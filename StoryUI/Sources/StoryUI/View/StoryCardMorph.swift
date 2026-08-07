@@ -87,6 +87,14 @@ public final class StoryCardMorph {
     /// stays 0 for the close, whose landing crossfade into the real row card is untouched.
     public weak var flightCover: UIView?
 
+    /// The corner the flight is asking for at this fraction, BEFORE the cap that keeps the container
+    /// mask from out-rounding the story card inside it. Two things need this number and they need the
+    /// same one: the mask (which then caps it) and the cover (which must not be capped, because its
+    /// square corners are baked-in photograph and there is no content behind them to protect).
+    private func wantedRadius(f: CGFloat, rowRadius: CGFloat) -> CGFloat {
+        cardCornerRadius + (rowRadius - cardCornerRadius) * min(1, f / 0.12)
+    }
+
     public func setFlightCoverAlpha(_ a: CGFloat) {
         guard let flightCover else { return }
         CATransaction.begin()
@@ -412,6 +420,39 @@ public final class StoryCardMorph {
         // cover IS the row card, pixel for pixel, and the hand-over at either end cannot pop.
         // Alpha is not touched here — the flight's own fraction owns it.
         if !sheet { flightCover?.frame = cropRect }
+        // ⚠️ THE COVER ROUNDS ITSELF, because the container's mask deliberately will not round it
+        // enough. This is the white corner rind, third time, and this time it is WHITE rather than
+        // black because the chat list was in LIGHT MODE.
+        //
+        // MEASURED off his 14:51 screenshot rather than taken from the report, which supplied a cause
+        // ("white parent background, set it to clear") that the numbers do not support:
+        //
+        //     crescent at the top corners   (247, 244, 245)
+        //     chat list under the card      (226, 226, 226)     <- dimmed, because a flight is running
+        //     nav bar background            (247, 247, 247)     <- UNDIMMED chrome
+        //
+        // Brighter than the list it sits on, and an exact match for undimmed chrome. So it is not a
+        // parent's backgroundColor (that would be a flat 255 and would not track the system
+        // background), and it is not the list showing through a hole. It is the COVER's own pixels.
+        //
+        // The cover is a rectangular crop of the WINDOW at the row card's rect, taken at tap time.
+        // The row card is rounded, so the corners of that rectangle contain the chat list BEHIND it,
+        // photographed before the dim existed. Those pixels are part of the image.
+        //
+        // The container mask cannot cut them. `flightRadius` below is capped at the story card's own
+        // rendered corner (`cardCornerRadius * scale`) so the mask can never be rounder than the
+        // content — that cap is the fix for the BLACK rind and it has to stay. But at the row end the
+        // scale is small, so the cap is a few points while the row card it is landing on is 24, and
+        // the comment there assumed "the cover is carrying the corner anyway". It is: it is carrying
+        // the corner AND the square pixels outside it.
+        //
+        // So the cover clips itself at the radius the mask wanted before the cap. Divided by `scale`
+        // for the same reason the mask's is: the transform multiplies it back.
+        if !sheet, let cover = flightCover {
+            cover.layer.cornerCurve = .continuous   // every card it meets is a SwiftUI squircle
+            cover.layer.cornerRadius = max(0, wantedRadius(f: f, rowRadius: cornerRadius)) / scale
+            cover.layer.masksToBounds = true
+        }
         // THE RADIUS RUNS BETWEEN TWO REAL CARDS AND NEVER REACHES ZERO.
         //
         // It used to be `cornerRadius * f`, which means square corners whenever the card is anywhere
@@ -449,7 +490,7 @@ public final class StoryCardMorph {
         // than the thing inside it. The row end keeps its larger radius through the interpolation
         // below, by which point the card's clip has shrunk so far that the cap is what governs and
         // the cover is carrying the corner anyway.
-        let wanted = cardCornerRadius + (cornerRadius - cardCornerRadius) * min(1, f / 0.12)
+        let wanted = wantedRadius(f: f, rowRadius: cornerRadius)
         let flightRadius = min(wanted, cardCornerRadius * scale)
         applyMask(on: card, sheet: sheet, rect: cropRect,
                   cornerRadius: (sheet ? cornerRadius * f : flightRadius) / scale,
