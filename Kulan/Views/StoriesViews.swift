@@ -1489,9 +1489,20 @@ struct StoryViewer: View {
             // Unconditional — this must keep arriving while the morph is unavailable and after the
             // sheet's own early-return paths, or the caption stays stuck at whatever it last heard.
             NotificationCenter.default.post(name: .init("storySheetProgress"), object: p)
-            // Open enough that the card is showing the story properly: take its picture, once, so
-            // the carousel has a true cover to draw when the live card steps aside. See frozenCovers.
-            if p > 0.9 { captureFrozenCover() }
+            // ⚠️ NO CAPTURE FROM HERE ANY MORE. This fired the instant the pull crossed 0.9, which is
+            // MID-MOTION: the caption fade is driven by this very number, so at 0.9 the caption is
+            // still ~10% drawn and its scrim is still there — and that is what got baked into the
+            // frozen cover. His 2026-08-07 report, with the bottom of the card circled: "sometimes
+            // appear caption and shadow". Sometimes, because whether it caught the tail of the fade
+            // depended on how fast he pulled.
+            //
+            // It SCHEDULES instead, through the same settle-and-verify the post-swipe path uses: wait
+            // for the pull to finish, then check the sheet is still up and nothing is moving. A cover
+            // taken there has the caption fully gone, because the fade ended before the timer did.
+            // Removing the capture from here outright would have been the obvious mistake — the first
+            // story of a visit is only ever reached by this path, so it would have had no cover at
+            // all and the carousel would have fallen back to the poster.
+            if p > 0.9 { scheduleFrozenCapture() }
         }
         // The carousel row took over, or gave the centre back — by a finger on the row OR by the
         // sheet being thrown sideways (both slide cards through the slot, both need the copy).
@@ -1503,11 +1514,7 @@ struct StoryViewer: View {
             // its re-freeze), photograph THIS story too, so the next swipe leaves a true cover
             // behind as well. A story already photographed is left alone — see frozenCovers.
             guard !on else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                guard showViewers, viewersProgress > 0.9,
-                      !carouselInteracting, sheetPageDrag == 0 else { return }
-                captureFrozenCover()
-            }
+            scheduleFrozenCapture()
         }
         // Safety net: never leave a story paused after the viewer goes away (the swipe-down dismiss posts
         // pauseStory and does not resume on commit; a sheet up at teardown can also skip the resume).
@@ -1833,14 +1840,26 @@ struct StoryViewer: View {
         // library has no idea replies can be refused, and adding a whole story type to say one
         // sentence would be the wrong place to put it.
         //
+        // Nil when a reply bar is actually shown, so the pill and the bar can never both appear —
+        // they are the same slot. The two reasons are worded differently on purpose: one is the
+        // author's choice about their own story, the other is about who you and they are to each
+        // other, and telling somebody "they turned replies off" when that is not what happened would
+        // be a small lie about a person.
+        //
         // Same three conditions the reply bar itself is built from, so the pill appears exactly
         // where a bar would have been and never anywhere else: somebody else's story, somebody you
         // actually have a chat with, and replies refused.
+        // ⚠️ BOTH REASONS NOW, NOT JUST ONE. This was gated on `isFriend`, so it only spoke when the
+        // AUTHOR had refused replies — and said nothing at all for a stranger, who is the other case
+        // the bar is withheld from. The result was a story with no bar and no explanation, which is
+        // his 2026-08-07 report: "im not seeing reply bar… show Reply Lock but never hide reply bar".
+        //
+        // It does NOT undo the L3 privacy rule. That rule is about not handing somebody a direct line
+        // to a person who never accepted them, and a sentence saying the line is closed is not a
+        // line. What changes is that the closed door is now visible instead of being an empty strip.
         .overlay(alignment: .bottom) {
-            if !currentIsMine,
-               StoryContact.isFriend(currentBucketUid),
-               currentStory?.allowsReplies == false {
-                Text("You can't reply to this story 🔒")
+            if !currentIsMine, let reason = replyLockReason {
+                Text(reason)
                     .font(.system(size: 16))
                     .foregroundStyle(.white.opacity(0.55))
                     .frame(maxWidth: .infinity)
@@ -1928,6 +1947,23 @@ struct StoryViewer: View {
     /// motion the owner already signed off is unchanged; only the pixels inside it are real now.
     /// Photograph the live card for the story the sheet is on, if it is a video and has not been
     /// photographed already. See `frozenCovers` for why only videos and why only once.
+    /// Photograph the card ONCE THE SHEET HAS STOPPED MOVING, never during the pull.
+    ///
+    /// The caption's fade is driven by the pull's own progress, so a snapshot taken while that number
+    /// is still climbing catches the caption part-drawn and its scrim with it — the thing he circled
+    /// at the bottom of the card. Waiting a beat and then re-checking that the sheet is up, settled
+    /// and not being swiped is what makes the cover a picture of the story and nothing else.
+    ///
+    /// Cheap to call as often as you like: `captureFrozenCover` already declines a story it has, and
+    /// a stale timer lands on the guard below.
+    private func scheduleFrozenCapture() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            guard showViewers, viewersProgress > 0.9,
+                  !carouselInteracting, sheetPageDrag == 0 else { return }
+            captureFrozenCover()
+        }
+    }
+
     private func captureFrozenCover() {
         guard showViewers, frozenCovers[sheetStoryId] == nil, !sheetStoryId.isEmpty else { return }
         let live = StoriesRepository.shared.mine?.stories ?? myStories
@@ -2147,6 +2183,19 @@ struct StoryViewer: View {
     /// picture flying home would land on somebody else's face. So the current bucket's own card is
     /// preferred, and the one it opened from is the fallback for the moment before the first bucket
     /// is reported.
+    /// Why the reply bar is not there, or nil when it is. Mirrors the SAME two tests the bar itself
+    /// is built from (`storyType` in `libraryStories`), so the pill can never appear next to a bar
+    /// or leave the slot empty — those two staying in step is the whole point of reading them here
+    /// rather than re-deciding.
+    private var replyLockReason: String? {
+        guard !currentIsMine else { return nil }          // my own story has the owner bar instead
+        guard StoryContact.isFriend(currentBucketUid) else {
+            return "You can only reply to people you chat with 🔒"
+        }
+        guard currentStory?.allowsReplies == false else { return nil }   // a real bar is showing
+        return "You can't reply to this story 🔒"
+    }
+
     private func heroKeyNow() -> String {
         guard heroDismiss else { return "" }
         // A pinned door has one anchor and it does not move — see `heroSourcePinned`.
