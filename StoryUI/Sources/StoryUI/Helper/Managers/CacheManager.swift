@@ -27,6 +27,30 @@ public enum StoryVideoSeed {
     }
 }
 
+/// The same idea for a PICTURE, and it exists for one case in particular: a url whose bytes are not
+/// on any server.
+///
+/// ⚠️ URLCache ALONE IS NOT A PLACE TO KEEP SOMETHING YOU CANNOT RE-FETCH. It is an LRU cache the
+/// system prunes whenever it likes, and `ImageLoader`'s own header says so ("survives app relaunches,
+/// unlike URLCache, which evicts"). For a real Storage url an eviction costs a re-download and
+/// nothing else. The UPLOADING PLACEHOLDER is not a real url — the app invents
+/// `https://fariin.local/uploading-<uuid>.jpg` and seeds the composed poster under it — so an
+/// eviction there has nowhere to fall back to and no network that could answer. The card goes blank
+/// for the rest of the upload, which is exactly the window the placeholder exists to fill.
+///
+/// Writing both means the lookup order in `ImageLoader` (URLCache, then `StoryDiskCache`) always has
+/// a second answer. Same bytes in both, so whichever one replies the picture is identical.
+public enum StoryImageSeed {
+    public static func seed(_ data: Data, for url: URL, mimeType: String = "image/jpeg") {
+        guard !data.isEmpty else { return }
+        let resp = URLResponse(url: url, mimeType: mimeType,
+                               expectedContentLength: data.count, textEncodingName: nil)
+        URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: data),
+                                            for: URLRequest(url: url))
+        StoryDiskCache.store(data, for: url)
+    }
+}
+
 final class CacheManager: NSObject {
 
     private let fileManager = FileManager.default
@@ -120,10 +144,17 @@ private extension CacheManager {
             // ignores every network policy, which is why the speculative flag had nowhere to live.
             var request = URLRequest(url: url)
             if speculative {
-                // Same two lines StoryPrefetcher.warmImage already used for photos. On a constrained
-                // connection the task simply fails and the story loads when you reach it, which is
-                // exactly where we were before prefetching existed — no worse, just not expensive.
+                // On a refused connection the task simply fails and the story loads when you reach
+                // it, which is exactly where we were before prefetching existed — no worse, just not
+                // expensive.
+                //
+                // ⚠️ BOTH LINES, NOT JUST THE FIRST. `allowsConstrainedNetworkAccess` refuses Low
+                // Data Mode, which hardly anybody has on; `allowsExpensiveNetworkAccess` is the one
+                // that refuses CELLULAR. With only the first set this read as a mobile-data guard
+                // and was not one, and a speculative clip is the biggest thing the app fetches
+                // without being asked. See StoryPrefetcher.warmVideo.
                 request.allowsConstrainedNetworkAccess = false
+                request.allowsExpensiveNetworkAccess = false
                 request.networkServiceType = .background
             }
             let task = session.downloadTask(with: request) { [weak self] (tempLocalUrl, response, error) in

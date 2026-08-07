@@ -48,7 +48,7 @@ public enum StoryPrefetcher {
             for story in upcoming {
                 // The poster first and always. It is a few KB, it is what the blurred loading state
                 // draws, and having it means the story can never open on nothing.
-                warmImage(story.previewURL)
+                warmImage(story.previewURL, poster: true)
                 // Then the media itself, which is the part that removes the wait. EACH KIND INTO THE
                 // CACHE ITS OWN READER ACTUALLY LOOKS IN, which is the thing to get right here. A
                 // photo is read from `StoryDiskCache` by ImageLoader. A video is NOT: VideoLoader
@@ -57,7 +57,7 @@ public enum StoryPrefetcher {
                 // it worked and download everything twice.
                 switch story.config.mediaType {
                 case .video: warmVideo(story.mediaURL)
-                default:     warmImage(story.mediaURL)
+                default:     warmImage(story.mediaURL, poster: false)
                 }
             }
         }
@@ -94,9 +94,9 @@ public enum StoryPrefetcher {
         guard !firsts.isEmpty else { return }
         queue.async {
             for (i, item) in firsts.enumerated() {
-                warmImage(item.poster)
+                warmImage(item.poster, poster: true)
                 guard i < mediaDepth else { continue }
-                if item.isVideo { warmVideo(item.media) } else { warmImage(item.media) }
+                if item.isVideo { warmVideo(item.media) } else { warmImage(item.media, poster: false) }
             }
         }
     }
@@ -114,6 +114,20 @@ public enum StoryPrefetcher {
     /// of scope the moment `loadVideo` returned, and it is the one holding the download.
     private static let videoCache = CacheManager()
 
+    /// ⚠️ CONSTRAINED IS NOT THE SAME AS EXPENSIVE, and only one of them was ever set.
+    ///
+    /// `allowsConstrainedNetworkAccess = false` refuses LOW DATA MODE. That is a switch almost
+    /// nobody has turned on. `allowsExpensiveNetworkAccess = false` is the one that refuses CELLULAR,
+    /// which is the connection this file's own comment is worried about ("the expensive mobile data a
+    /// lot of this app's users are on"). So the guard read as if it stood down on mobile data and in
+    /// practice stood down on nothing: sixteen megabytes of speculative video went out over the data
+    /// plan of anybody who was not in Low Data Mode.
+    ///
+    /// The split below is deliberate rather than a blanket refusal. Standing everything down on
+    /// cellular would put the whole app back to opening every story on grey for the majority of its
+    /// users, which is the problem the prefetcher exists to solve. A POSTER is a few KB and it is
+    /// what the card and the opening frame draw, so it is worth cellular. The MEDIA is megabytes for
+    /// something nobody has asked to watch, so it is not.
     private static func warmVideo(_ urlString: String?) {
         guard let urlString, !urlString.isEmpty, let url = URL(string: urlString) else { return }
         guard claim(urlString) else { return }
@@ -126,7 +140,9 @@ public enum StoryPrefetcher {
         }
     }
 
-    private static func warmImage(_ urlString: String?) {
+    /// `poster` is the few-KB cover, and it keeps cellular. Everything else is the story itself and
+    /// stands down. See the note on `warmVideo` for why the two are not treated the same.
+    private static func warmImage(_ urlString: String?, poster: Bool) {
         guard let urlString, !urlString.isEmpty, let url = URL(string: urlString) else { return }
         guard !isWarm(urlString), claim(urlString) else { return }
 
@@ -135,6 +151,7 @@ public enum StoryPrefetcher {
         // down on a metered or Low Data Mode connection. The story still plays; it just loads when
         // you reach it, which is where we were before.
         request.allowsConstrainedNetworkAccess = false
+        request.allowsExpensiveNetworkAccess = poster
         request.networkServiceType = .background
 
         URLSession.shared.dataTask(with: request) { data, response, _ in
