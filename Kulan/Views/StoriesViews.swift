@@ -917,6 +917,20 @@ struct StoryViewer: View {
     /// the tap and never moved. So this keeps the behaviour the cover already had, rather than
     /// inventing a new one while moving the door.
     var heroSourcePinned: Bool = false
+    /// THE AUTHOR ALREADY DECIDED THIS — set by any door whose stories came from MY TRAY.
+    ///
+    /// A story only reaches the tray because the query matches me against its `recipientUids`, which
+    /// is the author's own audience choice. His 2026-08-07 answer when I put the rule to him was
+    /// "already i have system": Everyone / My Friends / a custom list IS the system that says who
+    /// receives a story, and testing my chat list a second time is a gate on top of a gate.
+    ///
+    /// It was also plainly wrong on his own test accounts. They had put him in their audience and he
+    /// had never opened a chat with them, so the author said yes and the app said no.
+    ///
+    /// FALSE for the profile door, which is the case the rule was written for: a story you found by
+    /// opening somebody's profile did NOT come with your name on it, and a reply there would be a
+    /// direct line to a person who never accepted you.
+    var deliveredToMe: Bool = false
     /// False for a REFEED — the delete-with-stories-remaining swap, where the presenter replaces
     /// the viewer while the screen is already up and at rest. There is nothing to fly and no wall
     /// to paint: `stageHeroOpen` marks the open spent and shows the story where it stands, instead
@@ -1183,21 +1197,22 @@ struct StoryViewer: View {
 
     init(group: StoryGroup, ownSwipeDismiss: Bool = false,
          heroDismiss: Bool = false, heroSourceKey: String = "", heroSourcePinned: Bool = false,
-         heroStageOpen: Bool = true,
+         deliveredToMe: Bool = false, heroStageOpen: Bool = true,
          onHeroClose: (() -> Void)? = nil,
          onClose: @escaping () -> Void,
          onProfile: @escaping (StoryGroup) -> Void = { _ in },
          onDeletedRemaining: @escaping (StoryGroup) -> Void = { _ in }) {
         self.init(groups: [group], startIndex: 0, ownSwipeDismiss: ownSwipeDismiss,
                   heroDismiss: heroDismiss, heroSourceKey: heroSourceKey,
-                  heroSourcePinned: heroSourcePinned, heroStageOpen: heroStageOpen,
+                  heroSourcePinned: heroSourcePinned, deliveredToMe: deliveredToMe,
+                  heroStageOpen: heroStageOpen,
                   onHeroClose: onHeroClose,
                   onClose: onClose, onProfile: onProfile,
                   onDeletedRemaining: onDeletedRemaining)
     }
     init(groups: [StoryGroup], startIndex: Int = 0, ownSwipeDismiss: Bool = false,
          heroDismiss: Bool = false, heroSourceKey: String = "", heroSourcePinned: Bool = false,
-         heroStageOpen: Bool = true,
+         deliveredToMe: Bool = false, heroStageOpen: Bool = true,
          onHeroClose: (() -> Void)? = nil,
          onClose: @escaping () -> Void,
          onProfile: @escaping (StoryGroup) -> Void = { _ in },
@@ -1208,6 +1223,7 @@ struct StoryViewer: View {
         self.heroDismiss = heroDismiss
         self.heroSourceKey = heroSourceKey
         self.heroSourcePinned = heroSourcePinned
+        self.deliveredToMe = deliveredToMe
         self.heroStageOpen = heroStageOpen
         self.onHeroClose = onHeroClose
         self.onClose = onClose
@@ -1274,7 +1290,7 @@ struct StoryViewer: View {
                             // a direct line to somebody who never accepted you — on the one surface
                             // built for reach. `isFriend` is the same accepted-chat test the audience
                             // itself is built from, so the two cannot disagree about who counts.
-                            storyType: g.isMine || !StoryContact.isFriend(g.authorUid)
+                            storyType: g.isMine || !(deliveredToMe || StoryContact.isFriend(g.authorUid))
                                 ? .plain()
                                 : (s.allowsReplies
                                     ? .message(config: StoryInteractionConfig(showLikeButton: true),
@@ -2195,7 +2211,7 @@ struct StoryViewer: View {
     /// rather than re-deciding.
     private var replyLockReason: String? {
         guard !currentIsMine else { return nil }          // my own story has the owner bar instead
-        guard StoryContact.isFriend(currentBucketUid) else {
+        guard deliveredToMe || StoryContact.isFriend(currentBucketUid) else {
             return "You can only reply to people you chat with 🔒"
         }
         guard currentStory?.allowsReplies == false else { return nil }   // a real bar is showing

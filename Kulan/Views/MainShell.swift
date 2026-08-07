@@ -761,14 +761,19 @@ struct ChatsView: View {
             DispatchQueue.main.async { profileGroup = grp }
         }
         if let idx = others.firstIndex(where: { $0.id == g.id }) {
+            // `deliveredToMe`: these came out of `StoriesRepository.others`, whose query is
+            // "recipientUids contains me" — so being here IS the author's audience choice, and the
+            // reply bar follows it rather than testing my chat list a second time. See the property.
             StoryViewer(groups: others, startIndex: idx,
                         heroDismiss: true, heroSourceKey: key, heroSourcePinned: pinned,
+                        deliveredToMe: true,
                         onHeroClose: heroClose,
                         onClose: close,
                         onProfile: profile)
         } else {
             StoryViewer(group: g,
                         heroDismiss: true, heroSourceKey: key, heroSourcePinned: pinned,
+                        deliveredToMe: true,
                         heroStageOpen: !refeed,
                         onHeroClose: heroClose,
                         onClose: close,
