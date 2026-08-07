@@ -74,13 +74,25 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            FAST REPEATED SWIPES ON THE VIEWERS SHEET.
+            STORIES BUILD. Eight changes, all of them stories.
 
-            Swiping the sheet sideways to the next story takes about a third of a second to settle. If you started another swipe inside that window, the app tore the first one down the WRONG way round - it put the story you were leaving back over the one it had just moved to. So a normal swipe worked and a fast one appeared to do nothing.
+            LONG PRESS ON THE STORIES ROW is the app's own menu now, not Apple's. What lifts off the row is a photograph of the card that is on screen, so it no longer reloads its picture, move its avatar or wear a caption the card does not have. The row and a chat message press the same way.
 
-            An interrupted swipe now finishes the way it was already going to finish.
+            THE CENTRE CARD IN THE VIEWERS CAROUSEL no longer ends up behind its neighbours. The middle of that row is the real story, and the signal that hides it only knew about fingers, so paging the sheet sideways left it uncovered for a third of a second while the other cards slid over the top of it.
 
-            THIS IS THE ONLY CHANGE IN THIS BUILD. Everything else you are testing is build 494.
+            THE CAPTION AND SHADOW ON A VIDEO CARD are gone for good. Two earlier attempts moved when the picture was taken; this one changes what the picture is, so there is no timing left to get wrong.
 
-            WHAT TO CHECK: open your own story, pull the viewers sheet up, then swipe sideways across it as fast as you can several times in a row. Every swipe should land on the next story. If any of them still stick, a short screen recording would help - this one is a timing bug and I could not reproduce it here.
+            THE RING HOLDS STILL while you are inside somebody's story, the way the order already does. Watching their last unseen story used to grey the ring out underneath you, and you saw it change colour at the moment the story landed back on the card.
+
+            THE VIDEO EDITOR shows the background the export actually bakes. You were framing clips against a blur and getting a gradient back.
+
+            DELETING YOUR LAST STORY on a poor connection now works. The app could not tell an empty result from an empty cache, so the card stayed on the row.
+
+            SPECULATIVE DOWNLOADS stand down on mobile data. A guard that was meant to stop this only covered Low Data Mode, which nobody turns on, so the app was pulling story videos over your data plan without being asked. Covers still load, so nothing gets slower to open.
+
+            THE UPLOADING CARD cannot go blank half way through an upload any more.
+
+            WHAT TO CHECK. Long press the stories row, several cards, and check the lift is the card itself. Open your own story, pull the viewers sheet up, and swipe sideways fast, watching that the middle card stays on top. Post a video story and check the card has no caption on it. Watch a friend's last unseen story and check their ring only greys after you leave.
+
+            STILL OPEN, do not report these again yet: the story pausing by itself after you come back into the app, and an EDITED video (drawing or text on it) still exporting with black bars instead of the gradient. Both are next.
         run: fastlane beta
