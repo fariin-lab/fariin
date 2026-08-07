@@ -958,9 +958,17 @@ struct StoryViewer: View {
         /// restarting from rest. (Telegram animates with a fixed 0.4s ease-out and hides the
         /// discontinuity with additive animations; a spring fed the real velocity is the same feel
         /// with a scalar we own.)
+        /// Per-RUN overrides on top of the per-animator numbers: the hero's open wants a softer,
+        /// longer-tailed spring than its close (see `stageHeroOpen`), and two more animator
+        /// instances would mean two more things to remember to cancel on a drag's `.began`.
+        private var runK: CGFloat = 340
+        private var runEpsilon: CGFloat = 0.001
         func animate(from: CGFloat, to: CGFloat, velocity initialVelocity: CGFloat = 0,
+                     stiffness: CGFloat? = nil, settle: CGFloat? = nil,
                      write: @escaping (CGFloat) -> Void, completion: (() -> Void)? = nil) {
             cancel()
+            runK = stiffness ?? k
+            runEpsilon = settle ?? settleEpsilon
             current = from; target = to; velocity = initialVelocity
             self.write = write; self.completion = completion
             let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
@@ -973,6 +981,7 @@ struct StoryViewer: View {
             // Critically damped, so it arrives without overshooting. `k` is per animator now — see
             // the property. 340 is interactiveSpring(response: ~0.34); 631 is Signal's own story
             // transition spring, `response: 0.25, damping: 1`, which expands to stiffness (2π/0.25)².
+            let k = runK, settleEpsilon = runEpsilon
             velocity += (k * (target - current) - 2 * sqrt(k) * velocity) * dt
             current += velocity * dt
             if abs(target - current) < settleEpsilon, abs(velocity) < settleEpsilon * 20 {
@@ -2006,11 +2015,12 @@ struct StoryViewer: View {
     /// the see-through flying card he reported on an earlier build.
     private func runHero(to endF: CGFloat, center endC: CGPoint, alpha endA: CGFloat,
                          velocity: CGFloat, alphaCurve: @escaping (CGFloat) -> CGFloat = { $0 },
+                         stiffness: CGFloat? = nil, settle: CGFloat? = nil,
                          done: @escaping () -> Void) {
         hero.fromF = hero.f;      hero.toF = endF
         hero.fromC = hero.center; hero.toC = endC
         hero.fromA = hero.alpha;  hero.toA = endA
-        heroAnimator.animate(from: 0, to: 1, velocity: velocity, write: { t in
+        heroAnimator.animate(from: 0, to: 1, velocity: velocity, stiffness: stiffness, settle: settle, write: { t in
             hero.f = hero.fromF + (hero.toF - hero.fromF) * t
             hero.center = CGPoint(x: hero.fromC.x + (hero.toC.x - hero.fromC.x) * t,
                                   y: hero.fromC.y + (hero.toC.y - hero.fromC.y) * t)
@@ -2099,8 +2109,17 @@ struct StoryViewer: View {
             StoryCardMorph.shared.revealAfterHeroOpen?()
             // Head-heavy alpha: mostly in within the first third of the growth, so the dissolve
             // reads as part of the lift instead of a slow ghost riding the whole flight.
+            //
+            // THE OPEN'S OWN SPRING — softer than the close's, on his Snapchat frame-scrub
+            // (2026-08-07): what reads as "smoother" there is not the total time, it is the long
+            // gentle glide into full screen, where Signal's 631 arrives and stops. 450 with a finer
+            // settle keeps the lift-off just as immediate (80% of the travel still lands inside
+            // ~0.15s) and spends the difference on the landing: ~0.45s of visible motion instead of
+            // ~0.33s with a clipped tail. THE CLOSE IS NOT TOUCHED — its tight settle belongs to a
+            // finger release, and he said so outright ("I don't mean closing").
             runHero(to: 0, center: rest, alpha: 1, velocity: 0,
-                    alphaCurve: { let u = 1 - $0; return 1 - u * u * u }) {
+                    alphaCurve: { let u = 1 - $0; return 1 - u * u * u },
+                    stiffness: 450, settle: 0.0008) {
                 hero.live = false
                 heroFlying = false                          // full screen again: the backing may return
                 NotificationCenter.default.post(name: .init("storyFlightActive"), object: false)
