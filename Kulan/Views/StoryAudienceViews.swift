@@ -704,7 +704,7 @@ struct NewAudienceButton: UIViewRepresentable {
         // same idea everywhere it appears.
         let custom = UIAction(title: "New Custom Story",
                               subtitle: "Visible only to specific people.",
-                              image: UIImage(named: "ic_story_folder")) { _ in
+                              image: Self.menuIcon("ic_story_folder")) { _ in
             context.coordinator.onCustom()
         }
         // Dimmed rather than absent at the ceiling: an item that vanishes leaves you wondering
@@ -721,6 +721,33 @@ struct NewAudienceButton: UIViewRepresentable {
         b.menu = UIMenu(children: [custom, oneTime])
         b.showsMenuAsPrimaryAction = true   // one tap opens it; there is no other action to lose
         b.isEnabled = true
+    }
+
+    /// A BUNDLED DRAWING, SIZED THE WAY THE MENU SIZES A SYMBOL.
+    ///
+    /// UIKit scales an SF Symbol in a menu to the row's text metrics. It does not do that for an
+    /// image out of the asset catalogue — that one is drawn at its natural size, so our folder came
+    /// out visibly larger than the flame sitting directly under it (his screenshot, with the folder
+    /// circled).
+    ///
+    /// The target box is asked of the FLAME rather than written down, because the flame is the thing
+    /// it has to match and its size moves with the user's text size. Aspect is preserved and the
+    /// drawing is fitted inside that box, so a square icon fills it and a tall one is not stretched.
+    /// Template mode so it tints with the menu label exactly as a symbol does — and so a disabled
+    /// item greys the icon along with its text.
+    private static func menuIcon(_ name: String) -> UIImage? {
+        guard let raw = UIImage(named: name), raw.size.width > 0, raw.size.height > 0 else {
+            return UIImage(named: name)
+        }
+        let box = UIImage(systemName: "flame")?.size ?? CGSize(width: 22, height: 22)
+        let scale = min(box.width / raw.size.width, box.height / raw.size.height)
+        let fitted = CGSize(width: raw.size.width * scale, height: raw.size.height * scale)
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.opaque = false
+        let drawn = UIGraphicsImageRenderer(size: fitted, format: format).image { _ in
+            raw.draw(in: CGRect(origin: .zero, size: fitted))
+        }
+        return drawn.withRenderingMode(.alwaysTemplate)
     }
 
     /// Without this SwiftUI hands a representable the whole width it was offered, and a "+ New"

@@ -29,11 +29,60 @@ import StoryUI
 /// profile can freeze the row it is not even on screen with.
 @Observable final class StoryDoorState {
     static let shared = StoryDoorState()
-    /// The group being watched, or nil. Set before the presentation, cleared after the landing.
+    /// The group the viewer was OPENED on, or nil. Set before the presentation, cleared after the
+    /// landing. This is the door, not the position — see `activeGroupId` for where he actually is.
     var openGroup: StoryGroup?
     /// The uploading-story viewer, which has no posted group of its own to name yet.
     var uploadingOpen = false
     var isOpen: Bool { openGroup != nil || uploadingOpen }
+
+    // MARK: - THE ONE ANSWER TO "WHOSE STORY IS ON SCREEN RIGHT NOW"
+    //
+    // ⚠️ READ THIS BEFORE TOUCHING THE CLOSE'S LANDING.
+    //
+    // The viewer pages person to person, and for a long time nothing outside it knew that. The row
+    // kept the position it had at the open, and the close asked "is the person he is on visible?" —
+    // if the answer was no, because their card was off to the right of a row that had never
+    // scrolled, it fell back to THE PERSON THE VIEWER WAS OPENED FROM. So Abdi → Ali → Salmo → Saki,
+    // pull down, and the story flew home to Abdi. That fallback is his report exactly, and he named
+    // the shape of the fix: do not special-case the opener, keep one live answer instead.
+    //
+    // This is that answer. The viewer writes it on EVERY change of person, immediately — the open,
+    // a swipe forward, a swipe back, a carousel jump — and everything else reads it: the row scrolls
+    // to it, the flight lands on it, the cover decides against it. One value, so the row, the
+    // carousel and the dismissal cannot disagree about where he is.
+    //
+    /// `MediaOpenRects` key of the active person's row card. Nil while no viewer is up.
+    var activeSourceKey: String?
+    /// The same person, keyed the way the ROW identifies its cards (`.id(g.authorUid)`), so the row
+    /// can scroll to them. Two spellings of one fact, written in the same breath and never apart.
+    var activeAuthorUid: String?
+
+    /// Called by the viewer whenever the person on screen changes, and once at the open.
+    func setActive(sourceKey: String, authorUid: String) {
+        if activeSourceKey != sourceKey { activeSourceKey = sourceKey }
+        if activeAuthorUid != authorUid { activeAuthorUid = authorUid }
+    }
+
+    /// WHERE TO LEAVE THE ROW ONCE THE VIEWER HAS GONE AND THE ORDER HAS RE-SORTED. Consumed once.
+    ///
+    /// The close hands the story back to a card, and then — 0.4s later, deliberately, so the landing
+    /// is not disturbed — the repo reloads and the row re-sorts: the people he just watched move
+    /// behind the ones he has not. A scroll offset does not survive that; whoever ends up at those
+    /// points is who he is left looking at, and after Abdi → Ali → Salmo → Saki that is not Saki.
+    ///
+    /// So the person is remembered rather than the offset, and the row scrolls back to them once the
+    /// new order is drawn. Once: this is cleared on use, so an unrelated re-sort an hour later can
+    /// never yank the row somewhere he did not ask for.
+    var restoreRowToUid: String?
+
+    func clearActive() {
+        // The row still has to be put back on him after the re-sort, so the person outlives the
+        // session by exactly one reorder. `activeSourceKey` is the flight's, and dies with it.
+        restoreRowToUid = activeAuthorUid
+        activeSourceKey = nil
+        activeAuthorUid = nil
+    }
 }
 
 @MainActor
@@ -83,6 +132,11 @@ enum StoryDoor {
                           deliveredToMe: deliveredToMe, onProfile: onProfile, onClosed: onClosed)
         request = req
         StoryDoorState.shared.openGroup = g
+        // A fresh session starts on the person who was tapped, and owes nothing to the last one. The
+        // pending row restore goes too: it belongs to a visit that is over, and letting it survive
+        // into this one would scroll the row out from under the story that is opening.
+        StoryDoorState.shared.restoreRowToUid = nil
+        StoryDoorState.shared.setActive(sourceKey: sourceKey, authorUid: g.authorUid)
         // The tapped view is photographed HERE, at tap time, while it is definitely on screen: the
         // snapshot rides the flight as the cover the open wears. Nil (nothing registered, or the view
         // scrolled away) degrades to an open with no cover, which is still a correct flight.
@@ -168,6 +222,8 @@ enum StoryDoor {
         let req = request
         request = nil
         StoryDoorState.shared.openGroup = nil
+        // Hands the last person he watched to the row, to be restored once the re-sort below lands.
+        StoryDoorState.shared.clearActive()
         MediaSourceVisibility.shared.reveal()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
             Task { await StoriesRepository.shared.load(force: true) }

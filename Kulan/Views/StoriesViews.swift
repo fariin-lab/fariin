@@ -397,6 +397,9 @@ struct StoriesRow: View {
     /// other inputs, because the memberwise initializer takes its arguments in declaration order and
     /// the call site reads better with the row's inputs together. See `displayedOthers`.
     var freezeOrder: Bool = false
+    /// The live answer to "whose story is on screen": the row scrolls to it while a viewer is up, so
+    /// the card he came in on is never the one he lands back on. See `StoryDoorState.activeSourceKey`.
+    private var doorState = StoryDoorState.shared
     var onCompose: () -> Void
     var onOpen: (StoryGroup) -> Void
     var onMessage: (StoryGroup) -> Void = { _ in }
@@ -487,6 +490,42 @@ struct StoriesRow: View {
     }
 
     var body: some View {
+        ScrollViewReader { proxy in
+            rowScroller
+                // ⚠️ THE ROW FOLLOWS HIM, and this is the other half of the wrong-landing fix.
+                //
+                // The viewer pages person to person; the row never moved. So the moment he swiped
+                // past the third or fourth card the person he was watching had no card on screen,
+                // and a close with nowhere to fly fell back to the person he had opened from. The
+                // row scrolls to whoever is active now, so there is always somewhere true to land
+                // AND the row he comes back to is sitting on the story he was actually watching —
+                // his "the list position must return to Salmo".
+                //
+                // FREE, because it happens behind a full-screen viewer: nobody sees the row move.
+                // Unanimated for the same reason, and because an animating scroll would still be
+                // settling when a fast pull-down asks for the card's rectangle.
+                .onChange(of: doorState.activeAuthorUid) { _, uid in
+                    guard let uid, !uid.isEmpty else { return }
+                    var t = Transaction(); t.disablesAnimations = true
+                    withTransaction(t) { proxy.scrollTo(uid, anchor: .center) }
+                }
+                // AND HE IS STILL THERE AFTER THE RE-SORT. The close hands the story back to a card,
+                // then the repo reloads and the watched people move behind the unwatched — a scroll
+                // OFFSET does not survive that, so the row would settle on whoever happened to land
+                // at those points. The person is restored instead, once, the frame the new order is
+                // drawn. See `StoryDoorState.restoreRowToUid`.
+                //
+                // `initial: false`: this fires on real order changes only, so a row that has simply
+                // appeared is left exactly where the user last put it.
+                .onChange(of: displayedOthers.map(\.id)) { _, _ in
+                    guard !freezeOrder, let uid = doorState.restoreRowToUid, !uid.isEmpty else { return }
+                    doorState.restoreRowToUid = nil
+                    proxy.scrollTo(uid, anchor: .center)
+                }
+        }
+    }
+
+    private var rowScroller: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(alignment: .top, spacing: storySpacing) {
                 myCard
@@ -1781,7 +1820,15 @@ struct StoryViewer: View {
             },
             // Landing on a person no longer greys their whole ring — seen state advances per ITEM
             // below (the standard rule: the ring stays colored until every story is watched).
-            onUserChanged: { uid in currentBucketUid = uid; loadBarViewers() },
+            // ⚠️ EVERY CHANGE OF PERSON IS PUBLISHED, IMMEDIATELY, AND THIS IS THE ONLY PLACE IT
+            // HAPPENS. Forward, back, or a carousel jump all arrive here, so there is one write and
+            // nothing to keep in step. See `StoryDoorState.activeSourceKey` for what went wrong when
+            // the outside world did not know he had moved.
+            onUserChanged: { uid in
+                currentBucketUid = uid
+                publishActive(uid)
+                loadBarViewers()
+            },
             onItemSeen: { id in
                 currentStoryId = id
                 // DOWNLOAD WHAT IS COMING WHILE THIS ONE PLAYS. Signal fires this on every item
@@ -2276,12 +2323,36 @@ struct StoryViewer: View {
         return "You can't reply to this story 🔒"
     }
 
+    /// Tell the world which person is on screen. Called at the open and on every change of person.
+    ///
+    /// The row card's key IS the group id, and the row identifies its cards by `authorUid` — both
+    /// spellings go out together so the row can scroll to him and the flight can land on him without
+    /// either having to derive the other.
+    private func publishActive(_ uid: String) {
+        guard heroDismiss, !heroSourcePinned else { return }
+        guard let g = groups.first(where: { $0.authorUid == uid }) else { return }
+        StoryDoorState.shared.setActive(sourceKey: g.id, authorUid: g.authorUid)
+    }
+
+    /// WHERE THE CLOSE LANDS: the person he is on, never the person he came in through.
+    ///
+    /// ⚠️ THE OLD FALLBACK WAS THE BUG, NOT A SAFETY NET. This used to test whether the active
+    /// person's card was on screen and, if it was not, return `heroSourceKey` — the person the viewer
+    /// was opened from. A row that has not scrolled has the fourth person off to the right, so
+    /// Abdi → Ali → Salmo → Saki and a pull down flew the story home to ABDI. His report, and his
+    /// instruction: no special case for the opener, one live answer instead.
+    ///
+    /// The on-screen test has gone with it. It was never this function's question — `heroEndpoints`
+    /// asks it, which is the place that has to answer "is there anywhere to fly", and it now gets a
+    /// yes because `StoriesRow` scrolls the row to whoever is active while the viewer is up.
     private func heroKeyNow() -> String {
         guard heroDismiss else { return "" }
         // A pinned door has one anchor and it does not move — see `heroSourcePinned`.
         guard !heroSourcePinned else { return heroSourceKey }
-        if let g = groups.first(where: { $0.authorUid == currentBucketUid }),
-           onScreenRect(for: g.id) != nil { return g.id }
+        if let key = StoryDoorState.shared.activeSourceKey, !key.isEmpty { return key }
+        // Only before the library has reported a first person — the same instant `currentBucketUid`
+        // is still empty. That IS the opening person, so it is not a special case for him, it is the
+        // only thing that is true yet.
         return heroSourceKey
     }
 
