@@ -74,13 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            EVERYTHING FROM THE LAST BUILD, PLUS THE FLIGHT NOW ASKS THE CARD WHERE IT IS.
+            STORIES ARE BACK ON APPLE'S OPEN AND CLOSE, and there is a crash fix in that.
 
-            THE OPEN WAS RUNNING TWICE, and that was my mistake in the build before. The open waits for the card's real position on a ladder of attempts, and I stretched that ladder to just over half a second in the same build that made the animation faster, about 0.3 seconds. The ladder was guarded on "is a flight running", which goes false when the flight FINISHES, so every leftover attempt started the whole open again. That is the two shakes, the second flight from the row card, and the black behind it. It is guarded on "has one been started" now.
+            You asked for this tonight and you were right to. The custom open and close is switched off with one line, so opening a story from the top row now behaves exactly like opening one from the ring next to a chat, which is the way it worked yesterday. It shrinks the whole screen instead of the card. It is less pretty and it works.
 
-            THE FLIGHT NO LONGER TRUSTS A REMEMBERED NUMBER. Each row card now registers its real view, and the animation asks that view where it is at the instant it flies. Before, it flew to a rectangle written down by an earlier layout pass, which goes stale every time the row re-sorts, scrolls sideways, or the list moves under it. Two of the things you filmed were exactly that. This is how Telegram does it: their story screen is handed the source VIEW, not a rectangle.
+            THE CRASH YOU SENT IS THE REAL REASON. Your crash log names it without any guessing: UIPageViewController throwing an assertion while cleaning up one of its own transitions. Our animation moved the story by writing a transform onto that class's private internal scroll view, while UIKit was animating that same view itself. Every fix I shipped tonight was downstream of that, which is why each one produced a new symptom instead of an ending. Switching it off removes the cause, not just the symptom.
 
-            A WATCHDOG ON THE CLOSE, because you filmed it freezing. The close button is deliberately ignored while the card is in the air so a press cannot yank it out mid flight, and the cost is that an animation which never reports back leaves no way out. If it has not landed within 1.2 seconds it closes by hand. A safety net, not a fix: if it still freezes, say so, because then it is something I have not found yet.
+            TWO THINGS FROM TONIGHT ARE KEPT, because they are right either way. The story row now holds its order still while a story is open, instead of re-sorting under you and moving the card the close is aiming at. And where a story opens follows the proper rule: where you left that person, then their first unwatched story, then, if you have seen everything of theirs, their newest when you arrive going backwards and their oldest going forwards.
 
-            WHAT TO CHECK FIRST. Open a story and watch the landing: one movement, no shake, no second run. Then open and close fifteen times in a row, which is what froze it. Then watch a friend's story to the end so the row re-sorts, and close it: it should land on that person's card wherever the row has moved it to.
+            WHAT COMES NEXT. The real version, built as an actual iOS transition, the way Signal and Telegram both do it: iOS hands the animation a container holding both screens and the card flies inside it, touching nothing private. That is one piece of work, and you will see it when it is finished rather than every twenty minutes.
+
+            WHAT TO CHECK. Open and close stories, your own and a friend's, twenty times. Nothing should freeze and nothing should crash. The animation will look like yesterday's.
         run: fastlane beta
