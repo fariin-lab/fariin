@@ -1,4 +1,4 @@
-﻿name: TestFlight
+name: TestFlight
 
 # Manual trigger so we only ship to TestFlight when we mean to.
 on:
@@ -74,24 +74,17 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            EVERYTHING YOU REPORTED SINCE THE LAST BUILD, plus a crash fix. Twenty one changes.
+            THE STORY OPEN AND CLOSE, and where a story starts. Four things, all from tonight's reports.
 
-            A CRASH IS GONE, and you could hit it. Opening My Friends under Stories and touching Allow Replies and Reactions killed the app. The two built-in audiences carried a date two days below the earliest one Firestore accepts, and it does not return an error for that, it raises. Found from your crash log, symbolicated against the exact build.
+            YOUR OWN STORY NO LONGER CLOSES ONTO A BLACK SCREEN. Only your own story had a full black layer sitting behind it, which is why a friend's story showed the chat list behind it and yours did not. It is a SwiftUI layer behind the card, and the card is moved in UIKit, so the card flew home over a black wall and the chat list only came back once the screen was gone. It now steps aside for the flight. The Views and delete bar goes with it, because on an X close it was hanging there as a black bar.
 
-            + THEN CHOOSE AN IMAGE WORKS. The editor keeps its tools beside the picture rather than inside it, and adding a picture restored everything except the tools - so a new photo arrived wearing the last one's crop, and if that one had been cropped you were shown the OLD photo. The picker also closes when you pick now.
+            A FRIEND'S STORY GROWS OUT OF ITS CARD INSTEAD OF POPPING. The animation waits for the card's real position and used to give up after a quarter second. Your own story hands that over before the first frame is drawn. A friend's cannot, because that screen builds a page controller and a fresh page at the moment you tap. Past the deadline it just showed the story at full size. It now waits while that screen is genuinely still building.
 
-            AN UPLOAD THAT CANNOT FINISH NOW FAILS. Firebase retries a dead upload for TEN MINUTES before giving up, and the card that says Uploading is cleared by the code that runs when it gives up. Capped at two minutes. Expect a story on a bad connection to fail visibly now instead of spinning forever.
+            CLOSING LANDS ON THE RIGHT CARD. The row re-sorts itself the moment you finish someone's last unwatched story, so their card slid to the watched group while you were still inside the story, and the close chased it towards the edge of the screen. The row now holds still while a story is open and re-sorts after you leave.
 
-            THE STORY CARDS. Video cards went black after a swipe: the picture I take of the card does not always capture video, and a failed capture was being kept. Blank ones are thrown away now. A square video keeps its blurred bars after posting, second attempt. The row and the sheet swipe together - 10 percent of one is 10 percent of the other.
+            WHERE A STORY STARTS, which is what you asked about. Three rules, in order. Where you left that person, if you were already in them this time. Otherwise their first unwatched story. Otherwise, if you have watched everything of theirs, the direction decides: going BACKWARDS lands on their newest, going forwards lands on their oldest. That last part is Signal's rule, read from their source, and it is what you described. It used to be one answer for every case, always the oldest, which is why everything restarted from the beginning.
 
-            TAP TO THE NEXT PERSON IS FASTER. Half a second of animation that animated nothing is gone, and the next person's screen is no longer built from scratch during your tap. Some delay remains and it belongs to iOS.
+            WHAT TO CHECK FIRST. Open your own story and drag it down slowly. The chat list should be behind it the whole way, no black. Then close with the X, same thing. Then open a friend's card and watch whether it grows out of the card or appears at full size. Then watch someone's last story to the end and close, and see where it lands. Then tap back past the first story into someone you have already watched, and you should get their LAST one, not their first.
 
-            CUSTOM STORIES. The sheet grows with your list instead of cutting off the fourth row. Everyone wears your profile picture. Five is the limit and the button says so. New Group Story is hidden until it exists.
-
-            THE EDITORS. The video editor uses the photo editor's exact frame, so buttons no longer sit on the video. Its caption sits where the photo editor's does. The video opens PAUSED. X and speaker are 40pt. The caption + is your own icon on both. The picker is one colour, not a lighter bar over a darker list. The CAMERA and TEXT switch no longer jumps sideways.
-
-            WHAT TO CHECK FIRST. Settings then Stories then My Friends, and hit the replies switch - that is the crash. Then + another image in the editor. Then post a story on a weak signal. Then a square video, and swipe between video cards.
-
-            ONE THING I COULD NOT TEST: the square video blur is my second attempt at a bug I cannot reproduce on a simulator. If it is still black, tell me and I will bake the blur into the video at post time instead.
-
+            ONE THING I AM NOT SURE OF: the friend's story growing out of its card. I found a real difference between the two screens by reading the code, but I could not measure it. If it still pops open, tell me and I will find which measurement is missing instead of widening the wait again.
         run: fastlane beta
