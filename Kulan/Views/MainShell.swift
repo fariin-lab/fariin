@@ -690,6 +690,14 @@ struct ChatsView: View {
                        onProfile: { grp in profileGroup = grp })
     }
 
+    /// The still-uploading card's door. Same presentation and same flight as a posted story; its
+    /// content is the handoff view, which swaps itself for the real viewer when the upload lands.
+    private func openUploadingStory() {
+        StoryDoor.openUploading(meName: profile.me?.name ?? "You",
+                                mePhoto: profile.me?.photoUrl,
+                                onProfile: { grp in profileGroup = grp })
+    }
+
     // Welcome empty state: icon + copy + the three ways to get a first chat going.
     // Reuses the existing flows (NewChatView search, MyQRView, Settings' invite text).
     private var inviteText: String {
@@ -1324,11 +1332,12 @@ struct ChatsView: View {
                                  onOpen: { g in openStoryFromRow(g) },
                                  onMessage: { g in openStoryChat(g) },
                                  onProfile: { g in profileGroup = g },
-                                 onOpenUploading: {
-                                     StoryDoor.openUploading(meName: profile.me?.name ?? "You",
-                                                             mePhoto: profile.me?.photoUrl,
-                                                             onProfile: { grp in profileGroup = grp })
-                                 })
+                                 // ⚠️ A METHOD, NOT AN INLINE CLOSURE. Written out here it tipped this
+                                 // body over the type-checker's budget ("unable to type-check this
+                                 // expression in reasonable time") — `body` is already a very large
+                                 // single expression and every optional-chained default inside a new
+                                 // closure is more work for it. Same rule as the other handlers above.
+                                 onOpenUploading: { openUploadingStory() })
                         .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { storiesRowHeight = $0 }
                         .offset(y: -chatScrollY)
                         // NO clip and NO mask on the stories row (user's 3-stage proof, build 225):
