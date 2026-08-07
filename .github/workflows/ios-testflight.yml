@@ -74,13 +74,13 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THE OPEN WAS RUNNING TWICE. That is the two shakes, the second flight starting from the row card, and the black behind it.
+            EVERYTHING FROM THE LAST BUILD, PLUS THE FLIGHT NOW ASKS THE CARD WHERE IT IS.
 
-            It was my mistake in the last build, both halves of it. The open waits for the card's real position on a ladder of attempts, and I stretched that ladder from a quarter second to just over half a second so a friend's story had time to lay out. In the same build I put the animation on Signal's spring, which took it from 0.5 seconds to about 0.3. The ladder was guarded on "is a flight running", and that goes false when the flight FINISHES. So from 0.3s onward every leftover attempt saw no flight and both rectangles, and started the whole open again. The second one ran over black because finishing is what puts the black backing back.
+            THE OPEN WAS RUNNING TWICE, and that was my mistake in the build before. The open waits for the card's real position on a ladder of attempts, and I stretched that ladder to just over half a second in the same build that made the animation faster, about 0.3 seconds. The ladder was guarded on "is a flight running", which goes false when the flight FINISHES, so every leftover attempt started the whole open again. That is the two shakes, the second flight from the row card, and the black behind it. It is guarded on "has one been started" now.
 
-            It is now guarded on "has one been started", which is the question that was always meant.
+            THE FLIGHT NO LONGER TRUSTS A REMEMBERED NUMBER. Each row card now registers its real view, and the animation asks that view where it is at the instant it flies. Before, it flew to a rectangle written down by an earlier layout pass, which goes stale every time the row re-sorts, scrolls sideways, or the list moves under it. Two of the things you filmed were exactly that. This is how Telegram does it: their story screen is handed the source VIEW, not a rectangle.
 
-            A WATCHDOG ON THE CLOSE, because you filmed it freezing. The close button is deliberately ignored while the card is in the air, so a button press cannot yank it out mid flight. The cost is that an animation which never reports back leaves no way out of the screen. If it has not landed within 1.2 seconds, four times the flight, the close now happens by hand. This is a safety net and not a fix: if it still freezes, tell me, because then the cause is somewhere I have not looked yet.
+            A WATCHDOG ON THE CLOSE, because you filmed it freezing. The close button is deliberately ignored while the card is in the air so a press cannot yank it out mid flight, and the cost is that an animation which never reports back leaves no way out. If it has not landed within 1.2 seconds it closes by hand. A safety net, not a fix: if it still freezes, say so, because then it is something I have not found yet.
 
-            WHAT TO CHECK FIRST. Open a story and watch the landing: one movement, no second run, no shake. Then open and close ten or fifteen times in a row, which is what made it freeze for you. Then your own story, which should never show black behind the card at any point.
+            WHAT TO CHECK FIRST. Open a story and watch the landing: one movement, no shake, no second run. Then open and close fifteen times in a row, which is what froze it. Then watch a friend's story to the end so the row re-sorts, and close it: it should land on that person's card wherever the row has moved it to.
         run: fastlane beta
