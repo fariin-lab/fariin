@@ -55,11 +55,12 @@ enum VideoTranscoder {
     }
 
     /// `storyBackdrop`: THIS IS A STORY, so a clip that does not fill the story canvas must carry
-    /// its blurred backdrop IN THE FILE — the editor shows blurred bands above and below a square
-    /// clip, and the posted story must look like the editor ("the final published story should
-    /// match the editor exactly", 2026-08-07, his fourth report of the black bars). Baked at post
-    /// time like the photo path (`flattenBackdrop`), because THREE viewer-side attempts have
-    /// shipped and failed on his phone — see the kulan-square-video-blur note. The accepted cost,
+    /// its own canvas IN THE FILE, and since 2026-08-07 that canvas is Telegram's two-colour
+    /// GRADIENT rather than a blur — his decision after four reports of black bars; the reasoning is
+    /// on `gradientComposition`. Baked at post time like the photo path (`flattenBackdrop`), because
+    /// THREE viewer-side attempts shipped and failed on his phone — see the kulan-square-video-blur
+    /// note. ⚠️ The EDITOR still previews these clips against a blur, so until that is changed too
+    /// the preview and the posted file do not match. The accepted cost,
     /// put to him with the fix: a square/landscape story video stops being a fast copy and becomes
     /// a re-encode. Tall 9:16 clips still pass through untouched.
     static func prepare(_ url: URL, maxSeconds: Double? = nil, stripAudio: Bool = false,
@@ -167,9 +168,15 @@ enum VideoTranscoder {
                                                     cropRect: cropRect, canvasAspect: canvasAspect,
                                                     hd: hd)
         } else if let ba = backdropAspect {
-            // A failed backdrop build falls through to the plain export (black bars) rather than
-            // failing the post: a story with the old look still beats an error nobody can act on.
-            if let comp = await backdropComposition(asset: exportAsset, aspect: ba, hd: hd) {
+            // ⚠️ THIS `if let` IS THE OLD SILENT FALL-THROUGH, and it is why he reported black bars
+            // four separate times. The blur build had four ways to return nil and every one of them
+            // landed here and did nothing, producing exactly the file he kept photographing.
+            //
+            // `gradientComposition` is now total apart from "no video track", so this can only skip
+            // for a clip that could never have been a story in the first place. Left as an `if let`
+            // rather than a force: a crash is not a better answer than a plain export, and the
+            // guarantee belongs in the builder, not in an exclamation mark here.
+            if let comp = await gradientComposition(asset: exportAsset, aspect: ba, hd: hd) {
                 session.videoComposition = comp
             }
         }
@@ -343,9 +350,9 @@ enum VideoTranscoder {
             let parent = CALayer(); parent.frame = CGRect(origin: .zero, size: render)
             let video = CALayer(); video.frame = parent.frame
             let art = CALayer()
-            // (The story's blurred backdrop does NOT ride this path — see `backdropComposition`.
+            // (The story's gradient canvas does NOT ride this path — see `gradientComposition`.
             // An edited clip keeps its black letterbox for now; the plain square/landscape story,
-            // which is the reported case, gets the blur.)
+            // which is the reported case, gets the gradient.)
             // Core Animation composes video with the origin at the BOTTOM left, so the overlay's
             // rectangle is converted into that space and its contents flipped about its own centre.
             // Flipping the parent instead would turn the video upside down with it, which is the
@@ -363,16 +370,31 @@ enum VideoTranscoder {
         return comp
     }
 
-    /// THE STORY'S BLURRED CANVAS, BAKED INTO THE FILE. The editor previews a square/landscape clip
-    /// sitting on a blurred still of itself; this reproduces that frame in the export, so the
-    /// posted file looks like the editor in every viewer that will ever play it — ours, a
-    /// recipient's, the row card, anything. Core Image per frame rather than the CoreAnimation
-    /// tool, because a composition instruction paints its empty areas OPAQUE black (documented:
-    /// background colors must be opaque), so a layer behind the video can never show through it.
+    /// THE STORY'S CANVAS, FILLED THE WAY TELEGRAM FILLS IT: a two-colour gradient sampled from the
+    /// clip, baked into the exported file. Core Image per frame rather than the CoreAnimation tool,
+    /// because a composition instruction paints its empty areas OPAQUE black (documented: background
+    /// colours must be opaque), so a layer behind the video can never show through it.
     ///
-    /// The backdrop itself is rendered ONCE (poster frame, aspect-filled, Gaussian-blurred, baked
-    /// to a bitmap); each video frame is then fitted and composited over that bitmap on the GPU.
-    private static func backdropComposition(asset: AVAsset, aspect: CGFloat, hd: Bool) async -> AVVideoComposition? {
+    /// ⚠️ WHY THIS IS NOT A BLUR ANY MORE — his call, 2026-08-07, after four reports of black bars.
+    /// He asked me to read Telegram; I read `VideoFinishPass.swift` and `mediaEditorGetGradientColors`
+    /// in their MediaEditor, and they do not blur at all. They take two colours off the first frame
+    /// and run a gradient behind the video. Rebuilt here from that idea, NOT copied: Telegram is
+    /// GPL and that licence is exactly why we never take their code ([[kulan-telegram-conversation-mode]]).
+    ///
+    /// The blur had FOUR separate ways to return nil — a poster frame that would not decode, a
+    /// degenerate canvas, a CIContext that would not produce a bitmap, and a throwing composition
+    /// builder — and every one of them was silent and fell through to plain black bars. That is the
+    /// bug, four times over. This version cannot do that:
+    ///
+    /// * The colours cannot fail. If the poster will not decode, or a crop comes back empty, the
+    ///   sampler returns a neutral dark pair instead of nothing, and the gradient is still drawn.
+    /// * The gradient is CoreGraphics, not Core Image: no CIContext to lose. If even that fails it
+    ///   falls back to a flat fill of the top colour, which is still a canvas.
+    /// * The only remaining nil is "this asset has no video track", and a clip with no video track
+    ///   was never going to be a story.
+    ///
+    /// So the caller's `if let` can no longer quietly do nothing.
+    private static func gradientComposition(asset: AVAsset, aspect: CGFloat, hd: Bool) async -> AVVideoComposition? {
         guard let track = try? await asset.loadTracks(withMediaType: .video).first,
               let natural = try? await track.load(.naturalSize),
               let transform = try? await track.load(.preferredTransform) else { return nil }
@@ -389,30 +411,11 @@ enum VideoTranscoder {
         canvas.height -= canvas.height.truncatingRemainder(dividingBy: 2)
         guard canvas.width >= 16, canvas.height >= 16 else { return nil }
 
-        // The still the blur is built from: same just-after-zero instant every poster uses,
-        // because frame zero is very often black — and a blurred black canvas IS the bug.
-        let gen = AVAssetImageGenerator(asset: asset)
-        gen.appliesPreferredTrackTransform = true
-        gen.maximumSize = CGSize(width: 800, height: 800)
-        let dur = ((try? await asset.load(.duration))?.seconds) ?? 1
-        let at = CMTime(seconds: min(0.1, dur / 2), preferredTimescale: 600)
-        guard let posterCG = try? await gen.image(at: at).image else { return nil }
-
-        // Aspect-FILL the canvas with the poster, clamp so the blur has no dark vignette at the
-        // edges, blur, crop — then BAKE it: a CIImage is a recipe, and an unbaked recipe would
-        // re-run the Gaussian on every single frame of the export.
-        var still = CIImage(cgImage: posterCG)
-        let fill = max(canvas.width / still.extent.width, canvas.height / still.extent.height)
-        still = still.transformed(by: CGAffineTransform(scaleX: fill, y: fill))
-        still = still.transformed(by: CGAffineTransform(
-            translationX: (canvas.width - still.extent.width) / 2 - still.extent.minX,
-            y: (canvas.height - still.extent.height) / 2 - still.extent.minY))
-        let recipe = still.clampedToExtent()
-            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 50])
-            .cropped(to: CGRect(origin: .zero, size: canvas))
-        guard let bakedCG = CIContext().createCGImage(recipe, from: CGRect(origin: .zero, size: canvas))
-        else { return nil }
-        let backdrop = CIImage(cgImage: bakedCG)
+        // Two colours off the clip, then one gradient bitmap the whole export composites over. Both
+        // steps are total: `gradientColours` always answers, and `gradientBackdrop` falls back to a flat
+        // fill rather than to nothing.
+        let colours = await gradientColours(of: asset)
+        let backdrop = gradientBackdrop(size: canvas, top: colours.top, bottom: colours.bottom)
 
         let comp: AVMutableVideoComposition
         do {
@@ -444,5 +447,117 @@ enum VideoTranscoder {
         } catch { return nil }
         comp.renderSize = canvas
         return comp
+    }
+
+    /// The two colours the story canvas is filled with, read off the clip's own first frame.
+    ///
+    /// TOTAL BY CONSTRUCTION — it always returns a usable pair, because the whole point of this
+    /// rewrite is that nothing in the canvas path may quietly produce nothing. A clip whose poster
+    /// will not decode gets the neutral dark pair, which still reads as a deliberate backdrop rather
+    /// than as the black bars he has reported four times.
+    ///
+    /// The instant sampled is the same just-after-zero one every poster in this file uses: frame
+    /// zero is very often black on a real recording, and a black gradient IS the bug wearing a
+    /// different hat.
+    private static func gradientColours(of asset: AVAsset) async -> (top: CIColor, bottom: CIColor) {
+        let fallback = (top: CIColor(red: 0.13, green: 0.13, blue: 0.15),
+                        bottom: CIColor(red: 0.05, green: 0.05, blue: 0.06))
+        let gen = AVAssetImageGenerator(asset: asset)
+        // `appliesPreferredTrackTransform` so a clip recorded sideways is sampled the way it will be
+        // SEEN: without it, the "top" band of a rotated clip is one of its sides.
+        gen.appliesPreferredTrackTransform = true
+        gen.maximumSize = CGSize(width: 240, height: 240)
+        let dur = ((try? await asset.load(.duration))?.seconds) ?? 1
+        let at = CMTime(seconds: min(0.1, max(0, dur / 2)), preferredTimescale: 600)
+        guard let cg = try? await gen.image(at: at).image else { return fallback }
+        let w = CGFloat(cg.width), h = CGFloat(cg.height)
+        guard w >= 1, h >= 1 else { return fallback }
+        // A band rather than a line: one row of pixels can land on a caption, a letterbox edge or a
+        // single bright object. An eighth of the height averages those away and still describes the
+        // end of the picture the gradient has to meet.
+        let band = max(1, (h / 8).rounded())
+        // ⚠️ `CGImage.cropping(to:)` takes its rectangle in the IMAGE's own space, whose origin is
+        // the TOP left. That is not the same convention as a CGContext, and getting it backwards
+        // would put the sky at the bottom — the kind of mistake nobody sees until it ships.
+        let top = averageColour(of: cg, in: CGRect(x: 0, y: 0, width: w, height: band))
+        let bottom = averageColour(of: cg, in: CGRect(x: 0, y: h - band, width: w, height: band))
+        guard let top, let bottom else { return fallback }
+        return (top, bottom)
+    }
+
+    /// The mean colour of one band of a frame, or nil if it cannot be read.
+    ///
+    /// Averaged in code from a small grid rather than by asking CoreGraphics to scale the band
+    /// straight down to a single pixel: at extreme reductions the interpolator is free to point
+    /// sample, and a "mean" that is really one arbitrary pixel is how a gradient ends up keyed to a
+    /// speck of glare.
+    private static func averageColour(of image: CGImage, in rect: CGRect) -> CIColor? {
+        guard let crop = image.cropping(to: rect.integral), crop.width > 0, crop.height > 0
+        else { return nil }
+        let side = 8
+        var px = [UInt8](repeating: 0, count: side * side * 4)
+        let ok: Bool = px.withUnsafeMutableBytes { buf -> Bool in
+            guard let ctx = CGContext(data: buf.baseAddress, width: side, height: side,
+                                      bitsPerComponent: 8, bytesPerRow: side * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return false }
+            ctx.interpolationQuality = .medium
+            ctx.draw(crop, in: CGRect(x: 0, y: 0, width: CGFloat(side), height: CGFloat(side)))
+            return true
+        }
+        guard ok else { return nil }
+        var r = 0.0, g = 0.0, b = 0.0, n = 0.0
+        for i in stride(from: 0, to: px.count, by: 4) {
+            // Premultiplied: undo the alpha before averaging, and skip anything transparent so a
+            // clip with an alpha channel cannot drag the mean towards black.
+            let a = Double(px[i + 3]) / 255
+            guard a > 0.01 else { continue }
+            r += Double(px[i]) / 255 / a
+            g += Double(px[i + 1]) / 255 / a
+            b += Double(px[i + 2]) / 255 / a
+            n += 1
+        }
+        guard n > 0 else { return nil }
+        return CIColor(red: CGFloat(min(1, r / n)), green: CGFloat(min(1, g / n)), blue: CGFloat(min(1, b / n)))
+    }
+
+    /// The gradient itself, drawn ONCE into a bitmap the export then composites every frame over.
+    ///
+    /// Returns a CIImage that ALWAYS covers the whole canvas, and there is no failure path out of
+    /// here. CoreGraphics draws it, because there is no CIContext in that route to lose; if the
+    /// bitmap cannot be produced for any reason, the fallback is `CIImage(color:)` cropped to the
+    /// canvas, which is a Core Image generator with no allocation to fail and infinite extent. A
+    /// flat colour is still a canvas. The one thing this must never do is hand back something that
+    /// does not cover the frame, because whatever it does not cover is composited as BLACK — which
+    /// is the exact bug this whole rewrite exists to end.
+    private static func gradientBackdrop(size: CGSize, top: CIColor, bottom: CIColor) -> CIImage {
+        let canvas = CGRect(origin: .zero, size: size)
+        let topUI = UIColor(red: top.red, green: top.green, blue: top.blue, alpha: 1)
+        let bottomUI = UIColor(red: bottom.red, green: bottom.green, blue: bottom.blue, alpha: 1)
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = 1
+        fmt.opaque = true
+        let ui = UIGraphicsImageRenderer(size: size, format: fmt).image { ctx in
+            let cg = ctx.cgContext
+            // The flat fill goes down FIRST, so even if the gradient cannot be built the bitmap is
+            // still a full, opaque canvas rather than a transparent one.
+            topUI.setFill()
+            cg.fill(canvas)
+            guard let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                        colors: [topUI.cgColor, bottomUI.cgColor] as CFArray,
+                                        locations: [0, 1])
+            else { return }
+            // UIGraphicsImageRenderer hands out a FLIPPED context (origin top-left, y downwards), so
+            // y = 0 is the TOP and the top colour starts there. Drawing this the other way up is the
+            // classic way a gradient ships upside down, and it would be invisible in testing on any
+            // clip whose two sampled colours happen to be similar.
+            cg.drawLinearGradient(grad,
+                                  start: CGPoint(x: size.width / 2, y: 0),
+                                  end: CGPoint(x: size.width / 2, y: size.height),
+                                  options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+        }
+        if let cg = ui.cgImage { return CIImage(cgImage: cg) }
+        return CIImage(color: top).cropped(to: canvas)
     }
 }

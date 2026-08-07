@@ -561,7 +561,7 @@ final class StoriesService {
         // The editor's text, pen and crop ride the SAME export the trim and the 90-second split
         // already use, so a long edited clip is burned in once per segment rather than re-encoded a
         // second time on top of itself.
-        // `storyBackdrop`: a square/landscape clip gets the editor's blurred canvas BAKED into the
+        // `storyBackdrop`: a square/landscape clip gets a gradient canvas BAKED into the
         // file, so the posted story looks like the editor everywhere. Costs those clips the fast
         // copy path (they re-encode); 9:16 clips are untouched. See `VideoTranscoder.prepare`.
         guard let prepared = await VideoTranscoder.prepare(videoURL, maxSeconds: Double(Limits.storyVideoSeconds), stripAudio: muted, range: range,
