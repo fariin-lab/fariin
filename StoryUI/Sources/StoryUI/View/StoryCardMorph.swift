@@ -430,7 +430,27 @@ public final class StoryCardMorph {
         // Divided by `scale` because the transform will multiply it back.
         // The SHEET keeps its own `cornerRadius * f` exactly as it was: it is a different journey
         // (full screen into the viewers panel) and nobody has reported anything about it.
-        let flightRadius = cardCornerRadius + (cornerRadius - cardCornerRadius) * min(1, f / 0.12)
+        // ⚠️ NEVER ROUNDER THAN THE CARD ITSELF, OR THE CORNER OPENS A HOLE.
+        //
+        // The story card clips ITSELF at `cardCornerRadius` (StoryDetailView's 12), and that clip
+        // shrinks with the card: at scale 0.9 it renders as 10.8pt. The mask is applied to the
+        // container, so its radius renders at face value. Ask the mask for 22 while the content is
+        // only rounded to 10.8 and the crescent between the two curves contains NOTHING from the
+        // card — so the dimming wall behind shows through it, and the wall at the start of a drag is
+        // almost solid black.
+        //
+        // That is his 2026-08-07 report, and it is mine: the `f / 0.12` ramp I added in 492 reached
+        // the full 24 within a tenth of the journey, opening an 11pt gap while the card was still
+        // nearly full screen. Measured off his screenshot of a BRIGHT blue story: the picture reads
+        // (91,177,202), the wedge (0,9,23), the list outside (67,67,67). Black, not the photo.
+        //
+        // Capped at the card's own rendered corner. The card is already a rounded card, so this
+        // still looks rounded from the first millimetre — it simply stops claiming to be rounder
+        // than the thing inside it. The row end keeps its larger radius through the interpolation
+        // below, by which point the card's clip has shrunk so far that the cap is what governs and
+        // the cover is carrying the corner anyway.
+        let wanted = cardCornerRadius + (cornerRadius - cardCornerRadius) * min(1, f / 0.12)
+        let flightRadius = min(wanted, cardCornerRadius * scale)
         applyMask(on: card, sheet: sheet, rect: cropRect,
                   cornerRadius: (sheet ? cornerRadius * f : flightRadius) / scale,
                   outside: sheet ? 0 : chrome,
