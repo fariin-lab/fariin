@@ -1902,19 +1902,30 @@ struct StoryViewer: View {
                                           dim: heroDim(hero.f))
     }
 
-    /// HOW DARK THE CHAT LIST IS WHILE THE STORY IS IN THE AIR. Snapchat's, from his screenshots: the
-    /// list behind is clearly greyed down the moment the card starts to move, which is what makes the
-    /// story read as lifting off it.
+    /// THE WALL'S ALPHA, AS A FUNCTION OF WHERE THE CARD IS — and the two ends are DIFFERENT.
     ///
-    /// It rises fast and then LETS GO before the landing. A dim held all the way home would still be
-    /// on the screen at the instant the cover is taken away, so the chat list would snap from grey to
-    /// white in one frame — a flash exactly where the eye is. Up over the first 60pt of travel, full
-    /// through the middle, back to nothing over the last quarter. Symmetric, so the open fades it in
-    /// and out the same way on its way to full screen.
+    /// At the ROW end (f → 1) it lets go to nothing: the landing must reveal the chat list, and a
+    /// dim held all the way home would still be on screen at the instant the cover is taken away —
+    /// a grey-to-white flash exactly where the eye is. Down over the last quarter, as before.
+    ///
+    /// At the FULL-SCREEN end (f → 0) it goes to OPAQUE, not back to nothing. The wall IS the
+    /// story screen's black above and below the card, so it must arrive WITH the card. The first
+    /// curve here was symmetric ("fades in and out the same way at both ends"), which handed the
+    /// last stretch of every open to a transparent wall and then snapped to black at completion —
+    /// his first build-487 report, with the white strips circled top and bottom: "the black bottom
+    /// and top draws late… shows as the story fully opens". Ramping to opaque over the last 15%
+    /// also makes `resetFlight`'s black a visual no-op, and gives the close drag Telegram's look:
+    /// the letterbox black GIVES WAY progressively as the card leaves, instead of vanishing on the
+    /// first frame of the drag.
+    ///
+    /// In the middle: Snapchat's grey, from his screenshots — the list behind is clearly dimmed but
+    /// still readable, which is what makes the story read as lifting off it.
     private func heroDim(_ f: CGFloat) -> CGFloat {
-        let up = min(1, max(0, f) / 0.15)
-        let down = f > 0.75 ? max(0, (1 - f) / 0.25) : 1
-        return Self.heroDimMax * up * down
+        let f = max(0, min(1, f))
+        if f < 0.15 {
+            return 1 - (1 - Self.heroDimMax) * (f / 0.15)
+        }
+        return Self.heroDimMax * (f > 0.75 ? max(0, (1 - f) / 0.25) : 1)
     }
 
     /// THE CARD THIS STORY BELONGS TO RIGHT NOW, which is not always the one it was opened from.
