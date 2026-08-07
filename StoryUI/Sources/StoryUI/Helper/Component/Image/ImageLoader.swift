@@ -451,7 +451,35 @@ extension ImageLoader {
         installFreezeIfReady()
     }
 
+    /// ⚠️ NEVER SYNCHRONOUSLY. THIS IS THE CRASH.
+    ///
+    /// `rasterizeBlurBackdrop` needs `afterScreenUpdates: true`, and that flag does not just take a
+    /// picture: it forces a CoreAnimation commit first, which runs a full layout and render pass
+    /// there and then. `apply(_:)` is reached from `loadImageWithUrl`, which runs from
+    /// `updateUIView` — so on a memory-cache hit the picture was taken from INSIDE SwiftUI's own
+    /// update, and the commit re-entered the view graph while it was still building it. SwiftUI then
+    /// tore down and rebuilt a display list underneath itself.
+    ///
+    /// Build 495, `Kulan-2026-08-07-222010.ips`, EXC_BREAKPOINT in `__CFCheckCFInfoPACSignature`
+    /// under `_CFRelease` — an object released whose header no longer passes its integrity check —
+    /// at the bottom of a recursive `swift_arrayDestroy` chain out of
+    /// `DisplayList.ViewUpdater.render`. The stack reads the whole path in order:
+    /// `PlatformViewRepresentableAdaptor.updateViewProvider` → us → `UIGraphicsImageRenderer` → us →
+    /// `drawViewHierarchyInRect` → `_UIRenderViewImageAfterCommit` → `CA::Transaction::commit` →
+    /// `_UIHostingView.layoutSubviews` → the render that died.
+    ///
+    /// It is very likely the same root cause as the OTHER signature we have seen three times
+    /// (EXC_BAD_ACCESS in `StackLayout.makeChildren`, also on the AttributeGraph flush): the same
+    /// re-entrancy, blowing up one phase earlier. Intermittent because it needs the sheet engaged
+    /// AND an image that lands synchronously from memory.
+    ///
+    /// One hop off the current pass is the whole fix. Every guard below is re-checked when it lands,
+    /// so arriving a frame late is safe and a state that moved on simply declines.
     func installFreezeIfReady() {
+        DispatchQueue.main.async { [weak self] in self?.installFreezeNow() }
+    }
+
+    private func installFreezeNow() {
         guard Self.freezeWanted, frozenBlur == nil,
               imageView.image != nil, imageView.contentMode == .scaleAspectFit,
               bounds.width > 0, window != nil else { return }
