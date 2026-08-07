@@ -110,6 +110,9 @@ enum StoryZoomPresenter {
         // exit we did not drive would leave a permanent blank circle in the main screen of the app,
         // with no way back short of a relaunch. Idempotent, so calling it on every path is free.
         MediaSourceVisibility.shared.reveal()
+        // Same belt for the fold flag, which `tearDown` clears on the driven paths: left raised by
+        // an exit we did not drive, it would keep the NEXT story's cube flat for the whole visit.
+        StoryCardMorph.heroDismissActive = false
     }
 
     private static func topController() -> UIViewController? {
@@ -217,6 +220,11 @@ final class StoryZoomContainerVC: UIViewController {
         // back to identity — done before the dismissal that would be one frame of full-screen story
         // painted between the landing and the removal. Off-window, the reset touches nobody.
         dismiss(animated: false)
+        // THE CUBE STAYS FLAT UNTIL THE SCREEN IS GONE. The landing used to clear this, but the
+        // landing is 0.03s before the removal on this door — and an unflagged card that is still
+        // parked on the row card computes a large fold angle from its global minX. See the note in
+        // `land`, and StoryDetailView's own for what that fold looks like.
+        StoryCardMorph.heroDismissActive = false
         if StoryCardMorph.shared.flightCover === coverView { StoryCardMorph.shared.flightCover = nil }
         // Identity-checked detach, same contract as the pagers': a successor presented before this
         // teardown finishes must not lose its registration.

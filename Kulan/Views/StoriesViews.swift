@@ -2648,9 +2648,24 @@ struct StoryViewer: View {
             hero.closed = true
             // The card is home. Take the cover away with no animation of its own — see onHeroClose.
             if let onHeroClose { onHeroClose() } else { isPresented = false }
-            // Cleared here rather than on teardown: this is a static, so a viewer that left it
-            // raised would keep the NEXT story's cube flat for as long as that story was open.
-            StoryCardMorph.heroDismissActive = false
+            // ⚠️ NOT WHILE THE SCREEN IS STILL UP. This flag means "the card is being moved by
+            // something that is not a page swipe", and while it is raised `StoryDetailView` returns
+            // a fold angle of ZERO. Clearing it re-enables a fold that derives from the page's
+            // GLOBAL minX — and at this exact moment the card is parked on the row card, which is a
+            // long way from centre, so the angle it computes is large.
+            //
+            // On the presenter door the screen does not go away here. `heroClose` reveals the source
+            // and tears down 0.03s later, deliberately, so the row card is back underneath before
+            // the copy is lifted off it. Those two frames used to run with the fold switched back
+            // on over a card that is still displaced: the library's own comment for this flag calls
+            // that "a sudden violent 3D fold (flipped/black frames on close)". That is the shape of
+            // the post-dismissal flash.
+            //
+            // The presenter clears it in `tearDown`, when the screen is actually gone, and in
+            // `noteDismissed` for any exit we did not drive. The old cover door has no presenter and
+            // removes its viewer synchronously right here, so it still clears it itself — there,
+            // "landed" and "gone" really are the same instant.
+            if !StoryZoomPresenter.isActive { StoryCardMorph.heroDismissActive = false }
         }
         // The cover-and-hole landing belongs to the TAPPED person's slot alone: only that slot was
         // emptied, and only its pixels are on the cover. A close after swiping to somebody ELSE
