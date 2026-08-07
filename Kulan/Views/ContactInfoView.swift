@@ -147,7 +147,8 @@ struct ContactInfoView: View {
     @State private var showAvatarChoice = false     // has BOTH a story and a photo → ask which to open
     // Same zoom hero as everywhere else: the viewer grows out of the tapped thumbnail and the
     // drag-down close shrinks back into it.
-    @Namespace private var mediaNS
+    // (`mediaNS` is gone with the zoom transition it fed. Both of this screen's story circles
+    // register rects with `MediaOpenRects` now — that is what the flight reads.)
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
 
