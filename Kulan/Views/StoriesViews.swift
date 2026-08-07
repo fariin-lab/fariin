@@ -619,7 +619,9 @@ struct StoriesRow: View {
                       heroKey: String? = nil,
                       onBadge: (() -> Void)? = nil, tap: @escaping () -> Void) -> some View {
         // Button (not onTapGesture) so the caller's .contextMenu long-press fires reliably.
-        Button(action: tap) {
+        // Same dip as the friend cards; the compose fallback (nothing posted) gets it too, which
+        // just reads as the tap answering.
+        Button(action: { afterStoryDip(tap) }) {
         VStack(spacing: 6) {
             ZStack(alignment: .bottomLeading) {
                 coverImage(cover, name: name, avatarName: avatarName, avatar: avatar,
@@ -703,7 +705,7 @@ struct StoriesRow: View {
         .frame(width: cardW)
         .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(StoryCardDipStyle())
     }
 
     // addBadge (my card, NO stories yet): the reference app add-status look — a centered circle avatar (profile
@@ -741,6 +743,27 @@ struct StoriesRow: View {
     func reload() { Task { await repo.load(force: true) } }
 }
 
+/// THE TAP DIPS THE CARD, AND THE STORY FLIES OUT OF THE DIP (owner 2026-08-07, Snapchat named:
+/// "first do a small zoom-out animation, then smoothly zoom in again to directly open"). The dip
+/// is the Button's own pressed state, so a held finger keeps the card pressed and the release
+/// lets it spring back — nothing here is a canned sequence fighting the finger. The open is then
+/// delayed one beat (`afterStoryDip`) so the dip reads even on the fastest tap. The flight seats
+/// itself on the card's LIVE rectangle, wherever its spring-back has reached, and the open
+/// crossfade fades in over the springing card, so the dip and the lift read as one motion.
+private struct StoryCardDipStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.92 : 1)
+            .animation(.spring(response: 0.28, dampingFraction: 0.7), value: configuration.isPressed)
+    }
+}
+
+/// The beat between the tap and the open: long enough for the dip to be seen, short enough to
+/// read as response rather than lag.
+private func afterStoryDip(_ open: @escaping () -> Void) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: open)
+}
+
 // One friend's story card in the row. Its own Equatable view so the long-press context menu stays
 // armed across the row's re-renders (the inline-ForEach version only worked on the first card).
 private struct StoryFriendCard: View, Equatable {
@@ -764,7 +787,7 @@ private struct StoryFriendCard: View, Equatable {
     private var cardH: CGFloat { cardW * 1.46 }
 
     var body: some View {
-        Button(action: onOpen) {
+        Button(action: { afterStoryDip(onOpen) }) {
             VStack(spacing: 6) {
                 ZStack(alignment: .bottomLeading) {
                     coverView
@@ -787,7 +810,7 @@ private struct StoryFriendCard: View, Equatable {
             .frame(width: cardW)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(StoryCardDipStyle())
         // NATIVE iOS context menu (build 181 look). Each card owns its menu built from its OWN
         // props, and the explicit `preview:` lifts just the rounded photo. The row is OUTSIDE the
         // chat List now (which was what collapsed per-card menus into one), so per-card native menus
