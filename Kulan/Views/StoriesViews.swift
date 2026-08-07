@@ -1966,7 +1966,12 @@ struct StoryViewer: View {
             let name = StoriesService.isPending(s.id)
                 ? StoriesService.shared.uploadingAudienceName(for: s.id)
                 : (StoryPrefs.audienceName(storyId: s.id) ?? "")
+            // The owner's own folder drawing (2026-08-07). OUTLINE here: this pill is a thin line of
+            // white over a photograph, next to a light-weight name, and the filled version reads as a
+            // blob at 12pt. The filled one is used where the glyph sits on a solid tinted circle —
+            // the same outline-vs-filled split the app's other icon pairs already use.
             return StoryAudienceBadge(systemImage: "person.crop.rectangle.stack",
+                                      assetImage: "ic_story_folder",
                                       text: name.isEmpty ? "Custom" : name)
         default: return StoryAudienceBadge(systemImage: "person.2.fill", text: "My Friends")
         }

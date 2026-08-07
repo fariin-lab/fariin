@@ -89,7 +89,20 @@ struct StoryAudienceRow<Trailing: View>: View {
         } else {
             ZStack {
                 Circle().fill(badgeTint.gradient)
-                Image(systemName: badgeIcon).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                // A custom list wears the owner's own folder drawing (2026-08-07), FILLED: it is a
+                // white glyph on a solid tinted circle, which is exactly where the filled weight
+                // belongs. The outline of the same pair is used on the viewer's audience pill, where
+                // the glyph sits over a photograph.
+                if audience.kind == .custom {
+                    Image("ic_story_folder_fill")
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 19, height: 19)
+                        .foregroundStyle(.white)
+                } else {
+                    Image(systemName: badgeIcon).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                }
             }
             .frame(width: 40, height: 40)
         }

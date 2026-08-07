@@ -19,9 +19,17 @@ import Foundation
 /// it into the plain word "Custom".
 public struct StoryAudienceBadge: Hashable {
     public let systemImage: String
+    /// An ASSET name from the app's own catalogue, drawn instead of `systemImage` when set.
+    ///
+    /// The custom-audience badge is the owner's own drawing (`ic_story_folder`), and it lives in the
+    /// app target rather than in this package — so the view resolves it against `Bundle.main`. Left
+    /// optional and defaulted so every existing badge keeps passing an SF Symbol and nothing else in
+    /// the file changes.
+    public let assetImage: String?
     public let text: String
-    public init(systemImage: String, text: String) {
+    public init(systemImage: String, assetImage: String? = nil, text: String) {
         self.systemImage = systemImage
+        self.assetImage = assetImage
         self.text = text
     }
 }

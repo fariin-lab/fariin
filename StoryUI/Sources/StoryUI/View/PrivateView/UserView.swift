@@ -58,8 +58,20 @@ struct UserView: View {
                     }
                     if let audience {
                         HStack(spacing: 5) {
-                            Image(systemName: audience.systemImage)
-                                .font(.system(size: 11, weight: .semibold))
+                            // An asset wins when there is one. Sized by FRAME rather than by font,
+                            // because a drawn glyph has no text metrics to follow, and squared to
+                            // the symbol's own optical size so the pill's height does not change
+                            // depending on which audience a story went to.
+                            if let asset = audience.assetImage {
+                                Image(asset, bundle: .main)
+                                    .renderingMode(.template)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 12, height: 12)
+                            } else {
+                                Image(systemName: audience.systemImage)
+                                    .font(.system(size: 11, weight: .semibold))
+                            }
                             Text(audience.text).font(.system(size: 12, weight: .regular))
                                 .lineLimit(1)
                         }
