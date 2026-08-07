@@ -1970,13 +1970,33 @@ struct StoryViewer: View {
     /// inner view the sheet shrinks — for a friend's story that is UIPageViewController's private
     /// scroll view, and transforming it while UIKit animated it is the build-481 crash. The inner
     /// card still belongs to the viewers sheet; the flight now has a view of its own.
+    /// THE SHAPE THE FLIGHT LANDS IN, ASKED OF THE SOURCE RATHER THAN ASSUMED.
+    ///
+    /// This was a hardcoded 24, which is the story row card's radius and nothing else's. Every source
+    /// that registers itself with `MediaOpenRects` already reports its REAL corner radius — the
+    /// machinery has been there since the chat media transition, where a flat 14 made bubbles change
+    /// shape at the hand-over — and the story flight was the one caller ignoring it.
+    ///
+    /// ⚠️ THIS IS WHAT MAKES SNAPCHAT'S CIRCLE WORK, and it is why the circle needed almost no new
+    /// code. A chat-row ring or a profile avatar reports its radius as half its width; the flight
+    /// then interpolates to a full circle on its own, and the crop that already converges the card to
+    /// the target's ASPECT (square, for an avatar) is what crops the story to fill as it rounds. Card
+    /// from the row, circle from an avatar, one system, no per-site branch.
+    private var heroLandingRadius: CGFloat {
+        let key = MediaOpenRects.key(.storyRow, heroKeyNow())
+        // A source that never registered a radius answers 14, which is not this screen's default, so
+        // fall back to the row card's 24 rather than to the chat bubble's number.
+        let r = MediaOpenRects.cornerRadius(key)
+        return r == 14 ? 24 : r
+    }
+
     private func applyHero() {
         guard StoryCardMorph.shared.isFlightAvailable else { return }
         let f = hero.f
         StoryCardMorph.shared.applyFlight(fraction: f,
                                           targetSize: hero.anchor.size,
                                           targetCenter: CGPoint(x: hero.anchor.midX, y: hero.anchor.midY),
-                                          cornerRadius: 24,
+                                          cornerRadius: heroLandingRadius,
                                           centerOverride: hero.center,
                                           alpha: hero.alpha,
                                           dim: heroDim(f),
