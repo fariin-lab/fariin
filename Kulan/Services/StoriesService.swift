@@ -48,6 +48,14 @@ struct Story: Identifiable, Hashable, Codable {
     /// Each recipient may open it exactly once. Enforced on the server by removing them from
     /// `recipientUids` the moment they do — see `StoryPrefs.consumeOneTime` and `onStoryConsumed`.
     var oneTime: Bool = false
+    /// How many of the people this story was sent to are still in its audience — and therefore, for
+    /// a one-time story, how many of them have NOT used their single view yet. It counts down as
+    /// each one opens it, because that is precisely what consuming a one-time story does: the
+    /// server takes them out of `recipientUids`.
+    ///
+    /// MY OWN STORIES ONLY. Nobody else may read that field (it is the author's audience list), so
+    /// for everybody else's stories this stays at -1, which means "not known" and never "nobody".
+    var recipientsLeft: Int = -1
 
     // What card/ring/reply thumbnails should render: the photo itself, or the video's poster.
     // Every image consumer (row cards, morph carousel, reply quotes, archive) reads THIS, never
@@ -940,7 +948,11 @@ final class StoriesRepository {
                          // a public story is caught by the `public` flag below it.
                          audienceLabel: data["audienceLabel"] as? String
                             ?? ((data["public"] as? Bool ?? false) ? "everyone" : "friends"),
-                         oneTime: data["oneTime"] as? Bool ?? false)
+                         oneTime: data["oneTime"] as? Bool ?? false,
+                         // Only my own story hands this over — see the property.
+                         recipientsLeft: author == me
+                            ? ((data["recipientUids"] as? [String])?.count ?? -1)
+                            : -1)
         }
     }
 
@@ -1068,7 +1080,19 @@ final class StoriesRepository {
         // Snapshot every live-mutated input on the main actor.
         let inputs: RebuildInputs? = await MainActor.run {
             guard let me = listeningUid else { return nil }
-            return (me, (othersStories + mineStories).filter { $0.expiresAt > now },
+            // ⚠️ THE ONE-TIME FILTER RUNS HERE TOO, NOT ONLY IN `parse`.
+            //
+            // `parse` reads a SNAPSHOT, and a story I have just opened produces no snapshot for
+            // several seconds: my consumption receipt has to reach Firestore, `onStoryConsumed` has
+            // to fire, and only then does the recipients query stop matching. Until it did, the
+            // parsed struct sat in `othersStories` and every regroup put it straight back in the
+            // tray — so the card was still there and could be opened again and again. His report,
+            // exactly: "a user can finish viewing the story and still see/open that same story".
+            // Filtering the cached list as well makes the local flag bite immediately, on the
+            // regroup the viewer's own close already asks for, without waiting for the server.
+            return (me, (othersStories + mineStories)
+                        .filter { $0.expiresAt > now }
+                        .filter { !($0.oneTime && $0.authorUid != me && StoryPrefs.isOneTimeUsed($0.id)) },
                     ConversationsRepository.shared.conversations,
                     ProfileStore.shared.me?.name ?? "You",
                     ProfileStore.shared.me?.photoUrl,

@@ -2771,6 +2771,16 @@ struct StoryViewer: View {
     // Views/reactions/delete controls, shared by the gradient overlay bar and the solid footer.
     private var ownerControls: some View {
         let reactions = barViewers.filter { !($0.reaction ?? "").isEmpty }.count
+        // EVERY SELECTED VIEWER HAS USED THEIR ONE VIEW (owner 2026-08-07: "when all selected users
+        // have viewed the story once, show Once Viewer Is Full to me").
+        //
+        // Counted from the audience itself rather than from the receipts, and that is the only
+        // honest count: consuming a one-time story IS being removed from `recipientUids`, so an
+        // empty audience means everybody has been through, while a view receipt is a setting the
+        // viewer can turn off. `recipientsLeft` is -1 on anything that is not my own story, so this
+        // can never read "full" from a story whose audience we are not allowed to see.
+        let s = currentStory
+        let oneTimeFull = (s?.oneTime ?? false) && s?.recipientsLeft == 0
         return HStack(spacing: 12) {
             Button { openViewers() } label: {
                 HStack(spacing: 8) {
@@ -2782,10 +2792,16 @@ struct StoryViewer: View {
                             }
                         }
                     } else {
-                        Image(systemName: "eye").font(.subheadline).foregroundStyle(.white)
+                        Image(systemName: oneTimeFull ? "1.circle" : "eye")
+                            .font(.subheadline).foregroundStyle(.white)
                     }
-                    Text("\(barViewers.count) View\(barViewers.count == 1 ? "" : "s")")
+                    // The label carries the state rather than a second chip beside it: this row
+                    // already holds avatars, a count, hearts and the bin, and for a one-time story
+                    // "everybody has seen it" and "N views" are the same sentence twice.
+                    Text(oneTimeFull ? "Once viewer is full"
+                                     : "\(barViewers.count) View\(barViewers.count == 1 ? "" : "s")")
                         .font(.subheadline.weight(.medium)).foregroundStyle(.white)
+                        .lineLimit(1)
                     if reactions > 0 {
                         Image(systemName: "heart.fill").font(.subheadline).foregroundStyle(.red)
                         Text("\(reactions)").font(.subheadline).foregroundStyle(.white)
