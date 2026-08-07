@@ -309,8 +309,14 @@ enum StoryPrefs {
     /// Deliberately NOT the thing that makes one-time work. If this file were deleted the story would
     /// still be gone, because it is gone on the server.
     static func isOneTimeUsed(_ storyId: String) -> Bool { set("oneTimeUsed").contains(storyId) }
+    /// ⚠️ `mutateOrdered`, NOT `save`. This store was written with the plain append-and-save pair,
+    /// which is the shape the seen and liked stores were explicitly moved OFF because they "grew
+    /// forever" — see the note above `mutateOrdered`. Every one-time story id ever opened would have
+    /// sat in UserDefaults for the life of the install, and UserDefaults is read into memory at
+    /// launch, so it becomes a launch cost that only ever grows. Same 1000-id cap as the others.
     static func markOneTimeUsed(_ storyId: String) {
-        var s = set("oneTimeUsed"); s.insert(storyId); save("oneTimeUsed", s)
+        guard !storyId.isEmpty, !isOneTimeUsed(storyId) else { return }
+        mutateOrdered("oneTimeUsed") { $0.append(storyId) }
     }
 
     /// THE NAME OF A CUSTOM STORY I POSTED, kept here and nowhere else.

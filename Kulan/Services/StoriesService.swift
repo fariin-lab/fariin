@@ -882,6 +882,20 @@ final class StoriesRepository {
     private var mineReg: ListenerRegistration?
     private var ctxReg: ListenerRegistration?
     private var listeningUid: String?               // re-attach when the signed-in user changes
+    /// ⚠️ WHICH REBUILD IS ALLOWED TO PUBLISH. Bumped by every rebuild as it starts; a rebuild only
+    /// writes its result if it is still the newest one when it finishes.
+    ///
+    /// All three snapshot listeners end with `Task { await rebuild() }`, so three of them race into
+    /// the same function, and `rebuild` awaits a network fetch for authors who are not in my chats.
+    /// That is a real round trip, so a rebuild that STARTED with older data can FINISH after a newer
+    /// one — the newer one finds those profiles already cached and returns fast — and the stale
+    /// result lands last and wins. Symptom: a story you just deleted flickering back, or one you just
+    /// posted vanishing for a beat, and only when somebody outside your chats has a story, which is
+    /// what would have made it look random.
+    ///
+    /// The account guard below is NOT this guard: it catches switching user, and both of these
+    /// rebuilds belong to the same account.
+    private var rebuildGeneration = 0
     private var othersStories: [Story] = []
     private var mineStories: [Story] = []
     private var profileCache: [String: (String, String?)] = [:]   // unknown-author name/photo
@@ -1123,9 +1137,14 @@ final class StoriesRepository {
 
     private func rebuild() async {
         let now = Date()
+        // Claimed on the main actor with the inputs, so the number and the data it describes are
+        // taken in the same hop and cannot disagree.
+        var generation = 0
         // Snapshot every live-mutated input on the main actor.
         let inputs: RebuildInputs? = await MainActor.run {
             guard let me = listeningUid else { return nil }
+            rebuildGeneration &+= 1
+            generation = rebuildGeneration
             // ⚠️ THE ONE-TIME FILTER RUNS HERE TOO, NOT ONLY IN `parse`.
             //
             // `parse` reads a SNAPSHOT, and a story I have just opened produces no snapshot for
@@ -1208,6 +1227,10 @@ final class StoriesRepository {
             // would repaint the previous account's story row for the next person, right after
             // reset() cleared it (audit). reset() nils listeningUid, so this is the test.
             guard self.listeningUid == me else { return }
+            // AND ONLY IF NOTHING NEWER HAS STARTED. See `rebuildGeneration`. A rebuild that has
+            // been overtaken while it waited on profile fetches is holding an older picture of the
+            // world, and publishing it would undo whatever the newer one has already drawn.
+            guard generation == self.rebuildGeneration else { return }
             for (u, p) in profiles where cachedProfiles[u] == nil { profileCache[u] = p }
             // Apply the freshest watermark to each group so a rebuild can never REGRESS a ring
             // to unseen while the view write is still in flight (H8, watermark edition).
