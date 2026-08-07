@@ -906,6 +906,18 @@ final class StoriesRepository {
     private var rebuildGeneration = 0
     private var othersStories: [Story] = []
     private var mineStories: [Story] = []
+    /// ⚠️ HAS THE SERVER ANSWERED THIS LISTENER YET, in this session.
+    ///
+    /// The empty-cached-snapshot guard below exists for the COLD START and nothing else: offline at
+    /// launch, Firestore answers from an empty cache and the row would blank out before the seeded
+    /// one could be seen. Without knowing whether the server had ever spoken, that guard could not
+    /// tell that opening case apart from a real emptying, so it swallowed both — and the one story
+    /// that empties a query is the LAST one, which is exactly the case somebody notices. Delete your
+    /// only story with a poor connection and the card stayed on the row.
+    ///
+    /// Once the server has answered once, an empty snapshot means empty. See `start`.
+    private var mineFromServer = false
+    private var othersFromServer = false
     private var profileCache: [String: (String, String?)] = [:]   // unknown-author name/photo
     private var expiryTask: Task<Void, Never>?      // wakes at the next expiresAt → drop that card
 
@@ -1102,15 +1114,16 @@ final class StoriesRepository {
         othersReg = db.collection("stories").whereField("recipientUids", arrayContains: me)
             .addSnapshotListener { [weak self] snap, error in
                 guard let self, let snap else { if let error { print("stories listen error:", error) }; return }
-                // Offline cold-start: ignore an empty cached snapshot so the last-known row stays.
-                if snap.metadata.isFromCache && snap.documents.isEmpty { return }
+                if !snap.metadata.isFromCache { self.othersFromServer = true }
+                if Self.ignoreColdEmpty(snap, serverHasSpoken: self.othersFromServer) { return }
                 self.othersStories = self.parse(snap.documents)
                 Task { await self.rebuild() }
             }
         mineReg = db.collection("stories").whereField("authorUid", isEqualTo: me)
             .addSnapshotListener { [weak self] snap, error in
                 guard let self, let snap else { if let error { print("my stories listen error:", error) }; return }
-                if snap.metadata.isFromCache && snap.documents.isEmpty { return }
+                if !snap.metadata.isFromCache { self.mineFromServer = true }
+                if Self.ignoreColdEmpty(snap, serverHasSpoken: self.mineFromServer) { return }
                 self.mineStories = self.parse(snap.documents)
                 Task { await self.rebuild() }
             }
@@ -1130,11 +1143,32 @@ final class StoriesRepository {
             }
     }
 
+    /// THE OFFLINE COLD START, AND ONLY THAT: an empty snapshot out of the cache, before the server
+    /// has ever answered this listener, with no unacknowledged write of ours to explain it.
+    ///
+    /// Everything else is a real emptying and has to be applied. The case this used to swallow is
+    /// the one that matters: deleting your LAST story is the only delete that empties the query, and
+    /// on a slow connection Firestore reports it from the cache first, so the guard threw the truth
+    /// away and the card stayed on the row. `hasPendingWrites` is what names that snapshot as the
+    /// consequence of my own delete rather than an empty cache, and it is true from the moment the
+    /// local mutation lands until the server acknowledges it.
+    ///
+    /// Static, so it cannot read the flag it is being told about — a stored property passed into a
+    /// method of its own owner is the exclusivity trap `markSeenLocally` already paid for once.
+    private static func ignoreColdEmpty(_ snap: QuerySnapshot, serverHasSpoken: Bool) -> Bool {
+        snap.metadata.isFromCache && snap.documents.isEmpty
+            && !snap.metadata.hasPendingWrites && !serverHasSpoken
+    }
+
     @MainActor private func stop() {
         othersReg?.remove(); othersReg = nil
         mineReg?.remove(); mineReg = nil
         ctxReg?.remove(); ctxReg = nil
         listeningUid = nil
+        // A new account gets a new cold start. Left true, the first empty cached snapshot after a
+        // sign-in would be applied as though the server had already confirmed the row was empty.
+        mineFromServer = false
+        othersFromServer = false
     }
 
     // Regroup the cached live inputs into the row's groups. Cheap (no story reads); only
