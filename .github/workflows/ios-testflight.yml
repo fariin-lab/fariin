@@ -74,17 +74,17 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THE PICTURE THAT FLIES WAS BLANK, AND NOW IT IS NOT. That is why the preview only ever changed after the card had landed: the app was photographing an empty frame instead of the card, so there was nothing to cross-fade with and the real card had to snap in at the very end. It photographs the card itself now.
+            THE STORY STAYS SOLID WHILE YOU PULL IT. It was going slightly see-through as you dragged, and with the chat list drawn right behind it even a few percent reads as glass. It is fully opaque now, the whole way down and the whole way back.
 
-            THE EXCHANGE HAPPENS ON THE WAY HOME, not under your finger. Three clean phases: while you drag, the story you were watching stays exactly as it is, nothing swaps. The moment you let go, the flying card cross-fades into the row picture, avatar ring and border and all, over the snap. It is finished at four-fifths of the way down, so the last stretch is already wearing the row card and the hand-over at the end swaps two identical pictures.
+            NOTHING IS CROPPED UNDER YOUR FINGER. The picture was being shaved from the top and bottom while you were still dragging. Now the drag is a pure scale-down of the whole picture, nothing removed, and the shape only settles into the row card's shape during the snap after you let go.
 
-            THE TOP AND BOTTOM STOPPED POPPING IN. The black above and below the card, the reply bar and the footers now fade with the card's own travel instead of switching on when it stops.
+            THE WHITE CORNERS ARE GONE. Our mask was drawing a plain circular corner while every card it has to line up with uses Apple's continuous curve. The sliver between those two curves was being filled with a piece of the chat list, which is what you saw as a white rind. Both shapes match now.
 
-            VIEW ONCE ACTUALLY ENDS NOW. The server piece that was meant to drop you from a one-time story after you finished it did not exist, so those stories stayed in the tray and could be reopened. Fixed on the phone in this build; the server half goes up separately.
+            YOUR OWN STORY NO LONGER SHOWS BLACK TOP AND BOTTOM. Your story sits on a full-screen black layer that other people's stories do not have, which is exactly why theirs looked right and yours did not. That black now leaves on the first frame of a pull instead of fading out over the first three centimetres.
 
-            POSTING THREE PICTURES SHOWS THREE. Each post in the air gets its own card with its own progress, so you can page between them instead of seeing one upload repeated.
+            ROUNDED CORNERS THE WHOLE WAY, and the opening is quicker. The corner used to collapse to square whenever the card was near full screen, which is most of what you watch during an open. It now runs between the row card's corner and the story card's own, so it is round at every moment. The strip under the card that carries the reply bar is rounded too, instead of being a square shoulder under a round card.
 
-            ALSO: the audience line (My Friends, Everyone, a custom list) is yours alone now and nobody else sees it, and a story posted to a custom list no longer says My Friends while it uploads. Video captions sit inside the picture like photo captions do. The CAMERA / TEXT switch is real glass that melts from word to word. Can't Call now speaks straight away when you press call on a profile.
+            ADD SEVERAL PICTURES AT ONCE. Tap + in the story editor and you can now tick as many as you want. Each tick is numbered so you can see the order they will land in, a preview strip along the bottom shows what you have chosen, tapping a preview removes it, and Add brings all of them straight back to the editor. Up to ten at a time.
 
-            WHAT TO CHECK, slow motion welcome: pull a story down slowly and hold. Nothing at all should change while your finger is down. Let go, and watch the picture become the row card during the flight. When it lands there must be zero change: no jump, no flash, no avatar appearing late. Then post one story to a custom list and watch what the uploading card says, and finish a view-once story and try to open it again.
+            WHAT TO CHECK: pull a story down slowly and hold. It must stay solid, nothing cropped, corners round from the start. Do the same on your OWN story and watch the top and bottom: no black over the chat list. Open a story and look at all four corners. Then tap + in the editor and add three pictures in one go.
         run: fastlane beta
