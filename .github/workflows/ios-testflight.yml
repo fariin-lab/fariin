@@ -74,6 +74,18 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
+            DOWNLOADED STORIES SURVIVE AN APP UPDATE NOW. Story pictures and videos were being kept in the folder iOS empties whenever the phone runs low on space, and that folder is not carried across an app update - so everything you had already downloaded went back to needing the internet. They live in permanent storage with the rest of your media now, and anything already on your phone is moved across on first launch rather than lost. They delete themselves after two days, which is what Telegram uses for stories.
+
+            THE CAMERA / TEXT SWITCH IS ONE PIECE OF GLASS. It was a glass track with a second glass pill on top of it, and two materials stacked on a black background both come out looking like grey plastic. Apple's own segmented glass has no track at all, just the selected word.
+
+            SWIPING THE VIEWERS SHEET NO LONGER PILES THE CARDS UP. The sheet was handing the carousel a distance measured in points while the carousel was reading it as a number of cards, so a few millimetres threw the row sideways by tens of cards. Swiping the card itself was never affected, which is exactly why it only happened on the sheet.
+
+            SQUARE AND LETTERBOXED VIDEOS GET A GRADIENT INSTEAD OF BLACK BARS. Posting one now fills the space above and below with a smooth gradient taken from the video's own colours, baked into the file so it looks the same for everyone. This replaces the blur, which had four separate ways to quietly produce nothing and fall back to black bars.
+
+            WHAT TO CHECK: post a square video and look at the top and bottom. Then open a story you have already watched with wifi off. Then swipe the viewers sheet sideways across several of your own stories.
+
+            ALSO IN THIS BUILD, from earlier today:
+
             THE STORY STAYS SOLID WHILE YOU PULL IT. It was going slightly see-through as you dragged, and with the chat list drawn right behind it even a few percent reads as glass. It is fully opaque now, the whole way down and the whole way back.
 
             NOTHING IS CROPPED UNDER YOUR FINGER. The picture was being shaved from the top and bottom while you were still dragging. Now the drag is a pure scale-down of the whole picture, nothing removed, and the shape only settles into the row card's shape during the snap after you let go.
