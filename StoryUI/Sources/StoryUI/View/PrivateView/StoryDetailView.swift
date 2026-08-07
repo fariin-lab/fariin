@@ -159,7 +159,14 @@ struct StoryDetailView: View {
         self.onItemSeen = onItemSeen
         self.showMore = showMore
         self.isDismissing = isDismissing
-        _timerProgress = State(initialValue: CGFloat(model.stories.firstIndex(where: { !$0.isSeen }) ?? 0))
+        // A page swiped two people away is dismantled and REBUILT when you come back, so the resume
+        // has to be answered here as well as in `.onChange` — otherwise going back far enough still
+        // restarted the person. Split into named steps rather than a chain of `??`: this file has
+        // twice cost a CI round to the type-checker.
+        let resume = viewModel.lastIndex[model.id]
+        let firstUnseen = model.stories.firstIndex(where: { !$0.isSeen })
+        let start = min(max(0, resume ?? firstUnseen ?? 0), max(0, model.stories.count - 1))
+        _timerProgress = State(initialValue: CGFloat(start))
     }
 
     private var messageViewPosition: CGFloat {
@@ -350,16 +357,23 @@ struct StoryDetailView: View {
         }
         .onChange(of: viewModel.currentStoryUser) { newValue in
             NotificationCenter.default.post(name: .stopVideo, object: nil)
+            // ON THE WAY OUT, BEFORE `resetProgress` WIPES IT. This fires on every mounted page, so
+            // the one being left is the one whose id no longer matches — and its `timerProgress`
+            // still holds where the finger got to.
+            if newValue != model.id { rememberPosition() }
             resetProgress()
-            // When this bucket becomes current, open at the FIRST UNSEEN item (e.g. a new
-            // story D after A/B/C were seen) instead of always restarting at item 0.
-            if newValue == model.id { timerProgress = CGFloat(firstUnseenIndex()) }
+            // When this bucket becomes current, open where it was left in this session, else at the
+            // FIRST UNSEEN item (e.g. a new story D after A/B/C were seen), else at the start.
+            // Asking `firstUnseenIndex` here unconditionally is what restarted a fully-watched
+            // person at item 1 every single time you swiped back to them.
+            if newValue == model.id { timerProgress = CGFloat(resumeIndex()) }
             playVideo()
         }
         .onAppear {
             // First open of the viewer (onChange(currentStoryUser) doesn't fire for the initial bucket):
-            // land on the first unseen item too.
-            if viewModel.currentStoryUser == model.id { timerProgress = CGFloat(firstUnseenIndex()) }
+            // land on the first unseen item too. `lastIndex` is empty on a fresh viewer, so this is
+            // the same answer it always gave.
+            if viewModel.currentStoryUser == model.id { timerProgress = CGFloat(resumeIndex()) }
         }
         .onReceive(timer) { _ in
             startProgress()
@@ -867,6 +881,23 @@ private extension StoryDetailView {
     // First UNSEEN item index (open-at-newest). All seen → 0 (replay from the start).
     func firstUnseenIndex() -> Int {
         model.stories.firstIndex(where: { !$0.isSeen }) ?? 0
+    }
+
+    /// WHERE THIS PERSON OPENS. The place they were left in this session if there is one, otherwise
+    /// their first unseen item, otherwise the start. See `StoryViewModel.lastIndex` for why the
+    /// memory lives there and why it is not persisted.
+    func resumeIndex() -> Int {
+        let idx = viewModel.lastIndex[model.id] ?? firstUnseenIndex()
+        return min(max(0, idx), max(0, model.stories.count - 1))
+    }
+
+    /// Remember where this person was left, on the way out. `timerProgress` counts items with the
+    /// progress through the current one as its fraction, so its integer part IS the index; it is
+    /// guarded for non-finite because a bad video duration has produced one before (see
+    /// `getVideoProgressBarFrame`).
+    func rememberPosition() {
+        let raw = timerProgress.isFinite ? Int(timerProgress) : 0
+        viewModel.lastIndex[model.id] = min(max(0, raw), max(0, model.stories.count - 1))
     }
     
     func resetAVPlayer() {

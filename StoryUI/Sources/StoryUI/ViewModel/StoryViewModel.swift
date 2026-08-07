@@ -8,9 +8,24 @@
 import Foundation
 
 final class StoryViewModel: ObservableObject {
-    
+
     @Published var currentStoryUser: String = ""
     @Published var stories: [StoryUIModel] = []
+
+    /// WHERE EACH PERSON WAS LEFT, FOR THIS VIEWING SESSION ONLY. Keyed by bucket id.
+    ///
+    /// Instagram's and Snapchat's rule, and the owner's report: swiping back to somebody you were
+    /// watching two seconds ago restarted them at item 1, because the only answer the viewer had for
+    /// "where does this person open" was `firstUnseenIndex()` — which falls back to 0 the moment
+    /// everything of theirs is watched, and it was asked again on every bucket change rather than
+    /// only on the way in.
+    ///
+    /// Deliberately NOT @Published: it is read when a page is built or becomes current, never
+    /// rendered, and publishing it would invalidate every page on each swipe.
+    ///
+    /// Deliberately NOT persisted either. It dies with the viewer, which is what makes a FRESH open
+    /// of a fully-watched person replay from the start, exactly as both apps do.
+    var lastIndex: [String: Int] = [:]
     
     /// NEVER ZERO, and that floor is what stops the app dying.
     ///
