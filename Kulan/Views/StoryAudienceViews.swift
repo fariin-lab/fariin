@@ -94,11 +94,17 @@ struct StoryAudienceRow<Trailing: View>: View {
                 // belongs. The outline of the same pair is used on the viewer's audience pill, where
                 // the glyph sits over a photograph.
                 if audience.kind == .custom {
+                    // ⚠️ 23, NOT 19, and the reason is that these two are not measured the same way.
+                    // `person.2.fill` beside it is an SF Symbol at 17pt, and a symbol's point size is
+                    // its CAP HEIGHT, not its box — it draws noticeably wider and taller than 17.
+                    // A drawn glyph given a 19pt frame really is 19pt, so the folder came out visibly
+                    // smaller than its neighbour inside the same 40pt circle. His report, and it is
+                    // the standard way a custom icon ends up looking undersized next to a symbol.
                     Image("ic_story_folder_fill")
                         .renderingMode(.template)
                         .resizable()
                         .scaledToFit()
-                        .frame(width: 19, height: 19)
+                        .frame(width: 23, height: 23)
                         .foregroundStyle(.white)
                 } else {
                     Image(systemName: badgeIcon).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
