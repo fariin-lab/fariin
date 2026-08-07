@@ -74,25 +74,18 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            STORIES BUILD. Eight changes, all of them stories.
+            TWO CHANGES. Everything else you are testing is build 496.
 
-            LONG PRESS ON THE STORIES ROW is the app's own menu now, not Apple's. What lifts off the row is a photograph of the card that is on screen, so it no longer reloads its picture, move its avatar or wear a caption the card does not have. The row and a chat message press the same way.
+            THE CAMERA / TEXT BAR, on your fifth report. I went and read Signal's source this time. Their control is a plain UISegmentedControl and on iOS 26 they set NOTHING on it except the font and the two text colours. Every line that paints the track is switched off. Painting the track is what makes it grey plastic, and that is what I had been doing five different ways. Ours is now their control with their settings and nothing else.
 
-            THE CENTRE CARD IN THE VIEWERS CAROUSEL no longer ends up behind its neighbours. The middle of that row is the real story, and the signal that hides it only knew about fingers, so paging the sheet sideways left it uncovered for a third of a second while the other cards slid over the top of it.
+            THE CRASH, root cause found and fixed. The .ips you sent at 22:20 was a DIFFERENT crash from the three before it, and unlike them it had our own code in the stack. When you pull the viewers sheet up, the app photographs the blurred background to freeze it. That photograph forces the system to redraw the whole screen there and then, and it was happening in the middle of SwiftUI building the screen, so SwiftUI destroyed and rebuilt a view list underneath itself. It needed the sheet open AND an image loading from memory at the same moment, which is why it looked random.
 
-            THE CAPTION AND SHADOW ON A VIDEO CARD are gone for good. Two earlier attempts moved when the picture was taken; this one changes what the picture is, so there is no timing left to get wrong.
+            I believe this is also the other crash, the one that happened three times, caught one step earlier. Cannot prove it, but it is the only place in the app doing this.
 
-            THE RING HOLDS STILL while you are inside somebody's story, the way the order already does. Watching their last unseen story used to grey the ring out underneath you, and you saw it change colour at the moment the story landed back on the card.
+            WHAT TO CHECK: the CAMERA / TEXT bar, whether it now reads as real glass. And use the app normally. If it crashes again, send the .ips, the signature tells me straight away whether it is the same one.
 
-            THE VIDEO EDITOR shows the background the export actually bakes. You were framing clips against a blur and getting a gradient back.
+            PREVIOUS BUILD 496, still worth testing if you have not: eight story fixes including the carousel centre card, captions on video covers, the ring holding still, and mobile data no longer pulling story videos.
 
-            DELETING YOUR LAST STORY on a poor connection now works. The app could not tell an empty result from an empty cache, so the card stayed on the row.
+            STILL OPEN, do not report again yet: the story pausing by itself after you come back into the app (I asked you two questions about it), and edited videos exporting with black bars instead of the gradient.
 
-            SPECULATIVE DOWNLOADS stand down on mobile data. A guard that was meant to stop this only covered Low Data Mode, which nobody turns on, so the app was pulling story videos over your data plan without being asked. Covers still load, so nothing gets slower to open.
-
-            THE UPLOADING CARD cannot go blank half way through an upload any more.
-
-            WHAT TO CHECK. Long press the stories row, several cards, and check the lift is the card itself. Open your own story, pull the viewers sheet up, and swipe sideways fast, watching that the middle card stays on top. Post a video story and check the card has no caption on it. Watch a friend's last unseen story and check their ring only greys after you leave.
-
-            STILL OPEN, do not report these again yet: the story pausing by itself after you come back into the app, and an EDITED video (drawing or text on it) still exporting with black bars instead of the gradient. Both are next.
         run: fastlane beta
