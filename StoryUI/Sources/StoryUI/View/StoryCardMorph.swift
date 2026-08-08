@@ -117,6 +117,14 @@ public final class StoryCardMorph {
     /// shoulders through the gap.
     static let circleCoverSpan: CGFloat = 0.82
 
+    /// How much of a LEAVING circular flight is spent becoming the circle, measured from full
+    /// screen. His number: "within the first 10-15% of the interactive drag progress",
+    /// `min(1.0, gestureProgress * 6.0)` — which is 1/6, and 0.15 is that rounded to the tighter
+    /// end of the range he gave. Past it the mask is a true circle for every remaining frame.
+    /// Not the same journey as `circleCoverSpan` and deliberately not the same number: see the two
+    /// notes in `applyCore`.
+    static let circleRushSpan: CGFloat = 0.15
+
     public func setFlightCoverAlpha(_ a: CGFloat) {
         guard let flightCover else { return }
         CATransaction.begin()
@@ -271,13 +279,17 @@ public final class StoryCardMorph {
     ///   - crop: how much of the story's height is shaved to reach the row slot's shorter shape,
     ///     0…1. **The drag passes 0 and a flight drives it** — see the note in `applyCore`. Defaulted
     ///     to 1 so any caller that does not care keeps the original geometry exactly.
+    ///   - exiting: this flight is LEAVING (a pull and the landing that follows it), as opposed to
+    ///     an open. Only a circular door reads it, and only to pick which way its circle is timed —
+    ///     see `circleRushSpan`.
     public func applyFlight(fraction: CGFloat, targetSize: CGSize, targetCenter: CGPoint, cornerRadius: CGFloat,
                             centerOverride: CGPoint? = nil, alpha: CGFloat = 1, dim: CGFloat? = nil,
-                            chrome: CGFloat = 0, crop: CGFloat = 1) {
+                            chrome: CGFloat = 0, crop: CGFloat = 1, exiting: Bool = false) {
         guard let flightCard else { return }
         applyCore(on: flightCard, sheet: false, fraction: fraction, targetSize: targetSize,
                   targetCenter: targetCenter, cornerRadius: cornerRadius,
-                  centerOverride: centerOverride, alpha: alpha, dim: dim, chrome: chrome, crop: crop)
+                  centerOverride: centerOverride, alpha: alpha, dim: dim, chrome: chrome, crop: crop,
+                  exiting: exiting)
     }
 
     /// Flight over: container back to identity, unmasked — and the wall behind it opaque again. The
@@ -354,7 +366,8 @@ public final class StoryCardMorph {
         // and below the card. Only the flight defers it.
         applyCore(on: card, sheet: true, fraction: fraction, targetSize: targetSize,
                   targetCenter: targetCenter, cornerRadius: cornerRadius,
-                  centerOverride: centerOverride, alpha: alpha, dim: dim, chrome: 0, crop: 1)
+                  centerOverride: centerOverride, alpha: alpha, dim: dim, chrome: 0, crop: 1,
+                  exiting: false)
     }
 
     /// The one copy of the interpolation, serving both targets. `sheet` picks the mask slot and the
@@ -362,7 +375,7 @@ public final class StoryCardMorph {
     private func applyCore(on card: UIView, sheet: Bool,
                            fraction: CGFloat, targetSize: CGSize, targetCenter: CGPoint,
                            cornerRadius: CGFloat, centerOverride: CGPoint?, alpha: CGFloat, dim: CGFloat?,
-                           chrome: CGFloat, crop: CGFloat) {
+                           chrome: CGFloat, crop: CGFloat, exiting: Bool) {
         guard let superview = card.superview else { return }
         let f = max(0, min(1, fraction))
         // The dim is written before the early-out: a drag that has begun but not yet moved is still a
@@ -453,8 +466,39 @@ public final class StoryCardMorph {
         let cropRect: CGRect
         if circular {
             let diag = (restW * restW + restH * restH).squareRoot()
-            let open = 1 - f                     // 0 at the avatar, 1 at full screen
-            let side = restW + (diag - restW) * min(1, open / Self.circleCoverSpan)
+            let side: CGFloat
+            if exiting {
+                // ⚠️ THE CLOSE RUSHES TO THE CIRCLE; THE OPEN CANNOT, AND THAT ASYMMETRY IS THE
+                // WHOLE POINT.
+                //
+                // His 2026-08-08 spec, from a Snapchat comparison: "the cornerRadius scales
+                // linearly during the drag, keeping the frame rectangle-shaped for too long…
+                // reach a 100% full circle mask within the first 10-15% of the drag,
+                // min(1.0, gestureProgress * 6.0)". His screenshot is what "too long" looks like:
+                // a story from a chat ring, pulled well down, still a tall rounded slab with the
+                // card's own letterbox black domed at top and bottom.
+                //
+                // The old curve was written for the OPEN and then used for both. Read on a pull it
+                // says: hold the crop at the card's DIAGONAL (a square containing the whole card, so
+                // nothing is cut at all) until the card is 18% of the way home, and only then
+                // converge to a circle — so the circle exists for the last stretch and the rest of
+                // the drag is a rectangle. Exactly the complaint.
+                //
+                // Leaving, the circle is formed in the first 15% and then simply travels: past that
+                // point every frame is a true circle shrinking towards the ring it came from, which
+                // is his "seamlessly shrinks down and snaps directly to the origin avatar".
+                side = diag + (restW - diag) * min(1, f / Self.circleRushSpan)
+            } else {
+                // The OPEN keeps the gentle curve, and must. The circle CUTS the card's corners, and
+                // what lies outside the card is the page's black shoulders — hidden only while the
+                // mask's surround is still cropped away. That surround fades back in over the last
+                // 18% (`heroChromeSpan`), so the circle has to be gone by then, and reaching the
+                // diagonal at `circleCoverSpan` is the same event seen from the other end. Rush the
+                // open and the corners of a full-screen story would show black while the reply bar
+                // arrives. See the note above this one for what the circle is for.
+                let open = 1 - f                 // 0 at the avatar, 1 at full screen
+                side = restW + (diag - restW) * min(1, open / Self.circleCoverSpan)
+            }
             cropRect = CGRect(x: content.midX - side / 2, y: content.midY - side / 2,
                               width: side, height: side)
         } else {

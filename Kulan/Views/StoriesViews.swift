@@ -1668,7 +1668,12 @@ struct StoryViewer: View {
                                           alpha: hero.alpha,
                                           dim: heroDim(f),
                                           chrome: heroChrome(f),
-                                          crop: hero.crop)
+                                          crop: hero.crop,
+                                          // A circular door times its circle differently coming and
+                                          // going — see `StoryCardMorph.circleRushSpan`. This is the
+                                          // same flag `heroChrome` reads, so the two cannot disagree
+                                          // about which direction the flight is travelling.
+                                          exiting: hero.exiting)
         // THE COVER BELONGS TO THE FLIGHT, NOT TO THE FINGER. Written by whichever run is going
         // (see `HeroBox.coverAlpha`); the drag holds it at 0, so what is under the hand is story A,
         // unaltered, all the way down.
