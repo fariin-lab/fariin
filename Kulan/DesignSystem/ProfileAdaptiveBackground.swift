@@ -47,13 +47,26 @@ final class ProfileAdaptiveTheme {
     let leftAccent: UIColor
     let rightAccent: UIColor
     let dominant: UIColor
+    /// THE PAGE ITSELF: the photo, cropped the way the header crops it and downscaled to 160x200.
+    ///
+    /// His reference (Nextgram, 2026-08-08) does not paint a colour behind a profile at all — it
+    /// keeps the PHOTO going down the whole screen, blurred. Every colour-only approximation before
+    /// this one was rejected, and this is why: a flat field has no texture for a translucent panel
+    /// to sit on, so the cards read as painted shapes however the colour is chosen.
+    ///
+    /// 160x200 because it is only ever seen through a heavy blur — the same reason the poster's own
+    /// wash is 32x48. Keeping the full-size bitmap alive per profile would be the expensive way to
+    /// get an image nobody can see the detail of.
+    let canvas: UIImage
 
-    private init(key: String, seam: UIColor, leftAccent: UIColor, rightAccent: UIColor, dominant: UIColor) {
+    private init(key: String, seam: UIColor, leftAccent: UIColor, rightAccent: UIColor,
+                 dominant: UIColor, canvas: UIImage) {
         self.key = key
         self.seam = seam
         self.leftAccent = leftAccent
         self.rightAccent = rightAccent
         self.dominant = dominant
+        self.canvas = canvas
     }
 
     // MARK: Cache
@@ -168,102 +181,116 @@ final class ProfileAdaptiveTheme {
         // and letting that decide the page's colour is how you get a grey background under a
         // colourful photo.
         let lower = (h / 3)..<h
+
+        // THE PAGE'S OWN PICTURE, from the SAME crop the colours came from, so the background and
+        // the numbers describing it can never be of two different framings.
+        guard let canvas = downscale(crop, to: CGSize(width: 160, height: 200)) else { return nil }
+
         return ProfileAdaptiveTheme(key: key,
                                     seam: seam,
                                     leftAccent: vivid(x: 0..<(w / 2), y: lower),
                                     rightAccent: vivid(x: (w / 2)..<w, y: lower),
-                                    dominant: average(x: 0..<w, y: lower))
+                                    dominant: average(x: 0..<w, y: lower),
+                                    canvas: canvas)
+    }
+
+    /// A small opaque copy of the crop. Opaque on purpose: the page behind it is the plain system
+    /// background, and a bitmap with an alpha channel would let that grey through the blur at the
+    /// edges.
+    private static func downscale(_ cg: CGImage, to size: CGSize) -> UIImage? {
+        let f = UIGraphicsImageRendererFormat.default()
+        f.opaque = true
+        f.scale = 1
+        let img = UIGraphicsImageRenderer(size: size, format: f).image { _ in
+            UIImage(cgImage: cg).draw(in: CGRect(origin: .zero, size: size))
+        }
+        return img
     }
 
     // MARK: What the page draws
 
-    /// The nine colours of the 3x3 mesh, top row first.
+    /// The colour the header's photo must ARRIVE at, which is the colour the page begins with.
     ///
-    /// **The top row is three copies of one colour on purpose.** Any horizontal variation there would
-    /// meet the photo's own bottom edge as a line of changing colour, and a line of changing colour
-    /// along a horizontal join is precisely what the eye reads as a seam. The character comes in on
-    /// the middle row, a third of the way down the page, where there is no edge for it to draw.
-    /// The colour the header's photo must ARRIVE at, which is the mesh's own first row.
-    ///
-    /// ⚠️ ONE FUNCTION, TWO READERS, and it has to stay that way: the page begins on this colour and
-    /// the photo fades into it, so the moment the two are computed separately the join reappears.
-    /// The muting below is applied on BOTH sides for exactly that reason — the photo now fades into
-    /// something deeper than its own bottom edge, which reads as the picture settling, not as a line.
+    /// ⚠️ ONE FUNCTION, TWO READERS, and it has to stay that way: the page holds this colour solid
+    /// across the whole region the header covers, and the header fades its photo into it. The moment
+    /// the two are computed separately, a line appears where they meet — which this screen has been
+    /// reported for three times.
     func canvasSeam(dark: Bool) -> Color {
         Color(uiColor: ProfileSurfaceTone.muteCanvas(seam, dark: dark))
-    }
-
-    func mesh(dark: Bool) -> [Color] {
-        // MUTED AT THE SOURCE, once, so every stop below inherits it and no stop can be built from
-        // the raw photo colour by accident. See `ProfileSurfaceTone.muteCanvas` for why a frosted
-        // card needs this to be here at all.
-        let top = ProfileSurfaceTone.muteCanvas(seam, dark: dark)
-        let dom = ProfileSurfaceTone.muteCanvas(dominant, dark: dark)
-        let accL = ProfileSurfaceTone.muteCanvas(leftAccent.vibrant(1.12), dark: dark)
-        let accR = ProfileSurfaceTone.muteCanvas(rightAccent.vibrant(1.12), dark: dark)
-
-        let mid = dom.mixed(with: top, 0.35)
-        let midL = accL.mixed(with: mid, 0.55)
-        let midR = accR.mixed(with: mid, 0.55)
-        // WHERE THE PAGE SETTLES. It still walks down toward the bottom of the screen, so the eye
-        // has somewhere to rest and the lowest cards sit against the deepest colour — but from the
-        // already-muted stops above, not from the raw photo, and no longer up toward white in light
-        // mode. Washing the page out was what left `.ultraThinMaterial` with nothing to frost.
-        let floor = dom.scaled(brightness: dark ? 0.70 : 0.88, saturation: 1)
-        let floorL = accL.scaled(brightness: dark ? 0.74 : 0.90, saturation: 0.95)
-        let floorR = accR.scaled(brightness: dark ? 0.74 : 0.90, saturation: 0.95)
-        return [Color(uiColor: top), Color(uiColor: top), Color(uiColor: top),
-                Color(uiColor: midL), Color(uiColor: mid), Color(uiColor: midR),
-                Color(uiColor: floorL), Color(uiColor: floor), Color(uiColor: floorR)]
     }
 }
 
 // MARK: - The background itself
 
-/// The full-page adaptive background: a mesh of the photo's own colours, softened, running from the
-/// photo's bottom edge to the bottom of the screen.
+/// The full-page adaptive background: the person's own photo, blurred, running the whole screen.
 ///
-/// A `MeshGradient` rather than hand-stacked radial blobs because it is native (see the standing
-/// preference for native over hand-rolled), because its colours are animatable — which is the whole
-/// of the "smooth when you switch profiles" requirement, for free — and because nine control points
-/// give the soft, uneven bleed a stack of linear gradients cannot.
-///
-/// The blur on top is small. The mesh is already smooth; what the blur buys is the last of the
-/// banding on a large flat area, which is the one artefact a gradient this size can show.
+/// THE PICTURE, NOT A PALETTE. This was a `MeshGradient` of extracted colours through four rounds of
+/// his verdicts and it was rejected every time, in four different ways. His Nextgram reference
+/// (2026-08-08) shows why: that app does not paint a colour behind a profile at all, it keeps the
+/// PHOTO going down the whole screen under a heavy blur. You can still see the shape of the sea in
+/// his screenshot. A flat field, however cleverly its colours are chosen, gives a translucent panel
+/// nothing to sit on — which is the whole of "cards look painted" and why every fill, tint and
+/// material tried on top of the mesh read as a shape rather than as glass.
 struct ProfileAdaptiveBackdrop: View {
     let theme: ProfileAdaptiveTheme?
     /// Drawn when there is no photo to read, which is the stated fallback: an ordinary system page.
     let fallback: Color
     @Environment(\.colorScheme) private var scheme
 
-    /// Fixed mesh points. Not a perfect grid — the middle row is pulled slightly off centre so the
-    /// bleed reads as light through glass rather than as three stripes.
-    private static let points: [SIMD2<Float>] = [
-        .init(0, 0),    .init(0.5, 0),    .init(1, 0),
-        .init(0, 0.42), .init(0.52, 0.5), .init(1, 0.44),
-        .init(0, 1),    .init(0.5, 1),    .init(1, 1),
-    ]
-
     var body: some View {
         ZStack {
             fallback
             if let theme {
-                MeshGradient(width: 3, height: 3,
-                             points: Self.points,
-                             colors: theme.mesh(dark: scheme == .dark))
-                    // Blur samples beyond the view's edges and would fade them out; scaling the
-                    // blurred result pushes that soft rim off screen instead of letting it draw a
-                    // pale border down the sides.
-                    .blur(radius: 26)
-                    .scaleEffect(1.3)
+                Color.clear
+                    .overlay {
+                        Image(uiImage: theme.canvas)
+                            .resizable()
+                            .scaledToFill()
+                            // HEAVY, because none of the picture is meant to be legible down here —
+                            // only its colours, roughly where they were. `opaque: true` keeps the
+                            // blur from pulling transparency in at the edges of the bitmap.
+                            .blur(radius: 44, opaque: true)
+                            // Scaled AFTER the blur, so the soft rim a blur always leaves is pushed
+                            // off screen instead of drawing a pale border down both sides.
+                            .scaleEffect(1.25)
+                    }
+                    .clipped()
+                    .overlay(seamVeil(theme))
+                    .overlay(settle)
             }
         }
-        // ONE animation, on the colours. Identity is deliberately NOT keyed to the theme: keeping the
-        // same MeshGradient and handing it new colours is what makes switching profiles a wash from
-        // one palette to the next rather than a cross-fade between two pictures.
+        // ONE animation, on the colours, so moving from one person to the next is a wash rather than
+        // a cut. Identity is deliberately not keyed to the theme.
         .animation(.easeInOut(duration: 0.45), value: theme?.key)
         .ignoresSafeArea()
         .allowsHitTesting(false)
+    }
+
+    /// ⚠️ THE JOIN, AND WHY IT CANNOT SHOW.
+    ///
+    /// The header's photo fades into `canvasSeam` at its own bottom edge, which lands a little under
+    /// halfway down the screen. So the page holds that SAME colour, solid, to 45% — comfortably past
+    /// wherever the header actually ends on any device — and only then dissolves into the blurred
+    /// picture underneath, finishing at 85%. Two consequences worth keeping: the crossover happens
+    /// between a colour and itself, and every pixel of the blurred photo that is revealed is well
+    /// below the join, in the region where the cards live and the texture is wanted.
+    private func seamVeil(_ theme: ProfileAdaptiveTheme) -> some View {
+        let seam = theme.canvasSeam(dark: scheme == .dark)
+        return LinearGradient(stops: [
+            .init(color: seam, location: 0),
+            .init(color: seam, location: 0.45),
+            .init(color: seam.opacity(0), location: 0.85),
+        ], startPoint: .top, endPoint: .bottom)
+    }
+
+    /// The page settles toward the bottom so the lowest cards keep their contrast and the picture
+    /// does not simply stop. Down toward black in dark mode, up toward white in light.
+    private var settle: some View {
+        let dark = scheme == .dark
+        return LinearGradient(stops: [
+            .init(color: (dark ? Color.black : Color.white).opacity(0), location: 0.45),
+            .init(color: (dark ? Color.black : Color.white).opacity(dark ? 0.30 : 0.22), location: 1),
+        ], startPoint: .top, endPoint: .bottom)
     }
 }
 
