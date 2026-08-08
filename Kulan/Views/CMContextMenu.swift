@@ -250,15 +250,34 @@ final class CMOverlay: UIView {
             bar.alpha = 0
         }
 
-        // the reference app's `animationDuration / 2.0` = 0.2, plain (default ease-in-out), started the moment
-        // the overlay appears — i.e. after the 0.2 press and the 0.2 squeeze, never during them.
-        UIView.animate(withDuration: 0.2) {
-            self.blurView.effect = UIBlurEffect(style: .regular)
-            self.blurView.backgroundColor = UIColor { tc in
-                tc.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.2)
-                                               : UIColor(white: 0, alpha: 0.2)
+        // ⚠️ ONE RUNLOOP LATER, AND THAT IS THE WHOLE FIX. His 2026-08-08 report: the blur "is coming
+        // one time feeling like pop", not gradually.
+        //
+        // The numbers here were never wrong — they are the reference app's, `animationDuration / 2.0`
+        // = 0.2, plain ease-in-out, and their code animates `blurView.effect` in exactly this way.
+        // What differs is WHEN. Theirs runs in `viewDidAppear`, so by the time it starts, their view
+        // is in the window, laid out, and has already rendered a frame with `effect == nil`. Ours ran
+        // in the same runloop turn as `addSubview`, when the blur view had never been drawn at all —
+        // and a `UIVisualEffectView` can only interpolate an effect change if it has already
+        // rendered the effect it is coming FROM. With no starting frame there is nothing to
+        // interpolate, so UIKit applies the blur in one step. That is the pop.
+        //
+        // `layoutIfNeeded` puts the geometry in place now; the hop to the next turn is what lets a
+        // frame be committed at effect-nil first. This is the same moment `viewDidAppear` would be,
+        // reached the way a view added straight to the window has to reach it.
+        layoutIfNeeded()
+        DispatchQueue.main.async { [weak self] in
+            // Dismissed inside that one turn (a press cancelled immediately): there is nothing left
+            // to blur and turning it on now would light up an overlay on its way out.
+            guard let self, !self.dismissing, self.superview != nil else { return }
+            UIView.animate(withDuration: 0.2) {
+                self.blurView.effect = UIBlurEffect(style: .regular)
+                self.blurView.backgroundColor = UIColor { tc in
+                    tc.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.2)
+                                                   : UIColor(white: 0, alpha: 0.2)
+                }
+                self.setPreviewShadow(true)
             }
-            self.setPreviewShadow(true)
         }
 
         // TELEGRAM TAKES THE MENU'S ALPHA OUT OF THE SPRING. Theirs is opaque in 0.05 and its whole
