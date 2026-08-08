@@ -931,6 +931,11 @@ final class StoryCardUIView: UIControl {
         return nameLabel.convert(nameLabel.bounds, to: nil)
     }
 
+    /// The label itself, so the lift can photograph IT rather than the window under it. A window
+    /// crop of a label is the chat list with glyphs on top — his white box. See
+    /// `StoryMenuTarget.labelView`.
+    var labelView: UIView? { labelWindowRect == nil ? nil : nameLabel }
+
     /// The written-down rectangle stays as the fallback for anything that asks before the view can
     /// answer. Refreshed on layout and on every scroll, in window space, at the card's real radius.
     func publishRect() {
@@ -1542,7 +1547,7 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
             return StoryMenuTarget(key: MediaOpenRects.key(.storyRow, m.id), rect: r, actions: [
                 CMAction(title: "Add Story", icon: "ic_stories") { [weak self] in self?.onCompose() },
                 CMAction(title: "Posted Stories", icon: "circle.dashed") { [weak self] in self?.onOpen(m) },
-            ], labelRect: myCard.labelWindowRect)
+            ], labelRect: myCard.labelWindowRect, labelView: myCard.labelView)
         }
         for g in displayedOthers {
             guard let r = hit(g.id) else { continue }
@@ -1554,7 +1559,8 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
                 },
                 // The name is lifted with the card now (his "also show Name"). It comes from the card
                 // itself rather than from the group, so what rises is the label the row is drawing.
-            ], labelRect: friendCards[g.id]?.labelWindowRect)
+            ], labelRect: friendCards[g.id]?.labelWindowRect,
+               labelView: friendCards[g.id]?.labelView)
         }
         return nil
     }

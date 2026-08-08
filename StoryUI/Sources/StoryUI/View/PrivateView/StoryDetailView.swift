@@ -52,9 +52,21 @@ private struct SheetCaptionFade: ViewModifier {
     /// draws the drag, and this guarantees the end state no matter how the drag got there.
     @State private var chromeHidden = false
 
+    /// AND GONE FOR A FLIGHT TOO (his 2026-08-08: "when i scroll down to close story plz hide
+    /// caption").
+    ///
+    /// The caption is drawn inside the card, so unlike the reply bar it shrinks with it and had no
+    /// reason to leave — the card's own chrome staying put is Snapchat's look and it is deliberate.
+    /// But a caption is a paragraph of text, and a paragraph rendered at a third of its size over a
+    /// picture the size of a row card is a smudge, not a caption. `storyFlightActive` is already
+    /// the app's answer to "is the card in the air", posted on the FIRST frame of a pull (an exit
+    /// hides the surround at once) and coming back over the last 18% of an arrival — so the caption
+    /// now leaves with the reply bar and returns with it, which is one event instead of two.
+    @State private var flightActive = false
+
     /// Linear, straight off the finger — but never visible once the chrome is down.
     private var opacity: Double {
-        if chromeHidden { return 0 }
+        if chromeHidden || flightActive { return 0 }
         let t = min(1, max(0, progress / Self.goneAt))
         return Double(1 - t)
     }
@@ -87,6 +99,16 @@ private struct SheetCaptionFade: ViewModifier {
                 // fade's own number with it, or a leftover progress from the pull that just ended
                 // would hold the caption invisible until the next drag happened to overwrite it.
                 if !hidden { progress = 0 }
+            }
+            // The card is in the air: the caption goes with the reply bar. See `flightActive`.
+            .onReceive(NotificationCenter.default.publisher(for: .init("storyFlightActive"))) { note in
+                let active = (note.object as? Bool) ?? false
+                guard flightActive != active else { return }
+                flightActive = active
+                // Same reset as above, and for the same reason: a drag that was cancelled mid-fade
+                // leaves a stale progress behind, and the flight's own end is a reliable moment to
+                // clear it.
+                if !active { progress = 0 }
             }
     }
 }

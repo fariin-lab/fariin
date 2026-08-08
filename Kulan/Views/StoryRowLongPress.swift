@@ -66,6 +66,13 @@ struct StoryMenuTarget {
     /// included in the card's crop, because the card is rounded and the name is not: one image with
     /// one corner radius would round the bottom of the label.
     var labelRect: CGRect? = nil
+    /// THE LABEL ITSELF, so its picture can be taken from its OWN layer tree rather than off the
+    /// window. A window crop is right for the card (its pixels are a photo, a ring and a badge
+    /// composited by the row) but wrong for the name: a `UILabel` draws only glyphs, and everything
+    /// around them in a window crop is the CHAT LIST — white in light mode. That is the white box
+    /// he circled on 2026-08-08, "make it only text". Rendered from the label, the strip is
+    /// transparent everywhere the text is not. See `StoryCardShot.render`.
+    var labelView: UIView? = nil
 }
 
 /// A picture of what is really on screen inside `rect`.
@@ -294,8 +301,11 @@ struct StoryRowLongPress: UIViewRepresentable {
                     ? [.flexibleWidth, .flexibleHeight]
                     : [.flexibleWidth, .flexibleHeight, .flexibleBottomMargin]
                 container.addSubview(image)
-                if let lr = t.labelRect,
-                   let nameShot = StoryCardShot.crop(lr, in: window, cornerRadius: 0) {
+                // ⚠️ RENDERED FROM THE LABEL, NOT CROPPED OUT OF THE WINDOW — see `labelView`. The
+                // card above is a window crop because its pixels really are on the window; the name
+                // is glyphs on nothing, and a window crop of "nothing" is the chat list.
+                if let lr = t.labelRect, let lv = t.labelView,
+                   let nameShot = StoryCardShot.render(lv, cornerRadius: 0) {
                     let name = UIImageView(image: nameShot)
                     name.frame = CGRect(x: lr.minX - frame.minX, y: lr.minY - frame.minY,
                                         width: lr.width, height: lr.height)
