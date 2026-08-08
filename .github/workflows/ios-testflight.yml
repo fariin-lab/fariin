@@ -74,17 +74,25 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            TWO CHANGES. Everything else you are testing is build 496.
+            THE WHOLE STORY OPEN AND CLOSE WAS REBUILT. This is the biggest change to stories since the viewer itself, so please push on it.
 
-            THE CAMERA / TEXT BAR, on your fifth report. I went and read Signal's source this time. Their control is a plain UISegmentedControl and on iOS 26 they set NOTHING on it except the font and the two text colours. Every line that paints the track is switched off. Painting the track is what makes it grey plastic, and that is what I had been doing five different ways. Ours is now their control with their settings and nothing else.
+            SIX PLACES OPENED STORIES SIX DIFFERENT WAYS. The stories row, the ring on a chat, the archive, a contact's profile, My Story in Settings, and a reply quote each had their own open and their own close written separately. That is why a fix to one never reached the others, and why scrolling down felt like a different gesture depending on which circle you tapped. There is one now. All six go through the same code.
 
-            THE CRASH, root cause found and fixed. The .ips you sent at 22:20 was a DIFFERENT crash from the three before it, and unlike them it had our own code in the stack. When you pull the viewers sheet up, the app photographs the blurred background to freeze it. That photograph forces the system to redraw the whole screen there and then, and it was happening in the middle of SwiftUI building the screen, so SwiftUI destroyed and rebuilt a view list underneath itself. It needed the sheet open AND an image loading from memory at the same moment, which is why it looked random.
+            THE CIRCLE IS ACTUALLY ROUND. On a chat ring and on a profile photo the story is meant to grow out of the circle and shrink back into it, Snapchat style. It was really growing as a rounded rectangle with a round picture sitting on top for the first moment. It stays round the whole way now. Cards still open as cards.
 
-            I believe this is also the other crash, the one that happened three times, caught one step earlier. Cannot prove it, but it is the only place in the app doing this.
+            SCROLLING DOWN HAS A LIMIT, your screenshot of the story sitting under the tab bar. It stops at about a third of the screen and will not go further or slide off the bottom.
 
-            WHAT TO CHECK: the CAMERA / TEXT bar, whether it now reads as real glass. And use the app normally. If it crashes again, send the .ips, the signature tells me straight away whether it is the same one.
+            SCROLLING DOWN LANDS ON THE RIGHT PERSON. Open the first person, swipe to the second, third, fourth, then pull down, and it used to fly back to the FIRST one. It goes back to the person you were watching, and the row is sitting on them afterwards.
 
-            PREVIOUS BUILD 496, still worth testing if you have not: eight story fixes including the carousel centre card, captions on video covers, the ring holding still, and mobile data no longer pulling story videos.
+            THE WHITE CORNERS. They were in the photograph, not in the corners. When a story opens, the app takes a picture of the card you tapped, and the four corners of a square picture around a rounded card are the chat list behind it. My last two attempts tried to cover them up, which is why it got worse rather than better. They are cut out of the picture itself now.
+
+            THE BACKGROUND STAYS DARKER while you drag, on your Telegram comparison. Not as dark as Telegram, which you said was too much. Roughly half way between, nearer Snapchat.
+
+            ALSO: the Add button in the photo picker was a blank white pill (white text on white). The New Custom Story icon was too big next to the flame.
+
+            AND FROM THE BUILD THAT NEVER UPLOADED: the CAMERA / TEXT bar is Signal's own control now, and the crash root cause is fixed. Apple blocked that upload, not us, so you are seeing those for the first time here.
+
+            WHAT TO CHECK FIRST: open a story from all six places and close each one by scrolling down. Anything that feels different from the others is a mistake I made.
 
             STILL OPEN, do not report again yet: the story pausing by itself after you come back into the app (I asked you two questions about it), and edited videos exporting with black bars instead of the gradient.
 
