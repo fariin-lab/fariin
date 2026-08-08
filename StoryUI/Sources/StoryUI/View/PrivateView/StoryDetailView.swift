@@ -308,10 +308,17 @@ struct StoryDetailView: View {
                             // drag. Snapchat's dismissal looks the way it does for the same reason —
                             // what pulls away is the picture and nothing else.
                             .background(Color.black)
-                            // Flatten the card (photo + UIKit blur backdrop) into ONE layer first: a bare
-                            // .clipShape does NOT clip the ImageLoader's UIVisualEffectView (its backdrop
-                            // composites separately and spills past the mask, so the bottom stayed square).
-                            // compositingGroup forces a single layer the round-corner mask can actually cut.
+                            // ⚠️ THE REASON THIS WAS ADDED IS GONE, AND IT IS STILL HERE ON PURPOSE.
+                            // It was here because a bare `.clipShape` does not clip a
+                            // `UIVisualEffectView` — ImageLoader's blur backdrop composited
+                            // separately and spilled past the mask, so the card's bottom stayed
+                            // square. That backdrop is a `CAGradientLayer` now (`StoryCanvas`) and an
+                            // ordinary clip cuts it, so this is no longer load-bearing for corners.
+                            // It is kept because it also flattens the card for the flight mask and
+                            // the dismiss transform below, and unpicking that belongs to a change to
+                            // the story flight, not to a change to the backdrop. Removing it is a
+                            // real (small) win — an offscreen pass per frame — for whoever next has
+                            // the flight open and a device to check it on.
                             .compositingGroup()
                             // All four corners now, not just the bottom two: the card has a visible top
                             // edge for the first time, because it starts below the status bar.

@@ -148,6 +148,15 @@ struct StoryImage: View {
                         // layout the way the aspect-filled copy of the photo it replaced could, so
                         // the `Color.clear` overlay nesting that used to be needed to contain that
                         // copy is gone with it.
+                        //
+                        // ⚠️ THIS IS THE SEAM AND IT IS SUPPOSED TO BE INVISIBLE, so do not "fix" it
+                        // by cropping or by dimming the edges. The carousel slot is taller than 9:16
+                        // (see `cardSlot`), so even a story that was baked to fill a story frame is
+                        // FIT here and wears a canvas around it. Those extra strips read as
+                        // continuous because the strip's colours are sampled from the file's own top
+                        // and bottom bands — which, for a baked story, ARE the ends of the gradient
+                        // already in it. The canvas continues the picture rather than framing it.
+                        // That only holds while both sides go through `StoryCanvas`.
                         ZStack {
                             LinearGradient(colors: [canvas?.top ?? .black, canvas?.bottom ?? .black],
                                            startPoint: .top, endPoint: .bottom)
