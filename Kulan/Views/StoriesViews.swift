@@ -120,7 +120,7 @@ struct StoryImage: View {
             // would draw one frame of photo-on-black before the gradient arrived, and one frame of
             // black bars under a moving finger is exactly the flash this initializer exists to stop.
             if fitCanvas, !Self.fills(warm, threshold: cardFillThreshold) {
-                _canvas = State(initialValue: Self.colours(of: warm))
+                _canvas = State(initialValue: Self.colours(of: warm, url: url))
             }
         }
     }
@@ -203,9 +203,41 @@ struct StoryImage: View {
     /// Through `StoryCanvas`, the same sampler the story viewer and the export both read. A card in
     /// the carousel and the full-screen story behind it are the same photo, and they must not be
     /// able to disagree about what colour sits behind it.
-    private static func colours(of img: UIImage) -> (top: Color, bottom: Color) {
+    ///
+    /// ⚠️ CACHED PER URL, AND THAT IS NOT AN OPTIMISATION, IT IS WHAT MAKES THE `init` CALL LEGAL.
+    /// `init` seeds these colours so a warm card never draws a frame of black bars, and SwiftUI
+    /// builds a view struct on EVERY body evaluation — so during a sheet page-drag this would run
+    /// two crops and two 8x8 context draws per card per frame. That is main-thread pixel work in the
+    /// middle of a gesture, which is the lag it would have caused. One dictionary lookup instead,
+    /// and the sampling happens once per photo for the life of the process.
+    /// ⚠️ AN `NSCache`, WHICH IS THREAD-SAFE, and that is the whole reason it is not a dictionary.
+    /// A plain static dictionary here would be written from `init` (main) and from `apply`'s
+    /// continuation, and concurrent writes to a Swift dictionary are how `StoryPrefs`' static cache
+    /// became a SIGSEGV on every cold start (build 177, a few lines down this same file). NSCache
+    /// also gives the memory back under pressure, which for a pair of colours costs a re-sample.
+    private final class ColourPair { let top: Color, bottom: Color
+        init(_ t: Color, _ b: Color) { top = t; bottom = b } }
+    private static let colourCache = NSCache<NSString, ColourPair>()
+
+    private static func cachedColours(_ url: String) -> (top: Color, bottom: Color)? {
+        guard let p = colourCache.object(forKey: url as NSString) else { return nil }
+        return (p.top, p.bottom)
+    }
+
+    @discardableResult
+    private static func storeColours(_ url: String, _ pair: (top: Color, bottom: Color))
+    -> (top: Color, bottom: Color) {
+        colourCache.setObject(ColourPair(pair.top, pair.bottom), forKey: url as NSString)
+        return pair
+    }
+
+    /// The seeding path, for `init` only: a hit is a cache lookup, and a miss samples once and
+    /// remembers. `init` runs on EVERY body evaluation, so a miss must never be the common case —
+    /// and it is not, because the same url is sampled once and answered from the cache thereafter.
+    private static func colours(of img: UIImage, url: String) -> (top: Color, bottom: Color) {
+        if let hit = cachedColours(url) { return hit }
         let c = StoryCanvas.colours(of: img)
-        return (Color(uiColor: c.top), Color(uiColor: c.bottom))
+        return storeColours(url, (Color(uiColor: c.top), Color(uiColor: c.bottom)))
     }
 
     @MainActor private func load() async {
@@ -232,11 +264,31 @@ struct StoryImage: View {
 
     @MainActor private func apply(_ img: UIImage) async {
         image = img
-        // Sample the canvas off-main: it reads an 8x8 grid out of two crops, which is cheap but not
-        // free, and this can land during the sheet drag.
         guard fitCanvas, !fillsScreen(img), canvas == nil else { return }
-        canvas = await Task.detached(priority: .userInitiated) { Self.colours(of: img) }.value
+        if let hit = Self.cachedColours(url) { canvas = hit; return }
+        // ⚠️ THE SAMPLING GOES OFF-MAIN, THE CACHE WRITE DOES NOT. `StoryCanvas.colours` is pure —
+        // it touches nothing shared — so it is safe anywhere; the dictionary is not, and this
+        // function is `@MainActor`, so the store below happens back on the main actor after the
+        // await. Writing that dictionary from a detached task is precisely how `StoryPrefs`'
+        // static cache was corrupted into a SIGSEGV on every cold start (build 177), a few lines
+        // down this same file.
+        let sampled = await Task.detached(priority: .userInitiated) { StoryCanvas.colours(of: img) }.value
+        canvas = Self.storeColours(url, (Color(uiColor: sampled.top), Color(uiColor: sampled.bottom)))
     }
+}
+
+/// THE SHEET'S SIDEWAYS PAGE-DRAG, IN A BOX OF ITS OWN.
+///
+/// One number, written by a UIKit pan on every frame, read by exactly one SwiftUI view. It lives in
+/// an object rather than in the host's `@State` so that writing it invalidates only whoever
+/// SUBSCRIBES to it — see the long note on `pageDragBox`. The host holds it with `@State`, which
+/// stores the reference without subscribing; `MyStoriesCarousel` declares `@ObservedObject`, and is
+/// therefore the only thing a drag re-renders.
+@MainActor final class StorySheetPageDrag: ObservableObject {
+    /// In CARD UNITS, not points — a fraction of the panel's journey, and one panel journey is one
+    /// card. Divided by nothing downstream; see the note at `onPageDrag` in StoryViewersSheetUIKit
+    /// for the two builds that got this wrong in each direction.
+    @Published var value: CGFloat = 0
 }
 
 // Local per-author story prefs.
@@ -555,7 +607,31 @@ struct StoryViewer: View {
     /// card step while a finger on the row itself covers a card in about half that. So the row
     /// crawled at half speed behind the panel: his "when I swipe sheet viewer the window card is
     /// not working like when I'm using my finger".
-    @State private var sheetPageDrag: CGFloat = 0
+    ///
+    /// ⚠️ HELD IN A BOX, AND `@State` ON THE BOX RATHER THAN ON THE NUMBER, and that is the whole of
+    /// his "when I swipe sheet top card images swipes lag".
+    ///
+    /// This was a plain `@State CGFloat`, written by the sheet's UIKit pan on EVERY FRAME of the
+    /// drag. A `@State` write invalidates the body it lives on — and the body it lives on is this
+    /// one, the whole story viewer: the pager representable, the sheet representable, the carousel,
+    /// every overlay. So dragging the sheet sideways asked SwiftUI to re-evaluate the entire screen
+    /// sixty or a hundred and twenty times a second, and `updateUIViewController` ran on both
+    /// representables each time. The row was the visible casualty because it is the thing that is
+    /// supposed to be moving.
+    ///
+    /// Telegram does not have this seam to fall down: `StoryItemSetContainerComponent` repositions
+    /// its cards and its view list in ONE layout pass driven straight from `scrollViewDidScroll`,
+    /// all in UIKit. Ours crosses into SwiftUI, so the fix is to make the crossing narrow: the box
+    /// is an `ObservableObject` that ONLY `MyStoriesCarousel` observes, and this view holds it with
+    /// `@State`, which stores a reference WITHOUT subscribing to it. Per-frame writes now invalidate
+    /// the row and nothing else.
+    ///
+    /// The three places this view genuinely needs to know about paging want a BOOLEAN, and a boolean
+    /// changes twice a drag rather than a hundred times a second — that is `sheetPaging` below.
+    @State private var pageDragBox = StorySheetPageDrag()
+    /// Is a sheet page-drag in flight? The boolean half of `pageDragBox`, kept as ordinary `@State`
+    /// because the host really does have to re-render when it flips — twice per drag, not per frame.
+    @State private var sheetPaging = false
     /// The frame each of my VIDEO stories was actually showing the first time the sheet came up over
     /// it, by story id. The carousel draws this instead of the poster.
     ///
@@ -1073,7 +1149,7 @@ struct StoryViewer: View {
         // The carousel row took over, or gave the centre back — by a finger on the row OR by the
         // sheet being thrown sideways (both slide cards through the slot, both need the copy).
         // See StoryCardMorph.setHidden.
-        .onChange(of: carouselInteracting || sheetPageDrag != 0) { _, on in
+        .onChange(of: carouselInteracting || sheetPaging) { _, on in
             StoryCardMorph.shared.setHidden(on)
             // The swipe is over and the live card is back. Once the story underneath has finished
             // landing on the card he stopped at (the same beat `sheetStoryId`'s handler waits for
@@ -1544,7 +1620,7 @@ struct StoryViewer: View {
         let at = viewersProgress
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             guard showViewers, viewersProgress > 0.9, viewersProgress == at,
-                  !carouselInteracting, sheetPageDrag == 0 else { return }
+                  !carouselInteracting, !sheetPaging else { return }
             captureFrozenCover()
         }
     }
@@ -2475,9 +2551,9 @@ struct StoryViewer: View {
                               // while the row slides past), so for the length of the swipe the
                               // carousel draws its own centre card and the real story hides
                               // underneath. Same size, same place, so the exchange is invisible.
-                              hideActiveContent: !(carouselInteracting || sheetPageDrag != 0),
+                              hideActiveContent: !(carouselInteracting || sheetPaging),
                               onInteracting: { carouselInteracting = $0 },
-                              pageDrag: sheetPageDrag,
+                              pageDrag: pageDragBox,
                               frozenCovers: frozenCovers)
                 .padding(.top, blockTop)
                 .opacity(Double(carIn))
@@ -2528,7 +2604,8 @@ struct StoryViewer: View {
                               let live = StoriesRepository.shared.mine?.stories ?? myStories
                               guard let i = live.firstIndex(where: { $0.id == sheetStoryId }),
                                     live.indices.contains(i + d) else {
-                                  withAnimation(.easeOut(duration: 0.28)) { sheetPageDrag = 0 }
+                                  withAnimation(.easeOut(duration: 0.28)) { pageDragBox.value = 0 }
+                                  sheetPaging = false
                                   return
                               }
                               // The drag zeroes IN THE SAME TRANSACTION as the id flip, on the
@@ -2536,10 +2613,17 @@ struct StoryViewer: View {
                               // distance while the new sheet slides in, one motion.
                               withAnimation(.easeOut(duration: 0.28)) {
                                   sheetStoryId = live[i + d].id
-                                  sheetPageDrag = 0
+                                  pageDragBox.value = 0
                               }
+                              sheetPaging = false
                           },
-                          onPageDrag: { f in sheetPageDrag = f },
+                          // THE ONLY PER-FRAME WRITE, and it goes to the box. The boolean beside
+                          // it changes twice a drag, which is what the host actually needs to know.
+                          onPageDrag: { f in
+                              pageDragBox.value = f
+                              let paging = f != 0
+                              if sheetPaging != paging { sheetPaging = paging }
+                          },
                           // A viewer's profile opens in the SAME sheet the story header uses, so
                           // there is one profile screen in this viewer and not two that drift.
                           onOpenProfile: { v in
@@ -3098,7 +3182,11 @@ struct MyStoriesCarousel: View {
     /// the sliding panel, so the picture in the slot follows the finger instead of switching at
     /// commit. Converted to card units below with `fullDist`, which is exactly what CarouselScroller
     /// divides a finger's own travel by — so both ways of moving the row move it the same distance.
-    var pageDrag: CGFloat = 0
+    /// ⚠️ `@ObservedObject`, SO THIS IS THE ONLY VIEW A PAGE-DRAG RE-RENDERS. It used to be a plain
+    /// `CGFloat` copied down from the host's `@State`, which meant every frame of the drag
+    /// invalidated the host's whole body — the pager, the sheet, every overlay — to move this row.
+    /// See `pageDragBox` on the host.
+    @ObservedObject var pageDrag: StorySheetPageDrag
     /// Frames photographed off the live card, by story id — see the host's `frozenCovers`. A story in
     /// here draws THIS instead of its `previewUrl`, because for a video the previewUrl is the poster
     /// and the poster is second zero.
@@ -3160,7 +3248,7 @@ struct MyStoriesCarousel: View {
 
     init(stories: [Story], activeId: Binding<String>, slotW: CGFloat, slotH: CGFloat, miniH: CGFloat, cropY: CGFloat,
          onActiveTap: @escaping () -> Void = {}, hideActiveContent: Bool = false,
-         onInteracting: @escaping (Bool) -> Void = { _ in }, pageDrag: CGFloat = 0,
+         onInteracting: @escaping (Bool) -> Void = { _ in }, pageDrag: StorySheetPageDrag,
          frozenCovers: [String: UIImage] = [:]) {
         self.frozenCovers = frozenCovers
         self.stories = stories
@@ -3172,7 +3260,7 @@ struct MyStoriesCarousel: View {
         self.onActiveTap = onActiveTap
         self.hideActiveContent = hideActiveContent
         self.onInteracting = onInteracting
-        self.pageDrag = pageDrag
+        self._pageDrag = ObservedObject(wrappedValue: pageDrag)
         self._scroll = State(initialValue: CGFloat(stories.firstIndex(where: { $0.id == activeId.wrappedValue }) ?? 0))
     }
 
@@ -3218,7 +3306,7 @@ struct MyStoriesCarousel: View {
                         // overshot fourfold. The commit snaps the row to exactly +1 card, so only a
                         // value that reaches exactly 1.0 over a full panel travel lands where the
                         // snap lands.
-                        let cf = CGFloat(i) - (scroll - pageDrag)
+                        let cf = CGFloat(i) - (scroll - pageDrag.value)
                         let sign: CGFloat = cf < 0 ? -1 : 1
                         let acf = abs(cf)
                         // itemPositionX = centralX + min(1,|cf|)·sign·fullDist + max(0,|cf|-1)·sign·halfDist
