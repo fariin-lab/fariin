@@ -435,11 +435,36 @@ public final class StoryCardMorph {
         // `crop: 1` — the sheet's geometry is unchanged and must stay so. It shrinks the story into
         // the viewers panel's slot, where the shave IS the effect: it is what hides the black above
         // and below the card. Only the flight defers it.
+        sheetFraction = max(0, min(1, fraction))
         applyCore(on: card, sheet: true, fraction: fraction, targetSize: targetSize,
                   targetCenter: targetCenter, cornerRadius: cornerRadius,
                   centerOverride: centerOverride, alpha: alpha, dim: dim, chrome: 0, crop: 1,
                   exiting: false)
     }
+
+    /// HOW FAR THE STORY IS INTO THE VIEWERS SLOT: 0 full screen, 1 fully shrunk. Written here, on
+    /// the one call that shrinks it, so it is a description of what is ON SCREEN rather than a
+    /// message about what was requested.
+    ///
+    /// ⚠️ THIS IS TELEGRAM'S ANSWER TO "WHY IS THE CAPTION STILL THERE", and he has now asked four
+    /// times. `StoryItemSetContainerComponent` sets its caption's alpha like this, in the same
+    /// layout pass that scales the card:
+    ///
+    ///     var captionAlpha: CGFloat = (component.hideUI || ...) ? 0.0 : 1.0
+    ///     captionAlpha *= (1.0 - itemLayout.contentScaleFraction)
+    ///
+    /// `contentScaleFraction` is the SAME number that shrinks their card. That multiplication is the
+    /// whole mechanism: there is no notification, no timer, no snapshot, and no way for the caption
+    /// to disagree with the card, because it is a pure function of the card's own state computed in
+    /// the same pass.
+    ///
+    /// Ours was three separate signals (`storySheetProgress`, `storyChromeHidden`,
+    /// `storyFlightActive`), and the doc on `SheetCaptionFade` admits the failure mode in as many
+    /// words: "a fade driven by a continuous value is only ever as correct as the last value it was
+    /// told". A cancelled drag, a killed spring, or a sheet that arrives open by a path that never
+    /// walked the fade window all leave it holding a stale number, and a stale number is his
+    /// screenshot. Reading THIS instead cannot be stale: if the card is in the slot, this is 1.
+    public private(set) var sheetFraction: CGFloat = 0
 
     /// The one copy of the interpolation, serving both targets. `sheet` picks the mask slot and the
     /// reset that runs on the early-out, nothing else differs.
@@ -803,6 +828,10 @@ public final class StoryCardMorph {
 
     /// Back to full screen, square, unmasked. Called when the sheet is fully shut.
     public func reset() {
+        // BEFORE the guard: the card is back at full size whether or not there is still a card to
+        // put back, and a `sheetFraction` left at 1 would hold the caption invisible for the next
+        // story. This is the one number the caption trusts, so it must never outlive the shrink.
+        sheetFraction = 0
         guard let card else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)

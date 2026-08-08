@@ -65,9 +65,22 @@ private struct SheetCaptionFade: ViewModifier {
     @State private var flightActive = false
 
     /// Linear, straight off the finger — but never visible once the chrome is down.
+    ///
+    /// ⚠️ THE SHRINK IS THE SOURCE OF TRUTH, NOT THE NOTIFICATION. `StoryCardMorph.sheetFraction` is
+    /// written by the one call that actually shrinks the card into the viewers slot, so it describes
+    /// what is ON SCREEN. `progress` is a message about what was requested, and the doc above lists
+    /// three ways for it to arrive stale — every one of which ends with a caption still drawn over
+    /// an open sheet, which is his report, four times now.
+    ///
+    /// So the fade takes the LARGER of the two. The notification still drives the redraw and still
+    /// gives the smooth per-frame curve under a finger; the fraction guarantees the end state by
+    /// construction. This is Telegram's `captionAlpha *= (1.0 - contentScaleFraction)` translated
+    /// into a view that cannot be handed its alpha directly — same guarantee, same number, same
+    /// reason it cannot be told a lie.
     private var opacity: Double {
         if chromeHidden || flightActive { return 0 }
-        let t = min(1, max(0, progress / Self.goneAt))
+        let shrink = max(progress, StoryCardMorph.shared.sheetFraction)
+        let t = min(1, max(0, shrink / Self.goneAt))
         return Double(1 - t)
     }
 
