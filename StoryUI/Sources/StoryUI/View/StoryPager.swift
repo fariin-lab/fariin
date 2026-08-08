@@ -80,22 +80,14 @@ struct StoryPager: UIViewControllerRepresentable {
                 UIView.animate(withDuration: 0.18) { pager.view.alpha = 1 }
             }
         }
-        // ⚠️ SYNCHRONOUSLY FIRST, and this is the other half of the late open.
-        //
-        // This was only the `async` line below, so the card was NEVER attached before the first
-        // frame — even when the scroll view already existed, which it usually does by now:
-        // `pager.view` has been touched several times above, so the view is loaded, and
-        // `setViewControllers` has already put the first page in. Meanwhile `stageHeroOpen` holds
-        // the story invisible and polls every frame for exactly this card. A guaranteed runloop hop
-        // before the first look is a guaranteed hop of black.
-        //
-        // The async call STAYS as the fallback: `installDismissPan` is one-shot on `didInstallPan`,
-        // so if this attempt finds the scroll view the second call returns having done nothing, and
-        // if it does not the retry ladder runs exactly as before. There is no path this removes.
-        //
-        // `scheduleRetry: false` so ONE ladder exists. Two would share `bindAttempts` and burn the
-        // cap at twice the rate, which would quietly halve the patience this is trying to protect.
-        context.coordinator.installDismissPan(scheduleRetry: false)
+        // ⚠️ DO NOT CALL `installDismissPan` SYNCHRONOUSLY HERE. It was tried, to save the runloop
+        // hop the open spends waiting for this card, and it cost the person-to-person swipe: it ran
+        // `neutralizePagerScrollIfHostOwnsSwipe` before `startStory` had populated the view model,
+        // so a friend's bucket read as a single bucket and the person-to-person swipe was disabled
+        // for the whole session. The neutralise is symmetric now and would recover on the next
+        // update, but this call bought only one runloop turn and it is not worth a second unknown
+        // in a gesture that had to be reported to find. The per-frame retry below is the half of
+        // the open-speed fix that was actually costing time (it slept 50ms between looks).
         DispatchQueue.main.async { context.coordinator.installDismissPan() }
         return pager
     }
@@ -246,10 +238,22 @@ struct StoryPager: UIViewControllerRepresentable {
             // Own story = a SINGLE bucket: nothing to navigate to horizontally, so kill the internal
             // scroll (its bounce would fight the vertical dismiss pan). Friends have multiple buckets
             // and keep it for user-to-user swipe.
-            guard parent.viewModel.stories.count <= 1, let scroll = internalScroll else { return }
-            scroll.isScrollEnabled = false
-            scroll.panGestureRecognizer.isEnabled = false
-            scroll.bounces = false
+            //
+            // ⚠️ SYMMETRIC, AND THAT IS A FIX, NOT TIDYING. This only ever DISABLED, so whoever
+            // asked first won for the rest of the session — and `stories` is EMPTY at
+            // `makeUIViewController` time (see the note in `syncIfNeeded`: `startStory` runs in
+            // `.onAppear`, after). Any call that early therefore read "one bucket or fewer" for a
+            // friend's story and killed the person-to-person swipe for good. That is exactly what
+            // happened when the open-speed change started calling this synchronously, and his
+            // report was the 3D swipe doing nothing.
+            //
+            // `syncIfNeeded` re-asserts this on every update, so restoring the enabled state here
+            // means a wrong early answer repairs itself the moment the buckets arrive.
+            guard let scroll = internalScroll else { return }
+            let single = parent.viewModel.stories.count <= 1
+            scroll.isScrollEnabled = !single
+            scroll.panGestureRecognizer.isEnabled = !single
+            scroll.bounces = !single
             scroll.alwaysBounceHorizontal = false
         }
 
