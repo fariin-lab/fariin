@@ -74,15 +74,19 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THIS BUILD IS ABOUT YOUR SIX MORNING SCREENSHOTS. Both story closing bugs, plus the three row problems from last night.
+            EVERYTHING FROM TODAY'S SCREENSHOTS IS IN THIS BUILD. The corners, the colour bleed around them, the iOS 26 blink, the close after swiping, and last night's row problems.
 
-            THE CORNERS STAY ROUND THE WHOLE WAY DOWN. Your four screenshots with the red marks. The story card was cutting its own corners with a curve that shrinks as the card shrinks, so by the time it was small the corners were nearly square and the grey background sat right against them. The dark corners at the bottom were the caption strip poking past the card. One curve owns the corners now, from the first moment of the pull to the landing, and everything on the card is cut by it, caption included. This is a real cause fix, not a cover up.
+            THE CORNERS STAY ROUND THE WHOLE WAY DOWN. The story card was cutting its own corners with a curve that shrinks as the card shrinks, so by the time it was small the corners were nearly square. One curve owns the corners now, from the first moment of the pull to the landing, caption included.
 
-            THE FULL SIZE BLINK AT THE END IS GONE, your iOS 26 report. When the story finished landing, the app put the screen back to full size and then asked Apple to remove it, trusting that nobody would see. iOS 27 removes it instantly so you never saw anything. iOS 26 keeps it on screen for one more frame, and that frame was the giant story you photographed. The screen now goes blank before anything is put back, so there is nothing left to see on either iOS.
+            THE COLOUR BLEED AROUND THE CORNERS IS HIDDEN BEHIND THE PICTURE, your suggestion, done exactly that way. The small card picture the story turns into has its rounded corners baked in at the small size, so while it is drawn large mid flight there was a gap at each corner where the story leaked out. The picture now carries a second copy of itself behind it, slightly zoomed, so anything that leaks shows the picture instead of the story. This fixes the open and the close, both.
 
-            FROM LAST NIGHT, ALSO IN THIS BUILD: stories no longer open as stretched ovals the first time the app starts. Long pressing a card keeps the card's own rounded corners instead of changing them. The lifted card shows the person's name again.
+            THE FULL SIZE BLINK AT THE END IS GONE, your iOS 26 report. The app was putting the screen back to full size and trusting Apple to remove it in the same instant. iOS 26 keeps it for one extra frame, and that frame was the giant story you photographed. The screen now goes blank first, so there is nothing left to see on either iOS.
 
-            WHAT TO CHECK FIRST: open a story, scroll down slowly and watch the corners the whole way. Then close it fast with a flick. Then do the same on iOS 26 and watch for the blink at the end.
+            THE CLOSE AFTER SWIPING IS THE SAME CLOSE. Open a story, swipe to the next person, scroll down: it used to fade out instead of flying home. Now the new person's slot empties and their picture rides the card down, exactly like the first story.
+
+            FROM LAST NIGHT, ALSO IN THIS BUILD: stories no longer open as stretched ovals the first time the app starts. Long pressing a card keeps the card's own rounded corners. The lifted card shows the person's name again.
+
+            WHAT TO CHECK FIRST: open a story and scroll down slowly, watching the corners. Then swipe to the second person and close. Then close on iOS 26 and watch for the blink.
 
             STILL OPEN, do not report again yet: the story pausing by itself after you come back into the app (I asked you two questions about it), and edited videos exporting with black bars instead of the gradient.
 
