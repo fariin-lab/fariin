@@ -96,7 +96,9 @@ struct LoginCodeView: View {
 
                 if step == .email {
                     labelled("Email") {
-                        TextField("", text: $address, prompt: Text("you@example.com").foregroundStyle(.tertiary))
+                        // No placeholder, same reason as the login field: the row is labelled
+                        // "Email" already, so a fake address underneath it only repeated the label.
+                        TextField("", text: $address)
                             .keyboardType(.emailAddress)
                             .textContentType(.emailAddress)
                             .textInputAutocapitalization(.never)

@@ -411,7 +411,12 @@ struct EmailAuthView: View {
                     .padding(.bottom, 2)
                 } else {
                     field("Email") {
-                        TextField("", text: $email, prompt: Text("you@example.com").foregroundStyle(.tertiary))
+                        // NO PLACEHOLDER. "you@example.com" sat here and the owner called it
+                        // unprofessional, which it was: the row already carries an "Email" label
+                        // directly above it, so the ghost text repeated the label and dressed the
+                        // repeat up as a fake address. Apple's own sign-in fields label the row and
+                        // leave the box empty. An empty box under a label is not missing anything.
+                        TextField("", text: $email)
                             .keyboardType(.emailAddress)
                             .textContentType(.emailAddress)
                             .textInputAutocapitalization(.never)

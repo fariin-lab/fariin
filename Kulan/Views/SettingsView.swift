@@ -1795,7 +1795,11 @@ struct ConnectEmailView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("you@example.com", text: $email)
+                    // "Email", not "you@example.com". Unlike the two auth screens this row has no
+                    // label above it, so the placeholder IS the label here and cannot just be
+                    // emptied — that would leave a blank row with nothing saying what goes in it.
+                    // The word does the labelling job the fake address was pretending to do.
+                    TextField("Email", text: $email)
                         .keyboardType(.emailAddress)
                         .textContentType(.emailAddress)
                         .textInputAutocapitalization(.never)
