@@ -216,7 +216,11 @@ struct SettingsView: View {
     // Centered profile header (mockup style): big avatar, name, @handle. Tap to edit.
     private var profileHeader: some View {
         VStack(spacing: 8) {
-            AvatarView(name: profile.me?.name ?? "", photoUrl: profile.me?.photoUrl, size: 96)
+            // 120, up from 96 on his 2026-08-08 report that it reads small. This is the first thing
+            // on the screen and the only picture on it, and at 96 it was smaller than the app icon
+            // in the tab bar below it. Telegram's own settings avatar is 100; the extra goes to the
+            // same place his screenshot points, which is the gap between the circle and the name.
+            AvatarView(name: profile.me?.name ?? "", photoUrl: profile.me?.photoUrl, size: 120)
                 // The morph's source rect, and the hidden-while-open swap, same as ContactInfoView's
                 // hero: the viewer flies out of this circle and back into it.
                 .background(GeometryReader { g in
