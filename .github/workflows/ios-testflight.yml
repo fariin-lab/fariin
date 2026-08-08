@@ -74,9 +74,11 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THE SWIPE TO THE NEXT PERSON IS BACK. I BROKE IT IN THE LAST BUILD. In trying to make stories open faster I attached the pager one step earlier, and at that moment the app does not yet know how many people have stories. It read "only one" and switched the sideways swipe off for the whole session. The early attach is reverted, and the switch now turns back ON as well as off, so a wrong answer that early can never stick again. Stories still open faster than before, just not by quite as much.
+            THE VIDEO NO LONGER BLINKS BLACK WHEN YOU TAP ACROSS TO IT. THIS IS THE ONE TO TEST. The story card is painted black underneath and the video layer is see through until it has actually drawn a frame, so any moment the loading cover comes down early is a flash of that black. It was coming down early in two places: when the player says it is playing, and when the decoder finishes warming up. Neither of those means a picture exists yet. It now waits for the real thing, which is the same signal Telegram waits for.
 
-            THE VIDEO NO LONGER BLINKS BLACK WHEN YOU TAP ACROSS TO IT. Two separate faults in your three screenshots. The player was looking for the cover in its own caches, and the app keeps them in a different one, so for a story you just posted it had nothing to draw and showed black. And the clip was uncovered the moment it started playing, which is before it has told anyone its shape, so it painted once at the wrong size and corrected itself. It now waits for both.
+            AND THERE WAS A SECOND HOLE IN THAT, WHICH I FOUND WHILE PUTTING IT BACK. The cover goes up the instant you tap, but the new clip is not handed to the player until the cache answers, which is later. In between, the player is still holding the PREVIOUS clip, and that one does have a frame, so the check could be answered by the wrong video and drop the cover anyway. It now checks which clip it is looking at, not just whether some clip is ready.
+
+            The player also looks for the cover picture in the app's own cache now, not only its own, so a story you just posted has something to show while the video loads.
 
             THE CAPTION AND ITS SHADOW WHEN YOU SCROLL UP. You told me to go and read Telegram and I did. Their caption's transparency is multiplied by the same number that shrinks the card, in the same pass, so it cannot disagree with the card. Ours was three separate messages and any one of them arriving late left the caption on screen. It now reads the shrink itself. NOTE: if the text you saw sits in the corner of a TikTok clip, that is burned into the video and no setting can remove it. To tell: post a story with no caption at all and scroll up. If text still shows, it belongs to the video.
 
@@ -84,15 +86,15 @@ jobs:
 
             SEND AND PREVIEW NOW APPEAR INSIDE AN ALBUM. The bar was built into the first screen, and an album opens on top of it, so it was left behind. Your selection was never lost, which is why the numbers were right and only the buttons were missing.
 
-            HOLDING A STORY PAUSES IT THE INSTANT YOUR FINGER LANDS. You told me to read Telegram and you were right about where to look. Their pause does not come from the long press firing at all: it happens on touch down, and the method they gate it with is called "allows instant pause on touch". Ours waited a quarter second. That quarter second was there for a reason, though: a pause armed on touch could be left switched on when another gesture stole the touch, which is the story-frozen-for-no-reason bug. So this copies their shape, not just their number, and the resume is now posted by the system itself whenever the touch ends by any route, including being stolen. The header and progress bars still fade only on a real hold, because moving those to touch down would blink them on every tap, which you reported before.
-
             THE VIEWERS SHEET SHOWS ONE LIST UNLESS THE STORY WENT TO EVERYONE. You are right. All Viewers and Friends only says something when the audience could contain both. Posted to My Friends, to a custom list, or as View Once, everyone in the list is already that, so the split says nothing. The tabs are gone for those and the search moves up into their place.
 
             SCROLLING DOWN OUT OF AN UPLOADING STORY NO LONGER SHOWS BLACK AT THE TOP AND BOTTOM. Every other door hands the story straight to the viewer. The uploading one put a full-screen black sheet behind it, to stop the picture blinking when the upload finishes and the real story takes over, and nothing could clear that sheet while the card shrank away from it. It still holds still at rest, and now steps aside for the moment the card is in the air.
 
             THE PICTURE ON THE SETTINGS PAGE IS BIGGER. 120 instead of 96.
 
-            WHAT TO CHECK FIRST: swipe sideways between people, then hold a story to pause it, then tap left and right onto a video.
+            WHAT TO CHECK FIRST: open your own story and tap left and right onto a video, several times, including the first time after opening the app. That is the whole point of this build.
+
+            NOT IN THIS BUILD, SO DO NOT SPEND TIME ON THEM. The sideways swipe to the next person is still broken, and holding a story still waits a quarter second before it pauses. Both had fixes that were taken back out this evening. Say the word and they go in the next one.
 
             STILL OPEN: edited videos still export with black bars instead of the gradient.
 
