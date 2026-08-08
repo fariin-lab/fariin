@@ -80,6 +80,15 @@ struct StoryPager: UIViewControllerRepresentable {
                 UIView.animate(withDuration: 0.18) { pager.view.alpha = 1 }
             }
         }
+        // ⚠️ DO NOT CALL `installDismissPan` SYNCHRONOUSLY HERE. It was tried on 2026-08-08
+        // (`261043f`), to save the runloop hop the open spends waiting for this card, and it cost the
+        // person-to-person swipe: it ran `neutralizePagerScrollIfHostOwnsSwipe` before `startStory`
+        // had populated the view model, so a friend's bucket read as a single bucket and the 3D swipe
+        // was switched off for the whole session. It was reverted in `7e313b2`.
+        //
+        // The neutralise is symmetric now and would recover on the next update, so this is no longer
+        // a trapdoor — but the call bought exactly one runloop turn, and that is not worth a second
+        // unknown in a gesture that had to be reported twice to find.
         DispatchQueue.main.async { context.coordinator.installDismissPan() }
         return pager
     }
@@ -230,10 +239,27 @@ struct StoryPager: UIViewControllerRepresentable {
             // Own story = a SINGLE bucket: nothing to navigate to horizontally, so kill the internal
             // scroll (its bounce would fight the vertical dismiss pan). Friends have multiple buckets
             // and keep it for user-to-user swipe.
-            guard parent.viewModel.stories.count <= 1, let scroll = internalScroll else { return }
-            scroll.isScrollEnabled = false
-            scroll.panGestureRecognizer.isEnabled = false
-            scroll.bounces = false
+            //
+            // ⚠️ SYMMETRIC, AND THAT IS A FIX, NOT TIDYING. THIS IS THE ONLY WAY THE PERSON-TO-PERSON
+            // SWIPE CAN BE KILLED, so it must not be possible to kill it by accident.
+            //
+            // It only ever DISABLED, so whoever asked first won for the rest of the session — and
+            // `stories` is EMPTY at `makeUIViewController` time (see the note in `syncIfNeeded`:
+            // `startStory` runs in `.onAppear`, which is after). Any call that early therefore read
+            // "one bucket or fewer" for a FRIEND's story and switched the swipe off for good, with
+            // nothing able to switch it back: the old guard returned early once the buckets arrived,
+            // so the re-assert below could never undo it.
+            //
+            // That is exactly what happened on 2026-08-08 when the open-speed change (`261043f`)
+            // started calling this synchronously, and his report was the 3D swipe doing nothing.
+            // That call has been reverted, so the specific trigger is gone — this is here so the next
+            // early caller cannot do it again. `syncIfNeeded` re-asserts on every update, so a wrong
+            // early answer now repairs itself the moment the buckets arrive.
+            guard let scroll = internalScroll else { return }
+            let single = parent.viewModel.stories.count <= 1
+            scroll.isScrollEnabled = !single
+            scroll.panGestureRecognizer.isEnabled = !single
+            scroll.bounces = !single
             scroll.alwaysBounceHorizontal = false
         }
 
