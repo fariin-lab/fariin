@@ -80,14 +80,6 @@ struct StoryPager: UIViewControllerRepresentable {
                 UIView.animate(withDuration: 0.18) { pager.view.alpha = 1 }
             }
         }
-        // ⚠️ DO NOT CALL `installDismissPan` SYNCHRONOUSLY HERE. It was tried, to save the runloop
-        // hop the open spends waiting for this card, and it cost the person-to-person swipe: it ran
-        // `neutralizePagerScrollIfHostOwnsSwipe` before `startStory` had populated the view model,
-        // so a friend's bucket read as a single bucket and the person-to-person swipe was disabled
-        // for the whole session. The neutralise is symmetric now and would recover on the next
-        // update, but this call bought only one runloop turn and it is not worth a second unknown
-        // in a gesture that had to be reported to find. The per-frame retry below is the half of
-        // the open-speed fix that was actually costing time (it slept 50ms between looks).
         DispatchQueue.main.async { context.coordinator.installDismissPan() }
         return pager
     }
@@ -238,22 +230,10 @@ struct StoryPager: UIViewControllerRepresentable {
             // Own story = a SINGLE bucket: nothing to navigate to horizontally, so kill the internal
             // scroll (its bounce would fight the vertical dismiss pan). Friends have multiple buckets
             // and keep it for user-to-user swipe.
-            //
-            // ⚠️ SYMMETRIC, AND THAT IS A FIX, NOT TIDYING. This only ever DISABLED, so whoever
-            // asked first won for the rest of the session — and `stories` is EMPTY at
-            // `makeUIViewController` time (see the note in `syncIfNeeded`: `startStory` runs in
-            // `.onAppear`, after). Any call that early therefore read "one bucket or fewer" for a
-            // friend's story and killed the person-to-person swipe for good. That is exactly what
-            // happened when the open-speed change started calling this synchronously, and his
-            // report was the 3D swipe doing nothing.
-            //
-            // `syncIfNeeded` re-asserts this on every update, so restoring the enabled state here
-            // means a wrong early answer repairs itself the moment the buckets arrive.
-            guard let scroll = internalScroll else { return }
-            let single = parent.viewModel.stories.count <= 1
-            scroll.isScrollEnabled = !single
-            scroll.panGestureRecognizer.isEnabled = !single
-            scroll.bounces = !single
+            guard parent.viewModel.stories.count <= 1, let scroll = internalScroll else { return }
+            scroll.isScrollEnabled = false
+            scroll.panGestureRecognizer.isEnabled = false
+            scroll.bounces = false
             scroll.alwaysBounceHorizontal = false
         }
 
@@ -341,23 +321,12 @@ struct StoryPager: UIViewControllerRepresentable {
         /// How many times the scroll-view lookup below has come up empty. Capped so a pager that
         /// genuinely never builds one cannot spin forever.
         private var bindAttempts = 0
-        /// The keyboard observers are registered ONCE. They used to be added at the top of
-        /// `installDismissPan`, ABOVE its one-shot guard — and that function retries, so a pager that
-        /// took a few attempts to find its scroll view registered the same two observers that many
-        /// times over and `keyboardShown` ran once per registration.
-        private var didObserveKeyboard = false
 
-        /// - Parameter scheduleRetry: false for the one speculative attempt made synchronously from
-        ///   `makeUIViewController`. It may legitimately find nothing that early; the ladder belongs
-        ///   to the async call so there is only ever one of it.
-        func installDismissPan(scheduleRetry: Bool = true) {
-            if !didObserveKeyboard {
-                didObserveKeyboard = true
-                NotificationCenter.default.addObserver(self, selector: #selector(keyboardShown),
-                                                      name: UIResponder.keyboardWillShowNotification, object: nil)
-                NotificationCenter.default.addObserver(self, selector: #selector(keyboardHidden),
-                                                      name: UIResponder.keyboardWillHideNotification, object: nil)
-            }
+        func installDismissPan() {
+            NotificationCenter.default.addObserver(self, selector: #selector(keyboardShown),
+                                                  name: UIResponder.keyboardWillShowNotification, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(keyboardHidden),
+                                                  name: UIResponder.keyboardWillHideNotification, object: nil)
             guard !didInstallPan, let pager else { return }
             // THE ONE-SHOT FLAG USED TO BE SET HERE, BEFORE WE KNEW WE HAD ANYTHING, and that is why
             // the viewers sheet came up over a full-size story that never shrank.
@@ -373,22 +342,9 @@ struct StoryPager: UIViewControllerRepresentable {
             // pan goes on `pager.view` rather than on the scroll view, so nothing looked broken until
             // somebody pulled the sheet.
             guard let scroll = pager.view.subviews.compactMap({ $0 as? UIScrollView }).first else {
-                // ⚠️ THIS RETRY IS WHY A FRIEND'S STORY OPENED LATE (his 2026-08-08 report, twice).
-                //
-                // It waited 0.05s between looks. The open is not idle during that wait: `stageHeroOpen`
-                // polls EVERY FRAME for `heroEndpoints()`, which cannot answer until the card attached
-                // three lines below exists — and it holds the whole story screen at alpha 0 while it
-                // waits. So the open's resolution was quantised to 50ms whether or not the scroll view
-                // had appeared 1ms in, and two empty looks alone were 100ms of black.
-                //
-                // One frame instead, with the attempt cap raised to keep the SAME total patience
-                // (60 x 1/60 = 1.0s, exactly 20 x 0.05). Nothing about the failure path changes; it
-                // just stops sleeping through the moment it is waiting for. A frame is also the right
-                // unit on its own terms: what this is waiting for is a UIKit layout pass, and layout
-                // happens on a frame.
-                guard scheduleRetry, bindAttempts < 60 else { return }
+                guard bindAttempts < 20 else { return }
                 bindAttempts += 1
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60.0) { [weak self] in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
                     self?.installDismissPan()
                 }
                 return

@@ -1,5 +1,4 @@
 import SwiftUI
-import StoryUI   // StoryPosterSource: lets the story player read the app's image cache
 
 @main
 struct KulanApp: App {
@@ -17,19 +16,6 @@ struct KulanApp: App {
                 // Someone still on one of the removed tri-arrow icons has a name iOS can no longer
                 // resolve — put them back on the default rather than leave them with a broken icon.
                 .task { RetiredAppIcons.resetIfInUse() }
-                // STORYUI CAN SEE THE APP'S DECODED-IMAGE CACHE, through one closure.
-                //
-                // The story player's poster lookup only ever asked StoryUI's own two caches
-                // (URLCache and StoryDiskCache), and those are cold for a story whose poster came
-                // down for the ROW rather than for the viewer. With nothing to draw, tapping across
-                // to a video showed the player's black background first: his 2026-08-08 "blink
-                // black". See `StoryPosterSource`.
-                //
-                // Installed HERE rather than in `StoriesService.init` for two reasons: that
-                // singleton is lazy and is not necessarily touched before the viewer opens, and it
-                // is not main-actor isolated, which this is. Memory only and synchronous, which is
-                // what the hook asks for; a miss falls through to the old path unchanged.
-                .task { StoryPosterSource.provider = { DiskImageCache.shared.memoryImage($0) } }
         }
         .onChange(of: scenePhase) { _, phase in
             Task { await PresenceService.set(online: phase == .active) }

@@ -152,33 +152,6 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         StoryCanvas.apply(StoryCanvas.colours(of: source), to: canvasLayer)
     }
 
-    /// ⚠️ THE CLIP IS NOT SHOWN UNTIL IT KNOWS ITS OWN SHAPE. His 2026-08-08 report, and his second
-    /// screenshot is the frame it names: the video drawn low in the card with the canvas above it,
-    /// for one frame, before it settles.
-    ///
-    /// The loading veil used to come down the instant `timeControlStatus` reported `.playing`, and
-    /// that says nothing about `presentationSize`. Until that has arrived, `applyGravity` cannot run
-    /// and `playerLayer.videoGravity` is still the `.resizeAspectFill` it was born with — so a
-    /// letterboxed clip paints once at the wrong gravity and then corrects itself. That correction
-    /// is the flicker.
-    ///
-    /// Both halves now report here and whichever lands last does the reveal.
-    private var playbackStarted = false
-    private func revealIfGeometryKnown() {
-        guard playbackStarted, presentedSize.width > 0, presentedSize.height > 0 else { return }
-        removeActivityIndicatory()
-    }
-
-    /// BELT, because a veil that never comes down is worse than one frame of wrong gravity. A clip
-    /// with no video track (or one whose size never resolves) would otherwise play under a spinner
-    /// for ever. Bound to the url it was armed for, so it cannot uncover the NEXT story.
-    private func armRevealBackstop(for story: URL) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            guard let self, self.url == story, self.playbackStarted else { return }
-            self.removeActivityIndicatory()
-        }
-    }
-
     /// The observer's landing point: remember the clip's size, re-take the decision.
     fileprivate func notePresentationSize(_ s: CGSize) {
         presentedSize = s
@@ -186,9 +159,6 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // The clip's own size is what decides fit vs fill, so this is the moment the backdrop is
         // either needed or not. layoutSubviews cannot be relied on to run again after it.
         refreshBackdrop()
-        // LAST, deliberately: the gravity is right and the canvas is coloured, so this is the first
-        // moment the clip may be uncovered without showing a frame of either being wrong.
-        revealIfGeometryKnown()
     }
 
     // MARK: - Initializers
@@ -258,12 +228,6 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // the same bug audit finding C1 caught on the photo half.
         canvasSourced = false
         guard let urlString, let u = URL(string: urlString) else { return }
-        // THE APP'S OWN CACHE FIRST, and that is the black blink. The two caches below are StoryUI's;
-        // the app draws the row and the carousel through a different one and warms THAT. For a story
-        // just posted, or one whose poster came down for the row rather than for the viewer, both of
-        // these miss, the poster becomes a network fetch, and until it lands there is nothing to draw
-        // over this view's black background. See `StoryPosterSource`.
-        if let img = StoryPosterSource.provider?(urlString) { posterImage = img; refreshBackdrop(); return }
         if let cached = URLCache.shared.cachedResponse(for: .init(url: u)),
            let img = UIImage(data: cached.data) { posterImage = img; refreshBackdrop(); return }
         if let disk = StoryDiskCache.image(u) { posterImage = disk; refreshBackdrop(); return }
@@ -292,13 +256,7 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // Belt for `setPoster`'s braces: two clips that both arrive with no poster never move
         // `posterURL`, so its reset would not fire and clip B would keep clip A's canvas.
         canvasSourced = false
-        // A NEW CLIP HAS NOT STARTED AND ITS SIZE IS NOT KNOWN. Both must be cleared here or the
-        // previous clip's answers would uncover this one before it has a shape — see
-        // `revealIfGeometryKnown`.
-        playbackStarted = false
-        presentedSize = .zero
         addActivityIndicatory()
-        armRevealBackstop(for: validatedUrl)
         // stop video if it's playing before video request
         stopVideo()
         didRetryRemote = false
@@ -373,8 +331,7 @@ private extension PlayerView {
             guard let self else { return }
             switch player.timeControlStatus {
             case .playing:
-                self.playbackStarted = true
-                self.revealIfGeometryKnown()
+                self.removeActivityIndicatory()
                 self.setBuffering(false)
                 self.state = .started
                 self.mediaState?(self.state, self.duration)
