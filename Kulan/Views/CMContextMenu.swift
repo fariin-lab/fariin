@@ -90,6 +90,31 @@ struct CMReactConfig {
 /// controller's view the same way). Owns blur, dismiss catcher, preview snapshot, bar and card.
 final class CMOverlay: UIView {
 
+    /// WHOSE ANIMATION THIS MENU OPENS AND CLOSES WITH.
+    ///
+    /// The chat's long-press menu is Signal's, numbers and all, and he has judged it already — it does
+    /// not change. The STORY ROW's is Telegram's, on his 2026-08-08 order ("make it like telegram…
+    /// dont chnage my design just Long pres how to work long press and Close both"). The design is
+    /// untouched either way; this is only what moves and how long it takes.
+    ///
+    /// **Read out of Telegram's own source, not guessed** —
+    /// `submodules/TelegramUI/Components/ContextControllerImpl/Sources/ContextControllerExtractedPresentationNode.swift`:
+    ///
+    /// - **IN** `duration 0.42`, `CASpringAnimation(mass 5, stiffness 900, damping 104)`, from REST.
+    ///   Critical damping there is `2·√(900·5) = 134.16`, so their ratio is `104/134.16 = 0.775` —
+    ///   which is what `usingSpringWithDamping` takes. The extracted content only ever animates
+    ///   `position.x` / `position.y`: **it does not scale on the way in.** The actions menu springs
+    ///   `transform.scale` from `0.01` and takes its alpha over `0.05`, i.e. it is opaque almost at
+    ///   once and its whole entrance is the growth.
+    /// - **OUT** `duration 0.2`, plain `easeInEaseOut`, **no spring anywhere**. The content slides
+    ///   home, the menu shrinks to `0.01` and fades on the same clock, and that is all of it.
+    ///
+    /// The close is where ours was furthest away: a 0.4s spring at damping 0.8 takes twice as long
+    /// AND overshoots on the way back. That is the wobble he reported.
+    enum Motion { case signal, telegram }
+
+    private let motion: Motion
+
     private let previewView: UIView
     private let sourceFrame: CGRect          // window space; animation start AND end
     private let alignRight: Bool
@@ -108,6 +133,15 @@ final class CMOverlay: UIView {
     private let minPreviewScale: CGFloat = 0.1
     private let deadZoneRadius: CGFloat = 40
 
+    // The two openings are near twins — 0.42 against 0.4, ratio 0.775 against 0.8 — which is why the
+    // way IN only needed the menu's own numbers moved. The way OUT is a different animation entirely.
+    private var openDuration: TimeInterval { motion == .telegram ? 0.42 : springDuration }
+    private var openDamping: CGFloat { motion == .telegram ? 0.775 : springDamping }
+    /// Telegram's springs start from rest; Signal's are launched with velocity.
+    private var openVelocity: CGFloat { motion == .telegram ? 0 : 1.0 }
+    /// Telegram grows the menu out of nothing, Signal out of a fifth of itself.
+    private var cardMinScale: CGFloat { motion == .telegram ? 0.01 : 0.2 }
+
     private var fingerExitedDeadZone = false
     private var initialFingerPoint: CGPoint?
     private var dismissing = false
@@ -123,7 +157,9 @@ final class CMOverlay: UIView {
          alignRight: Bool,
          actions: [CMAction],
          react: CMReactConfig?,
+         motion: Motion = .signal,
          onDismissed: @escaping () -> Void) {
+        self.motion = motion
         self.previewView = previewView
         self.sourceFrame = sourceFrame
         self.alignRight = alignRight
@@ -188,7 +224,13 @@ final class CMOverlay: UIView {
         let frames = computeFrames(in: bounds)
         // Everything starts where the real bubble is; the spring carries it to the computed place.
         previewView.frame = sourceFrame
-        if startAtSqueeze { previewView.transform = CGAffineTransform(scaleX: 0.95, y: 0.95) }
+        // TELEGRAM'S LIFT DOES NOT SCALE. Their extracted content animates `position` and nothing
+        // else; the squeeze belongs to the press gesture, before the menu exists. Releasing a 0.95
+        // squeeze here with no squeeze before it is a card that pops BIGGER under the finger, which
+        // is not what their story row does.
+        if startAtSqueeze, motion == .signal {
+            previewView.transform = CGAffineTransform(scaleX: 0.95, y: 0.95)
+        }
 
         card.sizeToFit()
         card.frame = frames.menu
@@ -197,7 +239,7 @@ final class CMOverlay: UIView {
         let cardFrame = card.frame
         card.layer.anchorPoint = CGPoint(x: alignRight ? 1 : 0, y: 0)
         card.frame = cardFrame
-        card.transform = CGAffineTransform(scaleX: 0.2, y: 0.2)
+        card.transform = CGAffineTransform(scaleX: cardMinScale, y: cardMinScale)
         card.alpha = 0
         // Ride the preview's travel: start displaced by the same delta the preview will move.
         let travel = frames.preview.minY - sourceFrame.minY
@@ -219,13 +261,20 @@ final class CMOverlay: UIView {
             self.setPreviewShadow(true)
         }
 
-        UIView.animate(withDuration: springDuration, delay: 0,
-                       usingSpringWithDamping: springDamping, initialSpringVelocity: 1.0,
+        // TELEGRAM TAKES THE MENU'S ALPHA OUT OF THE SPRING. Theirs is opaque in 0.05 and its whole
+        // entrance is the growth from 0.01; ours faded across the full spring, so the menu arrived by
+        // materialising rather than by opening. Signal's keeps its fade, inside the spring below.
+        if motion == .telegram {
+            UIView.animate(withDuration: 0.05) { self.card.alpha = 1 }
+        }
+
+        UIView.animate(withDuration: openDuration, delay: 0,
+                       usingSpringWithDamping: openDamping, initialSpringVelocity: openVelocity,
                        options: [.curveEaseInOut, .beginFromCurrentState]) {
             self.previewView.transform = .identity
             self.previewView.frame = frames.preview
             self.card.transform = .identity
-            self.card.alpha = 1
+            if self.motion == .signal { self.card.alpha = 1 }
             self.card.frame = frames.menu
         }
 
@@ -263,6 +312,16 @@ final class CMOverlay: UIView {
     /// nothing, because the preview is on its way to that exact rectangle.
     var onWillDismiss: (() -> Void)?
 
+    /// WHERE THE LIFT LANDS, asked at the moment it starts going home rather than remembered from
+    /// the press. nil, or a nil answer, keeps the rectangle it came from.
+    ///
+    /// The chat does not need this: a bubble is exactly where it was. The story row does. Its card is
+    /// DIPPED to 0.92 under the held finger, so the rectangle photographed at `.began` is 8% smaller
+    /// than the card the finger has since let go of — and the copy would shrink past the real card's
+    /// size to land on a rectangle that no longer exists, revealing a bigger card underneath at the
+    /// last instant. Asking again costs one hit-test and lands on the card that is actually there.
+    var liveSourceFrame: (() -> CGRect?)?
+
     func dismiss(animated: Bool, then: (() -> Void)? = nil) {
         guard !dismissing else { return }
         dismissing = true
@@ -273,6 +332,34 @@ final class CMOverlay: UIView {
             return
         }
         bar?.playDismissal(duration: 0.2)
+        let home = liveSourceFrame?() ?? sourceFrame
+
+        // TELEGRAM'S CLOSE, WHOLE. One animation, 0.2s, plain ease-in-out, nothing springing: the
+        // card slides home, the menu shrinks to nothing and fades, the blur goes, and they all land
+        // together. Their `animateOut` is `duration = 0.2` with `easeInEaseOut` and every layer
+        // driven by `layer.animate(...)`, not `animateSpring`.
+        //
+        // ⚠️ THE ABSENCE OF THE SPRING IS THE POINT, not the shorter clock. A spring returning home
+        // overshoots the slot and settles back into it, and on a card landing in a row of other
+        // cards that reads as the thing bouncing — his report. Do not "improve" this by giving it a
+        // gentle damping; there is no spring in Telegram's close at all.
+        if motion == .telegram {
+            UIView.animate(withDuration: 0.2, delay: 0,
+                           options: [.curveEaseInOut, .beginFromCurrentState]) {
+                self.blurView.effect = nil
+                self.blurView.backgroundColor = nil
+                self.setPreviewShadow(false)
+                self.previewView.frame = home
+                self.card.transform = CGAffineTransform(scaleX: 0.01, y: 0.01)
+                self.card.alpha = 0
+                self.bar?.alpha = 0
+            } completion: { _ in
+                self.removeFromSuperview()
+                self.onDismissed()
+                then?()
+            }
+            return
+        }
 
         // the reference app runs the background off in its OWN plain animation, not on the spring that carries
         // the message home. A spring overshoots and settles, and driving a blur with it makes the
@@ -288,7 +375,7 @@ final class CMOverlay: UIView {
         UIView.animate(withDuration: springDuration, delay: 0,
                        usingSpringWithDamping: springDamping, initialSpringVelocity: 1.0,
                        options: [.curveEaseInOut, .beginFromCurrentState]) {
-            self.previewView.frame = self.sourceFrame
+            self.previewView.frame = home
             self.card.transform = CGAffineTransform(scaleX: 0.2, y: 0.2)
             self.card.alpha = 0
             self.bar?.alpha = 0

@@ -321,7 +321,10 @@ struct StoryRowLongPress: UIViewRepresentable {
                                   // the side the bubble is on.
                                   alignRight: frame.midX > window.bounds.midX,
                                   actions: t.actions,
-                                  react: nil) { [weak self] in
+                                  react: nil,
+                                  // TELEGRAM'S OPEN AND CLOSE, on his order. The chat's menu keeps
+                                  // Signal's, which he has already judged — see `CMOverlay.Motion`.
+                                  motion: .telegram) { [weak self] in
                     self?.overlay = nil
                 }
                 // The card comes back as the return spring STARTS, not after the lift is gone — a
@@ -344,6 +347,18 @@ struct StoryRowLongPress: UIViewRepresentable {
                 o.onWillDismiss = {
                     liftedName?.alpha = 0
                     MediaSourceVisibility.shared.reveal()
+                }
+                // AND WHERE IT LANDS IS ASKED AGAIN AT THE CLOSE, not remembered from here.
+                //
+                // The row dips a held card to 0.92 (its own pressed state), so the rectangle
+                // photographed at `.began` is 8% smaller than the card the finger has since let go
+                // of. Landing on the remembered rectangle means the copy shrinks past the real
+                // card's size and vanishes, uncovering something bigger on the last frame. Same
+                // hit-test and the same union rule as the lift; it declines if the card under that
+                // point is no longer this person, and `CMOverlay` then keeps the original.
+                o.liveSourceFrame = { [weak self] in
+                    guard let self, let now = self.target(p), now.key == t.key else { return nil }
+                    return now.labelRect.map { now.rect.union($0) } ?? now.rect
                 }
                 overlay = o
                 // The real card steps aside for the lift, exactly as the chat hides the pressed
