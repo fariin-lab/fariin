@@ -455,6 +455,22 @@ struct StoryDetailView: View {
             let on = (note.object as? Bool) ?? false
             if on != flightMaskOn { flightMaskOn = on }
         }
+        // ...AND SAY SO, which is the half that was missing. Setting `flightMaskOn` only SCHEDULES
+        // the clip change; the mask on the other side was already opening on the assumption that it
+        // had happened, and the gap between the two is the black crescent he photographed at the
+        // corners in the first fifth of a pull. `StoryCardMorph` holds its hole at the card's own
+        // curve until this arrives — see `cardClipIsDown` there.
+        //
+        // ⚠️ THE `async` HOP IS THE POINT, not clumsiness. `onChange` runs while SwiftUI is
+        // processing the new value; a hop lands after that pass has been committed, which is the
+        // first moment the zero-radius clip is genuinely on screen. Acknowledging from inside the
+        // update would re-state the same assumption one line further down.
+        .onChange(of: flightMaskOn) { on in
+            guard on else { return }
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .init("storyFlightMaskAck"), object: nil)
+            }
+        }
         // The player says whether it is waiting on bytes; the progress bar holds while it is. Only
         // the page that is actually current listens, or a neighbour's stall would freeze the story
         // you are watching.

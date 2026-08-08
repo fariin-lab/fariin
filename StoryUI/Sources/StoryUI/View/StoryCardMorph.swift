@@ -106,7 +106,46 @@ public final class StoryCardMorph {
     private func setFlightMaskOwnsCorner(_ on: Bool) {
         guard flightMaskOwnsCorner != on else { return }
         flightMaskOwnsCorner = on
+        if !on { cardClipIsDown = false }
         NotificationCenter.default.post(name: .init("storyFlightMask"), object: on)
+    }
+
+    /// ⚠️ HAS THE CARD ACTUALLY STOOD DOWN YET, as opposed to having been ASKED to.
+    ///
+    /// `storyFlightMask` is a notification into SwiftUI, where it lands on `@State flightMaskOn` and
+    /// takes effect on the NEXT render pass. Until that pass commits, the card is still clipping
+    /// itself at `cardCornerRadius` while this mask has already started opening — and the note in
+    /// `applyCore` that says the swap cannot show is only true at exactly f = 0 with scale = 1.
+    ///
+    /// THE FIRST FRAME OF A DRAG IS NEVER AT f = 0. A pan begins after its slop threshold, so the
+    /// first `applyCore` already carries a few points of movement, and from there the mask's radius
+    /// in the card's own space is `wanted / scale` — climbing from both ends at once as `wanted`
+    /// ramps 12 → 24 and `scale` shrinks — against a clip still sitting at 12. The difference is a
+    /// crescent at each corner where the mask has cut real pixels away and the card's own black no
+    /// longer reaches, so the dim wall behind shows through: his 2026-08-08 report, "a small black
+    /// artifact around the corners" for the first 5-20% of the pull, gone by 30%, and ONLY on the
+    /// first pull — because the first time that subtree re-renders with a new clip shape is the slow
+    /// one, and every drag after it lands within a frame.
+    ///
+    /// ⚠️ THIS DOES NOT WALK BACK `8150fbd`. That fix is that the mask owns the corner, uncapped,
+    /// with the card's own clip out of the way — and it still does, from the moment the card
+    /// confirms. All this adds is that "the card has stood down" is now something the card SAYS
+    /// rather than something we assume it did in time. Once the acknowledgement is in, every number
+    /// below is exactly what it was; the clamp can only ever affect frames in which the old code was
+    /// drawing two different curves over one corner.
+    private var cardClipIsDown = false
+    private var ackObserver: NSObjectProtocol?
+    private func startListeningForCardClipAck() {
+        guard ackObserver == nil else { return }
+        // `queue: nil`, so this runs synchronously on the thread that posted — which is main, from
+        // inside the card's own post-commit hop. An `OperationQueue.main` observer would add a
+        // second hop and hold the cap one frame longer than it needs to be held.
+        ackObserver = NotificationCenter.default.addObserver(
+            forName: .init("storyFlightMaskAck"), object: nil, queue: nil
+        ) { [weak self] _ in
+            guard let self, self.flightMaskOwnsCorner else { return }
+            self.cardClipIsDown = true
+        }
     }
 
     /// WHERE A CIRCULAR OPEN STOPS BEING A CIRCLE AND STARTS BECOMING THE CARD, and where it has
@@ -411,7 +450,9 @@ public final class StoryCardMorph {
         guard restW > 1, restH > 1, card.bounds.width > 1 else { return }
 
         // The card's own corner clip stands down for the flight — see `setFlightMaskOwnsCorner`.
-        if !sheet { setFlightMaskOwnsCorner(true) }
+        // The listener is armed here rather than in `init` so the singleton owns no observer until
+        // something actually flies.
+        if !sheet { startListeningForCardClipAck(); setFlightMaskOwnsCorner(true) }
 
         // The card scales uniformly by WIDTH. The slot is deliberately shorter than the story's own
         // aspect (the owner signed off a card 12% shorter than aspect-true, twice), so a uniform
@@ -609,7 +650,18 @@ public final class StoryCardMorph {
         // is already in the view's own coordinates (see where it is worked out), the other one is a
         // screen-space number that has to be converted.
         let wanted = circular ? circleRadiusInView : wantedRadius(f: f, rowRadius: cornerRadius)
-        let flightRadius = wanted * (circular ? scale : 1)
+        // HOLD THE HOLE AT THE CARD'S OWN CURVE UNTIL THE CARD SAYS ITS CLIP IS OFF. See
+        // `cardClipIsDown` for the whole of why. In the card's own space this mask is
+        // `flightRadius / scale`, and the clip it is replacing is a flat `cardCornerRadius`, so
+        // matching them means capping the SCREEN-space number at `cardCornerRadius * scale`. While
+        // the two agree there is no crescent to show anything through, at any fraction.
+        //
+        // Only the card path is held. A CIRCULAR door is a different shape by design — capping it
+        // to a 12pt rounded rectangle for a frame would be a visible square, which is worse than
+        // what it is guarding against, and the circle is not what he is reporting.
+        let unconfirmed = !circular && !sheet && !cardClipIsDown
+        let capped = unconfirmed ? min(wanted, cardCornerRadius * scale) : wanted
+        let flightRadius = capped * (circular ? scale : 1)
         applyMask(on: card, sheet: sheet, rect: cropRect,
                   cornerRadius: (sheet ? cornerRadius * f : flightRadius) / scale,
                   // ⚠️ NOTHING OUTSIDE A CIRCLE, EVER — the first half of his 2026-08-08 report:
