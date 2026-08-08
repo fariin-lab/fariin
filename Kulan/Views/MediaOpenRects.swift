@@ -102,8 +102,27 @@ import UIKit
 @MainActor final class MediaSourceVisibility: ObservableObject {
     static let shared = MediaSourceVisibility()
     @Published private(set) var hiddenId: String?
-    func hide(_ id: String?) { if hiddenId != id { hiddenId = id } }
-    func reveal() { if hiddenId != nil { hiddenId = nil } }
+    /// DOES THE NAME UNDER THE CARD GO WITH IT? Only for the row's long press, and the rule is
+    /// "hide exactly what the copy replaces".
+    ///
+    /// A story flight photographs the PICTURE alone (`captureView` registers the hero box, and the
+    /// old SwiftUI row put its `Text(name)` outside the rect reporter for the same reason), so a
+    /// flight that hid the name took away something nothing was covering: the slot lost its name
+    /// for the whole visit and only got it back when the close's reveal landed. That is his
+    /// 2026-08-08 "after closed story person name is caming late" — the picture came home on the
+    /// flying copy and the name had to wait for the hand-back.
+    ///
+    /// The long-press lift is the opposite case: its copy carries the name too (`labelView`), so
+    /// there the original must step aside or the name is on screen twice.
+    @Published private(set) var hidesLabel = false
+    func hide(_ id: String?, withLabel: Bool = false) {
+        if hiddenId != id { hiddenId = id }
+        if hidesLabel != withLabel { hidesLabel = withLabel }
+    }
+    func reveal() {
+        if hiddenId != nil { hiddenId = nil }
+        if hidesLabel { hidesLabel = false }
+    }
 }
 
 // Continuously reports a bubble media view's global frame (one dict write per layout pass — no state),

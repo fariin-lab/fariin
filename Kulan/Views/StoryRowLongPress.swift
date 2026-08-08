@@ -329,7 +329,10 @@ struct StoryRowLongPress: UIViewRepresentable {
                 overlay = o
                 // The real card steps aside for the lift, exactly as the chat hides the pressed
                 // bubble: the same picture must never be on screen twice at the hand-over.
-                MediaSourceVisibility.shared.hide(t.key)
+                // WITH THE NAME, because this lift carries one. A story flight does not, and hiding
+                // the name for it is what made the name come back late after a close — see
+                // `MediaSourceVisibility.hidesLabel`.
+                MediaSourceVisibility.shared.hide(t.key, withLabel: true)
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.8)
                 o.present(in: window, startAtSqueeze: true)
 

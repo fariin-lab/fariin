@@ -944,9 +944,18 @@ final class StoryCardUIView: UIControl {
                                cornerRadius: StoryRowMetrics.radius)
     }
 
-    private func applyVisibility() {
+    /// ⚠️ THE PICTURE STEPS ASIDE, THE NAME STAYS — unless the thing replacing the card is carrying
+    /// a name of its own. See `MediaSourceVisibility.hidesLabel`. This used to set the whole card's
+    /// alpha, which is a regression against the SwiftUI row it replaced: there the opacity lived on
+    /// `MediaRectReporter`, applied to the picture, and the name was its sibling.
+    /// ⚠️ THE CARD'S OWN `alpha` IS NOT TOUCHED HERE, and that is deliberate: it belongs to the row
+    /// (a fresh card fades in on the re-sort, a departing one fades out, and my own card cross-fades
+    /// with the uploading placeholder). Writing it from here would slam any of those back to 1 on
+    /// the next visibility change.
+    func applyVisibility() {
         let hidden = !rectKey.isEmpty && MediaSourceVisibility.shared.hiddenId == rectKey
-        alpha = hidden ? 0 : 1
+        heroBox.alpha = hidden ? 0 : 1
+        nameLabel.alpha = hidden && MediaSourceVisibility.shared.hidesLabel ? 0 : 1
     }
 }
 
@@ -1393,7 +1402,13 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
             for (i, id) in self.displayedIds.enumerated() {
                 guard let card = self.friendCards[id] else { continue }
                 place(card, at: i + 1)
-                card.alpha = MediaSourceVisibility.shared.hiddenId == card.rectKey ? 0 : 1
+                // TWO DIFFERENT ALPHAS, and they are not the same question. This one is MEMBERSHIP:
+                // a card born this pass starts at 0 and fades in with the spring (see the note
+                // below), a departing one fades out. Which PART of a card steps aside for a flight
+                // or a lift is the card's own business, and asking it here rather than keeping a
+                // second copy of that rule is what stops the name and the picture disagreeing.
+                card.alpha = 1
+                card.applyVisibility()
             }
             for id in gone { self.friendCards[id]?.alpha = 0 }
         }
