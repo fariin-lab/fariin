@@ -692,13 +692,23 @@ struct StoryViewer: View {
     /// before this is reached.
     private static let heroDragSpan: CGFloat = 420
     /// THE SMALLEST THE STORY IS ALLOWED TO GET WHILE THE FINGER IS STILL DOWN, as a fraction of its
-    /// own full-screen width. Measured off his Snapchat screenshot: their card bottoms out at just
-    /// under a third and stops there. See the note in `onHeroDrag`.
-    private static let heroDragMinScale: CGFloat = 0.34
+    /// own full-screen width.
+    ///
+    /// 0.34 first, off his Snapchat screenshot. RAISED TO 0.46 on 2026-08-08 against a pair of his
+    /// own frames — "reduce the Story scroll-down limit… it should only allow a small amount of
+    /// downward movement and must not go beyond that limit" — measured rather than guessed: the
+    /// card he called too far is 22% of the screen's width, the one he wants is 46%.
+    ///
+    /// It bounds the TRAVEL as much as the size, which is why one number answers both halves of his
+    /// report: `heroDragCeiling` turns it into a cap on the fraction, `heroDragY` gives the finger
+    /// 1:1 only for as long as that cap allows, and the bottom-edge clamp then holds the card well
+    /// clear of the tab bar because a bigger card runs out of room sooner.
+    private static let heroDragMinScale: CGFloat = 0.46
     /// How much further the card drifts after it has bottomed out, however far the finger keeps
     /// going. Small on purpose: it exists so the gesture still answers at the bottom, not so the card
-    /// can keep travelling.
-    private static let heroDragTail: CGFloat = 64
+    /// can keep travelling. Halved with the floor above, same report: 64pt of drift past a limit
+    /// reads as the limit not being there.
+    private static let heroDragTail: CGFloat = 28
     // (`heroFade`, how much the story itself softened as it was pulled away, is GONE — 2026-08-07.
     // It was 0.22 and it is what he saw as the chat list showing through the story like glass. The
     // background giving way is `heroDimMax`'s job; the picture stays opaque.)
