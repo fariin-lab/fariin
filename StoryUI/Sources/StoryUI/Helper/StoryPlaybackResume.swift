@@ -76,3 +76,23 @@ public enum StoryPlaybackResume {
     /// The viewer is gone: a story opened later must start at its beginning.
     public static func clearAll() { positions = [:]; frames.removeAllObjects() }
 }
+
+/// A WAY FOR STORYUI TO ASK THE APP FOR A POSTER IT HAS ALREADY DECODED.
+///
+/// Telegram's story video is hidden until its first frame exists, and what you look at until then is
+/// the thumbnail — which they always have, because it travels inside the message. We have no such
+/// guarantee: `PlayerView.setPoster` asks `URLCache.shared` and `StoryDiskCache`, both of which are
+/// StoryUI's own caches, while the app draws the stories row and the carousel through its OWN
+/// `DiskImageCache` and warms that one. For a story just posted, or one whose cover came down for the
+/// ROW rather than for the viewer, both of StoryUI's caches miss, the poster becomes a network fetch,
+/// and there is nothing to hold the frame — which is the black.
+///
+/// So this is the seam that gives the hide-until-ready rule something to hide BEHIND. One synchronous
+/// memory-only closure, installed by the app. Nil is a normal answer and falls straight through to
+/// the two caches and the network exactly as before, so this can never make a poster arrive later
+/// than it used to; it can only make one arrive sooner.
+public enum StoryPosterSource {
+    /// Must be synchronous and memory-only — it is called on the main thread on the frame a story
+    /// opens, which is the whole point of it.
+    public static var provider: ((String) -> UIImage?)?
+}
