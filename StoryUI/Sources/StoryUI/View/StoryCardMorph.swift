@@ -536,8 +536,35 @@ public final class StoryCardMorph {
         // rounder than the story card inside it opens a crescent at the CARD'S OWN CORNERS, where
         // there is nothing to show but the dimming wall. The circle never goes near those corners —
         // its widest points touch the card's edges at their MIDDLE, where the card's clip is straight.
+        // ⚠️ THE CAP IS RELEASED BY THE COVER, AND WITHOUT THAT THE CARD LANDS SQUARE.
+        //
+        // Fourth corner report, and this one is not a rind: it is the corner not being there at all.
+        // MEASURED off his 00:49 screenshots rather than reasoned. At the landing the flying card is
+        // 277px wide against a row card's 282, so scale is 0.218, and the cap above works out at
+        // 12 x 0.218 = 2.6pt while the card it is touching down onto is 24. Cropping his frame and
+        // putting the three cards side by side settles it with no arithmetic at all: Test Omar and
+        // Test Ali are squircles and the card flying home between them has four square corners.
+        //
+        // The cap itself is right and stays. Early in a drag the wall behind the card is nearly solid
+        // black, so a mask rounder than the card's own `.clipShape` cuts a crescent with nothing of
+        // the card in it and you see the wall — the black wedge measured in `6bf4418`, photo
+        // (91,177,202) against a wedge of (0,9,23).
+        //
+        // But it was defending the corner against a wall that has gone by then. A committed close
+        // runs `dimFloor` to zero, so the wall is transparent at the landing, and the cover — opaque,
+        // and already clipping ITSELF to the full uncapped radius twenty lines above — is lying over
+        // that corner. Where the cover is opaque there is no crescent to protect: it paints right up
+        // to its own curve, and the mask cutting at the same curve removes only what the cover was
+        // not painting anyway.
+        //
+        // So the cap is lifted in proportion to the cover that replaces it. Cover absent (a drag,
+        // which pins it at 0 by his own spec, and the first frames of an open) leaves the old
+        // behaviour exactly as it was; cover opaque (the end of every close) lets the mask reach the
+        // row card's own 24 and the two rectangles the hand-over swaps are finally the same shape.
+        let coverA = sheet ? 0 : max(0, min(1, flightCover?.alpha ?? 0))
         let wanted = circular ? cropRect.width / 2 : wantedRadius(f: f, rowRadius: cornerRadius)
-        let flightRadius = circular ? wanted * scale : min(wanted, cardCornerRadius * scale)
+        let flightRadius = circular ? wanted * scale
+                                    : min(wanted, max(cardCornerRadius * scale, wanted * coverA))
         applyMask(on: card, sheet: sheet, rect: cropRect,
                   cornerRadius: (sheet ? cornerRadius * f : flightRadius) / scale,
                   outside: sheet ? 0 : chrome,
