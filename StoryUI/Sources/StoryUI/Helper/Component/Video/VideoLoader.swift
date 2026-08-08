@@ -465,6 +465,12 @@ private extension PlayerView {
         let t = p.currentTime().seconds
         guard t.isFinite, t > 1, duration <= 0 || t < duration - 1 else { return }
         StoryPlaybackResume.remember(story, seconds: t)
+        // AND THE PICTURE IT WAS SHOWING, in the same breath and under the same guard — a position
+        // worth resuming to is exactly a frame worth coming back to. Without this the clip resumed
+        // at 10s underneath a poster of second zero, which is the half of it he can actually see.
+        // `currentVideoFrame` reads the player's own display output; nil is a normal answer and
+        // simply leaves the poster in charge, as before.
+        StoryPlaybackResume.rememberFrame(story, image: currentVideoFrame())
     }
 
     func restartVideo() {
@@ -562,7 +568,28 @@ private extension PlayerView {
         // showed.
         view.backgroundColor = .clear
         view.tag = 999
-        if let poster = posterImage {
+        // ⚠️ THE FRAME HE LEFT ON BEATS THE POSTER, and it is not treated as a loading state at all.
+        //
+        // A RESUME is not the same event as a first open. On a first open there is nothing to show
+        // but the poster, and blurring it says "this is coming". On a return the clip is going to
+        // reappear at 10s, and covering that with a sharp-or-blurred picture of second zero is the
+        // bug he reported — the position resumed and the picture did not.
+        //
+        // So the remembered frame is drawn SHARP, at the gravity the video itself will use, which
+        // makes the hand-over to the live layer invisible: the same picture, the same size, in the
+        // same place. Only the poster path still veils, because only that path is really loading.
+        // See `StoryPlaybackResume.rememberFrame`.
+        if let resumed = self.url.flatMap({ StoryPlaybackResume.frame($0) }) {
+            let iv = UIImageView(image: resumed)
+            iv.frame = view.bounds
+            // The same question `applyGravity` asks, through the same function, so the still and the
+            // clip that replaces it cannot be framed two different ways.
+            iv.contentMode = StoryCanvas.fills(media: resumed.size, in: view.bounds.size)
+                ? .scaleAspectFill : .scaleAspectFit
+            iv.clipsToBounds = true
+            iv.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            view.addSubview(iv)
+        } else if let poster = posterImage {
             // STATIC PIXELS, NOT A LIVE MATERIAL — see `StoryCanvas.loadingVeil`. Both story kinds
             // now draw their loading state through that one function.
             let iv = UIImageView(image: StoryCanvas.loadingVeil(of: poster, covering: view.bounds.size))
