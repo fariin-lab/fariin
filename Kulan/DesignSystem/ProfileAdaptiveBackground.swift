@@ -256,44 +256,19 @@ struct ProfileAdaptiveBackdrop: View {
     }
 }
 
-// MARK: - Cards on that background
-
-/// A profile card: glass while the adaptive background is on, the ordinary grouped-list card colour
-/// while it is off.
-///
-/// `.ultraThinMaterial` and not `liquidGlass`: the standing rule is that Liquid Glass lives on the
-/// round actions and nowhere else on this page, and a page of glass cards over glass buttons is the
-/// look that has been rejected here before. The material samples the colour underneath, which is all
-/// this needs.
-struct ProfileCardBackground: ViewModifier {
-    let adaptive: Bool
-    let color: Color
-    let radius: CGFloat
-    @Environment(\.colorScheme) private var scheme
-
-    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: radius, style: .continuous) }
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if adaptive {
-            content
-                .background(.ultraThinMaterial, in: shape)
-                // A hairline, not a border: without it a glass card over a soft background has no
-                // edge at all and the rows look like they are floating in the page. Brighter in
-                // light mode, where white-on-white needs more help than white-on-dark.
-                .overlay { shape.strokeBorder(Color.white.opacity(scheme == .dark ? 0.16 : 0.55), lineWidth: 0.6) }
-        } else {
-            content.background(color, in: shape)
-        }
-    }
-}
-
-extension View {
-    /// The one place a profile card decides what it sits on.
-    func profileCard(adaptive: Bool, color: Color, radius: CGFloat = 24) -> some View {
-        modifier(ProfileCardBackground(adaptive: adaptive, color: color, radius: radius))
-    }
-}
+// MARK: - Cards on that background: THERE IS NOTHING HERE, AND THAT IS THE POINT
+//
+// This file used to carry a `profileCard` modifier that turned the six cards on the profile into
+// `.ultraThinMaterial` whenever the adaptive background was on. It was in the spec he wrote —
+// "apply an Ultra Thin Material / Glassmorphism effect to cards, action buttons, and details
+// sections" — and he rejected it on sight the first time he saw it running (2026-08-08, screenshot
+// with both cards ringed in green): "That cards why you are make it liquid glass… only buttons call
+// video voice mite search and more only that buttons liquid button cards dont add liquid glass".
+//
+// So the cards are ordinary opaque cards again on both backgrounds, exactly as they were before this
+// file existed, and glass on this page lives ONLY on the round actions — which is the standing rule
+// from the poster redesign that the spec had briefly overridden. Do not reintroduce a material here
+// because a coloured page "looks like it wants glass". It has been asked for and answered.
 
 // MARK: - Colour arithmetic
 

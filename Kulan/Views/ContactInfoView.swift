@@ -330,7 +330,7 @@ struct ContactInfoView: View {
             rowDivider
             infoRow("Report \(shownName)", "exclamationmark.triangle", tint: .red, chevron: false) { showReport = true }
         }
-        .profileCard(adaptive: useAdaptive, color: cardColor)
+        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     /// Section title above a card, with SIGNAL'S OWN numbers (OWSTableViewController2, fetched and
@@ -713,7 +713,7 @@ struct ContactInfoView: View {
             }
             .padding(.horizontal, 16).padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .profileCard(adaptive: useAdaptive, color: cardColor)
+            .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         }
     }
 
@@ -769,7 +769,7 @@ struct ContactInfoView: View {
             rowDivider
             infoRow("Verify Encryption", "ic_verify_encryption", tint: .accentColor) { showVerify = true }
         }
-        .profileCard(adaptive: useAdaptive, color: cardColor)
+        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     // Groups this contact and I both belong to. "N Groups in Common" + Add-to-a-Group + the list;
@@ -819,7 +819,7 @@ struct ContactInfoView: View {
                 .buttonStyle(.plain)
             }
         }
-        .profileCard(adaptive: useAdaptive, color: cardColor)
+        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     private func setMuted(_ until: Double) {
@@ -1232,7 +1232,7 @@ struct ContactInfoView: View {
                 // 24, matching every other card on this screen (the sections below, the action tiles, the
                 // media card). This one was left at 14, so it sat directly above a 24 card with visibly
                 // tighter corners - the mismatch the user circled. `.continuous` is the Apple curve.
-                .profileCard(adaptive: useAdaptive, color: cardColor)
+                .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             }
         }
     }
@@ -1286,7 +1286,7 @@ struct ContactInfoView: View {
             }
         }
         .padding(14)
-        .profileCard(adaptive: useAdaptive, color: cardColor)   // iOS 26 corners
+        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))   // iOS 26 corners
         // Tap anywhere on the CARD (See All row / background) → the full media page. The thumbnails'
         // own tap wins over this for their area, so a photo tap opens just that photo.
         .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
