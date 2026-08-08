@@ -80,6 +80,22 @@ struct StoryPager: UIViewControllerRepresentable {
                 UIView.animate(withDuration: 0.18) { pager.view.alpha = 1 }
             }
         }
+        // ⚠️ SYNCHRONOUSLY FIRST, and this is the other half of the late open.
+        //
+        // This was only the `async` line below, so the card was NEVER attached before the first
+        // frame — even when the scroll view already existed, which it usually does by now:
+        // `pager.view` has been touched several times above, so the view is loaded, and
+        // `setViewControllers` has already put the first page in. Meanwhile `stageHeroOpen` holds
+        // the story invisible and polls every frame for exactly this card. A guaranteed runloop hop
+        // before the first look is a guaranteed hop of black.
+        //
+        // The async call STAYS as the fallback: `installDismissPan` is one-shot on `didInstallPan`,
+        // so if this attempt finds the scroll view the second call returns having done nothing, and
+        // if it does not the retry ladder runs exactly as before. There is no path this removes.
+        //
+        // `scheduleRetry: false` so ONE ladder exists. Two would share `bindAttempts` and burn the
+        // cap at twice the rate, which would quietly halve the patience this is trying to protect.
+        context.coordinator.installDismissPan(scheduleRetry: false)
         DispatchQueue.main.async { context.coordinator.installDismissPan() }
         return pager
     }
@@ -321,12 +337,23 @@ struct StoryPager: UIViewControllerRepresentable {
         /// How many times the scroll-view lookup below has come up empty. Capped so a pager that
         /// genuinely never builds one cannot spin forever.
         private var bindAttempts = 0
+        /// The keyboard observers are registered ONCE. They used to be added at the top of
+        /// `installDismissPan`, ABOVE its one-shot guard — and that function retries, so a pager that
+        /// took a few attempts to find its scroll view registered the same two observers that many
+        /// times over and `keyboardShown` ran once per registration.
+        private var didObserveKeyboard = false
 
-        func installDismissPan() {
-            NotificationCenter.default.addObserver(self, selector: #selector(keyboardShown),
-                                                  name: UIResponder.keyboardWillShowNotification, object: nil)
-            NotificationCenter.default.addObserver(self, selector: #selector(keyboardHidden),
-                                                  name: UIResponder.keyboardWillHideNotification, object: nil)
+        /// - Parameter scheduleRetry: false for the one speculative attempt made synchronously from
+        ///   `makeUIViewController`. It may legitimately find nothing that early; the ladder belongs
+        ///   to the async call so there is only ever one of it.
+        func installDismissPan(scheduleRetry: Bool = true) {
+            if !didObserveKeyboard {
+                didObserveKeyboard = true
+                NotificationCenter.default.addObserver(self, selector: #selector(keyboardShown),
+                                                      name: UIResponder.keyboardWillShowNotification, object: nil)
+                NotificationCenter.default.addObserver(self, selector: #selector(keyboardHidden),
+                                                      name: UIResponder.keyboardWillHideNotification, object: nil)
+            }
             guard !didInstallPan, let pager else { return }
             // THE ONE-SHOT FLAG USED TO BE SET HERE, BEFORE WE KNEW WE HAD ANYTHING, and that is why
             // the viewers sheet came up over a full-size story that never shrank.
@@ -342,9 +369,22 @@ struct StoryPager: UIViewControllerRepresentable {
             // pan goes on `pager.view` rather than on the scroll view, so nothing looked broken until
             // somebody pulled the sheet.
             guard let scroll = pager.view.subviews.compactMap({ $0 as? UIScrollView }).first else {
-                guard bindAttempts < 20 else { return }
+                // ⚠️ THIS RETRY IS WHY A FRIEND'S STORY OPENED LATE (his 2026-08-08 report, twice).
+                //
+                // It waited 0.05s between looks. The open is not idle during that wait: `stageHeroOpen`
+                // polls EVERY FRAME for `heroEndpoints()`, which cannot answer until the card attached
+                // three lines below exists — and it holds the whole story screen at alpha 0 while it
+                // waits. So the open's resolution was quantised to 50ms whether or not the scroll view
+                // had appeared 1ms in, and two empty looks alone were 100ms of black.
+                //
+                // One frame instead, with the attempt cap raised to keep the SAME total patience
+                // (60 x 1/60 = 1.0s, exactly 20 x 0.05). Nothing about the failure path changes; it
+                // just stops sleeping through the moment it is waiting for. A frame is also the right
+                // unit on its own terms: what this is waiting for is a UIKit layout pass, and layout
+                // happens on a frame.
+                guard scheduleRetry, bindAttempts < 60 else { return }
                 bindAttempts += 1
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60.0) { [weak self] in
                     self?.installDismissPan()
                 }
                 return
