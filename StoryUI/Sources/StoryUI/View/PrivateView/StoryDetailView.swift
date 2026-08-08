@@ -836,19 +836,47 @@ private extension StoryDetailView {
             // pauses exactly as before, a quarter second in, which is when the chrome fades anyway.
             // A horizontal swipe still exceeds `maximumDistance` and cancels the press, so the pager
             // keeps its touch (the R2 fix that shaped this gesture).
+            // ⚠️ THE PAUSE AND THE CHROME FADE ARE TWO DIFFERENT EVENTS NOW, and separating them is
+            // what lets the pause be instant without bringing his older report back.
+            //
+            // Telegram pauses on `touchesBegan` — `StoryLongPressRecognizer.updateIsTracking`, gated
+            // by a method they named `allowsInstantPauseOnTouch`. Their long press `.began`, after
+            // the duration, drives something else entirely (`itemSetPanState`). So the two things
+            // this gesture used to do together are two things there, on two different clocks.
+            //
+            // Ours did both at 0.25s, which is the delay he is reporting ("telegram is so fast").
+            // But moving BOTH to touch-down would put back "when i click story normal story pause":
+            // `isHolding` fades the header and the progress bars over 0.2s, so a tap would blink the
+            // chrome every time. So: the PAUSE is instant, on the watcher below, and `isHolding` —
+            // the fade — still waits for a real hold.
             .onLongPressGesture(minimumDuration: 0.25, maximumDistance: 10,
                                 perform: {
                 guard !keyboardManager.isKeyboardOpen else { return }
-                isHolding = true; isPaused = true; pauseVideo()
+                isHolding = true
             },
                                 onPressingChanged: { pressing in
                 guard !pressing else { return }
-                // Release, or a cancellation we DID hear about. Belt-and-braces: clearing a flag
-                // that is already false costs nothing, and this is the common path home.
-                if isPaused || isHolding {
-                    isPaused = false; isHolding = false; playVideo()
-                }
+                if isHolding { isHolding = false }
             })
+            // Instant pause, and a resume that cannot be missed — see `StoryHoldToPause` for why it
+            // is a UIKit recogniser that never recognises rather than another SwiftUI gesture.
+            .overlay(
+                StoryHoldDetector { holding in
+                    if holding {
+                        guard !keyboardManager.isKeyboardOpen, !isPaused else { return }
+                        isPaused = true
+                        pauseVideo()
+                    } else if isPaused || isHolding {
+                        // `reset()` fires however the touch ended, including when the pager's pan
+                        // steals it — which is the case the old SwiftUI press could not hear, and
+                        // the reason a story used to strand paused for no visible reason.
+                        isPaused = false
+                        isHolding = false
+                        playVideo()
+                    }
+                }
+                .allowsHitTesting(false)
+            )
         }
     }
     

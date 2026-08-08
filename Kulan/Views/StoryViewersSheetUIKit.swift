@@ -118,6 +118,19 @@ final class StoryViewersSheetView: UIView {
     private let grabber = UIView()
     private let allTab = UIButton(type: .system)
     private let friendsTab = UIButton(type: .system)
+    /// Does this story's audience make a second tab mean anything? See `audienceIsEveryone` on the
+    /// representable. False hides the whole tab row and lifts the search field into its place, so
+    /// there is no empty band where the tabs used to be.
+    var showsTabs: Bool = true {
+        didSet {
+            guard showsTabs != oldValue else { return }
+            if !showsTabs { setTab(0) }   // a hidden Friends tab must not leave its filter on
+            allTab.isHidden = !showsTabs
+            friendsTab.isHidden = !showsTabs
+            underline.isHidden = !showsTabs
+            setNeedsLayout()
+        }
+    }
     private let underline = UIView()
     private let search = UISearchTextField()
     private let table = UITableView(frame: .zero, style: .plain)
@@ -388,7 +401,11 @@ final class StoryViewersSheetView: UIView {
         underline.frame = CGRect(x: active.frame.minX, y: allTab.frame.maxY + 4,
                                  width: active.bounds.width, height: 2)
 
-        search.frame = CGRect(x: 16, y: underline.frame.maxY + 12, width: bounds.width - 32, height: 38)
+        // With no tabs the search field takes their place rather than leaving a gap where they were.
+        // `tabY` is the same number the tabs start at, so the panel's top spacing is unchanged and
+        // only the row that is gone is missing.
+        let searchY = showsTabs ? underline.frame.maxY + 12 : tabY
+        search.frame = CGRect(x: 16, y: searchY, width: bounds.width - 32, height: 38)
         let top = search.frame.maxY + 10
         table.frame = CGRect(x: 0, y: top, width: bounds.width, height: h - top)
         loadingView.center = CGPoint(x: bounds.width / 2, y: top + 44)
@@ -921,6 +938,14 @@ struct StoryViewerRowContent: View {
 /// about how far open the sheet is.
 struct StoryViewersSheet: UIViewRepresentable {
     let activeStoryId: String
+    /// Was this story posted to EVERYONE? Only then is there a second tab.
+    ///
+    /// His 2026-08-08 report: the sheet always offers "All Viewers" and "Friends". Splitting the
+    /// list that way only says anything when the audience could contain both — a story posted to
+    /// Everyone. Posted to My Friends, to a custom list, or as View Once, every name in the list is
+    /// already in that audience by definition, so "Friends" is either the same list again or a
+    /// smaller one for no reason the reader asked for. One list, no tabs.
+    var audienceIsEveryone: Bool = false
     @Binding var progress: CGFloat
     var carouselBand: CGRect = .zero
     var hasPrev: Bool = false
@@ -977,6 +1002,7 @@ struct StoryViewersSheet: UIViewRepresentable {
         }
         v.onPagePreview = { [weak c = context.coordinator] d in c?.preview(d) }
         context.coordinator.view = v
+        v.showsTabs = audienceIsEveryone
         context.coordinator.setNeighbours(prev: prevStoryId, next: nextStoryId)
         context.coordinator.load(activeStoryId)
         return v
@@ -987,6 +1013,7 @@ struct StoryViewersSheet: UIViewRepresentable {
         v.carouselBand = carouselBand
         v.hasPrev = hasPrev
         v.hasNext = hasNext
+        v.showsTabs = audienceIsEveryone
         context.coordinator.setNeighbours(prev: prevStoryId, next: nextStoryId)
         context.coordinator.load(activeStoryId)
     }

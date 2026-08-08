@@ -2595,7 +2595,15 @@ struct StoryViewer: View {
         // right and never a stale snapshot's idea of it.
         let arr = StoriesRepository.shared.mine?.stories ?? myStories
         let idx = arr.firstIndex { $0.id == sheetStoryId }
+        // ONE TAB UNLESS THE STORY WENT TO EVERYONE. Friends, a custom list and View Once are all
+        // audiences whose every member is already the thing the second tab would filter for, so
+        // splitting the list says nothing — his 2026-08-08 report. `oneTime` is excluded explicitly
+        // rather than left to the label, because a View Once story carries the audience it was
+        // posted to AND its own rule, and the rule is the narrower of the two.
+        let sheetStory = arr.first { $0.id == sheetStoryId }
+        let everyoneAudience = (sheetStory?.audienceLabel == "everyone") && !(sheetStory?.oneTime ?? false)
         return StoryViewersSheet(activeStoryId: sheetStoryId,
+                          audienceIsEveryone: everyoneAudience,
                           progress: $viewersProgress,
                           carouselBand: carouselBandRect,
                           hasPrev: (idx ?? 0) > 0,
