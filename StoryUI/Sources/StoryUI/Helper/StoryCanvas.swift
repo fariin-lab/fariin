@@ -148,12 +148,16 @@ public enum StoryCanvas {
     /// because a colour change inside a layout pass would otherwise animate over the default 0.25s,
     /// and a canvas that fades between two greys while a card is moving is the flicker this file
     /// exists to remove.
+    /// Start and end are in UNIT coordinates, so the gradient re-spans itself whenever the layer is
+    /// resized without anything having to redraw it. That is why nothing here caches by size the way
+    /// the veil it replaced had to, and why `needsDisplayOnBoundsChange` is deliberately left at its
+    /// default rather than "optimised" to false — a stale gradient at the wrong size would be a
+    /// flicker, which is the one thing this file may not produce.
     public static func makeLayer() -> CAGradientLayer {
         let l = CAGradientLayer()
         l.startPoint = CGPoint(x: 0.5, y: 0)
         l.endPoint = CGPoint(x: 0.5, y: 1)
         l.locations = [0, 1]
-        l.needsDisplayOnBoundsChange = false
         l.colors = [UIColor.black.cgColor, UIColor.black.cgColor]
         return l
     }
@@ -161,10 +165,14 @@ public enum StoryCanvas {
     /// Point a layer at a piece of media. Safe to call every layout pass: it returns without touching
     /// anything when the answer has not moved, so the layer is never handed a new colour pair for the
     /// same picture (which is what an implicit animation needs to start).
+    ///
+    /// `CFEqual`, not `==`: these are CoreFoundation colours, and this comparison is the guard that
+    /// stops a repaint, so it must be the one that is certainly right rather than the one that reads
+    /// better.
     public static func apply(_ colours: (top: UIColor, bottom: UIColor), to layer: CAGradientLayer) {
         let want = [colours.top.cgColor, colours.bottom.cgColor]
         if let have = layer.colors as? [CGColor], have.count == 2,
-           have[0] == want[0], have[1] == want[1] { return }
+           CFEqual(have[0], want[0]), CFEqual(have[1], want[1]) { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.colors = want
