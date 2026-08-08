@@ -76,3 +76,23 @@ public enum StoryPlaybackResume {
     /// The viewer is gone: a story opened later must start at its beginning.
     public static func clearAll() { positions = [:]; frames.removeAllObjects() }
 }
+
+/// A WAY FOR STORYUI TO ASK THE APP FOR A POSTER IT HAS ALREADY DECODED.
+///
+/// His 2026-08-08 report: tapping across to a video story blinks BLACK before the clip appears.
+/// `PlayerView.setPoster` looks in `URLCache.shared` and `StoryDiskCache`, both of which are
+/// StoryUI's own caches. The app draws the stories row and the carousel through its OWN
+/// `DiskImageCache`, and warms that one — so for a story you just posted, or one whose poster came
+/// down for the row rather than for the viewer, the two caches the player reads are cold. It then
+/// has nothing to draw over `PlayerView`'s black background while the clip loads, and black is
+/// exactly what he photographed.
+///
+/// This is the seam rather than a second copy of the cache: the app installs one closure at launch
+/// and StoryUI asks it first. Nil is a normal answer and falls through to the caches and the network
+/// exactly as before, so nothing here can make the poster arrive later than it used to.
+@MainActor
+public enum StoryPosterSource {
+    /// Must be synchronous and must not touch the disk — it is called while a story is appearing.
+    /// A memory-cache lookup is what this is for.
+    public static var provider: ((String) -> UIImage?)?
+}
