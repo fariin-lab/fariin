@@ -119,6 +119,10 @@ enum StoryZoomPresenter {
         // Same belt for the fold flag, which `tearDown` clears on the driven paths: left raised by
         // an exit we did not drive, it would keep the NEXT story's cube flat for the whole visit.
         StoryCardMorph.heroDismissActive = false
+        // And for the flight registration: identity-checked, so a driven exit (already detached)
+        // and a successor's live flight are both no-ops. An undriven exit that skipped this would
+        // leave `storyFlightMask` raised, and the next viewer's card would render bare-cornered.
+        StoryCardMorph.shared.detachFlight(vc.flightView)
     }
 
     private static func topController() -> UIViewController? {
@@ -222,19 +226,26 @@ final class StoryZoomContainerVC: UIViewController {
     }
 
     func tearDown() {
-        // Dismiss FIRST, detach second. `detachFlight` runs `resetFlight`, which puts the container
-        // back to identity — done before the dismissal that would be one frame of full-screen story
-        // painted between the landing and the removal. Off-window, the reset touches nobody.
+        // ⚠️ BLANK FIRST, DISMISS SECOND — the iOS 26 giant-blink, his 01:12 screenshot. This used
+        // to dismiss first and trust `animated: false` to have the screen out of the window before
+        // `detachFlight` ran `resetFlight`, which snaps the container back to identity and full
+        // screen. iOS 27 honours that trust; iOS 26 keeps the screen up for one more frame — and
+        // that frame was the landed story back at FULL SIZE wearing the row-card cover, giant,
+        // because the cover reference was also nilled before the detach so the reset could not even
+        // zero its alpha. Hiding the view first costs nothing when the removal is synchronous and
+        // paints nothing when it is not: the teardown no longer depends on which OS it runs on.
+        view.isHidden = true
         dismiss(animated: false)
         // THE CUBE STAYS FLAT UNTIL THE SCREEN IS GONE. The landing used to clear this, but the
         // landing is 0.03s before the removal on this door — and an unflagged card that is still
         // parked on the row card computes a large fold angle from its global minX. See the note in
         // `land`, and StoryDetailView's own for what that fold looks like.
         StoryCardMorph.heroDismissActive = false
-        if StoryCardMorph.shared.flightCover === coverView { StoryCardMorph.shared.flightCover = nil }
         // Identity-checked detach, same contract as the pagers': a successor presented before this
-        // teardown finishes must not lose its registration.
+        // teardown finishes must not lose its registration. BEFORE the cover reference is dropped,
+        // so `resetFlight` can zero the cover's alpha — the other half of the blink above.
         StoryCardMorph.shared.detachFlight(flightView)
+        if StoryCardMorph.shared.flightCover === coverView { StoryCardMorph.shared.flightCover = nil }
     }
 
     func driftAwayThenTearDown() {
