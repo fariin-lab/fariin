@@ -304,6 +304,7 @@ struct StoryRowLongPress: UIViewRepresentable {
                 // ⚠️ RENDERED FROM THE LABEL, NOT CROPPED OUT OF THE WINDOW — see `labelView`. The
                 // card above is a window crop because its pixels really are on the window; the name
                 // is glyphs on nothing, and a window crop of "nothing" is the chat list.
+                var liftedName: UIView?
                 if let lr = t.labelRect, let lv = t.labelView,
                    let nameShot = StoryCardShot.render(lv, cornerRadius: 0) {
                     let name = UIImageView(image: nameShot)
@@ -311,6 +312,7 @@ struct StoryRowLongPress: UIViewRepresentable {
                                         width: lr.width, height: lr.height)
                     name.autoresizingMask = [.flexibleWidth, .flexibleTopMargin]
                     container.addSubview(name)
+                    liftedName = name
                 }
 
                 let o = CMOverlay(previewView: container,
@@ -325,7 +327,24 @@ struct StoryRowLongPress: UIViewRepresentable {
                 // The card comes back as the return spring STARTS, not after the lift is gone — a
                 // SwiftUI reveal paints on the next pass, and waiting would leave one frame with an
                 // empty slot in the row. See `CMOverlay.onWillDismiss`.
-                o.onWillDismiss = { MediaSourceVisibility.shared.reveal() }
+                //
+                // ⚠️ AND THE COPY'S NAME GOES IN THE SAME BREATH, OR THE NAME IS ON SCREEN TWICE.
+                //
+                // His 2026-08-08 screenshot: two "Test Zahra", one sharp and one offset and blurred.
+                // The reveal above brings the real card back INSTANTLY while the lifted copy takes
+                // 0.4s to spring home, so for that whole spring both are drawn. The pictures
+                // doubling is invisible — they are the same photograph landing on itself — but the
+                // NAME the lift gained in `5401903` is a line of text sliding over a line of text
+                // that is not moving, and the eye reads that immediately.
+                //
+                // A hard cut, not a fade: at this instant the copy is still up at the lifted size,
+                // so its name is nowhere near the real one and there is nothing to cross-fade with.
+                // What flies home is the picture, which is what it did before the name was added and
+                // is the half that actually has somewhere to fly to.
+                o.onWillDismiss = {
+                    liftedName?.alpha = 0
+                    MediaSourceVisibility.shared.reveal()
+                }
                 overlay = o
                 // The real card steps aside for the lift, exactly as the chat hides the pressed
                 // bubble: the same picture must never be on screen twice at the hand-over.
