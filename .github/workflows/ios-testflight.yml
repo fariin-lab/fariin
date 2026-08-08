@@ -74,25 +74,15 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THE WHOLE STORY OPEN AND CLOSE WAS REBUILT. This is the biggest change to stories since the viewer itself, so please push on it.
+            THIS BUILD IS ABOUT YOUR SIX MORNING SCREENSHOTS. Both story closing bugs, plus the three row problems from last night.
 
-            SIX PLACES OPENED STORIES SIX DIFFERENT WAYS. The stories row, the ring on a chat, the archive, a contact's profile, My Story in Settings, and a reply quote each had their own open and their own close written separately. That is why a fix to one never reached the others, and why scrolling down felt like a different gesture depending on which circle you tapped. There is one now. All six go through the same code.
+            THE CORNERS STAY ROUND THE WHOLE WAY DOWN. Your four screenshots with the red marks. The story card was cutting its own corners with a curve that shrinks as the card shrinks, so by the time it was small the corners were nearly square and the grey background sat right against them. The dark corners at the bottom were the caption strip poking past the card. One curve owns the corners now, from the first moment of the pull to the landing, and everything on the card is cut by it, caption included. This is a real cause fix, not a cover up.
 
-            THE CIRCLE IS ACTUALLY ROUND. On a chat ring and on a profile photo the story is meant to grow out of the circle and shrink back into it, Snapchat style. It was really growing as a rounded rectangle with a round picture sitting on top for the first moment. It stays round the whole way now. Cards still open as cards.
+            THE FULL SIZE BLINK AT THE END IS GONE, your iOS 26 report. When the story finished landing, the app put the screen back to full size and then asked Apple to remove it, trusting that nobody would see. iOS 27 removes it instantly so you never saw anything. iOS 26 keeps it on screen for one more frame, and that frame was the giant story you photographed. The screen now goes blank before anything is put back, so there is nothing left to see on either iOS.
 
-            SCROLLING DOWN HAS A LIMIT, your screenshot of the story sitting under the tab bar. It stops at about a third of the screen and will not go further or slide off the bottom.
+            FROM LAST NIGHT, ALSO IN THIS BUILD: stories no longer open as stretched ovals the first time the app starts. Long pressing a card keeps the card's own rounded corners instead of changing them. The lifted card shows the person's name again.
 
-            SCROLLING DOWN LANDS ON THE RIGHT PERSON. Open the first person, swipe to the second, third, fourth, then pull down, and it used to fly back to the FIRST one. It goes back to the person you were watching, and the row is sitting on them afterwards.
-
-            THE WHITE CORNERS. They were in the photograph, not in the corners. When a story opens, the app takes a picture of the card you tapped, and the four corners of a square picture around a rounded card are the chat list behind it. My last two attempts tried to cover them up, which is why it got worse rather than better. They are cut out of the picture itself now.
-
-            THE BACKGROUND STAYS DARKER while you drag, on your Telegram comparison. Not as dark as Telegram, which you said was too much. Roughly half way between, nearer Snapchat.
-
-            ALSO: the Add button in the photo picker was a blank white pill (white text on white). The New Custom Story icon was too big next to the flame.
-
-            AND FROM THE BUILD THAT NEVER UPLOADED: the CAMERA / TEXT bar is Signal's own control now, and the crash root cause is fixed. Apple blocked that upload, not us, so you are seeing those for the first time here.
-
-            WHAT TO CHECK FIRST: open a story from all six places and close each one by scrolling down. Anything that feels different from the others is a mistake I made.
+            WHAT TO CHECK FIRST: open a story, scroll down slowly and watch the corners the whole way. Then close it fast with a flick. Then do the same on iOS 26 and watch for the blink at the end.
 
             STILL OPEN, do not report again yet: the story pausing by itself after you come back into the app (I asked you two questions about it), and edited videos exporting with black bars instead of the gradient.
 
