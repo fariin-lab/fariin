@@ -126,10 +126,12 @@ struct StoryPager: UIViewControllerRepresentable {
         let parent: StoryPager
         weak var pager: UIPageViewController?
         weak var internalScroll: UIScrollView?
-        // Stationary blurred backdrop revealed BEHIND the card during swipe-down (instead of black). It does
-        // not move with the drag — only the card (internalScroll) translates — so the gap shows the blur.
-        private let dismissBackdrop = UIImageView()
-        private let dismissBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
+        // `dismissBackdrop` + `dismissBlur` stood here: a stationary blurred copy of the story meant
+        // to be revealed behind the card during a swipe-down. DEAD SINCE THE DISMISS WAS REBUILT —
+        // nothing ever assigned the image view a picture, and both were hidden at install and hidden
+        // again on every pan `.began`, so what they actually did was add a permanently invisible
+        // `UIVisualEffectView` to the pager for the app to composite. Removed with the rest of the
+        // blur system; what pulls away now is the card, over the live chat list, as below.
         private var didInstallPan = false
         /// Whether the passive watcher has already told the host it is past the fade threshold. One
         /// report per crossing, not one per frame — see `handleDismissWatch`.
@@ -360,18 +362,6 @@ struct StoryPager: UIViewControllerRepresentable {
             // no bounce). Friends keep it for user-to-user swipe. Re-applied in syncIfNeeded so a
             // UIPageViewController internal reset can't turn it back on.
             neutralizePagerScrollIfHostOwnsSwipe()
-            // Stationary blurred backdrop behind the pages: hidden at rest, shown only during a dismiss drag
-            // so the area the card uncovers (above it) is a blurred copy of the story, not black.
-            dismissBackdrop.contentMode = .scaleAspectFill
-            dismissBackdrop.clipsToBounds = true
-            dismissBackdrop.frame = pager.view.bounds
-            dismissBackdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            dismissBackdrop.isHidden = true
-            dismissBlur.frame = pager.view.bounds
-            dismissBlur.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            dismissBlur.isHidden = true
-            pager.view.insertSubview(dismissBackdrop, at: 0)
-            pager.view.insertSubview(dismissBlur, aboveSubview: dismissBackdrop)
             // DOWN dismiss pan (native UIKit — smooth). Installed for BOTH own and friends now, so the
             // own-story swipe-down uses the exact same buttery pan friends use (no app-level SwiftUI
             // offset). The card moves in pure UIKit; require(toFail:) keeps the horizontal slide separate.
@@ -577,8 +567,6 @@ struct StoryPager: UIViewControllerRepresentable {
                 // else, which is what Snapchat's dismissal actually is.
                 card.backgroundColor = .clear
                 pager.view.backgroundColor = .clear
-                dismissBackdrop.isHidden = true
-                dismissBlur.isHidden = true
                 NotificationCenter.default.post(name: .pauseStory, object: nil)   // freeze for the whole drag
             case .changed:
                 let ty = max(0, t.y)

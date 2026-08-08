@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreImage
 import UIKit
+import StoryUI   // StoryCanvas: the one sampler + drawer for a story's backdrop
 
 // Prepares a picked gallery video for sending: transcodes to 720p H.264 mp4 (bounded
 // size, plays on every device, strips HDR/HEVC oddities) and grabs a thumbnail +
@@ -553,63 +554,18 @@ enum VideoTranscoder {
         return gradientColours(of: cg)
     }
 
-    /// The same sampling, from a frame already in hand. Split out so the uploading placeholder and
-    /// the export read their colours through ONE function — two implementations would agree today
-    /// and drift the first time either is touched, and "it changes colour when it lands" is the
-    /// report that produced this.
-    static func gradientColours(of cg: CGImage) -> (top: CIColor, bottom: CIColor) {
-        let fallback = (top: CIColor(red: 0.13, green: 0.13, blue: 0.15),
-                        bottom: CIColor(red: 0.05, green: 0.05, blue: 0.06))
-        let w = CGFloat(cg.width), h = CGFloat(cg.height)
-        guard w >= 1, h >= 1 else { return fallback }
-        // A band rather than a line: one row of pixels can land on a caption, a letterbox edge or a
-        // single bright object. An eighth of the height averages those away and still describes the
-        // end of the picture the gradient has to meet.
-        let band = max(1, (h / 8).rounded())
-        // ⚠️ `CGImage.cropping(to:)` takes its rectangle in the IMAGE's own space, whose origin is
-        // the TOP left. That is not the same convention as a CGContext, and getting it backwards
-        // would put the sky at the bottom — the kind of mistake nobody sees until it ships.
-        let top = averageColour(of: cg, in: CGRect(x: 0, y: 0, width: w, height: band))
-        let bottom = averageColour(of: cg, in: CGRect(x: 0, y: h - band, width: w, height: band))
-        guard let top, let bottom else { return fallback }
-        return (top, bottom)
-    }
-
-    /// The mean colour of one band of a frame, or nil if it cannot be read.
+    /// The same sampling, from a frame already in hand.
     ///
-    /// Averaged in code from a small grid rather than by asking CoreGraphics to scale the band
-    /// straight down to a single pixel: at extreme reductions the interpolator is free to point
-    /// sample, and a "mean" that is really one arbitrary pixel is how a gradient ends up keyed to a
-    /// speck of glare.
-    private static func averageColour(of image: CGImage, in rect: CGRect) -> CIColor? {
-        guard let crop = image.cropping(to: rect.integral), crop.width > 0, crop.height > 0
-        else { return nil }
-        let side = 8
-        var px = [UInt8](repeating: 0, count: side * side * 4)
-        let ok: Bool = px.withUnsafeMutableBytes { buf -> Bool in
-            guard let ctx = CGContext(data: buf.baseAddress, width: side, height: side,
-                                      bitsPerComponent: 8, bytesPerRow: side * 4,
-                                      space: CGColorSpaceCreateDeviceRGB(),
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
-            else { return false }
-            ctx.interpolationQuality = .medium
-            ctx.draw(crop, in: CGRect(x: 0, y: 0, width: CGFloat(side), height: CGFloat(side)))
-            return true
-        }
-        guard ok else { return nil }
-        var r = 0.0, g = 0.0, b = 0.0, n = 0.0
-        for i in stride(from: 0, to: px.count, by: 4) {
-            // Premultiplied: undo the alpha before averaging, and skip anything transparent so a
-            // clip with an alpha channel cannot drag the mean towards black.
-            let a = Double(px[i + 3]) / 255
-            guard a > 0.01 else { continue }
-            r += Double(px[i]) / 255 / a
-            g += Double(px[i + 1]) / 255 / a
-            b += Double(px[i + 2]) / 255 / a
-            n += 1
-        }
-        guard n > 0 else { return nil }
-        return CIColor(red: CGFloat(min(1, r / n)), green: CGFloat(min(1, g / n)), blue: CGFloat(min(1, b / n)))
+    /// ⚠️ THIS IS A THIN SHIM OVER `StoryCanvas.colours(of:)` AND MUST STAY ONE. The body that used
+    /// to live here — band average, 8x8 grid, alpha-aware — moved to `StoryCanvas` when the photo
+    /// half of the app stopped blurring and started drawing the same canvas. The export bakes the
+    /// gradient into a posted clip and the story viewer draws it live behind a clip posted before
+    /// that bake existed, so the two are looking at the same media and MUST reach the same pair of
+    /// colours. Re-implementing it here would agree today and drift the first time either is
+    /// touched, and "it changes colour when it lands" is the report that produced the shared version.
+    static func gradientColours(of cg: CGImage) -> (top: CIColor, bottom: CIColor) {
+        let c = StoryCanvas.colours(of: cg)
+        return (CIColor(color: c.top), CIColor(color: c.bottom))
     }
 
     /// The gradient itself, drawn ONCE into a bitmap the export then composites every frame over.
@@ -640,22 +596,12 @@ enum VideoTranscoder {
     /// is that nothing here may leave part of the frame uncovered, because uncovered composites as
     /// black.
     ///
-    /// ⚠️ `UIGraphicsImageRenderer` hands out a FLIPPED context (origin top-left, y downwards), so
-    /// y = 0 is the TOP and the top colour starts there. Drawing it the other way up is the classic
-    /// way a gradient ships upside down, and on a clip whose two sampled colours are similar nobody
-    /// would notice until it shipped.
+    /// The stroke itself is `StoryCanvas.draw`, for the same reason `gradientColours` is a shim:
+    /// the canvas baked into an exported clip and the canvas drawn live behind an older one have to
+    /// be the same gradient, not two gradients that were written to match.
     private static func drawGradient(in cg: CGContext, size: CGSize, top: CIColor, bottom: CIColor) {
-        let topUI = UIColor(red: top.red, green: top.green, blue: top.blue, alpha: 1)
-        let bottomUI = UIColor(red: bottom.red, green: bottom.green, blue: bottom.blue, alpha: 1)
-        topUI.setFill()
-        cg.fill(CGRect(origin: .zero, size: size))
-        guard let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                                    colors: [topUI.cgColor, bottomUI.cgColor] as CFArray,
-                                    locations: [0, 1])
-        else { return }
-        cg.drawLinearGradient(grad,
-                              start: CGPoint(x: size.width / 2, y: 0),
-                              end: CGPoint(x: size.width / 2, y: size.height),
-                              options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
+        StoryCanvas.draw(in: cg, size: size,
+                         top: UIColor(red: top.red, green: top.green, blue: top.blue, alpha: 1),
+                         bottom: UIColor(red: bottom.red, green: bottom.green, blue: bottom.blue, alpha: 1))
     }
 }

@@ -19,18 +19,18 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     var mediaState: ((MediaState, Double) -> ())?
 
     let contentView = UIView()
-    /// WHAT FILLS THE BARS WHEN A CLIP DOES NOT FIT THE CARD.
+    /// WHAT FILLS THE BARS WHEN A CLIP DOES NOT FIT THE CARD: Telegram's canvas, the same one the
+    /// photo half draws and the same one `VideoTranscoder` bakes into every exported story.
     ///
-    /// A photo that does not fit gets a blurred, aspect-filled copy of itself behind it — that is
-    /// what `ImageLoader.backgroundImageView` is, and it is the look the owner chose. A video got
-    /// `playerLayer.backgroundColor = .black` instead, so a square clip showed the editor's blurred
-    /// bars right up until it was posted and then flat black ones for ever after. Same story, two
-    /// different backdrops, and only one of them was the one he asked for.
-    ///
-    /// It is the POSTER, blurred the way `frozenVeil` blurs it: a hard downscale, because a downscale
-    /// is a blur and a real Gaussian on every frame of a playing video is not free. Drawn once when
-    /// the poster lands, never re-sampled.
-    private let backdropView = UIImageView()
+    /// A clip posted from a recent build already carries the canvas in its own pixels and this is
+    /// never seen. It is here for the clips posted before that bake existed, and for anything that
+    /// reaches the viewer without it — and it is the SAME gradient, from the SAME sampler, so the
+    /// two are indistinguishable. That is the point: a story must not change appearance depending on
+    /// which half of the app happened to draw its background.
+    private let canvasLayer = StoryCanvas.makeLayer()
+    /// The frame the canvas colours were read from, so a poster arriving after the first video frame
+    /// cannot re-colour a canvas that is already right (and start an implicit animation doing it).
+    private var canvasSourced = false
 
     // MARK: Private Properties
     private let playerLayer = AVPlayerLayer()
@@ -81,7 +81,7 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         CATransaction.setDisableActions(true)   // a resize correction must not animate
         contentView.frame = bounds
         playerLayer.frame = bounds
-        backdropView.frame = bounds
+        StoryCanvas.frame(canvasLayer, to: bounds)
         CATransaction.commit()
         viewWithTag(999)?.frame = bounds        // the loading veil rides along
         applyGravity()
@@ -98,7 +98,7 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     private func applyGravity() {
         guard presentedSize.width > 0, presentedSize.height > 0,
               bounds.width > 0, bounds.height > 0 else { return }
-        let fills = presentedSize.height / presentedSize.width >= bounds.height / bounds.width - 0.02
+        let fills = StoryCanvas.fills(media: presentedSize, in: bounds.size)
         let want: AVLayerVideoGravity = fills ? .resizeAspectFill : .resizeAspect
         guard playerLayer.videoGravity != want else { return }
         CATransaction.begin()
@@ -107,9 +107,8 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         CATransaction.commit()
     }
 
-    /// The blurred fill behind a letterboxed clip. Nothing to do when the video fills the card —
-    /// there are no bars to fill, and an unnecessary full-size image under a playing video is a
-    /// composite nobody is looking at.
+    /// The canvas behind a letterboxed clip. Nothing to do when the video fills the card — there are
+    /// no bars to fill.
     ///
     /// ⚠️ SECOND ATTEMPT. The first shipped in 470 and did nothing, and the flaw was that it asked
     /// `playerLayer.videoGravity` whether the clip fits. That is a DERIVED value written by
@@ -118,10 +117,10 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// every call before the clip's real size arrived HID the backdrop. Hiding is exactly the black
     /// he photographed.
     ///
-    /// It measures the same two numbers `applyGravity` measures now, so the two cannot disagree and
+    /// Both this and `applyGravity` go through `StoryCanvas.fills`, so the two cannot disagree and
     /// neither waits on the other. And when the answer is not known yet — the poster is here but the
-    /// clip's size is not — it SHOWS. A blurred fill behind a video that turns out to fill the frame
-    /// is invisible; a black one behind a video that does not is the bug.
+    /// clip's size is not — it SHOWS. A canvas behind a video that turns out to fill the frame is
+    /// invisible; black behind a video that does not is the bug.
     private func refreshBackdrop() {
         // ⚠️ THE POSTER WAS NEVER GUARANTEED TO BE HERE, AND THAT IS THE BLACK BARS.
         //
@@ -130,33 +129,28 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // caches, filled by its ImageLoader and prefetcher. The app draws its story row through its
         // OWN DiskImageCache and warms that one. So for a story you just posted, the two caches this
         // reads are cold, the poster becomes a network fetch, and until it lands there is nothing to
-        // blur. That is the square-video report, three times: the decision logic was right all along,
-        // the picture it needed was simply not there yet.
+        // sample. That is the square-video report, three times: the decision logic was right all
+        // along, the picture it needed was simply not there yet.
         //
         // The player is a better source than the poster anyway: it is the frame actually on screen
         // rather than second zero, it needs no network, and it cannot come back black the way a
         // screen capture can. The poster stays as the fallback for the moments before the first
         // frame is decoded.
-        let source = posterImage ?? currentVideoFrame()
-        guard bounds.width > 1, bounds.height > 1, let poster = source else {
-            if !backdropView.isHidden { backdropView.isHidden = true }
-            return
-        }
+        guard bounds.width > 1, bounds.height > 1 else { return }
         // Undecided (presentedSize still zero) counts as "might have bars" — see the note above.
         let known = presentedSize.width > 0 && presentedSize.height > 0
-        let fills = known && presentedSize.height / presentedSize.width >= bounds.height / bounds.width - 0.02
-        guard !fills else {
-            if !backdropView.isHidden { backdropView.isHidden = true }
-            return
-        }
-        backdropView.isHidden = false
-        // Rebuilt only when the box it has to cover changes shape — this runs from layoutSubviews.
-        if backdropView.image == nil || backdropSize != bounds.size {
-            backdropSize = bounds.size
-            backdropView.image = Self.frozenVeil(of: poster, covering: bounds.size)
-        }
+        let fills = known && StoryCanvas.fills(media: presentedSize, in: bounds.size)
+        canvasLayer.isHidden = fills
+        guard !fills else { return }
+        // The colours are read ONCE, from whichever frame is available first, and then left alone.
+        // Re-reading them when the poster lands after the video has already started would repaint
+        // the bars mid-story, which is a colour change under a still picture — the exact class of
+        // thing this rewrite exists to remove. Nothing about the canvas depends on the card's size,
+        // so unlike the veil it replaced there is nothing to rebuild when the box changes shape.
+        guard !canvasSourced, let source = posterImage ?? currentVideoFrame() else { return }
+        canvasSourced = true
+        StoryCanvas.apply(StoryCanvas.colours(of: source), to: canvasLayer)
     }
-    private var backdropSize: CGSize = .zero
 
     /// The observer's landing point: remember the clip's size, re-take the decision.
     fileprivate func notePresentationSize(_ s: CGSize) {
@@ -229,6 +223,10 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         guard posterURL != urlString else { return }
         posterURL = urlString
         posterImage = nil
+        // A DIFFERENT CLIP, so the canvas has to be read again. This view is reused across stories,
+        // and without this the second clip would wear the first one's colours — the video half of
+        // the same bug audit finding C1 caught on the photo half.
+        canvasSourced = false
         guard let urlString, let u = URL(string: urlString) else { return }
         if let cached = URLCache.shared.cachedResponse(for: .init(url: u)),
            let img = UIImage(data: cached.data) { posterImage = img; refreshBackdrop(); return }
@@ -255,6 +253,9 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // stop) reaches this point with its position intact and `stopVideo`'s guard never fires.
         rememberPlaybackPosition()
         self.url = validatedUrl
+        // Belt for `setPoster`'s braces: two clips that both arrive with no poster never move
+        // `posterURL`, so its reset would not fire and clip B would keep clip A's canvas.
+        canvasSourced = false
         addActivityIndicatory()
         // stop video if it's playing before video request
         stopVideo()
@@ -542,25 +543,10 @@ private extension PlayerView {
     /// stays on top of it, because a video genuinely can take a moment and something has to say so —
     /// but it turns over the picture instead of over nothing. Black is only the fallback for a clip
     /// whose poster we have not got.
-    /// The poster as a frozen dark blur: aspect-fill at 1/8 scale (the upscale's interpolation is
-    /// the blur) with the dark veil baked in. One draw, at load time, never re-sampled. The small
-    /// canvas carries the aspect of the RECT IT WILL COVER — it was UIScreen's, so on the 9:16
-    /// card the veil's poster painted at screen-fill zoom, a different scale from the video that
-    /// replaced it, which is half of the first-paint jump.
-    static func frozenVeil(of poster: UIImage, covering: CGSize) -> UIImage {
-        let small = CGSize(width: max(8, covering.width / 8),
-                           height: max(8, covering.height / 8))
-        let fmt = UIGraphicsImageRendererFormat()
-        fmt.scale = 1
-        return UIGraphicsImageRenderer(size: small, format: fmt).image { ctx in
-            let s = max(small.width / max(poster.size.width, 1), small.height / max(poster.size.height, 1))
-            let w = poster.size.width * s, h = poster.size.height * s
-            poster.draw(in: CGRect(x: (small.width - w) / 2, y: (small.height - h) / 2, width: w, height: h))
-            UIColor.black.withAlphaComponent(0.45).setFill()
-            ctx.fill(CGRect(origin: .zero, size: small))
-        }
-    }
-
+    ///
+    /// `frozenVeil` lived here and is now `StoryCanvas.loadingVeil` — the same function, the same
+    /// numbers, in the one file that owns everything drawn behind or over a story, so the photo half
+    /// and the video half cannot drift apart in how a loading story looks.
     func addActivityIndicatory() {
         removeActivityIndicatory()
         // THE VIEW'S OWN SIZE, not UIScreen's — the veil must cover exactly the card the video
@@ -577,16 +563,9 @@ private extension PlayerView {
         view.backgroundColor = .clear
         view.tag = 999
         if let poster = posterImage {
-            // STATIC PIXELS, NOT A LIVE MATERIAL. This used to be a UIVisualEffectView over the
-            // poster, and a visual effect re-samples what is behind it EVERY FRAME and composites
-            // outside its view's transform — so the moment the viewers-sheet morph scaled the card,
-            // the veil shimmered and shook against the poster it was supposed to be part of (owner
-            // 2026-08-05: "scroll up video blur... is shaking"). A photo story never shook because
-            // ImageLoader FREEZES its blur into a bitmap when the sheet opens. The video's veil is
-            // now born frozen: the poster downscaled hard (a downscale is a blur — the profile
-            // poster's wash trick) and darkened once, drawn as an ordinary image that transforms
-            // like every other pixel on the card.
-            let iv = UIImageView(image: Self.frozenVeil(of: poster, covering: view.bounds.size))
+            // STATIC PIXELS, NOT A LIVE MATERIAL — see `StoryCanvas.loadingVeil`. Both story kinds
+            // now draw their loading state through that one function.
+            let iv = UIImageView(image: StoryCanvas.loadingVeil(of: poster, covering: view.bounds.size))
             iv.frame = view.bounds
             iv.contentMode = .scaleAspectFill
             iv.clipsToBounds = true
@@ -604,10 +583,8 @@ private extension PlayerView {
 
     func setupPlayer() {
         backgroundColor = .black
-        backdropView.contentMode = .scaleAspectFill
-        backdropView.clipsToBounds = true
-        backdropView.isHidden = true
-        self.addSubview(backdropView)      // behind everything
+        canvasLayer.isHidden = true        // shown only once a clip is known not to fill the card
+        self.layer.addSublayer(canvasLayer)   // behind everything
         self.addSubview(contentView)
         // layoutSubviews owns this geometry now (see its note) — the one-shot frame here only
         // covers the beat before the first layout pass. The old Auto Layout pins are gone: they

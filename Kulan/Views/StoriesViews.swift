@@ -54,8 +54,6 @@ struct StoryRingView: View {
 
 // Cached story image: memory + persistent disk (DiskImageCache), so swiping
 // back/forward, reopening, and app relaunches load instantly with no re-download.
-// The exact dark blur the story viewer uses over its fill backdrop (ImageLoader's
-// UIVisualEffectView(.systemThickMaterialDark)) — so bars look identical in-story and in-sheet.
 // Clips the shrinking story to its CONTENT rect (photo area, not the layer's full height,
 // which extends into the faded footer region) — so all four rounded corners land exactly
 // on the visible card's edges. radius 0 = plain content rect.
@@ -70,73 +68,34 @@ struct StoryCardClip: Shape {
     }
 }
 
-struct StoryDarkBlur: UIViewRepresentable {
-    func makeUIView(context: Context) -> UIVisualEffectView {
-        UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
-    }
-    func updateUIView(_ uiView: UIVisualEffectView, context: Context) {}
-}
-
-// Pre-baked imitation of systemThickMaterialDark for views that must CROSSFADE:
-// a real UIVisualEffectView drops its blur entirely whenever it's composited at
-// fractional opacity (the bright flash while the viewers sheet opened/closed).
-// Used ONLY by the mid-transition morph card — the story's own bars and the
-// carousel keep the real material, so the at-rest look is untouched (build 216).
-enum StoryBlurBake {
-    private static let cache = NSCache<NSString, UIImage>()
-    static func cached(_ url: String) -> UIImage? { cache.object(forKey: url as NSString) }
-    static func bake(_ img: UIImage, url: String) -> UIImage {
-        if let hit = cached(url) { return hit }
-        // Pseudo-gaussian with ZERO CoreImage: collapse the photo to a tiny thumbnail, then
-        // stretch it back up — the interpolation produces the same smooth low-frequency wash
-        // as a heavy blur. The previous CIGaussianBlur pipeline silently produced BLACK on
-        // both the simulator and real devices (measured RGB 0,0,0 in the user's screenshot),
-        // and 50% black over black = the "blur is gone" bug. Pure UIKit drawing cannot fail.
-        let fmt = UIGraphicsImageRendererFormat.default()
-        fmt.scale = 1
-        // 4×4, not 16×16: the real systemThickMaterialDark shows essentially NO image
-        // structure — at 16px the stretched thumbnail still ghosted recognizable shapes,
-        // which read as "a different blur" next to the at-rest bars (user screenshot).
-        let tiny = CGSize(width: 4, height: 4)
-        let thumb = UIGraphicsImageRenderer(size: tiny, format: fmt).image { ctx in
-            ctx.cgContext.interpolationQuality = .medium
-            img.draw(in: CGRect(origin: .zero, size: tiny))
-        }
-        let outSize = CGSize(width: 240, height: 240)
-        let out = UIGraphicsImageRenderer(size: outSize, format: fmt).image { ctx in
-            ctx.cgContext.interpolationQuality = .high   // smooth stretch = the blur
-            thumb.draw(in: CGRect(origin: .zero, size: outSize))
-            // Calibrated against the REAL systemThickMaterialDark: measured from device
-            // screenshots, the material renders the bars at ~22% of the photo's brightness
-            // (photo luma ~171 → bar luma ~38), so the veil is 0.78 — the earlier 0.5 was
-            // tuned for a different pipeline and would read too bright here.
-            // 0.88 (was 0.78): the real systemThickMaterialDark reads DARKER than the old linear
-            // calibration on bright photos, so the baked morph looked visibly lighter than the live
-            // bars at both ends of the pull-up (user: "blur is going to be weak"). A heavier veil
-            // keeps the mid-drag morph close to the live material the story + carousel now use.
-            UIColor.black.withAlphaComponent(0.88).setFill()
-            ctx.fill(CGRect(origin: .zero, size: outSize))
-        }
-        cache.setObject(out, forKey: url as NSString)
-        return out
-    }
-}
+// `StoryDarkBlur` (a live `UIVisualEffectView(.systemThickMaterialDark)`) and `StoryBlurBake` (a
+// hand-calibrated 4x4 imitation of it, for the crossfades where a real material collapses) stood
+// here. Both are gone. What replaced them is `StoryCanvas` in StoryUI — Telegram's two-colour
+// gradient — and the reason the imitation existed at all is the reason the whole system had to go:
+// a material cannot be composited at fractional opacity, cannot be scaled by a gesture, and cannot
+// be snapshotted, so every surface that did one of those needed its own copy of the look. A gradient
+// needs none, and the at-rest look and the mid-transition look are now the same object rather than
+// two things calibrated against each other.
 
 struct StoryImage: View {
     let url: String
-    // fitBlur = show the WHOLE image (aspect-fit) over a blurred fill of itself — the SAME look as the
-    // story viewer, so a wide/tall photo isn't cropped/zoomed and keeps its blur bars. Used for the
-    // swipe-up morph card + the viewers carousel; the small story-row covers stay plain fill (crop).
-    var fitBlur = false
-    // bakedBars = the fit-case backdrop is a PRE-BAKED blur image instead of the live material.
-    // Only the morph card (which crossfades) uses it — materials break at fractional opacity.
-    var bakedBars = false
-    // cardFillThreshold = the fill-vs-blur decision uses THIS aspect (image height/width) instead of
-    // the screen's. The shorter viewer cards pass slotH/slotW so any image as tall as the card fills
-    // (no side bars) and only wider images get blur bars; nil = decide against the full screen.
+    // fitCanvas = show the WHOLE image (aspect-fit) over Telegram's canvas — the same treatment the
+    // story viewer gives it, so a wide/tall photo isn't cropped/zoomed. Used for the swipe-up morph
+    // card + the viewers carousel; the small story-row covers stay plain fill (crop).
+    //
+    // `bakedBars` used to sit beside this, choosing between the live material and the baked
+    // imitation. There is one canvas now and it is correct in every context, so the choice — and the
+    // whole class of bug where a card picked the wrong one — is gone.
+    var fitCanvas = false
+    // cardFillThreshold = the fill-vs-canvas decision uses THIS aspect (image height/width) instead
+    // of the screen's. The shorter viewer cards pass slotH/slotW so any image as tall as the card
+    // fills (no side bars) and only wider images get a canvas; nil = decide against the full screen.
     var cardFillThreshold: CGFloat? = nil
     @State private var image: UIImage?
-    @State private var blurredBG: UIImage?   // baked dark backdrop, from StoryBlurBake
+    /// The canvas colours for this photo, sampled once when it lands. Nil until then, and a card
+    /// with no colours yet simply draws black — which is what it drew before the photo arrived
+    /// anyway, so there is no state where this shows something wrong.
+    @State private var canvas: (top: Color, bottom: Color)?
 
     /// FIRST-FRAME SEED FROM MEMORY, and this is the story-card flash (owner 2026-08-03: "when i
     /// scroll up and scroll down is flashing", with a shot of the card as a plain grey rectangle —
@@ -151,24 +110,31 @@ struct StoryImage: View {
     /// Memory only, never the disk: this runs during a gesture and `AvatarView`'s synchronous disk
     /// read is licensed by avatars being a few KB. A story is a full-screen photo. A miss simply
     /// falls through to `load()` as before.
-    init(url: String, fitBlur: Bool = false, bakedBars: Bool = false, cardFillThreshold: CGFloat? = nil) {
+    init(url: String, fitCanvas: Bool = false, cardFillThreshold: CGFloat? = nil) {
         self.url = url
-        self.fitBlur = fitBlur
-        self.bakedBars = bakedBars
+        self.fitCanvas = fitCanvas
         self.cardFillThreshold = cardFillThreshold
-        if let warm = DiskImageCache.shared.memoryImage(url) { _image = State(initialValue: warm) }
+        if let warm = DiskImageCache.shared.memoryImage(url) {
+            _image = State(initialValue: warm)
+            // Seed the canvas in the SAME breath as the photo. If it were left to `apply` the card
+            // would draw one frame of photo-on-black before the gradient arrived, and one frame of
+            // black bars under a moving finger is exactly the flash this initializer exists to stop.
+            if fitCanvas, !Self.fills(warm, threshold: cardFillThreshold) {
+                _canvas = State(initialValue: Self.colours(of: warm))
+            }
+        }
     }
 
     var body: some View {
         Group {
             if let image {
-                if fitBlur {
+                if fitCanvas {
                     // Match the story viewer's ImageLoader EXACTLY, both rules:
-                    //  • an image at least as TALL as the screen (9:16 photos, text statuses) fills
-                    //    edge-to-edge with NO blur bars — don't add bars the story never had;
-                    //  • shorter images aspect-FIT over the SAME dark backdrop the story uses
-                    //    (fill + systemThickMaterialDark), not a bright gaussian blur.
-                    // Every fill lives INSIDE an overlay of Color.clear so it can never report an
+                    //  • an image at least as TALL as the card fills edge-to-edge with NO canvas —
+                    //    don't add bars the story never had;
+                    //  • shorter images aspect-FIT over Telegram's canvas, the same gradient the
+                    //    viewer draws behind the same photo.
+                    // The fill lives INSIDE an overlay of Color.clear so it can never report an
                     // oversized layout (a bare scaledToFill blew a wide panorama into a huge zoomed
                     // crop the moment the viewers sheet appeared — the ZStack adopted its size).
                     if fillsScreen(image) {
@@ -177,23 +143,14 @@ struct StoryImage: View {
                             .clipped()
                             .transition(.opacity)
                     } else {
-                        // ORIGINAL nesting (build 216): fill INSIDE the first overlay, the blur layer as a
-                        // SECOND overlay on Color.clear — so the blur is sized to the CARD, never to the
-                        // (possibly enormous) overflowing fill image. Nesting the blur on the fill image
-                        // itself gave it the fill's oversized frame and the material rendered BLACK on the
-                        // sheet cards (the "blur is gone" regression). Only the TOP layer varies:
-                        // the real material normally, the baked crossfade-safe copy for the morph card.
+                        // The canvas is a plain `LinearGradient`, which is two colours the GPU
+                        // interpolates inside this view's own frame. It cannot adopt an oversized
+                        // layout the way the aspect-filled copy of the photo it replaced could, so
+                        // the `Color.clear` overlay nesting that used to be needed to contain that
+                        // copy is gone with it.
                         ZStack {
-                            Color.clear
-                                .overlay(Image(uiImage: image).resizable().scaledToFill())
-                                .overlay {
-                                    if bakedBars, let bg = blurredBG {
-                                        Image(uiImage: bg).resizable().scaledToFill()
-                                    } else {
-                                        StoryDarkBlur()
-                                    }
-                                }
-                                .clipped()
+                            LinearGradient(colors: [canvas?.top ?? .black, canvas?.bottom ?? .black],
+                                           startPoint: .top, endPoint: .bottom)
                             Image(uiImage: image).resizable().scaledToFit()
                         }
                         .transition(.opacity)
@@ -223,12 +180,23 @@ struct StoryImage: View {
     // thumbnails and row covers, where the box is nothing like a story card and the old rule is
     // harmless. Anything drawing a story-shaped surface must pass its own aspect, as the viewers
     // carousel does.
-    private func fillsScreen(_ img: UIImage) -> Bool {
+    private func fillsScreen(_ img: UIImage) -> Bool { Self.fills(img, threshold: cardFillThreshold) }
+
+    /// Static so the initializer can seed the canvas colours before the first frame is drawn.
+    private static func fills(_ img: UIImage, threshold: CGFloat?) -> Bool {
         guard img.size.width > 0 else { return false }
         let ratio = img.size.height / img.size.width
-        if let t = cardFillThreshold { return ratio >= t - 0.02 }
+        if let threshold { return ratio >= threshold - 0.02 }
         let screen = UIScreen.main.bounds
         return ratio >= screen.height / screen.width - 0.02
+    }
+
+    /// Through `StoryCanvas`, the same sampler the story viewer and the export both read. A card in
+    /// the carousel and the full-screen story behind it are the same photo, and they must not be
+    /// able to disagree about what colour sits behind it.
+    private static func colours(of img: UIImage) -> (top: Color, bottom: Color) {
+        let c = StoryCanvas.colours(of: img)
+        return (Color(uiColor: c.top), Color(uiColor: c.bottom))
     }
 
     @MainActor private func load() async {
@@ -255,11 +223,10 @@ struct StoryImage: View {
 
     @MainActor private func apply(_ img: UIImage) async {
         image = img
-        // Bake the crossfade-safe backdrop off-main (morph card only; cached per URL).
-        guard bakedBars, fitBlur, !fillsScreen(img), blurredBG == nil else { return }
-        if let hit = StoryBlurBake.cached(url) { blurredBG = hit; return }
-        let u = url
-        blurredBG = await Task.detached(priority: .userInitiated) { StoryBlurBake.bake(img, url: u) }.value
+        // Sample the canvas off-main: it reads an 8x8 grid out of two crops, which is cheap but not
+        // free, and this can land during the sheet drag.
+        guard fitCanvas, !fillsScreen(img), canvas == nil else { return }
+        canvas = await Task.detached(priority: .userInitiated) { Self.colours(of: img) }.value
     }
 }
 
@@ -895,7 +862,7 @@ struct StoryViewer: View {
                 .opacity(showViewers ? 1 : 0)
             // BUILD 213 architecture (restored per user — the zoom that worked): the real story
             // just FADES OUT; the morph card in viewersBackdrop (ABOVE the story) does the visual
-            // zoom by interpolating its FRAME with a StoryImage(fitBlur:) = image + blur. No
+            // zoom by interpolating its FRAME with a StoryImage(fitCanvas:) = image + canvas. No
             // scaleEffect on the live story anywhere (that top-anchor scale was the break-out bug).
             storyLayer
             if showViewers { viewersBackdrop }
@@ -1060,7 +1027,6 @@ struct StoryViewer: View {
             // (close, dismiss, teardown) and a card left mid-transform would open the NEXT story
             // already shrunken.
             StoryCardMorph.shared.reset()
-            NotificationCenter.default.post(name: .init("storyUnfreezeBlur"), object: nil)
         }
         // SELF-HEALING for a PARKED sheet (user video: sheet resting at ~73% open — story stuck
         // as a giant half-morphed card, carousel never faded in). Two ways to get parked: a
@@ -1117,7 +1083,6 @@ struct StoryViewer: View {
             // Same reason the chrome is restored here: a viewer torn down with the sheet still up
             // must not hand the next one a caption that is already faded out.
             NotificationCenter.default.post(name: .init("storySheetProgress"), object: CGFloat(0))
-            NotificationCenter.default.post(name: .init("storyUnfreezeBlur"), object: nil)
             // The frozen covers belong to ONE viewing session. Kept across sessions they would be
             // bitmaps of frames nobody is watching any more, and the next open would show a cover
             // from the last one.
@@ -1160,14 +1125,11 @@ struct StoryViewer: View {
         .onChange(of: sheetStoryId) { _, id in
             guard showViewers, currentIsMine, !id.isEmpty else { return }
             NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: id)
-            // The jumped-to item arrives UNFROZEN (the stale-freeze fix clears it on URL change),
-            // and its live blur misrenders under the sheet's scale — the centre card grew an
-            // "extra blur" bar and the photo read as jumping (user report). Re-freeze once the
-            // new item has rendered; the freeze uses the cached composite, so it's exact.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                guard showViewers else { return }
-                NotificationCenter.default.post(name: .init("storyFreezeBlur"), object: nil)
-            }
+            // A 0.2s re-freeze lived here, because a jumped-to item arrived with a live material
+            // that misrendered under the sheet's scale — "the centre card grew an extra blur bar and
+            // the photo read as jumping". The canvas has no such state: it is two colours in a
+            // layer, it is set the moment the new photo lands, and it scales with the card rather
+            // than being recomputed against it. Nothing to re-freeze, and no timer racing the load.
         }
         // The COVER'S OWN BACKING (not just an inner canvas) must be opaque black while the viewers
         // sheet is up — otherwise the .zoom transition composites the clear backing over the inner
@@ -1364,9 +1326,10 @@ struct StoryViewer: View {
                     // Freeze the story the INSTANT the sheet starts to open (don't wait for the
                     // progress>0.01 onChange) so it can never advance/auto-close under the sheet.
                     NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
-                    // Freeze the blurred backdrop AS IT LOOKS RIGHT NOW (user spec: the pull-up
-                    // must keep the exact pre-pull blur, never re-compute it at the smaller size).
-                    NotificationCenter.default.post(name: .init("storyFreezeBlur"), object: nil)
+                    // His spec for the pull-up was "keep the exact pre-pull blur, never re-compute
+                    // it at the smaller size", and a freeze post went here to obey it. The canvas
+                    // obeys it by construction — a gradient has nothing to re-compute at any size —
+                    // so the spec is now a property of the backdrop rather than a message about it.
                     // Chrome-only exit: progress bar / avatar / name / scrim fade via the library;
                     // the story IMAGE never animates (user spec: no flash, no re-render).
                     NotificationCenter.default.post(name: .init("storyChromeHidden"), object: true)
@@ -1392,7 +1355,6 @@ struct StoryViewer: View {
                     // and skipped pause/freeze on the NEXT swipe-up).
                     showViewers = false
                     NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)
-                    NotificationCenter.default.post(name: .init("storyUnfreezeBlur"), object: nil)
                     NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
                     return
                 }
@@ -2609,7 +2571,6 @@ struct StoryViewer: View {
         // and a carousel with nothing in its slot. It opens the moment the real story lands.
         guard !isUploadingItem else { return }
         NotificationCenter.default.post(name: .init("pauseStory"), object: nil)   // freeze the story immediately
-        NotificationCenter.default.post(name: .init("storyFreezeBlur"), object: nil)   // keep the exact pre-pull blur
         NotificationCenter.default.post(name: .init("storyChromeHidden"), object: true)   // chrome-only exit
         if !showViewers {
             sheetStoryId = targetStoryId
@@ -2650,7 +2611,6 @@ struct StoryViewer: View {
             // Reaching here means the close actually finished (a re-open cancels this animator).
             showViewers = false
             NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)   // chrome back
-            NotificationCenter.default.post(name: .init("storyUnfreezeBlur"), object: nil)     // live material again
         }
     }
 
@@ -3330,36 +3290,29 @@ struct MyStoriesCarousel: View {
                 .overlay(Image(uiImage: shot).resizable().scaledToFill())
                 .clipped()
         } else {
-            // ⚠️ BAKED BARS, NOT THE LIVE MATERIAL, and his 2026-08-08 report is why: "non-centered
-            // cards lose their blur effect or show weak blur. The blur only appears when the card is
-            // centered."
+            // His 2026-08-08 report was: "non-centered cards lose their blur effect or show weak
+            // blur. The blur only appears when the card is centered." That was a `UIVisualEffectView`
+            // DROPPING ITS BLUR when composited at fractional opacity — which is exactly what the
+            // cover-flow does to every card that is not centred (`.opacity(1 - 0.20 * scaleFraction)`
+            // in the body above, on top of a `.scaleEffect`). The centre card was the only one drawn
+            // at opacity 1, so it was the only one whose blur survived.
             //
-            // The answer is written at the top of this file already, it was just applied to the
-            // wrong view. `StoryDarkBlur` is a real `UIVisualEffectView`, and a material DROPS ITS
-            // BLUR whenever it is composited at fractional opacity — which is exactly what the
-            // cover-flow does to every card that is not centred: `.opacity(1 - 0.20 * scaleFraction)`
-            // in the body above, on top of a `.scaleEffect`. The centre card is the only one drawn at
-            // opacity 1, so it is the only one whose blur survives. That is the whole of the report,
-            // and it is not a transition problem — a side card is simply never asked to blur.
-            //
-            // The baked backdrop is a UIImage, so scaling and fading it are ordinary drawing and
-            // cannot fail. Its veil was calibrated against the real material for the morph card
-            // (0.88, tuned twice off his screenshots), so the centre card keeps the look it has now
-            // and the neighbours finally match it.
-            StoryImage(url: s.previewUrl, fitBlur: true, bakedBars: true, cardFillThreshold: slotH / slotW)
+            // It was patched with a pre-baked imitation of the material. The canvas ends the
+            // question instead: a gradient at 80% opacity is the same gradient, 20% weaker, in every
+            // card at once — there is no state in which it can be present for one card and absent
+            // for its neighbour.
+            StoryImage(url: s.previewUrl, fitCanvas: true, cardFillThreshold: slotH / slotW)
         }
     }
 
     private func card(_ s: Story) -> some View {
         let vs = byStory[s.id] ?? []
         let reacts = vs.filter { !($0.reaction ?? "").isEmpty }.count
-        // IMAGE + BLUR (build 213, user: keep both): the card is a live StoryImage(fitBlur:) — the
-        // whole image over its own blur — exactly what the morph card shows, so the morph→carousel
-        // hand-off at full-open is seamless (same view, same size).
-        // fitBlur keeps the story exactly as full-screen (user rule: keep image + blur if it has
-        // blur; fill with no blur if it doesn't). bakedBars:false = the real live material, so the
-        // resting card's dark bars match the story's own bars (the baked copy read weaker).
-        // A story with a frozen cover draws that instead — see cardMedia.
+        // IMAGE + CANVAS (build 213, user: keep both): the card is a live StoryImage(fitCanvas:) —
+        // the whole image over its own canvas — exactly what the morph card shows, so the
+        // morph→carousel hand-off at full-open is seamless (same view, same size). `fitCanvas` keeps
+        // the story framed exactly as it is full-screen (user rule: keep image + backdrop if it has
+        // one; fill with none if it doesn't). A story with a frozen cover draws that — see cardMedia.
         return cardMedia(s)
             .frame(width: slotW, height: slotH)
             .clipped()

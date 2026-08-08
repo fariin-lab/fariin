@@ -6525,11 +6525,11 @@ struct MessageBubble: View, Equatable {
                         .frame(width: 5, height: 140)
                     // ~92x160 (measured from the reference): small enough to read as a story CARD,
                     // not a sent photo. Hairline stroke separates light stories from the wallpaper.
-                    // fitBlur: the WHOLE photo shows (aspect-fit over its own dark blur), never a
+                    // fitCanvas: the WHOLE photo shows (aspect-fit over its own canvas), never a
                     // crop — the preview must show exactly what opening the story shows (6 people
                     // in the story = 6 people in the card, user rule). Threshold = the card's own
                     // aspect so a card-tall photo still fills edge-to-edge with no bars.
-                    StoryImage(url: thumb, fitBlur: true, cardFillThreshold: 140.0 / 80.0)
+                    StoryImage(url: thumb, fitCanvas: true, cardFillThreshold: 140.0 / 80.0)
                         .frame(width: 80, height: 140)
                         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)

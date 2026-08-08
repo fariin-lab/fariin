@@ -130,22 +130,23 @@ final class ImageLoader: UIView {
 
     // MARK: Public Properties
     var imageURL: URL?
-    // Round ONLY the bottom two corners of the whole card (photo + blur backdrop) in UIKit. A SwiftUI
-    // .clipShape doesn't clip the UIVisualEffectView blur (it composites separately and spills past the
-    // mask), so the friend reply-bar card stayed square; a UIKit corner mask clips the blur reliably.
+    // Round ONLY the bottom two corners of the whole card (photo + canvas) in UIKit. This was
+    // forced by the old backdrop — a SwiftUI `.clipShape` does not clip a `UIVisualEffectView`,
+    // which composites separately and spilled past the mask, leaving the friend reply-bar card
+    // square. The canvas is an ordinary layer and would clip either way; the UIKit mask stays
+    // because it is what the callers ask for and it is one less thing to re-verify.
     var bottomCornerRadius: CGFloat = 0 { didSet { applyCornerMask() } }
     // Foreground: the photo at its TRUE aspect ratio — never stretched/cropped.
     var imageView = UIImageView()
-    // Background: a zoomed + blurred copy of the same photo that fills the empty top/bottom.
-    private let backgroundImageView = UIImageView()
-    private let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
+    /// TELEGRAM'S CANVAS behind a photo that does not fill the card. See `StoryCanvas` for what this
+    /// replaced and why: a live `UIVisualEffectView` over an aspect-filled copy of the photo, which
+    /// re-sampled every frame and composited outside this view's transform, so every gesture that
+    /// scaled the card tore it away from the picture it belonged to.
+    private let canvasLayer = StoryCanvas.makeLayer()
     private let shimmer = ShimmerView()
-    // The story's own poster behind glass, shown while the full-size media downloads (see
+    // The story's own poster, blurred, shown while the full-size media downloads (see
     // showPreviewBlur). Built lazily: a story that is already cached never needs one.
     private var previewBlur: UIImageView?
-    private var previewBlurEffect: UIVisualEffectView?
-    // The frozen fill+blur composite while the viewers sheet scales the story (see freezeBlur).
-    private var frozenBlur: UIImageView?
     /// The download in flight for the story on screen, held so that moving on can cancel it.
     private var loadTask: URLSessionDataTask?
 
@@ -161,13 +162,13 @@ final class ImageLoader: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        backgroundImageView.frame = bounds
-        blurView.frame = bounds
+        // The canvas is framed through `StoryCanvas` rather than assigned directly: a CALayer
+        // sublayer does not autoresize, and a bare `frame =` inside an animation block inherits that
+        // animation, so the backdrop would lag the card it belongs to by one spring.
+        StoryCanvas.frame(canvasLayer, to: bounds)
         imageView.frame = bounds
         shimmer.frame = bounds
         previewBlur?.frame = bounds
-        previewBlurEffect?.frame = bounds
-        frozenBlur?.frame = bounds
         applyCornerMask()
         // The fit/fill decision is re-taken here because it is measured against the CARD, and the
         // card's size is only known once there has been a layout pass. It cannot bring the old
@@ -203,9 +204,11 @@ final class ImageLoader: UIView {
     private func decideContentMode() {
         guard let img = imageView.image, img.size.width > 0,
               bounds.width > 1, bounds.height > 1 else { return }
-        let imgAspect = img.size.height / img.size.width
-        let cardAspect = bounds.height / bounds.width
-        let want: UIView.ContentMode = imgAspect >= cardAspect - 0.02 ? .scaleAspectFill : .scaleAspectFit
+        let fills = StoryCanvas.fills(media: img.size, in: bounds.size)
+        let want: UIView.ContentMode = fills ? .scaleAspectFill : .scaleAspectFit
+        // A photo that fills has no bars, so there is nothing for the canvas to do and it is hidden
+        // rather than left to composite under an opaque picture nobody can see through.
+        canvasLayer.isHidden = fills
         // The early return is what makes calling this from `layoutSubviews` free, and it is what
         // guarantees a settled card can never flip the photo mid-gesture.
         guard imageView.contentMode != want else { return }
@@ -214,11 +217,15 @@ final class ImageLoader: UIView {
 
     private func apply(_ image: UIImage?) {
         imageView.image = image
-        backgroundImageView.image = image
-        decideContentMode()        // fixed for this image; never recomputed on layout/drag
-        if image != nil {
-            installFreezeIfReady()   // sheet engaged + fresh image (carousel jump) → frozen backdrop now
+        // The canvas is coloured from the photo the moment the photo arrives, and never again for
+        // it. There is no per-frame work behind a story any more, and nothing to freeze or thaw
+        // while the viewers sheet scales the card: two colours in a layer scale like the pixels they
+        // sit behind. (`StoryCanvas.apply` returns without touching the layer when the pair has not
+        // moved, so a re-layout cannot restart an implicit colour animation.)
+        if let image {
+            StoryCanvas.apply(StoryCanvas.colours(of: image), to: canvasLayer)
         }
+        decideContentMode()
     }
 
     private func showShimmer(_ show: Bool) {
@@ -245,14 +252,15 @@ final class ImageLoader: UIView {
             v.clipsToBounds = true
             previewBlur = v
             addSubview(v)
-            let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemThickMaterialDark))
-            v.addSubview(blur)
-            previewBlurEffect = blur
             view = v
         }
-        view.image = image
+        // BAKED, not a live material. This was the poster with a `UIVisualEffectView` laid over it,
+        // and an effect view composites outside its own view's transform — so the loading state
+        // sheared away from the card during the very gesture (the story flight) that it is most
+        // often on screen for. `loadingVeil` is the same look as ordinary pixels.
+        let box = bounds.width > 1 ? bounds.size : UIScreen.main.bounds.size
+        view.image = StoryCanvas.loadingVeil(of: image, covering: box)
         view.frame = bounds
-        previewBlurEffect?.frame = view.bounds
         view.isHidden = false
         bringSubviewToFront(view)
         // The shimmer is redundant once there is a real picture behind the glass, and running both
@@ -305,15 +313,13 @@ final class ImageLoader: UIView {
 
         imageURL = URL(string: validatedUrl)
 
-        // Reused for a different story (carousel jump mid-sheet): the previous story's FROZEN
-        // blur overlay must never survive under the new photo (audit C1 — story A's bars were
-        // showing beneath story B). Drop the stale overlay ONLY — the sheet is still engaged,
-        // so freezeWanted stays set and apply() re-freezes the new image the moment it lands.
-        frozenBlur?.removeFromSuperview()
-        frozenBlur = nil
-        blurView.isHidden = false
-        // Same reasoning for the loading poster: story A's blurred cover must never be the first
-        // thing you see of story B.
+        // Reused for a different story (carousel jump mid-sheet): story A's loading cover must never
+        // be the first thing you see of story B.
+        //
+        // The stale FROZEN BLUR this used to also have to clear here is gone with the blur itself.
+        // Audit C1 was exactly that overlay outliving its story — a class of bug the canvas cannot
+        // have, because it holds no picture of story A to leak, only two colours that are rewritten
+        // the moment story B's photo lands.
         hidePreviewBlur()
 
         guard let imageURL else { imageIsLoaded(); return }   // malformed URL → don't freeze the progress bar
@@ -409,16 +415,14 @@ final class ImageLoader: UIView {
 private extension ImageLoader {
    func setupImageView() {
        backgroundColor = .black
-       // For non-9:16 photos: a zoomed + heavily-blurred copy of the SAME image fills the
-       // whole screen behind, so the empty top/bottom become a blurred color-matched backdrop (no black bars).
-       backgroundImageView.contentMode = .scaleAspectFill
-       backgroundImageView.clipsToBounds = true
-       addSubview(backgroundImageView)
-       addSubview(blurView)   // heavy Gaussian blur over the fill copy
+       // TELEGRAM'S CANVAS, at the very back: for media that does not fill the card, a vertical
+       // gradient between the colours at the top and bottom of the picture itself. A layer, not a
+       // view, and deliberately so — it is the one backdrop primitive that survives being scaled by
+       // a gesture, which is the entire history of this file.
+       layer.addSublayer(canvasLayer)
 
        // Foreground: the photo at its TRUE aspect ratio — aspect-FIT so a square/landscape is never
-       // cropped/zoomed. The empty top/bottom become the zoomed + blurred backdrop above (user prefers
-       // this resize+blur look over a center-crop fill).
+       // cropped/zoomed. The empty top/bottom are the canvas above.
        imageView.contentMode = .scaleAspectFit
        imageView.clipsToBounds = true
        addSubview(imageView)
@@ -426,111 +430,20 @@ private extension ImageLoader {
        shimmer.isHidden = true
        addSubview(shimmer)
 
-       // Viewers-sheet pull-up: freeze/unfreeze the blurred backdrop (posted by the host app).
-       NotificationCenter.default.addObserver(self, selector: #selector(freezeBlur),
-                                              name: Notification.Name("storyFreezeBlur"), object: nil)
-       NotificationCenter.default.addObserver(self, selector: #selector(unfreezeBlur),
-                                              name: Notification.Name("storyUnfreezeBlur"), object: nil)
+       // `storyFreezeBlur` / `storyUnfreezeBlur` were observed here. Both are gone: they existed to
+       // rasterize a live material before the viewers sheet scaled it, and there is no live material
+       // left to rasterize. The `drawHierarchy(afterScreenUpdates: true)` that freeze needed is also
+       // gone, and with it the re-entrancy it caused (build 495, `Kulan-2026-08-07-222010.ips`).
    }
 }
 
-// MARK: - Blur freeze (viewers-sheet pull-up)
-extension ImageLoader {
-    // A LIVE material re-computes itself as the story scales down, rendering the fit-image bars far
-    // darker/flatter than they looked full screen (user spec: "keep the exact blur from before the
-    // pull-up — never generate a new one"). Freezing rasterizes the CURRENT on-screen appearance
-    // (fill + material composite) into plain pixels and hides the live blur: frozen pixels scale
-    // like a photograph, identical at every size. Unfreeze restores the live material at full screen.
-    // The sheet is engaged and every current/future image should carry a frozen backdrop.
-    // Set by storyFreezeBlur, cleared by storyUnfreezeBlur; apply() re-freezes on image load
-    // (a one-shot timer missed slow-loading carousel jumps — audit finding 3).
-    static var freezeWanted = false
-
-    @objc private func freezeBlur() {
-        Self.freezeWanted = true
-        installFreezeIfReady()
-    }
-
-    /// ⚠️ NEVER SYNCHRONOUSLY. THIS IS THE CRASH.
-    ///
-    /// `rasterizeBlurBackdrop` needs `afterScreenUpdates: true`, and that flag does not just take a
-    /// picture: it forces a CoreAnimation commit first, which runs a full layout and render pass
-    /// there and then. `apply(_:)` is reached from `loadImageWithUrl`, which runs from
-    /// `updateUIView` — so on a memory-cache hit the picture was taken from INSIDE SwiftUI's own
-    /// update, and the commit re-entered the view graph while it was still building it. SwiftUI then
-    /// tore down and rebuilt a display list underneath itself.
-    ///
-    /// Build 495, `Kulan-2026-08-07-222010.ips`, EXC_BREAKPOINT in `__CFCheckCFInfoPACSignature`
-    /// under `_CFRelease` — an object released whose header no longer passes its integrity check —
-    /// at the bottom of a recursive `swift_arrayDestroy` chain out of
-    /// `DisplayList.ViewUpdater.render`. The stack reads the whole path in order:
-    /// `PlatformViewRepresentableAdaptor.updateViewProvider` → us → `UIGraphicsImageRenderer` → us →
-    /// `drawViewHierarchyInRect` → `_UIRenderViewImageAfterCommit` → `CA::Transaction::commit` →
-    /// `_UIHostingView.layoutSubviews` → the render that died.
-    ///
-    /// It is very likely the same root cause as the OTHER signature we have seen three times
-    /// (EXC_BAD_ACCESS in `StackLayout.makeChildren`, also on the AttributeGraph flush): the same
-    /// re-entrancy, blowing up one phase earlier. Intermittent because it needs the sheet engaged
-    /// AND an image that lands synchronously from memory.
-    ///
-    /// One hop off the current pass is the whole fix. Every guard below is re-checked when it lands,
-    /// so arriving a frame late is safe and a state that moved on simply declines.
-    func installFreezeIfReady() {
-        DispatchQueue.main.async { [weak self] in self?.installFreezeNow() }
-    }
-
-    private func installFreezeNow() {
-        guard Self.freezeWanted, frozenBlur == nil,
-              imageView.image != nil, imageView.contentMode == .scaleAspectFit,
-              bounds.width > 0, window != nil else { return }
-        // BLUR-ONLY FREEZE (user's red-border test PROVED the cause): the freeze must hold ONLY
-        // the blurred backdrop, never the sharp photo. It used to photograph the WHOLE story, so
-        // the photo got baked into the freeze AND the live imageView still sat on top — TWO copies
-        // of the photo. On the sheet morph they drifted apart (the two red rectangles the user saw)
-        // and snapped to one at the hand-off (the "jump to fit", up AND back). Freezing the blur
-        // alone leaves exactly ONE photo — the live one — so nothing can drift or snap.
-        // This also keeps the earlier fix: a FRESH live capture (never the offscreen cache, where
-        // Apple's UIVisualEffectView blur fails to render) keeps the blur from looking broken.
-        guard let img = rasterizeBlurBackdrop() else { return }
-        let iv = UIImageView(image: img)
-        iv.frame = bounds
-        iv.contentMode = .scaleToFill          // img is captured at `bounds` → no distortion
-        insertSubview(iv, aboveSubview: blurView)   // BEHIND the live photo (imageView stays on top)
-        blurView.isHidden = true
-        frozenBlur = iv
-    }
-
-    // The blurred backdrop ALONE (background fill + material), captured with the sharp photo
-    // HIDDEN — so the frozen overlay can never contain a second copy of the photo. The live
-    // imageView stays on top and remains the single visible photo. afterScreenUpdates: true is
-    // required so the "hide the photo" change is committed before the snapshot (otherwise the
-    // capture would still include it); the photo is restored synchronously, before any refresh,
-    // so it never visibly disappears.
-    private func rasterizeBlurBackdrop() -> UIImage? {
-        guard bounds.width > 0, window != nil, imageView.image != nil,
-              imageView.contentMode == .scaleAspectFit else { return nil }
-        let photoWasHidden = imageView.isHidden
-        let shimmerWasHidden = shimmer.isHidden
-        imageView.isHidden = true
-        shimmer.isHidden = true
-        let img = UIGraphicsImageRenderer(bounds: bounds).image { _ in
-            drawHierarchy(in: bounds, afterScreenUpdates: true)
-        }
-        imageView.isHidden = photoWasHidden
-        shimmer.isHidden = shimmerWasHidden
-        return img
-    }
-
-    // `rasterizeComposite` and `scheduleCompositeCapture` lived here. Every fit story that appeared
-    // scheduled a full-screen `drawHierarchy` 0.15s later to fill `StoryCompositeCache`. Nothing has
-    // read that cache since `21f3209`, and the cards it fed are gone, so the render went with them.
-    // `rasterizeBlurBackdrop` (the pull-up FREEZE, blur only) is a different function and is
-    // untouched.
-
-    @objc private func unfreezeBlur() {
-        Self.freezeWanted = false
-        frozenBlur?.removeFromSuperview()
-        frozenBlur = nil
-        blurView.isHidden = false
-    }
-}
+// `freezeBlur` / `unfreezeBlur` / `installFreezeNow` / `rasterizeBlurBackdrop` lived here, and so
+// did `rasterizeComposite` before them. Every one of them existed to photograph a live
+// `UIVisualEffectView` before something scaled it, because a material cannot be scaled and cannot
+// be composited at fractional opacity without falling apart. The material is gone, so the whole
+// apparatus goes with it: no static `freezeWanted`, no notifications, no snapshot, and in
+// particular no `drawHierarchy(afterScreenUpdates: true)` — which forced a CoreAnimation commit
+// from inside SwiftUI's own update pass and crashed build 495 (`Kulan-2026-08-07-222010.ips`).
+//
+// What replaced all of it is `StoryCanvas`: two colours in a `CAGradientLayer`. There is nothing to
+// freeze because there is nothing that recomputes itself.

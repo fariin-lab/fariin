@@ -4,6 +4,7 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import AVFoundation
 import PhotosUI
+import StoryUI   // StoryCanvas: the one sampler + drawer for a story's backdrop
 
 // Photo-story editor — matches the in-chat photo editor (image 212): the picked photo fits on a
 // black canvas; X top-left; a caption bar + @ and a crop / draw / adjust / HD tool row at the
@@ -77,6 +78,10 @@ struct StoryEditorView: View {
     /// my finger show again") — you cannot draw across a corner your own toolbar is sitting on.
     @State private var strokeInFlight = false
     @State private var editedCache: UIImage?         // filtered+cropped; recomputed only on tool change
+    /// Telegram's two canvas colours for the picture as it stands. Held rather than derived on each
+    /// layout pass, and rewritten by `recomputeEdited` — a filter changes the picture, so it changes
+    /// the canvas made from it.
+    @State private var canvasCache: (top: UIColor, bottom: UIColor)?
     @State private var canvasSize: CGSize = .zero
     // Pinch-zoom + pan the photo directly on the canvas (baked WYSIWYG into the post). Driven by UIKit
     // recognizers (PinchPanGestureView) using the standard accumulate-and-reset pattern — see below.
@@ -257,6 +262,16 @@ struct StoryEditorView: View {
         // Filter applies on top of the (interactively) cropped source.
         editedCache = Self.apply(Self.filters[filterIndex].ci, to: croppedSource ?? current)
         updateIconContrast()   // re-sample brightness so the controls stay readable on this photo
+        // ...and re-read the canvas, because a filter changes the colours the canvas is made of.
+        // It is sampled HERE rather than derived in `cardContent` because that runs on every layout
+        // pass and this reads pixels. Same reason, same shape, as the video editor's `canvasBackdrop`.
+        canvasCache = StoryCanvas.colours(of: edited)
+    }
+    /// The canvas colours for the picture as it stands, through the one sampler the post and the
+    /// story viewer also read. Falls back to the untouched source for the instant before
+    /// `recomputeEdited` first runs, so the card never draws a frame of the wrong backdrop.
+    private var canvasColours: (top: UIColor, bottom: UIColor) {
+        canvasCache ?? StoryCanvas.colours(of: current)
     }
 
     // The photo's aspect-fit size inside the frame ("always-cover" clamp basis).
@@ -503,15 +518,19 @@ struct StoryEditorView: View {
         let boxed = !imageFillsCanvas(card)
         ZStack {
             Color.black
-            // The wash behind a photo that does not fill the card: a heavily muted, near-solid
-            // blur of itself (big blur + desaturation + dark veil — the vivid full-screen blur
-            // was rejected). Editor-only look; the posted image is untouched.
+            // ⚠️ THE CANVAS THE POST WILL BAKE, not a blur of the photo. WYSIWYG is the whole
+            // contract of this screen, and it was broken here in exactly the way the video editor's
+            // was: this wash was a big blur + desaturation + dark veil, `flatten` baked a downscaled
+            // wash, and the story viewer drew a third thing over the posted file. Three backdrops
+            // for one picture, and he framed his photo against whichever one he happened to see.
+            //
+            // Same sampler and same drawer as `flatten` and as the story viewer — `StoryCanvas` —
+            // so what he frames here is the file that lands.
             if boxed {
-                Image(uiImage: edited).resizable().scaledToFill()
+                LinearGradient(colors: [Color(uiColor: canvasColours.top),
+                                        Color(uiColor: canvasColours.bottom)],
+                               startPoint: .top, endPoint: .bottom)
                     .frame(width: card.width, height: card.height)
-                    .blur(radius: 90, opaque: true)
-                    .saturation(0.4)
-                    .overlay(Color.black.opacity(0.4))
                     .allowsHitTesting(false)
             }
             // Photo: full card width, aspect-fit on the wash. Zoom/pan applied DIRECTLY to a
@@ -1340,28 +1359,38 @@ struct StoryEditorView: View {
     @MainActor private func flatten() async -> Data {
         let base = edited
         let quality: CGFloat = 0.9
-        // No drawing AND no text overlays AND no real zoom/pan → post the full-resolution edited image
-        // (caption is no longer baked, so it doesn't force the lossy path). Use near-identity.
+        let size = canvasSize == .zero ? UIScreen.main.bounds.size : canvasSize
+        // THE FAST PATH IS NOW ALSO A "DOES IT FILL" TEST. Nothing to draw, nothing to type, no
+        // zoom AND the photo already fills the frame → post it untouched at full resolution, which
+        // keeps a 9:16 photo off the renderer and out of a re-encode.
+        //
+        // A photo that does NOT fill can no longer take that path, and that is the whole change on
+        // this side: it goes through the composition below so the CANVAS IS BAKED INTO THE POSTED
+        // FILE. Telegram exports every story as a full 1080x1920 frame with the gradient already in
+        // it, which is why their viewer never has to invent a background and never gets it wrong.
+        // Ours posted the bare photo and left the viewer to letterbox it live at watch time — that
+        // live backdrop is the thing that tore while he scrolled, and a file that fills the frame
+        // never asks for one.
         let zoomed = abs(photoZoom - 1) > 0.001 || abs(photoOffset.width) > 0.5 || abs(photoOffset.height) > 0.5
-        if drawing.bounds.isEmpty && overlays.isEmpty && !zoomed {
+        if drawing.bounds.isEmpty && overlays.isEmpty && !zoomed && imageFillsCanvas(size) {
             return base.jpegData(compressionQuality: quality) ?? Data()
         }
-        let size = canvasSize == .zero ? UIScreen.main.bounds.size : canvasSize
-        // ZOOMED OUT → TELEGRAM'S CANVAS (owner 2026-08-05, "Read telegram", with his screenshot of
-        // smeared side bands). A photo pinched below full size used to be cropped back out of the
-        // canvas and posted alone, and the story VIEWER then letterboxed it with its live blur at
-        // watch time — the bands he circled. Telegram's MediaEditor bakes the whole story frame at
-        // POST time instead: the photo composited over a blurred, darkened fill of itself. So the
-        // posted file IS the full canvas, every viewer on every device sees the same deliberate
-        // picture, and the backdrop matches what this editor already shows behind a boxed photo.
-        let zoomedOut = photoZoom < 0.999
+        // BAKED AT THE CARD'S OWN SIZE, which is the space the pen drew in and the text overlays are
+        // positioned in, so what he framed is byte-for-byte what lands. On every full-size phone the
+        // card IS 9:16 and so is this file, which is the whole point — it fills a story frame and no
+        // viewer ever has to invent a background for it.
+        //
+        // On a short phone the card is `min(9:16, the room there is)` and the file comes out
+        // slightly squat, so a 9:16 viewer still draws a canvas behind it. That is fine, and it is
+        // fine only because of the one-sampler rule: the canvas the viewer draws is the SAME
+        // gradient from the SAME two colours this bake would have used, so the two are
+        // indistinguishable. Forcing the file to 9:16 instead would buy nothing visible and would
+        // cost this editor its WYSIWYG on exactly the devices with the least room to spare.
+        let colours = canvasColours
         let composed = ZStack(alignment: .bottom) {
-            if zoomedOut, let wash = Self.flattenBackdrop(base, canvas: size) {
-                Image(uiImage: wash).resizable()
-                    .frame(width: size.width, height: size.height)
-            } else {
-                Color.black   // standard lobby = photo on black (no blurred self-background)
-            }
+            LinearGradient(colors: [Color(uiColor: colours.top), Color(uiColor: colours.bottom)],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(width: size.width, height: size.height)
             // Foreground photo with the SAME fit + zoom + pan as the editor → WYSIWYG.
             Image(uiImage: base).resizable().scaledToFit()
                 .scaleEffect(photoZoom).offset(photoOffset)
@@ -1380,53 +1409,22 @@ struct StoryEditorView: View {
         }
         .frame(width: size.width, height: size.height)
         let r = ImageRenderer(content: composed); r.scale = UIScreen.main.scale
-        guard let full = r.uiImage else { return base.jpegData(compressionQuality: quality) ?? Data() }
-        // SAME AS NORMAL POSTS (user's call): the posted file keeps the PHOTO's own shape — the
-        // canvas's empty black areas are cropped away, so the viewer adds its normal live blur
-        // around a text-edited photo exactly like an untouched one. (Text dragged outside the
-        // photo gets cropped with the black — accepted limit of this design.) The photo's
-        // canvas footprint mirrors the editor layout: aspect-fit, centred, scaled about the
-        // centre by photoZoom, then shifted by photoOffset.
-        let fit = photoFitSize(in: size)
-        let scaled = CGSize(width: fit.width * photoZoom, height: fit.height * photoZoom)
-        let centre = CGPoint(x: size.width / 2 + photoOffset.width, y: size.height / 2 + photoOffset.height)
-        let photoRect = CGRect(x: centre.x - scaled.width / 2, y: centre.y - scaled.height / 2,
-                               width: scaled.width, height: scaled.height)
-            .intersection(CGRect(origin: .zero, size: size))
-        if !zoomedOut,   // a baked backdrop means the CANVAS is the picture — nothing to crop away
-           !photoRect.isEmpty,
-           photoRect.width < size.width - 1 || photoRect.height < size.height - 1,   // full-bleed → nothing to crop
-           let cg = full.cgImage {
-            let s = full.scale
-            let px = CGRect(x: photoRect.minX * s, y: photoRect.minY * s,
-                            width: photoRect.width * s, height: photoRect.height * s).integral
-            if let cropped = cg.cropping(to: px) {
-                return UIImage(cgImage: cropped, scale: s, orientation: .up)
-                    .jpegData(compressionQuality: quality) ?? Data()
-            }
-        }
-        return full.jpegData(compressionQuality: quality) ?? (base.jpegData(compressionQuality: quality) ?? Data())
+        // The render is the story. There is no crop-back any more (see the note below), so the only
+        // fallback left is the untouched photo, for a renderer that returned nothing at all.
+        return r.uiImage?.jpegData(compressionQuality: quality)
+            ?? base.jpegData(compressionQuality: quality) ?? Data()
     }
 
-    /// The baked backdrop behind a zoomed-out story: the photo itself, aspect-filled to the canvas,
-    /// heavily downscaled — a downscale IS a blur, the same trick and the same reason as the
-    /// profile poster's wash (a real Gaussian costs milliseconds this tap does not have) — then
-    /// darkened so the sharp photo reads on top of it. Drawn with UIGraphicsImageRenderer rather
-    /// than left to a SwiftUI `.blur` inside ImageRenderer, which does not reliably rasterize it.
-    private static func flattenBackdrop(_ src: UIImage, canvas: CGSize) -> UIImage? {
-        guard canvas.width > 1, canvas.height > 1, src.size.width > 0, src.size.height > 0 else { return nil }
-        let small = CGSize(width: max(8, (canvas.width / 8).rounded()), height: max(8, (canvas.height / 8).rounded()))
-        let fmt = UIGraphicsImageRendererFormat()
-        fmt.scale = 1
-        return UIGraphicsImageRenderer(size: small, format: fmt).image { ctx in
-            // Centre crop: aspect-fill the small canvas with the photo.
-            let s = max(small.width / src.size.width, small.height / src.size.height)
-            let w = src.size.width * s, h = src.size.height * s
-            src.draw(in: CGRect(x: (small.width - w) / 2, y: (small.height - h) / 2, width: w, height: h))
-            UIColor.black.withAlphaComponent(0.38).setFill()
-            ctx.fill(CGRect(origin: .zero, size: small))
-        }
-    }
+    // `flattenBackdrop` lived here: the photo aspect-filled into an eighth-size canvas and darkened
+    // by 0.38, which is a blur by downscale. It is gone with the rest of the blur system. The posted
+    // file's backdrop is `StoryCanvas`'s gradient now, drawn straight into the composition above
+    // from the same two colours the editor card shows and the story viewer would draw.
+    //
+    // The CROP-BACK went with it, and that is the more important half. The bake used to be undone
+    // for anything except a pinched-out photo: the canvas was rendered, then cut back to the
+    // photo's own rectangle, so the posted file was the bare picture again and the viewer had to
+    // invent a background for it at watch time. Every story now lands as a full frame, which is
+    // Telegram's model and the reason their viewer has no backdrop code to go wrong.
 
     // The picture's aspect-fit size within the canvas — the photo frame's real footprint.
     private func photoFitSize(in canvas: CGSize) -> CGSize {
