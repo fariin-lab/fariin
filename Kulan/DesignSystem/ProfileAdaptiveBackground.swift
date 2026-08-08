@@ -313,18 +313,10 @@ struct ProfileAdaptiveSurface: ViewModifier {
     func body(content: Content) -> some View {
         if adaptive {
             content
-                // TWO FILLS IN THE BACKGROUND, NOT AN OVERLAY. His spec calls the tint an overlay,
-                // but a real overlay sits above the CONTENT and would put a veil over the labels and
-                // the icons as well as the card. Stacking it inside `.background` tints the surface
-                // and leaves the text at full strength, which is the effect he is describing:
-                // "so the background canvas color bleeds through naturally".
-                .background {
-                    shape.fill(.ultraThinMaterial)
-                    shape.fill(ProfileSurfaceTone.tint(scheme == .dark))
-                }
+                .background(ProfileSurfaceTone.lift(scheme == .dark), in: shape)
                 // `strokeBorder`, not `stroke`: it draws inside the shape, so a 0.5pt line on a 24pt
                 // corner stays on the card instead of straddling its edge.
-                .overlay { shape.strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5) }
+                .overlay { shape.strokeBorder(ProfileSurfaceTone.edge(scheme == .dark), lineWidth: 0.5) }
         } else {
             content.background(plain, in: shape)
         }
@@ -341,11 +333,12 @@ struct ProfileAdaptiveCircleSurface: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         if adaptive {
-            // Material and a stroke, and NO tint fill — his spec gives the circles those two alone
-            // while the cards also get a tint. Followed as written rather than made uniform.
+            // The same lift as the cards, so the two read as one system — which is what his
+            // reference does: the circles there are the page's colour a shade lighter, exactly like
+            // the panels below them.
             content
-                .background(.ultraThinMaterial, in: Circle())
-                .overlay { Circle().strokeBorder(Color.white.opacity(0.15), lineWidth: 0.5) }
+                .background(ProfileSurfaceTone.lift(scheme == .dark), in: Circle())
+                .overlay { Circle().strokeBorder(ProfileSurfaceTone.edge(scheme == .dark), lineWidth: 0.5) }
         } else {
             // Liquid Glass survives ONLY here, on the round actions of a page with no adaptive
             // canvas — the standing rule for this screen. "ccard dont use lequid glass" is about the
@@ -357,9 +350,32 @@ struct ProfileAdaptiveCircleSurface: ViewModifier {
 
 /// The surface numbers, in one place, straight from his spec.
 enum ProfileSurfaceTone {
-    /// The tint that sits between the material and the content on a card.
-    static func tint(_ dark: Bool) -> Color {
-        dark ? Color.black.opacity(0.15) : Color.white.opacity(0.08)
+    /// ⚠️ A LIFT, NOT A MATERIAL, AND THIS IS THE THIRD ANSWER TO THE SAME QUESTION. READ THIS
+    /// BEFORE CHANGING IT BACK.
+    ///
+    /// His spec asked for `.ultraThinMaterial` on these surfaces by name, and it was built exactly
+    /// that way. His verdict on it: "now Buttons and Cards looks dark plz This os not how i want",
+    /// with Apple's Contacts card as the reference again.
+    ///
+    /// **The spec and the reference cannot both be satisfied.** `.ultraThinMaterial` is tuned for a
+    /// neutral backdrop and DESATURATES whatever is behind it, so on a coloured page it renders as
+    /// grey frost — which is precisely the "dark" he is pointing at. In his reference the panels are
+    /// unmistakably the SAME HUE as the page and merely lighter, which no material produces.
+    ///
+    /// So: a plain white at a low fraction, composited straight onto the muted canvas. It lifts the
+    /// page's own colour without draining it — a lighter olive on an olive page, a lighter blue on a
+    /// blue one — because nothing here samples, blurs, or reinterprets the backdrop.
+    ///
+    /// The numbers are small ON PURPOSE now that `muteCanvas` has deepened the page. An earlier
+    /// version used 0.30 in light mode against an undimmed page and washed the colour out toward
+    /// white, which is the round he rejected before this one.
+    static func lift(_ dark: Bool) -> Color {
+        Color.white.opacity(dark ? 0.12 : 0.17)
+    }
+
+    /// The hairline. Bright enough to give the panel an edge, faint enough not to draw a box.
+    static func edge(_ dark: Bool) -> Color {
+        Color.white.opacity(dark ? 0.12 : 0.26)
     }
 
     /// THE CANVAS HAS TO BE DARKER THAN THE PHOTO, which is his third point and the reason the
