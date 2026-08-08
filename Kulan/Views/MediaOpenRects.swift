@@ -72,11 +72,34 @@ import UIKit
     /// Where that card is RIGHT NOW, asked of the view itself. Falls back to the last written
     /// rectangle when there is no live view (a screen that reports rects but has no anchor).
     static func liveRect(_ key: String) -> CGRect? {
-        if let v = views[key]?.value, v.window != nil {
-            let r = v.convert(v.bounds, to: nil)
-            if r.width > 1, r.height > 1 { return r }
-        }
+        if let r = liveViewRect(key) { return r }
         return rects[key]
+    }
+
+    /// THE VIEW'S RECTANGLE OR NOTHING — no fall back to the written-down one.
+    ///
+    /// ⚠️ THE STORY FLIGHT MUST USE THIS, and his 2026-08-08 reply-quote report is why. `liveRect`
+    /// above falls back to `rects[key]`, a rectangle recorded at some earlier layout pass, and for
+    /// the doors that live in the CHAT that fallback is a trap: a reply quote is a cell in
+    /// `NativeMessageList`, a reusing collection view. Open the story and the chat is behind it; the
+    /// cell can be recycled and the anchor deallocated, so the weak view goes nil while
+    /// `rects[key]` survives — pointing at wherever that quote was the last time it laid out.
+    ///
+    /// The close then flew to a rectangle with nothing in it. That is his "the story returns from
+    /// the top header area instead of the position where it opened", and it is INTERMITTENT for
+    /// exactly the reason reuse is: it depends on whether that cell happened to survive.
+    ///
+    /// A missing view is a real answer and the flight already knows what to do with it — the caller
+    /// gets nil, `heroEndpoints` gives up, and the close falls back to `closeWithDrift`, which "never
+    /// pretends to land anywhere". An honest drift beats a confident landing on empty screen.
+    ///
+    /// `liveRect` keeps its fallback for everything else: the chat media transition reports rects
+    /// from places that do not all carry an anchor, and this is not a change to that.
+    static func liveViewRect(_ key: String) -> CGRect? {
+        guard let v = views[key]?.value, v.window != nil else { return nil }
+        let r = v.convert(v.bounds, to: nil)
+        guard r.width > 1, r.height > 1 else { return nil }
+        return r
     }
     /// The bubble's own corner radius, so a transition interpolates from the REAL shape instead of a
     /// hardcoded guess. The close used a flat 14 and the open had no radius at all, so media with a

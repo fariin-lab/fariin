@@ -1857,8 +1857,16 @@ struct StoryViewer: View {
         // `liveRect`, not `rect`: it asks the card's own view where it is at this instant, the way
         // Telegram's TransitionIn carries a `sourceView` rather than a remembered rectangle. A
         // written-down rect is only as true as the last layout pass that wrote it.
+        // ⚠️ `liveViewRect`, NOT `liveRect`. The difference is the written-down fallback, and for a
+        // door that lives in the chat that fallback is a rectangle where the source USED to be —
+        // see the note on `liveViewRect`. The doc above already says a written-down rect is only as
+        // true as the last layout pass that wrote it; this is the line that finally acts on it.
+        //
+        // Every story door registers a real anchor (`MediaRectReporter` installs `MediaViewAnchor`
+        // alongside the rect), so a door that is genuinely on screen always has one and loses
+        // nothing here. A door that is NOT on screen now says so instead of guessing.
         guard !key.isEmpty,
-              let r = MediaOpenRects.liveRect(MediaOpenRects.key(.storyRow, key)),
+              let r = MediaOpenRects.liveViewRect(MediaOpenRects.key(.storyRow, key)),
               r.width > 1, r.height > 1,
               UIScreen.main.bounds.insetBy(dx: -r.width / 2, dy: -r.height / 2).contains(CGPoint(x: r.midX, y: r.midY))
         else { return nil }
