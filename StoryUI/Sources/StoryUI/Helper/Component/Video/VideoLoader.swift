@@ -86,9 +86,6 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         viewWithTag(999)?.frame = bounds        // the loading veil rides along
         applyGravity()
         refreshBackdrop()
-        // A clip whose frame and size both landed while this view had no bounds yet is waiting on
-        // exactly this pass, and nothing else would come along to release it.
-        revealVideoIfReady()
     }
 
     /// Fill vs fit, decided against the CARD the video actually lives in — it was decided against
@@ -155,76 +152,6 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         StoryCanvas.apply(StoryCanvas.colours(of: source), to: canvasLayer)
     }
 
-    // MARK: - HIDDEN UNTIL THERE IS A FRAME (Telegram's rule)
-
-    /// ⚠️ THE PLAYER LAYER IS HIDDEN FROM BIRTH AND SHOWN ONCE, WHEN IT HAS A PICTURE.
-    ///
-    /// His 2026-08-08 report: tap across to a video and it blinks BLACK, then paints the clip at the
-    /// wrong size, then settles. Both faults are the same mistake — the layer was on screen before it
-    /// had anything to draw.
-    ///
-    /// An `AVPlayerLayer` with no decoded frame draws its background, and behind it is a canvas that
-    /// starts life black-to-black (`StoryCanvas.makeLayer`) over a black view. That is the blink. And
-    /// `videoGravity` is still the `.resizeAspectFill` it was born with until `presentationSize`
-    /// arrives, so the first frame it does paint is at the wrong scale and then corrects itself. That
-    /// is the second screenshot.
-    ///
-    /// Telegram, read from source before this was written
-    /// (`StoryItemContentComponent`, `MediaPlayerNode`): the video node is created `isHidden = true`
-    /// over a thumbnail view, and the ONLY thing that ever unhides it is `hasSentFramesToDisplay` —
-    /// which they raise from the first `enqueue` of a sample buffer, and on iOS 17.4+ from
-    /// `AVSampleBufferDisplayLayerReadyForDisplayDidChange`. There is no timer and no fallback. Our
-    /// exact equivalent on an `AVPlayerLayer` is `isReadyForDisplay`, which Apple documents as "the
-    /// first video frame has been made ready for display for the current item".
-    ///
-    /// ⚠️ WHY THIS IS NOT THE REVEAL GATE HE REVERTED THIS MORNING (`a0947b3`). That one waited for
-    /// `timeControlStatus == .playing`, and a story is allowed to sit PAUSED — held under his finger,
-    /// or opened paused — in which case playback never starts and the veil never lifts. Its 0.4s
-    /// backstop did not save it, because that was itself gated on playback having started.
-    /// `isReadyForDisplay` has no such problem: a paused player still decodes and still becomes
-    /// ready, which is precisely why it is the signal Telegram uses and the reason there is no timer
-    /// here to go wrong.
-    private var readyObservation: NSKeyValueObservation?
-
-    /// Both answers have to be in: a frame exists, and we know the shape to frame it at. Whichever
-    /// lands second does the reveal. Runs once per clip — the `isHidden` test is the latch.
-    ///
-    /// The frame half is READ LIVE off the layer rather than latched from the observer, and that is
-    /// deliberate. `isReadyForDisplay` is documented to belong to the CURRENT ITEM, so replacing the
-    /// item puts it back to false; if that ever failed to hold, a latched copy could leave this clip
-    /// covered for ever, while a live read can at worst show it a frame early. One of those is the
-    /// old bug and the other is a dead story, so the live read is the one that fails safely.
-    private func revealVideoIfReady() {
-        guard playerLayer.isHidden else { return }
-        guard playerLayer.isReadyForDisplay else { return }
-        // A LAYER WITH A FRAME KNOWS ITS SIZE, so ask the item directly rather than wait to be told.
-        // The observer below is still what usually answers first; this is here so that a clip whose
-        // `presentationSize` notification is late or missed cannot leave the cover up for ever. There
-        // is deliberately no timer anywhere in this path — a timer is what would put the wrong
-        // gravity back on screen, which is the fault this whole change exists to remove.
-        if presentedSize.width <= 0 || presentedSize.height <= 0,
-           let live = player?.currentItem?.presentationSize, live.width > 0, live.height > 0 {
-            presentedSize = live
-        }
-        guard presentedSize.width > 0, presentedSize.height > 0 else { return }
-        // A CARD WITH NO SIZE CANNOT DECIDE FIT VERSUS FILL, so revealing into one would show the
-        // clip at whatever gravity it was born with — the very frame this exists to prevent.
-        // `layoutSubviews` calls back here, so this is a wait rather than a refusal.
-        guard bounds.width > 1, bounds.height > 1 else { return }
-        // ORDER MATTERS: the gravity and the canvas colours are settled while the layer is still
-        // hidden, so the first frame anybody sees is already at its final scale on a coloured
-        // backdrop. This is the flicker in his second screenshot, removed by construction.
-        applyGravity()
-        refreshBackdrop()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)   // an appearance must not fade in
-        playerLayer.isHidden = false
-        CATransaction.commit()
-        // The cover comes down in the same turn as the clip goes up, so there is no frame with
-        // neither of them on screen.
-        removeActivityIndicatory()
-    }
-
     /// The observer's landing point: remember the clip's size, re-take the decision.
     fileprivate func notePresentationSize(_ s: CGSize) {
         presentedSize = s
@@ -232,9 +159,6 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // The clip's own size is what decides fit vs fill, so this is the moment the backdrop is
         // either needed or not. layoutSubviews cannot be relied on to run again after it.
         refreshBackdrop()
-        // LAST, deliberately: the gravity is right and the canvas is coloured, so this is the first
-        // moment the clip may be shown without showing a frame of either being wrong.
-        revealVideoIfReady()
     }
 
     // MARK: - Initializers
@@ -250,7 +174,6 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         observation = nil
         sizeObservation = nil
         statusObservation = nil
-        readyObservation = nil
         player = nil
     }
 
@@ -305,12 +228,6 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // the same bug audit finding C1 caught on the photo half.
         canvasSourced = false
         guard let urlString, let u = URL(string: urlString) else { return }
-        // THE APP'S OWN CACHE FIRST, and that is the black blink. The two caches below are StoryUI's;
-        // the app draws the row and the carousel through a different one and warms THAT. For a story
-        // just posted, or one whose cover came down for the row rather than for the viewer, both of
-        // these miss and the cover becomes a network fetch — leaving the hide-until-ready rule above
-        // with nothing to hide behind. See `StoryPosterSource`.
-        if let img = StoryPosterSource.provider?(urlString) { posterImage = img; refreshBackdrop(); return }
         if let cached = URLCache.shared.cachedResponse(for: .init(url: u)),
            let img = UIImage(data: cached.data) { posterImage = img; refreshBackdrop(); return }
         if let disk = StoryDiskCache.image(u) { posterImage = disk; refreshBackdrop(); return }
@@ -339,14 +256,6 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // Belt for `setPoster`'s braces: two clips that both arrive with no poster never move
         // `posterURL`, so its reset would not fire and clip B would keep clip A's canvas.
         canvasSourced = false
-        // A NEW CLIP HAS NO FRAME AND NO KNOWN SHAPE, and it goes back under cover until it has both.
-        // Hiding here as well as at init is what makes this hold for the SECOND video in a row: this
-        // view is reused, so without it clip B would be shown by clip A's reveal.
-        presentedSize = .zero
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        playerLayer.isHidden = true
-        CATransaction.commit()
         addActivityIndicatory()
         // stop video if it's playing before video request
         stopVideo()
@@ -422,14 +331,7 @@ private extension PlayerView {
             guard let self else { return }
             switch player.timeControlStatus {
             case .playing:
-                // ⚠️ THIS NO LONGER UNCOVERS THE CLIP, because playing is not the same as having a
-                // picture — it was the premature reveal that let the black through. The first reveal
-                // belongs to `revealVideoIfReady` alone.
-                //
-                // It still takes the cover down when the clip is ALREADY on screen, and that case is
-                // not cosmetic: `.waitingToPlayAtSpecifiedRate` puts the cover back up mid-story for
-                // a stall, and this is the only thing that ever takes it down again.
-                if !self.playerLayer.isHidden { self.removeActivityIndicatory() }
+                self.removeActivityIndicatory()
                 self.setBuffering(false)
                 self.state = .started
                 self.mediaState?(self.state, self.duration)
@@ -469,11 +371,10 @@ private extension PlayerView {
             DispatchQueue.main.async {
                 guard self.url == url || self.cachedFileInUse == url else { return }   // reused meanwhile
                 guard self.player?.currentItem === item else { return }                // item swapped meanwhile
-                // PREROLL DECODES; IT DOES NOT DISPLAY. Its completion used to take the cover down,
-                // which is a second premature reveal — a filled render pipeline is not a frame on the
-                // layer. It is still worth calling, because it is what brings `isReadyForDisplay`
-                // forward, and that is now the only thing that uncovers anything.
-                self.player?.preroll(atRate: 1) { _ in }
+                self.player?.preroll(atRate: 1) { [weak self] finished in
+                    guard finished, let self, self.url == url || self.cachedFileInUse == url else { return }
+                    self.removeActivityIndicatory()
+                }
             }
         }
 
@@ -710,16 +611,6 @@ private extension PlayerView {
     func setupPlayer() {
         backgroundColor = .black
         canvasLayer.isHidden = true        // shown only once a clip is known not to fill the card
-        // HIDDEN UNTIL IT HAS A PICTURE — Telegram's `videoNode.isHidden = true` at construction.
-        // A layer with no decoded frame paints its background, and that is the black he photographed.
-        playerLayer.isHidden = true
-        // The one thing that ever takes it back off. Observed on the LAYER, which owns the answer,
-        // and once for the life of this view — the layer outlives every item put through it.
-        readyObservation = playerLayer.observe(\.isReadyForDisplay, options: [.new]) { [weak self] _, _ in
-            guard let self else { return }
-            if Thread.isMainThread { self.revealVideoIfReady() }
-            else { DispatchQueue.main.async { self.revealVideoIfReady() } }
-        }
         self.layer.addSublayer(canvasLayer)   // behind everything
         self.addSubview(contentView)
         // layoutSubviews owns this geometry now (see its note) — the one-shot frame here only
