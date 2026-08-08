@@ -170,7 +170,9 @@ struct ContactInfoView: View {
     /// first colour — the same number both sides read, which is the only reason the join cannot show.
     private var posterFadeInto: Color {
         guard useAdaptive, let t = adaptiveTheme else { return pageBackground }
-        return Color(uiColor: t.seam)
+        // `canvasSeam`, NOT the raw seam: the page's first row is muted for the frosted cards, and
+        // the photo has to arrive at whatever the page actually starts on or the join comes back.
+        return t.canvasSeam(dark: scheme == .dark)
     }
 
     /// Re-samples when the person changes AND when the switch is flipped, so turning it on while a

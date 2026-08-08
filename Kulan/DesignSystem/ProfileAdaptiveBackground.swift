@@ -183,24 +183,35 @@ final class ProfileAdaptiveTheme {
     /// meet the photo's own bottom edge as a line of changing colour, and a line of changing colour
     /// along a horizontal join is precisely what the eye reads as a seam. The character comes in on
     /// the middle row, a third of the way down the page, where there is no edge for it to draw.
+    /// The colour the header's photo must ARRIVE at, which is the mesh's own first row.
+    ///
+    /// ⚠️ ONE FUNCTION, TWO READERS, and it has to stay that way: the page begins on this colour and
+    /// the photo fades into it, so the moment the two are computed separately the join reappears.
+    /// The muting below is applied on BOTH sides for exactly that reason — the photo now fades into
+    /// something deeper than its own bottom edge, which reads as the picture settling, not as a line.
+    func canvasSeam(dark: Bool) -> Color {
+        Color(uiColor: ProfileSurfaceTone.muteCanvas(seam, dark: dark))
+    }
+
     func mesh(dark: Bool) -> [Color] {
-        let top = seam
-        let mid = dominant.mixed(with: seam, 0.35)
-        let midL = leftAccent.vibrant(1.18).mixed(with: mid, 0.55)
-        let midR = rightAccent.vibrant(1.18).mixed(with: mid, 0.55)
-        // WHERE THE PAGE SETTLES. Dark mode walks the colour down toward black and light mode walks
-        // it up toward white, because the cards, the section titles and the system's own text
-        // colours all assume the page is going that way. The hue survives either trip, which is what
-        // keeps a green photo's page green at the bottom instead of grey.
-        let floor = dark
-            ? dominant.scaled(brightness: 0.34, saturation: 0.92)
-            : dominant.mixed(with: .white, 0.62)
-        let floorL = dark
-            ? leftAccent.scaled(brightness: 0.40, saturation: 0.80)
-            : leftAccent.mixed(with: .white, 0.66)
-        let floorR = dark
-            ? rightAccent.scaled(brightness: 0.40, saturation: 0.80)
-            : rightAccent.mixed(with: .white, 0.66)
+        // MUTED AT THE SOURCE, once, so every stop below inherits it and no stop can be built from
+        // the raw photo colour by accident. See `ProfileSurfaceTone.muteCanvas` for why a frosted
+        // card needs this to be here at all.
+        let top = ProfileSurfaceTone.muteCanvas(seam, dark: dark)
+        let dom = ProfileSurfaceTone.muteCanvas(dominant, dark: dark)
+        let accL = ProfileSurfaceTone.muteCanvas(leftAccent.vibrant(1.12), dark: dark)
+        let accR = ProfileSurfaceTone.muteCanvas(rightAccent.vibrant(1.12), dark: dark)
+
+        let mid = dom.mixed(with: top, 0.35)
+        let midL = accL.mixed(with: mid, 0.55)
+        let midR = accR.mixed(with: mid, 0.55)
+        // WHERE THE PAGE SETTLES. It still walks down toward the bottom of the screen, so the eye
+        // has somewhere to rest and the lowest cards sit against the deepest colour — but from the
+        // already-muted stops above, not from the raw photo, and no longer up toward white in light
+        // mode. Washing the page out was what left `.ultraThinMaterial` with nothing to frost.
+        let floor = dom.scaled(brightness: dark ? 0.70 : 0.88, saturation: 1)
+        let floorL = accL.scaled(brightness: dark ? 0.74 : 0.90, saturation: 0.95)
+        let floorR = accR.scaled(brightness: dark ? 0.74 : 0.90, saturation: 0.95)
         return [Color(uiColor: top), Color(uiColor: top), Color(uiColor: top),
                 Color(uiColor: midL), Color(uiColor: mid), Color(uiColor: midR),
                 Color(uiColor: floorL), Color(uiColor: floor), Color(uiColor: floorR)]
@@ -301,12 +312,19 @@ struct ProfileAdaptiveSurface: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         if adaptive {
-            let dark = scheme == .dark
             content
-                .background(Color.white.opacity(ProfileSurfaceTone.fill(dark)), in: shape)
-                // A hairline of the same white. Without it a tint this soft has no edge at all
-                // against the page it is made of, and the rows read as floating text.
-                .overlay { shape.strokeBorder(Color.white.opacity(ProfileSurfaceTone.edge(dark)), lineWidth: 0.6) }
+                // TWO FILLS IN THE BACKGROUND, NOT AN OVERLAY. His spec calls the tint an overlay,
+                // but a real overlay sits above the CONTENT and would put a veil over the labels and
+                // the icons as well as the card. Stacking it inside `.background` tints the surface
+                // and leaves the text at full strength, which is the effect he is describing:
+                // "so the background canvas color bleeds through naturally".
+                .background {
+                    shape.fill(.ultraThinMaterial)
+                    shape.fill(ProfileSurfaceTone.tint(scheme == .dark))
+                }
+                // `strokeBorder`, not `stroke`: it draws inside the shape, so a 0.5pt line on a 24pt
+                // corner stays on the card instead of straddling its edge.
+                .overlay { shape.strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5) }
         } else {
             content.background(plain, in: shape)
         }
@@ -323,21 +341,39 @@ struct ProfileAdaptiveCircleSurface: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         if adaptive {
-            let dark = scheme == .dark
+            // Material and a stroke, and NO tint fill — his spec gives the circles those two alone
+            // while the cards also get a tint. Followed as written rather than made uniform.
             content
-                .background(Color.white.opacity(ProfileSurfaceTone.fill(dark)), in: Circle())
-                .overlay { Circle().strokeBorder(Color.white.opacity(ProfileSurfaceTone.edge(dark)), lineWidth: 0.6) }
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay { Circle().strokeBorder(Color.white.opacity(0.15), lineWidth: 0.5) }
         } else {
+            // Liquid Glass survives ONLY here, on the round actions of a page with no adaptive
+            // canvas — the standing rule for this screen. "ccard dont use lequid glass" is about the
+            // cards, and no card has ever reached this modifier.
             content.liquidGlass(Circle(), interactive: true)
         }
     }
 }
 
-/// ONE PLACE FOR THE TWO NUMBERS. A card and a button that drift apart by a few percent is exactly
-/// the kind of thing that reads as "these were designed by two different people".
+/// The surface numbers, in one place, straight from his spec.
 enum ProfileSurfaceTone {
-    static func fill(_ dark: Bool) -> Double { dark ? 0.14 : 0.30 }
-    static func edge(_ dark: Bool) -> Double { dark ? 0.10 : 0.38 }
+    /// The tint that sits between the material and the content on a card.
+    static func tint(_ dark: Bool) -> Color {
+        dark ? Color.black.opacity(0.15) : Color.white.opacity(0.08)
+    }
+
+    /// THE CANVAS HAS TO BE DARKER THAN THE PHOTO, which is his third point and the reason the
+    /// first two were not enough on their own. A frosted card is a *relative* effect: it reads as
+    /// glass by being lighter and softer than what is behind it, and against the raw colour of a
+    /// bright photo — his saturated red and blue pages — there is nothing for it to be lighter than,
+    /// so `.ultraThinMaterial` looked like flat pink and flat light blue.
+    ///
+    /// Dark mode deepens; light mode both deepens and drains, because a light-mode page cannot go
+    /// very dark without the header's own name and letter losing their footing on it.
+    static func muteCanvas(_ c: UIColor, dark: Bool) -> UIColor {
+        dark ? c.scaled(brightness: 0.55, saturation: 0.95)
+             : c.scaled(brightness: 0.80, saturation: 0.60)
+    }
 }
 
 extension View {
