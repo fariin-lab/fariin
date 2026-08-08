@@ -387,14 +387,36 @@ struct StoryLibraryPicker: View {
     }
 
     private func albumGrid(_ album: AlbumInfo) -> some View {
+        // ⚠️ THE BAR HAS TO BE ON THIS SCREEN TOO, and that is his 2026-08-08 report: picking from
+        // the Photos tab shows Send and Preview, picking from inside an album shows nothing.
+        //
+        // `selectionBar` sits in the root `VStack` beside the two tabs, which is correct for the
+        // tabs because they are that view's own content. An album is not: it is PUSHED by
+        // `navigationDestination`, so it covers the root and leaves the bar behind on the parent.
+        // The selection was never lost — `picked` is the root's state and the ticks were numbering
+        // correctly, which is why it looked like only the buttons were missing. There was simply
+        // nothing on this screen to draw them.
+        //
+        // A `safeAreaInset` rather than another VStack: it lays the bar over the bottom edge and
+        // insets the grid's scroll content by exactly its height, so the last row can still be
+        // scrolled clear of it instead of hiding underneath.
         ScrollView {
             LazyVGrid(columns: cols, spacing: 2) {
                 ForEach(store.assets(in: album.collection), id: \.localIdentifier) { asset in tile(asset) }
             }
             .padding(.horizontal, 2)
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if allowsMultiple, !picked.isEmpty { selectionBar }
+        }
         .navigationTitle(album.title)
         .navigationBarTitleDisplayMode(.inline)
+        // The pushed screen gets the same one black as the root, for the reason written at the
+        // root's own background: anything left to the navigation stack's default draws a
+        // translucent chrome material and reads as a different, lighter colour.
+        .background(Color(.systemBackground))
+        .toolbarBackground(Color(.systemBackground), for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
     }
 
     private func tile(_ asset: PHAsset) -> some View {
