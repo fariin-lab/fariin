@@ -211,6 +211,15 @@ struct StoryDetailView: View {
     private var messageViewPosition: CGFloat {
         return -keyboardManager.currentHeight
     }
+
+    /// Should the picture be dimmed behind the reply keyboard? See the overlay in `body` for the
+    /// Telegram numbers this copies.
+    ///
+    /// `chromeHidden` is the second half, and it is theirs too: they clear the dim when the view
+    /// list is showing (`if component.hideUI || self.viewListDisplayState != .hidden`). Ours is the
+    /// viewers sheet, and the reason is the same — the sheet's own scale and scrim already own the
+    /// picture's brightness at that point, and a second dim underneath is a step nobody asked for.
+    private var replyDimOn: Bool { keyboardManager.isKeyboardOpen && !chromeHidden }
     
     private var emojiViewPosition: CGFloat {
         // SPEC: the reaction bar sits exactly 12pt above the input bar. The input pill's top is
@@ -294,6 +303,39 @@ struct StoryDetailView: View {
                                    height: cardHeight(width: proxy.size.width,
                                                       containerH: proxy.size.height,
                                                       footerH: footerH))
+                            // THE STORY STEPS BACK WHILE YOU TYPE. His report, with a Telegram
+                            // screenshot beside ours: opening the reply keyboard left our picture at
+                            // full brightness, so the thing you are reading and the thing you are
+                            // writing competed, and on a bright photo the reply bar was hard to see
+                            // at all.
+                            //
+                            // Telegram's own numbers, read from `StoryItemSetContainerComponent`:
+                            // `contentDimView.backgroundColor = UIColor(white: 0.0, alpha: 0.8)`,
+                            // and `dimAlpha` goes to 1 exactly when `inputPanelIsOverlay`, which is
+                            // true when and only when the keyboard has height. So: black at 0.8, on
+                            // keyboard open, and nothing else turns it on.
+                            //
+                            // ⚠️ IT DIMS, IT DOES NOT SHRINK, and that is measured rather than
+                            // assumed. In the same file the keyboard branch is
+                            // `bottomContentInset += 44.0` against `+= inputPanelSize.height` when
+                            // the keyboard is down — 44 is LESS than the reply pill's own height, so
+                            // their card gets marginally TALLER while you type, never smaller.
+                            // Scaling the card here would also put it out of step with the rect
+                            // `publishCardRect` hands the flight.
+                            //
+                            // OVER THE MEDIA, UNDER THE CHROME: this overlay is first, so the
+                            // caption, the top scrim, the header and the progress bar all layer
+                            // above it and stay readable — which is what their `insertSubview(
+                            // captionItemView, aboveSubview: self.contentDimView)` arranges too.
+                            .overlay(
+                                Color.black
+                                    .opacity(replyDimOn ? 0.8 : 0)
+                                    // The keyboard's OWN duration and curve, so the picture darkens
+                                    // with the keyboard rising rather than lagging behind it.
+                                    .animation(.easeInOut(duration: keyboardManager.animationDuration),
+                                               value: replyDimOn)
+                                    .allowsHitTesting(false)
+                            )
                             // THE CARD CARRIES ITS OWN BLACK, inside its own rounded rect.
                             //
                             // The dismiss used to paint the whole moving page black so the story
