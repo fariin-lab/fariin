@@ -430,6 +430,10 @@ struct StoryDetailView: View {
             if newValue == model.id {
                 let i = resumeIndex()
                 timerProgress = CGFloat(i) + resumeFraction(at: i)
+                // The page being handed the screen is not folding, whatever the last geometry
+                // snapshot said. `resetProgress` above cleared this too, but a preference delivered
+                // mid-transition can arrive AFTER it — see the note in `startProgress`.
+                isFolding = false
             }
             playVideo()
         }
@@ -437,7 +441,14 @@ struct StoryDetailView: View {
             // First open of the viewer (onChange(currentStoryUser) doesn't fire for the initial bucket):
             // land on the first unseen item too. `lastIndex` is empty on a fresh viewer, so this is
             // the same answer it always gave.
-            if viewModel.currentStoryUser == model.id { timerProgress = CGFloat(resumeIndex()) }
+            if viewModel.currentStoryUser == model.id {
+                timerProgress = CGFloat(resumeIndex())
+                // A VIEWER THAT HAS JUST OPENED IS NOT FOLDING. The open flight moves this page's
+                // container, so the geometry snapshot taken during it reads an off-centre origin and
+                // there is no second delivery once it lands — see `startProgress`. This is the first
+                // open, where `onChange(of: currentStoryUser)` never fires at all.
+                isFolding = false
+            }
         }
         .onReceive(timer) { _ in
             startProgress()
@@ -880,13 +891,42 @@ private extension StoryDetailView {
         // counting while the video is waiting on bytes will hand the screen to the next story before
         // this one has shown a frame. That is the progress desynchronisation: the bar was measuring
         // time, not playback. It resumes by itself the moment the player reports it is playing.
-        guard !isTimerRunning, !isPaused, !hostPause.paused, !isFolding, !isDismissing,
+        //
+        // ⚠️ AND `isFolding` CANNOT BE ALLOWED TO STOP THE PAGE THAT IS BEING WATCHED. This is his
+        // 2026-08-08 report — "when i open story is opening but is pause sametime… when i watch
+        // story A then i go story B is paused first befire dowing any thing… process bar completely
+        // stoping" — and the hold was never involved in it.
+        //
+        // `isFolding` comes from a PREFERENCE carrying `proxy.frame(in: .global).minX`, and it is
+        // true whenever the page sits more than 2pt off screen centre. That was sound for the old
+        // TabView, where a fold IS a SwiftUI layout and every intermediate position is published.
+        // It is not sound now, for one reason: **a GeometryReader re-evaluates on a SIZE change, not
+        // on a POSITION change.** `frame(in: .global)` is a snapshot taken whenever the body last
+        // ran, so the value is whatever the page's origin happened to be at that moment and there is
+        // NO guarantee of another delivery once it settles.
+        //
+        // Both of his cases are that snapshot landing off-centre:
+        //   OPEN — the flight scales and moves the presenter's container above this view, so a body
+        //          evaluation during it reads the page at the row card's x, not at 0.
+        //   A → B — the page transition moves pages by FRAME; a body evaluation mid-move reads an
+        //          off-centre origin, and the page arriving at 0 need not re-run the body at all.
+        // Nothing clears it afterwards: `resetProgress` runs BEFORE that snapshot, `onAppear` never
+        // touched it, and the preference will not fire again. So the bar stopped dead for the whole
+        // visit, which is exactly what he photographed.
+        //
+        // The fix is to ask the question the app can actually answer. A page that IS the current
+        // bucket is the page on screen, whatever some stale geometry says, so the fold gate now only
+        // applies to a page that is NOT current — and it is re-evaluated on every 0.05s tick against
+        // the live value, so it can never latch again. For a non-current page it changes nothing:
+        // the work below is already gated on the same test.
+        let isCurrent = viewModel.currentStoryUser == model.id
+        guard !isTimerRunning, !isPaused, !hostPause.paused, !(isFolding && !isCurrent), !isDismissing,
               !isBuffering, !keyboardManager.isKeyboardOpen else { return }
-        
+
         let index = getCurrentIndex()
         let story = getStory(with: index)
         
-        if viewModel.currentStoryUser == model.id {
+        if isCurrent {
             if !model.isSeen {
                 model.isSeen = true
             }
