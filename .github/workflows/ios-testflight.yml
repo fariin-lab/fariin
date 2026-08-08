@@ -84,11 +84,15 @@ jobs:
 
             SEND AND PREVIEW NOW APPEAR INSIDE AN ALBUM. The bar was built into the first screen, and an album opens on top of it, so it was left behind. Your selection was never lost, which is why the numbers were right and only the buttons were missing.
 
+            HOLDING A STORY PAUSES IT THE INSTANT YOUR FINGER LANDS. You told me to read Telegram and you were right about where to look. Their pause does not come from the long press firing at all: it happens on touch down, and the method they gate it with is called "allows instant pause on touch". Ours waited a quarter second. That quarter second was there for a reason, though: a pause armed on touch could be left switched on when another gesture stole the touch, which is the story-frozen-for-no-reason bug. So this copies their shape, not just their number, and the resume is now posted by the system itself whenever the touch ends by any route, including being stolen. The header and progress bars still fade only on a real hold, because moving those to touch down would blink them on every tap, which you reported before.
+
+            THE VIEWERS SHEET SHOWS ONE LIST UNLESS THE STORY WENT TO EVERYONE. You are right. All Viewers and Friends only says something when the audience could contain both. Posted to My Friends, to a custom list, or as View Once, everyone in the list is already that, so the split says nothing. The tabs are gone for those and the search moves up into their place.
+
             SCROLLING DOWN OUT OF AN UPLOADING STORY NO LONGER SHOWS BLACK AT THE TOP AND BOTTOM. Every other door hands the story straight to the viewer. The uploading one put a full-screen black sheet behind it, to stop the picture blinking when the upload finishes and the real story takes over, and nothing could clear that sheet while the card shrank away from it. It still holds still at rest, and now steps aside for the moment the card is in the air.
 
             THE PICTURE ON THE SETTINGS PAGE IS BIGGER. 120 instead of 96.
 
-            WHAT TO CHECK FIRST: swipe sideways between people, then tap left and right onto a video.
+            WHAT TO CHECK FIRST: swipe sideways between people, then hold a story to pause it, then tap left and right onto a video.
 
             STILL OPEN: edited videos still export with black bars instead of the gradient.
 
