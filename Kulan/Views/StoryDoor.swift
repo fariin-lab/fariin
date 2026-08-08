@@ -141,7 +141,37 @@ enum StoryDoor {
         // snapshot rides the flight as the cover the open wears. Nil (nothing registered, or the view
         // scrolled away) degrades to an open with no cover, which is still a correct flight.
         StoryZoomPresenter.present(viewer(req), coverFrom: liveView(sourceKey),
-                                   coverRadius: sourceRadius(sourceKey))
+                                   coverRadius: sourceRadius(sourceKey), coverKey: sourceKey)
+    }
+
+    /// THE HOLE AND THE COVER FOLLOW THE SWIPE, so the close after paging to another person is the
+    /// SAME close the tapped person gets — his 2026-08-08 report: "after swiping to the next story,
+    /// scrolling down does not behave the same way." The tapped card's slot empties at the open and
+    /// its picture rides the flight; a person you swiped to had neither, so the close fell back to
+    /// a fade landing onto their still-visible card — a visibly different return.
+    ///
+    /// Called by the viewer on every change of person (through `publishActive`, the one write).
+    /// Order matters twice over: the new card is photographed BEFORE it is hidden (an alpha-0 card
+    /// renders blank), from its OWN layer tree (the window is the story right now — see
+    /// `StoryCardShot.render`). Hiding the new key reveals the old one in the same write —
+    /// `MediaSourceVisibility` holds one id — and that reveal happens behind the presenter's
+    /// opaque wall, where nobody can see the exchange.
+    ///
+    /// If the photograph fails (no registered card, not in a window yet), NOTHING moves: the old
+    /// hole and cover stay, `coverSourceKey` keeps naming the old person, and the close falls back
+    /// to the fade landing exactly as before — a wrong-picture landing is worse than either.
+    static func retarget(to sourceKey: String) {
+        guard StoryZoomPresenter.isActive else { return }
+        // Already wearing him: nothing to do. This is also what keeps the OPEN out of here — the
+        // first person's cover was photographed at tap time and his slot is the flight's to hide
+        // (`stageHeroOpen`), and re-photographing the card mid-dip would trade a clean picture
+        // for a shrunken one.
+        guard StoryZoomPresenter.coverSourceKey != sourceKey else { return }
+        guard let view = liveView(sourceKey),
+              let shot = StoryCardShot.render(view, cornerRadius: sourceRadius(sourceKey))
+        else { return }
+        StoryZoomPresenter.retargetCover(shot, sourceKey: sourceKey)
+        MediaSourceVisibility.shared.hide(MediaOpenRects.key(.storyRow, sourceKey))
     }
 
     /// The live viewer for a story still being uploaded. Same presentation, same flight, same close —
@@ -181,7 +211,8 @@ enum StoryDoor {
                                       finish()
                                       DispatchQueue.main.async { onProfile(grp) }
                                   }),
-            coverFrom: liveView(sourceKey), coverRadius: sourceRadius(sourceKey))
+            coverFrom: liveView(sourceKey), coverRadius: sourceRadius(sourceKey),
+            coverKey: sourceKey)
     }
 
     /// The uploading card's own rect key. One constant so the card that registers it and the door that

@@ -1832,6 +1832,13 @@ struct StoryViewer: View {
         guard heroDismiss, !heroSourcePinned else { return }
         guard let g = groups.first(where: { $0.authorUid == uid }) else { return }
         StoryDoorState.shared.setActive(sourceKey: g.id, authorUid: g.authorUid)
+        // The hole and the cover move to him too, so the close he gets is the same close the
+        // tapped person gets (his 2026-08-08 "different transition after swiping" report). At rest
+        // only — a retarget under a live flight would swap the exchange mid-air; the pans are
+        // direction-locked so this should never fire then, and if it somehow does, the close falls
+        // back to the fade landing rather than glitching.
+        guard !hero.live, !hero.committing else { return }
+        StoryDoor.retarget(to: g.id)
     }
 
     /// WHERE THE CLOSE LANDS: the person he is on, never the person he came in through.
@@ -2196,7 +2203,10 @@ struct StoryViewer: View {
             // is… do not trigger any cross-fade during the drag"). Taking the cover off here also
             // answers the finger that seizes a card mid-open, which would otherwise be dragging a
             // half-dissolved thumbnail. It comes back only if this drag commits.
-            hero.cover = heroKeyNow() == heroSourceKey
+            // AGAINST THE COVER'S OWN KEY, not the opener's: the cover follows the swipe now
+            // (`StoryDoor.retarget`), so the question is "is the picture on the cover the card I
+            // am landing on", and the presenter is the one who knows what it is wearing.
+            hero.cover = StoryZoomPresenter.coverSourceKey == heroKeyNow()
             hero.coverAlpha = 0
             hero.exiting = true        // a pull is an exit: the black page goes now, not over 76pt
             // THE FINGER OWNS THE FLOOR. Held at full for the whole drag, so the backdrop cannot
@@ -2328,12 +2338,14 @@ struct StoryViewer: View {
             // "landed" and "gone" really are the same instant.
             if !StoryZoomPresenter.isActive { StoryCardMorph.heroDismissActive = false }
         }
-        // The cover-and-hole landing belongs to the TAPPED person's slot alone: only that slot was
-        // emptied, and only its pixels are on the cover. A close after swiping to somebody ELSE
-        // lands on their still-visible card, where a wrong-picture cover would be worse than none —
-        // that case keeps the proven crossfade landing: solid while it travels (t³), melting into
-        // the visible card as it arrives.
-        hero.cover = heroKeyNow() == heroSourceKey
+        // The cover-and-hole landing belongs to whoever the cover is a PICTURE of. That used to be
+        // the tapped person alone, so a close after swiping to somebody else fell back to a fade
+        // landing onto their still-visible card — his 2026-08-08 report, "a different transition".
+        // The hole and the cover follow the swipe now (`StoryDoor.retarget`), so on the main path
+        // this is true for whoever he is on. The fade landing below survives as the fallback for a
+        // retarget that could not photograph the card — a wrong-picture cover would be worse than
+        // none: solid while it travels (t³), melting into the visible card as it arrives.
+        hero.cover = StoryZoomPresenter.coverSourceKey == heroKeyNow()
         if hero.cover {
             // THE WHOLE EXCHANGE HAPPENS HERE, in the snap that follows the release: the flying
             // card cross-fades from the story he was watching into the row card's own picture —

@@ -126,6 +126,30 @@ enum StoryCardShot {
         guard let window = view.window else { return nil }
         return crop(view.convert(view.bounds, to: window), in: window, cornerRadius: cornerRadius)
     }
+
+    /// The same picture, rendered from the view's OWN layer tree instead of the window.
+    ///
+    /// The window crops above photograph WHAT IS ON SCREEN, and they must (the corners cut there
+    /// are the pixels behind the card). But a swipe retarget photographs a row card while the
+    /// story viewer is standing in front of it, and at that moment the screen IS the story — a
+    /// window crop would return story pixels. A covered view still owns its pixels; only the
+    /// window flattening loses them. `afterScreenUpdates: false`, same as everything here — the
+    /// card was committed long ago, and a flush is the re-entrancy trap `7763494` was about.
+    /// ⚠️ Photograph BEFORE hiding: an alpha-0 card renders blank from its own tree too.
+    static func render(_ view: UIView, cornerRadius: CGFloat = 0) -> UIImage? {
+        let size = view.bounds.size
+        guard size.width > 1, size.height > 1, view.window != nil else { return nil }
+        let format = UIGraphicsImageRendererFormat.preferred()
+        format.opaque = false
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            if cornerRadius > 0.5 {
+                let r = min(cornerRadius * 1.12, min(size.width, size.height) / 2)
+                UIBezierPath(roundedRect: CGRect(origin: .zero, size: size),
+                             cornerRadius: r).addClip()
+            }
+            view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: false)
+        }
+    }
 }
 
 /// Installs the row's press recogniser. Draws nothing and never takes a touch of its own.

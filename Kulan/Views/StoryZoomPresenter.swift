@@ -41,6 +41,25 @@ enum StoryZoomPresenter {
     /// One viewer at a time; the row's onOpen guards on this too.
     static var isActive: Bool { container != nil }
 
+    /// The `.storyRow` source key of the person whose picture is on the cover RIGHT NOW, nil while
+    /// no viewer is up. Written by `present` and by `retargetCover`, read by the close: the landing
+    /// may only wear the cover when the cover is a picture of the very card it is landing on — a
+    /// wrong-picture landing is worse than none (see `commitHero`'s note). Before the swipe
+    /// retarget existed this was implied by "the cover is the tapped card"; now the cover follows
+    /// the swipe, the key has to travel with the picture.
+    static var coverSourceKey: String? { container == nil ? nil : coverKey }
+    private static var coverKey: String?
+
+    /// THE COVER FOLLOWS THE SWIPE. A page swipe makes a new person the close's landing card, and
+    /// the cover photographed at tap time is a picture of somebody else — which forced the close
+    /// after a swipe onto a second, fade-style landing he reported as "a different transition".
+    /// The door photographs the new card and swaps it in here; the same landing can then wear it.
+    static func retargetCover(_ image: UIImage, sourceKey: String) {
+        guard let vc = container else { return }
+        vc.retargetCover(image)
+        coverKey = sourceKey
+    }
+
     /// `coverFrom`: the tapped row card's live view. It is photographed HERE, at tap time while it
     /// is definitely on screen, and the snapshot rides the flight as the cover the open wears —
     /// the shared-element look he named from Snapchat: the thumbnail itself expands, opaque from
@@ -50,9 +69,10 @@ enum StoryZoomPresenter {
     ///   corners of the crop — which are the chat list, not the card — never ride the flight. See
     ///   `StoryCardShot.crop`, which is where his white corners are actually removed.
     static func present<Content: View>(_ content: Content, coverFrom source: UIView? = nil,
-                                       coverRadius: CGFloat = 0) {
+                                       coverRadius: CGFloat = 0, coverKey: String = "") {
         guard container == nil else { return }
         guard let top = topController() else { return }
+        Self.coverKey = coverKey.isEmpty ? nil : coverKey
         let vc = StoryZoomContainerVC()
         // ⚠️ THE WINDOW IS PHOTOGRAPHED AND CROPPED, NOT THE REGISTERED VIEW, and the difference is
         // the whole cover. `MediaOpenRects` registers an ANCHOR: a `.background` view whose frame is
@@ -206,6 +226,19 @@ final class StoryZoomContainerVC: UIViewController {
         iv.clipsToBounds = true
         iv.alpha = 0
         coverView = iv
+    }
+
+    /// Swap the cover's picture for the person a swipe has made current. The image view is reused
+    /// (its alpha is 0 at rest — flights alone drive it), and if the OPEN had no cover to
+    /// photograph, one is created and mounted here: that open flew bare, but this close does not
+    /// have to.
+    func retargetCover(_ image: UIImage) {
+        if let coverView { coverView.image = image; return }
+        setCoverImage(image)
+        if let coverView, isViewLoaded, hosting != nil {
+            flightView.addSubview(coverView)
+            StoryCardMorph.shared.flightCover = coverView
+        }
     }
 
     private func mount(_ root: AnyView) {
