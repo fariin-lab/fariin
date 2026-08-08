@@ -699,6 +699,20 @@ final class StoryCardUIView: UIControl {
     private(set) var rectKey: String = ""
     private var onTap: (() -> Void)?
     private var onBadge: (() -> Void)?
+
+    /// TRUE only on MY card, and only once something is posted: the corner circle then means "add a
+    /// story", the same as the plus does. Cards are REUSED between mine and a friend's, so this is
+    /// written in both configure paths and can never be left over from the last person to occupy
+    /// this view — a friend's avatar must always open their story.
+    private var avatarAddsStory = false
+    /// Where the finger went down, in this card's own space.
+    ///
+    /// `UIControl` hands its action no location, and the corner circle is deliberately not a control
+    /// (`isUserInteractionEnabled = false`, so the whole card stays one button and the row's press
+    /// recogniser keeps working over it). Remembering the touch is therefore the only way to tell a
+    /// tap on the circle from a tap on the picture — and it costs no new gesture recogniser, which
+    /// this row cannot afford (see the scroll-and-gesture rules).
+    private var touchDownPoint: CGPoint = .zero
     private var didLayoutOnce = false
     /// The diameter the centred circle is drawn at when the card has no picture: 0.62 of the card on
     /// a friend's, 0.48 on my own. Stored rather than read back off the view, or the second layout
@@ -749,6 +763,9 @@ final class StoryCardUIView: UIControl {
     /// A friend's card.
     func configureFriend(group: StoryGroup, seen: [Bool], animated: Bool, onTap: @escaping () -> Void) {
         self.onTap = onTap
+        // A friend's avatar opens their story like the rest of their card. Written here because this
+        // view may have been my own card a moment ago — see `avatarAddsStory`.
+        avatarAddsStory = false
         nameLabel.text = group.name.isEmpty ? "User" : group.name
         applyCover(group.stories.last?.previewUrl,
                    name: group.name.isEmpty ? "User" : group.name,
@@ -773,6 +790,11 @@ final class StoryCardUIView: UIControl {
         nameLabel.text = "My Story"
 
         let hasCover = !(coverUrl ?? "").isEmpty
+        // WITH something posted, the circle is a second, bigger way to reach "add a story". With
+        // NOTHING posted the circle is hidden anyway and the whole card already composes, which is
+        // the behaviour he asked me to leave alone: "if user not posting any story and everywhere
+        // click user it menas add already that is working dont tuch".
+        avatarAddsStory = hasCover
         // avatarName: what the LETTER CIRCLE falls back to when there is no photo. The label is "My
         // Story" but the circle must use the real name — label-as-avatar-name drew a purple "M"
         // while Edit Profile drew the correct initial (device report).
@@ -844,9 +866,31 @@ final class StoryCardUIView: UIControl {
 
     // MARK: Touches
 
+    override func beginTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
+        touchDownPoint = touch.location(in: self)
+        return super.beginTracking(touch, with: event)
+    }
+
     @objc private func tapped() {
         // A press that raised the menu must not also open the story when the finger lifts.
         guard !StoryRowPress.swallowsTap else { return }
+        // THE CIRCLE MEANS ADD, THE PICTURE MEANS OPEN. Owner, 2026-08-08: "if i tuch + button or it
+        // i tuch circle avater it menas add story but if i tuch other areas like the big iamge
+        // preview it meanes open story i posted before". The plus on its own was too small to hit.
+        //
+        // Measured against the RING, not the 32pt frame: `StoryCornerCircle` draws its 37pt ring
+        // outside its own bounds, so the circle he is aiming at is 2.5pt bigger on every side than
+        // the view is. Nothing else grows — a tap anywhere outside that circle still opens.
+        //
+        // No dip and no flight on this path: this is the plus badge's behaviour reached from a
+        // different pixel, so it must do exactly what the plus does and nothing more.
+        if avatarAddsStory, !corner.isHidden, let onBadge {
+            let pad = (StoryCornerCircle.ring - StoryCornerCircle.avatar) / 2
+            if corner.convert(corner.bounds, to: self).insetBy(dx: -pad, dy: -pad).contains(touchDownPoint) {
+                onBadge()
+                return
+            }
+        }
         // The tap dips the card and the story flies out of the dip (owner 2026-08-07, Snapchat
         // named). The dip is the control's own pressed state, so a held finger keeps the card
         // pressed and the release lets it spring back.
