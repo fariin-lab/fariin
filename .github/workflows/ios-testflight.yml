@@ -74,19 +74,27 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            THREE THINGS SINCE THE LAST BUILD. The profile background is the big one and it is still behind the switch.
+            SEVEN STORY FIXES. The background behind a story is the big one, and it is a replacement rather than another patch.
 
-            THE COLOURED PROFILE IS THE PHOTO NOW, NOT A COLOUR MIXED FROM IT. Settings, then Privacy and Security, then Adaptive Profile Background. Every version you have seen so far painted a colour worked out from the picture, and every one of them looked painted to you. Your Nextgram shots showed why: that app keeps the PHOTO running down the whole screen under a heavy blur, so there is real texture behind everything. That is what this does now.
+            THE BLUR IS GONE. TELEGRAM DOES NOT BLUR, AND NOW WE DO NOT EITHER. You asked me to read their code first, so I did. There is no blur anywhere in their story pipeline. They take two colours off the picture itself, the colour at the top and the colour at the bottom, draw a gradient between them, and BAKE IT INTO THE FILE when you post. Their viewer draws no background at all, which is exactly why theirs never breaks while you scroll.
 
-            The cards and the five round buttons are the same glass as the Back and Edit buttons, because that is what you pointed at. And a coloured profile is always in dark colours now whatever your phone is set to, since a photograph is dark more often than not and the light labels were only readable by luck of which picture you opened.
+            Ours was a live blur that redrew itself every frame, and it came apart whenever anything moved the card. That is what you were seeing. Six separate patches had been written for six symptoms of that one cause, and all six are now deleted along with it. Your videos already worked this way since you chose the gradient. Photos have joined them, so a picture and a video now behave the same.
 
-            A profile with no photo is unchanged, and so is everything on this page with the switch off.
+            A photo that does not fill the frame is also posted as a FULL frame now, gradient included, so nobody watching has to invent a background for it. Stories you posted before this build still get the gradient drawn live, and it is the same gradient from the same two colours, so you should not be able to tell them apart.
 
-            TAPPING THE CIRCLE ON MY STORY ADDS A STORY. The small plus was the only way in and it was too small to hit. The whole circle counts now. Tapping the big picture still opens what you posted. If you have posted nothing, the whole card still composes, exactly as before.
+            THE STORY GOES DARK WHEN YOU OPEN THE REPLY KEYBOARD. Your screenshot next to Telegram was right. Their number is black at 80 per cent, and it turns on only when the keyboard has height. That is what this is. It does NOT shrink the picture, because theirs does not either. I checked: with the keyboard up their card actually gets slightly taller.
 
-            SWIPING DOWN WITH THE REPLY KEYBOARD UP CLOSES THE KEYBOARD, NOT THE STORY. You asked for this twice and you were right both times. It had been fixed once, back in June, and the fix was lost when the story viewer was rebuilt on new gesture code. Nothing has been protecting it since. It is refused at the gesture now, so the close cannot even start while the keyboard is up.
+            STORIES OPEN FASTER. Your own story was never slow. A friend's story was, and it was a retry loop waiting 50 milliseconds between looks while the open sat there holding a black screen. It looks every frame now, and it tries once immediately instead of always waiting a turn first.
 
-            WHAT TO CHECK FIRST: turn the profile switch on and open somebody who has a photo. Then open a story, tap reply, and swipe down.
+            THE BLACK CORNERS AT THE START OF A PULL DOWN. Only on the first pull, which was the clue. The story is told to stop clipping its own corners and the mask takes over, but the telling goes through SwiftUI and lands a frame or more later. In that gap two different curves were cutting the same corner. The card now says when it has actually let go, and the mask waits for it. The fix you asked me to protect is untouched and still does exactly what it did.
+
+            A STORY OPENED FROM A REPLY GOES BACK WHERE IT CAME FROM. It was flying home to a remembered rectangle, and the chat reuses its rows, so the thing that rectangle described was sometimes no longer there. It asks the real view now. If the reply has genuinely scrolled away it drifts off instead of landing somewhere wrong.
+
+            A VIDEO COMES BACK ON THE FRAME YOU LEFT IT ON. Watch to ten seconds, swipe away, swipe back. The position was already resuming, but the picture on top of it was the cover made when you posted, which is second zero. It keeps the real frame now.
+
+            THE VIEWERS SHEET SWIPES WITHOUT LAGGING. Dragging it sideways was rebuilding the entire story screen on every frame, pager and sheet included, to move one row of cards. Only the row is rebuilt now.
+
+            WHAT TO CHECK FIRST: post a square photo and a square video, then watch them and scroll the row hard. Then open a story, tap reply, and look at how dark it goes.
 
             STILL OPEN: edited videos still export with black bars instead of the gradient.
         run: fastlane beta
