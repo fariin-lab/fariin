@@ -118,6 +118,48 @@ final class StoryViewersSheetView: UIView {
     private let grabber = UIView()
     private let allTab = UIButton(type: .system)
     private let friendsTab = UIButton(type: .system)
+
+    /// WHAT THIS STORY'S AUDIENCE WAS, AND WHETHER A SECOND TAB SAYS ANYTHING.
+    ///
+    /// His 2026-08-08 rule, in his words: Everyone shows Everyone plus Friends; My Friends shows only
+    /// the friends tab; a custom list shows only that list's name; View Once shows only View Once.
+    /// So the row never disappears — it always names the audience — and it only ever offers a CHOICE
+    /// for a story that went to Everyone, because that is the only audience whose viewers can be a
+    /// mix of friends and strangers. The words come from `storyAudienceTitle`, the same function the
+    /// pill on the story itself reads.
+    var audience: (title: String, bothTabs: Bool) = ("All Viewers", true) {
+        didSet {
+            // Field by field rather than as a tuple: `updateUIView` writes this on every pass, so
+            // the no-change case has to be cheap and certain, and tuple `!=` on a LABELLED tuple is
+            // the kind of thing that resolves differently than it reads.
+            guard audience.title != oldValue.title || audience.bothTabs != oldValue.bothTabs
+            else { return }
+            applyAudienceTabs()
+        }
+    }
+
+    /// THE FIRST TAB IS ALWAYS THE AUDIENCE'S OWN NAME, which makes the whole rule one sentence: the
+    /// first tab names who this story went to, and the second exists only when that was Everyone.
+    /// It used to read "All Viewers" in every case, which said nothing about the story. His words for
+    /// the Everyone case were "show Everyone + Friends", so that is what it says.
+    private var allTabTitle: String { audience.title }
+
+    private func applyAudienceTabs() {
+        // A HIDDEN FRIENDS TAB MUST NOT LEAVE ITS FILTER ON. Paging the sheet from an Everyone story
+        // you were reading on Friends across to a My Friends story would otherwise show that story's
+        // list still narrowed, under a tab that is no longer on screen to say so.
+        if !audience.bothTabs, tab != 0 {
+            tab = 0
+            applyFilter()
+        }
+        friendsTab.isHidden = !audience.bothTabs
+        // Nothing to switch to, so it stops behaving like a button: no highlight, no touch feedback
+        // on a tap that cannot change anything. It is a label with an underline at that point.
+        allTab.isUserInteractionEnabled = audience.bothTabs
+        configureTab(allTab, allTabTitle, selected: tab == 0)
+        configureTab(friendsTab, "Friends", selected: tab == 1)
+        setNeedsLayout()
+    }
     private let underline = UIView()
     private let search = UISearchTextField()
     private let table = UITableView(frame: .zero, style: .plain)
@@ -318,7 +360,9 @@ final class StoryViewersSheetView: UIView {
         grabber.layer.cornerRadius = 2.5
         panel.addSubview(grabber)
 
-        configureTab(allTab, "All Viewers", selected: true)
+        // Placeholder titles only: `audience` is set by the representable the moment this view is
+        // built and `applyAudienceTabs` writes the real ones.
+        configureTab(allTab, allTabTitle, selected: true)
         configureTab(friendsTab, "Friends", selected: false)
         allTab.addTarget(self, action: #selector(pickAll), for: .touchUpInside)
         friendsTab.addTarget(self, action: #selector(pickFriends), for: .touchUpInside)
@@ -691,7 +735,7 @@ final class StoryViewersSheetView: UIView {
     private func setTab(_ i: Int) {
         guard tab != i else { return }
         tab = i
-        configureTab(allTab, "All Viewers", selected: i == 0)
+        configureTab(allTab, allTabTitle, selected: i == 0)
         configureTab(friendsTab, "Friends", selected: i == 1)
         applyFilter()
         UIView.animate(withDuration: 0.18) { self.setNeedsLayout(); self.layoutIfNeeded() }
@@ -921,6 +965,10 @@ struct StoryViewerRowContent: View {
 /// about how far open the sheet is.
 struct StoryViewersSheet: UIViewRepresentable {
     let activeStoryId: String
+    /// This story's audience, in words, and whether it earns a second tab. See `audience` on the
+    /// view and `storyAudienceTitle` in StoriesViews, which is where both of these come from.
+    var audienceTitle: String = "All Viewers"
+    var audienceHasBothTabs: Bool = true
     @Binding var progress: CGFloat
     var carouselBand: CGRect = .zero
     var hasPrev: Bool = false
@@ -977,6 +1025,7 @@ struct StoryViewersSheet: UIViewRepresentable {
         }
         v.onPagePreview = { [weak c = context.coordinator] d in c?.preview(d) }
         context.coordinator.view = v
+        v.audience = (audienceTitle, audienceHasBothTabs)
         context.coordinator.setNeighbours(prev: prevStoryId, next: nextStoryId)
         context.coordinator.load(activeStoryId)
         return v
@@ -984,6 +1033,9 @@ struct StoryViewersSheet: UIViewRepresentable {
 
     func updateUIView(_ v: StoryViewersSheetView, context: Context) {
         if !context.coordinator.applying { v.setProgress(progress) }
+        // The sheet pages sideways between the author's stories, and each one may have gone to a
+        // different audience, so the tab follows the story on screen rather than the one it opened on.
+        v.audience = (audienceTitle, audienceHasBothTabs)
         v.carouselBand = carouselBand
         v.hasPrev = hasPrev
         v.hasNext = hasNext
