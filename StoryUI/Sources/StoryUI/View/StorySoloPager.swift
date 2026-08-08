@@ -76,6 +76,10 @@ struct StorySoloPager: UIViewControllerRepresentable {
         var parent: StorySoloPager
         weak var host: StorySoloHostVC?
         private weak var dismissPan: DirectionalPanGestureRecognizer?
+        /// Is the reply keyboard up? Watched here rather than asked of `KeyboardManager`, which is a
+        /// `@StateObject` owned by each page and not reachable from the pager. Selector observers,
+        /// so they are removed for us when this coordinator goes.
+        private var keyboardUp = false
         // Baseline translation captured the instant the swipe-UP pan engages: the recognizer only
         // begins after ~8pt plus whatever moved while competing pans were failing, so the first
         // .changed already carries ~30-40pt. Reporting that raw value made the card JUMP the moment
@@ -114,8 +118,15 @@ struct StorySoloPager: UIViewControllerRepresentable {
             host.content = hc
         }
 
+        @objc private func keyboardShown() { keyboardUp = true }
+        @objc private func keyboardHidden() { keyboardUp = false }
+
         func installPans(on vc: StorySoloHostVC) {
             vc.loadViewIfNeeded()
+            NotificationCenter.default.addObserver(self, selector: #selector(keyboardShown),
+                                                  name: UIResponder.keyboardWillShowNotification, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(keyboardHidden),
+                                                  name: UIResponder.keyboardWillHideNotification, object: nil)
             // UP pan opens the views sheet, reported continuously so the host tracks the sheet 1:1
             // with the finger and decides open/close on release.
             let up = DirectionalPanGestureRecognizer(direction: .up, target: self, action: #selector(handleSwipeUp(_:)))
@@ -331,6 +342,26 @@ struct StorySoloPager: UIViewControllerRepresentable {
         // Our pans coexist with the hosted SwiftUI gestures (tap zones, hold-to-pause) and with
         // the system zoom-dismiss pan the passive watcher rides alongside.
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool { true }
+
+        /// ⚠️ WITH THE REPLY KEYBOARD UP, A DOWNWARD SWIPE LOWERS THE KEYBOARD AND NOTHING ELSE.
+        ///
+        /// His words, asked twice: "If i open keyboad then i try to scroll down just menas Close
+        /// keyboad Not all story". He was right that this had been fixed before — `bfb0a9d`, June,
+        /// as `if replyFocused { return }` inside the viewer's own SwiftUI `DragGesture`. That
+        /// gesture does not exist any more: the viewer was rebuilt on UIKit pans and the guard was
+        /// never carried across, so there is no keyboard test left anywhere in either pager.
+        ///
+        /// REFUSED BEFORE IT BEGINS, not handled inside. By the time a handler sees `.began` the
+        /// dismissal has already started — `heroDismissActive`, `prepareForHero`, `pauseStory` —
+        /// and undoing that is how half-torn-down states get made. Returning false here means the
+        /// close never starts at all.
+        ///
+        /// ONLY `dismissPan`, so the swipe-UP to the viewers sheet is untouched.
+        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            guard g === dismissPan, keyboardUp else { return true }
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            return false
+        }
     }
 }
 

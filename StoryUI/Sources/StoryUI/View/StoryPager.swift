@@ -135,6 +135,13 @@ struct StoryPager: UIViewControllerRepresentable {
         /// report per crossing, not one per frame — see `handleDismissWatch`.
         private var watchDragPastThreshold = false
         private weak var dismissPan: DirectionalPanGestureRecognizer?   // ours — system pans defer to it
+        /// Is the reply keyboard up? Watched here rather than asked of `KeyboardManager`, which is a
+        /// `@StateObject` owned by each page and not reachable from the pager. Selector observers,
+        /// so they are removed for us when this coordinator goes.
+        private var keyboardUp = false
+
+        @objc private func keyboardShown() { keyboardUp = true }
+        @objc private func keyboardHidden() { keyboardUp = false }
         fileprivate var cubeLink: CADisplayLink?   // fileprivate so dismantleUIViewController can invalidate it
         // Baseline translation captured the instant the swipe-UP pan engages. The recognizer only
         // begins after the finger has already travelled ~its 8pt threshold plus whatever it moved
@@ -314,6 +321,10 @@ struct StoryPager: UIViewControllerRepresentable {
         private var bindAttempts = 0
 
         func installDismissPan() {
+            NotificationCenter.default.addObserver(self, selector: #selector(keyboardShown),
+                                                  name: UIResponder.keyboardWillShowNotification, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(keyboardHidden),
+                                                  name: UIResponder.keyboardWillHideNotification, object: nil)
             guard !didInstallPan, let pager else { return }
             // THE ONE-SHOT FLAG USED TO BE SET HERE, BEFORE WE KNEW WE HAD ANYTHING, and that is why
             // the viewers sheet came up over a full-size story that never shrank.
@@ -688,6 +699,15 @@ struct StoryPager: UIViewControllerRepresentable {
         // "_UI…" exclusion protected the CUSTOM card pan from double-driving; that pan is
         // inert now, and excluding the system pan would kill the native close outright.)
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool { true }
+
+        /// ⚠️ WITH THE REPLY KEYBOARD UP, A DOWNWARD SWIPE LOWERS THE KEYBOARD AND NOTHING ELSE.
+        /// The same guard as `StorySoloPager`'s, for the same reason and with the same history —
+        /// read the note there. Both pagers install a down pan and neither had a keyboard test.
+        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            guard g === dismissPan, keyboardUp else { return true }
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            return false
+        }
     }
 }
 
