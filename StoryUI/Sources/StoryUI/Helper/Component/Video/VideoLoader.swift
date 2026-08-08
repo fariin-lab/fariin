@@ -186,6 +186,14 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// here to go wrong.
     private var readyObservation: NSKeyValueObservation?
 
+    /// The clip whose first frame the cover is waiting for, or nil while there is no such clip.
+    ///
+    /// Held so the reveal can tell THIS clip's readiness from the previous one's — the player is
+    /// shared across every page of the viewer and keeps the old item attached across the async gap
+    /// between `startVideo` and `setupPlayer(_:)`. See the note in `revealVideoIfReady`. Weak,
+    /// because the player owns the item and this must never be the reason one stays alive.
+    private weak var awaitedItem: AVPlayerItem?
+
     /// Both answers have to be in: a frame exists, and we know the shape to frame it at. Whichever
     /// lands second does the reveal. Runs once per clip — the `isHidden` test is the latch.
     ///
@@ -196,14 +204,27 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// old bug and the other is a dead story, so the live read is the one that fails safely.
     private func revealVideoIfReady() {
         guard playerLayer.isHidden else { return }
+        // ⚠️ THE PREVIOUS CLIP IS STILL ATTACHED WHEN THIS CLIP GOES UNDER COVER, and it is ready for
+        // display, and its `presentationSize` is not zero. `startVideo` hides the layer immediately,
+        // but the swap to the new item happens in `setupPlayer(_:)`, which is an ASYNC hop later — the
+        // cache has to answer first. Every test below would pass in that window on the OLD clip's
+        // answers, so a single `layoutSubviews` pass (which calls straight into here) would uncover
+        // the layer and pull the veil down, and then `replaceCurrentItem(with: nil)` would blank it.
+        // That is a black frame with nothing left covering it: the same fault this gate exists to
+        // remove, arriving through the back door.
+        //
+        // So the gate asks WHICH CLIP as well as whether there is a frame. `awaitedItem` is set on
+        // the line after the swap and nowhere else, and `startVideo` clears it, so between the two
+        // there is deliberately nothing this can reveal.
+        guard let awaited = awaitedItem, player?.currentItem === awaited else { return }
         guard playerLayer.isReadyForDisplay else { return }
         // A LAYER WITH A FRAME KNOWS ITS SIZE, so ask the item directly rather than wait to be told.
         // The observer below is still what usually answers first; this is here so that a clip whose
         // `presentationSize` notification is late or missed cannot leave the cover up for ever. There
         // is deliberately no timer anywhere in this path — a timer is what would put the wrong
         // gravity back on screen, which is the fault this whole change exists to remove.
-        if presentedSize.width <= 0 || presentedSize.height <= 0,
-           let live = player?.currentItem?.presentationSize, live.width > 0, live.height > 0 {
+        let live = awaited.presentationSize
+        if presentedSize.width <= 0 || presentedSize.height <= 0, live.width > 0, live.height > 0 {
             presentedSize = live
         }
         guard presentedSize.width > 0, presentedSize.height > 0 else { return }
@@ -343,6 +364,9 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // Hiding here as well as at init is what makes this hold for the SECOND video in a row: this
         // view is reused, so without it clip B would be shown by clip A's reveal.
         presentedSize = .zero
+        // AND THERE IS NOTHING TO REVEAL UNTIL THE NEW ITEM IS ATTACHED. Without this the old clip
+        // would answer the reveal's questions for as long as the cache takes to reply.
+        awaitedItem = nil
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         playerLayer.isHidden = true
@@ -408,7 +432,11 @@ private extension PlayerView {
         // AN ITEM PREPARED WHILE YOU WERE WATCHING THE STORY BEFORE, if there is one. It has already
         // had its tracks loaded and its first frames decoded, so it starts on the frame rather than
         // on a beat of nothing. See StoryItemPreloader.
-        self.player?.replaceCurrentItem(with: StoryItemPreloader.take(url) ?? .init(url: url))
+        let item = StoryItemPreloader.take(url) ?? AVPlayerItem(url: url)
+        self.player?.replaceCurrentItem(with: item)
+        // THE CLIP THE COVER IS WAITING FOR. Until this line there was no item to be ready, and
+        // `revealVideoIfReady` refuses on that — see its note on the previous clip's readiness.
+        awaitedItem = item
         // BACK TO WHERE HE WAS, same session (see StoryPlaybackResume). Keyed by the STORY's url,
         // not this function's parameter — `url` here is usually the cache FILE. Asked for once:
         // `take`, so a later rebuild of the same story in a fresh session starts clean. Seeking an
