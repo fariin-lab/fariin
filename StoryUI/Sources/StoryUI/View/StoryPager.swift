@@ -237,6 +237,9 @@ struct StoryPager: UIViewControllerRepresentable {
             if shown == nil {
                 if let first = makePage(for: parent.viewModel.currentStoryUser) {
                     pager.setViewControllers([first], direction: .forward, animated: false)
+                    // The FIRST advance is the one that used to be slowest, because nothing had been
+                    // asked for yet. Warm the neighbours from the moment the viewer has a page.
+                    prewarmNeighbours(of: parent.viewModel.currentStoryUser)
                 }
                 return
             }
@@ -245,6 +248,45 @@ struct StoryPager: UIViewControllerRepresentable {
                   let target = makePage(for: parent.viewModel.currentStoryUser)
             else { return }
             pager.setViewControllers([target], direction: to > from ? .forward : .reverse, animated: true)
+            prewarmNeighbours(of: parent.viewModel.currentStoryUser)
+        }
+
+        /// BUILD **AND LAY OUT** THE PEOPLE EITHER SIDE, BEFORE THE FINGER ASKS FOR THEM.
+        ///
+        /// His 2026-08-08: "make the transition from tapping a story to the next person much
+        /// faster… reduce the overall delay, including the page transition and any delay caused by
+        /// loading/building the next story."
+        ///
+        /// `makePage` already stopped rebuilding a page per tap, which was about a third of it. What
+        /// a cached page had NOT paid for is its first LAYOUT: it was constructed and then parked, so
+        /// the whole SwiftUI body — the GeometryReader, the card, the overlays, the image view — was
+        /// still evaluated on the main thread at the moment it was handed to the pager, which is
+        /// inside the tap. Laying it out here moves that work into the seconds he spends watching the
+        /// current story, where nothing is waiting on it.
+        ///
+        /// It also starts that page's image load, because `StoryImage.task` runs once the view is
+        /// laid out — so the next person's first frame is usually decoded before he ever asks for it.
+        /// That is the same reasoning as `prefetchAhead`'s flattened list, one layer further in.
+        ///
+        /// ⚠️ LAYOUT ONLY, NEVER PARENTED. A page added to the hierarchy would run `onAppear`, start
+        /// its timer and mark its first story SEEN — a person he never watched. `layoutIfNeeded` on a
+        /// detached view does the work without any of that.
+        private func prewarmNeighbours(of id: String) {
+            guard let pager, let idx = index(of: id), pager.view.bounds.width > 1 else { return }
+            let bounds = pager.view.bounds
+            // Next runloop: the transition that just started owns this one, and stealing main-thread
+            // time from it would trade a faster arrival for a jerkier animation.
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                for off in [1, -1] {
+                    let j = idx + off
+                    guard self.parent.viewModel.stories.indices.contains(j) else { continue }
+                    guard let vc = self.makePage(for: self.parent.viewModel.stories[j].id),
+                          vc.parent == nil, vc.view.superview == nil else { continue }
+                    vc.view.frame = bounds
+                    vc.view.layoutIfNeeded()
+                }
+            }
         }
 
         func pageViewController(_ pvc: UIPageViewController, viewControllerBefore vc: UIViewController) -> UIViewController? {
@@ -261,6 +303,9 @@ struct StoryPager: UIViewControllerRepresentable {
                                 previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
             guard completed, let cur = (pvc.viewControllers?.first as? StoryPageHostVC)?.bucketID else { return }
             parent.viewModel.currentStoryUser = cur   // StoryView's onChange fires onUserChanged
+            // A swipe lands here rather than in `syncIfNeeded`, and the person AFTER the one he just
+            // reached is the next thing he can ask for. Same warm, same reason.
+            prewarmNeighbours(of: cur)
         }
 
         // MARK: dismiss pan (down only) + require-to-fail on the pager's own scroll

@@ -3330,7 +3330,23 @@ struct MyStoriesCarousel: View {
                 .overlay(Image(uiImage: shot).resizable().scaledToFill())
                 .clipped()
         } else {
-            StoryImage(url: s.previewUrl, fitBlur: true, bakedBars: false, cardFillThreshold: slotH / slotW)
+            // ⚠️ BAKED BARS, NOT THE LIVE MATERIAL, and his 2026-08-08 report is why: "non-centered
+            // cards lose their blur effect or show weak blur. The blur only appears when the card is
+            // centered."
+            //
+            // The answer is written at the top of this file already, it was just applied to the
+            // wrong view. `StoryDarkBlur` is a real `UIVisualEffectView`, and a material DROPS ITS
+            // BLUR whenever it is composited at fractional opacity — which is exactly what the
+            // cover-flow does to every card that is not centred: `.opacity(1 - 0.20 * scaleFraction)`
+            // in the body above, on top of a `.scaleEffect`. The centre card is the only one drawn at
+            // opacity 1, so it is the only one whose blur survives. That is the whole of the report,
+            // and it is not a transition problem — a side card is simply never asked to blur.
+            //
+            // The baked backdrop is a UIImage, so scaling and fading it are ordinary drawing and
+            // cannot fail. Its veil was calibrated against the real material for the morph card
+            // (0.88, tuned twice off his screenshots), so the centre card keeps the look it has now
+            // and the neighbours finally match it.
+            StoryImage(url: s.previewUrl, fitBlur: true, bakedBars: true, cardFillThreshold: slotH / slotW)
         }
     }
 
