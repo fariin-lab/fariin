@@ -161,13 +161,26 @@ public final class StoryCardMorph {
     static let circleOpenEnd: CGFloat = 0.18
 
     /// How much of a LEAVING circular flight is spent becoming the circle, measured from full
-    /// screen. His number: "within the first 10-15% of the interactive drag progress",
-    /// `min(1.0, gestureProgress * 6.0)` — which is 1/6, and 0.15 is that rounded to the tighter
-    /// end of the range he gave. Past it the mask is a true circle for every remaining frame.
-    /// Not the same journey as the open's window above and deliberately not the same number: a pull
-    /// wants the circle at once, an open has to finish becoming the card before the surround
-    /// arrives. See the shape note in `applyCore`.
-    static let circleRushSpan: CGFloat = 0.15
+    /// screen. Past it the mask is a true circle for every remaining frame.
+    ///
+    /// ⚠️ 0.06, DOWN FROM 0.15, AND THE OLD NUMBER WAS NOT WRONG SO MUCH AS MEASURED AGAINST THE
+    /// WRONG THING. His original spec was "a 100% circle within the first 10-15% of the drag", and
+    /// 0.15 reads like exactly that — but this is a fraction of `f`, and `f` does not run to 1 on a
+    /// drag. `heroDragCeiling` caps it so the card stops shrinking at `heroDragMinScale` (0.46), and
+    /// for a 49pt chat ring in a ~393pt card the ratio is about 0.125, so the ceiling is
+    /// (1 - 0.46) / (1 - 0.125) = about 0.62.
+    ///
+    /// So 0.15 of `f` was 0.15 / 0.62 = about 24% OF THE TRAVEL HIS FINGER ACTUALLY MAKES — half as
+    /// long again as the number promised, which is exactly the "too late, feels slow" he reported.
+    /// 0.06 / 0.62 is about 9.7%, which is the spec he gave the first time, measured against the
+    /// thing he is actually moving.
+    ///
+    /// ⚠️ DO NOT READ THIS AS A PERCENTAGE OF THE DRAG. Divide it by `heroDragCeiling` for the door
+    /// in question, and re-derive it if `heroDragMinScale` ever moves.
+    ///
+    /// The open no longer has a window of its own to be confused with this one — a circular door
+    /// opens as a card now (see `circleMorph`), which is the whole of his second report.
+    static let circleRushSpan: CGFloat = 0.06
 
     public func setFlightCoverAlpha(_ a: CGFloat) {
         guard let flightCover else { return }
@@ -531,13 +544,21 @@ public final class StoryCardMorph {
                 // "reach a 100% full circle mask within the first 10-15% of the drag".
                 circleMorph = 1 - min(1, f / Self.circleRushSpan)
             } else {
-                // OPENING: a circle until the last third, then it becomes the card — and it is
-                // FINISHED becoming the card by `circleOpenEnd`, which is where the surround starts
-                // fading back in. That ordering is the other half of his report (see `outside`
-                // below): the reply bar and the page must never appear beside a mask that is still
-                // cutting, or you see the furniture of the screen around a circle.
-                circleMorph = max(0, min(1, (Self.circleOpenStart - f)
-                                             / (Self.circleOpenStart - Self.circleOpenEnd)))
+                // OPENING: NOT A CIRCLE AT ALL ANY MORE. His 2026-08-08 order in as many words —
+                // "when opening the story it should open normally like the other stories, not as a
+                // circle. Only when I close should it transition back into the circular avatar."
+                // That is Snapchat's and WhatsApp's asymmetry: out as a card, home as a circle.
+                //
+                // `circleMorph = 1` IS the card, so an opening circular door now takes exactly the
+                // same shape journey as a story-row card: a small rounded rectangle at the ring's
+                // rect, growing to the full 9:16. The host drops the cover for these doors in the
+                // same breath (`stageHeroOpen`), because a round cover in a card-shaped seat would
+                // show its own empty corners.
+                //
+                // `circleOpenStart` / `circleOpenEnd` are kept rather than deleted: they are the
+                // only record of why the open's window had to END before the surround arrived, and
+                // that constraint comes straight back the day anyone re-introduces a shaped open.
+                circleMorph = 1
             }
             let h = restW + (restH - restW) * circleMorph
             cropRect = CGRect(x: content.minX, y: content.midY - h / 2, width: restW, height: h)

@@ -2062,8 +2062,24 @@ struct StoryViewer: View {
             // cover dissolves into the live story while the card grows. Nothing can pop, and
             // nothing is ever transparent.
             hero.alpha = 1
-            hero.cover = true          // the tapped card is the one on the cover, by definition
-            hero.coverAlpha = 1        // the seat is the thumbnail; the flight dissolves it away
+            // ⚠️ EXCEPT OUT OF A CIRCLE, WHICH OPENS AS A CARD LIKE EVERY OTHER DOOR. His
+            // 2026-08-08 report: "when I open a story from the chat row it opens as a circle,
+            // it should open normally like the other stories".
+            //
+            // The cover goes with the circle and it has to: a circular door's cover is a photograph
+            // of a ROUND avatar, cut to that radius, so its corners are empty. Seat it in a
+            // card-shaped hole and those empty corners show the wall behind — a round picture in a
+            // square frame, which is worse than the circle he is asking me to remove. Without a
+            // cover the seat is the live story from its first frame, growing out of the ring's
+            // rectangle exactly as a story grows out of a row card. That is the "no cover" flight
+            // this code already supports and calls correct.
+            //
+            // The CLOSE is untouched and still becomes a circle — see `circleRushSpan`. That half
+            // he likes, and it is Snapchat's and WhatsApp's behaviour: out as a card, home as a
+            // circle.
+            let fromCircle = heroLandingIsCircle
+            hero.cover = !fromCircle
+            hero.coverAlpha = fromCircle ? 0 : 1
             // Seated IN the slot, so it wears the slot's shape; the open lets it back out to the
             // whole 9:16 picture on the same curve that dissolves the cover, which is what keeps
             // the unfolding hidden under the thumbnail while it happens.
