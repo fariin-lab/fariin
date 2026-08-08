@@ -467,6 +467,16 @@ struct StoryDetailView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .resumeStory)) { _ in
             hostPause.paused = false; if !keyboardManager.isKeyboardOpen { playVideo() }
+            // AND A HOLD THAT NEVER REPORTED ITS RELEASE. The engage-time pause above closes the
+            // common case; this is the belt for a hold whose touch was taken by another recogniser
+            // mid-press. `resumeStory` is posted at every moment the story is definitely meant to be
+            // running — a viewer appearing, a pull springing back, a sheet closing — and no finger
+            // can still be held down across any of them.
+            //
+            // NOT when the pause is the SCENE's: leaving the app sets `isPaused` too, and clearing
+            // it on a resume that arrives while backgrounded would start the story playing behind
+            // the app switcher. `scenePhase` owns that one and hands it back itself.
+            if !scenePaused, isPaused || isHolding { isPaused = false; isHolding = false }
         }
         // Host's viewers carousel centred a different one of MY stories → jump the (frozen) viewer to
         // that item, so when the sheet collapses the story underneath matches the carousel/morph (no
@@ -719,17 +729,34 @@ private extension StoryDetailView {
                     .fill(.black.opacity(0.01))
                     .onTapGesture { tapNextStory() }     // right two-thirds = next
             }
-            // Hold to pause. onLongPressGesture's onPressingChanged pauses on press-down
-            // and resumes on release; crucially, a horizontal swipe exceeds maximumDistance and
-            // CANCELS the press (→ resume) so the TabView can still page between users (R2 fix —
-            // a minimumDistance:0 drag stole the touch from the pager).
+            // ⚠️ THE PAUSE BELONGS TO THE HOLD, NOT TO THE TOUCH, and that is his 2026-08-08 report:
+            // "why you showing me when i click story normal story pause".
+            //
+            // `onPressingChanged(true)` fires the INSTANT a finger lands, so every tap paused the
+            // story and then relied on `onPressingChanged(false)` to undo it. That release is the
+            // half that is not guaranteed: this view sits under UIKit recognisers that can claim the
+            // touch out from under it — the pager's page pan, the hero's dismiss pan, the row's own
+            // press — and a SwiftUI gesture whose touch is stolen does not reliably report that it
+            // stopped pressing. `isPaused` then stays true for ever, because nothing else clears it:
+            // `resumeStory` only ever cleared the HOST's pause, which is a different flag. That is
+            // the "story is paused without reason" he has been reporting since 08-07, and why it
+            // looked random — it depended on whether another recogniser happened to win that touch.
+            //
+            // Pausing on the ENGAGE instead removes the whole class: a tap shorter than 0.25s never
+            // pauses at all, so there is nothing left for a lost release to strand. A real hold
+            // pauses exactly as before, a quarter second in, which is when the chrome fades anyway.
+            // A horizontal swipe still exceeds `maximumDistance` and cancels the press, so the pager
+            // keeps its touch (the R2 fix that shaped this gesture).
             .onLongPressGesture(minimumDuration: 0.25, maximumDistance: 10,
-                                perform: { isHolding = true },   // fires only AFTER 0.25s → chrome fades on a real hold
+                                perform: {
+                guard !keyboardManager.isKeyboardOpen else { return }
+                isHolding = true; isPaused = true; pauseVideo()
+            },
                                 onPressingChanged: { pressing in
-                if pressing {
-                    guard !keyboardManager.isKeyboardOpen else { return }
-                    isPaused = true; pauseVideo()
-                } else {
+                guard !pressing else { return }
+                // Release, or a cancellation we DID hear about. Belt-and-braces: clearing a flag
+                // that is already false costs nothing, and this is the common path home.
+                if isPaused || isHolding {
                     isPaused = false; isHolding = false; playVideo()
                 }
             })
@@ -884,6 +911,9 @@ private extension StoryDetailView {
     
     func tapNextStory() {
         if keyboardManager.isKeyboardOpen { keyboardManager.dismiss(); return }   // tap closes keyboard, resumes
+        // A TAP IS PROOF THE FINGER LEFT. The third belt on the stuck hold: whatever the gesture
+        // system did or did not report, a completed tap means nothing is being held right now.
+        if isPaused || isHolding { isPaused = false; isHolding = false; playVideo() }
         configureTapScreen()
         guard !isTapDisabled else { return }
         // A POISONED PROGRESS IS RECOVERED HERE, not trapped on. Same reason as `getCurrentIndex`:
@@ -905,6 +935,7 @@ private extension StoryDetailView {
     
     func tapPreviousStory() {
         if keyboardManager.isKeyboardOpen { keyboardManager.dismiss(); return }   // tap closes keyboard, resumes
+        if isPaused || isHolding { isPaused = false; isHolding = false; playVideo() }   // see tapNextStory
         configureTapScreen()
         guard !isTapDisabled else { return }
         if !timerProgress.isFinite { timerProgress = 0 }   // see tapNextStory
