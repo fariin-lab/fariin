@@ -256,19 +256,97 @@ struct ProfileAdaptiveBackdrop: View {
     }
 }
 
-// MARK: - Cards on that background: THERE IS NOTHING HERE, AND THAT IS THE POINT
-//
-// This file used to carry a `profileCard` modifier that turned the six cards on the profile into
-// `.ultraThinMaterial` whenever the adaptive background was on. It was in the spec he wrote —
-// "apply an Ultra Thin Material / Glassmorphism effect to cards, action buttons, and details
-// sections" — and he rejected it on sight the first time he saw it running (2026-08-08, screenshot
-// with both cards ringed in green): "That cards why you are make it liquid glass… only buttons call
-// video voice mite search and more only that buttons liquid button cards dont add liquid glass".
-//
-// So the cards are ordinary opaque cards again on both backgrounds, exactly as they were before this
-// file existed, and glass on this page lives ONLY on the round actions — which is the standing rule
-// from the poster redesign that the spec had briefly overridden. Do not reintroduce a material here
-// because a coloured page "looks like it wants glass". It has been asked for and answered.
+// MARK: - Cards and buttons on that background
+
+/// Are the cards and the round actions on this page drawing as tints of the adaptive background?
+///
+/// An environment value rather than a parameter because `PosterActionIcon` is used from three
+/// screens and only one of them has an adaptive page; threading a flag through every call site would
+/// put the decision in six places instead of one.
+private struct ProfileAdaptiveSurfaceKey: EnvironmentKey { static let defaultValue = false }
+
+extension EnvironmentValues {
+    var profileAdaptiveSurface: Bool {
+        get { self[ProfileAdaptiveSurfaceKey.self] }
+        set { self[ProfileAdaptiveSurfaceKey.self] = newValue }
+    }
+}
+
+/// THE ONE SURFACE BOTH THE CARDS AND THE BUTTONS WEAR, so they read as one system.
+///
+/// **This has now been asked for three times and answered three different ways, so the history
+/// matters.** It began as `.ultraThinMaterial` because his written spec asked for glassmorphism on
+/// "cards, action buttons, and details sections". He rejected that on sight — "cards dont add liquid
+/// glass remove plz" — so the cards went back to the ordinary opaque grouped-list card. He rejected
+/// THAT too, with Apple's own contact card as the reference: "I want like image 2 and 3 like tahy it
+/// most Use color backgroud". White cards on a coloured page were never what he meant; he meant the
+/// cards should be MADE OF the page's colour.
+///
+/// So: a plain translucent white, composited over whatever the mesh is painting underneath. Not a
+/// material, which is what he refused twice — nothing here samples or blurs anything. A flat fill at
+/// a fraction lets the page's own colour through, which is exactly how Apple's contact card gets an
+/// olive card on an olive page and a teal card on a teal one without knowing either colour.
+///
+/// Lighter in light mode because the page there is already pale, and a 12% veil on a pale page is
+/// invisible.
+struct ProfileAdaptiveSurface: ViewModifier {
+    /// Drawn instead of the tint when the adaptive background is off — the ordinary card colour.
+    let plain: Color
+    let radius: CGFloat
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.profileAdaptiveSurface) private var adaptive
+
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: radius, style: .continuous) }
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if adaptive {
+            let dark = scheme == .dark
+            content
+                .background(Color.white.opacity(ProfileSurfaceTone.fill(dark)), in: shape)
+                // A hairline of the same white. Without it a tint this soft has no edge at all
+                // against the page it is made of, and the rows read as floating text.
+                .overlay { shape.strokeBorder(Color.white.opacity(ProfileSurfaceTone.edge(dark)), lineWidth: 0.6) }
+        } else {
+            content.background(plain, in: shape)
+        }
+    }
+}
+
+/// The round actions wear the SAME surface as the cards while the adaptive page is on, which is what
+/// makes the two read as one system in his reference (the buttons there are the page's colour too,
+/// just a shade lighter). With it off they keep Liquid Glass, which is this page's standing rule.
+struct ProfileAdaptiveCircleSurface: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.profileAdaptiveSurface) private var adaptive
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if adaptive {
+            let dark = scheme == .dark
+            content
+                .background(Color.white.opacity(ProfileSurfaceTone.fill(dark)), in: Circle())
+                .overlay { Circle().strokeBorder(Color.white.opacity(ProfileSurfaceTone.edge(dark)), lineWidth: 0.6) }
+        } else {
+            content.liquidGlass(Circle(), interactive: true)
+        }
+    }
+}
+
+/// ONE PLACE FOR THE TWO NUMBERS. A card and a button that drift apart by a few percent is exactly
+/// the kind of thing that reads as "these were designed by two different people".
+enum ProfileSurfaceTone {
+    static func fill(_ dark: Bool) -> Double { dark ? 0.14 : 0.30 }
+    static func edge(_ dark: Bool) -> Double { dark ? 0.10 : 0.38 }
+}
+
+extension View {
+    /// The one place a profile card decides what it sits on. Reads the environment, so a card never
+    /// has to be told twice.
+    func profileSurface(plain: Color, radius: CGFloat = 24) -> some View {
+        modifier(ProfileAdaptiveSurface(plain: plain, radius: radius))
+    }
+}
 
 // MARK: - Colour arithmetic
 

@@ -330,7 +330,7 @@ struct ContactInfoView: View {
             rowDivider
             infoRow("Report \(shownName)", "exclamationmark.triangle", tint: .red, chevron: false) { showReport = true }
         }
-        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .profileSurface(plain: cardColor)
     }
 
     /// Section title above a card, with SIGNAL'S OWN numbers (OWSTableViewController2, fetched and
@@ -396,6 +396,10 @@ struct ContactInfoView: View {
                 pageBackground.ignoresSafeArea()
             }
         }
+        // ONE ANSWER, READ BY THE CARDS AND BY THE ROUND ACTIONS. Both wear a tint of the page while
+        // this is on, which is what makes them read as one system in his reference. Set on the whole
+        // scroll so the header's action row is covered by the same value the cards below use.
+        .environment(\.profileAdaptiveSurface, useAdaptive)
         // Two ways in, because a photo is either already here or on its way. The cache answers on the
         // first frame for anyone you have seen before; the notification carries a cold download in
         // afterwards and the mesh washes to it. Both are no-ops while the switch is off.
@@ -713,7 +717,7 @@ struct ContactInfoView: View {
             }
             .padding(.horizontal, 16).padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .profileSurface(plain: cardColor)
         }
     }
 
@@ -769,7 +773,7 @@ struct ContactInfoView: View {
             rowDivider
             infoRow("Verify Encryption", "ic_verify_encryption", tint: .accentColor) { showVerify = true }
         }
-        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .profileSurface(plain: cardColor)
     }
 
     // Groups this contact and I both belong to. "N Groups in Common" + Add-to-a-Group + the list;
@@ -819,7 +823,7 @@ struct ContactInfoView: View {
                 .buttonStyle(.plain)
             }
         }
-        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .profileSurface(plain: cardColor)
     }
 
     private func setMuted(_ until: Double) {
@@ -1232,7 +1236,7 @@ struct ContactInfoView: View {
                 // 24, matching every other card on this screen (the sections below, the action tiles, the
                 // media card). This one was left at 14, so it sat directly above a 24 card with visibly
                 // tighter corners - the mismatch the user circled. `.continuous` is the Apple curve.
-                .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .profileSurface(plain: cardColor)
             }
         }
     }
@@ -1286,7 +1290,7 @@ struct ContactInfoView: View {
             }
         }
         .padding(14)
-        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))   // iOS 26 corners
+        .profileSurface(plain: cardColor)   // iOS 26 corners
         // Tap anywhere on the CARD (See All row / background) → the full media page. The thumbnails'
         // own tap wins over this for their area, so a photo tap opens just that photo.
         .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))

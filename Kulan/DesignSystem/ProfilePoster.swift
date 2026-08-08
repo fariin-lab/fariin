@@ -564,7 +564,10 @@ struct PosterActionIcon: View {
         }
         .foregroundStyle(.primary)
         .frame(width: diameter, height: diameter)
-        .liquidGlass(Circle(), interactive: true)
+        // Liquid Glass normally; a tint of the page while the adaptive background is on, which is
+        // what his reference does — see `ProfileAdaptiveCircleSurface`. The other two screens that
+        // use this icon never set that environment value, so they are unchanged.
+        .modifier(ProfileAdaptiveCircleSurface())
         .frame(maxWidth: .infinity)
     }
 }
