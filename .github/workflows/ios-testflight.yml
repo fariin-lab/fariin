@@ -74,27 +74,21 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            SEVEN STORY FIXES. The background behind a story is the big one, and it is a replacement rather than another patch.
+            THE SWIPE TO THE NEXT PERSON IS BACK. I BROKE IT IN THE LAST BUILD. In trying to make stories open faster I attached the pager one step earlier, and at that moment the app does not yet know how many people have stories. It read "only one" and switched the sideways swipe off for the whole session. The early attach is reverted, and the switch now turns back ON as well as off, so a wrong answer that early can never stick again. Stories still open faster than before, just not by quite as much.
 
-            THE BLUR IS GONE. TELEGRAM DOES NOT BLUR, AND NOW WE DO NOT EITHER. You asked me to read their code first, so I did. There is no blur anywhere in their story pipeline. They take two colours off the picture itself, the colour at the top and the colour at the bottom, draw a gradient between them, and BAKE IT INTO THE FILE when you post. Their viewer draws no background at all, which is exactly why theirs never breaks while you scroll.
+            THE VIDEO NO LONGER BLINKS BLACK WHEN YOU TAP ACROSS TO IT. Two separate faults in your three screenshots. The player was looking for the cover in its own caches, and the app keeps them in a different one, so for a story you just posted it had nothing to draw and showed black. And the clip was uncovered the moment it started playing, which is before it has told anyone its shape, so it painted once at the wrong size and corrected itself. It now waits for both.
 
-            Ours was a live blur that redrew itself every frame, and it came apart whenever anything moved the card. That is what you were seeing. Six separate patches had been written for six symptoms of that one cause, and all six are now deleted along with it. Your videos already worked this way since you chose the gradient. Photos have joined them, so a picture and a video now behave the same.
+            THE CAPTION AND ITS SHADOW WHEN YOU SCROLL UP. You told me to go and read Telegram and I did. Their caption's transparency is multiplied by the same number that shrinks the card, in the same pass, so it cannot disagree with the card. Ours was three separate messages and any one of them arriving late left the caption on screen. It now reads the shrink itself. NOTE: if the text you saw sits in the corner of a TikTok clip, that is burned into the video and no setting can remove it. To tell: post a story with no caption at all and scroll up. If text still shows, it belongs to the video.
 
-            A photo that does not fill the frame is also posted as a FULL frame now, gradient included, so nobody watching has to invent a background for it. Stories you posted before this build still get the gradient drawn live, and it is the same gradient from the same two colours, so you should not be able to tell them apart.
+            A STORY FROM THE CHAT ROW OPENS LIKE ANY OTHER NOW. It grew out of the circle as a circle; it grows as a card. It still becomes a circle on the way back, which is what you asked for and what Snapchat and WhatsApp do. That circle also lands about three times sooner: the number that controls it looked like 15 per cent of the drag but was really 24 per cent of the distance your finger travels, which is the lateness you described.
 
-            THE STORY GOES DARK WHEN YOU OPEN THE REPLY KEYBOARD. Your screenshot next to Telegram was right. Their number is black at 80 per cent, and it turns on only when the keyboard has height. That is what this is. It does NOT shrink the picture, because theirs does not either. I checked: with the keyboard up their card actually gets slightly taller.
+            SEND AND PREVIEW NOW APPEAR INSIDE AN ALBUM. The bar was built into the first screen, and an album opens on top of it, so it was left behind. Your selection was never lost, which is why the numbers were right and only the buttons were missing.
 
-            STORIES OPEN FASTER. Your own story was never slow. A friend's story was, and it was a retry loop waiting 50 milliseconds between looks while the open sat there holding a black screen. It looks every frame now, and it tries once immediately instead of always waiting a turn first.
+            THE PICTURE ON THE SETTINGS PAGE IS BIGGER. 120 instead of 96.
 
-            THE BLACK CORNERS AT THE START OF A PULL DOWN. Only on the first pull, which was the clue. The story is told to stop clipping its own corners and the mask takes over, but the telling goes through SwiftUI and lands a frame or more later. In that gap two different curves were cutting the same corner. The card now says when it has actually let go, and the mask waits for it. The fix you asked me to protect is untouched and still does exactly what it did.
-
-            A STORY OPENED FROM A REPLY GOES BACK WHERE IT CAME FROM. It was flying home to a remembered rectangle, and the chat reuses its rows, so the thing that rectangle described was sometimes no longer there. It asks the real view now. If the reply has genuinely scrolled away it drifts off instead of landing somewhere wrong.
-
-            A VIDEO COMES BACK ON THE FRAME YOU LEFT IT ON. Watch to ten seconds, swipe away, swipe back. The position was already resuming, but the picture on top of it was the cover made when you posted, which is second zero. It keeps the real frame now.
-
-            THE VIEWERS SHEET SWIPES WITHOUT LAGGING. Dragging it sideways was rebuilding the entire story screen on every frame, pager and sheet included, to move one row of cards. Only the row is rebuilt now.
-
-            WHAT TO CHECK FIRST: post a square photo and a square video, then watch them and scroll the row hard. Then open a story, tap reply, and look at how dark it goes.
+            WHAT TO CHECK FIRST: swipe sideways between people, then tap left and right onto a video.
 
             STILL OPEN: edited videos still export with black bars instead of the gradient.
+
+            PREVIOUS BUILD, STILL WORTH CHECKING: the blur behind a story was replaced with Telegram's gradient, and photos that do not fill the frame are now posted as a full frame. Square photos and square videos are the test.
         run: fastlane beta
