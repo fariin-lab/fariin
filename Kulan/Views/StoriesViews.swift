@@ -1658,21 +1658,25 @@ struct StoryViewer: View {
         // on a screen they did not post to. The header falls back to its old stacked name-over-time
         // shape when there is nothing here; see `UserView`.
         guard isMine else { return nil }
-        // The WORDS come from `storyAudienceTitle`, which the viewers sheet's tab reads too, so the
-        // pill on the story and the tab over its viewers can never name the same audience two ways.
-        let text = storyAudienceTitle(for: s)
-        if s.oneTime { return StoryAudienceBadge(systemImage: "1.circle", text: text) }
+        if s.oneTime { return StoryAudienceBadge(systemImage: "1.circle", text: "View once") }
         switch s.audienceLabel {
-        case "everyone": return StoryAudienceBadge(systemImage: "globe", text: text)
+        case "everyone": return StoryAudienceBadge(systemImage: "globe", text: "Everyone")
         case "custom":
+            // The author's private name for the list. A name this device happens not to have
+            // (posted from another phone, or reinstalled) falls through to the plain type, which is
+            // the safe way round to be wrong. The story still UPLOADING has no document id to file
+            // a name under, so it reads the one the post in flight was given.
+            let name = StoriesService.isPending(s.id)
+                ? StoriesService.shared.uploadingAudienceName(for: s.id)
+                : (StoryPrefs.audienceName(storyId: s.id) ?? "")
             // The owner's own folder drawing (2026-08-07). OUTLINE here: this pill is a thin line of
             // white over a photograph, next to a light-weight name, and the filled version reads as a
             // blob at 12pt. The filled one is used where the glyph sits on a solid tinted circle —
             // the same outline-vs-filled split the app's other icon pairs already use.
             return StoryAudienceBadge(systemImage: "person.crop.rectangle.stack",
                                       assetImage: "ic_story_folder",
-                                      text: text)
-        default: return StoryAudienceBadge(systemImage: "person.2.fill", text: text)
+                                      text: name.isEmpty ? "Custom" : name)
+        default: return StoryAudienceBadge(systemImage: "person.2.fill", text: "My Friends")
         }
     }
 
@@ -2591,14 +2595,7 @@ struct StoryViewer: View {
         // right and never a stale snapshot's idea of it.
         let arr = StoriesRepository.shared.mine?.stories ?? myStories
         let idx = arr.firstIndex { $0.id == sheetStoryId }
-        // WHICH TABS THIS STORY'S VIEWERS LIST GETS, from the same two functions the story's own
-        // audience pill reads. Recomputed here rather than latched, because the sheet pages sideways
-        // between stories and `sheetStoryId` moves with it — so the tab follows the story you are
-        // looking at rather than the one you opened the sheet on.
-        let sheetStory = arr.first { $0.id == sheetStoryId }
         return StoryViewersSheet(activeStoryId: sheetStoryId,
-                          audienceTitle: sheetStory.map { storyAudienceTitle(for: $0) } ?? "All Viewers",
-                          audienceHasBothTabs: storyAudienceHasBothTabs(sheetStory),
                           progress: $viewersProgress,
                           carouselBand: carouselBandRect,
                           hasPrev: (idx ?? 0) > 0,
@@ -3587,45 +3584,4 @@ struct StoryForwardSheet: View {
             await MainActor.run { dismiss(); onSent() }
         }
     }
-}
-
-// MARK: - Naming a story's audience, once
-
-/// THE ONE PLACE THAT PUTS A NAME TO A STORY'S AUDIENCE.
-///
-/// Two screens say it: the pill under the author's own name on the story, and the tab over the
-/// viewers list. They used to be unrelated, and the tab did not say it at all — it offered "All
-/// Viewers" and "Friends" whatever the story had been posted to. Splitting the list that way only
-/// means something when the audience could hold both kinds of person, which is a story posted to
-/// Everyone; for My Friends, a custom list or View Once, every name in the list is already inside
-/// that audience by definition, so the second tab is either the same list again or a shorter one for
-/// no reason the reader asked for (his 2026-08-08 report).
-///
-/// ⚠️ THE NAME OF A CUSTOM LIST IS THE AUTHOR'S ALONE, and this function is only ever called for the
-/// author's own story. The name is not in the story document; it lives on this device
-/// (`StoryPrefs.audienceName`), so there is nothing here for anybody else to read even by mistake.
-///
-/// `oneTime` is tested FIRST because a View Once story carries the audience it was posted to AND its
-/// own rule, and the rule is the narrower of the two.
-func storyAudienceTitle(for s: Story) -> String {
-    if s.oneTime { return "View once" }
-    switch s.audienceLabel {
-    case "everyone": return "Everyone"
-    case "custom":
-        // The author's private name for the list. A name this device happens not to have (posted
-        // from another phone, or reinstalled) falls through to the plain type, which is the safe way
-        // round to be wrong. The story still UPLOADING has no document id to file a name under, so it
-        // reads the one the post in flight was given.
-        let name = StoriesService.isPending(s.id)
-            ? StoriesService.shared.uploadingAudienceName(for: s.id)
-            : (StoryPrefs.audienceName(storyId: s.id) ?? "")
-        return name.isEmpty ? "Custom" : name
-    default: return "My Friends"
-    }
-}
-
-/// Does this story's audience make a SECOND tab mean anything? Only Everyone does. See above.
-func storyAudienceHasBothTabs(_ s: Story?) -> Bool {
-    guard let s else { return false }
-    return s.audienceLabel == "everyone" && !s.oneTime
 }
