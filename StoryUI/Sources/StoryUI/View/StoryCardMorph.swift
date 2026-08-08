@@ -87,12 +87,26 @@ public final class StoryCardMorph {
     /// stays 0 for the close, whose landing crossfade into the real row card is untouched.
     public weak var flightCover: UIView?
 
-    /// The corner the flight is asking for at this fraction, BEFORE the cap that keeps the container
-    /// mask from out-rounding the story card inside it. Two things need this number and they need the
-    /// same one: the mask (which then caps it) and the cover (which must not be capped, because its
-    /// square corners are baked-in photograph and there is no content behind them to protect).
+    /// The corner the flight is asking for at this fraction. Two things need this number and they
+    /// need the same one: the mask (the one visible curve on the card — see the ownership note in
+    /// `applyCore`) and the cover (whose square corners are baked-in photograph, so it must carry
+    /// its own copy of the same curve).
     private func wantedRadius(f: CGFloat, rowRadius: CGFloat) -> CGFloat {
         cardCornerRadius + (rowRadius - cardCornerRadius) * min(1, f / 0.12)
+    }
+
+    /// TRUE while a flight mask is cutting the card, posted as `storyFlightMask` (object: Bool).
+    ///
+    /// The contract behind the uncapped `flightRadius` in `applyCore`: while this is raised,
+    /// `StoryDetailView` sets its own corner clip to ZERO, so the flight mask is the only curve on
+    /// the card and cuts real pixels at any radius. Raised on the first frame of every flight —
+    /// where the mask's radius equals the clip it replaces, so the swap cannot show — and lowered
+    /// by `resetFlight`, in the same main-thread turn that restores the clip.
+    private var flightMaskOwnsCorner = false
+    private func setFlightMaskOwnsCorner(_ on: Bool) {
+        guard flightMaskOwnsCorner != on else { return }
+        flightMaskOwnsCorner = on
+        NotificationCenter.default.post(name: .init("storyFlightMask"), object: on)
     }
 
     /// How much of a CIRCULAR flight is spent growing the circle out to cover the whole card, measured
@@ -271,6 +285,12 @@ public final class StoryCardMorph {
     /// be solid black, or a friend's full-bleed story would show the chat list through its own
     /// letterbox.
     public func resetFlight() {
+        // The card's own clip comes back in the same main-thread turn the mask leaves in, so both
+        // land in one render commit and there is no bare-cornered frame between them. (And even if
+        // SwiftUI ever slipped a frame, at rest the two curves are the same 12pt — see the
+        // ownership note in `applyCore`.) BEFORE the guard: the flag must never outlive a flight,
+        // even one whose card has already gone, or the next viewer would render bare-cornered.
+        setFlightMaskOwnsCorner(false)
         guard let flightCard else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -358,6 +378,9 @@ public final class StoryCardMorph {
         let restW = content.width, restH = content.height
         guard restW > 1, restH > 1, card.bounds.width > 1 else { return }
 
+        // The card's own corner clip stands down for the flight — see `setFlightMaskOwnsCorner`.
+        if !sheet { setFlightMaskOwnsCorner(true) }
+
         // The card scales uniformly by WIDTH. The slot is deliberately shorter than the story's own
         // aspect (the owner signed off a card 12% shorter than aspect-true, twice), so a uniform
         // scale cannot satisfy both dimensions and the extra height is cropped rather than squashed.
@@ -414,8 +437,8 @@ public final class StoryCardMorph {
         // not, and his Snapchat reference is what it does not do. Two things stop it. The crop above is
         // always the CARD'S FULL WIDTH by a shrinking height, so it is a rectangle at every fraction
         // except the very last one — a circle inscribed in it would be a stadium. And `flightRadius`
-        // below is capped at the story card's own rendered corner (`cardCornerRadius * scale`), which
-        // near the row end is a couple of points: the mask was very nearly SQUARE for the whole flight.
+        // below interpolates between two CARD corners (12 → 24, uncapped now but nowhere near a
+        // circle's half-width), so the mask stays a rounded rectangle for the whole flight.
         // The only circle anybody saw was the cover snapshot lying on top of it, and the cover dissolves
         // away at about a third of the journey — so what actually grew out of a ringed avatar was a
         // rounded rectangle, which is the report.
@@ -476,15 +499,11 @@ public final class StoryCardMorph {
         // The row card is rounded, so the corners of that rectangle contain the chat list BEHIND it,
         // photographed before the dim existed. Those pixels are part of the image.
         //
-        // The container mask cannot cut them. `flightRadius` below is capped at the story card's own
-        // rendered corner (`cardCornerRadius * scale`) so the mask can never be rounder than the
-        // content — that cap is the fix for the BLACK rind and it has to stay. But at the row end the
-        // scale is small, so the cap is a few points while the row card it is landing on is 24, and
-        // the comment there assumed "the cover is carrying the corner anyway". It is: it is carrying
-        // the corner AND the square pixels outside it.
-        //
-        // So the cover clips itself at the radius the mask wanted before the cap. Divided by `scale`
-        // for the same reason the mask's is: the transform multiplies it back.
+        // The container mask DOES cut them now (`flightRadius` runs uncapped at the wanted radius —
+        // see the ownership note below), but the cover still clips itself at the same curve: its
+        // corner pixels are photograph, not content, and a cover that relied on somebody else's
+        // mask has been this area's mistake twice. Divided by `scale` for the same reason the
+        // mask's is: the transform multiplies it back.
         if !sheet, let cover = flightCover {
             // A circle is a CIRCULAR curve, not a squircle. `.continuous` at exactly half the width
             // degenerates into something that is neither, and against a real avatar ring underneath it
@@ -513,58 +532,31 @@ public final class StoryCardMorph {
         // Divided by `scale` because the transform will multiply it back.
         // The SHEET keeps its own `cornerRadius * f` exactly as it was: it is a different journey
         // (full screen into the viewers panel) and nobody has reported anything about it.
-        // ⚠️ NEVER ROUNDER THAN THE CARD ITSELF, OR THE CORNER OPENS A HOLE.
+        // ⚠️ THE MASK OWNS THE CORNER, AND THE CARD'S OWN CLIP STANDS DOWN FOR THE FLIGHT.
         //
-        // The story card clips ITSELF at `cardCornerRadius` (StoryDetailView's 12), and that clip
-        // shrinks with the card: at scale 0.9 it renders as 10.8pt. The mask is applied to the
-        // container, so its radius renders at face value. Ask the mask for 22 while the content is
-        // only rounded to 10.8 and the crescent between the two curves contains NOTHING from the
-        // card — so the dimming wall behind shows through it, and the wall at the start of a drag is
-        // almost solid black.
+        // The story card used to clip ITSELF at `cardCornerRadius` (StoryDetailView's 12), and that
+        // clip shrinks with the card: at the landing scale of 0.218 it renders as 2.6pt. A mask
+        // rounder than the content's own clip cuts a crescent at the card's corners with nothing of
+        // the card in it — the near-black wall early in a drag, measured in `6bf4418` as a wedge of
+        // (0,9,23) against a photo of (91,177,202) — so the mask was capped at the card's rendered
+        // corner, and only an opaque cover could release it (`3a5bcc7`, the square landing).
         //
-        // That is his 2026-08-07 report, and it is mine: the `f / 0.12` ramp I added in 492 reached
-        // the full 24 within a tenth of the journey, opening an 11pt gap while the card was still
-        // nearly full screen. Measured off his screenshot of a BRIGHT blue story: the picture reads
-        // (91,177,202), the wedge (0,9,23), the list outside (67,67,67). Black, not the photo.
+        // Which left the DRAG. His spec pins the cover at 0 while the finger is down, so the cap
+        // never stood down there, and a scroll-down close travelled with corners a couple of points
+        // round and the grey wall sitting square against every one of them — his 2026-08-08 report,
+        // four screenshots with the missing curve drawn on in red. The caption's scrim, overlaid
+        // OUTSIDE the card's clip with square corners of its own, was the dark pair at the bottom.
         //
-        // Capped at the card's own rendered corner. The card is already a rounded card, so this
-        // still looks rounded from the first millimetre — it simply stops claiming to be rounder
-        // than the thing inside it. The row end keeps its larger radius through the interpolation
-        // below, by which point the card's clip has shrunk so far that the cap is what governs and
-        // the cover is carrying the corner anyway.
-        // A circular door skips the cap entirely, and it is allowed to: the cap exists because a mask
-        // rounder than the story card inside it opens a crescent at the CARD'S OWN CORNERS, where
-        // there is nothing to show but the dimming wall. The circle never goes near those corners —
-        // its widest points touch the card's edges at their MIDDLE, where the card's clip is straight.
-        // ⚠️ THE CAP IS RELEASED BY THE COVER, AND WITHOUT THAT THE CARD LANDS SQUARE.
-        //
-        // Fourth corner report, and this one is not a rind: it is the corner not being there at all.
-        // MEASURED off his 00:49 screenshots rather than reasoned. At the landing the flying card is
-        // 277px wide against a row card's 282, so scale is 0.218, and the cap above works out at
-        // 12 x 0.218 = 2.6pt while the card it is touching down onto is 24. Cropping his frame and
-        // putting the three cards side by side settles it with no arithmetic at all: Test Omar and
-        // Test Ali are squircles and the card flying home between them has four square corners.
-        //
-        // The cap itself is right and stays. Early in a drag the wall behind the card is nearly solid
-        // black, so a mask rounder than the card's own `.clipShape` cuts a crescent with nothing of
-        // the card in it and you see the wall — the black wedge measured in `6bf4418`, photo
-        // (91,177,202) against a wedge of (0,9,23).
-        //
-        // But it was defending the corner against a wall that has gone by then. A committed close
-        // runs `dimFloor` to zero, so the wall is transparent at the landing, and the cover — opaque,
-        // and already clipping ITSELF to the full uncapped radius twenty lines above — is lying over
-        // that corner. Where the cover is opaque there is no crescent to protect: it paints right up
-        // to its own curve, and the mask cutting at the same curve removes only what the cover was
-        // not painting anyway.
-        //
-        // So the cap is lifted in proportion to the cover that replaces it. Cover absent (a drag,
-        // which pins it at 0 by his own spec, and the first frames of an open) leaves the old
-        // behaviour exactly as it was; cover opaque (the end of every close) lets the mask reach the
-        // row card's own 24 and the two rectangles the hand-over swaps are finally the same shape.
-        let coverA = sheet ? 0 : max(0, min(1, flightCover?.alpha ?? 0))
+        // The cap was treating the symptom. The disease was two curves fighting over one corner:
+        // the content's own clip (shrinking with the card) and this mask (the radius the design
+        // actually wants). So while a flight mask is on, the card does not clip itself at all
+        // (`storyFlightMask` → StoryDetailView): the hole cuts REAL pixels right up to its curve,
+        // no crescent can exist at ANY radius, and the mask runs at the full wanted radius from the
+        // first frame of a drag to the landing — including the caption scrim, which the same hole
+        // now rounds. At f = 0 the wanted radius IS `cardCornerRadius`, so the swap with the card's
+        // own clip at either end of a flight exchanges two identical corners and cannot show.
         let wanted = circular ? cropRect.width / 2 : wantedRadius(f: f, rowRadius: cornerRadius)
-        let flightRadius = circular ? wanted * scale
-                                    : min(wanted, max(cardCornerRadius * scale, wanted * coverA))
+        let flightRadius = wanted * (circular ? scale : 1)
         applyMask(on: card, sheet: sheet, rect: cropRect,
                   cornerRadius: (sheet ? cornerRadius * f : flightRadius) / scale,
                   outside: sheet ? 0 : chrome,

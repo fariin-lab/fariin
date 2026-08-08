@@ -132,6 +132,13 @@ struct StoryDetailView: View {
     /// about. The REPLY BAR does not: it is drawn below the card, it does not move, and it carries
     /// its own solid black footer, so it has to leave. One flag for the sheet, one for the flight.
     @State private var flightActive = false
+    /// A flight MASK is cutting the card (`StoryCardMorph` posts `storyFlightMask`): the card's own
+    /// corner clip stands down so the mask is the only curve on it. The clip shrinks with the card,
+    /// so during a drag it renders at a couple of points and capped every corner the flight could
+    /// show — the square-cornered scroll-down close in his 2026-08-08 screenshots. The morph raises
+    /// this at the moment its mask equals this clip (12pt, full screen) and lowers it in the same
+    /// turn its mask leaves, so neither swap can ever be seen.
+    @State private var flightMaskOn = false
     @State private var chromeHidden = false     // viewers sheet engaged (host posts storyChromeHidden):
                                                 // ONLY the chrome fades; the photo never animates
     @State private var scenePaused = false      // pause came from leaving the foreground, not a hold
@@ -286,7 +293,11 @@ struct StoryDetailView: View {
                             .compositingGroup()
                             // All four corners now, not just the bottom two: the card has a visible top
                             // edge for the first time, because it starts below the status bar.
-                            .clipShape(RoundedRectangle(cornerRadius: cardRadius, style: .continuous))
+                            // Radius ZERO while a flight mask is on — the mask owns the corner for the
+                            // whole flight (see `flightMaskOn`); the rectangle clip itself stays, it is
+                            // what cuts the blur backdrop's spill.
+                            .clipShape(RoundedRectangle(cornerRadius: flightMaskOn ? 0 : cardRadius,
+                                                        style: .continuous))
                             .overlay(
                                 tapStory()
                                     .offset(
@@ -367,6 +378,11 @@ struct StoryDetailView: View {
         .onReceive(NotificationCenter.default.publisher(for: .init("storyFlightActive"))) { note in
             let active = (note.object as? Bool) ?? false
             if active != flightActive { flightActive = active }
+        }
+        // A flight mask is cutting the card: its own corner clip stands down. See `flightMaskOn`.
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyFlightMask"))) { note in
+            let on = (note.object as? Bool) ?? false
+            if on != flightMaskOn { flightMaskOn = on }
         }
         // The player says whether it is waiting on bytes; the progress bar holds while it is. Only
         // the page that is actually current listens, or a neighbour's stall would freeze the story
