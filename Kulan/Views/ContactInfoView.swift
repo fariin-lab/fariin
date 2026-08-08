@@ -172,7 +172,7 @@ struct ContactInfoView: View {
         guard useAdaptive, let t = adaptiveTheme else { return pageBackground }
         // `canvasSeam`, NOT the raw seam: the page's first row is muted for the frosted cards, and
         // the photo has to arrive at whatever the page actually starts on or the join comes back.
-        return t.canvasSeam(dark: scheme == .dark)
+        return t.canvasSeam()
     }
 
     /// Re-samples when the person changes AND when the switch is flipped, so turning it on while a
@@ -402,6 +402,16 @@ struct ContactInfoView: View {
         // this is on, which is what makes them read as one system in his reference. Set on the whole
         // scroll so the header's action row is covered by the same value the cards below use.
         .environment(\.profileAdaptiveSurface, useAdaptive)
+        // ⚠️ ALWAYS THE DARK COLOURS ON A COLOURED PAGE. His instruction, 2026-08-08: "when am using
+        // full color please always use the dark-mode colors". The page is a person's photograph now,
+        // and a photograph is dark far more often than not — light-mode labels and chevrons on it
+        // were legible only by luck of which picture you opened.
+        //
+        // `\.colorScheme`, NOT `.preferredColorScheme`. The latter sets the WINDOW's style and is
+        // dead code inside a screen here — KulanApp sets one outside RootView and an outer one
+        // always wins. This one is a subtree value, so every label, icon, separator and system
+        // colour below it resolves dark, and nothing outside this page is touched.
+        .environment(\.colorScheme, useAdaptive ? .dark : scheme)
         // Two ways in, because a photo is either already here or on its way. The cache answers on the
         // first frame for anyone you have seen before; the notification carries a cold download in
         // afterwards and the mesh washes to it. Both are no-ops while the switch is off.

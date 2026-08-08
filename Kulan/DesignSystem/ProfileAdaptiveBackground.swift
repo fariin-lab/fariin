@@ -215,8 +215,8 @@ final class ProfileAdaptiveTheme {
     /// across the whole region the header covers, and the header fades its photo into it. The moment
     /// the two are computed separately, a line appears where they meet — which this screen has been
     /// reported for three times.
-    func canvasSeam(dark: Bool) -> Color {
-        Color(uiColor: ProfileSurfaceTone.muteCanvas(seam, dark: dark))
+    func canvasSeam() -> Color {
+        Color(uiColor: ProfileSurfaceTone.muteCanvas(seam))
     }
 }
 
@@ -275,7 +275,7 @@ struct ProfileAdaptiveBackdrop: View {
     /// between a colour and itself, and every pixel of the blurred photo that is revealed is well
     /// below the join, in the region where the cards live and the texture is wanted.
     private func seamVeil(_ theme: ProfileAdaptiveTheme) -> some View {
-        let seam = theme.canvasSeam(dark: scheme == .dark)
+        let seam = theme.canvasSeam()
         return LinearGradient(stops: [
             .init(color: seam, location: 0),
             .init(color: seam, location: 0.45),
@@ -286,10 +286,9 @@ struct ProfileAdaptiveBackdrop: View {
     /// The page settles toward the bottom so the lowest cards keep their contrast and the picture
     /// does not simply stop. Down toward black in dark mode, up toward white in light.
     private var settle: some View {
-        let dark = scheme == .dark
-        return LinearGradient(stops: [
-            .init(color: (dark ? Color.black : Color.white).opacity(0), location: 0.45),
-            .init(color: (dark ? Color.black : Color.white).opacity(dark ? 0.30 : 0.22), location: 1),
+        LinearGradient(stops: [
+            .init(color: Color.black.opacity(0), location: 0.45),
+            .init(color: Color.black.opacity(0.30), location: 1),
         ], startPoint: .top, endPoint: .bottom)
     }
 }
@@ -339,11 +338,17 @@ struct ProfileAdaptiveSurface: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         if adaptive {
-            content
-                .background(ProfileSurfaceTone.lift(scheme == .dark), in: shape)
-                // `strokeBorder`, not `stroke`: it draws inside the shape, so a 0.5pt line on a 24pt
-                // corner stays on the card instead of straddling its edge.
-                .overlay { shape.strokeBorder(ProfileSurfaceTone.edge(scheme == .dark), lineWidth: 0.5) }
+            // LIQUID GLASS, AND HE PICKED IT BY POINTING AT IT. 2026-08-08, with the Back and Edit
+            // buttons ringed in red: "I want them to look exactly like the Back button and Edit
+            // button… use that same appearance and material style consistently for the buttons and
+            // cards". Those two are TOOLBAR buttons, which iOS 26 renders with `glassEffect` on its
+            // own — so the look he has chosen is Liquid Glass, seen on the real thing, in context.
+            //
+            // This supersedes "cards dont add liquid glass" from earlier the same day. That verdict
+            // was passed on `.ultraThinMaterial` over a FLAT mesh, where a panel had nothing behind
+            // it to refract. The page is a blurred photograph now, and he has since picked the look
+            // himself off two live buttons rather than off a written spec.
+            content.liquidGlass(shape)
         } else {
             content.background(plain, in: shape)
         }
@@ -360,16 +365,10 @@ struct ProfileAdaptiveCircleSurface: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         if adaptive {
-            // The same lift as the cards, so the two read as one system — which is what his
-            // reference does: the circles there are the page's colour a shade lighter, exactly like
-            // the panels below them.
-            content
-                .background(ProfileSurfaceTone.lift(scheme == .dark), in: Circle())
-                .overlay { Circle().strokeBorder(ProfileSurfaceTone.edge(scheme == .dark), lineWidth: 0.5) }
+            // The same glass the cards wear, which is what "consistently for the buttons and cards"
+            // asks for — and what these circles wore before this feature existed.
+            content.liquidGlass(Circle(), interactive: true)
         } else {
-            // Liquid Glass survives ONLY here, on the round actions of a page with no adaptive
-            // canvas — the standing rule for this screen. "ccard dont use lequid glass" is about the
-            // cards, and no card has ever reached this modifier.
             content.liquidGlass(Circle(), interactive: true)
         }
     }
@@ -377,34 +376,6 @@ struct ProfileAdaptiveCircleSurface: ViewModifier {
 
 /// The surface numbers, in one place, straight from his spec.
 enum ProfileSurfaceTone {
-    /// ⚠️ A LIFT, NOT A MATERIAL, AND THIS IS THE THIRD ANSWER TO THE SAME QUESTION. READ THIS
-    /// BEFORE CHANGING IT BACK.
-    ///
-    /// His spec asked for `.ultraThinMaterial` on these surfaces by name, and it was built exactly
-    /// that way. His verdict on it: "now Buttons and Cards looks dark plz This os not how i want",
-    /// with Apple's Contacts card as the reference again.
-    ///
-    /// **The spec and the reference cannot both be satisfied.** `.ultraThinMaterial` is tuned for a
-    /// neutral backdrop and DESATURATES whatever is behind it, so on a coloured page it renders as
-    /// grey frost — which is precisely the "dark" he is pointing at. In his reference the panels are
-    /// unmistakably the SAME HUE as the page and merely lighter, which no material produces.
-    ///
-    /// So: a plain white at a low fraction, composited straight onto the muted canvas. It lifts the
-    /// page's own colour without draining it — a lighter olive on an olive page, a lighter blue on a
-    /// blue one — because nothing here samples, blurs, or reinterprets the backdrop.
-    ///
-    /// The numbers are small ON PURPOSE now that `muteCanvas` has deepened the page. An earlier
-    /// version used 0.30 in light mode against an undimmed page and washed the colour out toward
-    /// white, which is the round he rejected before this one.
-    static func lift(_ dark: Bool) -> Color {
-        Color.white.opacity(dark ? 0.12 : 0.17)
-    }
-
-    /// The hairline. Bright enough to give the panel an edge, faint enough not to draw a box.
-    static func edge(_ dark: Bool) -> Color {
-        Color.white.opacity(dark ? 0.12 : 0.26)
-    }
-
     /// THE CANVAS HAS TO BE DARKER THAN THE PHOTO, which is his third point and the reason the
     /// first two were not enough on their own. A frosted card is a *relative* effect: it reads as
     /// glass by being lighter and softer than what is behind it, and against the raw colour of a
@@ -413,9 +384,12 @@ enum ProfileSurfaceTone {
     ///
     /// Dark mode deepens; light mode both deepens and drains, because a light-mode page cannot go
     /// very dark without the header's own name and letter losing their footing on it.
-    static func muteCanvas(_ c: UIColor, dark: Bool) -> UIColor {
-        dark ? c.scaled(brightness: 0.55, saturation: 0.95)
-             : c.scaled(brightness: 0.80, saturation: 0.60)
+    /// ⚠️ ONE SET OF NUMBERS, ALWAYS THE DARK ONES. His instruction, 2026-08-08: "when am using
+    /// full color please always use the dark-mode colors". A profile on this background renders in
+    /// dark mode whatever the phone is set to, so there is no light variant left to choose and no
+    /// `dark` argument that can be passed wrongly.
+    static func muteCanvas(_ c: UIColor) -> UIColor {
+        c.scaled(brightness: 0.55, saturation: 0.95)
     }
 }
 
