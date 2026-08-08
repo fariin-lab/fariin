@@ -922,6 +922,15 @@ final class StoryCardUIView: UIControl {
         applyVisibility()
     }
 
+    /// Where the person's name is drawn, in window space, so the long press can lift it along with
+    /// the card. Deliberately NOT part of the rectangle registered with `MediaOpenRects`: the flight
+    /// must keep flying to the picture alone, or a story would seat itself low and too tall to make
+    /// room for a label it is not carrying.
+    var labelWindowRect: CGRect? {
+        guard window != nil, !nameLabel.isHidden, nameLabel.bounds.width > 1 else { return nil }
+        return nameLabel.convert(nameLabel.bounds, to: nil)
+    }
+
     /// The written-down rectangle stays as the fallback for anything that asks before the view can
     /// answer. Refreshed on layout and on every scroll, in window space, at the card's real radius.
     func publishRect() {
@@ -1287,11 +1296,13 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
 
         // Cards: one per person, created and destroyed as people come and go.
         var live = Set<String>()
+        var fresh = Set<String>()
         for g in groups {
             live.insert(g.id)
             let card = friendCards[g.id] ?? {
                 let c = StoryCardUIView()
                 c.alpha = 0
+                fresh.insert(g.id)
                 friendCards[g.id] = c
                 content.addSubview(c)
                 return c
@@ -1303,7 +1314,7 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
         let gone = friendCards.keys.filter { !live.contains($0) }
 
         displayedIds = ids
-        layoutCards(removing: gone, animated: animate && orderChanged)
+        layoutCards(removing: gone, fresh: fresh, animated: animate && orderChanged)
 
         if orderChanged { restoreRowIfAsked() }
         scrollToActiveIfNeeded()
@@ -1358,7 +1369,7 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
 
     // MARK: Layout
 
-    private func layoutCards(removing gone: [String], animated: Bool) {
+    private func layoutCards(removing gone: [String], fresh: Set<String> = [], animated: Bool) {
         let w = StoryRowMetrics.cardW
         let h = StoryRowMetrics.cardH + StoryRowMetrics.labelGap + StoryRowMetrics.labelH
         let y = StoryRowMetrics.vPad
@@ -1394,6 +1405,22 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
         scrollView.contentSize = CGSize(width: contentW, height: StoryRowMetrics.rowH)
         content.frame = CGRect(x: 0, y: 0, width: contentW, height: StoryRowMetrics.rowH)
 
+        // ⚠️ A CARD THAT HAS JUST BEEN BORN IS PLACED BEFORE THE SPRING, NEVER BY IT.
+        //
+        // His 9:07 report, "first time when i open App other stories is caming late", with a shot of
+        // the row as a row of narrow overlapping OVALS. That shape is the diagnosis: a fresh UIView
+        // has `bounds` of zero, so animating it into place ran its WIDTH from 0 to 93.5 — and a 24pt
+        // corner on a view only forty points wide is a capsule, not a card. They were also stacked on
+        // top of each other because every one of them was still travelling out from the origin.
+        //
+        // SwiftUI never did this. A `ForEach` inserts a new card ALREADY LAID OUT and gives it the
+        // default `.opacity` transition, so only its alpha ever moved. This is that, restored: the
+        // geometry lands first and unanimated, the spring is left with the fade and with the cards
+        // that were already on screen and are genuinely sliding to new places.
+        for (i, id) in displayedIds.enumerated() where fresh.contains(id) {
+            guard let card = friendCards[id] else { continue }
+            place(card, at: i + 1)
+        }
         guard animated else { arrange(); cleanup(); publishRects(); return }
         // Smoothly slide cards to their new spots when a story moves unviewed → viewed-front.
         // `.animation(.spring(response: 0.42, dampingFraction: 0.82), value: displayedOthers.map(\.id))`
@@ -1515,7 +1542,7 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
             return StoryMenuTarget(key: MediaOpenRects.key(.storyRow, m.id), rect: r, actions: [
                 CMAction(title: "Add Story", icon: "ic_stories") { [weak self] in self?.onCompose() },
                 CMAction(title: "Posted Stories", icon: "circle.dashed") { [weak self] in self?.onOpen(m) },
-            ])
+            ], labelRect: myCard.labelWindowRect)
         }
         for g in displayedOthers {
             guard let r = hit(g.id) else { continue }
@@ -1525,7 +1552,9 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
                 CMAction(title: "Hide Stories", icon: "archivebox", destructive: true) { [weak self] in
                     self?.confirmHide(g)
                 },
-            ])
+                // The name is lifted with the card now (his "also show Name"). It comes from the card
+                // itself rather than from the group, so what rises is the label the row is drawing.
+            ], labelRect: friendCards[g.id]?.labelWindowRect)
         }
         return nil
     }

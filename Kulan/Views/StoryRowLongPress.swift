@@ -58,6 +58,14 @@ struct StoryMenuTarget {
     let key: String
     let rect: CGRect            // window space
     let actions: [CMAction]
+    /// THE NAME UNDER THE CARD, in window space, and nil for a card that has none.
+    ///
+    /// His 2026-08-08 report: "also show Name". The lift used to be the picture alone, so pressing a
+    /// card took the person's name away for as long as the menu was up — the one thing on the card
+    /// that says WHOSE story you are about to hide. It is photographed as a second strip rather than
+    /// included in the card's crop, because the card is rounded and the name is not: one image with
+    /// one corner radius would round the bottom of the label.
+    var labelRect: CGRect? = nil
 }
 
 /// A picture of what is really on screen inside `rect`.
@@ -219,27 +227,63 @@ struct StoryRowLongPress: UIViewRepresentable {
                 guard overlay == nil,
                       let window = g.view?.window,
                       let t = target(p),
-                      // Cut to the card's own 24 for the same reason the flight's cover is: the
-                      // corners of a window crop are the chat list, and a lifted card wearing four
-                      // white chips is the same artifact standing still.
-                      let shot = StoryCardShot.crop(t.rect, in: window, cornerRadius: 24)
+                      // ⚠️ CUT AT ZERO, AND LET THE LAYER DO THE ROUNDING. This asked for 24 and got
+                      // a corner that did not match the card (his 2026-08-08 report, "when i long
+                      // press story dont change the runded corners").
+                      //
+                      // MEASURED off his 9:05 screenshot: the shot was being cut TWICE. Here, at
+                      // `24 * 1.12 = 26.88` with a CIRCULAR arc — the over-cut the flight's cover
+                      // needs, because that cover has no mask of its own and its corners must come
+                      // back transparent. And again by the image view below, at 24 with Apple's
+                      // CONTINUOUS curve. The bigger cut wins, so the lift wore a 26.88pt circular
+                      // corner where the card it came off wears a 24pt squircle: rounder, and the
+                      // wrong shape.
+                      //
+                      // This view is not the cover and does not have the cover's problem. It carries
+                      // its own mask, at the card's own radius and the card's own curve, so the
+                      // square corners of a window crop are removed by the one cut that is already
+                      // guaranteed to agree with the card.
+                      let shot = StoryCardShot.crop(t.rect, in: window, cornerRadius: 0)
                 else { return }
                 let image = UIImageView(image: shot)
                 image.frame = CGRect(origin: .zero, size: t.rect.size)
-                image.autoresizingMask = [.flexibleWidth, .flexibleHeight]
                 image.contentMode = .scaleAspectFill   // only ever scales uniformly; belt anyway
                 image.layer.cornerRadius = 24
                 image.layer.cornerCurve = .continuous   // every card in this app is continuous
                 image.layer.masksToBounds = true
-                let container = UIView(frame: CGRect(origin: .zero, size: t.rect.size))
+
+                // THE NAME COMES WITH IT (his "also show Name"). A second crop rather than one taller
+                // one, because the card is rounded and the name is not — a single image under a
+                // single corner radius would round the bottom of the label. Photographed, not
+                // rebuilt from a string, for the same reason the card is: a second label kept in step
+                // by hand is the mistake `.contextMenu`'s `preview:` closure was making.
+                //
+                // The lifted rectangle is the CARD PLUS THE NAME when there is one, so the frame the
+                // overlay squeezes out of is the whole card as the row draws it. A card with no name
+                // reported falls straight through to exactly what it did before.
+                let frame = t.labelRect.map { t.rect.union($0) } ?? t.rect
+                let container = UIView(frame: CGRect(origin: .zero, size: frame.size))
                 container.backgroundColor = .clear
+                image.frame = CGRect(x: t.rect.minX - frame.minX, y: t.rect.minY - frame.minY,
+                                     width: t.rect.width, height: t.rect.height)
+                image.autoresizingMask = t.labelRect == nil
+                    ? [.flexibleWidth, .flexibleHeight]
+                    : [.flexibleWidth, .flexibleHeight, .flexibleBottomMargin]
                 container.addSubview(image)
+                if let lr = t.labelRect,
+                   let nameShot = StoryCardShot.crop(lr, in: window, cornerRadius: 0) {
+                    let name = UIImageView(image: nameShot)
+                    name.frame = CGRect(x: lr.minX - frame.minX, y: lr.minY - frame.minY,
+                                        width: lr.width, height: lr.height)
+                    name.autoresizingMask = [.flexibleWidth, .flexibleTopMargin]
+                    container.addSubview(name)
+                }
 
                 let o = CMOverlay(previewView: container,
-                                  sourceFrame: t.rect,
+                                  sourceFrame: frame,
                                   // The menu hugs the side the card is on, the way the chat's hugs
                                   // the side the bubble is on.
-                                  alignRight: t.rect.midX > window.bounds.midX,
+                                  alignRight: frame.midX > window.bounds.midX,
                                   actions: t.actions,
                                   react: nil) { [weak self] in
                     self?.overlay = nil
