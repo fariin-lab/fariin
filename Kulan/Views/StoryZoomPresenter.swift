@@ -143,6 +143,9 @@ enum StoryZoomPresenter {
         // and a successor's live flight are both no-ops. An undriven exit that skipped this would
         // leave `storyFlightMask` raised, and the next viewer's card would render bare-cornered.
         StoryCardMorph.shared.detachFlight(vc.flightView)
+        // And for the video positions: an exit the door never saw would leave them, and the next
+        // session's first video would open mid-clip. Idempotent like everything else here.
+        StoryPlaybackResume.clearAll()
     }
 
     private static func topController() -> UIViewController? {

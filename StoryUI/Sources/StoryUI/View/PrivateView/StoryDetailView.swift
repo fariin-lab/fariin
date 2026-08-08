@@ -425,7 +425,12 @@ struct StoryDetailView: View {
             // FIRST UNSEEN item (e.g. a new story D after A/B/C were seen), else at the start.
             // Asking `firstUnseenIndex` here unconditionally is what restarted a fully-watched
             // person at item 1 every single time you swiped back to them.
-            if newValue == model.id { timerProgress = CGFloat(resumeIndex()) }
+            // The fraction rides along for a video left mid-play, same as the sheet jump: the item
+            // resumed and the position resumed are one memory, not two.
+            if newValue == model.id {
+                let i = resumeIndex()
+                timerProgress = CGFloat(i) + resumeFraction(at: i)
+            }
             playVideo()
         }
         .onAppear {
@@ -471,7 +476,10 @@ struct StoryDetailView: View {
                   let id = note.object as? String,
                   let idx = model.stories.firstIndex(where: { $0.id == id }),
                   idx != getCurrentIndex() else { return }
-            timerProgress = CGFloat(idx)
+            // Landing on a video watched earlier this session: the bar starts where the player
+            // will (see `resumeFraction`), or the segment counts a full duration over a clip with
+            // only its tail left.
+            timerProgress = CGFloat(idx) + resumeFraction(at: idx)
         }
         // Seamless per-item delete (host trash tap). Compute the adjacent index FIRST, then drop the item from
         // THIS bucket in-place and slide to it — the user never sees a blank frame. The host removes it from the
@@ -753,6 +761,23 @@ private extension StoryDetailView {
         return Angle(degrees: 45 * progress)
     }
     
+    /// How much of a video segment was already watched THIS SESSION, as the bar's fraction.
+    ///
+    /// `peek`, never `take`: the player is the one that consumes the memory (when it seeks, in
+    /// `setupPlayer`), and this runs before that player exists. Measured against the story's
+    /// DECLARED duration because that is the clock the bar counts with (`getProgressBarFrame`);
+    /// capped just under 1 so a position near the end can never advance the story on the first
+    /// tick. Zero for photos, for videos never left mid-play, and for every fresh session — the
+    /// door empties the store at close.
+    func resumeFraction(at index: Int) -> CGFloat {
+        guard index >= 0, index < model.stories.count else { return 0 }
+        let s = model.stories[index]
+        guard s.config.mediaType == .video, s.duration > 0,
+              let u = URL(string: s.mediaURL),
+              let t = StoryPlaybackResume.peek(u) else { return 0 }
+        return min(0.98, max(0, CGFloat(t / s.duration)))
+    }
+
     func resetProgress() {
         timerProgress = 0
         isAdvancing = false

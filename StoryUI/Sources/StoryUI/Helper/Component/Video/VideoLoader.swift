@@ -250,6 +250,10 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     func startVideo(url: URL?) {
         guard let validatedUrl = url else { return }
         if self.url == url { return }
+        // The story this view is LEAVING keeps its place (his 20s → sheet swipe → back → 20s).
+        // Here as well as in `stopVideo`, because a paused player (the sheet pauses, it does not
+        // stop) reaches this point with its position intact and `stopVideo`'s guard never fires.
+        rememberPlaybackPosition()
         self.url = validatedUrl
         addActivityIndicatory()
         // stop video if it's playing before video request
@@ -313,6 +317,14 @@ private extension PlayerView {
         // had its tracks loaded and its first frames decoded, so it starts on the frame rather than
         // on a beat of nothing. See StoryItemPreloader.
         self.player?.replaceCurrentItem(with: StoryItemPreloader.take(url) ?? .init(url: url))
+        // BACK TO WHERE HE WAS, same session (see StoryPlaybackResume). Keyed by the STORY's url,
+        // not this function's parameter — `url` here is usually the cache FILE. Asked for once:
+        // `take`, so a later rebuild of the same story in a fresh session starts clean. Seeking an
+        // item that is not ready yet is fine — AVPlayer queues the seek and applies it on ready.
+        if let story = self.url, let resume = StoryPlaybackResume.take(story) {
+            self.player?.seek(to: CMTime(seconds: resume, preferredTimescale: 600),
+                              toleranceBefore: .zero, toleranceAfter: .zero)
+        }
 
         observation = player?.observe(\.timeControlStatus, options: [.new, .initial]) { [weak self] player, change in
             guard let self else { return }
@@ -433,10 +445,25 @@ private extension PlayerView {
 
     func stopVideo() {
         if player?.timeControlStatus == .playing {
+            // BEFORE the seek, which erases the very number being kept. `.stopVideo` fires on a
+            // person swipe (and on the close, where the door clears the whole store anyway), and
+            // this is the only moment the position still exists on that path.
+            rememberPlaybackPosition()
             player?.pause()
             player?.seek(to: .zero)
             state = .stopped
         }
+    }
+
+    /// The clip's place in this viewer session, written down so the NEXT player built for this url
+    /// starts there instead of at zero. Only a position a person would call "the middle": the first
+    /// second is a restart in all but name, and the last is the natural end the auto-advance
+    /// already owns.
+    private func rememberPlaybackPosition() {
+        guard let story = self.url, let p = player, p.currentItem != nil else { return }
+        let t = p.currentTime().seconds
+        guard t.isFinite, t > 1, duration <= 0 || t < duration - 1 else { return }
+        StoryPlaybackResume.remember(story, seconds: t)
     }
 
     func restartVideo() {

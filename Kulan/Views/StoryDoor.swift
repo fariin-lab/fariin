@@ -256,6 +256,9 @@ enum StoryDoor {
         // Hands the last person he watched to the row, to be restored once the re-sort below lands.
         StoryDoorState.shared.clearActive()
         MediaSourceVisibility.shared.reveal()
+        // Mid-play video positions die with the session: within a visit, swiping away and back
+        // resumes; a story opened LATER starts at its beginning like every story app.
+        StoryPlaybackResume.clearAll()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
             Task { await StoriesRepository.shared.load(force: true) }
         }
