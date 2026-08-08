@@ -74,26 +74,31 @@ jobs:
           # story crash that had already shipped two builds earlier. Rewrite this block before every
           # ship, in the same breath as deciding to ship.
           TF_CHANGELOG: |
-            TEN REPORTS FROM THIS MORNING. The big one is the pause bug, which is finally root caused after weeks.
+            THIRTEEN CHANGES SINCE YOUR LAST BUILD. The big one is the story freezing, and it turned out not to be the pause at all.
 
-            THE STORY PAUSING BY ITSELF IS FIXED, AND IT WAS EVERY TAP. The pause was wired to the moment your finger touches the screen instead of to the hold, so a normal tap paused the story and then depended on your finger lifting to unpause it. The story sits under several other gestures that can take the touch away mid press, and when that happens nothing ever tells it the press ended. Nothing else could clear it either, so one unlucky tap froze the story for the rest of the visit. That is why it felt random. It now pauses only when the hold actually engages, so a tap can never leave it stuck, plus two safety nets. Holding to pause still works exactly as before, and so do the two pauses you wanted kept, the upload and the scroll down.
+            THE STORY THAT OPENS ALREADY STOPPED IS FIXED, AND IT WAS NEVER A PAUSE. The progress bar has a second brake on it, meant to hold the bar still while a story is sliding sideways between people. It works out whether the story is sliding by asking where the story sits on the screen, and that answer is only refreshed when the story changes SIZE, never when it MOVES. So if the app happened to ask while the story was flying out of the little card, or while it was halfway to the next person, the answer was "still sliding" and it stayed that way for the whole visit. That is why it froze the instant you opened it, and why walking to the next person froze that one too. The brake now only applies to a story that is not the one you are watching, and it is rechecked twenty times a second, so it cannot stick again.
 
-            THE NAME UNDER A CARD NO LONGER DISAPPEARS. When a story opened, the whole card was hidden, name included, and the name only came back when the story finished closing. That is your "name is coming late". Only the picture steps aside now, so the name never leaves and there is nothing to arrive late.
+            The earlier pause work is still here and still right on its own: a tap no longer pauses the story, only a real hold does. But it was not what was freezing you, so please do not judge it by that.
 
-            OPENING FROM A CHAT RING IS A REAL CIRCLE NOW. It used to grow a circle wider than the card, so the card's own edges cut the sides flat. That is your "left and right feeling cut". The circle now becomes the card instead of outgrowing it, so it can never be clipped sideways. The story screen's header and reply bar also stop being drawn in a rectangle around the circle, which is the mirror effect you circled.
+            YOUR PROFILE PAGE CAN TAKE ITS COLOURS FROM THE PHOTO, AND IT IS OFF UNTIL YOU TURN IT ON. Settings, then Privacy and Security, then Adaptive Profile Background. On, and the page behind a person takes the colours of their own photo all the way down the screen, with the cards on it turned to glass. Off, and you get exactly the page you have today. A profile with no photo is unchanged either way. Groups and your own settings page are not in this yet.
 
-            SCROLL DOWN STOPS SOONER. Measured off your two screenshots, the card you called too far is 22% of the screen and the one you wanted is 46%, so that is the new limit. The extra drift past the limit is more than halved so the stop feels fixed.
+            THE LONG PRESS ON THE STORY ROW OPENS AND CLOSES LIKE TELEGRAM. Read out of Telegram's own code, not guessed. The menu grows out of nothing and is solid almost at once instead of fading in, and the close is a fifth of a second of plain movement with no spring at all, where ours took twice as long and bounced as the card landed back in the row. The design is untouched. The chat's long press menu is not changed in any way.
 
-            ALL THE VIEWER CARDS KEEP THEIR BLUR. Only the centred card was blurred because iOS silently drops a blur on any card drawn slightly faded, which is every card except the middle one. They use a pre made blur now, so they all match.
+            ALL THE VIEWER CARDS KEEP THEIR BLUR. Only the centred card was blurred, because iOS silently drops a blur on any card drawn even slightly faded, which is every card except the middle one. They use a ready made blur now, so they all match. This was written two hours after your last build went out, which is why you saw it again this morning.
 
             A VIDEO REMEMBERS WHERE IT WAS. Watch to 20 seconds, scroll up, swipe the carousel, come back, and it carries on at 20 seconds instead of restarting. The progress bar resumes with it.
 
-            SWITCHING TO THE NEXT PERSON IS FASTER. The next person's screen is now built and laid out while you are still watching the current one, so the tap does not pay for it.
+            THE NAME UNDER A CARD NO LONGER DISAPPEARS. When a story opened, the whole card was hidden, name included, and the name only came back once the story finished closing. That is your "name is coming late". Only the picture steps aside now, so the name never leaves.
 
-            ALSO: the caption hides as soon as you start pulling down. Long pressing a name shows plain text with no white box behind it, and the name is no longer on screen twice as the card flies back. The archived page uses the app's own long press menu instead of Apple's. And the black bars at the top and bottom of your own story are gone.
+            OPENING FROM A CHAT RING IS A REAL CIRCLE. It used to grow a circle wider than the card, so the card's own edges cut the sides flat, which is your "left and right feeling cut". The circle becomes the card now instead of outgrowing it. The story screen's header and reply bar also stop being drawn in a rectangle around the circle, which is the mirror effect you circled.
 
-            WHAT TO CHECK FIRST: tap through a lot of stories quickly and see if any of them freezes. Then open from a chat ring and watch the circle.
+            SCROLL DOWN STOPS SOONER. Measured off your two screenshots: the card you called too far is 22% of the screen and the one you wanted is 46%, so that is the new limit, and the drift past it is more than halved.
+
+            SWITCHING TO THE NEXT PERSON IS FASTER. The next person's screen is built and laid out while you are still watching the current one, so the tap does not pay for it.
+
+            ALSO: the caption hides as soon as you start pulling down. Long pressing a name shows plain text with no white box behind it, and the name is no longer on screen twice as the card flies back. The archived page uses the app's own long press menu instead of Apple's. The black bars at the top and bottom of your own story are gone.
+
+            WHAT TO CHECK FIRST: open a story and watch the bar move straight away, then go to the next person and watch it there too. That is the freeze. Then long press a story card and close the menu, and tell me if the close still feels wrong.
 
             STILL OPEN: edited videos still export with black bars instead of the gradient.
-
         run: fastlane beta
