@@ -5,7 +5,11 @@ import UIKit
 struct RootView: View {
     // Equatable must be DECLARED now: Swift synthesises it automatically only for enums with no
     // associated values, and `.restore` added two. onChange(of: phase) depends on it.
-    enum Phase: Equatable { case loading, welcome, onboarding, main, restore(handle: String, due: Date) }
+    /// `proveEmail` is the backstop under sign-up. Creating an account signs you in to Firebase
+    /// immediately, so somebody who force-quits on the code screen is left holding a real session
+    /// for an address nobody has proved. Without this case the next launch would walk them straight
+    /// into the app and the proof would be skipped for good.
+    enum Phase: Equatable { case loading, welcome, onboarding, main, proveEmail(String), restore(handle: String, due: Date) }
     @State private var phase: Phase = .loading
     @Environment(\.colorScheme) private var scheme
     @Environment(\.scenePhase) private var scenePhase
@@ -34,6 +38,14 @@ struct RootView: View {
                             onDemo: { phase = .main })
             case .onboarding:
                 OnboardingView { phase = .main }
+            case .proveEmail(let address):
+                // Wrapped in its own NavigationStack because it is standing in for the whole auth
+                // flow here rather than being pushed onto one, and LoginCodeView expects a bar to
+                // hang its title on.
+                NavigationStack {
+                    LoginCodeView(email: address, purpose: .unproven,
+                                  onAuthed: { Task { await route() } })
+                }
             case .restore(let handle, let due):
                 // A scheduled-for-deletion account cannot enter the app: it is hidden from everyone
                 // else, so being half-inside it would be worse than either choice. Restore or finish.
@@ -130,6 +142,19 @@ struct RootView: View {
         // anonymous testers still have their session, so they never see this screen.
         guard AuthService.shared.isSignedIn else {
             phase = .welcome
+            return
+        }
+        // THE ABANDONED SIGN-UP. Force-quitting on the code screen leaves a live session attached to
+        // an address nobody has proved, because createUser signs you in before the proof happens.
+        // Catch it here and finish the errand instead of letting the app open.
+        //
+        // DELIBERATELY THE CACHED FLAG, with no `reload()`. Everything above this line is on the
+        // launch path, which must never wait on the network: offline, one awaited server call stalls
+        // the whole boot for around ten seconds. The cached copy is refreshed the moment a code is
+        // spent (see LoginCodeView.verify), so the only way it is wrong is stale-false, which costs
+        // one extra code screen rather than a silent skip. Wrong in the safe direction.
+        if let unproven = AuthService.shared.unprovenEmailCached {
+            phase = .proveEmail(unproven)
             return
         }
         // Returning user: boot INSTANTLY from the on-disk cache (the the reference app model).

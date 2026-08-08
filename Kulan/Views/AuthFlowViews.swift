@@ -343,8 +343,13 @@ struct EmailAuthView: View {
     @State private var busy = false
     @State private var error: String?
     @State private var reveal = false
-    // No `= false`: FocusState's init takes no arguments and defaults to false on its own. The other
-    // FocusState in this file (ForgotPasswordView) was already written the right way.
+
+    /// Set when the address still has to be proved with a code, which pushes the code screen instead
+    /// of finishing. One optional drives the whole thing through `navigationDestination(item:)`, so
+    /// there is no separate "is it showing" flag that could fall out of step with the purpose.
+    @State private var prove: LoginCodeView.Purpose?
+
+    // No `= false`: FocusState's init takes no arguments and defaults to false on its own.
     @FocusState private var emailFocused: Bool
     // The password box is a UITextField (see RevealablePasswordField), so its focus CANNOT ride on
     // @FocusState: setting a FocusState to a value no SwiftUI view claims gets reset to nil by
@@ -447,39 +452,32 @@ struct EmailAuthView: View {
                 .padding(.top, 4)
 
                 if mode == .login {
-                    // The way in when the password is gone, offered BEFORE the reset link: getting a
-                    // code and being in beats setting a new password you also have to remember.
+                    // ONE LINK NOW, NOT TWO. "Log in with a code instead" used to sit above this
+                    // one, and the pair of them made a person choose between two doors that both
+                    // ended in the same place. The owner's call (2026-08-08): the code stops being
+                    // its own advertised way in and becomes the machinery UNDER Forgot Password,
+                    // which is what people actually go looking for. Snapchat's model, and his words
+                    // for the old one were "users hate alot steps".
                     //
-                    // `.primary`, NOT `Color.accentColor`. accentColor reads the asset catalogue and
-                    // ignores the `.tint(.primary)` KulanApp sets to keep iOS blue out of this app,
-                    // so this link was rendering system blue on an otherwise monochrome screen. Same
-                    // mistake as the restore screen; two places, one cause.
-                    NavigationLink {
-                        LoginCodeView(email: email, onAuthed: onAuthed)
-                    } label: {
-                        Text("Log in with a code instead")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.primary)
-                    }
-                    .padding(.top, 2)
-
-                    // A PAGE, not a tap that fires. This used to call resetPassword the instant it
-                    // was pressed, with no chance to read the address back — and refused outright
-                    // with "Type your email above first" when the field was empty, which tells
-                    // somebody off instead of helping them.
+                    // It no longer mails a reset link either. Six digits, typed here, and you are
+                    // in. Setting a password is a separate thing you can do whenever you like from
+                    // Settings › Password, because what somebody locked out actually wants is their
+                    // account back, not homework.
                     //
-                    // That pairing was the dangerous part: the backend answers identically whether
-                    // or not an account exists (so it cannot be used to discover who is on Fariin),
-                    // so a typo'd address produces a cheerful "sent" and a wait for mail that was
-                    // never going to come. Showing the address on its own page, before anything is
-                    // sent, is the only place that mistake can still be caught.
+                    // ForgotPasswordView is gone with it. Its whole job was to show the address back
+                    // before firing a send that could not be undone; LoginCodeView shows the same
+                    // address at the top of the code step, so the page had nothing left to do.
+                    //
+                    // Keep `.secondary` here. `.primary` was right for the bold code link that used
+                    // to lead, and this line is not leading anything.
                     NavigationLink {
-                        ForgotPasswordView(email: email)
+                        LoginCodeView(email: email, purpose: .forgot, onAuthed: onAuthed)
                     } label: {
                         Text("Forgot password?")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
+                    .padding(.top, 2)
                 }
 
                 if let error {
@@ -492,10 +490,14 @@ struct EmailAuthView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { emailFocused = true }
-        // The "Check your email" alert that used to live here has moved INTO ForgotPasswordView.
-        // An alert is the wrong shape for that moment anyway: it is dismissed and gone, and the
-        // one thing a person needs at exactly that second is the address to check, still readable
-        // while they go looking for the mail.
+        // A PUSH, not a sheet and not an alert. This is the next step of the same errand, not an
+        // interruption of it, and the code screen needs to stay put while somebody leaves the app to
+        // go and read their mail. An alert would be dismissed and gone by the time they came back.
+        .navigationDestination(item: $prove) { purpose in
+            LoginCodeView(email: email.trimmingCharacters(in: .whitespaces),
+                          purpose: purpose,
+                          onAuthed: onAuthed)
+        }
     }
 
     /// Plain text now rather than a styled `Text`. It was shared so a TextField and a SecureField
@@ -601,11 +603,30 @@ struct EmailAuthView: View {
                 if mode == .create {
                     try await AuthService.shared.createEmailAccount(email: email.trimmingCharacters(in: .whitespaces),
                                                                     password: password)
+                    // SIGN-UP ALWAYS PROVES THE ADDRESS, and this is the step that closes the typo
+                    // hole for good. `createUser` checks nothing: mean `abdil@`, type `abdi@`, and
+                    // that address is attached to the account on your word alone. Everything the old
+                    // code tried to do about that afterwards (the confirm-before-code wall) could be
+                    // walked past with one click, because the cure it posted went to the very
+                    // mailbox it was defending. Proving it here, before the account is any use, is
+                    // the only version that holds.
+                    //
+                    // NOT `onAuthed()`. The person is signed in to Firebase at this point, but the
+                    // app deliberately does not move on Firebase's state — RootView waits for this
+                    // callback — so the code screen gets its turn.
+                    await MainActor.run { prove = .signUp }
                 } else {
                     try await AuthService.shared.signInEmail(email: email.trimmingCharacters(in: .whitespaces),
                                                              password: password)
+                    // EVERY ACCOUNT THAT PREDATES THE LINE ABOVE comes through here unproven, and
+                    // this is where each of them quietly gets fixed, one sign-in at a time, without
+                    // anybody being told to go and click anything in a mailbox.
+                    if await AuthService.shared.emailNeedsProof {
+                        await MainActor.run { prove = .unproven }
+                    } else {
+                        await MainActor.run { onAuthed() }
+                    }
                 }
-                await MainActor.run { onAuthed() }
             } catch {
                 await MainActor.run { self.error = plain(error) }
             }
@@ -744,131 +765,13 @@ struct RevealablePasswordField: UIViewRepresentable {
 
 // MARK: - Forgot password
 
-/// One field, one button, and then the address you sent it to, left on screen.
-///
-/// This replaced a "Forgot password?" that fired on the tap itself. Two things were wrong with
-/// that. It refused an empty field with "Type your email above first", which is a telling-off
-/// rather than help. And with a filled field it sent instantly, so nobody ever saw the address
-/// before it went — which matters more here than almost anywhere, because `requestPasswordReset`
-/// answers identically whether or not an account exists (deliberately, so the box cannot be used
-/// to discover who is on Fariin). A typo therefore produced a confident "sent" and a wait for mail
-/// that could never arrive. This page is the last place that mistake is catchable.
-///
-/// Kept to one screen on purpose: the sent state REPLACES the form rather than pushing another
-/// page. The address stays readable at exactly the moment somebody switches to their mail app to
-/// go looking for it, which an alert cannot do, because an alert is gone the second it is
-/// dismissed.
-struct ForgotPasswordView: View {
-    @State var email: String
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var busy = false
-    @State private var error: String?
-    @State private var sentTo: String?
-    @FocusState private var focus: Bool
-
-    private var trimmed: String { email.trimmingCharacters(in: .whitespaces) }
-
-    var body: some View {
-        ZStack {
-            AuthPalette.page.ignoresSafeArea()
-                .dismissesKeyboardOnTap()
-            VStack(spacing: 14) {
-                Spacer().frame(height: 40)
-                if let sentTo { sentState(sentTo) } else { form }
-                Spacer()
-            }
-            .padding(.horizontal, 24)
-        }
-        .navigationBarTitleDisplayMode(.inline)
-        .onAppear { focus = sentTo == nil }
-    }
-
-    @ViewBuilder private var form: some View {
-        Text("Reset your password")
-            .font(.system(size: 22, weight: .bold)).foregroundStyle(.primary)
-
-        Text("We'll email you a link to set a new one.")
-            .font(.subheadline).foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.bottom, 6)
-
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Email").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            TextField("", text: $email, prompt: Text("you@example.com").foregroundStyle(.tertiary))
-                .keyboardType(.emailAddress)
-                .textContentType(.emailAddress)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .submitLabel(.send)
-                .onSubmit { send() }
-                .focused($focus)
-                .font(.system(size: 17))
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 16).frame(height: 50)
-                .background(AuthPalette.raised, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        }
-
-        Button { send() } label: {
-            Group {
-                if busy { ProgressView().tint(AuthPalette.page) }
-                else { Text("Send reset link") }
-            }
-            .authPrimaryPill()
-        }
-        .disabled(busy || trimmed.isEmpty)
-        .opacity(trimmed.isEmpty ? 0.55 : 1)
-
-        if let error {
-            Text(error).font(.footnote).foregroundStyle(.red)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    @ViewBuilder private func sentState(_ address: String) -> some View {
-        Text("Check your email")
-            .font(.system(size: 22, weight: .bold)).foregroundStyle(.primary)
-
-        // NAMED, not "we sent it to you". The commonest reason a reset never arrives is that it
-        // went somewhere else, and the person cannot notice that unless the address is in front
-        // of them.
-        Text("We sent a link to \(address).")
-            .font(.subheadline).foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .fixedSize(horizontal: false, vertical: true)
-
-        // The second commonest reason, said before they go hunting rather than after.
-        Text("It can take a minute. If it is not there, look in your spam folder.")
-            .font(.footnote).foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.top, 2)
-
-        Button { dismiss() } label: {
-            Text("Back to log in").authPrimaryPill()
-        }
-        .padding(.top, 18)
-    }
-
-    private func send() {
-        guard !trimmed.isEmpty, !busy else { return }
-        // Say it plainly before trying, the same early refusal the other doors make.
-        guard NetworkState.shared.isOnline else {
-            error = "No internet connection. Check your connection and try again."
-            return
-        }
-        busy = true; error = nil
-        focus = false
-        Task {
-            do {
-                try await AuthService.shared.resetPassword(email: trimmed)
-                await MainActor.run { sentTo = trimmed; error = nil }
-            } catch {
-                await MainActor.run { self.error = AuthService.plainMessage(error) }
-            }
-            await MainActor.run { busy = false }
-        }
-    }
-}
+// ForgotPasswordView LIVED HERE AND IS DELETED (2026-08-08, owner's call).
+//
+// It collected the address, called requestPasswordReset, and then sat on a "Check your email"
+// state with the address left readable. All of that was sound for the flow it served, and the
+// flow underneath it is what went. Forgot Password no longer mails a link at all: it asks for
+// six digits and signs you in, on LoginCodeView, which shows the same address at the top of the
+// code step. So the one job this page still had, catching a typo before an unrecoverable send,
+// is done a screen later by the screen that replaced it.
+//
+// Recover it from git if the link flow ever comes back; do not rewrite it from memory.

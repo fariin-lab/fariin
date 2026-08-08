@@ -298,6 +298,42 @@ final class AuthService: NSObject {
             .call(["email": email])
     }
 
+    /// Does this session still owe us proof that its email address is really theirs?
+    ///
+    /// TRUE ONLY FOR PASSWORD ACCOUNTS, and that qualifier is the whole point. Apple and Google have
+    /// already proved the address before they hand it over, so asking those people for a code would
+    /// be an errand for nothing. `createUser` and `link` prove nothing at all, which is the gap this
+    /// closes.
+    ///
+    /// `reload()` first, because `isEmailVerified` is read off a cached token. Straight after
+    /// verifyLoginCode marks the address confirmed on the server, the copy on the phone is still the
+    /// stale one, and without the refresh a person who had just proved their address would be asked
+    /// to prove it again on the very next screen.
+    /// The same question as `emailNeedsProof`, answered WITHOUT touching the network, and the
+    /// address to send the code to when the answer is yes.
+    ///
+    /// This is the one the launch path uses. `emailNeedsProof` reloads the user, and an awaited
+    /// server call on boot stalls the app for about ten seconds when the phone is offline, which is
+    /// the trap RootView.route already warns about twice.
+    var unprovenEmailCached: String? {
+        guard let user = Auth.auth().currentUser,
+              user.providerData.contains(where: { $0.providerID == "password" }),
+              !user.isEmailVerified,
+              let address = user.email, !address.isEmpty
+        else { return nil }
+        return address
+    }
+
+    var emailNeedsProof: Bool {
+        get async {
+            guard let user = Auth.auth().currentUser else { return false }
+            guard user.providerData.contains(where: { $0.providerID == "password" }) else { return false }
+            try? await user.reload()
+            guard let fresh = Auth.auth().currentUser else { return false }
+            return !fresh.isEmailVerified
+        }
+    }
+
     // MARK: - Signing in with a code, for when the password is gone
 
     /// Ask for a six-digit code by email. The owner's reference was the reference app's "check your email for
@@ -327,6 +363,17 @@ final class AuthService: NSObject {
         }
         let signIn = try await Auth.auth().signIn(withCustomToken: token)
         uid = signIn.user.uid
+
+        // PULL THE FRESH FLAG DOWN NOW. The server marked this address confirmed a moment ago, as
+        // part of accepting the code, but the token this phone just signed in with was minted before
+        // that write and still says unverified. `unprovenEmailCached` reads exactly that stale copy
+        // on every launch, so without this the person would prove their address, get into the app,
+        // and be asked to prove it again the very next time they opened Fariin. Forever.
+        //
+        // Not thrown on. The sign-in worked; a failed refresh costs one unnecessary code screen at
+        // some later launch, and throwing here would cost them the sign-in they just earned.
+        try? await signIn.user.reload()
+
         reportLogin()
         return signIn.user.uid
     }
