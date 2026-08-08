@@ -497,11 +497,15 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     /// it arrives.
     private func load() async {
         if localImage != nil { return }      // handed the picture directly — nothing to fetch
-        if image != nil { return }           // already seeded from the cache
+        if let warm = image {                // already seeded from the cache in init
+            noteAdaptive(warm)
+            return
+        }
         guard let s = photoUrl, !s.isEmpty, let url = URL(string: s) else { image = nil; tone = nil; return }
         if let cached = await DiskImageCache.shared.image(for: s) {
             image = cached
             tone = PosterTone.sample(cached, for: s)
+            noteAdaptive(cached)
             ProfilePhotoIndex.noteLoad(s, ok: true)
             return
         }
@@ -509,6 +513,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
             DiskImageCache.shared.store(ui, data: data, for: s)
             image = ui
             tone = PosterTone.sample(ui, for: s)
+            noteAdaptive(ui)
             ProfilePhotoIndex.noteLoad(s, ok: true)
             return
         }
@@ -518,6 +523,18 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         // live layout from this same moment, which is why the header rearranged itself seconds
         // after you opened it.
         ProfilePhotoIndex.noteLoad(s, ok: false)
+    }
+
+    /// Hand the adaptive page background its palette, off the bitmap this header is already holding.
+    ///
+    /// GUARDED, so with the setting off nothing is sampled, nothing is cached and nothing is posted —
+    /// the load path is byte for byte what it was. It lives here because this is the one place in the
+    /// app that reliably has a profile photo decoded; the page that draws the colours does not own the
+    /// download. `ProfileAdaptiveTheme.sample` is itself cached, so a second visit costs a dictionary
+    /// lookup.
+    private func noteAdaptive(_ ui: UIImage) {
+        guard ProfileBackgroundStyle.isOn, let s = photoUrl, !s.isEmpty else { return }
+        ProfileAdaptiveTheme.sample(ui, for: s)
     }
 }
 

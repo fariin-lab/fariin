@@ -152,6 +152,36 @@ struct ContactInfoView: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
 
+    // MARK: Adaptive background (Settings ▸ Privacy & Security)
+
+    /// OFF by default. While it is off this page draws exactly what it drew before the setting
+    /// existed — every use below is an either/or, never a tweak to the old path.
+    @AppStorage(ProfileBackgroundStyle.storageKey) private var adaptiveBackground = false
+    /// The palette taken off this person's photo. nil until it has been sampled, and nil forever for
+    /// somebody with no photo — which is the stated fallback to a plain system page.
+    @State private var adaptiveTheme: ProfileAdaptiveTheme?
+
+    /// The adaptive page is a POSTER idea: it continues the big photo down the screen. Someone on the
+    /// classic circle header has no photo running off the top of the page for it to continue, so they
+    /// keep the ordinary background whatever the switch says.
+    private var useAdaptive: Bool { adaptiveBackground && useModernHeader }
+
+    /// The colour the header's photo dissolves into. With the adaptive page on, that is the page's own
+    /// first colour — the same number both sides read, which is the only reason the join cannot show.
+    private var posterFadeInto: Color {
+        guard useAdaptive, let t = adaptiveTheme else { return pageBackground }
+        return Color(uiColor: t.seam)
+    }
+
+    /// Re-samples when the person changes AND when the switch is flipped, so turning it on while a
+    /// profile is open fills the page in rather than waiting for the next visit.
+    private var adaptiveKey: String { "\(adaptiveBackground)|\(gatedPosterUrl ?? "")" }
+
+    private func loadAdaptiveTheme() async {
+        guard useAdaptive else { adaptiveTheme = nil; return }
+        adaptiveTheme = await ProfileAdaptiveTheme.resolve(url: gatedPosterUrl)
+    }
+
     // The name shown here reflects a local rename (Edit) if one exists, else the passed-in name. Read
     // the observable store DIRECTLY (not the async-loaded @State), so the nickname shows immediately —
     // no 2s flash of the old name on open.
@@ -300,7 +330,7 @@ struct ContactInfoView: View {
             rowDivider
             infoRow("Report \(shownName)", "exclamationmark.triangle", tint: .red, chevron: false) { showReport = true }
         }
-        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .profileCard(adaptive: useAdaptive, color: cardColor)
     }
 
     /// Section title above a card, with SIGNAL'S OWN numbers (OWSTableViewController2, fetched and
@@ -357,7 +387,23 @@ struct ContactInfoView: View {
         // frame makes it chase the finger and lag. It only settles when the rubber band does, which
         // the scroll view already animates for us.
         .onPreferenceChange(HeroOffsetKey.self) { heroOffset = $0 }
-        .background(pageBackground.ignoresSafeArea())   // grouped-list page (grey/black) so white cards pop, like Settings
+        // THE PAGE. Their photo's own colours while the adaptive background is on; the grouped-list
+        // grey/black it has always been while it is off (so white cards pop, like Settings).
+        .background {
+            if useAdaptive {
+                ProfileAdaptiveBackdrop(theme: adaptiveTheme, fallback: pageBackground)
+            } else {
+                pageBackground.ignoresSafeArea()
+            }
+        }
+        // Two ways in, because a photo is either already here or on its way. The cache answers on the
+        // first frame for anyone you have seen before; the notification carries a cold download in
+        // afterwards and the mesh washes to it. Both are no-ops while the switch is off.
+        .task(id: adaptiveKey) { await loadAdaptiveTheme() }
+        .onReceive(NotificationCenter.default.publisher(for: .profileAdaptiveThemeReady)) { note in
+            guard useAdaptive, let u = note.object as? String, u == gatedPosterUrl else { return }
+            adaptiveTheme = ProfileAdaptiveTheme.cached(for: u)
+        }
         // ⚠️ THE REFUSAL IS SAID WHERE THE CALL WAS TRIED, AND THIS IS ONE OF THE PLACES IT IS
         // TRIED. Same fix as ThreadView's, and the same report a screen later (owner, 2026-08-07:
         // "you forget in profile — when I enter that user profile then I try to call, nothing
@@ -667,7 +713,7 @@ struct ContactInfoView: View {
             }
             .padding(.horizontal, 16).padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .profileCard(adaptive: useAdaptive, color: cardColor)
         }
     }
 
@@ -723,7 +769,7 @@ struct ContactInfoView: View {
             rowDivider
             infoRow("Verify Encryption", "ic_verify_encryption", tint: .accentColor) { showVerify = true }
         }
-        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .profileCard(adaptive: useAdaptive, color: cardColor)
     }
 
     // Groups this contact and I both belong to. "N Groups in Common" + Add-to-a-Group + the list;
@@ -773,7 +819,7 @@ struct ContactInfoView: View {
                 .buttonStyle(.plain)
             }
         }
-        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .profileCard(adaptive: useAdaptive, color: cardColor)
     }
 
     private func setMuted(_ until: Double) {
@@ -1061,6 +1107,10 @@ struct ContactInfoView: View {
             // one picture moving rather than two stacked on each other. The wash stays, so the page
             // behind the viewer keeps its background.
             photoHidden: showProfilePhoto,
+            // THE ONE NUMBER BOTH SIDES READ. With the adaptive page on, the photo dissolves into
+            // the very colour the page begins with, so there is nothing left at the join to see.
+            // Off, it is the grouped background it has always arrived at.
+            fadeInto: posterFadeInto,
             caption: { posterCaption($0) },
             actions: { glassActions }
         )
@@ -1182,7 +1232,7 @@ struct ContactInfoView: View {
                 // 24, matching every other card on this screen (the sections below, the action tiles, the
                 // media card). This one was left at 14, so it sat directly above a 24 card with visibly
                 // tighter corners - the mismatch the user circled. `.continuous` is the Apple curve.
-                .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .profileCard(adaptive: useAdaptive, color: cardColor)
             }
         }
     }
@@ -1236,7 +1286,7 @@ struct ContactInfoView: View {
             }
         }
         .padding(14)
-        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))   // iOS 26 corners
+        .profileCard(adaptive: useAdaptive, color: cardColor)   // iOS 26 corners
         // Tap anywhere on the CARD (See All row / background) → the full media page. The thumbnails'
         // own tap wins over this for their area, so a photo tap opens just that photo.
         .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))

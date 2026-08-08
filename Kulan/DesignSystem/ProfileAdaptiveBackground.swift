@@ -1,0 +1,330 @@
+import SwiftUI
+import UIKit
+
+// MARK: - The switch
+
+/// The adaptive profile background: the page behind a profile takes its colours from that person's
+/// photo instead of being the flat grouped grey, and the cards on it become glass so they sample it.
+///
+/// **OFF by default, and off means UNCHANGED.** Every call site below is written as an either/or, and
+/// the sampling that feeds it never runs while the switch is off, so a profile with this turned off
+/// draws exactly the view tree it drew before this file existed. That is the point of shipping it on
+/// a switch (owner, 2026-08-08: "add button in privacy settings, when I make on I can use that
+/// design, when I off I see my original design").
+enum ProfileBackgroundStyle {
+    static let storageKey = "profileAdaptiveBackground"
+
+    /// For code that is not a View. Views use `@AppStorage` so they redraw when it is flipped.
+    static var isOn: Bool { UserDefaults.standard.bool(forKey: storageKey) }
+}
+
+extension Notification.Name {
+    /// A photo finished sampling. The page that is on screen re-reads the cache and cross-fades in.
+    ///
+    /// A notification rather than an observable store because the sampling happens inside the header
+    /// — which owns the download — while the background belongs to the PAGE. This is the same shape
+    /// the story flight already uses to talk across that boundary.
+    static let profileAdaptiveThemeReady = Notification.Name("profileAdaptiveThemeReady")
+}
+
+// MARK: - The palette taken off a photo
+
+/// The colours of one profile photo, sampled once and kept.
+///
+/// **`seam` is the load-bearing one.** It is the average of the bottom band of the photo AS THE
+/// HEADER DRAWS IT — same aspect-fill, same crop — so the colour the photo dissolves into and the
+/// colour the page begins on are the same colour by construction. Every seam this screen has ever
+/// been reported for came from two layers meeting at slightly different colours; this one cannot,
+/// because there is only one number and both sides read it.
+///
+/// The accents are what stop the page being a flat wash: the most saturated colour in the left half
+/// of the picture and the most saturated in the right half, which is why the blue side of a photo
+/// stays on the blue side of the page.
+final class ProfileAdaptiveTheme {
+    /// The photo url, so a view can tell one person's palette from another's and animate between.
+    let key: String
+    let seam: UIColor
+    let leftAccent: UIColor
+    let rightAccent: UIColor
+    let dominant: UIColor
+
+    private init(key: String, seam: UIColor, leftAccent: UIColor, rightAccent: UIColor, dominant: UIColor) {
+        self.key = key
+        self.seam = seam
+        self.leftAccent = leftAccent
+        self.rightAccent = rightAccent
+        self.dominant = dominant
+    }
+
+    // MARK: Cache
+
+    private static let cache = NSCache<NSString, ProfileAdaptiveTheme>()
+
+    /// Already sampled? Answers synchronously, which is what lets a re-opened profile draw its
+    /// colours on frame one instead of flashing grey and then tinting.
+    static func cached(for url: String?) -> ProfileAdaptiveTheme? {
+        guard let url, !url.isEmpty else { return nil }
+        return cache.object(forKey: url as NSString)
+    }
+
+    /// Sample a decoded photo. Called from the header's load path, which already holds the bitmap —
+    /// nothing here downloads anything.
+    @discardableResult
+    static func sample(_ image: UIImage, for url: String) -> ProfileAdaptiveTheme? {
+        if let hit = cache.object(forKey: url as NSString) { return hit }
+        guard let theme = build(image, key: url) else { return nil }
+        cache.setObject(theme, forKey: url as NSString)
+        // ON MAIN, ALWAYS. This can be reached from a download that finished off the main thread, and
+        // the only listener is a SwiftUI page that sets @State when it hears it. The cache is written
+        // above and NSCache is thread-safe, so by the time the page reads it the palette is there.
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .profileAdaptiveThemeReady, object: url)
+        }
+        return theme
+    }
+
+    /// For a page that opens with the photo already on disk: try the palette cache, then the image
+    /// cache. Never fetches — if the photo is not here yet the header is fetching it, and the
+    /// notification above is what brings the colours in.
+    static func resolve(url: String?) async -> ProfileAdaptiveTheme? {
+        guard let url, !url.isEmpty else { return nil }
+        if let hit = cached(for: url) { return hit }
+        if let warm = DiskImageCache.shared.smallImageSync(url) { return sample(warm, for: url) }
+        if let disk = await DiskImageCache.shared.image(for: url) { return sample(disk, for: url) }
+        return nil
+    }
+
+    // MARK: Sampling
+
+    /// A 12x15 draw of the photo — the same 0.8 aspect the poster header shows, so the bands sampled
+    /// here are the bands that are actually on screen. 180 pixels is enough for colour and cheap
+    /// enough to do on the main thread once per photo.
+    private static func build(_ image: UIImage, key: String) -> ProfileAdaptiveTheme? {
+        let w = 12, h = 15
+        guard let cg = image.cgImage else { return nil }
+
+        // Centre aspect-fill crop, matching `scaledToFill` in a `photoSide x photoSide * 1.25` box.
+        let sw = CGFloat(cg.width), sh = CGFloat(cg.height)
+        let want = CGFloat(w) / CGFloat(h)
+        let src = (sw / sh > want)
+            ? CGRect(x: (sw - sh * want) / 2, y: 0, width: sh * want, height: sh)
+            : CGRect(x: 0, y: (sh - sw / want) / 2, width: sw, height: sw / want)
+        guard let crop = cg.cropping(to: src.integral) else { return nil }
+
+        // Our own buffer, not `&array`: a pointer taken with & is only valid for the call it is
+        // passed to, and CGContext keeps it for its whole life. (Same trap as PosterTone.)
+        let count = w * h * 4
+        let px = UnsafeMutablePointer<UInt8>.allocate(capacity: count)
+        px.initialize(repeating: 0, count: count)
+        defer { px.deallocate() }
+
+        guard let ctx = CGContext(data: px, width: w, height: h, bitsPerComponent: 8,
+                                  bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .medium
+        ctx.draw(crop, in: CGRect(x: 0, y: 0, width: w, height: h))
+
+        // Row 0 of a bitmap context's buffer is the TOP row of the image it draws.
+        func rgb(_ x: Int, _ y: Int) -> (CGFloat, CGFloat, CGFloat) {
+            let i = (y * w + x) * 4
+            return (CGFloat(px[i]) / 255, CGFloat(px[i + 1]) / 255, CGFloat(px[i + 2]) / 255)
+        }
+        func average(x: Range<Int>, y: Range<Int>) -> UIColor {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0
+            var n: CGFloat = 0
+            for yy in y {
+                for xx in x {
+                    let c = rgb(xx, yy)
+                    r += c.0; g += c.1; b += c.2; n += 1
+                }
+            }
+            guard n > 0 else { return .gray }
+            return UIColor(red: r / n, green: g / n, blue: b / n, alpha: 1)
+        }
+        /// The most saturated pixel in a region, which is the colour a person would name if you
+        /// asked them what colour the photo is on that side. A plain average of a photograph is
+        /// always some kind of brown.
+        func vivid(x: Range<Int>, y: Range<Int>) -> UIColor {
+            var best = UIColor.gray
+            var bestScore = -1.0
+            for yy in y {
+                for xx in x {
+                    let c = rgb(xx, yy)
+                    let maxc = max(c.0, max(c.1, c.2)), minc = min(c.0, min(c.1, c.2))
+                    let sat = maxc <= 0 ? 0 : (maxc - minc) / maxc
+                    // Saturation first, but a black pixel is not a colour and a blown-out white one
+                    // is not either, so both ends are damped.
+                    let score = Double(sat) * (0.35 + Double(maxc) * (1 - Double(maxc) * 0.45))
+                    if score > bestScore { bestScore = score; best = UIColor(red: c.0, green: c.1, blue: c.2, alpha: 1) }
+                }
+            }
+            return best
+        }
+
+        // The bottom fifth: the strip the photo's blur has already turned to mush, which is exactly
+        // the colour the page has to start on.
+        let seam = average(x: 0..<w, y: (h - 3)..<h)
+        // Accents come from the lower two thirds — the top of a portrait is usually sky or ceiling,
+        // and letting that decide the page's colour is how you get a grey background under a
+        // colourful photo.
+        let lower = (h / 3)..<h
+        return ProfileAdaptiveTheme(key: key,
+                                    seam: seam,
+                                    leftAccent: vivid(x: 0..<(w / 2), y: lower),
+                                    rightAccent: vivid(x: (w / 2)..<w, y: lower),
+                                    dominant: average(x: 0..<w, y: lower))
+    }
+
+    // MARK: What the page draws
+
+    /// The nine colours of the 3x3 mesh, top row first.
+    ///
+    /// **The top row is three copies of one colour on purpose.** Any horizontal variation there would
+    /// meet the photo's own bottom edge as a line of changing colour, and a line of changing colour
+    /// along a horizontal join is precisely what the eye reads as a seam. The character comes in on
+    /// the middle row, a third of the way down the page, where there is no edge for it to draw.
+    func mesh(dark: Bool) -> [Color] {
+        let top = seam
+        let mid = dominant.mixed(with: seam, 0.35)
+        let midL = leftAccent.vibrant(1.18).mixed(with: mid, 0.55)
+        let midR = rightAccent.vibrant(1.18).mixed(with: mid, 0.55)
+        // WHERE THE PAGE SETTLES. Dark mode walks the colour down toward black and light mode walks
+        // it up toward white, because the cards, the section titles and the system's own text
+        // colours all assume the page is going that way. The hue survives either trip, which is what
+        // keeps a green photo's page green at the bottom instead of grey.
+        let floor = dark
+            ? dominant.scaled(brightness: 0.34, saturation: 0.92)
+            : dominant.mixed(with: .white, 0.62)
+        let floorL = dark
+            ? leftAccent.scaled(brightness: 0.40, saturation: 0.80)
+            : leftAccent.mixed(with: .white, 0.66)
+        let floorR = dark
+            ? rightAccent.scaled(brightness: 0.40, saturation: 0.80)
+            : rightAccent.mixed(with: .white, 0.66)
+        return [Color(uiColor: top), Color(uiColor: top), Color(uiColor: top),
+                Color(uiColor: midL), Color(uiColor: mid), Color(uiColor: midR),
+                Color(uiColor: floorL), Color(uiColor: floor), Color(uiColor: floorR)]
+    }
+}
+
+// MARK: - The background itself
+
+/// The full-page adaptive background: a mesh of the photo's own colours, softened, running from the
+/// photo's bottom edge to the bottom of the screen.
+///
+/// A `MeshGradient` rather than hand-stacked radial blobs because it is native (see the standing
+/// preference for native over hand-rolled), because its colours are animatable — which is the whole
+/// of the "smooth when you switch profiles" requirement, for free — and because nine control points
+/// give the soft, uneven bleed a stack of linear gradients cannot.
+///
+/// The blur on top is small. The mesh is already smooth; what the blur buys is the last of the
+/// banding on a large flat area, which is the one artefact a gradient this size can show.
+struct ProfileAdaptiveBackdrop: View {
+    let theme: ProfileAdaptiveTheme?
+    /// Drawn when there is no photo to read, which is the stated fallback: an ordinary system page.
+    let fallback: Color
+    @Environment(\.colorScheme) private var scheme
+
+    /// Fixed mesh points. Not a perfect grid — the middle row is pulled slightly off centre so the
+    /// bleed reads as light through glass rather than as three stripes.
+    private static let points: [SIMD2<Float>] = [
+        .init(0, 0),    .init(0.5, 0),    .init(1, 0),
+        .init(0, 0.42), .init(0.52, 0.5), .init(1, 0.44),
+        .init(0, 1),    .init(0.5, 1),    .init(1, 1),
+    ]
+
+    var body: some View {
+        ZStack {
+            fallback
+            if let theme {
+                MeshGradient(width: 3, height: 3,
+                             points: Self.points,
+                             colors: theme.mesh(dark: scheme == .dark))
+                    // Blur samples beyond the view's edges and would fade them out; scaling the
+                    // blurred result pushes that soft rim off screen instead of letting it draw a
+                    // pale border down the sides.
+                    .blur(radius: 26)
+                    .scaleEffect(1.3)
+            }
+        }
+        // ONE animation, on the colours. Identity is deliberately NOT keyed to the theme: keeping the
+        // same MeshGradient and handing it new colours is what makes switching profiles a wash from
+        // one palette to the next rather than a cross-fade between two pictures.
+        .animation(.easeInOut(duration: 0.45), value: theme?.key)
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Cards on that background
+
+/// A profile card: glass while the adaptive background is on, the ordinary grouped-list card colour
+/// while it is off.
+///
+/// `.ultraThinMaterial` and not `liquidGlass`: the standing rule is that Liquid Glass lives on the
+/// round actions and nowhere else on this page, and a page of glass cards over glass buttons is the
+/// look that has been rejected here before. The material samples the colour underneath, which is all
+/// this needs.
+struct ProfileCardBackground: ViewModifier {
+    let adaptive: Bool
+    let color: Color
+    let radius: CGFloat
+    @Environment(\.colorScheme) private var scheme
+
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: radius, style: .continuous) }
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if adaptive {
+            content
+                .background(.ultraThinMaterial, in: shape)
+                // A hairline, not a border: without it a glass card over a soft background has no
+                // edge at all and the rows look like they are floating in the page. Brighter in
+                // light mode, where white-on-white needs more help than white-on-dark.
+                .overlay { shape.strokeBorder(Color.white.opacity(scheme == .dark ? 0.16 : 0.55), lineWidth: 0.6) }
+        } else {
+            content.background(color, in: shape)
+        }
+    }
+}
+
+extension View {
+    /// The one place a profile card decides what it sits on.
+    func profileCard(adaptive: Bool, color: Color, radius: CGFloat = 24) -> some View {
+        modifier(ProfileCardBackground(adaptive: adaptive, color: color, radius: radius))
+    }
+}
+
+// MARK: - Colour arithmetic
+
+private extension UIColor {
+    var components: (r: CGFloat, g: CGFloat, b: CGFloat) {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        getRed(&r, green: &g, blue: &b, alpha: &a)
+        return (r, g, b)
+    }
+
+    func mixed(with other: UIColor, _ t: CGFloat) -> UIColor {
+        let a = components, b = other.components
+        let k = max(0, min(1, t))
+        return UIColor(red: a.r + (b.r - a.r) * k,
+                       green: a.g + (b.g - a.g) * k,
+                       blue: a.b + (b.b - a.b) * k, alpha: 1)
+    }
+
+    /// Multiply brightness and saturation in HSB, clamped. Keeps the hue, which is the only part of
+    /// a photo's colour that has to survive being taken to the bottom of a page.
+    func scaled(brightness: CGFloat, saturation: CGFloat) -> UIColor {
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard getHue(&h, saturation: &s, brightness: &b, alpha: &a) else { return self }
+        return UIColor(hue: h, saturation: min(1, s * saturation), brightness: min(1, b * brightness), alpha: 1)
+    }
+
+    /// Lift a washed-out sample toward the colour a person would say the photo is, without letting a
+    /// near-grey pixel turn into a colour it never was — the boost is on what is already there.
+    func vibrant(_ boost: CGFloat) -> UIColor {
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard getHue(&h, saturation: &s, brightness: &b, alpha: &a) else { return self }
+        return UIColor(hue: h, saturation: min(1, s * boost), brightness: min(1, max(b, 0.22)), alpha: 1)
+    }
+}
