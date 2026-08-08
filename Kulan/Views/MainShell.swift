@@ -1599,17 +1599,46 @@ struct ArchivedChatsView: View {
                     // lands as a CARD here rather than the circle a ringed avatar gets — the shape
                     // is read from this number and nowhere else.
                     .modifier(MediaRectReporter(id: "arch-\(g.id)", scope: .storyRow, cornerRadius: 24))
-                    .contextMenu {
-                        Button { StoryPrefs.toggleHidden(g.authorUid); prefsTick += 1 } label: {
-                            Label("Unhide Story", systemImage: "tray.and.arrow.up")
-                        }
-                    }
+                    // NO `.contextMenu` HERE ANY MORE (his 2026-08-08: "in archive page story when i
+                    // long press is using native plz use my custom longpress"). Apple's menu did not
+                    // lift this card, it rebuilt a second one from a `preview:` closure — the same
+                    // thing the stories row was moved off in `4d1e02f`. The press below lifts the
+                    // card's own pixels into the app's menu, so the two screens now feel the same.
                     // No `.id()` here any more: the ForEach above keys on `authorUid`, so the identity
                     // is already stable. Declaring it twice was the whole problem.
                 }
             }
+            // ONE recogniser for the whole strip, on its scroll view, exactly as the stories row
+            // does it — never one per card. A recogniser that lives on a card has to be
+            // hit-testable, and then the card's own Button never sees the tap.
+            .background(StoryRowLongPress(target: archivedMenuTarget))
             .padding(.horizontal, 12).padding(.vertical, 10)
         }
+    }
+
+    /// Which archived card is under the finger, and what its menu says. The rectangles come from the
+    /// same registry the story flight flies to, so the lift and the flight cannot disagree about
+    /// where a card is — the rule the stories row's own `menuTarget` is built on.
+    ///
+    /// THE PICTURE ALONE IS LIFTED. The reported rect here covers the whole button, name included,
+    /// because that is what the flight was given; but the card is rounded and the name is not, so
+    /// cutting the pair under one 24pt radius would round the label's bottom. The card's height is
+    /// known exactly (`storyCardW * 1.46`, the frame two lines up from the reporter), so the strip
+    /// that is lifted is the top of that rect and nothing else.
+    private func archivedMenuTarget(at p: CGPoint) -> StoryMenuTarget? {
+        for g in archivedStories {
+            let key = MediaOpenRects.key(.storyRow, "arch-\(g.id)")
+            guard let r = MediaOpenRects.liveRect(key), r.contains(p) else { continue }
+            let cardRect = CGRect(x: r.minX, y: r.minY, width: r.width,
+                                  height: min(r.height, storyCardW * 1.46))
+            return StoryMenuTarget(key: key, rect: cardRect, actions: [
+                CMAction(title: "Unhide Story", icon: "tray.and.arrow.up") {
+                    StoryPrefs.toggleHidden(g.authorUid)
+                    prefsTick += 1
+                },
+            ])
+        }
+        return nil
     }
 
     private var hasAnyArchived: Bool {

@@ -222,10 +222,24 @@ public final class StoryCardMorph {
 
     /// The card in the registered view's CURRENT coordinates, or the whole view if nobody has
     /// published metrics yet.
+    ///
+    /// ⚠️ THE METRICS ARE A SHARED SINGLETON AND THEY OUTLIVE THE VIEWER THAT PUBLISHED THEM, which
+    /// is where his 2026-08-08 "uploading story… sometimes have black top and bottom" comes from.
+    /// `StoryDetailView` publishes on its own `onAppear`, so between a screen going up and its first
+    /// layout the numbers still describe the LAST viewer — and a strip taller than the card it is
+    /// cropping to shows what lies past the card, which is the page's own black.
+    ///
+    /// So the height is clamped to what a card in THIS view could possibly be. `cardHeight` is
+    /// `min(9:16 of the width, the room available)`, so a strip taller than 9:16 of the view's own
+    /// width is not a card at any size — it can only be a stale number, and clamping it costs
+    /// nothing when the metrics are fresh because then the two agree exactly. The strip is pinned
+    /// inside the view's bottom edge for the same reason.
     private func contentRect(in view: UIView) -> CGRect {
-        guard cardHeight > 1, cardTop + cardHeight <= view.bounds.height + 1 else { return view.bounds }
-        return CGRect(x: view.bounds.minX, y: view.bounds.minY + cardTop,
-                      width: view.bounds.width, height: cardHeight)
+        guard cardHeight > 1, cardTop + 1 < view.bounds.height else { return view.bounds }
+        let w = view.bounds.width
+        let ceilingH = ceil(w * 1.77778)
+        let h = max(1, min(min(cardHeight, ceilingH), view.bounds.height - cardTop))
+        return CGRect(x: view.bounds.minX, y: view.bounds.minY + cardTop, width: w, height: h)
     }
 
     /// True once a pager has registered a card. The host degrades to "no zoom" rather than to a
