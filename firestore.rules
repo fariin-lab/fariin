@@ -76,7 +76,18 @@ service cloud.firestore {
     // Profiles: any signed-in user can look up a handle to start a chat,
     // but you can only create/edit your OWN profile.
     match /users/{uid} {
-      allow read: if signedIn();
+      // GET, NOT READ, and this one word was the whole user directory. `allow read` grants get AND
+      // list, and Firestore's `list` means "run any query you like against this collection", so one
+      // signed-in phone could page through every user document in Fariin. Proven by
+      // rules-tests/user-directory.test.js, which runs the same suite against the live ruleset and
+      // this one: both sweeps are ALLOWED on live and DENIED here, while single-profile fetches pass
+      // on both. Full reasoning sits in Kulan/firestore.rules, the file firebase.json deploys.
+      //
+      // ⚠️ DOES NOT SHIP ALONE. Four query sites in the app break until handle lookup moves to a
+      // Cloud Function: ChatService.findByHandle and .searchUsers, AnnouncementAdmin.searchPeople,
+      // VerificationAdmin.search. Everything else is safe: 42 of the 46 places the app touches this
+      // collection are .document(uid) fetches, which `get` still allows.
+      allow get: if signedIn();
 
       // FIELDS THE OWNER OF THE DOCUMENT MAY NOT WRITE. Only the server (the claimUsername
       // transaction, which runs with admin rights and bypasses these rules) or a moderator sets
