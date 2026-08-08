@@ -3034,6 +3034,8 @@ struct UploadingStoryHandoff: View {
     var onProfile: (StoryGroup) -> Void = { _ in }
     @State private var repo = StoriesRepository.shared
     @State private var svc = StoriesService.shared
+    /// Is the card flying? While it is, this view's own backdrop steps aside — see `body`.
+    @State private var flightActive = false
 
     // My stories + one synthetic item per post still in the air. Once they finish (the list empties),
     // this is just my real stories, which now include the just-posted one.
@@ -3050,7 +3052,29 @@ struct UploadingStoryHandoff: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()   // constant backdrop so the re-feed never blinks
+            // ⚠️ CLEAR WHILE THE CARD IS IN THE AIR, and this is the only structural difference
+            // between this door and the five that behave correctly.
+            //
+            // His report: scrolling down out of an UPLOADING story shows black at the top header
+            // and along the bottom, which his own story does not do. Every other door presents
+            // `StoryViewer` directly. This one wraps it in a full-screen opaque black, and the
+            // flight has NO WAY TO CLEAR IT: the pager's own background is managed for exactly this
+            // reason (`StoryCardMorph.prepareForHero` sets it clear so the shrinking card reveals
+            // the chat list, `restoreAfterHero` puts it back), but that hook owns the pager's view,
+            // not a SwiftUI sibling sitting behind it. So this black stayed full-screen behind a
+            // card that was shrinking away from it.
+            //
+            // The reason it exists is real and is kept: the view is re-fed when the upload finishes
+            // (`.id(svc.uploading)`), and a constant backdrop is what stops that swap blinking.
+            // It only has to be constant AT REST. `storyFlightActive` is already the app's answer to
+            // "is the card in the air" — the same signal the reply bar and the caption leave on —
+            // so the backdrop now steps aside for exactly the moments the flight owns the screen.
+            Color.black.ignoresSafeArea()
+                .opacity(flightActive ? 0 : 1)
+                .onReceive(NotificationCenter.default.publisher(for: .init("storyFlightActive"))) { note in
+                    let active = (note.object as? Bool) ?? false
+                    if active != flightActive { flightActive = active }
+                }
             if let g = group {
                 // The app's own flight, same as every other story: it grows out of the uploading
                 // card and the drag-down flies back into it. `heroSourcePinned` because there is
