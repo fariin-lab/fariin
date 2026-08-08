@@ -154,6 +154,56 @@ enum StoryZoomPresenter {
     }
 }
 
+/// The cover: the row card's photograph, drawn TWICE — and the second copy is what killed the
+/// corner bleed.
+///
+/// The photograph has the card's rounded corners baked into it at the ROW CARD'S size. The flight
+/// draws it far larger for most of the journey (the crop rect is in the card's untransformed
+/// coordinates), so the baked corner renders at 50-100pt while the flight mask cuts at 24 — and
+/// everything between the two curves showed whatever was BEHIND the cover. Once the corner fix let
+/// the story fill the mask hole square, that gap was bright story pixels: his 2026-08-08 pair of
+/// screenshots, dark green fins under the bottom corners mid-close and a thin green rim around the
+/// landed card. (Before that fix the gap showed the dimmed wall, which matched the list behind it —
+/// which is why he "saw it small" then and loudly now.)
+///
+/// His own instruction names the fix: "if you cant remove just Hide put behind image." The backing
+/// is the SAME picture, over-zoomed 15%, so its own baked corners are pushed outside the view: any
+/// point the front picture's corner cut leaves bare now shows card pixels from the backing instead
+/// of the story. The over-zoom is enough because the flight mask trims the view's corner tip — the
+/// deepest bare point is the mask's 24pt curve, well inside the zoomed copy at every fraction of
+/// the flight. At the landing the front picture fits exactly, so the backing is never seen at all.
+///
+/// The morph drives this view exactly as it drove the plain UIImageView — alpha, frame, and a
+/// layer corner clip (`masksToBounds` is set there) that cuts both copies together.
+final class StoryCoverView: UIView {
+    private let backing = UIImageView()
+    private let front = UIImageView()
+    var image: UIImage? {
+        didSet { backing.image = image; front.image = image }
+    }
+    init() {
+        super.init(frame: .zero)
+        clipsToBounds = true
+        for iv in [backing, front] {
+            // Aspect-fill, never stretch, same reason as always: the crop opens towards 9:16 while
+            // the cover is already dissolving out, and the picture must not deform on the way.
+            iv.contentMode = .scaleAspectFill
+            iv.clipsToBounds = true
+            addSubview(iv)
+        }
+        backing.transform = CGAffineTransform(scaleX: 1.15, y: 1.15)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        front.frame = bounds
+        // Centre + bounds rather than frame: the backing carries a transform, and setting `frame`
+        // on a transformed view is undefined by contract.
+        backing.center = CGPoint(x: bounds.midX, y: bounds.midY)
+        backing.bounds = CGRect(origin: .zero, size: bounds.size)
+    }
+}
+
 /// The presented screen. Deliberately dumb: it owns the wall, the flight container and the hosted
 /// SwiftUI content, and nothing about the transition itself — the drive lives with the viewer.
 final class StoryZoomContainerVC: UIViewController {
@@ -165,7 +215,9 @@ final class StoryZoomContainerVC: UIViewController {
     /// to the card strip by `StoryCardMorph.applyCore`; alpha driven only by the flight's ticks.
     /// Born invisible: before the flight has geometry its frame falls back to the whole screen,
     /// and a full-screen cover flash is exactly the kind of frame this system exists to kill.
-    private var coverView: UIImageView?
+    /// A `StoryCoverView`, not a bare UIImageView — see its note for the corner bleed it exists
+    /// to hide, on the open and the close alike.
+    private var coverView: StoryCoverView?
 
     init() {
         super.init(nibName: nil, bundle: nil)
@@ -218,14 +270,13 @@ final class StoryZoomContainerVC: UIViewController {
     }
 
     func setCoverImage(_ image: UIImage) {
-        let iv = UIImageView(image: image)
         // Framed by `applyCore` to the flight's CROP, whose aspect is the row card's exactly, so at
-        // the row end this fills it with nothing spare. Aspect-fill (never stretch) for the frames
-        // in between, where the crop opens towards 9:16 while the cover is already dissolving out.
-        iv.contentMode = .scaleAspectFill
-        iv.clipsToBounds = true
-        iv.alpha = 0
-        coverView = iv
+        // the row end this fills it with nothing spare. See `StoryCoverView` for why it is two
+        // copies of the picture rather than one.
+        let v = StoryCoverView()
+        v.image = image
+        v.alpha = 0
+        coverView = v
     }
 
     /// Swap the cover's picture for the person a swipe has made current. The image view is reused
