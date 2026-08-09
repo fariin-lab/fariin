@@ -302,16 +302,30 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         frameOutput = out
     }
 
-    /// The frame on screen right now, or nil if the player cannot supply one. Nil is a normal answer
-    /// — an item that has not decoded anything yet has nothing to give — and every caller already has
-    /// a fallback, so it must never be papered over with a black rectangle.
+    /// The frame on screen right now, or the last frame this clip actually rendered, or nil.
+    ///
+    /// THE SECOND ANSWER IS WHY THE FROZEN COVER STOPPED RESETTING TO SECOND ZERO. His 2026-08-09
+    /// report: watch a video to 10s, pull the sheet, swipe the carousel away and back — the card
+    /// wore the FIRST frame. The story is paused under the sheet, and a paused item's video output
+    /// hands its buffer over ONCE: the pause path (`rememberPlaybackPosition`) reads it into
+    /// `StoryPlaybackResume.rememberFrame`, so when `snapshotCard` asks a beat later for the SAME
+    /// time there is no new buffer, this answered nil, and the caller fell back to the poster —
+    /// which is second zero by construction. The remembered frame IS the 10s picture, decoded from
+    /// this very output, so answering with it keeps every promise the buffer path makes: real clip
+    /// pixels, never chrome, never a black rectangle.
+    ///
+    /// Nil still means nil when this clip has never rendered anything — the callers' own fallbacks
+    /// (the poster) remain the right answer there.
     func currentVideoFrame() -> UIImage? {
-        guard let item = player?.currentItem, let out = frameOutput else { return nil }
-        let t = item.currentTime()
-        guard let buffer = out.copyPixelBuffer(forItemTime: t, itemTimeForDisplay: nil) else { return nil }
-        let ci = CIImage(cvPixelBuffer: buffer)
-        guard let cg = frameContext.createCGImage(ci, from: ci.extent) else { return nil }
-        return UIImage(cgImage: cg)
+        if let item = player?.currentItem, let out = frameOutput,
+           let buffer = out.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) {
+            let ci = CIImage(cvPixelBuffer: buffer)
+            if let cg = frameContext.createCGImage(ci, from: ci.extent) {
+                return UIImage(cgImage: cg)
+            }
+        }
+        guard let url = self.url else { return nil }
+        return StoryPlaybackResume.frame(url)
     }
 
     /// Hand over the clip's cover before `startVideo`, so the loading state has a picture to show.
