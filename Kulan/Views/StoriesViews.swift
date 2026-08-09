@@ -1683,13 +1683,36 @@ struct StoryViewer: View {
     /// replaced by a SUCCESSFUL snapshot (`snapshotCard` answering nil leaves the old one alone), so
     /// a refresh can improve the cover and cannot take one away.
     private func captureFrozenCover(force: Bool = false) {
-        guard showViewers, force || frozenCovers[sheetStoryId] == nil, !sheetStoryId.isEmpty else { return }
+        guard showViewers else { return }
         let live = StoriesRepository.shared.mine?.stories ?? myStories
-        guard let s = live.first(where: { $0.id == sheetStoryId }), s.isVideo else { return }
         // A photo's poster IS the photo, so the row's own card already matches and a snapshot would
         // only be a second, staler copy of it.
-        guard let shot = StoryCardMorph.shared.snapshotCard(width: cardSlot.w) else { return }
-        frozenCovers[sheetStoryId] = shot
+        if !sheetStoryId.isEmpty, force || frozenCovers[sheetStoryId] == nil,
+           let s = live.first(where: { $0.id == sheetStoryId }), s.isVideo,
+           let shot = StoryCardMorph.shared.snapshotCard(width: cardSlot.w) {
+            frozenCovers[sheetStoryId] = shot
+        }
+        // ⚠️ AND EVERY OTHER VIDEO STORY THAT HAS ALREADY DRAWN SOMETHING, WHICH IS WHAT MAKES THIS
+        // STOP DEPENDING ON A MOMENT.
+        //
+        // The line above photographs THE LIVE CARD, so it can only ever answer for the one story the
+        // sheet is pointed at, through one global pointer at one player view, at one instant. Two
+        // fixes have now been aimed at moving that instant (settle-and-verify, then the touch-down
+        // capture) and he has reported the same thing after both: leave a card and it falls back to
+        // its poster — second zero, a different picture — and coming back only looks right because
+        // the LIVE card is showing again underneath.
+        //
+        // `StoryPlaybackResume` already holds the last frame every clip actually rendered, keyed by
+        // its own url, written whenever a story pauses — and pausing the story is precisely what
+        // pulling this sheet up does. So the cover can be ASKED FOR BY STORY instead of caught in
+        // flight, for every card in the row at once, whether or not the timing of any one capture
+        // worked out. A story with no remembered frame (never opened this session) is skipped and
+        // keeps its poster, which is what it had before.
+        for s in live where s.isVideo && frozenCovers[s.id] == nil {
+            guard let u = URL(string: s.mediaUrl),
+                  let f = StoryPlaybackResume.cardFrame(u, width: cardSlot.w) else { continue }
+            frozenCovers[s.id] = f
+        }
     }
 
     /// THE LINE UNDER THE NAME: which audience this story went to.

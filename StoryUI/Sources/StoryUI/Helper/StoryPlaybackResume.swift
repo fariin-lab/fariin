@@ -73,6 +73,40 @@ public enum StoryPlaybackResume {
     }
     static func frame(_ url: URL) -> UIImage? { frames.object(forKey: url.absoluteString as NSString) }
 
+    /// ⚠️ THE SAME PICTURE, FOR THE APP, BY STORY — and it needs no capture and no timing.
+    ///
+    /// The viewers carousel draws its side cards from `previewUrl`, which for a video is the poster
+    /// generated at post time: second zero. It papered over that by PHOTOGRAPHING the live card at
+    /// the instant a swipe begins, which means one global pointer at one player view and one instant
+    /// to get right — and his 2026-08-09 report, twice, is that the picture is still second zero the
+    /// moment he leaves a card.
+    ///
+    /// This slot already holds the answer for EVERY clip that has rendered anything, keyed by the
+    /// clip's own url and written whenever a story pauses — which is exactly what the sheet does to
+    /// the story it comes up over. So the card can be asked for by story instead of caught in
+    /// flight. A window is the wrong thing to narrow; this removes the window.
+    ///
+    /// Copied down to the width it will be drawn at, because what is kept here is the clip's full
+    /// resolution and the carousel draws it about a third that wide.
+    public static func cardFrame(_ url: URL, width targetW: CGFloat) -> UIImage? {
+        guard let f = frame(url) else { return nil }
+        return fitted(f, width: targetW)
+    }
+
+    /// A copy no bigger than it needs to be. Returns the original when it is already small enough,
+    /// so this is free in the common case.
+    public static func fitted(_ image: UIImage, width targetW: CGFloat) -> UIImage {
+        guard targetW > 1, image.size.width > targetW else { return image }
+        let h = image.size.height * (targetW / image.size.width)
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = UIScreen.main.scale
+        fmt.opaque = true
+        let size = CGSize(width: targetW, height: h)
+        return UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+
     /// The viewer is gone: a story opened later must start at its beginning.
     public static func clearAll() { positions = [:]; frames.removeAllObjects() }
 }
