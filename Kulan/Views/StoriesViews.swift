@@ -636,6 +636,9 @@ struct StoryViewer: View {
     /// close. Empty means the story underneath is already the selected one. See the `sheetStoryId`
     /// handler for why the jump is deferred at all.
     @State private var pendingJumpStoryId: String = ""
+    /// Which story the owner footer's viewers belong to, so a story change empties it instead of
+    /// leaving the previous one's count and faces up during the fetch. See `loadBarViewers`.
+    @State private var lastBarViewersStoryId: String = ""
 
     /// TRUE while the CAROUSEL'S OWN card owns the slot and the real story card must stand aside.
     ///
@@ -3094,8 +3097,21 @@ struct StoryViewer: View {
     }
 
     private func loadBarViewers() {
-        guard currentIsMine, !currentStoryId.isEmpty else { return }
+        // ⚠️ CLEARED FIRST, BECAUSE THE OLD ANSWER IS WRONG THE INSTANT THE STORY CHANGES. This only
+        // ever ASSIGNED, and only on success — so tapping from a story with 12 views to one with
+        // none kept reading "12 Views" with the previous story's avatars for the whole network round
+        // trip, then dropped to 0. It leaked the other way too: leave your own bucket for a friend's
+        // and come back, and the footer painted with the old bucket's viewers for the first frames.
+        // An empty footer for a moment is honest; somebody else's numbers are not.
+        guard currentIsMine, !currentStoryId.isEmpty else {
+            if !barViewers.isEmpty { barViewers = [] }
+            return
+        }
         let id = currentStoryId
+        if lastBarViewersStoryId != id {
+            lastBarViewersStoryId = id
+            barViewers = []
+        }
         Task {
             let v = await StoriesService.shared.fetchViewers(storyId: id)
             if id == currentStoryId { barViewers = v }
@@ -3596,7 +3612,11 @@ struct MyStoriesCarousel: View {
         .onAppear {
             if let ni = stories.firstIndex(where: { $0.id == activeId }), ni != index { scroll = CGFloat(ni) }
         }
-        .task { await loadAll() }
+        // ⚠️ KEYED ON THE STORIES. A bare `.task` runs once per MOUNT and never again, so the counts
+        // were fetched once and a story that landed while the sheet was open kept "0" for the rest
+        // of the session no matter how many people watched it. `id:` re-runs it when the set
+        // changes, which is exactly when the answer it cached stopped being complete.
+        .task(id: stories.map(\.id)) { await loadAll() }
     }
 
     /// The picture on a carousel card: the frame photographed off the live story if there is one,

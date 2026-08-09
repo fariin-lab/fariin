@@ -1256,7 +1256,22 @@ private extension StoryDetailView {
             }
             if cur.id != lastPrefetchItem {
                 lastPrefetchItem = cur.id
-                let all = viewModel.stories.flatMap { $0.stories }
+                // ⚠️ THE ORDER THEY WILL ACTUALLY BE WATCHED, WHICH IS NOT EVERY ITEM OF EVERY
+                // PERSON. A flat `flatMap` assumes each person is watched from their item 0, and
+                // nobody is: a bucket opens at `resumeIndex()`, normally their first UNSEEN item.
+                // So at every person boundary the lookahead warmed items that are about to be
+                // skipped and left the one actually landed on cold — paying for data on clips
+                // nobody sees AND keeping the wait this feature exists to remove.
+                //
+                // The bucket being watched keeps every item, because tapping BACK through it is
+                // normal and those are already on disk anyway. Later buckets start where they will
+                // open. Same rule as `resumeIndex`, minus the per-bucket saved position, which this
+                // view cannot see for anybody but itself.
+                let all: [Story] = viewModel.stories.flatMap { bucket -> [Story] in
+                    guard bucket.id != model.id else { return bucket.stories }
+                    let start = bucket.stories.firstIndex(where: { !$0.isSeen }) ?? 0
+                    return Array(bucket.stories.dropFirst(start))
+                }
                 if let i = all.firstIndex(where: { $0.id == cur.id }) {
                     StoryPrefetcher.prefetch(from: i, in: all)
                 }
