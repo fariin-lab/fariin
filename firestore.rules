@@ -480,7 +480,39 @@ service cloud.firestore {
         return !exists(/databases/$(database)/documents/users/$(u))
           || get(/databases/$(database)/documents/users/$(u)).data.get('privacy', {}).get('messages', 'everyone') != 'contacts';
       }
-      allow read: if signedIn() && request.auth.uid in resource.data.users;
+      // ⚠️ A CHAT THAT DOES NOT EXIST YET MUST READ AS EMPTY, OR NO NEW CHAT CAN EVER BE STARTED.
+      //
+      // This was the single `uid in resource.data.users` line, and on a document that is not there
+      // `resource` is null, so that test ERRORS and the read is refused. It silently broke starting
+      // a conversation for FIVE DAYS (2026-08-04 to 08-09, found from the owner's "Not delivered"
+      // screenshots; the live database had not gained a single new 1:1 in that window).
+      //
+      // The deadlock, with the message-request rules below:
+      //   1. `create` demands the chat be born stamped `startedBy` + `accepted:false`.
+      //   2. `openConversation` only stamps those when its pre-read ANSWERS, because it must not
+      //      stamp a chat that already exists and is merely unreachable (that would drop a real
+      //      friendship back to a pending request days later, when the queued write landed).
+      //   3. That pre-read is exactly the refused read. So it never answered, the stamp was never
+      //      written, and `create` refused the chat. Proving a chat was new required reading the
+      //      very thing you were not allowed to read.
+      // Every call site wraps `openConversation` in `try?`, so the refusal was thrown away and the
+      // chat screen opened as normal — the failure only surfaced later as a message that would not
+      // send, pointing at the wrong thing entirely.
+      //
+      // THE ID IS THE MEMBERSHIP, for a 1:1: the cid IS the two uids sorted and joined by "_", so
+      // "your uid is one of the two halves of this id" and "you are a member" say the same thing —
+      // and unlike the members list, the id is readable when the document is not there yet.
+      //
+      // ⚠️ DO NOT rewrite this as `resource == null && ...`. That form reads more precisely and does
+      // NOT work: measured against the live rules test service, a get on a missing document does not
+      // satisfy `resource == null`, so the branch never fires and new chats stay broken. This form
+      // was proven with 8 cases against the live ruleset (both members ALLOWED on a not-yet-existing
+      // chat, an outsider DENIED on the same, members/outsiders unchanged on existing 1:1s AND
+      // groups), with the previous rules as the control, where the two fix cases FAIL.
+      allow read: if signedIn() && (
+        request.auth.uid in cid.split('_')
+        || request.auth.uid in resource.data.get('users', [])
+      );
       // 1:1 must be exactly 2; a group ("type":"group") may have 2–30 members and the
       // creator must be in its admins list.
       allow create: if signedIn()
