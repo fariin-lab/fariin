@@ -988,7 +988,10 @@ private extension StoryDetailView {
             .gesture(holdGesture)
             // The pause and the resume both hang off the phase, so there is exactly one place where
             // a finger changes what the story is doing.
-            .onChange(of: pressPhase) { _, phase in
+            // ⚠️ THE ONE-PARAMETER FORM, because this file is in the StoryUI package and that
+            // deploys below iOS 17 — `onChange(of:initial:_:)` is 17+ and the app module's use of it
+            // elsewhere does not carry over here. The value handed in is the NEW one.
+            .onChange(of: pressPhase) { phase in
                 switch phase {
                 case .down, .holding:
                     // The keyboard owns the pause while a reply is being composed; a finger on the
