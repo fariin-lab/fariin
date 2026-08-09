@@ -806,7 +806,13 @@ private extension StoryDetailView {
                     .frame(height: 130)
                     .allowsHitTesting(false)
                 // Our own design (clean, story-style): bottom-LEFT, no hard line, over the soft fade.
-                Text(text)
+                // LINKS IN A CAPTION ARE REAL LINKS (his 2026-08-09 "caption must be work Link"):
+                // detected once per render, tappable in place, opening through the system. The
+                // expand/collapse tap below keeps every non-link touch — SwiftUI routes a touch on
+                // a link run to the link and everything else to the gesture. @mentions are
+                // deliberately NOT styled yet: a highlighted mention that goes nowhere is a fake
+                // feature, and the mention system (friends-only notify) is its own build.
+                Text(Self.captionWithLinks(text))
                     .font(.system(size: 16))
                     .foregroundColor(.white)
                     .shadow(color: .black.opacity(0.25), radius: 4)
@@ -836,6 +842,25 @@ private extension StoryDetailView {
             }
             .frame(maxWidth: .infinity, alignment: .bottomLeading)
         }
+    }
+
+    /// The caption with every URL made tappable. White and underlined rather than blue: the caption
+    /// sits on a photograph behind a dark fade, and blue-on-anything is the one colour combination
+    /// that can vanish there; the underline is what says "link" on every backdrop. Bare domains
+    /// count (NSDataDetector supplies the scheme), which is how people actually type them.
+    static func captionWithLinks(_ text: String) -> AttributedString {
+        var a = AttributedString(text)
+        guard let det = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return a }
+        let full = NSRange(text.startIndex..., in: text)
+        for m in det.matches(in: text, range: full) {
+            guard let url = m.url,
+                  let sr = Range(m.range, in: text),
+                  let ar = Range(sr, in: a) else { continue }
+            a[ar].link = url
+            a[ar].underlineStyle = .single
+            a[ar].foregroundColor = .white
+        }
+        return a
     }
 
     @ViewBuilder
