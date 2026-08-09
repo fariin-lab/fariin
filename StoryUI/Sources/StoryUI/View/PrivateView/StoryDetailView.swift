@@ -604,6 +604,34 @@ struct StoryDetailView: View {
             }
             NotificationCenter.default.post(name: .storyItemDeleted, object: deletedId)
         }
+        // THE DATA CHANGED UNDER AN OPEN VIEWER — swap the items in place, keep the person where
+        // they are. Built for an upload finishing in the background (host's 2026-08-09 report: the
+        // whole viewer used to be torn down and recreated at that moment, on whatever story you were
+        // watching). Same architecture as the delete above: this page's `@State` copy is the truth
+        // the screen reads, so it is the thing to update.
+        //
+        // The watched item is re-found BY ID, and only the index part of the clock moves — the
+        // fraction rides so the bar does not blink backwards for an unrelated change. A watched item
+        // whose id VANISHED is the placeholder that just became the real story: same slot, so the
+        // screen keeps the same picture (its bytes were seeded at post time) and the segment restarts.
+        .onReceive(NotificationCenter.default.publisher(for: .storyItemsReconciled)) { note in
+            guard let payload = note.object as? StoryItemsReconcile,
+                  payload.bucketId == model.id,
+                  !payload.stories.isEmpty else { return }
+            let oldIndex = getCurrentIndex()
+            let watchedId = (oldIndex >= 0 && oldIndex < model.stories.count) ? model.stories[oldIndex].id : nil
+            model.stories = payload.stories
+            // The pager builds FUTURE pages from the shared list — it must agree with this one.
+            if let bi = viewModel.stories.firstIndex(where: { $0.id == model.id }) {
+                viewModel.stories[bi].stories = payload.stories
+            }
+            let frac = timerProgress.isFinite ? timerProgress - CGFloat(Int(timerProgress)) : 0
+            if let watchedId, let ni = model.stories.firstIndex(where: { $0.id == watchedId }) {
+                if ni != oldIndex { timerProgress = CGFloat(ni) + frac }
+            } else {
+                timerProgress = CGFloat(min(max(0, oldIndex), model.stories.count - 1))
+            }
+        }
     }
 }
 

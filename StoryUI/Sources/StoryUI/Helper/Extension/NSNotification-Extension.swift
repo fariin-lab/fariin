@@ -15,6 +15,8 @@ extension NSNotification.Name {
     // Host (app) can freeze/resume the running story+progress while it shows a sheet over the viewer.
     static let pauseStory = Notification.Name("pauseStory")
     static let resumeStory = Notification.Name("resumeStory")
+    /// One bucket's items changed under an OPEN viewer (object: `StoryItemsReconcile`).
+    public static let storyItemsReconciled = Notification.Name("storyItemsReconciled")
     // Seamless per-item delete: host posts deleteCurrentStoryItem (trash tap); the viewer drops the active
     // item + slides to the adjacent one in-place, then posts storyItemDeleted(object: id) for the host to
     // remove it from the database.

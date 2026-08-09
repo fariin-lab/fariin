@@ -864,6 +864,12 @@ struct StoryViewer: View {
     /// the same reason (`ensureSubsequentItemsDownloaded`, the `contextAfter` loop).
     private var flatStories: [StoryUI.Story] { models.flatMap { $0.stories } }
 
+    /// Every bucket + item id this viewer is currently fed. When it CHANGES while the viewer is
+    /// open — an upload landing swaps the placeholder id for the real story's — the fresh buckets
+    /// are pushed into the mounted pages in place. See the `.onChange` in the body and
+    /// `StoryItemsReconcile` in the library.
+    private var reconcileSignature: [String] { groups.flatMap { [$0.id] + $0.stories.map(\.id) } }
+
     private func prefetchAhead(currentId: String) {
         let all = flatStories
         guard let i = all.firstIndex(where: { $0.id == currentId }) else { return }
@@ -1216,6 +1222,16 @@ struct StoryViewer: View {
         // NO host pause post during the swipe-DOWN dismiss drag — matching TestFlight build 210,
         // whose scroll-down-to-close the user confirmed as the correct one. The library already
         // pauses on its pan's own .began; this extra post only existed in 211+.
+        // A CHANGED FEED RECONCILES THE OPEN VIEWER, it does not rebuild it. The uploading door
+        // used to re-key the whole viewer on `svc.uploading` (his 2026-08-09 report: watching story
+        // A while C uploads — C landing closed and reopened the viewer around him). The door leaves
+        // identity alone now, and this pushes the fresh items into the mounted pages instead.
+        .onChange(of: reconcileSignature) { _, _ in
+            for m in models {
+                NotificationCenter.default.post(name: .storyItemsReconciled,
+                                                object: StoryItemsReconcile(bucketId: m.id, stories: m.stories))
+            }
+        }
         // Carousel centred a different one of my stories while the sheet is up → advance the frozen
         // story underneath to match, so collapsing lands on that story with no photo-swap flash.
         .onChange(of: sheetStoryId) { _, id in
@@ -2865,8 +2881,14 @@ struct StoryViewer: View {
     }
 
     private func timeAgo(_ d: Date) -> String {
-        let f = RelativeDateTimeFormatter(); f.unitsStyle = .abbreviated
-        return f.localizedString(for: d, relativeTo: Date())
+        // Number + one letter, no "ago" (owner 2026-08-09: "12 Sec ago" → "12s"). A story lives 24h,
+        // so h is the ceiling in practice; d/w cover the archive, which formats through this too.
+        let s = max(0, Int(Date().timeIntervalSince(d)))
+        if s < 60 { return "\(s)s" }
+        if s < 3600 { return "\(s / 60)m" }
+        if s < 86_400 { return "\(s / 3600)h" }
+        if s < 7 * 86_400 { return "\(s / 86_400)d" }
+        return "\(s / (7 * 86_400))w"
     }
 
     // Owner bar: overlapping viewer avatars + "N Views" + ❤️ reactions (tap → sheet) + delete.
@@ -3102,8 +3124,9 @@ struct UploadingStoryHandoff: View {
             // not a SwiftUI sibling sitting behind it. So this black stayed full-screen behind a
             // card that was shrinking away from it.
             //
-            // The reason it exists is real and is kept: the view is re-fed when the upload finishes
-            // (`.id(svc.uploading)`), and a constant backdrop is what stops that swap blinking.
+            // The reason it exists has narrowed: the viewer used to be RE-CREATED when the upload
+            // finished (`.id(svc.uploading)`, since removed — the swap reconciles in place now), and
+            // this backdrop stopped that recreation blinking. It stays as the door's opaque ground.
             // It only has to be constant AT REST. `storyFlightActive` is already the app's answer to
             // "is the card in the air" — the same signal the reply bar and the caption leave on —
             // so the backdrop now steps aside for exactly the moments the flight owns the screen.
@@ -3122,9 +3145,12 @@ struct UploadingStoryHandoff: View {
                             heroSourceKey: heroSourceKey, heroSourcePinned: true,
                             onHeroClose: onHeroClose,
                             onClose: onClose, onProfile: onProfile)
-                    // Re-feed identity when the upload flips done → open on the real just-posted story
-                    // (image already URLCache-warm from postStory, so the swap is seamless).
-                    .id(svc.uploading)
+                    // ⚠️ NO `.id(svc.uploading)` — THAT WAS THE CLOSE-AND-REOPEN. Re-keying on the
+                    // upload flag destroyed and recreated the WHOLE viewer the moment a background
+                    // post landed, whatever story he was watching (his 2026-08-09 report: watching A
+                    // while C uploads, C finishes, A closes/reopens). The viewer now stays alive and
+                    // the placeholder→real swap flows through `reconcileSignature` in StoryViewer —
+                    // Telegram's behaviour: a background post is a data update, never a transition.
             } else {
                 // Nothing to show (no stories and no upload) → just close.
                 Color.clear.onAppear { onClose() }
