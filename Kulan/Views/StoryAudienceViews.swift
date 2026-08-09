@@ -141,8 +141,11 @@ struct StoryTick: View {
     var body: some View {
         Image(systemName: on ? "checkmark.circle.fill" : "circle")
             .font(.system(size: 22))
-            .foregroundStyle(on ? Color.accentColor : Color.secondary.opacity(0.55))
-            .symbolRenderingMode(.hierarchical)
+            // `.blue` LITERALLY, not accentColor: the app's accent resolves near-grey here, and a
+            // grey tick does not read as chosen (his 2026-08-09 screenshot with the ticks circled).
+            // Same blue as the Post Story capsule, so the sheet's two affirmatives agree.
+            .foregroundStyle(on ? Color.blue : Color.secondary.opacity(0.55))
+            .symbolRenderingMode(on ? .monochrome : .hierarchical)
     }
 }
 

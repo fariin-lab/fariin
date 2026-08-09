@@ -93,6 +93,12 @@ struct ShareStorySheet: View {
     @State private var oneTimePicking = false
     @State private var oneTimeViewers: Set<String> = []
     private var oneTimeActive: Bool { !oneTimeViewers.isEmpty }
+    /// SEVERAL custom lists at once (owner 2026-08-09): ticking a second list ADDS it, and the post
+    /// is ONE story whose audience is the union — his explicit answer, "do not create a separate
+    /// story for each list". Sheet-local like the one-time set: the STORE still remembers exactly
+    /// one audience between posts (the first-ticked list), because "which lists went together" is a
+    /// property of a post, not a setting. Empty = the store's single selection rules, as always.
+    @State private var multiCustom: Set<String> = []
 
     private var contactIds: Set<String> { StoryContact.ids(contacts) }
 
@@ -173,9 +179,9 @@ struct ShareStorySheet: View {
                     // row sitting here between posts would be an audience you cannot pick.
                     if oneTimeActive { oneTimeRow }
                     ForEach(store.all) { a in
-                        Button { oneTimeViewers = []; store.select(a.id) } label: {
+                        Button { tapAudience(a) } label: {
                             StoryAudienceRow(audience: a, contacts: contactIds) {
-                                StoryTick(on: !oneTimeActive && store.selectedId == a.id)
+                                StoryTick(on: tickOn(a))
                             }
                         }
                     }
@@ -193,6 +199,10 @@ struct ShareStorySheet: View {
                 } footer: {
                     if oneTimeActive {
                         Text("Each person can open this once. As soon as they do it is gone for them, and they cannot open it again.")
+                    } else if multiCustom.count > 1 {
+                        // Same length class as the singular line, so `footerHeight`'s tallest-of-all
+                        // measure is untouched.
+                        Text("Only the people in these lists can watch it.")
                     } else {
                         Text(store.selected.isPublic
                              ? "Anyone on Fariin who opens your profile can watch this. People you have chatted with also get it in their stories."
@@ -219,7 +229,14 @@ struct ShareStorySheet: View {
         // is obviously the one he means. Signal does the same.
         .sheet(isPresented: $creating) {
             CreateCustomStoryFlow(
-                onCreated: { a in oneTimeViewers = []; store.select(a.id); creating = false },
+                onCreated: { a in
+                    oneTimeViewers = []
+                    store.select(a.id)
+                    // Mid-multi-pick, the new list JOINS the ticks instead of replacing them — he
+                    // built it while choosing lists, so it is one of the lists he is choosing.
+                    if !multiCustom.isEmpty { multiCustom.insert(a.id) }
+                    creating = false
+                },
                 onCancel: { creating = false })
         }
         // PICK THE PEOPLE, THEN COME BACK. Done does not post: the sheet already has a Post Story
@@ -283,9 +300,38 @@ struct ShareStorySheet: View {
         .background(Color(.systemGroupedBackground))
     }
 
+    /// One tap on an audience row. Everyone and My Friends stay exclusive — a public post and a
+    /// union of lists are different sentences, not different degrees. Custom lists TOGGLE, so a
+    /// second tick ADDS a list rather than replacing the first (his 2026-08-09 ask).
+    private func tapAudience(_ a: StoryAudience) {
+        oneTimeViewers = []
+        guard a.kind == .custom else { multiCustom = []; store.select(a.id); return }
+        var set = multiCustom
+        // The single tick the store shows counts as one: tapping a SECOND list while "oky" is
+        // ticked must read as adding to oky, not as replacing it silently.
+        if set.isEmpty, store.selected.kind == .custom { set.insert(store.selected.id) }
+        if set.contains(a.id) { set.remove(a.id) } else { set.insert(a.id) }
+        multiCustom = set
+        if set.isEmpty {
+            // Unticking the last list cannot leave the post aimed at nothing — the same fallback
+            // the store itself uses when a selected list is deleted.
+            store.select(store.myFriends.id)
+        } else if store.selected.kind != .custom || !set.contains(store.selectedId) {
+            // The store remembers exactly ONE audience between posts; keep it on a ticked list.
+            if let keep = store.all.first(where: { set.contains($0.id) }) { store.select(keep.id) }
+        }
+    }
+
+    private func tickOn(_ a: StoryAudience) -> Bool {
+        guard !oneTimeActive else { return false }
+        if multiCustom.isEmpty { return store.selectedId == a.id }
+        return a.kind == .custom && multiCustom.contains(a.id)
+    }
+
     private func post() {
         guard !posting else { return }   // ignore a second tap while the first is in flight
         if oneTimeActive { postOneTime(); return }
+        if !multiCustom.isEmpty { postToLists(); return }
         let a = store.selected
         let recipients = a.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom)
         // Block ONLY when you HAVE chats but this audience narrows down to literally no one. With no
@@ -356,6 +402,67 @@ struct ShareStorySheet: View {
             }
         }
         onPosted()   // dismisses the editor -> back to chat; upload runs in the background
+    }
+
+    /// SEVERAL LISTS, ONE STORY — his 2026-08-09 answer, in his words: "one single story that all
+    /// the selected lists can see. Do not create a separate story for each list." So the audience
+    /// is the UNION, resolved per list exactly the way a single list is (live chats, hidden-from
+    /// subtracted), then joined; the service still receives one included set and posts one story.
+    ///
+    /// Replies are allowed only when EVERY selected list allows them: combining lists must never
+    /// hand reply rights to people whose own list has them switched off — the strictest list wins,
+    /// the same direction every other privacy rule here leans.
+    private func postToLists() {
+        let lists = store.all.filter { $0.kind == .custom && multiCustom.contains($0.id) }
+        guard !lists.isEmpty else {
+            // Every ticked list was deleted from another screen while this sheet sat open.
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            emptyAudienceAlert = true
+            return
+        }
+        let recipients = lists.reduce(into: Set<String>()) {
+            $0.formUnion($1.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom))
+        }
+        if recipients.isEmpty && !contactIds.isEmpty {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            emptyAudienceAlert = true
+            return
+        }
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        posting = true
+
+        let included = lists.reduce(into: Set<String>()) { $0.formUnion(Set($1.members)) }
+        let excluded = store.hiddenFrom
+        let replies = lists.allSatisfy { $0.allowReplies }
+        // The header badge reads every list it went to. Device-local, like every custom name.
+        let tag = StoryAudienceTag(label: "custom",
+                                   name: lists.map(\.name).joined(separator: ", "))
+
+        if let video {
+            StoriesService.shared.postVideoStoryBackground(
+                videoURL: video.url, thumbnail: video.thumbnail, muted: video.muted,
+                burn: video.burn, trim: video.trim, caption: caption,
+                excluded: excluded, included: included, everyone: false, allowsReplies: replies,
+                tag: tag)
+        } else {
+            StoriesService.shared.postStoryBackground(
+                image: image, caption: caption,
+                excluded: excluded, included: included, everyone: false, allowsReplies: replies,
+                tag: tag)
+        }
+        for extra in extras {
+            if let v = extra.video {
+                StoriesService.shared.postVideoStoryBackground(
+                    videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim,
+                    caption: "", excluded: excluded, included: included, everyone: false,
+                    allowsReplies: replies, tag: tag)
+            } else if let p = extra.photo {
+                StoriesService.shared.postStoryBackground(
+                    image: p, caption: "", excluded: excluded, included: included, everyone: false,
+                    allowsReplies: replies, tag: tag)
+            }
+        }
+        onPosted()
     }
 
     /// The one-time post. Same pipeline, same background upload, one flag different.
