@@ -572,7 +572,13 @@ struct StoryDetailView: View {
             hostPause.paused = true; pauseVideo()
         }
         .onReceive(NotificationCenter.default.publisher(for: .resumeStory)) { _ in
-            hostPause.paused = false; if !keyboardManager.isKeyboardOpen { playVideo() }
+            hostPause.paused = false
+            // ⚠️ THE FLAGS COME DOWN BEFORE THE PLAY, NOT AFTER. `playVideo` now refuses while
+            // `isPaused`/`isHolding` stand (see its note), so calling it first — as this line did —
+            // would refuse, and then the clear below would leave a story whose bar runs and whose
+            // video never restarts. Every other resume path already had this order; this one was
+            // the odd one out and only worked because the guard did not exist.
+            //
             // AND A HOLD THAT NEVER REPORTED ITS RELEASE. The engage-time pause above closes the
             // common case; this is the belt for a hold whose touch was taken by another recogniser
             // mid-press. `resumeStory` is posted at every moment the story is definitely meant to be
@@ -583,6 +589,7 @@ struct StoryDetailView: View {
             // it on a resume that arrives while backgrounded would start the story playing behind
             // the app switcher. `scenePhase` owns that one and hands it back itself.
             if !scenePaused, isPaused || isHolding { isPaused = false; isHolding = false }
+            if !keyboardManager.isKeyboardOpen { playVideo() }
         }
         // Host's viewers carousel centred a different one of MY stories → jump the (frozen) viewer to
         // that item, so when the sheet collapses the story underneath matches the carousel/morph (no
@@ -1022,6 +1029,13 @@ private extension StoryDetailView {
         isAdvancing = false
         isPaused = false   // safety: never carry a stuck pause across a user switch (R1 freeze fix)
         scenePaused = false
+        // AND THE HOLD LATCH, which was the one missing from this list. It matters more now that
+        // `playVideo` refuses while it stands: a hold whose release was eaten by the page pan —
+        // the exact case the whole loan design exists for — would carry `isHolding` into the next
+        // person and their video would never start, with the bar running over a still picture.
+        // `touchPauseBegan` goes with it: a loan belongs to the story it was taken against.
+        isHolding = false
+        touchPauseBegan = nil
         // Clear every pause latch too, or a new bucket can start permanently frozen (stuck-state bug).
         isTimerRunning = false
         isAnimationStarted = false
@@ -1314,6 +1328,24 @@ private extension StoryDetailView {
     func playVideo() {
         // Never resume under a sheet or the reply keyboard, and never index an empty bucket.
         guard !model.stories.isEmpty, !hostPause.paused, !keyboardManager.isKeyboardOpen else { return }
+        // ⚠️ AND NEVER UNDER A FINGER. THE PAUSE IS THE AUTHORITY; THIS FUNCTION IS NOT.
+        //
+        // His 2026-08-09 report: hold a story, it pauses, and about a second later it starts playing
+        // again with the finger still down. Nothing was unpausing it — `isPaused` and `isHolding`
+        // both stayed true and the progress bar stayed frozen, which is why it reads as the video
+        // alone disobeying. This function simply never asked.
+        //
+        // It is called from six places and only two of them mean "the person wants this playing".
+        // The other four are events that happen to arrive while a story is up — a keyboard closing,
+        // an emoji animation ending, the scene returning, and above all `.onChange(of: state)`,
+        // which fires when the PLAYER reports `.started` or when the async duration load lands a
+        // beat after opening. That last one is the ~1s in his report: it has nothing to do with the
+        // hold, it just calls `play()` on whatever is loaded.
+        //
+        // Every caller that legitimately resumes already clears these two flags on the line before
+        // it calls here (the release branch, the loan collector, the scene's own resume), so this
+        // guard costs those nothing and refuses exactly the callers that were never asked for.
+        guard !isPaused, !isHolding else { return }
         let index = getCurrentIndex()
         let currentUser = viewModel.currentStoryUser == model.id
         let video = model.stories[index].config.mediaType == .video
