@@ -145,6 +145,9 @@ final class StoriesService {
         let url: String                 // the synthetic media url its bytes are cached under
         let startedAt: Date
         let tag: StoryAudienceTag
+        // The caption rides on the placeholder from frame one (his report: a caption typed before
+        // posting only appeared once the upload finished — the synthetic item simply never carried it).
+        let caption: String
     }
     /// Oldest first, which is the order stories are read in — so the placeholders sit at the end of
     /// my bucket in the same order they will land as real stories.
@@ -179,6 +182,7 @@ final class StoriesService {
             return Story(id: p.id, authorUid: uid, createdAt: p.startedAt,
                          expiresAt: p.startedAt.addingTimeInterval(24 * 3600),
                          mediaUrl: p.url, allowsReplies: false,
+                         caption: p.caption,
                          audienceLabel: p.tag.label, oneTime: p.tag.oneTime)
         }
     }
@@ -197,7 +201,8 @@ final class StoriesService {
                                     image: UIImage(data: image),
                                     url: "https://fariin.local/uploading-\(UUID().uuidString).jpg",
                                     startedAt: Date(),
-                                    tag: tag)   // the header says the chosen audience from frame one
+                                    tag: tag,   // the header says the chosen audience from frame one
+                                    caption: caption)
         // Pre-store the picked bytes under the synthetic URL so the injected uploading item renders
         // instantly in the viewer. BOTH CACHES, not URLCache alone: nothing on any server answers a
         // `fariin.local` url, so an eviction has nowhere to fall back to. See `StoryImageSeed`.
@@ -447,7 +452,8 @@ final class StoriesService {
                                     image: placeholder,
                                     url: "https://fariin.local/uploading-\(UUID().uuidString).jpg",
                                     startedAt: Date(),
-                                    tag: tag)
+                                    tag: tag,
+                                    caption: caption)
         // ⚠️ THE SAME BYTES, or the composed picture above is wasted. StoryUI's ImageLoader reads
         // URLCache FIRST, so seeding the raw poster here would win over `pending.image` and put the
         // black-letterboxed frame back on screen.
