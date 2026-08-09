@@ -190,6 +190,10 @@ struct StoryDetailView: View {
     /// reports it is playing again. See `.storyBuffering`.
     @State private var isBuffering: Bool = false
     @State private var captionExpanded: Bool = false   // tap the caption to expand past 3 lines
+    /// The instant pause's LOAN CLOCK — when the finger-down pause engaged. `systemUptime` because
+    /// it cannot jump with a wall-clock change. nil = no loan outstanding. See the hold gesture for
+    /// the design; the repayment lives at the top of `startProgress`, on the bar's own 0.05s tick.
+    @State private var touchPauseBegan: TimeInterval? = nil
 
     /// The index is RIGHT BEFORE THE FIRST FRAME, not corrected after it. `timerProgress` started
     /// at 0 and the jump to the first unseen item lived in `.onAppear` — so the first body
@@ -846,33 +850,52 @@ private extension StoryDetailView {
                     .fill(.black.opacity(0.01))
                     .onTapGesture { tapNextStory() }     // right two-thirds = next
             }
-            // ⚠️ THE PAUSE BELONGS TO THE HOLD, NOT TO THE TOUCH, and that is his 2026-08-08 report:
-            // "why you showing me when i click story normal story pause".
+            // ⚠️ THE INSTANT PAUSE IS A LOAN, AND THAT IS THE WHOLE DESIGN. Read this before moving
+            // anything — this area has swung three times now.
             //
-            // `onPressingChanged(true)` fires the INSTANT a finger lands, so every tap paused the
-            // story and then relied on `onPressingChanged(false)` to undo it. That release is the
-            // half that is not guaranteed: this view sits under UIKit recognisers that can claim the
-            // touch out from under it — the pager's page pan, the hero's dismiss pan, the row's own
-            // press — and a SwiftUI gesture whose touch is stolen does not reliably report that it
-            // stopped pressing. `isPaused` then stays true for ever, because nothing else clears it:
-            // `resumeStory` only ever cleared the HOST's pause, which is a different flag. That is
-            // the "story is paused without reason" he has been reporting since 08-07, and why it
-            // looked random — it depended on whether another recogniser happened to win that touch.
+            // The facts that shaped it:
+            //  · `onPressingChanged(true)` fires the INSTANT a finger lands — the down edge was
+            //    always available, on this very gesture, with no new machinery.
+            //  · The RELEASE is the half that cannot be trusted: a UIKit recogniser that claims the
+            //    touch (page pan, dismiss pan) can leave `onPressingChanged` silent, and a pause
+            //    trusting that release strands forever — his "paused without reason" reports.
+            //  · Pausing at the 0.25s ENGAGE fixed the strand and CREATED the delay he then
+            //    reported: "the pause must happen instantly on touch down" (2026-08-09).
+            //  · The recogniser-on-superview shape that once solved both is FORBIDDEN — his order,
+            //    2026-08-09: "Do not use the old implementation again."
             //
-            // Pausing on the ENGAGE instead removes the whole class: a tap shorter than 0.25s never
-            // pauses at all, so there is nothing left for a lost release to strand. A real hold
-            // pauses exactly as before, a quarter second in, which is when the chrome fades anyway.
-            // A horizontal swipe still exceeds `maximumDistance` and cancels the press, so the pager
-            // keeps its touch (the R2 fix that shaped this gesture).
+            // So the pause borrows against the hold instead of trusting anybody's release. Touch
+            // down → pause NOW and start a 0.35s loan clock. A real hold repays the loan at 0.25s
+            // (`perform` fires, `isHolding` confirms it, the pause is now the hold's). A tap or a
+            // stolen touch never confirms — and the repayment collector at the top of
+            // `startProgress`, riding the SAME 0.05s tick that drives the bar, clears the pause the
+            // moment the loan is 0.35s old with no hold behind it. A stuck pause from the down edge
+            // is therefore IMPOSSIBLE BY CONSTRUCTION, not prevented by care: if the tick runs at
+            // all, the heal runs with it. The worst mistiming is a bar frozen ~0.35s during a
+            // swipe, where the fold gate is holding it anyway.
+            //
+            // The chrome fade stays on the ENGAGE (`isHolding` at 0.25s), never on the touch — his
+            // other report ("when i click story normal story pause": every tap would blink the
+            // header). Two clocks on purpose. [[kulan-story-hold-pause-instant]].
             .onLongPressGesture(minimumDuration: 0.25, maximumDistance: 10,
                                 perform: {
                 guard !keyboardManager.isKeyboardOpen else { return }
-                isHolding = true; isPaused = true; pauseVideo()
+                isHolding = true
+                touchPauseBegan = nil   // the hold confirmed it: the pause is no longer on loan
+                if !isPaused { isPaused = true; pauseVideo() }   // belt: a missed down edge
             },
                                 onPressingChanged: { pressing in
-                guard !pressing else { return }
+                if pressing {
+                    // THE DOWN EDGE. Instant, and safe to act on precisely because of the loan.
+                    guard !keyboardManager.isKeyboardOpen, !isPaused else { return }
+                    isPaused = true
+                    touchPauseBegan = ProcessInfo.processInfo.systemUptime
+                    pauseVideo()
+                    return
+                }
                 // Release, or a cancellation we DID hear about. Belt-and-braces: clearing a flag
                 // that is already false costs nothing, and this is the common path home.
+                touchPauseBegan = nil
                 if isPaused || isHolding {
                     isPaused = false; isHolding = false; playVideo()
                 }
@@ -986,6 +1009,15 @@ private extension StoryDetailView {
     
     func startProgress() {
         guard !model.stories.isEmpty else { return }   // empty bucket (all expired/deleted) → nothing to index
+        // THE LOAN COLLECTOR — see the hold gesture. A touch-down pause that no real hold confirmed
+        // within 0.35s is a tap or a stolen touch, and both mean the story should be running. This
+        // runs BEFORE the pause guard below, on the same tick, so a missed release can freeze the
+        // bar for 0.35s at most. `!scenePaused`: backgrounding also sets `isPaused`, and that one
+        // belongs to `scenePhase == .active` to clear — the collector only forgives its own loan.
+        if let t0 = touchPauseBegan, !isHolding, ProcessInfo.processInfo.systemUptime - t0 > 0.35 {
+            touchPauseBegan = nil
+            if isPaused, !scenePaused { isPaused = false; playVideo() }
+        }
         // Report the ACTUAL current item as seen (per-item, not the whole bucket) — drives accurate
         // view receipts + "Seen by". Runs before the pause guard so it fires the moment an item shows.
         if viewModel.currentStoryUser == model.id {
