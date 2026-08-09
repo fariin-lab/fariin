@@ -180,7 +180,20 @@ public final class StoryCardMorph {
     ///
     /// The open no longer has a window of its own to be confused with this one — a circular door
     /// opens as a card now (see `circleMorph`), which is the whole of his second report.
-    static let circleRushSpan: CGFloat = 0.06
+    /// ⚠️ 0.03 SINCE 2026-08-09, down from 0.06, and the reason is his WhatsApp reference shot.
+    ///
+    /// The shape journey was already right — at `circleMorph = 0` the crop is a SQUARE at the
+    /// card's width, i.e. a centre-crop, which is exactly WhatsApp's filled circle rather than a
+    /// whole story shrunk to fit. What he photographed and disliked ("I don't like how the circle
+    /// starts") is the INTERMEDIATE: a big rounded rectangle for the first tenth of the travel,
+    /// which reads as a blob because it is neither the card nor the circle.
+    ///
+    /// 0.03 of `f` over a ~0.62 ceiling is about 5% of the travel his finger makes, so the circle
+    /// is there almost from the first movement and the whole rest of the drag is a circle flying
+    /// home — his image 2. A NUMBER, deliberately: the geometry is not in question, only how long
+    /// it is allowed to be in between, so this is the one thing to move if he wants it different
+    /// again. Divide by the door's `heroDragCeiling` before reading it as a percentage.
+    static let circleRushSpan: CGFloat = 0.03
 
     public func setFlightCoverAlpha(_ a: CGFloat) {
         guard let flightCover else { return }
