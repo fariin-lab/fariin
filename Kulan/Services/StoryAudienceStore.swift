@@ -273,7 +273,7 @@ final class StoryAudienceStore {
         // that moment, not addressed to them, and silently restoring reach to something posted
         // while they were excluded is the surprise in the other direction.
         if hidden {
-            Task { await StoriesService.shared.revokeAudience(for: uid) }
+            Task { await StoriesRepository.shared.revokeAudience(for: uid) }
         }
     }
 
