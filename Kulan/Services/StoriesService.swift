@@ -1227,7 +1227,9 @@ final class StoriesRepository {
             // The server-side equivalent, and the same once-per-sign-in cadence: mirrors of my own
             // expired stories, which nothing else deletes. See `sweepExpiredMirrors`. Detached so a
             // slow round trip cannot delay the row painting.
-            Task.detached { [weak self] in await self?.sweepExpiredMirrors() }
+            // `StoriesService`, not `self` — this call site lives in `StoriesRepository`, and the
+            // two share a file but not a type.
+            Task.detached { await StoriesService.shared.sweepExpiredMirrors() }
             await MainActor.run {
                 seedFromDisk(me)   // last-known row paints NOW; the listeners reconcile it silently
                 start(me)          // first call, or the signed-in user changed
