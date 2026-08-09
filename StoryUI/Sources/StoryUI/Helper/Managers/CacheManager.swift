@@ -96,7 +96,17 @@ final class CacheManager: NSObject {
     /// because a bare `downloadTask(with: url)` carries no request configuration at all. On the
     /// expensive mobile data a lot of this app's users are on, that was the single most costly
     /// thing the app did without being asked.
-    func loadVideo(from url: URL, speculative: Bool = false, completion: @escaping (Result<URL>) -> Void) {
+    /// `allowsCellular`: whether a SPECULATIVE fetch may go out over mobile data. Off by default —
+    /// the blanket refusal this parameter replaces. The story lookahead turns it on for the next
+    /// clip or two, because a video you are two taps away from is barely a guess; everything else
+    /// speculative stays on Wi-Fi. Low Data Mode is refused either way: that switch is the person
+    /// telling the system to spend nothing it does not have to.
+    ///
+    /// `onTask`: the download, handed back so the caller can cancel it if the reason for wanting it
+    /// goes away. A cancelled speculative download is data not spent on a story that was skipped.
+    func loadVideo(from url: URL, speculative: Bool = false, allowsCellular: Bool = false,
+                   onTask: ((URLSessionTask) -> Void)? = nil,
+                   completion: @escaping (Result<URL>) -> Void) {
         switch createCacheDirectory() {
         case .success(let cacheDirectory):
             let videoFileName = Self.cacheFileName(for: url)
@@ -116,7 +126,9 @@ final class CacheManager: NSObject {
                 } else {
                     // Clear the wedge, then fetch it properly.
                     try? fileManager.removeItem(at: destinationUrl)
-                    downloadAndCacheVideo(from: url, speculative: speculative, completion: completion)
+                    downloadAndCacheVideo(from: url, speculative: speculative,
+                                          allowsCellular: allowsCellular, onTask: onTask,
+                                          completion: completion)
                 }
             } else {
                 downloadAndCacheVideo(from: url, speculative: speculative, completion: completion)
@@ -141,7 +153,9 @@ private extension CacheManager {
         .success(StoryStorage.directory("VideoCache"))
     }
 
-    func downloadAndCacheVideo(from url: URL, speculative: Bool, completion: @escaping (Result<URL>) -> Void) {
+    func downloadAndCacheVideo(from url: URL, speculative: Bool, allowsCellular: Bool = false,
+                               onTask: ((URLSessionTask) -> Void)? = nil,
+                               completion: @escaping (Result<URL>) -> Void) {
         let backgroundQueue = DispatchQueue.global(qos: .background)
 
         backgroundQueue.async { [weak self] in
@@ -171,8 +185,16 @@ private extension CacheManager {
                 // that refuses CELLULAR. With only the first set this read as a mobile-data guard
                 // and was not one, and a speculative clip is the biggest thing the app fetches
                 // without being asked. See StoryPrefetcher.warmVideo.
+                //
+                // Low Data Mode is still an unconditional no. Cellular is now the CALLER's decision
+                // (`allowsCellular`), because "speculative" covers two very different bets: the next
+                // clip in a story you are already watching, and a clip for somebody whose ring you
+                // have not touched. Only the first one is worth mobile data.
                 request.allowsConstrainedNetworkAccess = false
-                request.allowsExpensiveNetworkAccess = false
+                request.allowsExpensiveNetworkAccess = allowsCellular
+                // Background service type, which matters most on exactly the connection this is
+                // now allowed onto: the system yields it to the clip actually being watched rather
+                // than racing it for the same bandwidth.
                 request.networkServiceType = .background
             }
             let task = session.downloadTask(with: request) { [weak self] (tempLocalUrl, response, error) in
@@ -219,6 +241,7 @@ private extension CacheManager {
                     DispatchQueue.main.async { completion(.failure(error)) }
                 }
             }
+            onTask?(task)
             task.resume()
         }
     }

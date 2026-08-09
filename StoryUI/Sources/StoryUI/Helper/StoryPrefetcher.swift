@@ -4,6 +4,7 @@
 
 import Foundation
 import UIKit
+import Network   // NWPathMonitor, for "is this connection the expensive one"
 
 /// WHY STORIES FEEL SLOW, AND WHAT SIGNAL DOES ABOUT IT.
 ///
@@ -32,9 +33,54 @@ public enum StoryPrefetcher {
     /// Signal's number.
     public static let lookahead = 3
 
+    /// HOW MANY VIDEOS AHEAD ON MOBILE DATA. Owner's decision, 2026-08-09: pre-download on cellular
+    /// too, so tapping onto a video is smooth the way Telegram is, but keep it tight. Two is the
+    /// smallest number that survives a normal tap-tap — the one you are about to reach and the one
+    /// after it — while a third is a clip most people never get to.
+    ///
+    /// Wi-Fi keeps the full `lookahead`. Low Data Mode gets none: that switch is the person telling
+    /// the system to spend nothing it does not have to, and guessing is exactly what it means.
+    private static let cellularVideoLookahead = 2
+
     private static let lock = NSLock()
     private static var inFlight = Set<String>()
+    /// Speculative downloads currently running, so one for a story that has been passed can be
+    /// stopped rather than paid for. `lookahead` marks the ones the viewer's window owns — the row's
+    /// first-card warms are not the window's to cancel.
+    private static var running: [String: (task: URLSessionTask, lookahead: Bool)] = [:]
     private static let queue = DispatchQueue(label: "fariin.story.prefetch", qos: .utility)
+
+    /// WHAT KIND OF CONNECTION THIS IS. `NWPathMonitor` is the only thing that answers it, and it
+    /// answers asynchronously — so until the first update lands the conservative answer stands:
+    /// assume the expensive one. Being briefly shallow on Wi-Fi costs a moment of loading; being
+    /// briefly deep on cellular costs somebody's data, and only one of those is worth risking.
+    private enum Net {
+        private static let monitor = NWPathMonitor()
+        /// Its own gate, deliberately not the prefetcher's `lock`: this one is taken from the
+        /// monitor's queue on every network change, and sharing it would make a path update wait
+        /// behind a download bookkeeping call for no reason.
+        private static let gate = NSLock()
+        private static let watch = DispatchQueue(label: "fariin.story.net")
+        private static var expensive = true
+        private static var constrained = false
+        private static var started = false
+
+        private static func start() {
+            gate.lock(); defer { gate.unlock() }
+            guard !started else { return }
+            started = true
+            monitor.pathUpdateHandler = { path in
+                gate.lock()
+                expensive = path.isExpensive
+                constrained = path.isConstrained
+                gate.unlock()
+            }
+            monitor.start(queue: watch)
+        }
+
+        static var isExpensive: Bool { start(); gate.lock(); defer { gate.unlock() }; return expensive }
+        static var isConstrained: Bool { start(); gate.lock(); defer { gate.unlock() }; return constrained }
+    }
 
     /// Warm everything from `index` onwards, up to `lookahead` items, out of the flattened list of
     /// every story in the viewer in the order they will be watched. Flattened ACROSS people on
@@ -45,7 +91,24 @@ public enum StoryPrefetcher {
         guard index + 1 < end else { return }
         let upcoming = Array(stories[(index + 1)..<end])
         queue.async {
-            for story in upcoming {
+            // HOW DEEP THE VIDEO GUESS GOES, decided per call because the connection can change
+            // mid-viewing. Posters are unaffected: they are a few KB and worth any connection.
+            let videoDepth = Net.isConstrained ? 0
+                           : (Net.isExpensive ? cellularVideoLookahead : lookahead)
+            // AND STOP PAYING FOR THE ONES BEHIND. This runs on every item change, so a clip warmed
+            // for a story that has since been passed — or skipped over by a fast tapper — is no
+            // longer wanted, and on mobile data an unwanted download is the whole cost this feature
+            // has to justify. Only the window's own downloads are cancelled; the row's first-card
+            // warms are somebody else's bet.
+            //
+            // ⚠️ THE ITEM BEING WATCHED IS KEPT, and it is not in `upcoming`. Its warm was started
+            // one call ago, when it was still the next one along, and it can easily be most of the
+            // way through at the moment you arrive on it. Cancelling that would throw those bytes
+            // away and leave the player to fetch the same clip again from zero — the exact wait
+            // this whole feature exists to remove.
+            let wanted = Set([stories[index].mediaURL] + upcoming.prefix(videoDepth).map(\.mediaURL))
+            cancelStaleWindow(keeping: wanted)
+            for (offset, story) in upcoming.enumerated() {
                 // The poster first and always. It is a few KB, it is what the blurred loading state
                 // draws, and having it means the story can never open on nothing.
                 warmImage(story.previewURL, poster: true)
@@ -56,11 +119,25 @@ public enum StoryPrefetcher {
                 // and AVPlayer never consults URLCache at all. Warming the wrong one would look like
                 // it worked and download everything twice.
                 switch story.config.mediaType {
-                case .video: warmVideo(story.mediaURL)
+                case .video:
+                    // The clip you are about to reach is worth mobile data; the third one along is
+                    // not. See `cellularVideoLookahead`.
+                    guard offset < videoDepth else { continue }
+                    warmVideo(story.mediaURL, allowsCellular: true, window: true)
                 default:     warmImage(story.mediaURL, poster: false)
                 }
             }
         }
+    }
+
+    /// Cancel the window's running video downloads that are no longer in it.
+    private static func cancelStaleWindow(keeping wanted: Set<String>) {
+        lock.lock()
+        let doomed = running.filter { $0.value.lookahead && !wanted.contains($0.key) }
+        for key in doomed.keys { running.removeValue(forKey: key) }
+        lock.unlock()
+        // Outside the lock: cancelling fires the completion handler, which takes it again.
+        for entry in doomed.values { entry.task.cancel() }
     }
 
     /// THE ONE STORY THE LOOKAHEAD CANNOT REACH: the first one.
@@ -114,6 +191,12 @@ public enum StoryPrefetcher {
     /// of scope the moment `loadVideo` returned, and it is the one holding the download.
     private static let videoCache = CacheManager()
 
+    /// ⚠️ THE ROW'S FIRST CARDS STAY ON WI-FI FOR VIDEO, and that is the line between the two bets.
+    /// The window above guesses about a story you are two taps from inside a viewer you have already
+    /// opened. This one guesses about people whose ring you have not touched at all, several of whom
+    /// you will scroll straight past — so its posters keep cellular (a few KB, and they are what the
+    /// card draws) and its clips do not.
+    ///
     /// ⚠️ CONSTRAINED IS NOT THE SAME AS EXPENSIVE, and only one of them was ever set.
     ///
     /// `allowsConstrainedNetworkAccess = false` refuses LOW DATA MODE. That is a switch almost
@@ -128,11 +211,18 @@ public enum StoryPrefetcher {
     /// users, which is the problem the prefetcher exists to solve. A POSTER is a few KB and it is
     /// what the card and the opening frame draw, so it is worth cellular. The MEDIA is megabytes for
     /// something nobody has asked to watch, so it is not.
-    private static func warmVideo(_ urlString: String?) {
+    /// `allowsCellular`: only the viewer's own next-clip window sets this. `window`: whether this
+    /// download belongs to that window, and may therefore be cancelled when the window moves past it.
+    private static func warmVideo(_ urlString: String?, allowsCellular: Bool = false,
+                                  window: Bool = false) {
         guard let urlString, !urlString.isEmpty, let url = URL(string: urlString) else { return }
         guard claim(urlString) else { return }
-        videoCache.loadVideo(from: url, speculative: true) { result in
+        videoCache.loadVideo(from: url, speculative: true, allowsCellular: allowsCellular,
+                             onTask: { task in
+            lock.lock(); running[urlString] = (task, window); lock.unlock()
+        }) { result in
             release(urlString)
+            lock.lock(); running.removeValue(forKey: urlString); lock.unlock()
             // ON DISK IS ONLY HALF OF IT. Building the asset, parsing the container, loading the
             // tracks and filling the render pipeline all still happen when you ARRIVE unless they are
             // done in advance, and all of it is visible as a wait. See StoryItemPreloader.
