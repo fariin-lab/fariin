@@ -30,6 +30,89 @@ final class KeyboardWatcher: ObservableObject {
     deinit { tokens.forEach { NotificationCenter.default.removeObserver($0) } }
 }
 
+/// The editor's pull-to-close pan, in UIKit.
+///
+/// It reports and does nothing else: no transform, no dismissal, no touch claiming. The editor owns
+/// what the numbers mean, exactly as the story viewer's hero drag does — one place decides the feel.
+///
+/// ⚠️ ON THE HOST'S TOP VIEW, and shared with everybody. `cancelsTouchesInView = false` and a
+/// delegate that says yes to simultaneity mean the buttons, the caption field and the zoomable image
+/// keep every touch they already had; this only watches. Direction-locked vertical, so a horizontal
+/// swipe (the thumbnail strip) fails it outright rather than fighting for the touch.
+private struct StoryEditorClosePan: UIViewRepresentable {
+    var enabled: Bool
+    var onChanged: (CGFloat) -> Void
+    var onEnded: (CGFloat, CGFloat) -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let v = Host()
+        v.isUserInteractionEnabled = false
+        v.backgroundColor = .clear
+        v.coordinator = context.coordinator
+        return v
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onChanged = onChanged
+        context.coordinator.onEnded = onEnded
+        context.coordinator.pan?.isEnabled = enabled
+        (uiView as? Host)?.coordinator = context.coordinator
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Host: UIView {
+        weak var coordinator: Coordinator?
+        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? { nil }
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            // Same retry shape as the row's press host, and for the same reason: SwiftUI may not
+            // have parented this representable's ancestors yet, and an install that only ever runs
+            // once would then never happen at all.
+            guard window != nil, let c = coordinator else { return }
+            c.install(from: self)
+            guard c.pan == nil else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.window != nil else { return }
+                self.coordinator?.install(from: self)
+            }
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onChanged: (CGFloat) -> Void = { _ in }
+        var onEnded: (CGFloat, CGFloat) -> Void = { _, _ in }
+        private(set) var pan: DirectionalSheetPan?
+        private weak var host: UIView?
+
+        func install(from view: UIView) {
+            guard pan == nil, let anchor = view.superview else { return }
+            let g = DirectionalSheetPan(axis: .vertical, target: self, action: #selector(handle(_:)))
+            g.delegate = self
+            g.cancelsTouchesInView = false   // the buttons under it must still work
+            anchor.addGestureRecognizer(g)
+            host = anchor
+            pan = g
+        }
+
+        func gestureRecognizer(_ g: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+
+        @objc private func handle(_ g: UIPanGestureRecognizer) {
+            let t = g.translation(in: g.view).y
+            switch g.state {
+            case .changed:
+                onChanged(t)
+            case .ended, .cancelled, .failed:
+                // A cancelled pan is a release with no speed: the editor springs home rather than
+                // being left parked half-open, which is what a missing branch here would do.
+                onEnded(g.state == .ended ? t : 0, g.state == .ended ? g.velocity(in: g.view).y : 0)
+            default: break
+            }
+        }
+    }
+}
+
 struct StoryEditorView: View {
     let source: UIImage
     var onPosted: () -> Void = {}
@@ -40,6 +123,20 @@ struct StoryEditorView: View {
     var seedItems: [DraftItem] = []
     var seedCaption: String = ""
     @Environment(\.dismiss) private var dismiss
+
+    /// HOW FAR DOWN THE EDITOR HAS BEEN PULLED, in points. Drives the shrink-and-return close he
+    /// asked for (2026-08-09, with the two editor screenshots): the whole editor follows the finger
+    /// and settles back where it came from, instead of a full-screen cover snapping away.
+    @State private var closeDrag: CGFloat = 0
+    /// 0…1 of the way to a committed close. Everything visual reads THIS, so the numbers below are
+    /// the only place the feel is decided.
+    private var closeProgress: CGFloat { max(0, min(1, closeDrag / 420)) }
+    /// The pull is only the pull when nothing else owns the screen. Every one of these is a mode
+    /// with its own vertical gesture — a stroke, a crop pinch, a trim handle, a text sheet — and a
+    /// close that could steal from any of them would be the third gesture regression in this app.
+    private var closePanEnabled: Bool {
+        !isDrawing && !showCrop && !showTrim && editingID == nil
+    }
 
     @State private var caption = ""
     @State private var drawing = PKDrawing()
@@ -305,7 +402,10 @@ struct StoryEditorView: View {
         // arrived and shoved it UP. Two state changes, two moments, neither animated with the
         // keyboard. Nothing here computes a keyboard height any more.
         ZStack {
+            // The ground stays put and fades — the EDITOR moves over it, so what the pull reveals is
+            // the screen underneath rather than a black hole travelling with the card.
             Color.black.ignoresSafeArea()
+                .opacity(1 - closeProgress * 0.75)
             canvasLayer
                 // THE CARD'S FRAME IS FIXED (owner: "the Story preview must never shrink, resize,
                 // or change its scale"). It was inset by the bottom bar's MEASURED height, and the
@@ -364,6 +464,39 @@ struct StoryEditorView: View {
             trimOverlay
                 .ignoresSafeArea(.keyboard)
         }
+        // THE WHOLE EDITOR SHRINKS AND RETURNS UNDER THE FINGER (his 2026-08-09 ask, with the photo
+        // and video editor screenshots): a pull down takes the screen with it — smaller, rounded,
+        // travelling — and letting go either brings it home or finishes the close. It used to be a
+        // bare `.fullScreenCover` that could only snap away, so there was nothing to "return".
+        //
+        // The transform belongs to the ZStack, ABOVE the layer that ignores the keyboard and below
+        // nothing: one number moves every piece together, which is what makes it read as one card
+        // rather than a canvas and some bars that happen to move at the same time.
+        .scaleEffect(1 - closeProgress * 0.22, anchor: .center)
+        .offset(y: closeDrag * 0.72)   // the card lags the finger slightly — the pull has weight
+        .clipShape(RoundedRectangle(cornerRadius: closeProgress > 0 ? 28 : 0, style: .continuous))
+        .ignoresSafeArea()
+        // ⚠️ A UIKIT PAN, NOT A SwiftUI `DragGesture` — [[kulan-scroll-gesture-rules]], written
+        // because gestures added to surfaces like this have twice claimed touches and locked
+        // scrolling. This one is direction-locked vertical, fails on anything horizontal, and never
+        // engages while a tool owns the screen (see `closePanEnabled`), so the crop's pinch, the
+        // pen's stroke, the trim's handles and the caption's keyboard all keep every touch they had.
+        .background(
+            StoryEditorClosePan(
+                enabled: closePanEnabled,
+                onChanged: { closeDrag = max(0, $0) },
+                onEnded: { translation, velocity in
+                    // Telegram's story-close numbers, the same pair the viewers sheet commits on:
+                    // 200pt of pull, or 100pt with real speed behind it.
+                    if translation > 200 || (translation > 100 && velocity > 100) {
+                        withAnimation(.easeOut(duration: 0.22)) { closeDrag = 900 }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { dismiss() }
+                    } else {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { closeDrag = 0 }
+                    }
+                })
+            .allowsHitTesting(false)
+        )
         // Closing the composer must not leave a decoder and an audio session running behind it.
         .onDisappear { stopPreview() }
         // ALWAYS DARK, whatever the phone is set to (owner: "all story buttons always use dark mode
