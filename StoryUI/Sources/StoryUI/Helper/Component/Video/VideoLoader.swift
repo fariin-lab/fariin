@@ -217,6 +217,15 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // the line after the swap and nowhere else, and `startVideo` clears it, so between the two
         // there is deliberately nothing this can reveal.
         guard let awaited = awaitedItem, player?.currentItem === awaited else { return }
+        // ⚠️ AND NOT IN THE SAME RUNLOOP TURN AS THE SWAP. `isReadyForDisplay` is reset by
+        // AVFoundation asynchronously after `replaceCurrentItem`, so inside `setupPlayer` — where
+        // the `.initial` presentationSize delivery for a preloaded item calls straight back in
+        // here — the layer can still be answering TRUE about the clip that was just flushed. That
+        // reveal uncovers a layer with no frame for THIS clip: his first-tap black flash. The hop
+        // that clears this flag re-asks the reveal itself, and the `isReadyForDisplay` KVO below
+        // keeps re-asking on every later change, so the strictest thing that can happen is the
+        // cover staying up ONE turn longer — never a stranded spinner.
+        guard !itemSwapSettling else { return }
         guard playerLayer.isReadyForDisplay else { return }
         // A LAYER WITH A FRAME KNOWS ITS SIZE, so ask the item directly rather than wait to be told.
         // The observer below is still what usually answers first; this is here so that a clip whose
@@ -290,6 +299,9 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// created on demand answers nil exactly when it is needed.
     private var frameOutput: AVPlayerItemVideoOutput?
     private let frameContext = CIContext(options: [.useSoftwareRenderer: false])
+    /// TRUE for the runloop turn in which `setupPlayer` swaps items. `isReadyForDisplay` can still
+    /// be answering about the flushed clip inside that turn — see the guard in `revealVideoIfReady`.
+    private var itemSwapSettling = false
 
     private func attachFrameOutput() {
         guard let item = player?.currentItem else { return }
@@ -340,6 +352,11 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // the same bug audit finding C1 caught on the photo half.
         canvasSourced = false
         guard let urlString, let u = URL(string: urlString) else { return }
+        // A POSTER IS A PICTURE. A video url arriving here (the empty-thumb window used to hand the
+        // mp4 through `previewUrl`) read megabytes off disk on the main thread at the disk-cache
+        // line below and then DOWNLOADED THE WHOLE CLIP a second time in the dataTask — in parallel
+        // with the player's own fetch — to decode nothing. Refuse it outright; no poster beats that.
+        guard !["mp4", "mov", "m4v"].contains(u.pathExtension.lowercased()) else { return }
         // THE APP'S OWN CACHE FIRST, and that is the black blink. The two caches below are StoryUI's;
         // the app draws the row and the carousel through a different one and warms THAT. For a story
         // just posted, or one whose cover came down for the row rather than for the viewer, both of
@@ -370,6 +387,14 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // Here as well as in `stopVideo`, because a paused player (the sheet pauses, it does not
         // stop) reaches this point with its position intact and `stopVideo`'s guard never fires.
         rememberPlaybackPosition()
+        // ⚠️ STOP THE OLD CLIP WHILE `self.url` STILL NAMES IT. `stopVideo` remembers the playhead
+        // and the frame too, and it keys them by `self.url` — with the stop AFTER the line below,
+        // it wrote clip A's picture and position under clip B's address. That poisoned entry then
+        // painted A's frame, sharp and full-card, behind every rebuild of B's veil, and seeked B to
+        // A's timestamp: his 2026-08-09 "i see flash cover… like i see again story a but u stay
+        // story b". Only when A had played past its first second (the remember guard), which is
+        // why it read as sometimes.
+        stopVideo()
         self.url = validatedUrl
         // Belt for `setPoster`'s braces: two clips that both arrive with no poster never move
         // `posterURL`, so its reset would not fire and clip B would keep clip A's canvas.
@@ -386,8 +411,7 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         playerLayer.isHidden = true
         CATransaction.commit()
         addActivityIndicatory()
-        // stop video if it's playing before video request
-        stopVideo()
+        // (the stop happens ABOVE, before `self.url` moves — see the warning there)
         didRetryRemote = false
         cachedFileInUse = nil
         cacheManager.loadVideo(from: validatedUrl) { [weak self] result in
@@ -442,6 +466,15 @@ private extension PlayerView {
         // Stories are sound-on media: .playback plays through the ringer
         // switch. The default (.soloAmbient) muted every story video on a silenced phone.
         try? AVAudioSession.sharedInstance().setCategory(.playback)
+        // The reveal must not trust anything read in THIS turn — see revealVideoIfReady. The hop
+        // that lifts the flag re-asks the reveal, so a preloaded clip is shown one turn later at
+        // the very worst; the isReadyForDisplay KVO carries every later re-ask.
+        itemSwapSettling = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.itemSwapSettling = false
+            self.revealVideoIfReady()
+        }
         self.player?.replaceCurrentItem(with: nil)
         // AN ITEM PREPARED WHILE YOU WERE WATCHING THE STORY BEFORE, if there is one. It has already
         // had its tracks loaded and its first frames decoded, so it starts on the frame rather than
@@ -451,6 +484,10 @@ private extension PlayerView {
         // THE CLIP THE COVER IS WAITING FOR. Until this line there was no item to be ready, and
         // `revealVideoIfReady` refuses on that — see its note on the previous clip's readiness.
         awaitedItem = item
+        // The frame output belongs to the NEW clip from the first moment anything can ask for a
+        // picture — attached down at the bottom of this function, it still belonged to the OLD
+        // clip while the `.initial` observations above it were already firing.
+        attachFrameOutput()
         // BACK TO WHERE HE WAS, same session (see StoryPlaybackResume). Keyed by the STORY's url,
         // not this function's parameter — `url` here is usually the cache FILE. Asked for once:
         // `take`, so a later rebuild of the same story in a fresh session starts clean. Seeking an
@@ -543,9 +580,8 @@ private extension PlayerView {
             if Thread.isMainThread { self.notePresentationSize(s) }
             else { DispatchQueue.main.async { self.notePresentationSize(s) } }
         }
-        // A REAL FRAME, ASKED FOR PROPERLY. Attached here rather than on demand, because an output
-        // added the instant somebody wants a picture has no frame to give yet and answers nil.
-        attachFrameOutput()
+        // The frame output was attached right after the item swap, where it belongs to the new
+        // clip before any observation can fire. (attachFrameOutput is idempotent.)
         StoryCardMorph.shared.frameSource = self
         // CLEAR, not black: the backdrop lives behind this layer and a black fill would cover it.
         // The view's own backgroundColor still guarantees nothing shows through when there is no

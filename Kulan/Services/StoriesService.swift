@@ -60,7 +60,13 @@ struct Story: Identifiable, Hashable, Codable {
     // What card/ring/reply thumbnails should render: the photo itself, or the video's poster.
     // Every image consumer (row cards, morph carousel, reply quotes, archive) reads THIS, never
     // mediaUrl directly — a video's mediaUrl is an .mp4 and image-decodes to nothing.
-    var previewUrl: String { isVideo && !thumbUrl.isEmpty ? thumbUrl : mediaUrl }
+    //
+    // ⚠️ EMPTY, NEVER THE MP4, for a video with no thumb yet. The old fallback handed the .mp4 to
+    // every image consumer, and the video poster path then read megabytes off disk on the main
+    // thread, downloaded the whole clip a SECOND time in parallel with the player's own fetch, and
+    // still had no picture at the end — his 2026-08-09 spinner-over-black screenshot. An empty url
+    // draws a placeholder immediately, which is honest and free.
+    var previewUrl: String { isVideo ? thumbUrl : mediaUrl }
 }
 
 // A person's active (unexpired) stories — the unit behind a ring in the row + the viewer.
