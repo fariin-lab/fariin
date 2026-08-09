@@ -120,7 +120,18 @@ final class StoryViewersSheetView: UIView {
 
     /// Height as a fraction of the screen. Matches `StoryViewersBottomSheet.heightFraction`, which the
     /// carousel still derives its slot from.
-    static let heightFraction: CGFloat = 0.60
+    ///
+    /// ⚠️ THIS ONE NUMBER IS BOTH HALVES OF HIS 2026-08-09 ASK — "make the sheet slightly taller,
+    /// not too tall" AND "make the thumbnail cards slightly smaller to give the sheet space". They
+    /// are the same number because `cardSlot` lays the cards out in what is LEFT: its `avail` is
+    /// `screen − sheetH − topInset`, so the sheet growing is the cards shrinking, and nothing has
+    /// to be kept in step by hand.
+    ///
+    /// 0.60 → 0.64. On an 852pt screen that is ~34pt more sheet (the empty band he drew a line
+    /// through, between the count row and the sheet's top edge) and a card that goes 200pt → 172pt.
+    /// Deliberately small: 0.66 was tried on paper and takes a fifth off the card, which is a
+    /// resize rather than the nudge he asked for. If he wants more, move THIS and nothing else.
+    static let heightFraction: CGFloat = 0.64
 
     private(set) var progress: CGFloat = 0
 
@@ -222,7 +233,7 @@ final class StoryViewersSheetView: UIView {
     /// source on his order (2026-08-09: "there is not enough space when the keyboard appears…
     /// first go read telegram"). Their viewers panel has two resting states, half and full, and
     /// focusing search jumps it to full = screen height minus 60 on a 0.5s spring; leaving search
-    /// steps it back to half. Ours maps their "half" to the existing 0.60 sheet and their "full"
+    /// steps it back to half. Ours maps their "half" to the resting `heightFraction` sheet and their "full"
     /// to this flag — same layout path, one number changes, so every child lays out through the
     /// code that already positions it.
     private var searchExpanded = false
