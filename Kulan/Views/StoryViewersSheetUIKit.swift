@@ -621,7 +621,14 @@ final class StoryViewersSheetView: UIView {
                 // this story's viewers in the panel, so the coordinator's load() is a no-op.
                 onPage?(dir)
                 pageCommitted = true
-                UIView.animate(withDuration: 0.28, delay: 0, options: [.curveEaseOut]) {
+                // `.allowUserInteraction`, OR THE INTERRUPTION PATH ABOVE CAN NEVER RUN. Without
+                // it, UIKit turns off touch delivery to the animating panel's whole subtree for
+                // the length of the settle — so a finger arriving inside the 0.28s (his 2026-08-09
+                // "swipe back does not work until the first swipe completes") was dropped before
+                // the pan ever heard it, and the `.began` that lands a mid-flight cycle sat
+                // unreachable. The flag is what every interruptible-gesture settle carries.
+                UIView.animate(withDuration: 0.28, delay: 0,
+                               options: [.curveEaseOut, .allowUserInteraction]) {
                     self.pageGhost?.transform =
                         CGAffineTransform(translationX: -CGFloat(dir) * self.pageTravel, y: 0)
                     panel.transform = .identity
@@ -637,7 +644,8 @@ final class StoryViewersSheetView: UIView {
                     ? .identity
                     : CGAffineTransform(translationX: CGFloat(pageDir) * pageTravel, y: 0)
                 UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9,
-                               initialSpringVelocity: 0, options: []) {
+                               initialSpringVelocity: 0,
+                               options: [.allowUserInteraction]) {   // same rule as the commit settle
                     self.pageGhost?.transform = .identity
                     panel.transform = parked
                 } completion: { _ in
