@@ -1641,8 +1641,14 @@ struct ArchivedChatsView: View {
         for g in archivedStories {
             let key = MediaOpenRects.key(.storyRow, "arch-\(g.id)")
             guard let r = MediaOpenRects.liveRect(key), r.contains(p) else { continue }
-            let cardRect = CGRect(x: r.minX, y: r.minY, width: r.width,
-                                  height: min(r.height, storyCardW * 1.46))
+            // THE HIT USES THE MODEL RECT, THE LIFT USES THE DRAWN ONE — the same split the chat
+            // list's `menuTarget` makes, and for the same reason: a card mid-press-dip has already
+            // committed 0.92 to the model while its pixels are still nearer 0.96, so a window crop
+            // taken at the model rectangle lifts a magnified card (his 2026-08-09 zoom report). The
+            // finger test stays on `liveRect`, which is what the flight flies to.
+            let drawn = MediaOpenRects.drawnRect(key) ?? r
+            let cardRect = CGRect(x: drawn.minX, y: drawn.minY, width: drawn.width,
+                                  height: min(drawn.height, storyCardW * 1.46))
             return StoryMenuTarget(key: key, rect: cardRect, actions: [
                 CMAction(title: "Unhide Story", icon: "tray.and.arrow.up") {
                     StoryPrefs.toggleHidden(g.authorUid)

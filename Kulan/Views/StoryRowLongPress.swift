@@ -207,11 +207,16 @@ struct StoryRowLongPress: UIViewRepresentable {
         }
         private func tryInstall() {
             guard window != nil, let c = coordinator else { return }
-            c.install(from: self)
+            // THE SCROLL VIEW GETS EVERY CHANCE FIRST. A climb that fails here may only be early —
+            // SwiftUI can still be assembling this view's ancestors — so the window fallback is
+            // held back until the next runloop turn, by which point the hierarchy this view was
+            // being attached into has finished existing. A row that has a scroll view therefore
+            // always anchors on it, exactly as before.
+            c.install(from: self, allowWindow: false)
             guard !c.isInstalled else { return }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.window != nil else { return }
-                self.coordinator?.install(from: self)
+                self.coordinator?.install(from: self, allowWindow: true)
             }
         }
     }
@@ -226,19 +231,41 @@ struct StoryRowLongPress: UIViewRepresentable {
 
         init(target: @escaping (CGPoint) -> StoryMenuTarget?) { self.target = target }
 
-        func install(from view: UIView) {
+        /// Anchored on the WINDOW rather than on a scroll view, so every press must prove it belongs
+        /// to this row before it is allowed to begin. See `install`.
+        private var gated = false
+        /// The view the representable sits in, kept for the gate's "same screen" test.
+        private weak var origin: UIView?
+
+        /// `allowWindow`: whether a failed climb may fall back to the window (see below). The UIKit
+        /// stories row calls this with a view inside its own scroller and never needs it.
+        func install(from view: UIView, allowWindow: Bool = false) {
             guard press == nil else { return }
-            // ONLY the row's own scroll view. Falling back to the window would put a press
-            // recogniser over the whole app, and the first thing it would do on recognising is
-            // cancel the touch of whatever was actually being pressed — a chat bubble, a settings
-            // row. No anchor is better than the wrong one: the row simply keeps its tap.
+            // The row's own scroll view, found by climbing. This is the chat list's answer too —
+            // it hands `install` a view inside its scroller, so the first step up finds it.
             var next: UIView? = view.superview
             var scroll: UIScrollView?
             while let v = next {
                 if let s = v as? UIScrollView { scroll = s; break }
                 next = v.superview
             }
-            guard let anchor = scroll else { return }
+            // ⚠️ AND WHEN THE CLIMB FINDS NOTHING, THE WINDOW — GATED. His 2026-08-09, twice: the
+            // archive row's long press does nothing while the chat list's works. The chat list hands
+            // its own scroll view over directly; the archive is a SwiftUI `.background`, so it has to
+            // climb, and refusing to anchor at all (the old behaviour, retries and all) means the
+            // screen simply has no press for its whole life. A retry cannot fix a climb that has no
+            // scroll view to find.
+            //
+            // The reason a window anchor was refused still stands — a bare one would cancel the
+            // touch of whatever was really being pressed anywhere in the app — so it is never bare.
+            // It begins ONLY when both answers agree that this press belongs to this row: a
+            // registered card is under the finger, and the thing actually on top at that point
+            // belongs to the same screen we do. Everywhere else the recogniser fails at 0.2s having
+            // cancelled nothing, which is exactly what having no recogniser did.
+            let anchor: UIView? = scroll ?? (allowWindow ? view.window : nil)
+            guard let anchor else { return }
+            gated = scroll == nil
+            origin = view
             let g = UILongPressGestureRecognizer(target: self, action: #selector(pressed(_:)))
             g.minimumPressDuration = 0.2      // the reference app's number, and the chat menu's
             g.delegate = self
@@ -247,10 +274,37 @@ struct StoryRowLongPress: UIViewRepresentable {
             press = g
         }
 
+        /// The last view below the window on `v`'s way up — a presented screen's own container. Two
+        /// views answer the same one exactly when they are on the same screen, which is how a press
+        /// on a story standing OVER the archive is told from a press on the archive itself. Asked
+        /// this way rather than by walking our own subtree, because where SwiftUI puts a
+        /// `.background` representable relative to its content is not something to depend on.
+        private func screenContainer(of v: UIView) -> UIView? {
+            var top: UIView?
+            var cur: UIView? = v
+            while let c = cur, !(c is UIWindow) { top = c; cur = c.superview }
+            return top
+        }
+
+        /// Only asked of a window-anchored recogniser (`gated`); a scroll-view anchor is already
+        /// bounded to the row and keeps its old behaviour exactly — including swallowing the tap on
+        /// a press that finds no card, which the chat list has shipped with since `bf976c8d`.
+        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            guard gated else { return true }
+            let p = g.location(in: nil)
+            guard target(p) != nil, let origin, origin.window != nil else { return false }
+            guard let hit = origin.window?.hitTest(p, with: nil) else { return false }
+            return screenContainer(of: hit) === screenContainer(of: origin)
+        }
+
         func uninstall() {
             if let press, let host { host.removeGestureRecognizer(press) }
             press = nil
             host = nil
+            // A window anchor outlives the screen that installed it unless this is cleared, and the
+            // next install has to decide the gate for itself.
+            gated = false
+            origin = nil
             overlay?.dismiss(animated: false)
         }
 
