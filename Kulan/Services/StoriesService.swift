@@ -362,6 +362,7 @@ final class StoriesService {
     /// Written only for `public` stories, and only once the media URL is known — a mirror pointing
     /// at an empty url is a black card on somebody else's profile.
     private func writePublicMirror(storyId: String, me: String, mediaUrl: String, thumbUrl: String,
+                                   blurThumb: String = "",
                                    type: String, caption: String, duration: Double,
                                    expiresAt: Date, allowsReplies: Bool) async {
         try? await db.collection("users").document(me)
@@ -372,6 +373,11 @@ final class StoriesService {
                 "expiresAt": Timestamp(date: expiresAt),
                 "mediaUrl": mediaUrl,
                 "thumbUrl": thumbUrl,
+                // THE COVER TRAVELS WITH THE MIRROR TOO. `parse` reads the same field names for both
+                // collections, so leaving it out was a stranger opening a public video story onto
+                // nothing while a friend opening the very same story got a picture. See
+                // `blurThumbBase64`.
+                "blurThumb": blurThumb,
                 "type": type,
                 "caption": caption,
                 "duration": duration,
@@ -429,6 +435,9 @@ final class StoriesService {
         }()
 
         let (recipients, mode) = await resolveAudience(me: me, excluded: excluded, included: included)
+        // Made once and used twice — the document and, for an "Everyone" story, the public mirror.
+        // It is a resize and a JPEG encode, so asking for it twice is real work for one string.
+        let cover = Self.blurThumbBase64(image)
 
         // Empty recipients is OK: it's still MY OWN story (the `mine` query loads by authorUid, so I
         // always see it) — just with no other viewers yet (e.g. a brand-new account with no contacts).
@@ -443,7 +452,7 @@ final class StoriesService {
                 "mediaPath": path,
                 "mediaUrl": "",
                 // THE COVER THAT TRAVELS WITH THE STORY. See `blurThumbBase64`.
-                "blurThumb": Self.blurThumbBase64(image),
+                "blurThumb": cover,
                 "caption": caption,
                 "audience": ["mode": everyone ? "everyone" : mode, "listId": "my-story"],
                 // THE LABEL, and only the label. See StoryAudienceTag: the custom NAME never comes
@@ -470,6 +479,7 @@ final class StoriesService {
             // The stranger-facing copy, media only. See `writePublicMirror`.
             if everyone {
                 await writePublicMirror(storyId: storyId, me: me, mediaUrl: url, thumbUrl: "",
+                                        blurThumb: cover,
                                         type: "image", caption: caption, duration: 0,
                                         expiresAt: Date().addingTimeInterval(expiryHours * 3600),
                                         allowsReplies: allowsReplies)
@@ -661,6 +671,8 @@ final class StoriesService {
         let videoPath = "stories/\(storyId)/video.mp4"
         let thumbPath = "stories/\(storyId)/thumb.jpg"
         let (recipients, mode) = await resolveAudience(me: me, excluded: excluded, included: included)
+        // Made once and used twice — the document and, for an "Everyone" story, the public mirror.
+        let cover = Self.blurThumbBase64(prepared.thumbnail)
 
         let docRef = db.collection("stories").document(storyId)
         try await docRef.setData([
@@ -675,7 +687,7 @@ final class StoriesService {
             // its second upload finishes and can fail on its own. Written with the DOCUMENT, before
             // a single byte of media is uploaded, so a viewer reaching this story at any point after
             // it exists has a picture to show. See `blurThumbBase64`.
-            "blurThumb": Self.blurThumbBase64(prepared.thumbnail),
+            "blurThumb": cover,
             "duration": prepared.duration,
             "caption": caption,
             "audience": ["mode": everyone ? "everyone" : mode, "listId": "my-story"],
@@ -717,7 +729,9 @@ final class StoriesService {
             // The stranger-facing copy, media only. See `writePublicMirror`.
             if everyone {
                 await writePublicMirror(storyId: storyId, me: me, mediaUrl: videoUrl,
-                                        thumbUrl: thumbUrl, type: "video", caption: caption,
+                                        thumbUrl: thumbUrl,
+                                        blurThumb: cover,
+                                        type: "video", caption: caption,
                                         duration: prepared.duration,
                                         expiresAt: Date().addingTimeInterval(expiryHours * 3600),
                                         allowsReplies: allowsReplies)
