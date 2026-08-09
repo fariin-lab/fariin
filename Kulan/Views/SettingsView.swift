@@ -542,7 +542,24 @@ struct AccountSettingsView: View {
                 // verification screen. The checkmark stays when this is the only way in, because
                 // then there is genuinely nothing to offer.
                 if AuthService.shared.connectedMethods.count > 1 {
-                    Button("Remove") { disconnecting = method }
+                    // The other half of the takeover, gated for the same reason. The removal screen
+                    // already re-verifies with a provider, and that step is exactly what the attack
+                    // walks through: the credential it accepts can be one added a minute earlier on
+                    // the same unlocked phone. The device lock is the part that cannot be
+                    // manufactured on the spot.
+                    Button("Remove") {
+                        Task {
+                            switch await DeviceLock.prove(reason: "Remove a way to sign in to Fariin") {
+                            case .refused:
+                                connectError = "Not verified. Unlock with Face ID, Touch ID or your passcode to remove a way in."
+                            case .noLock:
+                                connectError = DeviceLock.noLockAdvice
+                            case .proved:
+                                connectError = nil
+                                disconnecting = method
+                            }
+                        }
+                    }
                         .font(.subheadline.weight(.semibold))
                         .buttonStyle(.plain)
                         .foregroundStyle(.red)
@@ -570,8 +587,26 @@ struct AccountSettingsView: View {
                     } onCompletion: { result in
                         switch result {
                         case .success(let auth):
+                            // GATED HERE, NOT BEFORE, and the order is forced rather than chosen.
+                            // Apple's sheet only appears if its own button receives the tap
+                            // directly, so there is nowhere earlier to stand. The sheet therefore
+                            // runs first and the device lock second, which looks back to front and
+                            // is not: nothing is linked until both have passed, and the link is the
+                            // only thing that matters. Same takeover as startConnect, same defence.
                             connecting = .apple
                             Task {
+                                switch await DeviceLock.prove(reason: "Add a way to sign in to Fariin") {
+                                case .refused:
+                                    connectError = "Not verified. Unlock with Face ID, Touch ID or your passcode to add a way in."
+                                    connecting = nil
+                                    return
+                                case .noLock:
+                                    connectError = DeviceLock.noLockAdvice
+                                    connecting = nil
+                                    return
+                                case .proved:
+                                    break
+                                }
                                 do { try await AuthService.shared.connectApple(authorization: auth); connectedTick += 1 }
                                 catch { connectError = AuthService.plainMessage(error) }
                                 connecting = nil
@@ -593,7 +628,48 @@ struct AccountSettingsView: View {
         }
     }
 
+    /// ⚠️ THE DEVICE LOCK GATE HERE IS A FIX FOR A CONFIRMED ACCOUNT TAKEOVER. Do not remove it,
+    /// and do not "simplify" it away because connecting a login feels harmless.
+    ///
+    /// The attack, sixty seconds with an unlocked phone, no jailbreak, stock build:
+    ///   1. Settings › Sign-in Methods › Email › Connect. This used to open the sheet with nothing
+    ///      asked. Type any address and any password. Firebase links it and MOVES `user.email` to
+    ///      the attacker's address.
+    ///   2. Tap Remove on the victim's Google. That screen asks you to prove yourself with "any of
+    ///      your sign-in methods" — and `reauthEmail` builds its credential from
+    ///      `currentUser.email`, which is now the attacker's. So they prove themselves with the
+    ///      password they set twenty seconds earlier.
+    ///   3. The account now has exactly one door and they hold the key. The victim's own Forgot
+    ///      Password finds nothing, because their address is no longer on the account.
+    ///
+    /// AuthService's own comment claimed the reauth requirement closed this. It did not: a
+    /// credential added a moment ago is still an accepted proof of ownership, so step 2 proves
+    /// itself with step 1.
+    ///
+    /// The removal alert does not save them either. It is addressed from post-change state, and by
+    /// then the victim's address is off the account, so the "a login was removed" mail goes to the
+    /// attacker.
+    ///
+    /// An emailed code cannot fix this — the attacker chooses the address, and the victim's inbox is
+    /// on the phone in their hand anyway. Only the device lock stops somebody standing there,
+    /// because their face is not yours. See DeviceLock for the two-attacker reasoning in full.
     private func startConnect(_ method: AuthService.SignInMethod) {
+        Task {
+            switch await DeviceLock.prove(reason: "Add a way to sign in to Fariin") {
+            case .refused:
+                connectError = "Not verified. Unlock with Face ID, Touch ID or your passcode to add a way in."
+                return
+            case .noLock:
+                connectError = DeviceLock.noLockAdvice
+                return
+            case .proved:
+                break
+            }
+            await MainActor.run { connectError = nil; reallyConnect(method) }
+        }
+    }
+
+    private func reallyConnect(_ method: AuthService.SignInMethod) {
         switch method {
         case .apple:
             break                       // handled by the overlaid SignInWithAppleButton

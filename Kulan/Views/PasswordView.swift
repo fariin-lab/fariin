@@ -161,7 +161,7 @@ struct PasswordView: View {
         ContentUnavailableView {
             Label("Lock your iPhone first", systemImage: "lock.slash")
         } description: {
-            Text("This iPhone has no Face ID, Touch ID or passcode, so we cannot tell it is you holding it. Add a passcode and come back.\n\nIt is worth doing anyway: without one, anyone who picks up this phone can read all your messages.")
+            Text(DeviceLock.noLockAdvice)
         } actions: {
             Button("Open Settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -241,21 +241,14 @@ struct PasswordView: View {
 
     private func proveItIsYou() async {
         gate = .checking
-        let ctx = LAContext()
-        var err: NSError?
-        guard ctx.canEvaluatePolicy(.deviceOwnerAuthentication, error: &err) else {
-            gate = .noDeviceLock
-            return
-        }
-        do {
-            let ok = try await ctx.evaluatePolicy(
-                .deviceOwnerAuthentication,
-                localizedReason: isFirstPassword ? "Set your Fariin password" : "Change your Fariin password")
-            gate = ok ? .open : .refused
-        } catch {
-            // Cancelled counts as refused, not as an error worth a red message. Somebody who
-            // changed their mind does not need to be told off for it.
-            gate = .refused
+        // Moved into DeviceLock once a second screen needed the same gate. The reasoning for why
+        // this is Face ID and not an emailed code lives there, next to the code, rather than being
+        // restated in every caller.
+        switch await DeviceLock.prove(reason: isFirstPassword ? "Set your Fariin password"
+                                                              : "Change your Fariin password") {
+        case .proved:  gate = .open
+        case .refused: gate = .refused
+        case .noLock:  gate = .noDeviceLock
         }
     }
 
