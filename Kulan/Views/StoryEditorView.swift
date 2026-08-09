@@ -405,7 +405,9 @@ struct StoryEditorView: View {
             // The ground stays put and fades — the EDITOR moves over it, so what the pull reveals is
             // the screen underneath rather than a black hole travelling with the card.
             Color.black.ignoresSafeArea()
-                .opacity(1 - closeProgress * 0.75)
+                // `Double(...)`: `opacity` takes a Double and `closeProgress` is a CGFloat, which
+                // leaves the literal 1 with two equally good types to be.
+                .opacity(Double(1 - closeProgress * 0.75))
             canvasLayer
                 // THE CARD'S FRAME IS FIXED (owner: "the Story preview must never shrink, resize,
                 // or change its scale"). It was inset by the bottom bar's MEASURED height, and the
