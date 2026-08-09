@@ -153,6 +153,14 @@ public struct StoryView: View {
                 // Closing the viewer is precisely when the lookahead they belong to stops meaning
                 // anything, and the next open warms its own.
                 StoryItemPreloader.clear()
+                // ⚠️ AND THE TRANSFERS THEMSELVES, which nothing anywhere in the app could stop.
+                // `cancelStaleWindow` only ever ran from inside the viewer, on an item change, so
+                // closing a ring right after its last item — the moment the lookahead has just
+                // fired off up to three clips — left the phone pulling 15 to 25MB for stories that
+                // will never be opened, with the app already back in a chat. On the mobile data a
+                // lot of this app's users are on, that is the single most expensive thing it did
+                // without being asked.
+                StoryPrefetcher.cancelAll()
             }
         }
     }

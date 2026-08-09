@@ -130,6 +130,20 @@ public enum StoryPrefetcher {
         }
     }
 
+    /// EVERYTHING STOPS. Called when the viewer goes away — see `StoryView.onDisappear`. Until this
+    /// existed the only cancellation in the app was `cancelStaleWindow`, which runs on an item change
+    /// INSIDE the viewer, so closing one could leave the whole lookahead running to completion.
+    ///
+    /// The in-flight set is cleared too, or a url warmed by the session that just ended would be
+    /// refused by `claim` for the rest of the process.
+    public static func cancelAll() {
+        lock.lock()
+        running.removeAll()
+        inFlight.removeAll()
+        lock.unlock()
+        CacheManager.cancelAllDownloads()
+    }
+
     /// Cancel the window's running video downloads that are no longer in it.
     private static func cancelStaleWindow(keeping wanted: Set<String>) {
         lock.lock()

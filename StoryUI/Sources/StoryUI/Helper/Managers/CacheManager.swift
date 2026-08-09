@@ -83,6 +83,12 @@ final class CacheManager: NSObject {
     /// fetched — never on player readiness, which is why a cached story there never shows a loading
     /// state at all. Same name, same directory, same size floor as `loadVideo`: two answers that
     /// could drift apart would put the wheel back on cached clips.
+    /// Stop every speculative transfer still running. The viewer is gone, so nothing in flight was
+    /// asked for by anybody who is still looking — and until this existed there was no way to say so
+    /// anywhere in the app: close a ring after reaching its last item and the phone kept pulling the
+    /// whole lookahead, 15 to 25MB, with the app back in a chat list.
+    static func cancelAllDownloads() { VideoDownloads.cancelAll() }
+
     static func cachedFileIfUsable(for url: URL) -> URL? {
         let file = StoryStorage.directory("VideoCache").appendingPathComponent(cacheFileName(for: url))
         guard FileManager.default.fileExists(atPath: file.path), isUsableCacheFile(file) else { return nil }
@@ -126,7 +132,7 @@ final class CacheManager: NSObject {
                 } else {
                     // Clear the wedge, then fetch it properly.
                     try? fileManager.removeItem(at: destinationUrl)
-                    downloadAndCacheVideo(from: url, speculative: speculative,
+                    downloadAndCacheVideo(from: url, to: destinationUrl, speculative: speculative,
                                           allowsCellular: allowsCellular, onTask: onTask,
                                           completion: completion)
                 }
@@ -138,7 +144,7 @@ final class CacheManager: NSObject {
                 // request refused mobile data no matter what the prefetcher asked for) and
                 // `StoryPrefetcher.running` stayed empty, leaving `cancelStaleWindow` with nothing
                 // to cancel. Both features read as working in their own files and did nothing.
-                downloadAndCacheVideo(from: url, speculative: speculative,
+                downloadAndCacheVideo(from: url, to: destinationUrl, speculative: speculative,
                                       allowsCellular: allowsCellular, onTask: onTask,
                                       completion: completion)
             }
@@ -149,6 +155,62 @@ final class CacheManager: NSObject {
 }
 
 extension FileManager: @unchecked @retroactive Sendable {}
+
+/// ⚠️ ONE DOWNLOAD PER URL, FOR THE WHOLE PROCESS — and this is where the wasted mobile data went.
+///
+/// `CacheManager` had no in-flight registry at all. The only dedup lived in `StoryPrefetcher.claim`,
+/// which guards the PREFETCHER'S OWN instance, while `VideoLoader` builds a `CacheManager` of its
+/// own. So arriving at a story whose lookahead was still running found no file on disk and started a
+/// SECOND full download of the same clip — which is the normal case, since the lookahead exists
+/// precisely to be running when you get there. A 6MB clip cost 12MB, and when the two finished
+/// together they raced over the same destination path: the loser's `moveItem` threw, reported
+/// failure, and the live player then streamed the remote url a third time.
+///
+/// Joining instead of starting also fixes a quieter one. The old completion began
+/// `guard let self else { return }`, and `self` was the per-view `CacheManager` — so closing the
+/// viewer mid-download meant the bytes were paid for in full and then dropped on the floor without
+/// ever being written. Nothing here belongs to a view, so a download always finishes into the cache.
+private enum VideoDownloads {
+    private static let lock = NSLock()
+    private static var waiting: [URL: [(Result<URL>) -> Void]] = [:]
+    private static var tasks: [URL: URLSessionTask] = [:]
+
+    /// TRUE if this caller should start the transfer; FALSE if it merely joined one already running.
+    static func join(_ url: URL, _ completion: @escaping (Result<URL>) -> Void) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if waiting[url] != nil {
+            waiting[url]?.append(completion)
+            return false
+        }
+        waiting[url] = [completion]
+        return true
+    }
+
+    static func remember(_ url: URL, task: URLSessionTask) {
+        lock.lock(); tasks[url] = task; lock.unlock()
+    }
+
+    /// Every joiner gets the same answer, once, on the main thread.
+    static func finish(_ url: URL, _ result: Result<URL>) {
+        lock.lock()
+        let callbacks = waiting.removeValue(forKey: url) ?? []
+        tasks.removeValue(forKey: url)
+        lock.unlock()
+        DispatchQueue.main.async { callbacks.forEach { $0(result) } }
+    }
+
+    /// Stop everything still in flight. The viewer is gone; nothing running was asked for by anyone
+    /// who is still looking.
+    static func cancelAll() {
+        lock.lock()
+        let running = tasks
+        tasks.removeAll()
+        waiting.removeAll()
+        lock.unlock()
+        running.values.forEach { $0.cancel() }
+    }
+}
+
 
 private extension CacheManager {
 
@@ -162,9 +224,15 @@ private extension CacheManager {
         .success(StoryStorage.directory("VideoCache"))
     }
 
-    func downloadAndCacheVideo(from url: URL, speculative: Bool, allowsCellular: Bool = false,
+    func downloadAndCacheVideo(from url: URL, to destinationUrl: URL, speculative: Bool,
+                               allowsCellular: Bool = false,
                                onTask: ((URLSessionTask) -> Void)? = nil,
                                completion: @escaping (Result<URL>) -> Void) {
+        // ⚠️ JOIN, DO NOT START A SECOND ONE. A caller that arrives while this url is already coming
+        // down is added to the waiting list and answered with everybody else. It is deliberately NOT
+        // handed the task: the one who started it owns cancelling it, so a speculative warm cannot
+        // cancel a download the live player has since joined.
+        guard VideoDownloads.join(url, completion) else { return }
         let backgroundQueue = DispatchQueue.global(qos: .background)
 
         backgroundQueue.async { [weak self] in
@@ -206,11 +274,12 @@ private extension CacheManager {
                 // than racing it for the same bandwidth.
                 request.networkServiceType = .background
             }
-            let task = session.downloadTask(with: request) { [weak self] (tempLocalUrl, response, error) in
-                guard let self else { return }
-
+            // NO `self` ANYWHERE IN HERE. The completion belongs to the registry, not to whichever
+            // view happened to ask first — see `VideoDownloads`. A viewer closing mid-transfer used
+            // to throw away a clip that had already been paid for in full.
+            let task = session.downloadTask(with: request) { (tempLocalUrl, response, error) in
                 if let error = error {
-                    DispatchQueue.main.async { completion(.failure("Error downloading video: \(error.localizedDescription)")) }
+                    VideoDownloads.finish(url, .failure("Error downloading video: \(error.localizedDescription)"))
                     return
                 }
 
@@ -218,38 +287,21 @@ private extension CacheManager {
                       let response = response as? HTTPURLResponse,
                       response.statusCode == 200
                 else {
-                    DispatchQueue.main.async { completion(.failure("Error: Invalid response or no data")) }
+                    VideoDownloads.finish(url, .failure("Error: Invalid response or no data"))
                     return
                 }
 
-                switch self.createCacheDirectory() {
-                case .success(let cacheDirectory):
-                    let videoFileName = Self.cacheFileName(for: url)
-                    let destinationUrl = cacheDirectory.appendingPathComponent(videoFileName)
-
-                    do {
-                        if FileManager.default.fileExists(
-                            atPath: destinationUrl.path
-                        ) {
-                            try FileManager.default.removeItem(at: destinationUrl)
-                        }
-
-                        try FileManager.default.moveItem(
-                            at: tempLocalUrl,
-                            to: destinationUrl
-                        )
-
-                        DispatchQueue.main.async {
-                            completion(.success(destinationUrl))
-                        }
-
-                    } catch {
-                        DispatchQueue.main.async { completion(.failure("Error moving video file to cache: \(error.localizedDescription)")) }
+                do {
+                    if FileManager.default.fileExists(atPath: destinationUrl.path) {
+                        try FileManager.default.removeItem(at: destinationUrl)
                     }
-                case .failure(let error):
-                    DispatchQueue.main.async { completion(.failure(error)) }
+                    try FileManager.default.moveItem(at: tempLocalUrl, to: destinationUrl)
+                    VideoDownloads.finish(url, .success(destinationUrl))
+                } catch {
+                    VideoDownloads.finish(url, .failure("Error moving video file to cache: \(error.localizedDescription)"))
                 }
             }
+            VideoDownloads.remember(url, task: task)
             onTask?(task)
             task.resume()
         }

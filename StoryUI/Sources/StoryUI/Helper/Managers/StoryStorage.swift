@@ -105,12 +105,20 @@ public enum StoryStorage {
         }
     }
 
-    /// Delete everything past its life. Safe to call as often as you like — it walks two directories
-    /// and stats their contents, nothing more — and it is deliberately not clever: no size ceiling,
-    /// no LRU, no accounting. A story cannot outlive 24 hours, so age alone is a complete rule, and
-    /// a complete rule with one input is one that cannot drift out of agreement with the server.
+    /// Delete everything past its life, then anything over the ceiling. Safe to call as often as you
+    /// like — it walks two directories and stats their contents, nothing more.
+    ///
+    /// ⚠️ IT USED TO SAY "no size ceiling, no LRU, no accounting", on the grounds that a story cannot
+    /// outlive 24 hours so age alone is a complete rule. Age is a complete CORRECTNESS rule and it is
+    /// not a volume rule, and this directory needs both — see `trimToCeiling` for why the difference
+    /// could cost somebody a gigabyte they had no way to reclaim.
     ///
     /// Runs on a utility queue and never touches the main thread.
+    /// The most this app will hold on to per cache directory. Generous enough that a normal day of
+    /// stories never reaches it, small enough that a heavy one cannot strand a gigabyte the user
+    /// cannot get back without deleting the app.
+    private static let ceiling = 300 * 1024 * 1024
+
     public static func purgeExpired() {
         let names = ["StoryImageCache", "VideoCache"]
         DispatchQueue.global(qos: .utility).async {
@@ -129,7 +137,39 @@ public enum StoryStorage {
                     else { continue }
                     if date < cutoff { try? fm.removeItem(at: u) }
                 }
+                trimToCeiling(dir, fm: fm)
             }
+        }
+    }
+
+    /// ⚠️ AGE IS A CORRECTNESS RULE, NOT A VOLUME ONE, AND THIS DIRECTORY NEEDED BOTH.
+    ///
+    /// A story is dead in 24 hours, so deleting by age keeps the cache CORRECT. It does not keep it
+    /// SMALL, and nothing else did either: the prefetcher writes clips the user never opens (three
+    /// ahead in the viewer, plus two rings' worth from the row), the purge runs roughly once per cold
+    /// launch, and the directory was deliberately moved off `Caches` so that iOS would stop
+    /// reclaiming it — which also means the system CANNOT reclaim it. A heavy stories day could
+    /// leave the better part of a gigabyte sitting there for two days, and because it is not
+    /// `Caches`, neither the storage-pressure purge nor "Offload App" would free a byte of it. The
+    /// only remedy left to the user was deleting the app.
+    ///
+    /// Oldest first, because the newest clips are the ones a person is most likely to reopen.
+    private static func trimToCeiling(_ dir: URL, fm: FileManager) {
+        guard let items = try? fm.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]) else { return }
+        var entries: [(url: URL, date: Date, size: Int)] = []
+        var total = 0
+        for u in items {
+            guard let v = try? u.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
+                  let d = v.contentModificationDate, let sz = v.fileSize else { continue }
+            entries.append((u, d, sz))
+            total += sz
+        }
+        guard total > ceiling else { return }
+        for e in entries.sorted(by: { $0.date < $1.date }) {
+            guard total > ceiling else { break }
+            if (try? fm.removeItem(at: e.url)) != nil { total -= e.size }
         }
     }
 }
