@@ -1156,6 +1156,25 @@ struct StoryViewer: View {
         // sheet being thrown sideways (both slide cards through the slot, both need the copy).
         // See StoryCardMorph.setHidden.
         .onChange(of: carouselInteracting || sheetPaging) { _, on in
+            // ⚠️ PHOTOGRAPH THE STORY BEING LEFT FIRST, WHILE IT IS STILL THE LIVE ONE.
+            //
+            // His 2026-08-09 report: the frame a video is actually showing survives the pull up, but
+            // the moment he swipes to the next card the story he left falls back to its poster —
+            // second zero, a different picture — and only comes back when he swipes onto it again.
+            //
+            // Every capture site ran too late to help it. The pull-up one fires while the story is
+            // centred, so it needs the buffer to still be there; the post-swipe one fires when the
+            // row has landed, and by then `sheetStoryId` is the card he swiped TO, because `index`
+            // moves with the scroll position mid-drag. So the outgoing story had no frozen cover to
+            // draw and the carousel did the only thing left — its poster.
+            //
+            // This is the one moment that cannot be too late or too early: the finger has just gone
+            // down, `sheetStoryId` still names the story under it, and the live card has not been
+            // hidden yet (the line below is what hides it). `snapshotCard` reads the player's own
+            // decoded frame, so what is stored is exactly the picture that was on screen — and
+            // `captureFrozenCover` declines a story it already has, so this costs nothing on the
+            // second swipe past the same card.
+            if on { captureFrozenCover(force: true) }
             StoryCardMorph.shared.setHidden(on)
             // The swipe is over and the live card is back. Once the story underneath has finished
             // landing on the card he stopped at (the same beat `sheetStoryId`'s handler waits for
@@ -1665,8 +1684,14 @@ struct StoryViewer: View {
         }
     }
 
-    private func captureFrozenCover() {
-        guard showViewers, frozenCovers[sheetStoryId] == nil, !sheetStoryId.isEmpty else { return }
+    /// `force`: take a new picture even when this story already has one. Only the swipe-begin site
+    /// asks for it, and it needs it: the sheet can be pulled DOWN, the story watched on for another
+    /// ten seconds and the sheet pulled up again, all inside one viewing session — and the cover
+    /// stored the first time is by then a picture of where the clip used to be. It is only ever
+    /// replaced by a SUCCESSFUL snapshot (`snapshotCard` answering nil leaves the old one alone), so
+    /// a refresh can improve the cover and cannot take one away.
+    private func captureFrozenCover(force: Bool = false) {
+        guard showViewers, force || frozenCovers[sheetStoryId] == nil, !sheetStoryId.isEmpty else { return }
         let live = StoriesRepository.shared.mine?.stories ?? myStories
         guard let s = live.first(where: { $0.id == sheetStoryId }), s.isVideo else { return }
         // A photo's poster IS the photo, so the row's own card already matches and a snapshot would
