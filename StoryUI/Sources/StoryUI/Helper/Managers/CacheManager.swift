@@ -131,7 +131,16 @@ final class CacheManager: NSObject {
                                           completion: completion)
                 }
             } else {
-                downloadAndCacheVideo(from: url, speculative: speculative, completion: completion)
+                // ⚠️ THE ARGUMENTS BELONG HERE MOST OF ALL. This is the branch taken when the file
+                // is NOT on disk — which is EVERY prefetch that actually downloads anything. It was
+                // left passing the defaults (`allowsCellular: false`, `onTask: nil`) while the
+                // wedge-retry branch above got them, so the whole cellular lookahead was inert (the
+                // request refused mobile data no matter what the prefetcher asked for) and
+                // `StoryPrefetcher.running` stayed empty, leaving `cancelStaleWindow` with nothing
+                // to cancel. Both features read as working in their own files and did nothing.
+                downloadAndCacheVideo(from: url, speculative: speculative,
+                                      allowsCellular: allowsCellular, onTask: onTask,
+                                      completion: completion)
             }
         case .failure(let error):
             DispatchQueue.main.async { completion(.failure(error)) }

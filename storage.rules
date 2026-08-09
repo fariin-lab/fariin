@@ -1,0 +1,138 @@
+rules_version = '2';
+
+// Fariin Storage security rules. Signed-in users only; size capped; create-only.
+//
+// ⚠️ THIS FILE WAS NOT IN THE REPO UNTIL 2026-08-09, and that is exactly how a rule that blocks
+// every video story survived unnoticed: the only copy lived in the Firebase console, so nothing
+// about it was ever read in a diff, a review or a build. It is tracked now. Deploy with
+//     firebase deploy --only storage --project kulan-2ef85
+// and NEVER a bare `firebase deploy` (see the functions note in the backend memory).
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Profile photos: profiles/{uid}.jpg
+    match /profiles/{file} {
+      allow read: if request.auth != null;
+      // ⚠️ `file == uid + '.jpg'` ON THE WRITE, and it was missing. The DELETE rule below has always
+      // had it; the write rule checked only that you were signed in, the file was under 8 MB, and it
+      // was an image. Nothing tied the file to the person uploading it.
+      //
+      // So anybody with an account could write to profiles/<somebody-else's-uid>.jpg and replace
+      // that person's photo with anything they liked. Their picture, on their profile, in every
+      // chat list they appear in, changed by a stranger. Pure harassment, and the kind of thing an
+      // app gets pulled from the App Store over.
+      //
+      // The identical check sitting one line below on delete is what makes this an oversight rather
+      // than a decision: the rule was understood, written down, and applied to the wrong verb.
+      allow write: if request.auth != null
+        && file == request.auth.uid + '.jpg'
+        && request.resource.size < 8 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      // You may delete your OWN profile photo (file is "<uid>.jpg") — used on account deletion.
+      allow delete: if request.auth != null && file == request.auth.uid + '.jpg';
+    }
+
+    // Chat media: chat/{cid}/{messageId}.enc — END-TO-END ENCRYPTED, so it uploads
+    // as application/octet-stream (NOT an image). Don't require an image content
+    // type (that was rejecting every encrypted photo + voice note); just auth + size.
+    match /chat/{cid}/{file} {
+      allow read: if request.auth != null;
+
+      // ⚠️ THIS RULE USED TO CHECK ONE THING: are you signed in. Nothing else. Not whether you are
+      // in that chat, not whether the file already existed, not what kind of file it was.
+      //
+      // Two separate abuses fell out of that:
+      //
+      //   · OVERWRITING. Without `resource == null` anybody could write over anyone else's photos
+      //     and voice notes. The bytes are end-to-end encrypted, so the owner would not see a
+      //     replacement, they would see their own media simply stop working, with nothing anywhere
+      //     explaining why. Destruction that looks like a bug.
+      //   · A FREE FILE HOST. `{cid}` and `{file}` are wildcards, so a script could invent paths and
+      //     push 25 MB at a time, forever, into storage that you pay for. It never has to install
+      //     Fariin to do it — nothing yet proves a request came from the real app.
+      //
+      // `resource == null` is the create-only fix and it is the same shape the story and
+      // announcement rules below already use. Those two were hardened at some point and this one was
+      // never brought along.
+      //
+      // ⚠️ MEMBERSHIP IS STILL NOT CHECKED, and I am not guessing at it. The correct rule reads the
+      // conversation out of Firestore and requires request.auth.uid to be in its `users`. The story
+      // rule above carries a warning that firestore.get() "is unreliable in this project's Storage
+      // rules and was denying every legitimate upload" — that was a story doc which does not exist
+      // yet at upload time, which is a different situation from a conversation that already does.
+      // Different enough that it should work, not different enough to ship on a hunch: getting it
+      // wrong breaks every photo, video and voice note in the app. It needs the Storage emulator
+      // first. Until then create-only stands, which stops the vandalism but not the free storage.
+      allow write: if request.auth != null
+        && request.resource.size < 25 * 1024 * 1024
+        && resource == null;
+    }
+
+    // Story media at stories/{storyId}/{file} — PLAIN (v1, not E2EE).
+    //
+    // A photo story writes ONE object:   photo.jpg  (image/jpeg)
+    // A video story writes TWO:          video.mp4  (video/mp4) + thumb.jpg (image/jpeg)
+    //
+    // ⚠️ EVERY VIDEO STORY WAS BEING REFUSED HERE, AND HAD BEEN SINCE THIS RULE WAS HARDENED.
+    // His 2026-08-09 report: "Couldn't post story — User does not have permission to access
+    // gs://…/stories/<uuid>/…". Not a size problem, not intermittent, not his account: the write
+    // rule ended in
+    //     && request.resource.contentType.matches('image/.*')
+    //     && file == 'photo.jpg';
+    // so `video.mp4` failed BOTH clauses and `thumb.jpg` — an image, and half of every video post —
+    // failed the filename. Only a photo story could ever get through.
+    //
+    // The tell is in this rule's own history: the size cap was raised to 25 MB with a comment
+    // reasoning about "90 seconds at 540p is roughly 17 MB", so video was plainly meant to be
+    // allowed. The two hardening clauses were added for good reasons (no arbitrary file host, no
+    // arbitrary sub-paths) and silently contradicted it. A rule and its comment disagreed, and
+    // because this file lived only in the console, nothing ever put the two side by side.
+    //
+    // The fix keeps every protection and states the three legal objects explicitly: each filename
+    // is paired with the content type it must carry, so the path is still not a file host and
+    // `video.mp4` cannot be used to smuggle something that is not a video.
+    match /stories/{storyId}/{file} {
+      // Read = auth only. (An author is NOT in their own recipientUids, so an audience check
+      // here would deny the author's own getDownloadURL — that was the real cause of the old
+      // "permission denied on every post", not firestore.get being broken.) Audience is enforced
+      // in Firestore (recipientUids); the tokenized URL is only handed to recipients.
+      allow read: if request.auth != null;
+      // CREATE-ONLY write: `resource == null` means the object doesn't exist yet, so the author's
+      // first upload to a fresh {storyId} path succeeds, but NOBODY can overwrite an existing story
+      // object (the vandalism hole). No firestore.get() — that lookup is unreliable in this
+      // project's Storage rules and was denying every legitimate upload.
+      //
+      // 25 MB: a story video may be 90 seconds, and 90 seconds at the 540p we export to is roughly
+      // 17 MB. Matches the chat limit, which is the same kind of media.
+      allow write: if request.auth != null
+        && resource == null
+        && request.resource.size < 25 * 1024 * 1024
+        && (
+             (file == 'photo.jpg' && request.resource.contentType.matches('image/.*'))
+          || (file == 'thumb.jpg' && request.resource.contentType.matches('image/.*'))
+          || (file == 'video.mp4' && request.resource.contentType.matches('video/.*'))
+        );
+      // Deletes happen server-side only: the onStoryDeleted Cloud Function (admin SDK, bypasses
+      // rules) removes the media when the story doc is deleted. Blocking client deletes closes the
+      // "any user can delete anyone's media" hole; the client's own delete call fails harmlessly.
+      allow delete: if false;
+    }
+
+    // Official channel pictures at announcements/{announcementId}/image.jpg — PLAIN, like story
+    // photos. A broadcast to everybody cannot be a secret, so sealing it would be a costume: every
+    // phone would hold the key.
+    match /announcements/{announcementId}/{file} {
+      allow read: if request.auth != null;
+      // Same shape as the story rule above, and for the same reason: a firestore.get() here is
+      // unreliable in this project's Storage rules and denies legitimate uploads, so the real gate is
+      // in Firestore. Anybody can put bytes at this path; only an admin can ever publish an
+      // announcement that POINTS at them, and an unreferenced object is never fetched by anything.
+      allow write: if request.auth != null
+        && request.resource.size < 10 * 1024 * 1024
+        && resource == null                                    // create-only: no overwriting a live announcement's picture
+        && request.resource.contentType.matches('image/.*')    // images only — not an arbitrary file host
+        && file == 'image.jpg';                                // fixed filename — no arbitrary sub-paths
+      allow delete: if false;
+    }
+  }
+}
