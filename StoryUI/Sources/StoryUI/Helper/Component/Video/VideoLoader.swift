@@ -106,7 +106,13 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     private func setBuffering(_ buffering: Bool) {
         guard didReportBuffering != buffering else { return }
         didReportBuffering = buffering
-        NotificationCenter.default.post(name: .storyBuffering, object: buffering)
+        // ⚠️ WHO IS BUFFERING, not just that somebody is. The flag used to travel as a bare Bool and
+        // the receiver could only ask whether IT was the current page — never whether the SENDER
+        // was. The pager keeps neighbour pages mounted, so a clip stalling on a page nobody is
+        // looking at froze the progress bar of the story on screen. Carrying the url makes the
+        // question answerable: a report about a clip that is not the one being watched is ignored.
+        NotificationCenter.default.post(name: .storyBuffering, object: buffering,
+                                        userInfo: url.map { ["url": $0.absoluteString] })
     }
 
     /// The clip's own pixel size, once the item has reported it. Kept so the fit/fill decision can

@@ -192,6 +192,12 @@ struct StoryDetailView: View {
     /// The video is waiting on bytes. Holds the progress bar; cleared automatically when the player
     /// reports it is playing again. See `.storyBuffering`.
     @State private var isBuffering: Bool = false
+    /// The clip that put the bar on hold. `isBuffering` used to be cleared only by `resetProgress`,
+    /// which runs on a PERSON change — so a video that stalled and was then tapped past to a PHOTO in
+    /// the same person left the bar frozen for the rest of that bucket, with no auto-advance and no
+    /// way back except swiping to somebody else. Knowing whose hold it is means it can be released
+    /// the moment that clip stops being the one on screen, and never a moment earlier.
+    @State private var bufferingURL: String = ""
     @State private var captionExpanded: Bool = false   // tap the caption to expand past 3 lines
     /// WHERE THE FINGER IS, and the only answer in this file that cannot be missed. See `holdGesture`.
     ///
@@ -516,8 +522,16 @@ struct StoryDetailView: View {
         // you are watching.
         .onReceive(NotificationCenter.default.publisher(for: .storyBuffering)) { note in
             guard viewModel.currentStoryUser == model.id else { return }
+            // ⚠️ AND ABOUT THE CLIP THIS PAGE IS ACTUALLY SHOWING. Being the current PAGE was the
+            // only test, so a neighbour page's stall froze the bar of the story on screen. The
+            // sender names its url now; a report about anything else is not ours to act on.
+            // A post with no url at all is refused rather than trusted — the only writers are
+            // `PlayerView`s, and one that cannot say which clip it means is one we cannot place.
+            guard let sender = note.userInfo?["url"] as? String,
+                  sender == getStory(with: getCurrentIndex()).mediaURL else { return }
             let buffering = (note.object as? Bool) ?? false
             if buffering != isBuffering { isBuffering = buffering }
+            bufferingURL = buffering ? sender : ""
         }
         .onChange(of: viewModel.currentStoryUser) { newValue in
             NotificationCenter.default.post(name: .stopVideo, object: nil)
@@ -573,7 +587,16 @@ struct StoryDetailView: View {
             if phase == .active {
                 if scenePaused { scenePaused = false; isPaused = false; playVideo() }
             } else {
-                if !isPaused { scenePaused = true }   // remember this pause is ours, not a hold
+                // ⚠️ RECORDED EVEN WHEN A FINGER ALREADY PAUSED IT. This was `if !isPaused`, so a
+                // scene pause arriving DURING a hold was anonymous — nothing remembered that the app
+                // had left the foreground. The gesture's release then cleared `isPaused` and played
+                // the story behind Control Centre, with the 0.05s timer still running in `.inactive`,
+                // so the bar advanced and you came back one or two stories further on. And because
+                // `scenePaused` was never set, returning to `.active` had nothing to undo.
+                //
+                // Recording it unconditionally is safe precisely because `.active` is the only thing
+                // that clears it, and the release now refuses while it stands.
+                scenePaused = true
                 isPaused = true; pauseVideo()
             }
         }
@@ -1020,7 +1043,13 @@ private extension StoryDetailView {
                     // pause is instant, the fade is not. Two clocks on purpose.
                     if phase == .holding, !isHolding { isHolding = true }
                 case .idle:
-                    if isPaused || isHolding { isPaused = false; isHolding = false; playVideo() }
+                    // The finger has gone, but the APP may have gone too — see the `scenePhase`
+                    // handler. A release that resumes while backgrounded plays a story nobody can
+                    // see; `.active` owns that resume and hands it back itself. `isHolding` still
+                    // comes down, because the hold is genuinely over and it must not cross stories.
+                    isHolding = false
+                    guard !scenePaused else { return }
+                    if isPaused { isPaused = false; playVideo() }
                 }
             }
         }
@@ -1218,6 +1247,13 @@ private extension StoryDetailView {
         // they will be watched, across people, so the last item of one warms the first of the next.
         if viewModel.currentStoryUser == model.id {
             let cur = getStory(with: getCurrentIndex())
+            // A HOLD BELONGS TO ONE CLIP. See `bufferingURL`: the item has changed, so a hold left
+            // by the one we came from is stale and the bar must be released. Matched by url rather
+            // than cleared blindly, so a NEW clip that has already reported its own stall keeps it.
+            if isBuffering, bufferingURL != cur.mediaURL {
+                isBuffering = false
+                bufferingURL = ""
+            }
             if cur.id != lastPrefetchItem {
                 lastPrefetchItem = cur.id
                 let all = viewModel.stories.flatMap { $0.stories }
@@ -1245,9 +1281,18 @@ private extension StoryDetailView {
         //
         // This deliberately does NOT wait for a duration — a story looked at for half a second is
         // still watched. It waits only for the state to be watching at all.
+        // ⚠️ AND `!isBuffering`, WHICH IS THE DIFFERENCE BETWEEN WATCHED AND MERELY ARRIVED AT.
+        //
+        // The rule this block argues for is "the clock for this item is actually running". Every
+        // flag but one was listed, and the missing one is the flag that says the picture has not
+        // appeared yet. So on a slow connection the report fired on the first 50ms tick, over a
+        // placeholder, before a single frame existed — and for a VIEW-ONCE story `onItemSeen` runs
+        // `consumeOneTime`. The single view was spent on a blank screen and the story could not be
+        // opened again. The bar itself already refuses to advance while buffering; this is the same
+        // condition applied to the receipt, which is the more expensive of the two to get wrong.
         if viewModel.currentStoryUser == model.id,
            !isPaused, !isHolding, !hostPause.paused, !isFolding,
-           !keyboardManager.isKeyboardOpen, !isTimerRunning {
+           !keyboardManager.isKeyboardOpen, !isTimerRunning, !isBuffering {
             let cur = getStory(with: getCurrentIndex())
             if cur.id != lastSeenItem { lastSeenItem = cur.id; onItemSeen?(cur.id) }
         }
