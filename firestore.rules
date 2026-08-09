@@ -205,6 +205,28 @@ service cloud.firestore {
         allow read, write: if signedIn() && request.auth.uid == uid;
       }
 
+      // WHERE PUSH TOKENS ARE MOVING TO, and why they cannot stay on the profile.
+      //
+      // They live at users/{uid}.fcmTokens / .voipTokens today, on a document any signed-in account
+      // can GET once it knows a uid — and uids are not secret, they sit in every group you share.
+      // Firestore has no field-level read control, so as long as the tokens are ON that document
+      // they are readable, full stop. The data has to move; no rule can save it in place.
+      //
+      // The attack that makes it urgent: read the victim's token, write it onto your OWN profile,
+      // and `reconcilePushTokens` (which strips a token from every other account holding it) quietly
+      // removes it from theirs. Their messages and CallKit rings then arrive on your phone and stop
+      // arriving on theirs, with nothing anywhere explaining why.
+      //
+      // ⚠️ THIS BLOCK IS STAGE ONE OF FOUR AND CLOSES NOTHING BY ITSELF. The app and the server
+      // deploy separately and old builds live on phones for weeks, so the moment the server reads
+      // only from here, every phone still writing to the profile goes silent — no messages, no
+      // ringing, no error. The order has to be: server reads here and FALLS BACK to the profile;
+      // app writes here; that build reaches people; only then migrate the existing tokens and drop
+      // the old fields. The hole is open until that third step.
+      match /push/{docId} {
+        allow read, write: if signedIn() && request.auth.uid == uid;
+      }
+
       // Which sticker packs you have added, and the order you keep them in. A subcollection
       // rather than a field on the user doc precisely because any signed-in user can READ a
       // user doc (handle lookup) - what stickers you use is nobody else's business.

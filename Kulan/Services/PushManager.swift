@@ -9,8 +9,16 @@ import UserNotifications
 import PushKit
 
 // App delegate: configures Firebase, owns the APNs/FCM token handshake, and saves
-// the device's FCM token to users/{uid}.fcmTokens so the Cloud Function can push
+// the device's FCM token to users/{uid}/push/tokens so the Cloud Function can push
 // to it. (Firebase config lives here so it runs before any messaging setup.)
+//
+// STAGE 3 OF THE PUSH-TOKEN MOVE. Tokens used to live on the user doc itself
+// (users/{uid}.fcmTokens / .voipTokens) — a document ANY signed-in account can
+// read if it knows the uid. Read a token there, write it onto your own profile,
+// and the server's reconcile hands you the victim's messages and calls. So this
+// build writes tokens ONLY to users/{uid}/push/tokens (owner-only readable, see
+// firestore.rules) and strips its own token from the old fields. The server reads
+// BOTH places until every phone has this build (stage 4 removes the old fields).
 final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNUserNotificationCenterDelegate, PKPushRegistryDelegate {
 
     private var voipRegistry: PKPushRegistry?
@@ -103,8 +111,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // delegate fires on every launch and token rotation and put them straight back, so pushes
         // resumed at the next cold start while the switch still read OFF.
         guard UserDefaults.standard.object(forKey: "notif.push") as? Bool ?? true else { return }
-        Firestore.firestore().collection("users").document(uid)
-            .setData(["fcmTokens": FieldValue.arrayUnion([token])], merge: true)
+        Push.saveToken(field: "fcmTokens", token: token, uid: uid)
         // Also on this device's own row, so signing it out from another phone can strip
         // exactly this token and leave the other devices' tokens alone.
         Task { @MainActor in DeviceRegistry.shared.recordFCMToken(token) }
@@ -194,11 +201,24 @@ enum NotificationCleaner {
 enum Push {
     static var latestVoipToken: String?
 
+    /// The one place tokens are WRITTEN now: users/{uid}/push/tokens, which only its
+    /// owner can read — a stolen uid no longer surrenders the account's push tokens.
+    /// The second write scrubs this device's token off the old world-readable fields
+    /// (harmless no-op once stage 4 deletes them). Two separate writes on purpose:
+    /// registering in the new home must never be hostage to the old home's cleanup.
+    static func saveToken(field: String, token: String, uid: String) {
+        let user = Firestore.firestore().collection("users").document(uid)
+        user.collection("push").document("tokens")
+            .setData([field: FieldValue.arrayUnion([token])], merge: true)
+        // Only OUR token comes off — this account's other, not-yet-updated devices keep
+        // their old-field tokens (the server still reads those) until they update too.
+        user.updateData([field: FieldValue.arrayRemove([token])])
+    }
+
     /// Persist the VoIP token once we're signed in (PushKit can fire before login).
     static func saveVoipToken() {
         guard let token = latestVoipToken, let uid = Auth.auth().currentUser?.uid else { return }
-        Firestore.firestore().collection("users").document(uid)
-            .setData(["voipTokens": FieldValue.arrayUnion([token])], merge: true)
+        saveToken(field: "voipTokens", token: token, uid: uid)
         // And on this device's row, so a remote sign-out can pull this device's ring token.
         Task { @MainActor in DeviceRegistry.shared.recordVoipToken(token) }
     }
@@ -222,17 +242,25 @@ enum Push {
     // and lost auth mid-flight, leaving stale tokens (ghost pushes after logout).
     static func unregister() async {
         guard let uid = Auth.auth().currentUser?.uid else { return }
-        let doc = Firestore.firestore().collection("users").document(uid)
+        let db = Firestore.firestore()
+        let doc = db.collection("users").document(uid)
         var updates: [String: Any] = [:]
         if let token = Messaging.messaging().fcmToken { updates["fcmTokens"] = FieldValue.arrayRemove([token]) }
         if let voip = latestVoipToken { updates["voipTokens"] = FieldValue.arrayRemove([voip]) }
         guard !updates.isEmpty else { return }
-        // ONE atomic write, RETRIED. The old code swallowed failures (try?), so a transient blip at sign-out
+        // ONE atomic batch, RETRIED. The old code swallowed failures (try?), so a transient blip at sign-out
         // left this phone's tokens under the signed-out account → calls to it kept ringing this phone after
         // switching accounts (ghost calls). Retry so the removal actually lands. (CallService.watchRingingCancel
         // is the belt: it ends any call whose callee isn't the account signed in here.)
+        // BOTH homes in the batch: old fields (pre-move builds wrote there) and push/tokens
+        // (this build writes there). setData(merge:) on the push doc, not updateData — on an
+        // account that never saw this build the doc doesn't exist, and a NOT_FOUND would sink
+        // the whole batch, old-field removals included.
         for attempt in 0..<3 {
-            do { try await doc.updateData(updates); return }
+            let batch = db.batch()
+            batch.updateData(updates, forDocument: doc)
+            batch.setData(updates, forDocument: doc.collection("push").document("tokens"), merge: true)
+            do { try await batch.commit(); return }
             catch {
                 if attempt == 2 { return }
                 try? await Task.sleep(nanoseconds: 400_000_000)

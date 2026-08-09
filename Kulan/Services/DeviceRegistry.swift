@@ -164,7 +164,12 @@ final class DeviceRegistry: ObservableObject {
             tokenRemovals["voipTokens"] = FieldValue.arrayRemove([voip])
         }
         if !tokenRemovals.isEmpty {
-            batch.updateData(tokenRemovals, forDocument: db.collection("users").document(uid))
+            let user = db.collection("users").document(uid)
+            // Both token homes: the old user-doc fields (the signed-out device may be on a
+            // pre-move build) and users/{uid}/push/tokens (a post-move build). setData(merge:)
+            // on the push doc so a missing doc can't NOT_FOUND the whole batch.
+            batch.updateData(tokenRemovals, forDocument: user)
+            batch.setData(tokenRemovals, forDocument: user.collection("push").document("tokens"), merge: true)
         }
         batch.deleteDocument(ref)
         try await batch.commit()

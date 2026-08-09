@@ -1330,7 +1330,7 @@ final class CallService: NSObject {
                 self.remoteEnded(reason: EndReason(rawValue: d["endReason"] as? String ?? "") ?? .hangup)
                 return
             }
-            // ANSWERED ELSEWHERE. `voipTokens` is an array and every signed-in device of mine rings, but
+            // ANSWERED ELSEWHERE. `voipTokens` (users/{uid}/push/tokens) is an array and every signed-in device of mine rings, but
             // this watcher only ever handled "ended" and a callee mismatch — "active" matched neither, so
             // the OTHER phones kept ringing forever after I picked up on one. This watcher is removed the
             // moment THIS device answers (see completeAnswer), so still being .incoming while the doc says
