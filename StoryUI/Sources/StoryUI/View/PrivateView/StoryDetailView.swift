@@ -598,6 +598,22 @@ struct StoryDetailView: View {
             // NOT when the pause is the SCENE's: leaving the app sets `isPaused` too, and clearing
             // it on a resume that arrives while backgrounded would start the story playing behind
             // the app switcher. `scenePhase` owns that one and hands it back itself.
+            // ⚠️ AND NOT WHILE A FINGER IS STILL ON THE STORY. The paragraph above assumes no hold
+            // can survive a `resumeStory`, and that assumption is wrong in one specific way: a
+            // downward pan FAILS the moment the finger moves 8pt on the cross axis
+            // (`DirectionalPanGestureRecognizer`), and both pagers post `resumeStory` on failure.
+            // So holding a story to pause it and then sliding the thumb a centimetre sideways —
+            // without lifting — cleared both flags and started the clip again under the finger. The
+            // press was still live, so no further gesture callback was coming, and the eventual
+            // release found the flags already clear and did nothing. That is the "it pauses, then
+            // it plays by itself" shape, arriving from a completely different direction than the
+            // timing race that was fixed earlier.
+            //
+            // `pressPhase` is the one signal in this file that cannot lie about a finger, so it is
+            // what decides. Nothing is stranded by deferring: the gesture's own `.idle` transition
+            // resumes on release, which is the same code path a normal hold already ends through.
+            // `hostPause` is cleared either way — that is the host's axis, not the finger's.
+            guard pressPhase == .idle else { return }
             if !scenePaused, isPaused || isHolding { isPaused = false; isHolding = false }
             if !keyboardManager.isKeyboardOpen { playVideo() }
         }
@@ -1482,9 +1498,19 @@ private extension StoryDetailView {
             // let AVFoundation wait, and then told the opposite before any clip ever started. With
             // the override gone, a streamed clip holds on its cover until it can play through
             // instead of starting on a stutter, which is what the setting was chosen for.
-            Task {
-                player.play()
-            }
+            // ⚠️ NO `Task` HERE, AND THE HOP WAS A HOLE IN THE GUARD ABOVE.
+            //
+            // This function is on a plain extension, so a `Task` created in it does NOT inherit the
+            // main actor: `player.play()` ran on the global executor at an arbitrary later moment.
+            // By then the guard's answer could be stale — press and hold at the instant the player
+            // reports ready (every `state` change calls in here) and the pause would take effect,
+            // the bar would freeze and the chrome would fade, and then the escaped `play()` would
+            // land and the clip would keep moving under the finger. Exactly the report the guard was
+            // added for, reduced from certain to intermittent rather than closed.
+            //
+            // `play()` also has no business being called off the main thread. Calling it inline
+            // means the guard three lines up and the play are one indivisible decision.
+            player.play()
         }
     }
     

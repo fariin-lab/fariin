@@ -331,8 +331,19 @@ final class ImageLoader: UIView {
         loadTask?.cancel()
         loadTask = nil
 
-        // stop video if it's playing before image request
-        NotificationCenter.default.post(name: .stopVideo, object: nil)
+        // ⚠️ THE `.stopVideo` BROADCAST THAT USED TO BE HERE IS GONE, AND IT HAD NO LEGITIMATE TARGET.
+        //
+        // It read "stop video if it's playing before image request", which sounds local and is not:
+        // the notification carries no page identity, so EVERY mounted `PlayerView` obeyed it. The
+        // pager pre-builds the neighbouring person's page, so loading a photo on a page nobody is
+        // looking at reached across and stopped the video the user WAS watching — it froze on its
+        // frame with the audio gone while the progress bar kept counting and the story advanced on
+        // schedule.
+        //
+        // Nothing is lost by removing it. A page that shows a photo has no `VideoView` mounted at
+        // all, and the one case where a page switches from a video item to a photo item is already
+        // handled locally by `resetAVPlayer()` in the image branch of `getStoryView`. This post
+        // could only ever hit somebody else's player.
 
         // 1) ALREADY DECODED AND READY. A dictionary lookup and a pointer — no file read, no decode,
         //    and crucially no dispatch: the picture is on screen in this same turn, which is what
