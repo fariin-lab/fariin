@@ -228,6 +228,10 @@ final class StoryViewersSheetView: UIView {
     private var outsideBaselineY: CGFloat = 0
     /// True once a drag has decided the SHEET owns it rather than the list.
     private var dragOwnsSheet = false
+    /// TRUE FOR THE REST OF A GESTURE THAT WAS SPENT COLLAPSING THE SEARCH. One touch does one
+    /// thing: the drag that steps the sheet back from full to half is finished the moment it has
+    /// done that, and cannot go on to take the sheet and dismiss it. See `handlePan`.
+    private var dragSpentOnSearch = false
 
     /// SEARCH GROWS THE SHEET TO (almost) THE WHOLE SCREEN — Telegram's rule, read from their
     /// source on his order (2026-08-09: "there is not enough space when the keyboard appears…
@@ -284,6 +288,14 @@ final class StoryViewersSheetView: UIView {
         addGestureRecognizer(tapAbove)
         pagePan.delegate = self
         addGestureRecognizer(pagePan)
+        // Selector-based observers, so they are dropped with this view and there is no token to
+        // keep. See `keyboardWillChange` for what they are for.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(keyboardWillChange(_:)),
+            name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(keyboardWillChange(_:)),
+            name: UIResponder.keyboardWillHideNotification, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -487,6 +499,43 @@ final class StoryViewersSheetView: UIView {
         emptyLabel.frame = CGRect(x: 24, y: top + 40, width: bounds.width - 48, height: 22)
     }
 
+    // MARK: Keyboard
+
+    /// THE LIST MUST NOT RUN ON UNDER THE KEYBOARD.
+    ///
+    /// The table is laid out all the way down to the bottom of the screen and its
+    /// `contentInsetAdjustmentBehavior` is `.never`, so nothing moves it out of the way by itself:
+    /// with search focused the keyboard simply covered the last rows, which could then be neither
+    /// read nor tapped. The one thing that changes here is the table's own bottom inset, which is
+    /// what a scroll view is supposed to answer a keyboard with. The SHEET's height is left alone on
+    /// purpose: its two resting heights are Telegram's and the host's settle maths is written
+    /// against them, so making the keyboard a third one would put two height models on one drag.
+    @objc private func keyboardWillChange(_ note: Notification) {
+        guard let info = note.userInfo,
+              let end = (info[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+        else { return }
+        // A hide notification still carries a frame, and on some paths it is still the on-screen
+        // one, so the hide case is answered with a flat zero rather than by measuring anything.
+        let hiding = note.name == UIResponder.keyboardWillHideNotification
+        // `from: nil` means the window, which is the space the keyboard frame is published in.
+        let keyboardTop = hiding ? bounds.maxY : convert(end, from: nil).minY
+        let listBottom = convert(table.bounds, from: table).maxY
+        let overlap = max(0, listBottom - keyboardTop)
+        guard abs(table.contentInset.bottom - overlap) > 0.5 else { return }
+
+        let duration = info[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+        // The keyboard rides a curve that has no `UIView.AnimationCurve` case of its own (it reports
+        // 7). Shifting the raw value into the options field is how you ride the same timing, and it
+        // is the difference between the list settling WITH the keyboard and a beat behind it.
+        let curve = info[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int ?? 7
+        let timing = UIView.AnimationOptions(rawValue: UInt(curve) << 16)
+        UIView.animate(withDuration: duration, delay: 0,
+                       options: [timing, .beginFromCurrentState]) {
+            self.table.contentInset.bottom = overlap
+            self.table.verticalScrollIndicatorInsets.bottom = overlap
+        }
+    }
+
     // MARK: Progress
 
     /// Move the sheet, without animation. The host's spring drives this frame by frame during a
@@ -508,6 +557,7 @@ final class StoryViewersSheetView: UIView {
 
         switch g.state {
         case .began:
+            dragSpentOnSearch = false
             // A DRAG ON THE EXPANDED SHEET STEPS BACK ONE LEVEL, Telegram's rule: full+search →
             // half, and only the NEXT drag can dismiss. The host's settle math is written against
             // the half height, so letting a drag run while expanded would fight two height models.
@@ -516,6 +566,13 @@ final class StoryViewersSheetView: UIView {
                 setSearchExpanded(false)
                 g.setTranslation(.zero, in: self)
                 dragOwnsSheet = false
+                // AND NOW SOMETHING ENFORCES THAT CLAIM. Returning here used to leave the same touch
+                // live: the very next `.changed` asked `shouldSheetTakeDrag` again, got a yes (the
+                // list is at its top and the finger is still coming down), took the sheet, and the
+                // release dismissed it. So one flick collapsed the search AND closed the sheet, when
+                // the rule above says the close belongs to a second, separate drag. The flag spends
+                // this gesture on the collapse and on nothing else.
+                dragSpentOnSearch = true
                 return
             }
             onDragActive?(true)   // finger beats spring: the host cancels any in-flight settle
@@ -524,6 +581,7 @@ final class StoryViewersSheetView: UIView {
             panBaselineY = translation
             dragOwnsSheet = shouldSheetTakeDrag(velocity: velocity)
         case .changed:
+            if dragSpentOnSearch { return }
             if !dragOwnsSheet {
                 // The list is scrolling. Re-check on every event, because the moment it reaches its
                 // top and the finger is still coming down, the sheet takes over mid-gesture — that
@@ -539,6 +597,13 @@ final class StoryViewersSheetView: UIView {
             table.contentOffset.y = 0          // pin it while the sheet owns the movement
             setProgress(dragStart - (translation - panBaselineY) / sheetHeight)
         case .ended, .cancelled:
+            // Balanced with `.began`. A gesture spent on the collapse never said a finger owns
+            // progress, so it must not say one has let go either: it moved no sheet, there is no
+            // settle for the host to cancel and nothing for its parked-sheet watchdog to hold.
+            if dragSpentOnSearch {
+                dragSpentOnSearch = false
+                return
+            }
             onDragActive?(false)
             guard dragOwnsSheet else { return }
             dragOwnsSheet = false
@@ -830,6 +895,28 @@ final class StoryViewersSheetView: UIView {
         }
     }
 
+    /// THE SHEET IS BEING POINTED AT A DIFFERENT STORY, so everything that was narrowing the LAST
+    /// story's list goes with it.
+    ///
+    /// A query typed for one story means nothing for the next one's audience, and it was surviving
+    /// the swap: `viewers.didSet` re-ran the old text against the new people, so paging sideways
+    /// showed "No views yet" for a story that has viewers, with the words that hid them sitting in a
+    /// search field that had already collapsed out of sight. There was no way to see what was wrong,
+    /// let alone undo it.
+    ///
+    /// The friends set is emptied here for a different reason with the same shape: it is read once
+    /// and then kept for ever, so the Friends tab was answering with whatever the conversation list
+    /// said the first time that tab was opened in this sheet. Emptying it makes the next filter go
+    /// and read it again.
+    func prepareForStorySwap() {
+        friendUids = []
+        guard !(search.text ?? "").isEmpty || searchExpanded else { return }
+        search.text = ""
+        search.resignFirstResponder()
+        setSearchExpanded(false)
+        applyFilter()
+    }
+
     private func applyFilter() {
         let me = AuthService.shared.uid ?? ""
         if tab == 1 && friendUids.isEmpty {
@@ -918,7 +1005,15 @@ extension StoryViewersSheetView: UITableViewDataSource, UITableViewDelegate {
                     store.setHidden(v.id, !store.isHidden(v.id))
                     // Redraw: the menu's label is the state, so a stale row would offer to hide
                     // somebody it just hid.
-                    self?.table.reloadRows(at: [indexPath], with: .none)
+                    //
+                    // FOUND BY WHO IS IN IT, not by the index this cell happened to be built with. A
+                    // tab switch or a keystroke in the search between the build and the tap re-runs
+                    // the filter and moves everybody, and the captured index then names whoever has
+                    // since taken that slot: the wrong row redrew, and the tapped one kept the label
+                    // it had just contradicted.
+                    guard let self, let row = self.filtered.firstIndex(where: { $0.id == v.id })
+                    else { return }
+                    self.table.reloadRows(at: [IndexPath(row: row, section: 0)], with: .none)
                 },
                 onBlock: { [weak self] in self?.onBlock?(v) },
                 isHidden: StoryAudienceStore.shared.isHidden(v.id))
@@ -1183,6 +1278,11 @@ struct StoryViewersSheet: UIViewRepresentable {
         private func show(_ id: String) {
             guard !id.isEmpty, id != loadedId else { return }
             loadedId = id
+            // A NEW STORY IS A NEW AUDIENCE. Drop the last one's search text and its friends set
+            // BEFORE the new people are handed over, because assigning `viewers` filters them on the
+            // way in: do it after and the first thing drawn is the new list seen through the old
+            // story's query.
+            view?.prepareForStorySwap()
             task?.cancel()
             if let hit = cache[id] {
                 view?.viewers = hit

@@ -1374,7 +1374,14 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
         displayedIds = ids
         layoutCards(removing: gone, fresh: fresh, animated: animate && orderChanged)
 
-        if orderChanged { restoreRowIfAsked() }
+        // ASKED FOR, SO ANSWERED, WHETHER OR NOT ANYBODY MOVED. This used to run only on a change
+        // of order, and it is the only thing that clears the pending uid, so closing a story whose
+        // ring was already fully seen (nothing to re-sort, so no change) left the request sitting
+        // there: the row did not come back to the person being watched, and the uid was spent much
+        // later by some unrelated reorder, sliding the row sideways to somebody from a visit that
+        // had ended long before. `restoreRowIfAsked` still stands down while the order is frozen, so
+        // it cannot fire until the row is showing the order it is meant to restore into.
+        restoreRowIfAsked()
         scrollToActiveIfNeeded()
         prefetchIfNeeded()
         presentErrorIfNeeded()
@@ -1673,13 +1680,21 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
             if service.uploadError == nil { lastErrorShown = nil }
             return
         }
+        // MARKED AS SHOWN ONLY ONCE IT REALLY HAS BEEN SHOWN. There is no presenter while the row is
+        // off a window, which is exactly where you are when an upload fails while you are reading a
+        // chat, and recording the message first threw the alert away AND buried it: the guard above
+        // never let that same text through again, and the OK handler that clears `uploadError` never
+        // ran, so the failure sat in the service unseen for the rest of the session. Leaving now
+        // costs nothing: `uploadError` is still set and still observed, so the next `apply` puts the
+        // alert up the moment there is somewhere to put it.
+        guard let host = presenter else { return }
         lastErrorShown = message
         let a = UIAlertController(title: "Couldn't post story", message: message, preferredStyle: .alert)
         a.addAction(UIAlertAction(title: "OK", style: .cancel) { [weak self] _ in
             self?.service.uploadError = nil
             self?.lastErrorShown = nil
         })
-        presenter?.present(a, animated: true)
+        host.present(a, animated: true)
     }
 }
 
