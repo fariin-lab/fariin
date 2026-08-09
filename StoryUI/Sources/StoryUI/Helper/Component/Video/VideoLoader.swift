@@ -46,12 +46,14 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     private var cachedFileInUse: URL?
     /// One retry per story, or a dead URL becomes an endless download loop.
     private var didRetryRemote = false
-    /// The clip's cover, drawn blurred while it loads instead of a black rectangle. Set by the host
-    /// through `VideoView`; nil simply falls back to the old black.
+    /// The clip's cover — `thumb.jpg`, a full-size photograph of this clip's own opening frame —
+    /// drawn while it loads instead of a black rectangle, and drawn SHARP (see `cover`). Set by the
+    /// host through `VideoView`; nil simply falls back to the embedded thumbnail, then to black.
     var posterImage: UIImage?
     /// THE COVER OF LAST RESORT, decoded from the story's own bytes — see `Story.blurThumb`. It is
-    /// tiny (about 30px wide) and is drawn through the same blur the poster uses, so at card size it
-    /// reads as an out-of-focus frame of the clip rather than as a low-quality image.
+    /// tiny (about 30px wide) and is the ONLY cover that is drawn blurred, because at card size that
+    /// is the only honest thing to do with it: blurred it reads as an out-of-focus frame of the clip,
+    /// sharp it reads as a broken image.
     ///
     /// Held decoded because it is asked for on every veil rebuild and the base64 is not free.
     private var blurThumbImage: UIImage?
@@ -60,9 +62,23 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// Whatever this view can put on screen RIGHT NOW, in order of truth: the frame the person was
     /// actually watching, then the real poster, then the embedded thumbnail. Nil only when the story
     /// carries none of the three, which for anything posted from a current build cannot happen.
-    private var coverImage: UIImage? {
-        if let resumed = self.url.flatMap({ StoryPlaybackResume.frame($0) }) { return resumed }
-        return posterImage ?? blurThumbImage
+    ///
+    /// ⚠️ `isFrame` IS THE DIFFERENCE BETWEEN "THE VIDEO IS HERE" AND "THE VIDEO IS A SMEAR", and
+    /// getting it wrong is his 2026-08-09 "tap left/right and it is a full blur screen". A real frame
+    /// of this clip — a resume still, or `thumb.jpg`, which is a full-size photograph of the clip's
+    /// own opening — is worth showing AS IT IS. Only the 30px embedded thumbnail has to be blurred,
+    /// because at card size that is all it can honestly be.
+    ///
+    /// Telegram draws exactly this distinction and it is the whole reason their stories never look
+    /// blurred: `StoryItemImageView` shows the cached first frame or the downloaded preview
+    /// representation SHARP (`preparingForDisplay()`, `.scaleAspectFill`), and reaches for
+    /// `blurredImage(_:radius: 10, iterations: 3)` only on `decodeTinyThumbnail(immediateThumbnailData)`
+    /// — the inline bytes that are all it has when there is nothing else at all.
+    private var cover: (image: UIImage, isFrame: Bool)? {
+        if let resumed = self.url.flatMap({ StoryPlaybackResume.frame($0) }) { return (resumed, true) }
+        if let poster = posterImage { return (poster, true) }
+        if let thumb = blurThumbImage { return (thumb, false) }
+        return nil
     }
 
     func setBlurThumb(_ base64: String?) {
@@ -473,6 +489,14 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // A CLIP THAT IS ON DISK IS NOT LOADING, so its veil is a cover without a wheel — see
         // `addActivityIndicatory`. Asked here, synchronously, because by the time the cache
         // answers `loadVideo` the veil has already been up for the whole question.
+        // ⚠️ AND THE COLOURS COME STRAIGHT BACK. The reset two lines up is right — clip B must not
+        // wear clip A's gradient — but it was the LAST word on the canvas for the whole of B's load,
+        // so the backdrop sat at its neutral near-black even when B's cover was already in hand.
+        // `setPoster` and `setBlurThumb` both run BEFORE this (see `VideoView.updateUIView`) and both
+        // call `refreshBackdrop`, and this line was quietly undoing them. It matters most for the
+        // cover that is drawn `.scaleAspectFit`: without it the bars are black under the still and
+        // then change colour the instant the clip appears.
+        refreshBackdrop()
         let cachedFile = CacheManager.cachedFileIfUsable(for: validatedUrl)
         addActivityIndicatory(spinning: cachedFile == nil)
         // A CACHED CLIP CAN BE ITS OWN POSTER. A video with no thumbnail (the empty-thumb upload
@@ -875,40 +899,29 @@ private extension PlayerView {
         // showed.
         view.backgroundColor = .clear
         view.tag = 999
-        // ⚠️ THE FRAME HE LEFT ON BEATS THE POSTER, and it is not treated as a loading state at all.
+        // ⚠️ ONE BRANCH, TWO TREATMENTS — see `cover`. A REAL FRAME of this clip goes up AS IT IS,
+        // at the gravity the video itself will use, so the hand-over to the live layer is invisible:
+        // the same picture, the same size, in the same place. Only the 30px embedded thumbnail is
+        // blurred, because at card size that is the only honest thing to do with it.
         //
-        // A RESUME is not the same event as a first open. On a first open there is nothing to show
-        // but the poster, and blurring it says "this is coming". On a return the clip is going to
-        // reappear at 10s, and covering that with a sharp-or-blurred picture of second zero is the
-        // bug he reported — the position resumed and the picture did not.
-        //
-        // So the remembered frame is drawn SHARP, at the gravity the video itself will use, which
-        // makes the hand-over to the live layer invisible: the same picture, the same size, in the
-        // same place. Only the poster path still veils, because only that path is really loading.
-        // See `StoryPlaybackResume.rememberFrame`.
-        if let resumed = self.url.flatMap({ StoryPlaybackResume.frame($0) }) {
-            let iv = UIImageView(image: resumed)
+        // Two frames qualify, for two different reasons. The one he LEFT ON (`StoryPlaybackResume`)
+        // is not a loading state at all: the clip is going to reappear at 10s, and covering that with
+        // a picture of second zero — sharp or blurred — is the bug where the position resumed and the
+        // picture did not. And `thumb.jpg` is a full-size photograph of this clip's own opening
+        // frame, so it is the first frame, a beat early. Blurring THAT is what he photographed and
+        // called "full blur screen": the cover was there and correct, and we were smearing it.
+        if let cover = cover {
+            let iv = UIImageView(image: cover.isFrame
+                                 ? cover.image
+                                 : StoryCanvas.loadingVeil(of: cover.image, covering: view.bounds.size))
             iv.frame = view.bounds
             // The same question `applyGravity` asks, through the same function, so the still and the
-            // clip that replaces it cannot be framed two different ways.
-            iv.contentMode = StoryCanvas.fills(media: resumed.size, in: view.bounds.size)
-                ? .scaleAspectFill : .scaleAspectFit
-            iv.clipsToBounds = true
-            iv.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            view.addSubview(iv)
-        // ⚠️ `?? blurThumbImage` IS THE WHOLE REPORT. This was `posterImage` alone, so a story whose
-        // poster had not arrived — or does not exist, which is every video whose `thumb.jpg` is
-        // missing — built a veil with NOTHING IN IT. The veil is transparent by design, so what he
-        // photographed was whatever sat behind it: the canvas gradient in one shot, plain black in
-        // the other. The gate above it was doing its job perfectly; there was simply nothing under
-        // the clip to hold the screen. See `Story.blurThumb`.
-        } else if let poster = posterImage ?? blurThumbImage {
-            // STATIC PIXELS, NOT A LIVE MATERIAL — see `StoryCanvas.loadingVeil`. Both story kinds
-            // now draw their loading state through that one function, and the same blur is what
-            // turns a 30px embedded thumbnail into a plausible out-of-focus frame at card size.
-            let iv = UIImageView(image: StoryCanvas.loadingVeil(of: poster, covering: view.bounds.size))
-            iv.frame = view.bounds
-            iv.contentMode = .scaleAspectFill
+            // clip that replaces it cannot be framed two different ways. The blurred thumbnail always
+            // fills: it has no detail to crop and the canvas behind it owns the bars either way.
+            iv.contentMode = cover.isFrame
+                ? (StoryCanvas.fills(media: cover.image.size, in: view.bounds.size)
+                   ? .scaleAspectFill : .scaleAspectFit)
+                : .scaleAspectFill
             iv.clipsToBounds = true
             iv.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             view.addSubview(iv)

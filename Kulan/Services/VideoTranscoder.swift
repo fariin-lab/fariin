@@ -96,7 +96,8 @@ enum VideoTranscoder {
         if backdropAspect == nil,
            let copied = await passthrough(url: url, stripAudio: stripAudio, hd: hd, composing: composing,
                                           range: range, maxSeconds: maxSeconds, duration: duration),
-           let quick = await finish(data: copied, asset: asset, duration: duration) {
+           let quick = await finish(data: copied, asset: asset, duration: duration,
+                                    startAt: range?.start.seconds ?? 0) {
             return quick
         }
 
@@ -211,7 +212,8 @@ enum VideoTranscoder {
         // `backdropAspect` is non-nil exactly when the gradient canvas was baked into this export, so
         // it is also exactly when the poster has to be composed onto the same canvas. The passthrough
         // call above never passes it, and cannot: a clip needing the canvas is never eligible for it.
-        return await finish(data: data, asset: asset, duration: duration, canvasAspect: backdropAspect)
+        return await finish(data: data, asset: asset, duration: duration, canvasAspect: backdropAspect,
+                            startAt: range?.start.seconds ?? 0)
     }
 
     /// The half both paths share: the poster frame. Taken just after the start, because frame 0 is
@@ -229,11 +231,18 @@ enum VideoTranscoder {
     /// the carousel. So the poster is composed onto the same canvas by the same function the
     /// placeholder uses, and the three pictures agree by construction.
     private static func finish(data: Data, asset: AVAsset, duration: Double,
-                               canvasAspect: CGFloat? = nil) async -> Prepared? {
+                               canvasAspect: CGFloat? = nil, startAt: Double = 0) async -> Prepared? {
         let gen = AVAssetImageGenerator(asset: asset)
         gen.appliesPreferredTrackTransform = true
         gen.maximumSize = CGSize(width: 1600, height: 1600)
-        let t = CMTime(seconds: min(0.1, duration / 2), preferredTimescale: 600)
+        // ⚠️ `startAt` IS WHERE THE POSTED CLIP BEGINS, which is not where the SOURCE begins the
+        // moment somebody trims. The poster is generated from the source asset, so a story trimmed
+        // to start at 0:12 was getting a picture of 0:00 — a frame that is nowhere in the file. That
+        // was survivable while the poster was only ever drawn blurred; now that a real cover goes up
+        // sharp and hands over to the live clip (see `VideoLoader.cover`), a wrong frame would be a
+        // visible cut at first play. Same 0.1s nudge past the start, because a first frame is very
+        // often black.
+        let t = CMTime(seconds: max(0, startAt) + min(0.1, duration / 2), preferredTimescale: 600)
         guard let cg = try? await gen.image(at: t).image else { return nil }
         var poster = UIImage(cgImage: cg)
         if let canvasAspect { poster = storyCanvasPoster(poster, aspect: canvasAspect) }
