@@ -55,9 +55,27 @@ public struct Story: Identifiable, Hashable {
     /// The audience line under the name. Nil draws nothing, which is what every story had before.
     public var audience: StoryAudienceBadge? = nil
 
+    /// ⚠️ THE PICTURE THAT IS ALWAYS THERE — a base64 JPEG about 30px wide, carried INSIDE the story
+    /// itself. Empty for a story posted before this existed.
+    ///
+    /// `previewURL` is a URL, and a URL is a promise, not a picture: it has to be found in a cache or
+    /// fetched, and for a video it is the separately-uploaded `thumb.jpg` which can be missing
+    /// outright. When it is not there, the viewer has NOTHING to draw while the clip decodes, so the
+    /// hide-until-ready rule leaves the canvas gradient or plain black on screen — his 2026-08-09
+    /// "tap left/right and the video is full blur or black, then in seconds it works", reported over
+    /// and over because every fix so far has been to the loading, never to what is UNDERNEATH it.
+    ///
+    /// This is what Telegram does and the reason they never show it. `StoryItemContentComponent`
+    /// draws the cached first frame when it has one and otherwise
+    /// `decodeTinyThumbnail(file.immediateThumbnailData)` blurred — thumbnail bytes that travel in
+    /// the story's own data, so a cover exists on the first frame of the first visit with no cache
+    /// and no network at all. A few hundred bytes buys that outright.
+    public var blurThumb: String = ""
+
     public init(id: String = UUID().uuidString,
                 mediaURL: String,
                 previewURL: String? = nil,
+                blurThumb: String = "",
                 date: String,
                 isLiked: Bool = false,
                 isSeen: Bool = false,
@@ -69,6 +87,7 @@ public struct Story: Identifiable, Hashable {
         self.id = id
         self.mediaURL = mediaURL
         self.previewURL = previewURL
+        self.blurThumb = blurThumb
         self.date = date
         self.duration = duration
         self.config = config

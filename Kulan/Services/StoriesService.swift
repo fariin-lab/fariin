@@ -43,6 +43,9 @@ struct Story: Identifiable, Hashable, Codable {
     var isVideo: Bool = false
     var duration: Double = 0   // video length in seconds (photos: 0 → viewer uses the 5s standard)
     var thumbUrl: String = ""  // video poster frame (photos: empty)
+    /// A base64 JPEG about 30px wide, carried in the story document itself. See `blurThumbBase64`
+    /// and `StoryUI.Story.blurThumb` — this is the cover that cannot be missing.
+    var blurThumb: String = ""
     /// The audience LABEL this story was posted with. See `StoryAudienceTag`.
     var audienceLabel: String = "friends"
     /// Each recipient may open it exactly once. Enforced on the server by removing them from
@@ -67,6 +70,37 @@ struct Story: Identifiable, Hashable, Codable {
     // still had no picture at the end — his 2026-08-09 spinner-over-black screenshot. An empty url
     // draws a placeholder immediately, which is honest and free.
     var previewUrl: String { isVideo ? thumbUrl : mediaUrl }
+}
+
+extension StoriesService {
+    /// A COVER SMALL ENOUGH TO PUT IN THE DOCUMENT, which is what makes it impossible to be missing.
+    ///
+    /// Telegram's `immediateThumbnailData`: every story carries thumbnail bytes inside its own data,
+    /// so the viewer draws a blurred cover on the first frame of the first visit with no cache and no
+    /// network. Ours had only a URL — and for a video that URL is a separately uploaded `thumb.jpg`
+    /// which may not have landed, or may never land at all. When it was missing the viewer had
+    /// nothing to hold the screen with and showed the canvas or black, which is the report he has
+    /// filed more than any other.
+    ///
+    /// 30px on the long edge at quality 0.4 lands around 400-700 bytes of base64 — nothing against
+    /// Firestore's 1 MB document limit, and it is written with the document rather than after it, so
+    /// there is no window where the story exists without a cover. It is never drawn sharp: the veil
+    /// puts it through `StoryCanvas.loadingVeil`, the same blur the real poster gets, which is
+    /// exactly how Telegram uses theirs.
+    static func blurThumbBase64(_ image: UIImage) -> String {
+        let long = max(image.size.width, image.size.height)
+        guard long > 0 else { return "" }
+        let scale = 30.0 / long
+        let size = CGSize(width: max(1, image.size.width * scale),
+                          height: max(1, image.size.height * scale))
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = 1            // 30 POINTS at screen scale would be 90px — the point is the size
+        fmt.opaque = true
+        let small = UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+        return small.jpegData(compressionQuality: 0.4)?.base64EncodedString() ?? ""
+    }
 }
 
 // A person's active (unexpired) stories — the unit behind a ring in the row + the viewer.
@@ -384,6 +418,8 @@ final class StoriesService {
                 "type": "image",
                 "mediaPath": path,
                 "mediaUrl": "",
+                // THE COVER THAT TRAVELS WITH THE STORY. See `blurThumbBase64`.
+                "blurThumb": Self.blurThumbBase64(image),
                 "caption": caption,
                 "audience": ["mode": everyone ? "everyone" : mode, "listId": "my-story"],
                 // THE LABEL, and only the label. See StoryAudienceTag: the custom NAME never comes
@@ -611,6 +647,11 @@ final class StoriesService {
             "mediaPath": videoPath,
             "mediaUrl": "",
             "thumbUrl": "",
+            // ⚠️ THIS IS THE ONE THAT MATTERS MOST, because a video's `thumbUrl` stays empty until
+            // its second upload finishes and can fail on its own. Written with the DOCUMENT, before
+            // a single byte of media is uploaded, so a viewer reaching this story at any point after
+            // it exists has a picture to show. See `blurThumbBase64`.
+            "blurThumb": UIImage(data: prepared.thumbnail).map { Self.blurThumbBase64($0) } ?? "",
             "duration": prepared.duration,
             "caption": caption,
             "audience": ["mode": everyone ? "everyone" : mode, "listId": "my-story"],
@@ -1028,6 +1069,7 @@ final class StoriesRepository {
                          isVideo: data["type"] as? String == "video",
                          duration: data["duration"] as? Double ?? 0,
                          thumbUrl: data["thumbUrl"] as? String ?? "",
+                         blurThumb: data["blurThumb"] as? String ?? "",
                          // Stories posted before this field existed fall back to "friends", which is
                          // what they were: the audience list is newer than the story collection, and
                          // a public story is caught by the `public` flag below it.

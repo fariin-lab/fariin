@@ -682,6 +682,7 @@ private extension StoryDetailView {
             VideoView(
                 videoURL: story.mediaURL,
                 posterURL: story.previewURL,
+                blurThumb: story.blurThumb,
                 state: $state,
                 player: player
             ) { media, duration in

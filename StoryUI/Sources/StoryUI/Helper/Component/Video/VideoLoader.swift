@@ -49,6 +49,33 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// The clip's cover, drawn blurred while it loads instead of a black rectangle. Set by the host
     /// through `VideoView`; nil simply falls back to the old black.
     var posterImage: UIImage?
+    /// THE COVER OF LAST RESORT, decoded from the story's own bytes — see `Story.blurThumb`. It is
+    /// tiny (about 30px wide) and is drawn through the same blur the poster uses, so at card size it
+    /// reads as an out-of-focus frame of the clip rather than as a low-quality image.
+    ///
+    /// Held decoded because it is asked for on every veil rebuild and the base64 is not free.
+    private var blurThumbImage: UIImage?
+    private var blurThumbSource: String?
+
+    /// Whatever this view can put on screen RIGHT NOW, in order of truth: the frame the person was
+    /// actually watching, then the real poster, then the embedded thumbnail. Nil only when the story
+    /// carries none of the three, which for anything posted from a current build cannot happen.
+    private var coverImage: UIImage? {
+        if let resumed = self.url.flatMap({ StoryPlaybackResume.frame($0) }) { return resumed }
+        return posterImage ?? blurThumbImage
+    }
+
+    func setBlurThumb(_ base64: String?) {
+        guard blurThumbSource != base64 else { return }
+        blurThumbSource = base64
+        blurThumbImage = nil
+        guard let base64, !base64.isEmpty,
+              let data = Data(base64Encoded: base64),
+              let img = UIImage(data: data) else { return }
+        blurThumbImage = img
+        // The canvas may have given up for want of a colour source before this arrived.
+        refreshBackdrop()
+    }
     /// The poster this view was told about, so a late fetch can be dropped if the story moved on.
     private var posterURL: String?
     /// Whether we have already told the host it is buffering, so the notification is posted on the
@@ -160,7 +187,10 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // attach, the remembered frame — keyed by THIS clip's url — is the only live answer allowed.
         let live = awaitedItem != nil ? currentVideoFrame()
                                       : self.url.flatMap { StoryPlaybackResume.frame($0) }
-        guard let source = posterImage ?? live else { return }
+        // The embedded thumbnail is a legitimate colour source and is the ONLY one available on a
+        // first visit to a story whose `thumb.jpg` is missing — which is exactly the case that left
+        // the canvas at its neutral black in his screenshots.
+        guard let source = posterImage ?? live ?? blurThumbImage else { return }
         canvasSourced = true
         StoryCanvas.apply(StoryCanvas.colours(of: source), to: canvasLayer)
     }
@@ -832,9 +862,16 @@ private extension PlayerView {
             iv.clipsToBounds = true
             iv.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             view.addSubview(iv)
-        } else if let poster = posterImage {
+        // ⚠️ `?? blurThumbImage` IS THE WHOLE REPORT. This was `posterImage` alone, so a story whose
+        // poster had not arrived — or does not exist, which is every video whose `thumb.jpg` is
+        // missing — built a veil with NOTHING IN IT. The veil is transparent by design, so what he
+        // photographed was whatever sat behind it: the canvas gradient in one shot, plain black in
+        // the other. The gate above it was doing its job perfectly; there was simply nothing under
+        // the clip to hold the screen. See `Story.blurThumb`.
+        } else if let poster = posterImage ?? blurThumbImage {
             // STATIC PIXELS, NOT A LIVE MATERIAL — see `StoryCanvas.loadingVeil`. Both story kinds
-            // now draw their loading state through that one function.
+            // now draw their loading state through that one function, and the same blur is what
+            // turns a 30px embedded thumbnail into a plausible out-of-focus frame at card size.
             let iv = UIImageView(image: StoryCanvas.loadingVeil(of: poster, covering: view.bounds.size))
             iv.frame = view.bounds
             iv.contentMode = .scaleAspectFill

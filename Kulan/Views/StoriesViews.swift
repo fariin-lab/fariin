@@ -889,6 +889,9 @@ struct StoryViewer: View {
                         // The poster the story row already drew, so the viewer has something true to
                         // show blurred while the full-size media arrives instead of a grey block.
                         previewURL: s.previewUrl,
+                        // AND THE ONE THAT CANNOT BE MISSING. `previewUrl` is a promise the viewer
+                        // has to go and collect; this is the picture itself. See `Story.blurThumb`.
+                        blurThumb: s.blurThumb,
                         date: timeAgo(s.createdAt),
                         isLiked: StoryPrefs.isStoryLiked(s.id),   // heart stays red on reopen
                         // This flag decides WHERE THE VIEWER OPENS. The rule that reads it lives in
