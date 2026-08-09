@@ -632,6 +632,20 @@ struct StoryViewer: View {
     /// Is a sheet page-drag in flight? The boolean half of `pageDragBox`, kept as ordinary `@State`
     /// because the host really does have to re-render when it flips — twice per drag, not per frame.
     @State private var sheetPaging = false
+    /// The story the carousel has been moved to while the sheet is up, waiting to be spent at the
+    /// close. Empty means the story underneath is already the selected one. See the `sheetStoryId`
+    /// handler for why the jump is deferred at all.
+    @State private var pendingJumpStoryId: String = ""
+
+    /// TRUE while the CAROUSEL'S OWN card owns the slot and the real story card must stand aside.
+    ///
+    /// Three reasons, and the third is the deferred jump: once the selection has moved away from the
+    /// story the player is actually holding, the real card is showing the WRONG story and must not be
+    /// the thing on screen. Without it the slot would show the story you paged away from while the
+    /// sheet below it listed the viewers of the one you paged to.
+    private var carouselOwnsSlot: Bool {
+        carouselInteracting || sheetPaging || !pendingJumpStoryId.isEmpty
+    }
     /// The frame each of my VIDEO stories was actually showing the first time the sheet came up over
     /// it, by story id. The carousel draws this instead of the poster.
     ///
@@ -1146,7 +1160,7 @@ struct StoryViewer: View {
         // The carousel row took over, or gave the centre back — by a finger on the row OR by the
         // sheet being thrown sideways (both slide cards through the slot, both need the copy).
         // See StoryCardMorph.setHidden.
-        .onChange(of: carouselInteracting || sheetPaging) { _, on in
+        .onChange(of: carouselOwnsSlot) { _, on in
             // ⚠️ PHOTOGRAPH THE STORY BEING LEFT FIRST, WHILE IT IS STILL THE LIVE ONE.
             //
             // His 2026-08-09 report: the frame a video is actually showing survives the pull up, but
@@ -1196,6 +1210,9 @@ struct StoryViewer: View {
             progressWatchdog?.cancel(); progressWatchdog = nil
             showViewers = false
             viewersProgress = 0
+            // A selection belongs to the sheet session that made it. Carried across, it would jump
+            // the next viewer to a story nobody chose.
+            pendingJumpStoryId = ""
         }
         // Freeze the running story + progress while any sheet is shown over it; resume on dismiss.
         .onChange(of: sheetUp) { _, up in
@@ -1242,11 +1259,30 @@ struct StoryViewer: View {
                                                 object: StoryItemsReconcile(bucketId: m.id, stories: m.stories))
             }
         }
-        // Carousel centred a different one of my stories while the sheet is up → advance the frozen
-        // story underneath to match, so collapsing lands on that story with no photo-swap flash.
+        // ⚠️ THE STORY UNDERNEATH DOES NOT MOVE WHILE THE SHEET IS UP. IT MOVES WHEN THE SHEET GOES.
+        //
+        // This used to post `jumpToStoryItem` the instant the carousel centred a different story,
+        // and that single line is his "the real-time cover disappears when I swipe the sheet". The
+        // viewer draws ONE story at a time and reuses one `PlayerView`, so jumping tears clip A out
+        // of the layer that is on screen and starts loading B — under an open sheet, where the card
+        // is a 100pt thumbnail nobody is watching. A had a real paused frame; B has nothing until it
+        // downloads. That is the disappear, and the second or two is the download.
+        //
+        // Telegram does not do this, and reading their source is what settled it.
+        // `initializeVideoIfReady` refuses to build a player at all while the progress mode is
+        // `.pause`, and opening the views list forces `.pause` on the whole set
+        // (`StoryItemSetContainerComponent`). So paging with the list open creates NO player: the
+        // story you arrive at shows its still, the story you left keeps its own paused layer and its
+        // last decoded frame, and the player for whatever you settled on is built the moment the
+        // list is dismissed.
+        //
+        // We cannot keep a view per story the way they do — one story at a time is this viewer's
+        // architecture — but we can keep their RULE, which is the part that shows: nothing loads
+        // while the sheet is up. The selection is remembered and spent at the close, so the slot
+        // carries stills the whole time and the live clip arrives with the collapse.
         .onChange(of: sheetStoryId) { _, id in
             guard showViewers, currentIsMine, !id.isEmpty else { return }
-            NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: id)
+            pendingJumpStoryId = id
             // A 0.2s re-freeze lived here, because a jumped-to item arrived with a live material
             // that misrendered under the sheet's scale — "the centre card grew an extra blur bar and
             // the photo read as jumping". The canvas has no such state: it is two colours in a
@@ -1671,7 +1707,7 @@ struct StoryViewer: View {
         let at = viewersProgress
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
             guard showViewers, viewersProgress > 0.9, viewersProgress == at,
-                  !carouselInteracting, !sheetPaging else { return }
+                  !carouselOwnsSlot else { return }
             captureFrozenCover()
         }
     }
@@ -2669,7 +2705,7 @@ struct StoryViewer: View {
                               // while the row slides past), so for the length of the swipe the
                               // carousel draws its own centre card and the real story hides
                               // underneath. Same size, same place, so the exchange is invisible.
-                              hideActiveContent: !(carouselInteracting || sheetPaging),
+                              hideActiveContent: !carouselOwnsSlot,
                               onInteracting: { carouselInteracting = $0 },
                               pageDrag: pageDragBox,
                               frozenCovers: frozenCovers)
@@ -2837,6 +2873,15 @@ struct StoryViewer: View {
     /// self-heal) funnels here, and none of them may dismiss the whole viewer. (Telegram's
     /// closePressed does the same check in as many words: list open → hide the list only.)
     private func closeViewers(velocity: CGFloat = 0) {
+        // ⚠️ THE DEFERRED JUMP IS SPENT HERE, at the START of the collapse, which is the same beat
+        // Telegram builds the player it refused to build while the list was up. The clip loads
+        // behind a card that is already flying back to full screen, so the load is covered by the
+        // motion instead of happening under a 100pt thumbnail. Posted before the animator so the
+        // library has the whole collapse to get its first frame up.
+        if !pendingJumpStoryId.isEmpty {
+            NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: pendingJumpStoryId)
+            pendingJumpStoryId = ""
+        }
         sheetAnimator.animate(from: viewersProgress, to: 0, velocity: velocity, write: { viewersProgress = $0 }) {
             // Reaching here means the close actually finished (a re-open cancels this animator).
             showViewers = false

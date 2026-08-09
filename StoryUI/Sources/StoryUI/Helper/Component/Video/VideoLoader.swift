@@ -363,6 +363,22 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// player owns its items and this must never be the reason one stays alive.
     private weak var frameOutputItem: AVPlayerItem?
 
+    /// ⚠️ HOW THIS CLIP IS MEANT TO BE TURNED, and without it a portrait story hands back a
+    /// LANDSCAPE picture — his 2026-08-09 screenshot of the carousel, one card lying on its side
+    /// among portrait ones.
+    ///
+    /// A phone does not rotate the pixels it records. A portrait capture is stored as a landscape
+    /// buffer plus a 90° `preferredTransform`, and `AVAssetExportSession` carries that transform
+    /// through rather than baking it, unless a `videoComposition` forces a re-render. So our own
+    /// clips are split: anything that went through the gradient canvas or the editor's burn-in is
+    /// baked and upright, and everything on the fast path is stored sideways. That is the "sometimes".
+    ///
+    /// `AVPlayerLayer` applies the transform for playback, which is why the story itself always looks
+    /// right. `AVPlayerItemVideoOutput.copyPixelBuffer` does NOT — it hands over the raw decoded
+    /// buffer. The other cover path already gets this right (`coverFromFirstFrame` sets
+    /// `appliesPreferredTrackTransform`), so the two disagreed and only one of them was ever wrong.
+    private var frameOrientation: UIImage.Orientation = .up
+
     private func attachFrameOutput() {
         guard let item = player?.currentItem else { return }
         // A new item means the old output belongs to a video that is no longer playing.
@@ -381,6 +397,38 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         item.add(out)
         frameOutput = out
         frameOutputItem = item
+        // The rotation is asked for ONCE per item, off the main thread, and `.up` stands until the
+        // answer lands. `.up` is also the right answer for every clip whose transform is baked, so a
+        // slow load costs nothing on the common path.
+        frameOrientation = .up
+        loadFrameOrientation(for: item)
+    }
+
+    /// Reads the video track's `preferredTransform` and stores it as a `UIImage.Orientation`.
+    ///
+    /// Deliberately NOT applied to the `CIImage` directly: Core Image works bottom-left, the
+    /// transform is written for a top-left space, and a rotation composed across that flip comes out
+    /// turned the wrong way. `UIImage.Orientation` has no such ambiguity — UIKit applies it when the
+    /// image is drawn, and every consumer of this frame draws it (`UIImageView`, `draw(in:)`).
+    private func loadFrameOrientation(for item: AVPlayerItem) {
+        guard #available(iOS 16.0, *) else { return }
+        let asset = item.asset
+        Task { [weak self] in
+            guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+                  let t = try? await track.load(.preferredTransform) else { return }
+            let o: UIImage.Orientation
+            switch (t.a, t.b, t.c, t.d) {
+            case (0, 1, -1, 0):   o = .right      // portrait recorded on a landscape sensor
+            case (0, -1, 1, 0):   o = .left
+            case (-1, 0, 0, -1):  o = .down
+            default:              o = .up         // identity, or something we should not guess at
+            }
+            await MainActor.run { [weak self] in
+                // Still the same item: a swap while this was loading must not re-turn the new clip.
+                guard let self, self.frameOutputItem === item else { return }
+                self.frameOrientation = o
+            }
+        }
     }
 
     /// The frame on screen right now, or the last frame this clip actually rendered, or nil.
@@ -406,7 +454,9 @@ final class PlayerView: UIView, StoryVideoFrameSource {
            let buffer = out.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) {
             let ci = CIImage(cvPixelBuffer: buffer)
             if let cg = frameContext.createCGImage(ci, from: ci.extent) {
-                return UIImage(cgImage: cg)
+                // TURNED THE WAY THE CLIP IS MEANT TO BE SEEN — see `frameOrientation`. The layer
+                // does this for playback; the pixel buffer arrives raw.
+                return UIImage(cgImage: cg, scale: 1, orientation: frameOrientation)
             }
         }
         guard let url = self.url else { return nil }
