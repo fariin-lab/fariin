@@ -37,9 +37,25 @@ struct RootView: View {
                 WelcomeView(onAuthed: { Task { await route() } },
                             onDemo: { phase = .main })
             case .onboarding:
-                // The third and last way into .main. A new account finishing onboarding never goes
-                // back through route(), so without this the very newest users would be the only
-                // ones never asked their age until their second launch.
+                // ⚠️ THE ONLY PLACE THE AGE IS EVER ASKED. Owner's instruction, 2026-08-08: "age
+                // need one at time only when user sing up fist time creating account never ask
+                // them again."
+                //
+                // It briefly fired from the two launch paths as well, which meant every existing
+                // account met an Apple system sheet out of nowhere on the launch after updating.
+                // Those are people already inside the app who did not ask a question and are not
+                // doing anything; a modal arriving unbidden reads as the app malfunctioning, and an
+                // interrupted person taps whatever dismisses it fastest. Here it is part of joining,
+                // which is the one moment somebody expects to be asked things.
+                //
+                // Onboarding IS account creation: route() sends you here only when the account has
+                // no handle yet, so nobody who already finished signing up passes through.
+                //
+                // ⚠️ THE COST, and it is real. Every account that existed before this ships is never
+                // asked, so `isKnown` stays false for all of them forever and any protection built
+                // on it will not cover a single current user. That was the owner's call knowing the
+                // trade; changing it means a one-time ask for existing accounts, which is a
+                // deliberate decision and not a bug to quietly fix.
                 OnboardingView { phase = .main; Task { await askAgeOnce() } }
             case .proveEmail(let address):
                 // Wrapped in its own NavigationStack because it is standing in for the whole auth
@@ -166,29 +182,22 @@ struct RootView: View {
         }
     }
 
-    /// Ask Apple for an age band, once ever, and never anywhere near the boot path.
+    /// Ask Apple for an age band. ONE CALLER ONLY: the end of onboarding, i.e. the moment an account
+    /// is created. See the ⚠️ at that call site for why it is not asked anywhere else.
     ///
-    /// WHERE THIS SITS IS THE WHOLE DESIGN. It is inside the background task that already runs AFTER
-    /// `phase = .main`, behind the profile refresh, the key publish and the send-queue drain. Three
-    /// reasons, and the first is the one this file keeps relearning:
-    ///
-    /// · THE LAUNCH PATH MUST NEVER WAIT. Everything above `phase = .main` is measured in the
-    ///   comments here as a cold-start cost; an awaited call there stalls boot for around ten
-    ///   seconds offline. This is behind the paint, so the chat list is already on screen.
-    /// · IT PRESENTS A SYSTEM SHEET. Apple's own, over our UI. Firing that as the first thing
-    ///   somebody sees on opening a messenger reads as an interruption rather than a question, and
-    ///   the answer we get from an annoyed person is "decline".
-    /// · IT ONLY EVER HAPPENS ONCE. `hasAnswer` is the guard, and a decline COUNTS as an answer on
-    ///   purpose. Apple lets a parent set "never share"; re-asking every launch would nag exactly
-    ///   the families most careful about their children, which is the opposite of the point.
+    /// `hasAnswer` still guards it, and that is not belt-and-braces: onboarding can be completed
+    /// more than once on a device that has held more than one account, and a decline must survive
+    /// that. `.declined` counts as answered on purpose — Apple's "never share" is set by a parent,
+    /// so re-asking would nag exactly the families most careful about their children.
     ///
     /// Not awaited by anything and its result is not read yet, which is honest rather than
     /// incomplete: knowing somebody is 12 changes nothing until the protections exist. Those are the
     /// same switches as the search-privacy work and land with it.
     private func askAgeOnce() async {
         guard !AgeCheck.hasAnswer else { return }
-        // A beat after the app has settled. Not a fix for a race, just manners: the first second of
-        // a cold launch is people finding their place, not a moment to put a modal in front of them.
+        // A beat after onboarding hands over, so Apple's sheet does not collide with the transition
+        // into the app. Manners, not a race fix: two modals arriving on the same frame is how a
+        // finished sign-up ends up feeling broken.
         try? await Task.sleep(nanoseconds: 2_000_000_000)
         await AgeCheck.ask()
     }
@@ -237,7 +246,6 @@ struct RootView: View {
                 // Send anything an app kill left queued, whatever chat it belongs to — the queue's
                 // own contract. Until now it only re-drove when that exact chat was reopened.
                 await SendQueue.drainAll()
-                await askAgeOnce()
             }
             return
         }
@@ -260,14 +268,6 @@ struct RootView: View {
             Task { await SendQueue.drainAll() }   // queued sends from a previous run (see drainAll)
         }
         phase = ready ? .main : .onboarding
-        // THE FIRST-RUN PATH NEEDS IT TOO, and this is the one that matters most: a brand new
-        // account is exactly the person whose age nobody knows anything about. Adding it only to
-        // the cached path above would have meant the age question reached everybody EXCEPT new
-        // users, which is precisely backwards.
-        //
-        // Fired from the .main branch only. Somebody still in onboarding has no handle yet and is
-        // mid-flow; the next launch catches them, because `hasAnswer` is still false.
-        if ready { Task { await askAgeOnce() } }
     }
 
     /// The official channel, the admin permissions that decide whether the compose screens exist, and
