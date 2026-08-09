@@ -712,9 +712,23 @@ final class AuthService: NSObject {
         case 17010: return "Too many attempts. Wait a moment and try again."
         case 17014: return "Please sign in again before doing this."
         case 17021: return "Your session expired. Sign in again."
-        // The address belongs to an account created with Google or Apple, so there is no password
-        // that can be right.
-        case 17012: return "This email already has an account, made with Google or Apple. Go back and use that button, or log in with a code."
+        // 17012 IS REACHED FROM BOTH DIRECTIONS AND THE OLD WORDING ONLY FITTED ONE OF THEM.
+        //
+        // It used to read "made with Google or Apple... use that button", which is right when
+        // somebody types a password at an address that belongs to a social account. It is actively
+        // misleading in the other direction: sign up with email and password, sign out, then tap
+        // Google with the same address, and it told them to press the button they had just pressed.
+        //
+        // That second direction is NEWLY COMMON because of the sign-up code. Firebase's documented
+        // rule is that a trusted provider takes over an account whose email is UNVERIFIED — the
+        // Google sign-in wins and the password credential is dropped — and refuses with this error
+        // only once the address is PROVEN. Every account predating today was unverified, so this
+        // path used to end in a silent takeover of your own account (your password simply stopped
+        // working) and now ends here instead. Better outcome, newly visible error.
+        //
+        // So the text names neither provider and points at the one door that works whichever way
+        // round it happened.
+        case 17012: return "This email already has an account that signs in a different way. Go back and use the button you signed up with, or log in with a code."
         // Last resort. Firebase's own text is better than nothing, but it is never a good answer,
         // so anything that lands here is a code worth adding above once we have seen it.
         default: return error.localizedDescription
