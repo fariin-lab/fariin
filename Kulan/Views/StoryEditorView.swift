@@ -64,6 +64,11 @@ struct StoryEditorView: View {
     // held open for nothing.
     @State private var previewPlayer: AVPlayer?
     @State private var previewPlaying = false
+    /// The end-of-clip registration. `NotificationCenter.addObserver(forName:object:queue:using:)`
+    /// hands back a token that lives until it is removed BY HAND, and the block it registers captures
+    /// the AVPlayer and this view. Throwing the token away leaked one of each per clip previewed, for
+    /// the whole life of the app. `stopPreview()` removes it.
+    @State private var previewEndObserver: NSObjectProtocol?
     @State private var trimPlayhead: Double = 0
     @State private var trimScrub: Double?
     @State private var trimDragging = false
@@ -96,6 +101,8 @@ struct StoryEditorView: View {
     }
     @State private var posting = false
     @State private var postError = false
+    /// The X asked about, when there is something behind it worth asking about. See `closeEditor()`.
+    @State private var showDiscard = false
     /// The black band under the card where the tool capsule and NEXT live. A CONSTANT, not a
     /// measured height: the card's frame used to be inset by the bottom bar's measured size, and
     /// anything that changed the bar (focusing the caption, opening Aa — both raise the keyboard)
@@ -366,6 +373,15 @@ struct StoryEditorView: View {
         }
         // Closing the composer must not leave a decoder and an audio session running behind it.
         .onDisappear { stopPreview() }
+        // ONE PLACE DECIDES WHETHER THE CLIP IS RUNNING, the same rule the video editor follows.
+        // `previewPlaying` is not this screen's own flag alone: it is handed to `VideoTrimStrip` as
+        // its `playing` binding, and the strip sets it FALSE the moment a handle or the playhead is
+        // grabbed. Nothing was listening, so that instruction reached the flag and never reached the
+        // player. Following the flag here means every writer of it stops the clip, not just
+        // `togglePreview`.
+        .onChange(of: previewPlaying) { _, on in
+            if on { previewPlayer?.play() } else { previewPlayer?.pause() }
+        }
         // ALWAYS DARK, whatever the phone is set to (owner: "all story buttons always use dark mode
         // no light mode"). A story is white text and glass over somebody's photo; in light mode the
         // materials go pale and the controls wash out, which he photographed on the pen screen.
@@ -405,7 +421,7 @@ struct StoryEditorView: View {
                 // Top controls — stay put when the keyboard opens (don't ride up with it).
                 VStack {
                     HStack {
-                        Button { dismiss() } label: {
+                        Button { closeEditor() } label: {
                             // 40pt, his call (2026-08-06), matching the video editor's. The glyph
                             // comes down with the circle so the proportion inside it is unchanged.
                             Image(systemName: "xmark").font(.system(size: 15, weight: .semibold))
@@ -467,6 +483,17 @@ struct StoryEditorView: View {
         .ignoresSafeArea(.keyboard)
         .statusBarHidden(false)   // user round 3: the clock/battery must stay visible above the card
         .alert("Couldn't share", isPresented: $postError) { Button("OK", role: .cancel) {} }
+        // The X used to throw the whole post away on one tap: every crop, stroke, caption and
+        // every extra item you had added, with nothing asked and nothing to undo it. The text
+        // composer has confirmed since it was built; these two screens have far more to lose.
+        //
+        // A native ALERT, not a confirmationDialog, for the reason StoryTextComposer records: over a
+        // full-screen presentation the dialog renders as a centred popover, and popovers HIDE
+        // role-cancel buttons, which leaves "Discard" as the only way out of a discard prompt.
+        .alert("Discard this story?", isPresented: $showDiscard) {
+            Button("Discard", role: .destructive) { dismiss() }
+            Button("Keep Editing", role: .cancel) {}
+        }
         // OUR OWN PICKER, images AND videos, always (owner 2026-08-05: "The + button should always
         // open our custom media picker… Never fall back to Apple's Photo Picker"). It stays open
         // while you tap — each pick lands in the strip behind it — and the X brings you back.
@@ -681,6 +708,12 @@ struct StoryEditorView: View {
     }
 
     /// The player for the clip on screen, built on first need. Returns nil for a photo.
+    ///
+    /// ONE PLACE BUILDS IT, and the end-of-clip observer is part of building it. The observer used to
+    /// be attached inside `togglePreview`'s `previewPlayer == nil` branch, so a player built HERE
+    /// first never got one: trim's scrub calls this, and after a trim the clip played to its end,
+    /// stopped, never seeked back and left `previewPlaying` true for good. The card's play button
+    /// hangs off that flag (`.opacity(previewPlaying ? 0 : 1)`), so it stayed invisible as well.
     @discardableResult
     private func ensurePreviewPlayer() -> AVPlayer? {
         if let previewPlayer { return previewPlayer }
@@ -688,23 +721,19 @@ struct StoryEditorView: View {
         let p = AVPlayer(url: url)
         p.actionAtItemEnd = .pause
         previewPlayer = p
+        // Back to the start when it finishes, so a second press replays rather than doing nothing.
+        // The TOKEN is kept: see `previewEndObserver`.
+        previewEndObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: p.currentItem, queue: .main) { _ in
+                p.seek(to: .zero)
+                previewPlaying = false
+            }
         return p
     }
 
     private func togglePreview() {
-        guard items.indices.contains(index), let url = items[index].videoURL else { return }
-        if previewPlayer == nil {
-            let p = AVPlayer(url: url)
-            p.actionAtItemEnd = .pause
-            previewPlayer = p
-            // Back to the start when it finishes, so a second press replays rather than doing nothing.
-            NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime,
-                                                   object: p.currentItem, queue: .main) { _ in
-                p.seek(to: .zero)
-                previewPlaying = false
-            }
-        }
-        if previewPlaying { previewPlayer?.pause() } else { previewPlayer?.play() }
+        guard let p = ensurePreviewPlayer() else { return }
+        if previewPlaying { p.pause() } else { p.play() }
         previewPlaying.toggle()
     }
 
@@ -712,6 +741,10 @@ struct StoryEditorView: View {
     /// and its decoder, which is the kind of thing that only shows up as a battery complaint.
     private func stopPreview() {
         previewPlayer?.pause()
+        // ...and the observer goes with it. Dropping the player is not enough: the registration holds
+        // a strong reference to both it and this view until it is removed by name.
+        if let t = previewEndObserver { NotificationCenter.default.removeObserver(t) }
+        previewEndObserver = nil
         previewPlayer = nil
         previewPlaying = false
     }
@@ -964,6 +997,11 @@ struct StoryEditorView: View {
 
     private func openTrim() {
         guard items.indices.contains(index), items[index].isVideo else { return }
+        // TRIM ARRIVES ON A STILL FRAME, the video editor's own rule (`openTrim` there does the same
+        // thing to `playing`). You cannot pick the frame you are cutting on out of a moving picture,
+        // and leaving the flag true was also how the card's play button ended up hidden after trim:
+        // closing put nothing back, and the button is drawn `.opacity(previewPlaying ? 0 : 1)`.
+        previewPlaying = false
         trimStart = items[index].trimStart
         trimEnd = items[index].trimEnd > 0 ? items[index].trimEnd : items[index].duration
         trimOpenedStart = trimStart
@@ -1209,12 +1247,44 @@ struct StoryEditorView: View {
         restoreCurrent()
     }
 
+    /// ⚠️ `restoreCurrent()`, NOT `recomputeEdited()`. The same trap the two append paths fell into.
+    ///
+    /// The tools live OUTSIDE the items (croppedSource, cropRect, filterIndex, drawing, overlays,
+    /// photoZoom, photoOffset). Deleting an item and only recomputing left the DELETED one's crop,
+    /// filter, strokes, text and pinch sitting on the tools, wearing whichever item slid into its
+    /// place, and `stashCurrent` at post time then wrote them onto that item for real. Delete a
+    /// scribbled-on photo and the next one was posted carrying the scribble.
+    ///
+    /// The player goes too: it belonged to the item that just left, and `select(_:)` stops it for
+    /// exactly this reason.
     private func remove(_ i: Int) {
         guard items.count > 1, items.indices.contains(i) else { return }
+        stopPreview()
         items.remove(at: i)
         if index >= items.count { index = items.count - 1 }
         else if i < index { index -= 1 }
-        recomputeEdited()
+        restoreCurrent()   // ends in recomputeEdited()
+    }
+
+    /// Is there anything behind the X worth asking about? One untouched picture is not: there the X
+    /// means "wrong photo", and a prompt would be in the way of the thing he is trying to do. A
+    /// second item, a caption, or any edit at all IS, because none of it can be got back.
+    ///
+    /// Only the item on screen is checked for edits, and that is enough: with more than one item the
+    /// first line has already answered, and with exactly one its edits are the live tool state.
+    private var hasWork: Bool {
+        if items.count > 1 { return true }
+        if !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        if croppedSource != nil || cropRect != nil || filterIndex != 0 { return true }
+        if !drawing.bounds.isEmpty || !overlays.isEmpty { return true }
+        if let it = items.first, it.isTrimmed || it.muted { return true }
+        // The same "has it been reframed" test `videoBurnIn` uses, so a pinch that counts as an edit
+        // at post time counts as one here.
+        return photoZoom > 1.001 || abs(photoOffset.width) > 0.5 || abs(photoOffset.height) > 0.5
+    }
+
+    private func closeEditor() {
+        if hasWork { showDiscard = true } else { dismiss() }
     }
 
     // MARK: - Send

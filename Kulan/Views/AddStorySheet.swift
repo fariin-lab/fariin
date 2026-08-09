@@ -175,6 +175,14 @@ struct StoryLibraryPicker: View {
     /// full resolution and this is the one place that can add ten of them in a single tap.
     private static let batchLimit = 10
     @State private var tooMany = false
+    /// A batch where some, or all, of the ticks would not resolve: an iCloud original that will not
+    /// come down, or a video whose file cannot be exported. The count so the notice can say how many
+    /// were lost, and the ones that DID resolve so they still go through when he taps OK. Handing
+    /// them over BEFORE the notice is answered is not an option: dismissing this sheet takes its
+    /// alert down with it, which is a message he would never see. See `addPicked`.
+    @State private var someFailed = false
+    @State private var failedCount = 0
+    @State private var resolvedBatch: [StoryPick] = []
 
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
 
@@ -215,6 +223,23 @@ struct StoryLibraryPicker: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("You can add up to \(Self.batchLimit) at a time. Add these first, then tap + again for more.")
+            }
+            .alert("Couldn't add everything", isPresented: $someFailed) {
+                Button("OK", role: .cancel) {
+                    let batch = resolvedBatch
+                    resolvedBatch = []
+                    failedCount = 0
+                    // Only close on the way out if something is actually being taken along. When
+                    // nothing resolved, the picker stays open with the ticks still on, so trying
+                    // again is one tap rather than finding everything from scratch.
+                    guard !batch.isEmpty else { return }
+                    onBatch?(batch)
+                    dismiss()
+                }
+            } message: {
+                Text(resolvedBatch.isEmpty
+                     ? "None of what you picked would open. They may still be downloading from iCloud. Give it a moment and try again."
+                     : "\(failedCount) of them wouldn't open, so the rest were added. They may still be downloading from iCloud.")
             }
             .alert("That video is too long", isPresented: $tooLongVideo) {
                 Button("OK", role: .cancel) {}
@@ -337,7 +362,8 @@ struct StoryLibraryPicker: View {
     ///
     /// Sequential rather than a task group on purpose: an iCloud fetch of ten originals in parallel
     /// is how a picker runs the phone out of memory, and the spinner is already covering the wait.
-    /// A single item that fails to resolve is skipped rather than failing the batch.
+    /// A single item that fails to resolve is skipped rather than failing the batch, but it is
+    /// COUNTED and said out loud: see the notice below.
     private func addPicked() {
         guard !resolving else { return }
         resolving = true
@@ -353,7 +379,18 @@ struct StoryLibraryPicker: View {
             }
             await MainActor.run {
                 resolving = false
-                guard !out.isEmpty else { return }
+                // NOTHING IS DROPPED IN SILENCE ANY MORE. Every failed resolve was skipped without a
+                // word and an empty result returned on the spot, so ticking four could add two, or
+                // none, and the sheet simply sat there. From the outside that is the Add button not
+                // working. Say how many did not come through, in the same plain style as the other
+                // two refusals on this screen, and hand over the ones that did.
+                let missing = chosen.count - out.count
+                if missing > 0 {
+                    resolvedBatch = out
+                    failedCount = missing
+                    someFailed = true
+                    return
+                }
                 onBatch?(out)
                 dismiss()
             }

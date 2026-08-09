@@ -26,6 +26,8 @@ struct StoryVideoEditorView: View {
     @State private var pendingShare: StoryVideoShare?
     @State private var pendingExtras: [StoryExtra] = []
     @State private var loadFailed = false
+    /// The X asked about, when there is something behind it worth asking about. See `closeEditor()`.
+    @State private var showDiscard = false
     @FocusState private var captionFocused: Bool
     // No KeyboardWatcher: the bottom bar is a sibling of the canvas and SwiftUI's own avoidance
     // lifts it. Same change as the photo editor, same reason.
@@ -121,11 +123,22 @@ struct StoryVideoEditorView: View {
         let gen = AVAssetImageGenerator(asset: asset)
         gen.appliesPreferredTrackTransform = true
         gen.maximumSize = CGSize(width: 1600, height: 1600)
+        // A POSTER THAT WILL NOT DECODE MUST NOT COST THE CLIP. `posterData` was left nil here, and
+        // `payload(for:)` guards on exactly that, so the clip was dropped out of the post without a
+        // word, and if it was the FIRST clip `send()` returned on the same guard and NEXT did
+        // nothing at all. Same black-poster fallback the photo editor's `appendPicked(video:)` uses:
+        // this bitmap is only ever the strip's thumbnail, and the export reads the file, never it.
+        let poster: UIImage
         if let cg = try? await gen.image(at: CMTime(seconds: min(0.1, c.duration / 2), preferredTimescale: 600)).image {
-            let img = UIImage(cgImage: cg)
-            c.poster = img
-            c.posterData = img.jpegData(compressionQuality: 0.72)
+            poster = UIImage(cgImage: cg)
+        } else {
+            let side = CGSize(width: 1080, height: 1920)
+            poster = UIGraphicsImageRenderer(size: side).image { ctx in
+                UIColor.black.setFill(); ctx.fill(CGRect(origin: .zero, size: side))
+            }
         }
+        c.poster = poster
+        c.posterData = poster.jpegData(compressionQuality: 0.72)
         await MainActor.run {
             stashCurrent()
             clips.append(c)
@@ -232,6 +245,24 @@ struct StoryVideoEditorView: View {
         if playing { player.play() } else { player.pause() }
     }
 
+    /// Is there anything behind the X worth asking about? One untouched clip is not: there the X
+    /// means "wrong video", and a prompt would be in the way of the thing he is trying to do. A
+    /// second clip, a caption, or any edit at all IS, because none of it can be got back.
+    ///
+    /// Only the clip on screen is checked for edits, and that is enough: with more than one clip the
+    /// first line has already answered, and with exactly one its edits are the live tool state.
+    private var hasWork: Bool {
+        if clips.count > 1 { return true }
+        if !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        if !drawing.bounds.isEmpty || !overlays.isEmpty { return true }
+        if isTrimmed || muted { return true }
+        return zoom > 1.001   // the same "has it been reframed" test `burnIn(for:)` uses
+    }
+
+    private func closeEditor() {
+        if hasWork { showDiscard = true } else { dismiss() }
+    }
+
     private var windowSafeTop: CGFloat {
         UIApplication.shared.connectedScenes
             .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.top }
@@ -325,6 +356,17 @@ struct StoryVideoEditorView: View {
         .alert("Couldn't load this video", isPresented: $loadFailed) {
             Button("OK", role: .cancel) { dismiss() }
         }
+        // The X used to throw the whole post away on one tap: the trim, the mute, every stroke, the
+        // caption and every clip added after the first, with nothing asked and nothing to undo it.
+        // The text composer has confirmed since it was built; this screen has far more to lose.
+        //
+        // A native ALERT, not a confirmationDialog, for the reason StoryTextComposer records: over a
+        // full-screen presentation the dialog renders as a centred popover, and popovers HIDE
+        // role-cancel buttons, which leaves "Discard" as the only way out of a discard prompt.
+        .alert("Discard this story?", isPresented: $showDiscard) {
+            Button("Discard", role: .destructive) { dismiss() }
+            Button("Keep Editing", role: .cancel) {}
+        }
         .sheet(item: $pendingShare) { s in
             ShareStorySheet(image: s.payload.thumbnail, caption: s.caption, video: s.payload,
                             extras: pendingExtras,
@@ -414,7 +456,7 @@ struct StoryVideoEditorView: View {
                 // 40pt, his call (2026-08-06). The glyph comes down with the circle so the
                 // proportion inside it is unchanged — shrinking only the button would leave an
                 // oversized X rattling around in a smaller disc.
-                Button { dismiss() } label: {
+                Button { closeEditor() } label: {
                     Image(systemName: "xmark").font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(.primary)
                         .shadow(color: .black.opacity(0.35), radius: 2)
