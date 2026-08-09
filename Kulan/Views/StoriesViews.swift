@@ -1760,7 +1760,18 @@ struct StoryViewer: View {
                                           centerOverride: hero.center,
                                           alpha: hero.alpha,
                                           dim: heroDim(f),
-                                          chrome: heroChrome(f),
+                                          // ⚠️ ZERO ON AN EXIT, and the rule is already written
+                                          // twenty lines down: "AN EXIT HIDES THE SURROUND AT
+                                          // ONCE; ONLY AN ARRIVAL IS ALLOWED TO TAKE ITS TIME."
+                                          // The SwiftUI surround has obeyed it since that fix; this
+                                          // mask alpha was still passed unconditionally, so for the
+                                          // first 18% of a close drag (~40% of its travel) the
+                                          // card's SQUARE corner — its own clip stands down in
+                                          // flight — composited through the surround into the
+                                          // notch between the mask hole's curve and the card edge.
+                                          // His 2026-08-09 screenshots: the chat list showing
+                                          // through the rounded corners until ~40% down.
+                                          chrome: hero.exiting ? 0 : heroChrome(f),
                                           crop: hero.crop,
                                           // A circular door times its circle differently coming and
                                           // going — see `StoryCardMorph.circleRushSpan`. This is the
