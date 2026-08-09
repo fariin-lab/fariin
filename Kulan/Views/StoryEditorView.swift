@@ -69,7 +69,8 @@ private struct StoryEditorClosePan: UIViewRepresentable {
             // Same retry shape as the row's press host, and for the same reason: SwiftUI may not
             // have parented this representable's ancestors yet, and an install that only ever runs
             // once would then never happen at all.
-            guard window != nil, let c = coordinator else { return }
+            guard let c = coordinator else { return }
+            guard window != nil else { c.uninstall(); return }
             c.install(from: self)
             guard c.pan == nil else { return }
             DispatchQueue.main.async { [weak self] in
@@ -85,14 +86,38 @@ private struct StoryEditorClosePan: UIViewRepresentable {
         private(set) var pan: DirectionalSheetPan?
         private weak var host: UIView?
 
+        /// ⚠️ THE EDITOR'S OWN VIEW CONTROLLER, NOT THIS VIEW'S SUPERVIEW.
+        ///
+        /// The superview is a `.background` container: it is where SwiftUI parked a view that draws
+        /// nothing, and it does not contain the canvas, the caption bar or the buttons — so a
+        /// recogniser on it is only ever offered touches that land on nothing. That is the second
+        /// half of why the pull did nothing (the first was `.allowsHitTesting(false)`).
+        ///
+        /// The controller's root view is the whole editor and nothing beyond it, which is exactly
+        /// the reach this gesture should have: every touch inside the editor, none outside it, and
+        /// it goes away with the screen. `cancelsTouchesInView = false` plus simultaneity means it
+        /// still only watches — the buttons, the field and the zoomable image keep every touch.
         func install(from view: UIView) {
-            guard pan == nil, let anchor = view.superview else { return }
+            guard pan == nil else { return }
+            var responder: UIResponder? = view
+            var controller: UIViewController?
+            while let r = responder {
+                if let vc = r as? UIViewController { controller = vc; break }
+                responder = r.next
+            }
+            guard let anchor = controller?.view ?? view.window else { return }
             let g = DirectionalSheetPan(axis: .vertical, target: self, action: #selector(handle(_:)))
             g.delegate = self
             g.cancelsTouchesInView = false   // the buttons under it must still work
             anchor.addGestureRecognizer(g)
             host = anchor
             pan = g
+        }
+
+        func uninstall() {
+            if let pan, let host { host.removeGestureRecognizer(pan) }
+            pan = nil
+            host = nil
         }
 
         func gestureRecognizer(_ g: UIGestureRecognizer,
@@ -476,8 +501,20 @@ struct StoryEditorView: View {
         // rather than a canvas and some bars that happen to move at the same time.
         .scaleEffect(1 - closeProgress * 0.22, anchor: .center)
         .offset(y: closeDrag * 0.72)   // the card lags the finger slightly — the pull has weight
-        .clipShape(RoundedRectangle(cornerRadius: closeProgress > 0 ? 28 : 0, style: .continuous))
-        .ignoresSafeArea()
+        // ⚠️ NO `.ignoresSafeArea()` AND NO `.clipShape` ON THIS CHAIN. Both were here and both were
+        // the SPACES BUG (his 2026-08-09 report, build 511 named as the correct one — and 511 is the
+        // last build before this pull existed; the editor gained 135 lines and lost none, so the
+        // only thing that could have moved the layout is this).
+        //
+        // `.ignoresSafeArea()` here does not just let the black bleed to the edges — it re-lays out
+        // the WHOLE stack edge to edge, so the caption bar and the tool row slide down into the home
+        // indicator and the canvas moves up under the status bar. The black already reaches the
+        // edges on its own (`Color.black.ignoresSafeArea()` inside the ZStack) and always did.
+        //
+        // The clip cannot come back on its own either: with the stack sized to the safe area again,
+        // clipping to those bounds would cut off the very black that is deliberately outside them,
+        // and the system background would show in the strips. Rounded corners during the pull are
+        // the one thing lost with it; that is a look, and the layout is the report.
         // ⚠️ A UIKIT PAN, NOT A SwiftUI `DragGesture` — [[kulan-scroll-gesture-rules]], written
         // because gestures added to surfaces like this have twice claimed touches and locked
         // scrolling. This one is direction-locked vertical, fails on anything horizontal, and never
@@ -497,7 +534,11 @@ struct StoryEditorView: View {
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { closeDrag = 0 }
                     }
                 })
-            .allowsHitTesting(false)
+            // ⚠️ NO `.allowsHitTesting(false)` HERE, AND THAT MODIFIER IS WHY THE PULL DID NOTHING.
+            // It disables interaction for this whole background subtree — which is where the pan
+            // was being installed — so the recogniser sat on a view that UIKit had already excluded
+            // from hit testing and was never handed a touch in its life. The host takes no touches
+            // anyway: its `hitTest` returns nil, which is the honest way to say "I am not here".
         )
         // Closing the composer must not leave a decoder and an audio session running behind it.
         .onDisappear { stopPreview() }
