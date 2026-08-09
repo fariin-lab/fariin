@@ -151,7 +151,7 @@ struct ChatWallpaperPage: View {
                     ForEach(WallpaperPresets.all) { p in
                         presetTile(.preset(p.id)) {
                             Group {
-                                if let img = p.image() {
+                                if let img = p.image(dark: dark) {
                                     Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
                                 } else { Color.secondary.opacity(0.15) }
                             }
@@ -425,14 +425,10 @@ struct WallpaperPreviewScreen: View {
         case .color(let hex):
             Color(hex: hex)
         case .preset(let id):
-            if let img = WallpaperPreset(id: id).image() {
+            if let img = WallpaperPreset(id: id).image(dark: dark) {
                 Color.clear
                     .overlay { Image(uiImage: img).resizable().scaledToFill().blur(radius: blurred ? 10 : 0) }
                     .clipped()
-                    // Matches the chat's own scrim for a built-in, which is lighter than a gallery
-                    // photo's — see ChatWallpaperBackground. A preview that dims more than the real
-                    // thing is a preview of a different wallpaper.
-                    .overlay(dark ? Color.black.opacity(0.10) : Color.white.opacity(0.14))
             } else { Theme.bg(dark) }
         }
     }
@@ -577,7 +573,7 @@ struct ChatColorPage: View {
         case .color(let hex):
             Color(hex: hex)
         case .preset(let id):
-            if let img = WallpaperPreset(id: id).image() {
+            if let img = WallpaperPreset(id: id).image(dark: dark) {
                 Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
             } else { Color(.secondarySystemGroupedBackground) }
         }

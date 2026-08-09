@@ -45,32 +45,38 @@ enum ChatWallpaper: Equatable {
     static let legacyMarker = "__legacy__"
 }
 
-// Built-in PHOTO wallpapers — original generated art bundled in the app (Resources/Wallpapers),
-// so "Presets" isn't only gradients. Each has a light + dark file.
+// Built-in wallpapers — original art bundled in the app (Resources/Wallpapers). Each is a PAIR:
+// `<id>-light.jpg` and `<id>-dark.jpg`, and the app picks by colour scheme.
 struct WallpaperPreset: Identifiable, Equatable {
-    let id: String        // asset base name in Resources/Wallpapers (e.g. "wp-ocean")
+    let id: String        // base name in Resources/Wallpapers (e.g. "wp-paper")
 }
 
 enum WallpaperPresets {
-    /// SIX, AND THEY ARE ONE SET. The eighteen that were here before were assembled over time and
-    /// had no relationship to each other or to the app — light ones, busy ones, a doodle sheet.
-    /// These are one visual language: a near-black frame with a single small light in it, each keyed
-    /// to one of the six chat accents, so a wallpaper and the bubble colour it is paired with belong
-    /// together. The middle of every one is deliberately the quietest part, because that is where
-    /// the messages sit.
+    /// ONE PATTERN, SIX GROUNDS, AND A LIGHT AND A DARK OF EACH — his instruction, and it is how
+    /// WhatsApp actually ships this. Their picker is not a row of different drawings; it is the same
+    /// doodle sheet over a row of colours, which is exactly why it reads as one set rather than a
+    /// collection somebody accumulated.
     ///
-    /// The ids are the theme ids, so `imageId` below is never a guess about which picture goes with
-    /// which theme.
+    /// The trick in the pattern is the contrast, not the drawing: the ground carries the colour, the
+    /// hairline doodles carry texture, and the gap between them is small enough that a message
+    /// bubble always wins. So there is nothing here to read as "busy" and nothing to fight the
+    /// messages, which is the whole job of a chat background.
+    ///
+    /// The grounds are keyed to the app's own chat accents, so a wallpaper and the bubble colour it
+    /// pairs with belong together, and the ids ARE the theme ids so `imageId` is never a guess.
     static let all: [WallpaperPreset] = [
-        .init(id: "wp-sunset"), .init(id: "wp-ocean"), .init(id: "wp-dusk"),
-        .init(id: "wp-forest"), .init(id: "wp-mono"), .init(id: "wp-rose"),
+        .init(id: "wp-paper"), .init(id: "wp-ocean"), .init(id: "wp-forest"),
+        .init(id: "wp-dusk"), .init(id: "wp-rose"), .init(id: "wp-graphite"),
     ]
 }
 
 extension WallpaperPreset {
-    // Bundled JPEG in Resources/Wallpapers, loaded by base name.
-    func image() -> UIImage? {
-        Bundle.main.url(forResource: id, withExtension: "jpg").flatMap { UIImage(contentsOfFile: $0.path) }
+    /// The bundled JPEG for this scheme. A wallpaper is a PAIR now — the pattern is the same in both
+    /// and only the ground and the ink change, so a chat that follows the system appearance keeps
+    /// the same wallpaper rather than swapping to a different one at sunset.
+    func image(dark: Bool) -> UIImage? {
+        Bundle.main.url(forResource: "\(id)-\(dark ? "dark" : "light")", withExtension: "jpg")
+            .flatMap { UIImage(contentsOfFile: $0.path) }
     }
 }
 
@@ -95,7 +101,7 @@ struct WallpaperGradient: Identifiable, Equatable {
     // gradients). The gradient palettes stay as the fallback if the file is ever missing.
     var imageId: String? = nil
     func colors(_ dark: Bool) -> [Color] { dark ? self.dark : light }
-    func image() -> UIImage? { imageId.flatMap { WallpaperPreset(id: $0).image() } }
+    func image(_ dark: Bool) -> UIImage? { imageId.flatMap { WallpaperPreset(id: $0).image(dark: dark) } }
 }
 
 /// Renders a built-in theme wallpaper: its real IMAGE when one is bundled, else the gradient
@@ -104,7 +110,7 @@ struct GradientWallpaperView: View {
     let g: WallpaperGradient
     let dark: Bool
     var body: some View {
-        if let img = g.image() {
+        if let img = g.image(dark) {
             Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
         } else {
             // The actual gradient, which is what the doc above promises. This branch used to return
@@ -119,34 +125,36 @@ struct GradientWallpaperView: View {
 enum ChatWallpapers {
     // Kept subtle so message bubbles always read clearly on top (the top→bottom fall is gentle).
     // BUILT-IN wallpapers: never deletable (they aren't part of the user library at all).
-    /// ⚠️ THE PALETTES ARE SAMPLED FROM THE ART, top band / middle / bottom band, and they are DARK
-    /// in both modes now. They are only ever drawn if the bundled file goes missing, so the point of
-    /// them is to look like the picture they stand in for rather than to be a second design. The
-    /// wallpapers themselves are night pictures; a pale fallback would be a different wallpaper.
+    /// The palettes are the GROUNDS of the art, so the fallback looks like the wallpaper it stands
+    /// in for rather than being a second design. They differ per mode again, because the wallpapers
+    /// do: every one is a light paper and a dark paper carrying the same doodle sheet.
+    ///
+    /// `sunset` and `mono` kept their ids — a chat that stored either still resolves — and now point
+    /// at the paper and graphite grounds.
     static let all: [WallpaperGradient] = [
-        .init(id: "sunset", name: "Sunset",
-              light: [Color(hex: 0x160E0A), Color(hex: 0x0A0605), Color(hex: 0x0C0705)],
-              dark:  [Color(hex: 0x160E0A), Color(hex: 0x0A0605), Color(hex: 0x0C0705)],
-              tint: Color(hex: 0xF08A5D), bubbleHex: 0xF08A5D, imageId: "wp-sunset"),
+        .init(id: "sunset", name: "Paper",
+              light: [Color(hex: 0xEDE4DA), Color(hex: 0xEAE0D6), Color(hex: 0xE6DCD1)],
+              dark:  [Color(hex: 0x0C1116), Color(hex: 0x0B0F14), Color(hex: 0x090D11)],
+              tint: Color(hex: 0xF08A5D), bubbleHex: 0xF08A5D, imageId: "wp-paper"),
         .init(id: "ocean", name: "Ocean",
-              light: [Color(hex: 0x0A1B24), Color(hex: 0x0A1D2A), Color(hex: 0x0A111F)],
-              dark:  [Color(hex: 0x0A1B24), Color(hex: 0x0A1D2A), Color(hex: 0x0A111F)],
+              light: [Color(hex: 0xE3ECF5), Color(hex: 0xDDE8F3), Color(hex: 0xD6E3F0)],
+              dark:  [Color(hex: 0x0A141D), Color(hex: 0x09121A), Color(hex: 0x070F16)],
               tint: Color(hex: 0x3DA1FD), bubbleHex: 0x2E8BF0, imageId: "wp-ocean"),
         .init(id: "dusk", name: "Dusk",
-              light: [Color(hex: 0x0B0915), Color(hex: 0x07060E), Color(hex: 0x160E24)],
-              dark:  [Color(hex: 0x0B0915), Color(hex: 0x07060E), Color(hex: 0x160E24)],
+              light: [Color(hex: 0xEAE5F5), Color(hex: 0xE4DEF2), Color(hex: 0xDED7EE)],
+              dark:  [Color(hex: 0x100C1A), Color(hex: 0x0E0A17), Color(hex: 0x0B0813)],
               tint: Color(hex: 0x9B6DF3), bubbleHex: 0x8A5CF0, imageId: "wp-dusk"),
         .init(id: "forest", name: "Forest",
-              light: [Color(hex: 0x040907), Color(hex: 0x040807), Color(hex: 0x07140E)],
-              dark:  [Color(hex: 0x040907), Color(hex: 0x040807), Color(hex: 0x07140E)],
+              light: [Color(hex: 0xE2EFE4), Color(hex: 0xDBEBDF), Color(hex: 0xD4E7D9)],
+              dark:  [Color(hex: 0x0A1410), Color(hex: 0x09110E), Color(hex: 0x070F0C)],
               tint: Color(hex: 0x34C76F), bubbleHex: 0x1FA85A, imageId: "wp-forest"),
-        .init(id: "mono", name: "Mono",
-              light: [Color(hex: 0x131217), Color(hex: 0x100F14), Color(hex: 0x0D0C10)],
-              dark:  [Color(hex: 0x131217), Color(hex: 0x100F14), Color(hex: 0x0D0C10)],
-              tint: Color(hex: 0x8E8E93), bubbleHex: 0x3A3A3C, imageId: "wp-mono"),
+        .init(id: "mono", name: "Graphite",
+              light: [Color(hex: 0xEFEFF1), Color(hex: 0xE9E9EC), Color(hex: 0xE3E3E7)],
+              dark:  [Color(hex: 0x101012), Color(hex: 0x0E0E10), Color(hex: 0x0B0B0D)],
+              tint: Color(hex: 0x8E8E93), bubbleHex: 0x3A3A3C, imageId: "wp-graphite"),
         .init(id: "rose", name: "Rose",
-              light: [Color(hex: 0x1F0C15), Color(hex: 0x0B060A), Color(hex: 0x0C060A)],
-              dark:  [Color(hex: 0x1F0C15), Color(hex: 0x0B060A), Color(hex: 0x0C060A)],
+              light: [Color(hex: 0xF6E6EA), Color(hex: 0xF2E0E5), Color(hex: 0xEED9E0)],
+              dark:  [Color(hex: 0x150B10), Color(hex: 0x12090E), Color(hex: 0x0F080C)],
               tint: Color(hex: 0xF06792), bubbleHex: 0xE84D86, imageId: "wp-rose"),
     ]
 
@@ -350,17 +358,17 @@ struct ChatWallpaperBackground: View {
         case .color(let hex):
             Color(hex: hex)
         case .preset(let id):
-            if let img = WallpaperPreset(id: id).image() {
+            if let img = WallpaperPreset(id: id).image(dark: dark) {
                 Color.clear
                     .overlay { Image(uiImage: img).resizable().scaledToFill() }
                     .clipped()
-                    // ⚠️ A LIGHTER HAND THAN THE ONE ON A GALLERY PHOTO, and on purpose. That scrim
-                    // exists because an imported photo can be anything — a white beach, a face, a
-                    // screenshot — and bubbles have to survive it. The built-ins are not anything:
-                    // they are night pictures whose middle third is deliberately the quietest part,
-                    // so 28% black over them subtracts the single light each one has and leaves six
-                    // near-identical black rectangles. See `WallpaperPresets`.
-                    .overlay(dark ? Color.black.opacity(0.10) : Color.white.opacity(0.14))
+                    // ⚠️ NO SCRIM ON A BUILT-IN, and that is a decision rather than an omission.
+                    // The scrim exists because an imported gallery photo can be anything — a white
+                    // beach, a face, a screenshot — and bubbles have to survive it. A built-in is
+                    // not anything: it is a flat ground with hairline doodles at a contrast chosen
+                    // so the bubbles already win, and it ships in a light AND a dark version so it
+                    // never needs correcting toward the scheme. Washing 28% black over that only
+                    // removes the pattern it was made for. See `WallpaperPresets`.
             } else {
                 Theme.bg(dark)
             }

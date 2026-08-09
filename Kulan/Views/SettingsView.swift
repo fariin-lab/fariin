@@ -830,7 +830,7 @@ struct AppearanceSettingsView: View {
         case .color(let hex):
             Color(hex: hex)
         case .preset(let id):
-            if let img = WallpaperPreset(id: id).image() {
+            if let img = WallpaperPreset(id: id).image(dark: dark) {
                 Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
             } else { Color(.secondarySystemGroupedBackground) }
         }
