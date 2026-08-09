@@ -1760,18 +1760,19 @@ struct StoryViewer: View {
                                           centerOverride: hero.center,
                                           alpha: hero.alpha,
                                           dim: heroDim(f),
-                                          // ⚠️ ZERO ON AN EXIT, and the rule is already written
-                                          // twenty lines down: "AN EXIT HIDES THE SURROUND AT
-                                          // ONCE; ONLY AN ARRIVAL IS ALLOWED TO TAKE ITS TIME."
-                                          // The SwiftUI surround has obeyed it since that fix; this
-                                          // mask alpha was still passed unconditionally, so for the
-                                          // first 18% of a close drag (~40% of its travel) the
-                                          // card's SQUARE corner — its own clip stands down in
-                                          // flight — composited through the surround into the
-                                          // notch between the mask hole's curve and the card edge.
-                                          // His 2026-08-09 screenshots: the chat list showing
-                                          // through the rounded corners until ~40% down.
-                                          chrome: hero.exiting ? 0 : heroChrome(f),
+                                          // ⚠️ REVERTED 2026-08-09 EVENING, BUILD 512, his second
+                                          // corner screenshot: `hero.exiting ? 0 : heroChrome(f)`
+                                          // swapped one artifact for a worse one. The mask's
+                                          // `outside` is a BLACK PAINT over the notch, NOT a crop —
+                                          // the exit-hides-the-surround rule twenty lines down is
+                                          // about the SwiftUI furniture, and applying it here
+                                          // removed the only thing hiding the card's square
+                                          // corners, so the story's own photo showed dimmed in
+                                          // every corner for the WHOLE close (his Test Amina
+                                          // screenshot, photo-textured wedges). The original black
+                                          // notch in the first 18% is the lesser wrong until the
+                                          // hole truly CROPS (the parked mask-geometry work).
+                                          chrome: heroChrome(f),
                                           crop: hero.crop,
                                           // A circular door times its circle differently coming and
                                           // going — see `StoryCardMorph.circleRushSpan`. This is the
