@@ -41,7 +41,21 @@ enum AgeCheck {
         case child     // under 13. Below our own stated minimum.
         case teen      // 13 to 17. Allowed, but not to be findable by strangers.
         case adult     // 18 and over.
-        case unknown   // declined, unavailable, not an Apple device state we can read, or entitlement off.
+        /// They were asked and said no. A SETTLED ANSWER, not a missing one.
+        ///
+        /// ⚠️ THIS CASE EXISTS BECAUSE ITS ABSENCE WAS A BUG. A decline used to be recorded as
+        /// `unknown`, and `hasAnswer` reads `unknown` as "never asked" — so declining put Apple's
+        /// sheet up again on EVERY launch, forever. The commit that shipped it claimed the opposite
+        /// in as many words. Nagging is bad anywhere and worst here: Apple's "never share" is set by
+        /// a parent, so the people re-asked hardest would have been the families most careful about
+        /// their children's privacy. Exactly backwards.
+        case declined
+        /// Nobody has answered yet, or the attempt failed before reaching an answer: no window to
+        /// present from, the service unavailable, or the entitlement not yet live. Genuinely
+        /// transient, so this one IS retried on a later launch — which is also what lets an install
+        /// that predates the entitlement start working once it lands, instead of being written off
+        /// forever on one early failure.
+        case unknown
     }
 
     /// The two gates we care about, and they are ours: 13 is the floor in our Terms and privacy
@@ -61,8 +75,22 @@ enum AgeCheck {
         Band(rawValue: UserDefaults.standard.string(forKey: storeKey) ?? "") ?? .unknown
     }
 
-    /// True once we have a real answer, so callers can avoid asking again.
+    /// True once the question is SETTLED, which is not the same as knowing the age.
+    ///
+    /// `.declined` counts. Somebody who said no has answered, and the only thing re-asking achieves
+    /// is a sheet in their face on every launch. Only `.unknown` reopens the question, and only
+    /// because it means the attempt never reached a person.
     static var hasAnswer: Bool { storedBand != .unknown }
+
+    /// Whether anything is actually known about the age, as opposed to the question being closed.
+    /// Callers deciding what a minor may do want THIS one, not `hasAnswer` — a decline must read as
+    /// "we do not know", never as "adult".
+    static var isKnown: Bool {
+        switch storedBand {
+        case .child, .teen, .adult: return true
+        case .declined, .unknown:   return false
+        }
+    }
 
     /// Ask Apple. Presents a system sheet, so call it at a moment that makes sense to the person,
     /// not on a cold launch.
@@ -84,10 +112,12 @@ enum AgeCheck {
 
             switch response {
             case .declinedSharing:
-                // A refusal is an answer we must accept. Apple lets a parent set "never share", and
-                // treating a refusal as suspicion (locking the account down, or nagging) would
-                // punish the families most careful about their children's privacy.
-                return record(.unknown)
+                // A refusal is an answer we must accept, and `.declined` rather than `.unknown` is
+                // what makes that true in practice: it closes the question so the sheet is never
+                // put up again. Apple lets a parent set "never share", and treating a refusal as
+                // either suspicion or an invitation to ask again would punish the families most
+                // careful about their children's privacy.
+                return record(.declined)
 
             case .sharing(let range):
                 return record(band(from: range))
