@@ -859,15 +859,40 @@ private extension StoryDetailView {
     /// count (NSDataDetector supplies the scheme), which is how people actually type them.
     static func captionWithLinks(_ text: String) -> AttributedString {
         var a = AttributedString(text)
-        guard let det = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return a }
         let full = NSRange(text.startIndex..., in: text)
-        for m in det.matches(in: text, range: full) {
-            guard let url = m.url,
-                  let sr = Range(m.range, in: text),
-                  let ar = Range(sr, in: a) else { continue }
-            a[ar].link = url
-            a[ar].underlineStyle = .single
-            a[ar].foregroundColor = .white
+        if let det = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            for m in det.matches(in: text, range: full) {
+                guard let url = m.url,
+                      let sr = Range(m.range, in: text),
+                      let ar = Range(sr, in: a) else { continue }
+                a[ar].link = url
+                a[ar].underlineStyle = .single
+                a[ar].foregroundColor = .white
+            }
+        }
+        // @MENTIONS. Semibold and NOT underlined, so the two kinds of tappable text stay tellable
+        // apart at a glance — a link goes out of the app, a mention goes to a person inside it.
+        //
+        // They carry our own scheme rather than a real url: the host resolves the username against
+        // the app's username collection and opens that profile (see `StoryMention`). The library has
+        // no idea who anybody is, and it must not start knowing.
+        //
+        // ⚠️ The pattern demands a letter first and allows 2-30 of [A-Za-z0-9_.] after it, which is
+        // the app's own username rule. Being STRICTER than the rule would leave real mentions dead;
+        // being looser would light up an email's domain half, which the detector above has already
+        // claimed as part of a link.
+        if let re = try? NSRegularExpression(pattern: "@([A-Za-z][A-Za-z0-9_.]{1,29})") {
+            for m in re.matches(in: text, range: full) {
+                guard let sr = Range(m.range, in: text),
+                      let ar = Range(sr, in: a),
+                      a[ar].link == nil,   // already part of a url (an email's tail) — leave it alone
+                      let nr = Range(m.range(at: 1), in: text),
+                      let url = StoryMention.url(for: String(text[nr]).lowercased())
+                else { continue }
+                a[ar].link = url
+                a[ar].foregroundColor = .white
+                a[ar].font = .system(size: 16, weight: .semibold)
+            }
         }
         return a
     }

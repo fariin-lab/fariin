@@ -91,6 +91,21 @@ public enum StoryPlaybackResume {
 /// memory-only closure, installed by the app. Nil is a normal answer and falls straight through to
 /// the two caches and the network exactly as before, so this can never make a poster arrive later
 /// than it used to; it can only make one arrive sooner.
+/// A MENTION IS A PERSON, AND ONLY THE APP KNOWS PEOPLE.
+///
+/// Caption mentions are drawn by the library as links carrying this scheme, and the HOST resolves
+/// the username and opens that profile. Keeping the resolution outside means the library never
+/// learns what a username is, which is the same line every other host callback here draws.
+/// ⚠️ IT REUSES THE APP'S OWN DEEP LINK RATHER THAN INVENTING A SCHEME. `kulan://u/<handle>` is
+/// already the app's "open this person" route — the same one a shared profile link and a chat
+/// @username use, resolved by `KulanApp.route(from:)`. So a caption mention needs NO new host code
+/// and cannot drift from what a mention means everywhere else in the app: one route, one meaning.
+public enum StoryMention {
+    public static func url(for username: String) -> URL? {
+        URL(string: "kulan://u/\(username)")
+    }
+}
+
 public enum StoryPosterSource {
     /// Must be synchronous and memory-only — it is called on the main thread on the frame a story
     /// opens, which is the whole point of it.
