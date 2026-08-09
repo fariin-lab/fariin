@@ -45,6 +45,34 @@ struct RootView: View {
                 NavigationStack {
                     LoginCodeView(email: address, purpose: .unproven,
                                   onAuthed: { Task { await route() } })
+                        // THE WAY OUT, and there was none. This screen replaces the entire app, has
+                        // no back and no tab bar, and its own purpose deliberately hides "use a
+                        // different email". So somebody who reached it holding an address they
+                        // cannot read had no move left at all — not even the ordinary one of
+                        // signing out and starting again. A screen that can be entered and not left
+                        // is a lockout however good its reason for existing.
+                        //
+                        // Deliberately Sign Out rather than Skip. Skipping would make the gate
+                        // optional and the gate is the point; signing out costs the session, not
+                        // the account, and puts them back at the front door where every other way
+                        // in is available.
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) {
+                                Button("Sign Out") {
+                                    Task {
+                                        // The light teardown on purpose, not Settings' full one.
+                                        // Nobody reaching this screen ever got past it, so push was
+                                        // never registered and no account data was ever cached;
+                                        // unregistering and wiping would be tidying rooms that were
+                                        // never entered, over a network call that can hang.
+                                        await AuthService.shared.abandonSession()
+                                        await route()
+                                    }
+                                }
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            }
+                        }
                 }
             case .restore(let handle, let due):
                 // A scheduled-for-deletion account cannot enter the app: it is hidden from everyone

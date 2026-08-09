@@ -384,6 +384,32 @@ struct AccountSettingsView: View {
                 Text("Saves your profile and all chats to a text file you can share or keep.")
             }
 
+            // ABOVE Sign-in Methods, and filed under the word people actually look for.
+            //
+            // A password could already be added before this row existed, but only through Sign-in
+            // Methods › Email › Connect, which asks for an address we already know and is named
+            // after a thing nobody searching for "password" would open. Owner's instruction: put it
+            // where they look.
+            //
+            // The row hides itself for an account that cannot have a password at all — one signed
+            // in with no email address anywhere on it. Offering a screen that can only fail is
+            // worse than not offering it.
+            if let address = AuthService.shared.passwordAddress {
+                Section {
+                    NavigationLink {
+                        PasswordView(address: address,
+                                     isFirstPassword: !AuthService.shared.isConnected(.email))
+                    } label: {
+                        Label(AuthService.shared.isConnected(.email) ? "Change Password" : "Set a Password",
+                              systemImage: "key.fill")
+                    }
+                } footer: {
+                    Text(AuthService.shared.isConnected(.email)
+                         ? "You sign in with \(address) and this password."
+                         : "Add a second way in: \(address) and a password, alongside how you sign in now.")
+                }
+            }
+
             signInMethodsSection
 
             Section {

@@ -298,6 +298,85 @@ final class AuthService: NSObject {
             .call(["email": email])
     }
 
+    /// The address a password would sign you in with, or nil when this account cannot have one.
+    ///
+    /// Read off `providerData` first rather than `user.email`, because `user.email` MOVES: linking
+    /// an email credential rewrites it, which is the same behaviour that mis-delivered four
+    /// security mails in August. Any address the account can actually be reached at will do, and
+    /// the current `user.email` is the one Firebase will use, so it leads.
+    ///
+    /// nil means the Password row does not appear at all. An account with no address anywhere on it
+    /// cannot have an email password, and a screen that can only fail is worse than no screen.
+    var passwordAddress: String? {
+        guard let user = Auth.auth().currentUser else { return nil }
+        if let e = user.email, !e.isEmpty { return e }
+        return user.providerData.compactMap(\.email).first(where: { !$0.isEmpty })
+    }
+
+    /// Set the account's password, whether or not it had one.
+    ///
+    /// TWO DIFFERENT FIREBASE CALLS behind one name, and the difference is not cosmetic.
+    /// `updatePassword` changes an existing password credential; it cannot CREATE one, so a Google
+    /// or Apple account has to `link` an email credential instead. Getting this wrong is how the
+    /// feature would silently work for half the users and fail for the other half.
+    ///
+    /// The address is never taken from the caller. It is read off the account, which is the whole
+    /// reason this screen does not ask for one: we already know it, and a field to retype it is
+    /// both a step for nothing and a chance to attach a password to an address you cannot read.
+    ///
+    /// ⚠️ NOT GUARDED HERE. The proof that it is really you is Face ID, and it lives on the screen
+    /// (PasswordView) rather than in this method, because the check is a UI affair and because a
+    /// guard buried in a service is one a future caller silently skips. Any new caller of this
+    /// method owes the same gate.
+    func setPassword(_ newPassword: String, isFirst: Bool) async throws {
+        guard let user = Auth.auth().currentUser else { throw AuthFlowError.notSignedIn }
+
+        if isFirst {
+            guard let address = user.email, !address.isEmpty else { throw AuthFlowError.notSignedIn }
+            _ = try await user.link(with: EmailAuthProvider.credential(withEmail: address,
+                                                                      password: newPassword))
+        } else {
+            try await user.updatePassword(to: newPassword)
+        }
+
+        // TELL THE ACCOUNT, and read the state back first so the mail describes what is now true
+        // rather than what we intended. `reload()` also refreshes providerData, which is what the
+        // server reads to decide which of the two mails to send.
+        try? await user.reload()
+        await reportPasswordChanged(isFirst: isFirst)
+    }
+
+    /// The security mail after a password is set or changed. Fire-and-forget on purpose: the
+    /// password already moved, and failing the call would show an error for something that worked
+    /// and send them round to do it again.
+    ///
+    /// The time is formatted HERE, in the person's own locale and timezone. Doing it on the server
+    /// would print a server clock at somebody in Muqdisho or Minneapolis, and a security mail that
+    /// states the wrong time is a security mail that reads as fake.
+    private func reportPasswordChanged(isFirst: Bool) async {
+        let stamp = Date().formatted(date: .abbreviated, time: .shortened)
+        _ = try? await Functions.functions(region: "me-central1")
+            .httpsCallable("notifyPasswordChanged")
+            .call(["when": stamp, "first": isFirst])
+    }
+
+    /// Walk away from a session that never finished being set up.
+    ///
+    /// For the person stuck on the prove-your-address gate, and nowhere else. They are signed in to
+    /// Firebase but have never been inside the app: no push token was registered, no profile was
+    /// cached, no device row was written. So this is deliberately NOT the Settings sign-out, which
+    /// awaits `Push.unregister()` and `DeviceRegistry.removeThisDevice()` — two network writes that
+    /// would be undoing work nobody did, on a path where the person is already stuck and a hang is
+    /// the last thing they need.
+    ///
+    /// `async` even though the body is not, because the caller is in a Task and this is the kind of
+    /// thing that grows an awaited step later; making it async now means that day is not a change at
+    /// every call site.
+    func abandonSession() async {
+        try? Auth.auth().signOut()
+        uid = nil
+    }
+
     /// Does this session still owe us proof that its email address is really theirs?
     ///
     /// TRUE ONLY FOR PASSWORD ACCOUNTS, and that qualifier is the whole point. Apple and Google have
@@ -317,17 +396,43 @@ final class AuthService: NSObject {
     /// the trap RootView.route already warns about twice.
     var unprovenEmailCached: String? {
         guard let user = Auth.auth().currentUser,
-              user.providerData.contains(where: { $0.providerID == "password" }),
               !user.isEmailVerified,
               let address = user.email, !address.isEmpty
         else { return nil }
+
+        // PASSWORD MUST BE THE ONLY WAY IN, and this clause is a lockout bug I shipped this morning
+        // and had to be shown.
+        //
+        // Without it the test was "has a password AND the address is unproven", which is true of a
+        // Google account the moment its owner sets a password. Linking an email credential MOVES
+        // `user.email` to the new address and flips `emailVerified` false, so a Google user who set
+        // a password on any address other than their Google one was thrown into the code screen on
+        // the next launch — a screen with no sign-out, no back, and (for this purpose) no "use a
+        // different email". If they had mistyped the address, or used one they cannot read, they
+        // were permanently locked out of an account they could still authenticate to with Google,
+        // and the app would not let them near the Sign-in Methods screen that fixes it. It punished
+        // exactly the person who did the security-conscious thing.
+        //
+        // An account with Apple or Google on it has an identity its provider already proved. It is
+        // not locked out and it is not unidentified, so there is nothing for this gate to rescue.
+        // The address still gets proved, just at the moment it is SET, on the Password screen, which
+        // is where the person is actually standing and can retype it.
+        //
+        // The gate stays for the account this was written for: password as the sole door, where the
+        // address IS the identity and an unproven one means nobody has shown they can read it.
+        let providers = Set(user.providerData.map(\.providerID))
+        guard providers == ["password"] else { return nil }
         return address
     }
 
     var emailNeedsProof: Bool {
         get async {
             guard let user = Auth.auth().currentUser else { return false }
-            guard user.providerData.contains(where: { $0.providerID == "password" }) else { return false }
+            // Same sole-door rule as `unprovenEmailCached`, and it has to be the same or the two
+            // disagree: sign-in would demand a code that the next launch does not, or the reverse.
+            // Apple and Google prove the address before handing it over, so asking those people for
+            // a code is an errand for nothing.
+            guard Set(user.providerData.map(\.providerID)) == ["password"] else { return false }
             try? await user.reload()
             guard let fresh = Auth.auth().currentUser else { return false }
             return !fresh.isEmailVerified
