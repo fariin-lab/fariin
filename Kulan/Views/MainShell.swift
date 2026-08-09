@@ -668,7 +668,20 @@ struct ChatsView: View {
     /// person to person, and the row has a card for whoever you paged to, so the anchor follows.
     private func openStoryFromRow(_ g: StoryGroup) {
         let others = StoriesRepository.shared.others.filter { !StoryPrefs.isHidden($0.authorUid) }
-        StoryDoor.open(g, among: others, from: g.id, pinned: false,
+        // MY OWN CARD PAGES INTO THE FRIENDS (his 2026-08-09 order; Telegram's behaviour). Mine was
+        // never in the sibling list, so the door's index lookup failed, the viewer fell to the
+        // single-group SOLO host — and that host has no sideways machinery at all: not disabled,
+        // structurally absent (`StoryPager.horizontalScroll = nil`). Leading the list with my own
+        // bucket, exactly as it leads the row, sends MY open down the same PAGED host a friend's
+        // uses: same cube, same doors. The paged host already carries everything my bucket needs —
+        // it attaches the sheet-morph card, installs the swipe-up pan, and the host's sheet entry
+        // and header-tap are gated on the signed-in uid, written for "a mixed feed can page onto my
+        // own bucket" before one ever could. With NO friends live, `siblings` is just [g], the door
+        // takes its single-group path and the solo host serves exactly as before.
+        //
+        // A FRIEND's open keeps the friends-only feed he confirmed correct — untouched on purpose.
+        let siblings = g.isMine ? [g] + others : others
+        StoryDoor.open(g, among: siblings, from: g.id, pinned: false,
                        // These came out of `StoriesRepository.others`, whose query is "recipientUids
                        // contains me" — so being here IS the author's audience choice, and the reply
                        // bar follows it rather than testing my chat list a second time.
