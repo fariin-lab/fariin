@@ -845,12 +845,26 @@ private extension PlayerView {
         // already refuse to write a position for a clip that never reached its second second — so
         // widening this cannot invent a resume point for a story nobody watched.
         guard player?.timeControlStatus != .paused || state != .stopped else { return }
+        // ⚠️ THE REWIND KEEPS THE OLD CONDITION, AND ONLY THE REWIND.
+        //
+        // Widening this function so a BUFFERING clip can be stopped was right — that is the audio
+        // that kept playing from a story you swiped away from. But the function ends by seeking to
+        // zero, and before the widening a PAUSED player left early and was never seeked. Now it
+        // reaches that line, and the sheet pull pauses the story by design: pulling up on a clip
+        // three seconds in would rewind it to zero and put frame zero on the card. His "the first
+        // frame flashes for a split second" is exactly that shape, and it would have been a new
+        // bug in the build this went out on.
+        //
+        // So the pause and the remembering are unconditional, which is the fix, and the REWIND
+        // stays behind the condition it always had. A clip that was genuinely playing and is being
+        // left behind still rewinds; a paused one is left exactly where the person stopped it.
+        let wasPlaying = player?.timeControlStatus == .playing
         // BEFORE the seek, which erases the very number being kept. `.stopVideo` fires on a
         // person swipe (and on the close, where the door clears the whole store anyway), and
         // this is the only moment the position still exists on that path.
         rememberPlaybackPosition()
         player?.pause()
-        player?.seek(to: .zero)
+        if wasPlaying { player?.seek(to: .zero) }
         state = .stopped
     }
 

@@ -3626,7 +3626,15 @@ struct MyStoriesCarousel: View {
     /// file does: a bare `scaledToFill` reports its own oversized layout and the ZStack adopts it.
     @ViewBuilder private func cardMedia(_ s: Story) -> some View {
         if let shot = frozenCovers[s.id] {
+            // ⚠️ PINNED TO THE SLOT, exactly like the branch below. `Color.clear` is size-NEUTRAL: it
+            // accepts whatever size it is proposed, and inside the cover-flow `ZStack` that proposal
+            // is not the card, it is the container. The poster branch cannot drift that way because
+            // `StoryImage` carries its own sizing, so before the frozen covers were swept onto every
+            // video story only the CENTRED card ever took this path and the difference never showed.
+            // Once every card could take it, the cards stopped agreeing about how wide they were and
+            // grew into each other — his overlapping window cards.
             Color.clear
+                .frame(width: slotW, height: slotH)
                 .overlay(Image(uiImage: shot).resizable().scaledToFill())
                 .clipped()
         } else {
