@@ -48,18 +48,22 @@ enum ChatWallpaper: Equatable {
 // Built-in PHOTO wallpapers — original generated art bundled in the app (Resources/Wallpapers),
 // so "Presets" isn't only gradients. Each has a light + dark file.
 struct WallpaperPreset: Identifiable, Equatable {
-    let id: String        // asset base name in Resources/Wallpapers (e.g. "wp-dunes")
+    let id: String        // asset base name in Resources/Wallpapers (e.g. "wp-ocean")
 }
 
 enum WallpaperPresets {
-    // Real image wallpapers (not flat gradients) — the theme-paired six first, then extras.
+    /// SIX, AND THEY ARE ONE SET. The eighteen that were here before were assembled over time and
+    /// had no relationship to each other or to the app — light ones, busy ones, a doodle sheet.
+    /// These are one visual language: a near-black frame with a single small light in it, each keyed
+    /// to one of the six chat accents, so a wallpaper and the bubble colour it is paired with belong
+    /// together. The middle of every one is deliberately the quietest part, because that is where
+    /// the messages sit.
+    ///
+    /// The ids are the theme ids, so `imageId` below is never a guess about which picture goes with
+    /// which theme.
     static let all: [WallpaperPreset] = [
-        .init(id: "wp-sunset"), .init(id: "wp-tide"), .init(id: "wp-violet"),
-        .init(id: "wp-forest"), .init(id: "wp-graphite"), .init(id: "wp-rose"),
-        .init(id: "wp-nightlights"), .init(id: "wp-amber"), .init(id: "wp-teal"),
-        .init(id: "wp-daylight"), .init(id: "wp-sand"), .init(id: "wp-ice"),
-        .init(id: "wp-dunes"), .init(id: "wp-ocean"), .init(id: "wp-aurora"),
-        .init(id: "wp-mesh"), .init(id: "wp-night"), .init(id: "wp-doodle"),
+        .init(id: "wp-sunset"), .init(id: "wp-ocean"), .init(id: "wp-dusk"),
+        .init(id: "wp-forest"), .init(id: "wp-mono"), .init(id: "wp-rose"),
     ]
 }
 
@@ -115,30 +119,34 @@ struct GradientWallpaperView: View {
 enum ChatWallpapers {
     // Kept subtle so message bubbles always read clearly on top (the top→bottom fall is gentle).
     // BUILT-IN wallpapers: never deletable (they aren't part of the user library at all).
+    /// ⚠️ THE PALETTES ARE SAMPLED FROM THE ART, top band / middle / bottom band, and they are DARK
+    /// in both modes now. They are only ever drawn if the bundled file goes missing, so the point of
+    /// them is to look like the picture they stand in for rather than to be a second design. The
+    /// wallpapers themselves are night pictures; a pale fallback would be a different wallpaper.
     static let all: [WallpaperGradient] = [
         .init(id: "sunset", name: "Sunset",
-              light: [Color(hex: 0xFFE9C7), Color(hex: 0xFFC9AE), Color(hex: 0xF6AEC6)],
-              dark:  [Color(hex: 0x3A2A2C), Color(hex: 0x2A1E28), Color(hex: 0x1C161C)],
+              light: [Color(hex: 0x160E0A), Color(hex: 0x0A0605), Color(hex: 0x0C0705)],
+              dark:  [Color(hex: 0x160E0A), Color(hex: 0x0A0605), Color(hex: 0x0C0705)],
               tint: Color(hex: 0xF08A5D), bubbleHex: 0xF08A5D, imageId: "wp-sunset"),
         .init(id: "ocean", name: "Ocean",
-              light: [Color(hex: 0xD6ECFF), Color(hex: 0xB8DCF6), Color(hex: 0xA6D5E6)],
-              dark:  [Color(hex: 0x16283A), Color(hex: 0x142430), Color(hex: 0x101A22)],
-              tint: Color(hex: 0x3DA1FD), bubbleHex: 0x2E8BF0, imageId: "wp-tide"),
+              light: [Color(hex: 0x0A1B24), Color(hex: 0x0A1D2A), Color(hex: 0x0A111F)],
+              dark:  [Color(hex: 0x0A1B24), Color(hex: 0x0A1D2A), Color(hex: 0x0A111F)],
+              tint: Color(hex: 0x3DA1FD), bubbleHex: 0x2E8BF0, imageId: "wp-ocean"),
         .init(id: "dusk", name: "Dusk",
-              light: [Color(hex: 0xE7D9FF), Color(hex: 0xD3C1F5), Color(hex: 0xF3C6E4)],
-              dark:  [Color(hex: 0x2A2340), Color(hex: 0x231C33), Color(hex: 0x1A1626)],
-              tint: Color(hex: 0x9B6DF3), bubbleHex: 0x8A5CF0, imageId: "wp-violet"),
+              light: [Color(hex: 0x0B0915), Color(hex: 0x07060E), Color(hex: 0x160E24)],
+              dark:  [Color(hex: 0x0B0915), Color(hex: 0x07060E), Color(hex: 0x160E24)],
+              tint: Color(hex: 0x9B6DF3), bubbleHex: 0x8A5CF0, imageId: "wp-dusk"),
         .init(id: "forest", name: "Forest",
-              light: [Color(hex: 0xDCF3D8), Color(hex: 0xBFE7C2), Color(hex: 0xA9DCC9)],
-              dark:  [Color(hex: 0x1B2E22), Color(hex: 0x18271F), Color(hex: 0x121C18)],
+              light: [Color(hex: 0x040907), Color(hex: 0x040807), Color(hex: 0x07140E)],
+              dark:  [Color(hex: 0x040907), Color(hex: 0x040807), Color(hex: 0x07140E)],
               tint: Color(hex: 0x34C76F), bubbleHex: 0x1FA85A, imageId: "wp-forest"),
         .init(id: "mono", name: "Mono",
-              light: [Color(hex: 0xF2F2F5), Color(hex: 0xE4E4E9), Color(hex: 0xD5D5DB)],
-              dark:  [Color(hex: 0x1E1E22), Color(hex: 0x191919), Color(hex: 0x121214)],
-              tint: Color(hex: 0x8E8E93), bubbleHex: 0x3A3A3C, imageId: "wp-graphite"),
+              light: [Color(hex: 0x131217), Color(hex: 0x100F14), Color(hex: 0x0D0C10)],
+              dark:  [Color(hex: 0x131217), Color(hex: 0x100F14), Color(hex: 0x0D0C10)],
+              tint: Color(hex: 0x8E8E93), bubbleHex: 0x3A3A3C, imageId: "wp-mono"),
         .init(id: "rose", name: "Rose",
-              light: [Color(hex: 0xFFE1E6), Color(hex: 0xFFC9D5), Color(hex: 0xFAB0C6)],
-              dark:  [Color(hex: 0x33212A), Color(hex: 0x2A1B24), Color(hex: 0x1D141A)],
+              light: [Color(hex: 0x1F0C15), Color(hex: 0x0B060A), Color(hex: 0x0C060A)],
+              dark:  [Color(hex: 0x1F0C15), Color(hex: 0x0B060A), Color(hex: 0x0C060A)],
               tint: Color(hex: 0xF06792), bubbleHex: 0xE84D86, imageId: "wp-rose"),
     ]
 
@@ -346,7 +354,13 @@ struct ChatWallpaperBackground: View {
                 Color.clear
                     .overlay { Image(uiImage: img).resizable().scaledToFill() }
                     .clipped()
-                    .overlay(dark ? Color.black.opacity(0.28) : Color.white.opacity(0.14))
+                    // ⚠️ A LIGHTER HAND THAN THE ONE ON A GALLERY PHOTO, and on purpose. That scrim
+                    // exists because an imported photo can be anything — a white beach, a face, a
+                    // screenshot — and bubbles have to survive it. The built-ins are not anything:
+                    // they are night pictures whose middle third is deliberately the quietest part,
+                    // so 28% black over them subtracts the single light each one has and leaves six
+                    // near-identical black rectangles. See `WallpaperPresets`.
+                    .overlay(dark ? Color.black.opacity(0.10) : Color.white.opacity(0.14))
             } else {
                 Theme.bg(dark)
             }

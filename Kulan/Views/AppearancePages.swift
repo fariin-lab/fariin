@@ -429,7 +429,10 @@ struct WallpaperPreviewScreen: View {
                 Color.clear
                     .overlay { Image(uiImage: img).resizable().scaledToFill().blur(radius: blurred ? 10 : 0) }
                     .clipped()
-                    .overlay(dark ? Color.black.opacity(0.28) : Color.white.opacity(0.14))
+                    // Matches the chat's own scrim for a built-in, which is lighter than a gallery
+                    // photo's — see ChatWallpaperBackground. A preview that dims more than the real
+                    // thing is a preview of a different wallpaper.
+                    .overlay(dark ? Color.black.opacity(0.10) : Color.white.opacity(0.14))
             } else { Theme.bg(dark) }
         }
     }
