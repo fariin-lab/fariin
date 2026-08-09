@@ -102,10 +102,16 @@ const cases = [
   { name: 'S1 stranger reads the public MIRROR', expect: 'ALLOW', uid: C, method: 'get',
     path: `${D}/users/${A}/publicStories/${SID}`,
     before: { authorUid: A, mediaUrl: 'https://x/y.jpg', type: 'image' }, mocks: mocksFor(C) },
+  // ⚠️ THIS PAYLOAD IS THE ONE THE APP ACTUALLY WRITES, field for field, and it has to stay that
+  // way. It used to be the nine fields below without `blurThumb`, so when the app started sending a
+  // tenth this test kept passing while EVERY REAL MIRROR WRITE WAS DENIED — `hasOnly` fails the
+  // whole write on an unnamed field, and `writePublicMirror` swallows the denial with `try?`. A
+  // green rules suite over a payload nobody sends is worth nothing.
   { name: 'S1 author writes their own mirror', expect: 'ALLOW', uid: A, method: 'create',
     path: `${D}/users/${A}/publicStories/${SID}`,
     after: { authorUid: A, createdAt: NOW, expiresAt: SOON, mediaUrl: 'https://x/y.jpg',
-             thumbUrl: '', type: 'image', caption: '', duration: 0, allowsReplies: true },
+             thumbUrl: '', type: 'image', caption: '', duration: 0, allowsReplies: true,
+             blurThumb: '/9j/4AAQSkZJRg==' },
     mocks: mocksFor(A) },
   { name: 'S1 a stranger cannot write into my mirror', expect: 'DENY', uid: C, method: 'create',
     path: `${D}/users/${A}/publicStories/${SID}`,

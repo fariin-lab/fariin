@@ -181,9 +181,15 @@ service cloud.firestore {
         allow read: if signedIn();
         allow write: if signedIn() && request.auth.uid == uid
           && (request.method == 'delete'
+              // ⚠️ `blurThumb` HAS TO BE ON THIS LIST OR NOTHING IS MIRRORED AT ALL. The list is a
+              // `hasOnly`, so a field the app writes and the rule does not name fails the WHOLE
+              // write, and `writePublicMirror` swallows the denial with `try?` — the story posts,
+              // reaches contacts normally, and is simply absent from the author's public profile.
+              // Safe to allow: it is a few hundred bytes of base64 JPEG derived from the media this
+              // same document already publishes, so it discloses nothing the mirror did not.
               || (request.resource.data.keys().hasOnly(
                     ['authorUid', 'createdAt', 'expiresAt', 'mediaUrl', 'thumbUrl',
-                     'type', 'caption', 'duration', 'allowsReplies'])
+                     'type', 'caption', 'duration', 'allowsReplies', 'blurThumb'])
                   && request.resource.data.authorUid == uid
                   && !isBanned()));
       }
