@@ -438,6 +438,11 @@ final class StoriesService {
         // Made once and used twice — the document and, for an "Everyone" story, the public mirror.
         // It is a resize and a JPEG encode, so asking for it twice is real work for one string.
         let cover = Self.blurThumbBase64(image)
+        // ⚠️ ONE DEADLINE, EVALUATED ONCE. The mirror used to compute its own `Date()` AFTER the
+        // upload finished, so it was stamped to die later than the story it mirrors — by exactly
+        // however long the transfer took. On a slow connection that is minutes of a story that has
+        // expired everywhere except on the author's public profile.
+        let expiresAt = Date().addingTimeInterval(expiryHours * 3600)
 
         // Empty recipients is OK: it's still MY OWN story (the `mine` query loads by authorUid, so I
         // always see it) — just with no other viewers yet (e.g. a brand-new account with no contacts).
@@ -447,7 +452,7 @@ final class StoriesService {
             try await docRef.setData([
                 "authorUid": me,
                 "createdAt": FieldValue.serverTimestamp(),
-                "expiresAt": Timestamp(date: Date().addingTimeInterval(expiryHours * 3600)),
+                "expiresAt": Timestamp(date: expiresAt),
                 "type": "image",
                 "mediaPath": path,
                 "mediaUrl": "",
@@ -481,7 +486,7 @@ final class StoriesService {
                 await writePublicMirror(storyId: storyId, me: me, mediaUrl: url, thumbUrl: "",
                                         blurThumb: cover,
                                         type: "image", caption: caption, duration: 0,
-                                        expiresAt: Date().addingTimeInterval(expiryHours * 3600),
+                                        expiresAt: expiresAt,
                                         allowsReplies: allowsReplies)
             }
             // Warm the cache the My Story card reads from (DiskImageCache), so the final card shows the
@@ -673,12 +678,14 @@ final class StoriesService {
         let (recipients, mode) = await resolveAudience(me: me, excluded: excluded, included: included)
         // Made once and used twice — the document and, for an "Everyone" story, the public mirror.
         let cover = Self.blurThumbBase64(prepared.thumbnail)
+        // ONE DEADLINE, EVALUATED ONCE — see the photo path for what two of them cost.
+        let expiresAt = Date().addingTimeInterval(expiryHours * 3600)
 
         let docRef = db.collection("stories").document(storyId)
         try await docRef.setData([
             "authorUid": me,
             "createdAt": FieldValue.serverTimestamp(),
-            "expiresAt": Timestamp(date: Date().addingTimeInterval(expiryHours * 3600)),
+            "expiresAt": Timestamp(date: expiresAt),
             "type": "video",
             "mediaPath": videoPath,
             "mediaUrl": "",
@@ -733,7 +740,7 @@ final class StoriesService {
                                         blurThumb: cover,
                                         type: "video", caption: caption,
                                         duration: prepared.duration,
-                                        expiresAt: Date().addingTimeInterval(expiryHours * 3600),
+                                        expiresAt: expiresAt,
                                         allowsReplies: allowsReplies)
             }
             // Warm both caches with the poster so my-story cards + the viewer's first frame are instant.
@@ -899,6 +906,26 @@ final class StoriesService {
     /// stays visible after I'm gone (App Store 5.1.1(v) — deletion must remove my data).
     /// Removes the Storage image first (while the doc still exists, so the rules' author
     /// check passes), then the story doc itself.
+    /// ⚠️ THE MIRRORS NOBODY WAS DELETING. A mirror is removed on an explicit delete and on account
+    /// deletion, and on NOTHING ELSE — ordinary 24-hour expiry leaves it behind, readable by any
+    /// signed-in account, carrying the author's uid, media url and caption for as long as the account
+    /// exists. That is a privacy leak with an App Store rule attached to it, and a cost: every
+    /// profile visit used to read the whole pile.
+    ///
+    /// Only the author can write here, so only the author can clean it. Run once per session, off
+    /// the critical path, bounded, and failures are ignored — the reader already filters by expiry,
+    /// so this is housekeeping rather than correctness.
+    func sweepExpiredMirrors() async {
+        let me = uid
+        guard !me.isEmpty else { return }
+        guard let snap = try? await db.collection("users").document(me)
+            .collection("publicStories")
+            .whereField("expiresAt", isLessThan: Timestamp(date: Date()))
+            .limit(to: 40)
+            .getDocuments() else { return }
+        for d in snap.documents { try? await d.reference.delete() }
+    }
+
     func deleteAllMine() async {
         let me = uid
         guard !me.isEmpty,
@@ -1084,10 +1111,19 @@ final class StoriesRepository {
         // so this query could work is exactly what leaked the author's contact list. The mirror at
         // `users/{uid}/publicStories` holds the media and nothing about who else can see it, which
         // is all a profile visitor ever needed. `parse` reads the same field names either way.
+        // ⚠️ BOUNDED, BECAUSE NOTHING DELETES A MIRROR WHEN ITS STORY EXPIRES.
+        //
+        // `deletePublicMirror` is reached only from an explicit delete or from account deletion, so
+        // ordinary expiry leaves the mirror standing forever. This read had no `where` and no
+        // `limit`, so a daily poster's mirror collection grew without end and EVERY profile visit
+        // paid a document read per mirror that had ever existed, then threw almost all of them away
+        // in the filter below. The filter stays as the belt; the query is what stops the bill.
+        let now = Date()
         let snap = try? await db.collection("users").document(uid)
             .collection("publicStories")
+            .whereField("expiresAt", isGreaterThan: Timestamp(date: now))
+            .limit(to: 50)
             .getDocuments()
-        let now = Date()
         let stories = parse(snap?.documents)
             .filter { $0.expiresAt > now }
             .sorted { $0.createdAt < $1.createdAt }
@@ -1188,6 +1224,10 @@ final class StoriesRepository {
             // story category. Once per sign-in rather than per refresh — it walks two directories,
             // and doing that on every pull-to-refresh would be work nobody asked for.
             StoryStorage.purgeExpired()
+            // The server-side equivalent, and the same once-per-sign-in cadence: mirrors of my own
+            // expired stories, which nothing else deletes. See `sweepExpiredMirrors`. Detached so a
+            // slow round trip cannot delay the row painting.
+            Task.detached { [weak self] in await self?.sweepExpiredMirrors() }
             await MainActor.run {
                 seedFromDisk(me)   // last-known row paints NOW; the listeners reconcile it silently
                 start(me)          // first call, or the signed-in user changed
