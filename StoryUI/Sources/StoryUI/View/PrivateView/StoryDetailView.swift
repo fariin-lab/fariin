@@ -831,11 +831,37 @@ private extension StoryDetailView {
         .offset(y: messageViewPosition)
     }
 
-    // Top dark scrim: black (50%) at the very top fading to clear, so the header (username, avatar, X)
-    // stays readable on white/bright stories. Mirrors the bottom caption gradient.
+    /// ⚠️ A STRAIGHT FADE IS A HEAVY FADE, and that is his 2026-08-09 "caption shadow is too much,
+    /// use the shadow telegram is using".
+    ///
+    /// Both of ours were `LinearGradient(colors:)`, which puts a stop at each end and interpolates
+    /// evenly between them. Telegram's are not straight. They generate EIGHT stops and run the alpha
+    /// through `bezierPoint(0.42, 0.0, 0.58, 1.0, step)` — CSS ease-in-out — so the fade leaves the
+    /// picture almost untouched for its first third and does its darkening low down, near the text
+    /// that needs it (`StoryContentCaptionComponent`, `StoryItemSetContainerComponent`).
+    ///
+    /// The difference is not subtle where he drew his line. At a quarter of the way down the band a
+    /// straight ramp is already at 25% of peak; theirs is at 4%. Same peak, same height, and one of
+    /// them reads as a shadow while the other reads as a grey band across the picture.
+    ///
+    /// The numbers below ARE theirs, their own easing sampled at their own eight stops and divided
+    /// by the peak so one table serves both scrims.
+    private static func scrimStops(peak: Double) -> [Gradient.Stop] {
+        let eased: [(CGFloat, Double)] = [
+            (0.000000, 0.000000), (0.142857, 0.040904), (0.285714, 0.169701),
+            (0.428571, 0.378431), (0.571429, 0.621569), (0.714286, 0.830299),
+            (0.857143, 0.959096), (1.000000, 1.000000),
+        ]
+        return eased.map { .init(color: .black.opacity(peak * $0.1), location: $0.0) }
+    }
+
+    // Top dark scrim so the header (username, avatar, X) stays readable on white/bright stories.
+    // Telegram's numbers: black, 40% at the very top, eased away to nothing 90pt down
+    // (`topGradientHeight: CGFloat = 90.0`, and their PanelGradient asset peaks at 102/255).
+    // Ours was 50% over 130pt and straight, so it was heavier in every part of the band at once.
     var topScrim: some View {
-        LinearGradient(colors: [.black.opacity(0.5), .clear], startPoint: .top, endPoint: .bottom)
-            .frame(height: 130)
+        LinearGradient(stops: Self.scrimStops(peak: 0.4), startPoint: .bottom, endPoint: .top)
+            .frame(height: 90)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .allowsHitTesting(false)
     }
@@ -849,8 +875,11 @@ private extension StoryDetailView {
                 // Backs the CAPTION only. It used to be 210 because the reply bar floated over the
                 // media and needed darkening too; the bar sits below the card now, so a fade that
                 // tall just dimmed a third of the picture for nothing.
-                LinearGradient(colors: [.clear, .black.opacity(0.8)], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 130)
+                // Telegram's caption scrim exactly: black, 0.8 at the bottom, 128pt tall, and eased
+                // rather than straight — see `scrimStops`. The peak and the height were already
+                // theirs; the straight ramp between them is what he photographed.
+                LinearGradient(stops: Self.scrimStops(peak: 0.8), startPoint: .top, endPoint: .bottom)
+                    .frame(height: 128)
                     .allowsHitTesting(false)
                 // Our own design (clean, story-style): bottom-LEFT, no hard line, over the soft fade.
                 // LINKS IN A CAPTION ARE REAL LINKS (his 2026-08-09 "caption must be work Link"):
