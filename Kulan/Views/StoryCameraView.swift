@@ -861,9 +861,22 @@ struct StoryCameraView: View {
 private struct ComposerTypeSwitch: UIViewRepresentable {
     @Binding var isText: Bool
 
+    /// Signal's intrinsic size, the half of their control we had not copied yet: 40pt tall and
+    /// 8pt of extra width either side of each segment. The default ~32pt track is what made ours
+    /// read smaller than the Photos album bar he referenced (2026-08-09, "make it 40px") — the
+    /// GLASS itself was already right, because nothing below touches the track.
+    private final class GlassSegmentedControl: UISegmentedControl {
+        override var intrinsicContentSize: CGSize {
+            var s = super.intrinsicContentSize
+            s.width += CGFloat(8 * 2 * numberOfSegments)
+            s.height = 40
+            return s
+        }
+    }
+
     func makeUIView(context: Context) -> UISegmentedControl {
         // Titles UPPERCASED, which is Signal's, not a flourish of ours.
-        let control = UISegmentedControl(items: ["CAMERA", "TEXT"])
+        let control = GlassSegmentedControl(items: ["CAMERA", "TEXT"])
         control.selectedSegmentIndex = isText ? 1 : 0
         // ⚠️ NOTHING IS SET ON THE TRACK. No backgroundColor, no background image, no divider image,
         // no tint. That is the entire reason this reads as glass and the last five did not.
