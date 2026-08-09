@@ -474,6 +474,12 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // (the stop happens ABOVE, before `self.url` moves — see the warning there)
         didRetryRemote = false
         cachedFileInUse = nil
+        // ⚠️ A NEW CLIP GETS TO ANNOUNCE ITSELF AGAIN. `setBuffering` only posts on a CHANGE, so
+        // once this view has said "not buffering" it will never say it again until it has said the
+        // opposite — and if that `false` was posted while the host page was already being swiped
+        // away, nobody was listening and the host's flag stayed up for good. Re-arming per clip
+        // means the edge is per clip, which is the only scope it was ever meaningful at.
+        didReportBuffering = false
         cacheManager.loadVideo(from: validatedUrl) { [weak self] result in
             // STALE ANSWER GUARD. This view is reused across stories, so a download started for the
             // last one can land after the next one has claimed it — and it would then set up the

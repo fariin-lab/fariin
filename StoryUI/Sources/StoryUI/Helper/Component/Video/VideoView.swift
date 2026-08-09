@@ -42,6 +42,21 @@ struct VideoView: UIViewRepresentable {
     }
     
     func updateUIView(_ playerView: PlayerView, context: Context) {
+        // ⚠️ RE-ATTACH THE PLAYER, because it is WEAK and something else nils it.
+        //
+        // `PlayerView.player` is a weak reference assigned once, in `makeUIView`. The
+        // `.replaceCurrentItem` notification handler — posted on every viewer dismiss, with
+        // `object: nil`, so it reaches every mounted page — sets `self.player = nil`. This view is
+        // reused, so the next story handed to a view that has been through that is a chain of
+        // no-ops: both `replaceCurrentItem` calls do nothing, `playerLayer.player` becomes nil,
+        // `isReadyForDisplay` can never turn true, and `revealVideoIfReady` (the only thing that
+        // takes the cover down on the happy path) can never pass. The result is a story that sits
+        // under a loading cover for its whole declared length and then advances, and every later
+        // video in that view does the same.
+        //
+        // Re-asserting it here costs nothing when it is already right and is the only place that
+        // runs on every story change.
+        if playerView.player !== player { playerView.player = player }
         playerView.state = state
         // BEFORE startVideo, always: `startVideo` puts the loading cover up immediately, and it can
         // only draw a poster it already has. The embedded thumbnail goes first of all, because it is

@@ -736,6 +736,20 @@ private extension StoryDetailView {
                         isAnimationStarted: $isAnimationStarted,
                         emoji: selectedEmoji
                     )
+                    // ⚠️ THE LATCH IS RELEASED BY THE VIEW GOING AWAY, NOT ONLY BY THE ANIMATION
+                    // FINISHING — and that difference froze the whole page.
+                    //
+                    // `isAnimationStarted` is raised in this view's `onAppear` and lowered ONLY in
+                    // its `didCompletedAnimation`. But it lives inside `if let emojis, showEmoji`,
+                    // and `MessageView` sets `showEmoji = text.isEmpty` — so typing one character
+                    // into the reply box unmounts it mid-flight and that completion never runs.
+                    // The flag then stands for ever, and it drives two things at once:
+                    // `isTimerRunning` (the bar stops) and `isTapDisabled` (both tap zones die). Tap
+                    // a reaction, type a letter, and the story is completely inert.
+                    //
+                    // `onDisappear` is the honest end of this view by every route it can leave, and
+                    // it is idempotent with the normal completion, which has already set it false.
+                    .onDisappear { if isAnimationStarted { isAnimationStarted = false } }
                 }
                 
             }
@@ -1037,6 +1051,20 @@ private extension StoryDetailView {
         // `touchPauseBegan` goes with it: a loan belongs to the story it was taken against.
         isHolding = false
         touchPauseBegan = nil
+        // ⚠️ AND THE BUFFERING LATCH, which was the one that could never come back down.
+        //
+        // Telegram does not store this at all: `isBuffering` is recomputed as a LOCAL on every
+        // progress tick and handed straight to the bar (StoryItemContentComponent, in
+        // `updateVideoPlaybackProgress`), so it cannot survive anything. Ours is a flag written only
+        // by a notification, and the notification had a one-way door in it: the receiver drops any
+        // message addressed to a page that is no longer current, while `VideoLoader.setBuffering` is
+        // edge-deduped per view and so never sends `false` twice. Swipe away from a stalled video
+        // and back, and the bar was frozen for that person for the rest of the session with the
+        // video happily playing underneath it.
+        //
+        // Clearing it on a person switch is the same rule every other latch here already follows,
+        // and `VideoLoader.startVideo` now re-arms its own edge so a fresh clip can announce again.
+        isBuffering = false
         // Clear every pause latch too, or a new bucket can start permanently frozen (stuck-state bug).
         isTimerRunning = false
         isAnimationStarted = false
@@ -1106,8 +1134,27 @@ private extension StoryDetailView {
             if isPaused, !scenePaused { isPaused = false; playVideo() }
         }
         // Report the ACTUAL current item as seen (per-item, not the whole bucket) — drives accurate
-        // view receipts + "Seen by". Runs before the pause guard so it fires the moment an item shows.
-        if viewModel.currentStoryUser == model.id {
+        // view receipts + "Seen by".
+        //
+        // ⚠️ SEEN MEANS WATCHED, NOT LANDED ON, AND FOR A ONE-TIME STORY THE DIFFERENCE IS THE WHOLE
+        // STORY. This fired the moment an item appeared, deliberately ahead of the pause guard. For
+        // an ordinary story that is merely generous. For a view-once story it is destructive: the
+        // report runs `consumeOneTime`, so auto-advancing INTO one from the previous person's last
+        // item, or opening the viewer and immediately swiping down, spends the single view on a
+        // story that was never actually watched. It then vanishes and cannot be reopened.
+        //
+        // Telegram's rule, from `StoryItemContentComponent.updateVideoPlaybackProgress`: `markAsSeen`
+        // is called only once playback reports `.playing` with a real timestamp, and their comment
+        // is explicit that a story which never plays is never marked seen. Ours has no player for a
+        // photo, so the equivalent is "the clock for this item is actually running": not paused, not
+        // held, not frozen behind a sheet or the keyboard, not mid-fold. Every one of those is a
+        // moment the person is not watching.
+        //
+        // This deliberately does NOT wait for a duration — a story looked at for half a second is
+        // still watched. It waits only for the state to be watching at all.
+        if viewModel.currentStoryUser == model.id,
+           !isPaused, !isHolding, !hostPause.paused, !isFolding,
+           !keyboardManager.isKeyboardOpen, !isTimerRunning {
             let cur = getStory(with: getCurrentIndex())
             if cur.id != lastSeenItem { lastSeenItem = cur.id; onItemSeen?(cur.id) }
         }
