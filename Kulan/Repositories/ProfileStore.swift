@@ -217,7 +217,14 @@ final class ProfileStore {
         // `devices` included (audit): it holds this account's push and VoIP tokens plus hardware
         // ids, and Firestore does not cascade, so a "permanently deleted" account was leaving those
         // records behind under a deleted parent doc.
-        for sub in ["storyContexts", "storyLists", "devices"] {
+        // ⚠️ `publicStories` ADDED, and it is the one with teeth. It is the PUBLIC mirror of every
+        // "Everyone" story this account ever posted, and its read rule is signed-in-only with no
+        // author check and no parent check — so leaving it behind meant a deleted account's story
+        // records (caption, timestamps, thumbnail url, duration) stayed readable by anybody with an
+        // account, for ever. The media bytes go with `deleteAllMine`, so this is metadata rather
+        // than pictures, and it is still exactly what "delete my account" is promising not to keep.
+        // Nothing expires these either, so they accumulate for live accounts too.
+        for sub in ["storyContexts", "storyLists", "devices", "publicStories"] {
             if let docs = try? await db.collection("users").document(uid).collection(sub).getDocuments() {
                 for d in docs.documents { try? await d.reference.delete() }
             }

@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import UIKit
 import AVFoundation
+import ImageIO   // CGImageSourceCreateThumbnailAtIndex, for the embedded story cover
 import FirebaseAuth
 import FirebaseFirestore
 import FirebaseStorage
@@ -87,19 +88,22 @@ extension StoriesService {
     /// there is no window where the story exists without a cover. It is never drawn sharp: the veil
     /// puts it through `StoryCanvas.loadingVeil`, the same blur the real poster gets, which is
     /// exactly how Telegram uses theirs.
-    static func blurThumbBase64(_ image: UIImage) -> String {
-        let long = max(image.size.width, image.size.height)
-        guard long > 0 else { return "" }
-        let scale = 30.0 / long
-        let size = CGSize(width: max(1, image.size.width * scale),
-                          height: max(1, image.size.height * scale))
-        let fmt = UIGraphicsImageRendererFormat()
-        fmt.scale = 1            // 30 POINTS at screen scale would be 90px — the point is the size
-        fmt.opaque = true
-        let small = UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
-            image.draw(in: CGRect(origin: .zero, size: size))
-        }
-        return small.jpegData(compressionQuality: 0.4)?.base64EncodedString() ?? ""
+    /// Takes the ENCODED bytes, never a `UIImage`, and that is deliberate on both call sites: the
+    /// photo path holds the picked file's data and the video path holds its poster's data, so a
+    /// `UIImage` here would mean decoding a full-size picture at post time to throw all but 30
+    /// pixels of it away. `CGImageSourceCreateThumbnailAtIndex` decodes straight to the size asked
+    /// for, and honours the EXIF orientation while it does it, so a photo taken sideways gets a
+    /// cover the right way up.
+    static func blurThumbBase64(_ data: Data) -> String {
+        guard !data.isEmpty,
+              let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceThumbnailMaxPixelSize: 30,
+                  kCGImageSourceCreateThumbnailWithTransform: true,
+              ] as CFDictionary)
+        else { return "" }
+        return UIImage(cgImage: cg).jpegData(compressionQuality: 0.4)?.base64EncodedString() ?? ""
     }
 }
 
@@ -307,6 +311,26 @@ final class StoriesService {
         // question. `blockedBy` is a map keyed by whoever did the blocking, so somebody who blocked
         // ME was still in my audience and my stories kept arriving in their tray. Every other
         // messenger treats a block as ending the broadcast in both directions.
+        // ⚠️ WAIT FOR THE CHAT LIST BEFORE ASKING IT WHO YOUR FRIENDS ARE.
+        //
+        // This read the array straight out, and the array is filled by a snapshot listener with no
+        // synchronous seed. Post in the first moment after a cold launch — which is exactly when
+        // somebody opens the app to post — and `conversations` is still empty, so `pool` is empty,
+        // `recipients` comes back as the empty set, and `postStory` accepts that on purpose
+        // ("Empty recipients is OK"). The story uploads, appears on your own row with a normal
+        // ring, and reaches NOBODY. There is no error and no repair: `recipientUids` is pinned
+        // immutable by the update rule, so the only cure is delete and post again, which requires
+        // knowing it happened at all.
+        //
+        // `hasLoaded` is the same flag the chat list uses to stop showing its skeleton, and it is
+        // guaranteed to flip: the repository sets it after 3s whether or not a snapshot arrived. So
+        // the wait is bounded by the repository's own promise, and the cap below is only a belt
+        // against that promise being changed later. Ten ticks of 0.5s reads as instant on a warm
+        // launch, because the flag is already true and the loop never runs once.
+        for _ in 0..<10 {
+            if await MainActor.run(body: { ConversationsRepository.shared.hasLoaded }) { break }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
         let allContacts = await MainActor.run {
             Set(ConversationsRepository.shared.conversations
                 .filter { c in
@@ -651,7 +675,7 @@ final class StoriesService {
             // its second upload finishes and can fail on its own. Written with the DOCUMENT, before
             // a single byte of media is uploaded, so a viewer reaching this story at any point after
             // it exists has a picture to show. See `blurThumbBase64`.
-            "blurThumb": UIImage(data: prepared.thumbnail).map { Self.blurThumbBase64($0) } ?? "",
+            "blurThumb": Self.blurThumbBase64(prepared.thumbnail),
             "duration": prepared.duration,
             "caption": caption,
             "audience": ["mode": everyone ? "everyone" : mode, "listId": "my-story"],
@@ -874,6 +898,10 @@ final class StoriesService {
             if d.data()["type"] as? String == "video" {
                 try? await Storage.storage().reference().child("stories/\(d.documentID)/thumb.jpg").delete()
             }
+            // AND THE PUBLIC MIRROR, which is a SEPARATE document in a subcollection and does not
+            // go with the story. An "Everyone" story writes one at post time; nothing here removed
+            // it, and its read rule is signed-in-only, so it outlived the story it mirrors.
+            await deletePublicMirror(storyId: d.documentID, authorUid: me)
             try? await d.reference.delete()
         }
     }
@@ -986,6 +1014,16 @@ final class StoriesRepository {
         profileCache = [:]
         mine = nil; others = []
         didLoad = false          // the next account starts unknown, not "everything deleted"
+        // ⚠️ AND THE WATERMARKS, which were the one piece of story state this did not clear.
+        //
+        // `serverWatermarks` is "the newest item of X's I have already watched", keyed by author and
+        // NOT by account. Signing out and into a second account on the same phone therefore handed
+        // the new person the old person's history: any author they both know showed a grey
+        // already-watched ring on stories the new account had never opened. Worse, it swallowed
+        // their first real view — `advanceServerWatermark` refuses a date older than the one it
+        // holds, so the `storyContexts` write never fired and their seen state never reached the
+        // server or their other devices.
+        serverWatermarks = [:]
         storiesVersion &+= 1
         StoryRowCache.clear()   // the next account must never see this account's story row
     }

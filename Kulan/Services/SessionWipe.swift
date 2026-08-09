@@ -64,6 +64,13 @@ enum SessionWipe {
             // stories
             "storyViewReceipts", "storiesOptedOut",
             "hiddenStories", "seenStoryItems", "notifyStories", "likedStories",
+            // ⚠️ THESE TWO WERE MISSED, and both are account-scoped like everything above them.
+            // `oneTimeUsed` is the burn list for view-once stories and it HARD-FILTERS them out of
+            // every list, so a story account A used its single view on was invisible to account B on
+            // the same phone — B's own view, silently spent by somebody else. `storyAudienceNames`
+            // holds the private names of the author's custom audiences ("Close friends", and worse),
+            // which is the one piece of story state that is explicitly nobody else's business.
+            "oneTimeUsed", "storyAudienceNames",
             // misc account-scoped state
             "defaultDisappearSeconds", "callsSeenAt",
         ]

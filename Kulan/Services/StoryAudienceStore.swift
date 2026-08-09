@@ -257,6 +257,24 @@ final class StoryAudienceStore {
         write(StoryAudience(id: StoryAudience.hiddenId, kind: .hidden, name: "",
                             mode: .except, members: Array(hiddenFrom), allowReplies: true,
                             createdAt: StoryAudience.sortsFirst))
+        // ⚠️ AND THE STORIES THAT ARE ALREADY UP, which this did not touch.
+        //
+        // The hidden list was applied at POST time only (`resolveAudience`), so adding somebody here
+        // did nothing to the stories they could already see: for up to 24 hours they kept the ring,
+        // kept watching, and kept appearing in the author's Seen by list. Somebody hiding their
+        // story from a person is not asking for that to start tomorrow.
+        //
+        // `revokeAudience` is exactly this operation and already existed — it is what BLOCK calls
+        // (ChatService, on block), and it takes the uid out of `recipientUids` on every live story.
+        // Hiding was simply never wired to it. Fire and forget for the same reason block does: the
+        // list itself is already written above, so this is catching up the past, not the promise.
+        //
+        // Unhiding deliberately does NOT put them back. A story they were removed from was, from
+        // that moment, not addressed to them, and silently restoring reach to something posted
+        // while they were excluded is the surprise in the other direction.
+        if hidden {
+            Task { await StoriesService.shared.revokeAudience(for: uid) }
+        }
     }
 
     @discardableResult
