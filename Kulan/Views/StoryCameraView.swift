@@ -312,18 +312,43 @@ struct StoryCameraView: View {
 
     private var hasText: Bool { !storyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
+    /// How far a page sits off to the side when it is not the one being shown. A whole screen width,
+    /// so the resting page is fully outside the card's clip whatever the padding is doing.
+    private var pageSlide: CGFloat { UIScreen.main.bounds.width }
+
+    /// ⚠️ ONE CURVE FOR BOTH WAYS IN. The swipe animated and the TAP DID NOT — the segmented control
+    /// wrote `mode` straight through its binding, so tapping CAMERA or TEXT teleported while swiping
+    /// between them slid. Same switch, two different behaviours depending on how you touched it, and
+    /// the tap is the one he uses. Anything that changes `mode` goes through here now.
+    private static let modeCurve: Animation = .snappy(duration: 0.25)
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             VStack(spacing: 0) {
-                Group {
-                    if mode == .camera {
-                        preview
-                    } else {
-                        StoryTextCard(text: $storyText, styleIndex: $styleIndex,
-                                      fontIndex: $fontIndex, typing: $typing,
-                                      onClose: { onClose() })
-                    }
+                // ⚠️ BOTH PAGES STAY MOUNTED AND SLIDE. This was `if mode == .camera { preview }
+                // else { card }`, and a SwiftUI if/else is not a page change, it is a REPLACEMENT:
+                // the camera view is destroyed on the way to text and built again on the way back,
+                // and the default transition fades one into the other — so for a quarter of a second
+                // both pages are on screen at once over black. That is his "both page", and the
+                // rebuild of an AVCaptureVideoPreviewLayer is the part that does not feel smooth.
+                //
+                // Signal moves the screen the same way the pill reads, left word on the left
+                // (`didSwipeToTextComposer` / `didSwipeToCamera`), and the comment on the swipe
+                // below already says so — the swipe was honest about the direction and the view was
+                // not. Now the two pages sit side by side and translate, clipped by the card's own
+                // shape, so nothing is created or destroyed by a mode change and the motion matches
+                // the gesture that caused it.
+                //
+                // The session still stops when text is on screen (see `onChange(of: mode)`); what
+                // stays alive is the VIEW, which costs nothing and is what made the return jump.
+                ZStack {
+                    preview
+                        .offset(x: mode == .camera ? 0 : -pageSlide)
+                    StoryTextCard(text: $storyText, styleIndex: $styleIndex,
+                                  fontIndex: $fontIndex, typing: $typing,
+                                  onClose: { onClose() })
+                        .offset(x: mode == .text ? 0 : pageSlide)
                 }
                 // WHILE TYPING THE CARD MEETS THE KEYBOARD (owner 2026-08-03, circling the two bottom
                 // corners: "left and right i see empty black"). The card normally floats with 6pt of
@@ -368,7 +393,7 @@ struct StoryCameraView: View {
                             guard abs(dx) > 60, abs(dx) > abs(dy) * 1.5 else { return }
                             let next: Mode = dx < 0 ? .text : .camera
                             guard next != mode else { return }
-                            withAnimation(.snappy(duration: 0.25)) { mode = next }
+                            withAnimation(Self.modeCurve) { mode = next }
                         }
                 )
 
@@ -783,8 +808,11 @@ struct StoryCameraView: View {
     /// previous note removed it as a hand-built flourish, which was the wrong call for the same
     /// reason the rest of this was.
     private var modePicker: some View {
+        // The tap goes through the SAME curve as the swipe — see `modeCurve`.
         ComposerTypeSwitch(isText: Binding(get: { mode == .text },
-                                           set: { mode = $0 ? .text : .camera }))
+                                           set: { v in
+            withAnimation(Self.modeCurve) { mode = v ? .text : .camera }
+        }))
             // Its own intrinsic size, Signal's: the padding and the 40pt height come from the
             // control, not from a frame we impose. A width we choose is a width that has to be
             // re-chosen every time the font metric changes.
