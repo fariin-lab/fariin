@@ -144,6 +144,9 @@ struct StoryDetailView: View {
     var showMore: Bool = false   // show the header "…" dropdown menu (buttons post notifications to the host)
     var isDismissing: Bool = false   // true while swiping down to close → cube fold off (no skew)
     @State private var lastSeenItem: String = ""
+    /// The item the lookahead was last started from. Separate from `lastSeenItem` on purpose — see
+    /// the note at the top of `startProgress`.
+    @State private var lastPrefetchItem: String = ""
 
     // MARK: Private Properties
     @StateObject private var keyboardManager = KeyboardManager()   // own it once (was re-created each re-init)
@@ -1132,6 +1135,33 @@ private extension StoryDetailView {
         if let t0 = touchPauseBegan, !isHolding, ProcessInfo.processInfo.systemUptime - t0 > 0.35 {
             touchPauseBegan = nil
             if isPaused, !scenePaused { isPaused = false; playVideo() }
+        }
+        // ⚠️ THE LOOKAHEAD IS NOT A SEEN RECEIPT, AND CHAINING IT TO ONE COST EVERY FIRST TAP ONTO A
+        // VIDEO ITS FULL DOWNLOAD.
+        //
+        // The host started the next clips' downloads from `onItemSeen`, and the gate below
+        // deliberately withholds that report while the story is paused, held, folded, behind the
+        // keyboard — or BUFFERING, which is precisely the state a video is in while it loads. So the
+        // clip after this one could not begin downloading until this one had finished downloading
+        // and started to play. Tap on, and you are cold again. His "tap left/right to a video and
+        // the first time it is a blur or black screen, then in seconds it works": the wait was the
+        // download, every time, because the guess that was supposed to have removed it had not been
+        // allowed to start.
+        //
+        // Telegram separates the two outright. `markAsSeen` waits for real playback
+        // (`StoryItemContentComponent`), while the preload of the next three items is driven from
+        // `StoryContentContextImpl.updateState` — the item CHANGING, nothing else. This is that,
+        // on the same list the host used to flatten for us: every story in the viewer in the order
+        // they will be watched, across people, so the last item of one warms the first of the next.
+        if viewModel.currentStoryUser == model.id {
+            let cur = getStory(with: getCurrentIndex())
+            if cur.id != lastPrefetchItem {
+                lastPrefetchItem = cur.id
+                let all = viewModel.stories.flatMap { $0.stories }
+                if let i = all.firstIndex(where: { $0.id == cur.id }) {
+                    StoryPrefetcher.prefetch(from: i, in: all)
+                }
+            }
         }
         // Report the ACTUAL current item as seen (per-item, not the whole bucket) — drives accurate
         // view receipts + "Seen by".

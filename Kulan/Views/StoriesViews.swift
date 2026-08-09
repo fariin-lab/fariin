@@ -858,23 +858,11 @@ struct StoryViewer: View {
         self.onDeletedRemaining = onDeletedRemaining
     }
 
-    /// Every story in this viewer, in the order they will actually be watched, one person after the
-    /// next. FLATTENED ACROSS PEOPLE on purpose: the moment a story viewer is most likely to stall is
-    /// the jump to somebody new, because nothing of theirs is warm. Signal crosses that boundary for
-    /// the same reason (`ensureSubsequentItemsDownloaded`, the `contextAfter` loop).
-    private var flatStories: [StoryUI.Story] { models.flatMap { $0.stories } }
-
     /// Every bucket + item id this viewer is currently fed. When it CHANGES while the viewer is
     /// open — an upload landing swaps the placeholder id for the real story's — the fresh buckets
     /// are pushed into the mounted pages in place. See the `.onChange` in the body and
     /// `StoryItemsReconcile` in the library.
     private var reconcileSignature: [String] { groups.flatMap { [$0.id] + $0.stories.map(\.id) } }
-
-    private func prefetchAhead(currentId: String) {
-        let all = flatStories
-        guard let i = all.firstIndex(where: { $0.id == currentId }) else { return }
-        StoryPrefetcher.prefetch(from: i, in: all)
-    }
 
     private var models: [StoryUIModel] {
         groups.map { g in
@@ -1430,10 +1418,11 @@ struct StoryViewer: View {
             },
             onItemSeen: { id in
                 currentStoryId = id
-                // DOWNLOAD WHAT IS COMING WHILE THIS ONE PLAYS. Signal fires this on every item
-                // change rather than only when a person's stories run out, and keeps THREE ahead —
-                // see StoryPrefetcher for the rule and where it is written down.
-                prefetchAhead(currentId: id)
+                // ⚠️ THE LOOKAHEAD USED TO START HERE AND IT CANNOT. This callback is a SEEN
+                // RECEIPT, and the library withholds it while the story is paused, held or
+                // buffering — so the next clip's download waited on this clip's download. It now
+                // runs off the item CHANGING, inside the viewer, on the same flattened list; see
+                // the note at the top of `StoryDetailView.startProgress`.
                 // The synthetic still-uploading item has no real doc — don't persist it as "seen"
                 // (junk entry) or fetch its (non-existent) viewers.
                 guard !StoriesService.isPending(id) else { return }
