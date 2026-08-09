@@ -144,7 +144,16 @@ public struct StoryView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onChange(of: viewModel.currentStoryUser) { new in onUserChanged?(new) }   // mark each viewed bucket
             .onAppear { startStory() }
-            .onDisappear { stopVideo() }
+            .onDisappear {
+                stopVideo()
+                // ⚠️ THE PREPARED ITEMS GO WITH THE VIEWER. `StoryItemPreloader.clear()` existed and
+                // had NO caller anywhere in the app, so up to three `AVPlayerItem` plus their
+                // `AVURLAsset`s stayed resident for the life of the process — decoded buffers for
+                // stories nobody is watching any more, held while the user is back in a chat.
+                // Closing the viewer is precisely when the lookahead they belong to stops meaning
+                // anything, and the next open warms its own.
+                StoryItemPreloader.clear()
+            }
         }
     }
     

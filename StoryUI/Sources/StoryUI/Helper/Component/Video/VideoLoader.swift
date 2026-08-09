@@ -343,15 +343,28 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// be answering about the flushed clip inside that turn — see the guard in `revealVideoIfReady`.
     private var itemSwapSettling = false
 
+    /// The item the current `frameOutput` was added to, so it can be taken off again. Weak: the
+    /// player owns its items and this must never be the reason one stays alive.
+    private weak var frameOutputItem: AVPlayerItem?
+
     private func attachFrameOutput() {
         guard let item = player?.currentItem else { return }
         // A new item means the old output belongs to a video that is no longer playing.
         if let old = frameOutput, item.outputs.contains(old) { return }
+        // ⚠️ AND THE OLD ONE COMES OFF THE OLD ITEM. This only ever added. An attached
+        // `AVPlayerItemVideoOutput` makes the pipeline vend a pixel buffer for every frame it
+        // decodes, and we read one at a pause and nowhere else — so every story watched left another
+        // clip paying that cost for as long as its item survived. Removing it is one line and it is
+        // the difference between a per-view cost and a per-session one.
+        if let old = frameOutput, let previous = frameOutputItem, previous !== item {
+            previous.remove(old)
+        }
         let out = AVPlayerItemVideoOutput(pixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
         ])
         item.add(out)
         frameOutput = out
+        frameOutputItem = item
     }
 
     /// The frame on screen right now, or the last frame this clip actually rendered, or nil.
@@ -540,9 +553,16 @@ final class PlayerView: UIView, StoryVideoFrameSource {
                 return
             }
         }
-        // Streaming failed too, so there is nothing left to try. Stop claiming it is loading —
-        // a black frame is honest, an endless spinner is not.
-        removeActivityIndicatory()
+        // Streaming failed too, so there is nothing left to try. Stop claiming it is loading — an
+        // endless spinner is not honest.
+        //
+        // ⚠️ BUT KEEP THE COVER. This called `removeActivityIndicatory()`, which takes down the
+        // WHOLE veil — and the veil is what was carrying the clip's poster. Behind it is the view's
+        // own black, so a story whose video could not play went from showing its cover to showing a
+        // solid black rectangle for its full duration, with the layer still hidden and nothing left
+        // to reveal. Rebuilding the veil without a spinner leaves the picture up and only drops the
+        // claim that something is still coming, which is the true statement here.
+        addActivityIndicatory(spinning: false)
     }
 
 }
@@ -580,9 +600,17 @@ private extension PlayerView {
         // not this function's parameter — `url` here is usually the cache FILE. Asked for once:
         // `take`, so a later rebuild of the same story in a fresh session starts clean. Seeking an
         // item that is not ready yet is fine — AVPlayer queues the seek and applies it on ready.
-        if let story = self.url, let resume = StoryPlaybackResume.take(story) {
+        // ⚠️ CONSUMED ONLY ONCE THE SEEK IS ACTUALLY ISSUED, and that is not pedantry: this whole
+        // function runs a SECOND time when the first attempt fails. `handleFailedItem` throws away a
+        // bad cache file and calls `setupPlayer(remote)` to stream instead — and by then `take` had
+        // already eaten the position, so the retry started the clip at zero while the progress bar,
+        // which reads the same store with `peek`, was still sitting at twenty seconds. The picture
+        // and the bar disagreed for the rest of the item. Reading with `peek` and removing after the
+        // seek keeps the retry honest, and the entry still dies with the session as before.
+        if let story = self.url, let resume = StoryPlaybackResume.peek(story) {
             self.player?.seek(to: CMTime(seconds: resume, preferredTimescale: 600),
                               toleranceBefore: .zero, toleranceAfter: .zero)
+            _ = StoryPlaybackResume.take(story)
         }
 
         observation = player?.observe(\.timeControlStatus, options: [.new, .initial]) { [weak self] player, change in

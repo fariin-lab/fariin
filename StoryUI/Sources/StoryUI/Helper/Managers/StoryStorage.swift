@@ -42,7 +42,34 @@ public enum StoryStorage {
 
     /// One directory per kind, both under Application Support, both migrated once from the old
     /// `Caches` location so nothing he has already downloaded is lost on the first launch after this.
+    /// ⚠️ ANSWERED FROM MEMORY AFTER THE FIRST TIME, and the reason is where this is called from.
+    ///
+    /// Every one of the calls below does real filesystem work: `createDirectory`, an xattr WRITE for
+    /// the backup exclusion, and the migration's `fileExists`. That was fine when this was called
+    /// once per download. It is now also called synchronously from `startVideo` — on the main
+    /// thread, inside SwiftUI's update pass — to ask whether a clip is already on disk, so every
+    /// single tap onto a video story paid for it. Directories do not move while the app is running,
+    /// so the work is worth doing exactly once per name.
+    ///
+    /// The lock is not ceremony: `CacheManager` asks from a background download queue while the
+    /// viewer asks from the main thread, and two threads racing a dictionary is a crash rather than
+    /// a slow answer.
+    private static let dirLock = NSLock()
+    private static var dirCache: [String: URL] = [:]
+
     public static func directory(_ name: String) -> URL {
+        dirLock.lock()
+        let known = dirCache[name]
+        dirLock.unlock()
+        if let known { return known }
+        let made = buildDirectory(name)
+        dirLock.lock()
+        dirCache[name] = made
+        dirLock.unlock()
+        return made
+    }
+
+    private static func buildDirectory(_ name: String) -> URL {
         let fm = FileManager.default
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         var dir = base.appendingPathComponent(name, isDirectory: true)
