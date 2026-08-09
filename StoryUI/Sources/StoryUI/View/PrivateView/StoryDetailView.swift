@@ -193,10 +193,17 @@ struct StoryDetailView: View {
     /// reports it is playing again. See `.storyBuffering`.
     @State private var isBuffering: Bool = false
     @State private var captionExpanded: Bool = false   // tap the caption to expand past 3 lines
-    /// The instant pause's LOAN CLOCK — when the finger-down pause engaged. `systemUptime` because
-    /// it cannot jump with a wall-clock change. nil = no loan outstanding. See the hold gesture for
-    /// the design; the repayment lives at the top of `startProgress`, on the bar's own 0.05s tick.
-    @State private var touchPauseBegan: TimeInterval? = nil
+    /// WHERE THE FINGER IS, and the only answer in this file that cannot be missed. See `holdGesture`.
+    ///
+    /// `.idle` while nothing is touching the story, `.down` from the instant a finger lands, and
+    /// `.holding` once the press has lasted long enough to be a hold rather than a tap. Not `.none`:
+    /// that name collides with `Optional.none` at every use site and reads worse for it.
+    private enum PressPhase: Equatable { case idle, down, holding }
+    /// ⚠️ `@GestureState`, NOT `@State`, AND THAT IS THE ENTIRE FIX. SwiftUI resets a gesture state
+    /// to its initial value when the gesture ends OR is cancelled, and it guarantees that reset even
+    /// when the touch is taken away by another recogniser. That guarantee is the release edge this
+    /// file has been trying to manufacture for three attempts.
+    @GestureState private var pressPhase: PressPhase = .idle
 
     /// The index is RIGHT BEFORE THE FIRST FRAME, not corrected after it. `timerProgress` started
     /// at 0 and the jump to the first unseen item lived in `.onAppear` — so the first body
@@ -976,57 +983,70 @@ private extension StoryDetailView {
                     .fill(.black.opacity(0.01))
                     .onTapGesture { tapNextStory() }     // right two-thirds = next
             }
-            // ⚠️ THE INSTANT PAUSE IS A LOAN, AND THAT IS THE WHOLE DESIGN. Read this before moving
-            // anything — this area has swung three times now.
-            //
-            // The facts that shaped it:
-            //  · `onPressingChanged(true)` fires the INSTANT a finger lands — the down edge was
-            //    always available, on this very gesture, with no new machinery.
-            //  · The RELEASE is the half that cannot be trusted: a UIKit recogniser that claims the
-            //    touch (page pan, dismiss pan) can leave `onPressingChanged` silent, and a pause
-            //    trusting that release strands forever — his "paused without reason" reports.
-            //  · Pausing at the 0.25s ENGAGE fixed the strand and CREATED the delay he then
-            //    reported: "the pause must happen instantly on touch down" (2026-08-09).
-            //  · The recogniser-on-superview shape that once solved both is FORBIDDEN — his order,
-            //    2026-08-09: "Do not use the old implementation again."
-            //
-            // So the pause borrows against the hold instead of trusting anybody's release. Touch
-            // down → pause NOW and start a 0.35s loan clock. A real hold repays the loan at 0.25s
-            // (`perform` fires, `isHolding` confirms it, the pause is now the hold's). A tap or a
-            // stolen touch never confirms — and the repayment collector at the top of
-            // `startProgress`, riding the SAME 0.05s tick that drives the bar, clears the pause the
-            // moment the loan is 0.35s old with no hold behind it. A stuck pause from the down edge
-            // is therefore IMPOSSIBLE BY CONSTRUCTION, not prevented by care: if the tick runs at
-            // all, the heal runs with it. The worst mistiming is a bar frozen ~0.35s during a
-            // swipe, where the fold gate is holding it anyway.
-            //
-            // The chrome fade stays on the ENGAGE (`isHolding` at 0.25s), never on the touch — his
-            // other report ("when i click story normal story pause": every tap would blink the
-            // header). Two clocks on purpose. [[kulan-story-hold-pause-instant]].
-            .onLongPressGesture(minimumDuration: 0.25, maximumDistance: 10,
-                                perform: {
-                guard !keyboardManager.isKeyboardOpen else { return }
-                isHolding = true
-                touchPauseBegan = nil   // the hold confirmed it: the pause is no longer on loan
-                if !isPaused { isPaused = true; pauseVideo() }   // belt: a missed down edge
-            },
-                                onPressingChanged: { pressing in
-                if pressing {
-                    // THE DOWN EDGE. Instant, and safe to act on precisely because of the loan.
-                    guard !keyboardManager.isKeyboardOpen, !isPaused else { return }
-                    isPaused = true
-                    touchPauseBegan = ProcessInfo.processInfo.systemUptime
-                    pauseVideo()
-                    return
+            // ⚠️ ONE GESTURE, AND IT STAYS ALIVE UNTIL THE FINGER LEAVES. Read this before moving
+            // anything — this area has swung four times now. [[kulan-story-hold-pause-instant]].
+            .gesture(holdGesture)
+            // The pause and the resume both hang off the phase, so there is exactly one place where
+            // a finger changes what the story is doing.
+            .onChange(of: pressPhase) { _, phase in
+                switch phase {
+                case .down, .holding:
+                    // The keyboard owns the pause while a reply is being composed; a finger on the
+                    // story must not take it over. ⚠️ ON THE PAUSE SIDE ONLY — guarding the release
+                    // as well would strand a hold whose finger left while the keyboard came up.
+                    guard !keyboardManager.isKeyboardOpen else { return }
+                    if !isPaused { isPaused = true; pauseVideo() }
+                    // The chrome fade waits for the HOLD, never the touch — his other report ("when
+                    // i click story normal story pause": every tap would blink the header). The
+                    // pause is instant, the fade is not. Two clocks on purpose.
+                    if phase == .holding, !isHolding { isHolding = true }
+                case .idle:
+                    if isPaused || isHolding { isPaused = false; isHolding = false; playVideo() }
                 }
-                // Release, or a cancellation we DID hear about. Belt-and-braces: clearing a flag
-                // that is already false costs nothing, and this is the common path home.
-                touchPauseBegan = nil
-                if isPaused || isHolding {
-                    isPaused = false; isHolding = false; playVideo()
-                }
-            })
+            }
         }
+    }
+
+    /// ⚠️ `onLongPressGesture`'s "no longer pressing" IS NOT THE FINGER LIFTING, and everything that
+    /// went wrong here came from reading it as if it were.
+    ///
+    /// A SwiftUI long press ENDS the moment it succeeds. `perform` runs at `minimumDuration` and the
+    /// gesture is over — the finger can stay down for another ten seconds and nothing further is
+    /// reported. So the old code had a down edge and a confirm and NO release, and every attempt to
+    /// work around that made a different half of it wrong:
+    ///
+    ///  · Pausing at the 0.25s engage strands the pause forever when a UIKit recogniser steals the
+    ///    touch (page pan, dismiss pan) — his "paused without reason" reports.
+    ///  · Pausing on the down edge is instant, which he asked for, but then nothing trustworthy ever
+    ///    says to un-pause.
+    ///  · The loan that bridged the two is what he is reporting NOW. It pauses on touch-down and
+    ///    starts a 0.35s clock, and a collector on the bar's 0.05s tick cancels the pause if no hold
+    ///    has confirmed by then. The hold confirms at 0.25s. **The whole design rested on 100ms of
+    ///    margin on the main thread**, which is decoding video and running a 20fps timer — so the
+    ///    tick lands late, the collector fires first and resumes, and `perform` arrives a moment
+    ///    later and pauses again. Pause, play, pause, with the finger never moving. Exactly his
+    ///    words, and the arithmetic was always going to lose that race eventually.
+    ///
+    /// A press-and-hold needs a gesture that is still running while the finger is down, so this is
+    /// the standard shape for one: the long press SEQUENCED before a drag. The drag becomes the
+    /// active half only after the press has already succeeded, and it then lives until the touch
+    /// ends. `@GestureState` is reset by SwiftUI when a gesture ends or is cancelled, and that reset
+    /// is guaranteed — including when another recogniser takes the touch away, which is the case
+    /// every previous attempt died on. There is no clock, no loan, no collector and no race.
+    ///
+    /// ⚠️ THE `minimumDistance: 0` DRAG IS NOT THE ONE [[kulan-scroll-gesture-rules]] FORBIDS. That
+    /// rule is about a bare zero-distance drag claiming a touch the scroller needed. This one cannot:
+    /// it is unreachable until the long press has already won, and the long press still fails at
+    /// `maximumDistance: 10`, so a swipe is arbitrated exactly as it was before.
+    private var holdGesture: some Gesture {
+        LongPressGesture(minimumDuration: 0.25, maximumDistance: 10)
+            .sequenced(before: DragGesture(minimumDistance: 0))
+            .updating($pressPhase) { value, state, _ in
+                switch value {
+                case .first(_):     state = .down      // finger is down, not yet a hold
+                case .second(_, _): state = .holding   // the press won; the drag holds it open
+                }
+            }
     }
     
     func getAngle(proxy: GeometryProxy) -> Angle {
@@ -1078,11 +1098,10 @@ private extension StoryDetailView {
         scenePaused = false
         // AND THE HOLD LATCH, which was the one missing from this list. It matters more now that
         // `playVideo` refuses while it stands: a hold whose release was eaten by the page pan —
-        // the exact case the whole loan design exists for — would carry `isHolding` into the next
-        // person and their video would never start, with the bar running over a still picture.
-        // `touchPauseBegan` goes with it: a loan belongs to the story it was taken against.
+        // the exact case the gesture's guaranteed reset now covers — would carry `isHolding` into
+        // the next person and their video would never start, with the bar running over a still
+        // picture. Kept as a belt: this costs nothing and the flag has no business crossing stories.
         isHolding = false
-        touchPauseBegan = nil
         // ⚠️ AND THE BUFFERING LATCH, which was the one that could never come back down.
         //
         // Telegram does not store this at all: `isBuffering` is recomputed as a LOCAL on every
@@ -1156,15 +1175,11 @@ private extension StoryDetailView {
     
     func startProgress() {
         guard !model.stories.isEmpty else { return }   // empty bucket (all expired/deleted) → nothing to index
-        // THE LOAN COLLECTOR — see the hold gesture. A touch-down pause that no real hold confirmed
-        // within 0.35s is a tap or a stolen touch, and both mean the story should be running. This
-        // runs BEFORE the pause guard below, on the same tick, so a missed release can freeze the
-        // bar for 0.35s at most. `!scenePaused`: backgrounding also sets `isPaused`, and that one
-        // belongs to `scenePhase == .active` to clear — the collector only forgives its own loan.
-        if let t0 = touchPauseBegan, !isHolding, ProcessInfo.processInfo.systemUptime - t0 > 0.35 {
-            touchPauseBegan = nil
-            if isPaused, !scenePaused { isPaused = false; playVideo() }
-        }
+        // (The loan collector that used to sit here is gone with the loan — see `holdGesture`. It
+        // cancelled a touch-down pause that no hold had confirmed within 0.35s, and the hold
+        // confirms at 0.25s, so it was racing the main thread over 100ms and losing: it resumed
+        // under a finger that had not moved, and the confirm then paused again. The gesture now
+        // reports the finger leaving, so there is nothing left for a timer to guess at.)
         // ⚠️ THE LOOKAHEAD IS NOT A SEEN RECEIPT, AND CHAINING IT TO ONE COST EVERY FIRST TAP ONTO A
         // VIDEO ITS FULL DOWNLOAD.
         //
