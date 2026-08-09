@@ -18,6 +18,14 @@ public enum StoryHeroPhase { case began, changed, ended, cancelled }
 public protocol StoryVideoFrameSource: AnyObject {
     /// Nil is a normal answer, not a failure to hide. Callers fall back.
     func currentVideoFrame() -> UIImage?
+    /// ⚠️ WHICH CLIP THAT FRAME BELONGS TO, and it is the reason a cover can no longer be filed
+    /// under the wrong story.
+    ///
+    /// `frameSource` is one global slot written by whichever player set up last, and the viewer keeps
+    /// three pages alive. So "give me the frame on screen" was a question with no subject: the answer
+    /// could be about a story the user is not looking at, and the caller had no way to tell. Every
+    /// wrong-cover report in this area traces back to that.
+    var currentVideoURL: String? { get }
 }
 
 /// One handle on the story card that is actually on screen.
@@ -778,21 +786,26 @@ public final class StoryCardMorph {
     /// meaning here — the caller keeps the poster, which is second-zero rather than wrong. That is
     /// the same answer the old black-picture rejection gave, and this is only ever called for a video
     /// that is being watched, where `frameSource` is registered and decoding.
-    public func snapshotCard(width targetW: CGFloat) -> UIImage? {
-        guard card != nil, let frame = frameSource?.currentVideoFrame() else { return nil }
+    /// Returns the picture AND the clip it is a picture of. The caller must check that url against
+    /// the story it is about to file this under — see `currentVideoURL`.
+    public func snapshotCard(width targetW: CGFloat) -> (image: UIImage, mediaURL: String)? {
+        guard card != nil, let source = frameSource,
+              let mediaURL = source.currentVideoURL,
+              let frame = source.currentVideoFrame() else { return nil }
         // Down to the size it will be DRAWN at. A decoded frame is the clip's full resolution, and
         // these are held for the length of a viewing session — one per video story — so keeping
         // 1080x1920 bitmaps around to draw them a third of that wide is megabytes for nothing. The
         // old screen-capture path sized itself the same way and this keeps that.
-        guard targetW > 1, frame.size.width > targetW else { return frame }
+        guard targetW > 1, frame.size.width > targetW else { return (frame, mediaURL) }
         let h = frame.size.height * (targetW / frame.size.width)
         let fmt = UIGraphicsImageRendererFormat()
         fmt.scale = UIScreen.main.scale
         fmt.opaque = true
         let size = CGSize(width: targetW, height: h)
-        return UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
+        let scaled = UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
             frame.draw(in: CGRect(origin: .zero, size: size))
         }
+        return (scaled, mediaURL)
     }
 
     /// Step the live card aside while the carousel row is being swiped.

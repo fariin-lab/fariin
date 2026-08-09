@@ -397,6 +397,10 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     ///
     /// Nil still means nil when this clip has never rendered anything — the callers' own fallbacks
     /// (the poster) remain the right answer there.
+    /// The clip this view is currently pointed at — the subject of `currentVideoFrame`. See the
+    /// protocol note: without it a snapshot is an answer with no question attached.
+    var currentVideoURL: String? { self.url?.absoluteString }
+
     func currentVideoFrame() -> UIImage? {
         if let item = player?.currentItem, let out = frameOutput,
            let buffer = out.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) {

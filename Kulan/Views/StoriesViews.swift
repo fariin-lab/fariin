@@ -1687,10 +1687,24 @@ struct StoryViewer: View {
         let live = StoriesRepository.shared.mine?.stories ?? myStories
         // A photo's poster IS the photo, so the row's own card already matches and a snapshot would
         // only be a second, staler copy of it.
+        // ⚠️ THE SNAPSHOT IS FILED UNDER THE CLIP IT IS ACTUALLY A PICTURE OF, never under whichever
+        // story the sheet happens to be pointing at when we asked.
+        //
+        // Those two are NOT the same at the one moment that matters. Paging the sheet sideways
+        // commits `sheetStoryId = B` and clears `sheetPaging` in one transaction; the carousel then
+        // starts its own retarget, which raises `carouselInteracting`, which lands back here with
+        // `force: true` — while `jumpToStoryItem` has only just been posted and the live player is
+        // still showing A. Filing A's frame under B with `force` destroyed B's real cover, and B
+        // then drew A's picture until the live card took over. His 2026-08-09 report, in as many
+        // words: the cover that was correct during the swipe is wrong the moment it lands.
+        //
+        // Comparing urls does not narrow that window, it removes the question: a frame that does not
+        // belong to this story is simply not stored, and the story keeps whatever it had.
         if !sheetStoryId.isEmpty, force || frozenCovers[sheetStoryId] == nil,
            let s = live.first(where: { $0.id == sheetStoryId }), s.isVideo,
-           let shot = StoryCardMorph.shared.snapshotCard(width: cardSlot.w) {
-            frozenCovers[sheetStoryId] = shot
+           let shot = StoryCardMorph.shared.snapshotCard(width: cardSlot.w),
+           shot.mediaURL == s.mediaUrl {
+            frozenCovers[sheetStoryId] = shot.image
         }
         // ⚠️ AND EVERY OTHER VIDEO STORY THAT HAS ALREADY DRAWN SOMETHING, WHICH IS WHAT MAKES THIS
         // STOP DEPENDING ON A MOMENT.
