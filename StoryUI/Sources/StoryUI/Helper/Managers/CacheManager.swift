@@ -92,8 +92,14 @@ final class CacheManager: NSObject {
 
             if fileManager.fileExists(atPath: destinationUrl.path) {
                 if Self.isUsableCacheFile(destinationUrl) {
-                    DispatchQueue.main.async {
+                    // A HIT ON THE MAIN THREAD ANSWERS ON THE MAIN THREAD, NOW. The unconditional
+                    // hop cost a fully-downloaded clip one guaranteed runloop turn behind the
+                    // loading veil — a spinner frame for a video that was already on disk (his
+                    // "already i downloaded but still is loading"). Off-main callers keep the hop.
+                    if Thread.isMainThread {
                         completion(.success(destinationUrl))
+                    } else {
+                        DispatchQueue.main.async { completion(.success(destinationUrl)) }
                     }
                 } else {
                     // Clear the wedge, then fetch it properly.

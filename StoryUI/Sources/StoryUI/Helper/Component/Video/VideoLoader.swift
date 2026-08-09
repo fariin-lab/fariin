@@ -150,7 +150,14 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // the bars mid-story, which is a colour change under a still picture — the exact class of
         // thing this rewrite exists to remove. Nothing about the canvas depends on the card's size,
         // so unlike the veil it replaced there is nothing to rebuild when the box changes shape.
-        guard !canvasSourced, let source = posterImage ?? currentVideoFrame() else { return }
+        guard !canvasSourced else { return }
+        // ⚠️ THE LIVE FRAME MAY ONLY SPEAK FOR THIS CLIP ONCE ITS ITEM IS ATTACHED. In the load gap
+        // the player still holds the PREVIOUS clip, and a canvas sourced from its buffer here would
+        // latch A's colours onto B for the whole visit (`canvasSourced` never re-asks). Before the
+        // attach, the remembered frame — keyed by THIS clip's url — is the only live answer allowed.
+        let live = awaitedItem != nil ? currentVideoFrame()
+                                      : self.url.flatMap { StoryPlaybackResume.frame($0) }
+        guard let source = posterImage ?? live else { return }
         canvasSourced = true
         StoryCanvas.apply(StoryCanvas.colours(of: source), to: canvasLayer)
     }
@@ -349,8 +356,10 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         posterImage = nil
         // A DIFFERENT CLIP, so the canvas has to be read again. This view is reused across stories,
         // and without this the second clip would wear the first one's colours — the video half of
-        // the same bug audit finding C1 caught on the photo half.
+        // the same bug audit finding C1 caught on the photo half. Layer reset too, same reason as
+        // `startVideo`'s: the flag alone left the old gradient painted through the new clip's load.
         canvasSourced = false
+        StoryCanvas.apply(StoryCanvas.neutral, to: canvasLayer)
         guard let urlString, let u = URL(string: urlString) else { return }
         // A POSTER IS A PICTURE. A video url arriving here (the empty-thumb window used to hand the
         // mp4 through `previewUrl`) read megabytes off disk on the main thread at the disk-cache
@@ -399,6 +408,9 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // Belt for `setPoster`'s braces: two clips that both arrive with no poster never move
         // `posterURL`, so its reset would not fire and clip B would keep clip A's canvas.
         canvasSourced = false
+        // AND THE LAYER ITSELF GOES NEUTRAL, not just the flag: resetting `canvasSourced` alone
+        // left A's gradient painted for the whole of B's load — the warm bands behind his spinner.
+        StoryCanvas.apply(StoryCanvas.neutral, to: canvasLayer)
         // A NEW CLIP HAS NO FRAME AND NO KNOWN SHAPE, and it goes back under cover until it has both.
         // Hiding here as well as at init is what makes this hold for the SECOND video in a row: this
         // view is reused, so without it clip B would be shown by clip A's reveal.

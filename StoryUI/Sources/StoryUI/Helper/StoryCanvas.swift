@@ -82,9 +82,13 @@ public enum StoryCanvas {
     /// TOTAL BY CONSTRUCTION: it always returns a usable pair. Media that will not decode gets the
     /// neutral dark pair, which still reads as a deliberate backdrop rather than as the black bars
     /// that produced four reports. Nothing in the canvas path may quietly produce nothing.
+    /// The pair every failure path answers with — and the pair a REUSED canvas is reset to while
+    /// the next clip has no picture yet, so clip B never spends its load wearing clip A's colours.
+    public static let neutral = (top: UIColor(red: 0.13, green: 0.13, blue: 0.15, alpha: 1),
+                                 bottom: UIColor(red: 0.05, green: 0.05, blue: 0.06, alpha: 1))
+
     public static func colours(of cg: CGImage) -> (top: UIColor, bottom: UIColor) {
-        let fallback = (top: UIColor(red: 0.13, green: 0.13, blue: 0.15, alpha: 1),
-                        bottom: UIColor(red: 0.05, green: 0.05, blue: 0.06, alpha: 1))
+        let fallback = Self.neutral
         let w = CGFloat(cg.width), h = CGFloat(cg.height)
         guard w >= 1, h >= 1 else { return fallback }
         let band = max(1, (h / 8).rounded())
