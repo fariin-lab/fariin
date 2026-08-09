@@ -167,16 +167,30 @@ struct StoryPager: UIViewControllerRepresentable {
 
         /// Pages already built, by bucket id. See `makePage`.
         private var pageCache: [String: StoryPageHostVC] = [:]
-        /// What the cache was built against. When the model changes shape, the cache is wrong.
-        private var cacheSignature = ""
+        /// What each cached page was built against, PER BUCKET.
+        private var pageSignatures: [String: String] = [:]
 
-        /// Every bucket and every story in it. `StoryUIModel` is a STRUCT, so a cached page holds a
-        /// SNAPSHOT of its bucket — post a story, delete one, or have the row re-sort, and a cached
-        /// page would keep showing the old set. This is the cheap way to notice: if the shape of the
-        /// data changed at all, throw the whole cache away and build fresh.
-        private func modelSignature() -> String {
-            parent.viewModel.stories.map { "\($0.id):\($0.stories.map(\.id).joined(separator: ","))" }
-                .joined(separator: "|")
+        /// ⚠️ ONE BUCKET'S SHAPE, NOT THE WHOLE VIEWER'S — and this is why tapping to the next person
+        /// was sometimes fast and sometimes not.
+        ///
+        /// `StoryUIModel` is a struct, so a cached page holds a SNAPSHOT of its bucket: post a story,
+        /// delete one, or have the row re-sort, and that page would keep showing the old set. The
+        /// cheap way to notice was to hash EVERY bucket and every story in the viewer and throw the
+        /// WHOLE cache away when any of it moved.
+        ///
+        /// The trouble is what makes it move. A story landing anywhere in the row, a delete, a
+        /// refresh — any of those changed the signature, and the next tap then rebuilt a
+        /// `StoryDetailView` and a hosting controller synchronously, before the page turn could even
+        /// begin. That is the third of the delay `makePage` was written to remove, coming back
+        /// through the door the invalidation left open, at a moment nobody could predict.
+        ///
+        /// Per bucket, only the bucket that actually changed is rebuilt. The staleness guarantee is
+        /// unchanged — a page whose own stories moved is still thrown away — it just stops taking
+        /// everybody else's page with it.
+        private func bucketSignature(_ id: String) -> String {
+            guard let idx = index(of: id) else { return "" }
+            let m = parent.viewModel.stories[idx]
+            return "\(m.id):\(m.stories.map(\.id).joined(separator: ","))"
         }
 
         /// A page per bucket, BUILT ONCE.
@@ -191,12 +205,11 @@ struct StoryPager: UIViewControllerRepresentable {
         /// this into a pile of live hosting controllers.
         func makePage(for id: String) -> StoryPageHostVC? {
             guard let idx = index(of: id) else { return nil }
-            let signature = modelSignature()
-            if signature != cacheSignature {
-                pageCache.removeAll()
-                cacheSignature = signature
-            }
-            if let hit = pageCache[id] { return hit }
+            let signature = bucketSignature(id)
+            if let hit = pageCache[id], pageSignatures[id] == signature { return hit }
+            // This one is stale (or new): drop only it.
+            pageCache.removeValue(forKey: id)
+            pageSignatures[id] = signature
 
             let model = parent.viewModel.stories[idx]
             let root = StoryDetailView(
@@ -224,6 +237,7 @@ struct StoryPager: UIViewControllerRepresentable {
                 .compactMap { parent.viewModel.stories.indices.contains($0) ? parent.viewModel.stories[$0].id : nil })
             for (key, _) in pageCache where !keep.contains(key) && !live.contains(key) {
                 pageCache.removeValue(forKey: key)
+                pageSignatures.removeValue(forKey: key)
             }
         }
 
@@ -261,8 +275,17 @@ struct StoryPager: UIViewControllerRepresentable {
                   let from = index(of: shown!), let to = index(of: parent.viewModel.currentStoryUser),
                   let target = makePage(for: parent.viewModel.currentStoryUser)
             else { return }
-            pager.setViewControllers([target], direction: to > from ? .forward : .reverse, animated: true)
-            prewarmNeighbours(of: parent.viewModel.currentStoryUser)
+            // ⚠️ THE WARM WAITS FOR THE TURN TO FINISH. It used to start one runloop after the
+            // transition began, which is DURING it — and laying out a SwiftUI story page is not
+            // cheap, so it spent main-thread time on the person after next while the person you
+            // asked for was still sliding in. Apple owns this animation's duration and we cannot
+            // shorten it; the least we can do is not compete with it. The completion is roughly
+            // where the old hop landed anyway, minus the contention.
+            let next = parent.viewModel.currentStoryUser
+            pager.setViewControllers([target], direction: to > from ? .forward : .reverse,
+                                     animated: true) { [weak self] _ in
+                self?.prewarmNeighbours(of: next)
+            }
         }
 
         /// BUILD **AND LAY OUT** THE PEOPLE EITHER SIDE, BEFORE THE FINGER ASKS FOR THEM.
