@@ -1172,6 +1172,14 @@ struct StoryViewer: View {
             // bitmaps of frames nobody is watching any more, and the next open would show a cover
             // from the last one.
             frozenCovers.removeAll()
+            // The sheet state belongs to one session too, and it does NOT die with this overlay
+            // (host @State). A viewer torn down mid-pull — the last story deleted under an open
+            // sheet, a system-cancelled drag that parked it at a few percent — left `showViewers`
+            // true, and the freeze watchdog then strangled every viewer opened after it. Closing
+            // time means "no sheet", the same way opening time does.
+            progressWatchdog?.cancel(); progressWatchdog = nil
+            showViewers = false
+            viewersProgress = 0
         }
         // Freeze the running story + progress while any sheet is shown over it; resume on dismiss.
         .onChange(of: sheetUp) { _, up in
@@ -1198,7 +1206,10 @@ struct StoryViewer: View {
             // resuming mid-collapse re-renders behind the moving sheet every tick and fights the
             // drag frame-by-frame (the violent "two views shaking" close). Resume still happens
             // via the viewersProgress onChange once the sheet is fully down.
-            if showViewers && viewersProgress > 0.01 {
+            // `currentIsMine`: the viewers sheet only exists over MY OWN story, so a freeze
+            // asserted while a friend's story is up can only ever be leaked state — it is what
+            // kept re-pausing his freshly opened stories half a second in (2026-08-09).
+            if showViewers && currentIsMine && viewersProgress > 0.01 {
                 NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
             }
         }
@@ -1469,6 +1480,19 @@ struct StoryViewer: View {
         // `stageHeroOpen`. A no-op unless this presentation owns its own transition.
         .onAppear {
             stageHeroOpen()
+            // A FRESH VIEWER HAS NO SHEET, EITHER — and this is the half the resume below could
+            // not cover. `showViewers`/`viewersProgress` are HOST state, so they outlive this
+            // overlay, and a drag the system cancelled can leave them parked with the sheet at
+            // 1-2% — invisible, below the self-heal's floor, below the close guards — while the
+            // 0.5s freeze watchdog polices `> 0.01` forever after. That is his 2026-08-09 "opens
+            // paused" screenshot on someone ELSE's story: the resume below fired at mount, held
+            // for half a second, and then the stale watchdog paused the fresh viewer again, every
+            // visit, until the app died. Assert the whole truth of a fresh open, not just the
+            // pause half of it.
+            progressWatchdog?.cancel(); progressWatchdog = nil
+            sheetAnimator.cancel()
+            showViewers = false          // its onChange zeroes the progress + resets the card
+            viewersProgress = 0          // belt: that onChange is silent if showViewers was already false
             // A FRESH VIEWER NEVER STARTS PAUSED, whatever the last one left behind.
             //
             // His report: post a story, open it, leave, open it again — and it sits there paused.
@@ -2704,11 +2728,15 @@ struct StoryViewer: View {
     // See the .onChange(of: viewersProgress) note: parked-sheet self-heal.
     private func rearmProgressWatchdog(_ p: CGFloat) {
         progressWatchdog?.cancel(); progressWatchdog = nil
-        guard showViewers, p > 0.02, p < 0.995 else { return }
+        // > 0.001, NOT > 0.02. The heal's floor must sit BELOW the freeze watchdog's trip line
+        // (> 0.01), or there is a band — a cancelled drag parked at 1-2% — that the watchdog
+        // polices forever and nobody heals. That band is where his "every story opens paused"
+        // state was born. Anything parked above zero is a sheet in a state no finger asked for.
+        guard showViewers, p > 0.001, p < 0.995 else { return }
         progressWatchdog = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 800_000_000)
             guard !Task.isCancelled, showViewers,
-                  viewersProgress > 0.02, viewersProgress < 0.995,
+                  viewersProgress > 0.001, viewersProgress < 0.995,
                   // Never snap under a LIVE finger (audit M3): a held-still drag writes nothing
                   // for 0.8s but the sheet still reports the finger down; UIKit pans deliver
                   // .cancelled reliably, so a dead finger always clears the flag.
@@ -2731,6 +2759,13 @@ struct StoryViewer: View {
             // Reaching here means the close actually finished (a re-open cancels this animator).
             showViewers = false
             NotificationCenter.default.post(name: .init("storyChromeHidden"), object: false)   // chrome back
+            // Say the resume OUT LOUD. The crossing-based onChange (`viewersProgress > 0.01`)
+            // only resumes if the pull ever rose ABOVE its line — but the gesture's entry posted
+            // `pauseStory` directly, before any progress existed. A pull parked below 1% and then
+            // healed here crossed nothing, and the story stayed paused with no repauser to blame.
+            // A fully closed sheet over an open viewer is a moment the story is definitely meant
+            // to be running — the same unconditional truth every other resume post leans on.
+            NotificationCenter.default.post(name: .init("resumeStory"), object: nil)
         }
     }
 
