@@ -888,19 +888,51 @@ public final class StoryCardMorph {
         // shapes now coincide and there is no crescent to fill. The surround still needs the layer
         // BEHIND the hole to carry `outside`'s alpha, hence a container plus one sublayer rather than
         // a single shape.
+        // ⚠️ THE SURROUND IS FENCED OUT OF THE CARD'S RECTANGLE, and that is what makes the hole a
+        // TRUE CROP. The surround used to be the container's own backgroundColor, which paints
+        // EVERYWHERE outside the hole — including the four corner notches between the hole's curve
+        // and the card's square content (the card does not clip itself while a flight mask is on).
+        // In those notches the card's own square corner rendered at the surround's alpha: his
+        // 2026-08-09 screenshots, the square edge showing dimmed through the rounded corner for the
+        // first ~40% of a close and the tail of an open. Trading that alpha away instead was build
+        // 512's regression (`ac2c26e4`, reverted): the paint was the only thing DARKENING the notch,
+        // so removing it showed the notch in full.
+        //
+        // The mask cannot tell card pixels from page furniture — they are one masked tree — so the
+        // distinction is drawn in GEOMETRY instead: the surround is its own layer whose even-odd
+        // cutout excludes the card's rect entirely. Outside the rect it is the same fading page
+        // furniture as ever; inside the rect only the hole speaks, and beyond the hole's curve the
+        // notch is alpha 0 — cropped, showing the presenter's backdrop like every other cut edge.
+        // Both cutout rects are PLAIN RECTANGLES, so the squircle-vs-arc crescent war (the white
+        // corners) has nothing to fight over here.
         let layer: CALayer
         let hole: CALayer
+        let surround: CALayer
         let existing = sheet ? maskLayer : flightMask
-        if let existing, card.layer.mask === existing, let h = existing.sublayers?.first {
+        if let existing, card.layer.mask === existing, existing.sublayers?.count == 2,
+           let s = existing.sublayers?.first, let h = existing.sublayers?.last {
             layer = existing
+            surround = s
             hole = h
         } else {
+            existing?.removeFromSuperlayer()   // an old single-sublayer mask cannot be reused
             layer = CALayer()
+            let s = CALayer()
+            // Opaque: only the alpha channel reaches the mask, the colour is arbitrary. The fade
+            // rides on `opacity`, not on the colour's alpha, so the cutout mask below composes.
+            s.backgroundColor = UIColor.black.cgColor
+            s.cornerCurve = .continuous
+            let cut = CAShapeLayer()
+            cut.fillRule = .evenOdd
+            cut.fillColor = UIColor.black.cgColor
+            s.mask = cut
             let h = CALayer()
             // Opaque: only the alpha channel reaches the mask, the colour is arbitrary.
             h.backgroundColor = UIColor.black.cgColor
             h.cornerCurve = .continuous
+            layer.addSublayer(s)
             layer.addSublayer(h)
+            surround = s
             hole = h
             if sheet { maskLayer = layer } else { flightMask = layer }
             card.layer.mask = layer
@@ -934,18 +966,29 @@ public final class StoryCardMorph {
         // Capped at half the short side: a continuous curve asked for more than that degenerates,
         // and the crop gets very short at the end of a close.
         hole.cornerRadius = max(0, min(cornerRadius, min(local.width, local.height) / 2))
-        // The surround. Black is arbitrary — only the alpha reaches the mask.
+        // The surround — the page furniture beyond the card's rect, at the flight's fade. Its
+        // cutout keeps it out of the card's rect entirely (see the note at the top): the notches
+        // between the hole's curve and the card's square content belong to nobody, which IS the crop.
         let o = max(0, min(1, outside))
-        layer.backgroundColor = o > 0.001 ? UIColor.black.withAlphaComponent(o).cgColor : nil
+        surround.opacity = Float(o)
+        if o > 0.001 {
+            surround.frame = CGRect(origin: .zero, size: card.bounds.size)
+            if let cut = surround.mask as? CAShapeLayer {
+                cut.frame = surround.bounds
+                let path = CGMutablePath()
+                path.addRect(surround.bounds)
+                path.addRect(local)
+                cut.path = path
+            }
+        }
         // AND THE SURROUND IS A CARD TOO, not a square sheet of screen.
         //
         // His 2026-08-07 screenshot of a friend's story opening, bottom-left corner circled: the card
         // had its rounded corner and the black strip under it carrying the reply bar was square, so
         // the moment the reply bar faded in the page grew square shoulders under a rounded card. This
-        // container IS that strip — it is the whole page, and its alpha is what lets the surround
+        // layer IS that strip — it is the whole page, and its alpha is what lets the surround
         // through — so it needs the same corner the card has. Same continuous curve, same radius,
         // which means the thing that grows out of the row reads as one card end to end.
-        layer.cornerCurve = .continuous
-        layer.cornerRadius = max(0, min(outsideRadius, min(layer.bounds.width, layer.bounds.height) / 2))
+        surround.cornerRadius = max(0, min(outsideRadius, min(card.bounds.width, card.bounds.height) / 2))
     }
 }

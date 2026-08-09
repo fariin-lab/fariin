@@ -396,15 +396,28 @@ struct StoryDetailView: View {
                             // Overlay caption: overlaid on the media (never baked into the photo).
                             // It fades with the viewers-sheet pull rather than flipping with the rest
                             // of the chrome — see SheetCaptionFade.
+                            // ⚠️ BOTH SCRIMS TAKE THE CARD'S OWN CLIP. They are overlaid AFTER the
+                            // card's `.clipShape`, so their square corners OVERHUNG the rounded card
+                            // — at rest, no flight involved: his 2026-08-09 screenshot, all four
+                            // corners marked, the gradient's square corner sitting proud of the
+                            // curve with the chat list behind it. Each scrim strip's far end fades
+                            // to clear, so rounding it cuts nothing visible there; its near corners
+                            // are the card's corners, which is the point. Radius zero while a
+                            // flight mask is on, same rule as the card — the mask owns the corner
+                            // and now truly crops these strips with everything else.
                             .overlay(captionView(story.caption, plain: story.config.storyType == .plain())
-                                        .modifier(SheetCaptionFade()),
+                                        .modifier(SheetCaptionFade())
+                                        .clipShape(RoundedRectangle(cornerRadius: flightMaskOn ? 0 : cardRadius,
+                                                                    style: .continuous)),
                                      alignment: .bottom)
                             // Top dark scrim so the username/avatar/close stay readable on white/bright photos.
                             // Fades with the chrome (it's part of the chrome look) — the PHOTO must stay
                             // pixel-stable when the viewers sheet opens, so the scrim can't linger under
                             // a scrimless morph card (that brightness step read as a flash).
                             .overlay(topScrim.opacity(chromeHidden ? 0 : 1)
-                                        .animation(.linear(duration: 0.18), value: chromeHidden),
+                                        .animation(.linear(duration: 0.18), value: chromeHidden)
+                                        .clipShape(RoundedRectangle(cornerRadius: flightMaskOn ? 0 : cardRadius,
+                                                                    style: .continuous)),
                                      alignment: .top)
                             // THE BARS AND THE HEADER LIVE INSIDE THE CARD, over the picture, which is
                             // where Telegram puts them (`contentInsets.top = 54`). They used to be
