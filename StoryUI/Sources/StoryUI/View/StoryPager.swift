@@ -606,6 +606,7 @@ struct StoryPager: UIViewControllerRepresentable {
             case .cancelled:
                 springBackFromDismiss(card: card)
             case .ended:
+                let ty = t.y, vy = g.velocity(in: pager.view).y
                 // commit threshold: translation.y > 200 OR (translation.y > 5 AND velocity.y > 200)
                 if ty > 200 || (ty > 5 && vy > 200) {
                     // Dismiss → STOP playback/timer for good (don't resume). The story was already paused on
