@@ -137,6 +137,11 @@ struct StoryPager: UIViewControllerRepresentable {
         /// report per crossing, not one per frame — see `handleDismissWatch`.
         private var watchDragPastThreshold = false
         private weak var dismissPan: DirectionalPanGestureRecognizer?   // ours — system pans defer to it
+        /// EVERY down pan this coordinator installed. `dismissPan` names only the newest one and the
+        /// passive watcher is never assigned to it at all — see `gestureRecognizerShouldBegin`.
+        /// Weak boxes: the views own the recognisers, and this must not be why one outlives its view.
+        private var ourDownPans: [() -> UIGestureRecognizer?] = []
+
         /// Is the reply keyboard up? Watched here rather than asked of `KeyboardManager`, which is a
         /// `@StateObject` owned by each page and not reachable from the pager. Selector observers,
         /// so they are removed for us when this coordinator goes.
@@ -373,6 +378,7 @@ struct StoryPager: UIViewControllerRepresentable {
                 let pan = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleHeroDrag(_:)))
                 pan.delegate = self
                 pager.view.addGestureRecognizer(pan)
+                ourDownPans.append({ [weak pan] in pan })
                 scroll.panGestureRecognizer.require(toFail: pan)
                 dismissPan = pan
                 // (prepareForHero / restoreAfterHero are registered in makeUIViewController — see
@@ -386,11 +392,13 @@ struct StoryPager: UIViewControllerRepresentable {
                 watch.delegate = self
                 watch.cancelsTouchesInView = false
                 pager.view.addGestureRecognizer(watch)
+                ourDownPans.append({ [weak watch] in watch })
             }
             if parent.dismissEnabled {
                 let pan = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleDismiss(_:)))
                 pan.delegate = self
                 pager.view.addGestureRecognizer(pan)
+                ourDownPans.append({ [weak pan] in pan })
                 scroll.panGestureRecognizer.require(toFail: pan)
                 dismissPan = pan
                 // The zoom navigationTransition installs its OWN hidden interactive-dismiss pan on the
@@ -587,8 +595,17 @@ struct StoryPager: UIViewControllerRepresentable {
                 card.transform = CGAffineTransform(translationX: tx, y: ty * 0.85)
                     .scaledBy(x: scale, y: scale)
                 parent.onDragChanged(ty)                // fade the host overlays
-            case .ended, .cancelled:
-                let ty = t.y, vy = g.velocity(in: pager.view).y
+            // ⚠️ A CANCELLED PULL IS NOT A FINISHED PULL. `.cancelled` used to share this branch
+            // with `.ended` and was judged on the SAME accumulated translation, so a touch the
+            // system took away past the threshold COMMITTED. Pull a story down and let a call
+            // banner or Control Center interrupt you, and it closed instead of springing back.
+            // `DirectionalPanGestureRecognizer` also cancels itself when the cross axis wins, and
+            // disabling a live recogniser cancels it, so this is not a rare path.
+            //
+            // Cancelled means nothing happened: spring home, whatever the finger had covered.
+            case .cancelled:
+                springBackFromDismiss(card: card)
+            case .ended:
                 // commit threshold: translation.y > 200 OR (translation.y > 5 AND velocity.y > 200)
                 if ty > 200 || (ty > 5 && vy > 200) {
                     // Dismiss → STOP playback/timer for good (don't resume). The story was already paused on
@@ -609,21 +626,27 @@ struct StoryPager: UIViewControllerRepresentable {
                         StoryPager.dismissActive = false
                     }
                 } else {
-                    NotificationCenter.default.post(name: .resumeStory, object: nil)   // sprang back -> resume
-                    UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.85,
-                                   initialSpringVelocity: 0.3, options: []) {
-                        card.transform = .identity
-                        card.layer.cornerRadius = 0   // back to square (the media keeps its own rounding)
-                    } completion: { _ in
-                        // The dismiss clip comes off only once the card is home, or the story would
-                        // pop back to full-page bounds mid-spring.
-                        StoryCardMorph.shared.clearMask()
-                        self.pager?.view.backgroundColor = .black   // restore the solid backing at rest
-                        StoryPager.dismissActive = false            // cube live again at rest
-                        self.parent.onCancel()
-                    }
+                    springBackFromDismiss(card: card)
                 }
             default: break
+            }
+        }
+
+        /// The card goes home and the story runs again. ONE implementation, shared by the gentle
+        /// release and by a cancellation, so the two can never drift into behaving differently.
+        private func springBackFromDismiss(card: UIView) {
+            NotificationCenter.default.post(name: .resumeStory, object: nil)   // sprang back -> resume
+            UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.85,
+                           initialSpringVelocity: 0.3, options: []) {
+                card.transform = .identity
+                card.layer.cornerRadius = 0   // back to square (the media keeps its own rounding)
+            } completion: { _ in
+                // The dismiss clip comes off only once the card is home, or the story would
+                // pop back to full-page bounds mid-spring.
+                StoryCardMorph.shared.clearMask()
+                self.pager?.view.backgroundColor = .black   // restore the solid backing at rest
+                StoryPager.dismissActive = false            // cube live again at rest
+                self.parent.onCancel()
             }
         }
 
@@ -654,9 +677,17 @@ struct StoryPager: UIViewControllerRepresentable {
                 if swipeUpBaselineY == nil { swipeUpBaselineY = t.y }
                 let up = -(t.y - (swipeUpBaselineY ?? t.y))    // +up, zeroed at engagement
                 parent.onSwipeUpChanged(max(0, up))
-            case .ended, .cancelled:
+            case .ended:
                 let up = -(t.y - (swipeUpBaselineY ?? t.y))
                 parent.onSwipeUpEnded(up, -v.y)                // translation +up (from engagement), velocity +up
+                swipeUpBaselineY = nil
+            // ⚠️ CANCELLED REPORTS NOTHING, for the same reason the dismiss does not commit on one.
+            // Sharing `.ended`'s branch meant a touch the system took away was judged on its
+            // accumulated travel: past 200pt it snapped the viewers sheet fully open with the finger
+            // already gone, and on a FRIEND's story past 40pt it opened the reply keyboard. Zero
+            // fails both tests, so the sheet settles back to where it was before the drag.
+            case .cancelled:
+                parent.onSwipeUpEnded(0, 0)
                 swipeUpBaselineY = nil
             default: break
             }
@@ -691,8 +722,17 @@ struct StoryPager: UIViewControllerRepresentable {
         /// ⚠️ WITH THE REPLY KEYBOARD UP, A DOWNWARD SWIPE LOWERS THE KEYBOARD AND NOTHING ELSE.
         /// The same guard as `StorySoloPager`'s, for the same reason and with the same history —
         /// read the note there. Both pagers install a down pan and neither had a keyboard test.
+        // ⚠️ EVERY DOWN PAN WE OWN, NOT JUST `dismissPan`. The guard used to name one recogniser,
+        // and the PASSIVE watcher is never assigned to it — so on a viewer that installs the watcher
+        // (no hero dismiss, no library dismiss) a downward swipe with the reply keyboard up sailed
+        // past this and closed the whole viewer. His report, in his words: "if i open keyboad then i
+        // try to scroll down just means Close keyboad Not all story". It was fixed on two of the
+        // three routes and this was the third.
+        //
+        // Keeping the SET rather than the one reference means a future fourth pan is covered by
+        // construction instead of by remembering to add it here.
         func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-            guard g === dismissPan, keyboardUp else { return true }
+            guard ourDownPans.contains(where: { $0() === g }), keyboardUp else { return true }
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             return false
         }

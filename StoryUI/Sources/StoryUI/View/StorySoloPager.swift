@@ -76,6 +76,11 @@ struct StorySoloPager: UIViewControllerRepresentable {
         var parent: StorySoloPager
         weak var host: StorySoloHostVC?
         private weak var dismissPan: DirectionalPanGestureRecognizer?
+        /// EVERY down pan this coordinator installed. `dismissPan` names only the newest one and the
+        /// passive watcher is never assigned to it at all — see `gestureRecognizerShouldBegin`.
+        /// Weak boxes: the views own the recognisers, and this must not be why one outlives its view.
+        private var ourDownPans: [() -> UIGestureRecognizer?] = []
+
         /// Is the reply keyboard up? Watched here rather than asked of `KeyboardManager`, which is a
         /// `@StateObject` owned by each page and not reachable from the pager. Selector observers,
         /// so they are removed for us when this coordinator goes.
@@ -140,6 +145,7 @@ struct StorySoloPager: UIViewControllerRepresentable {
                 let pan = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleHeroDrag(_:)))
                 pan.delegate = self
                 vc.view.addGestureRecognizer(pan)
+                ourDownPans.append({ [weak pan] in pan })
                 dismissPan = pan
                 StoryCardMorph.shared.prepareForHero = { [weak vc] in
                     vc?.cardContainer.backgroundColor = .clear
@@ -153,6 +159,7 @@ struct StorySoloPager: UIViewControllerRepresentable {
                 let pan = DirectionalPanGestureRecognizer(direction: .down, target: self, action: #selector(handleDismiss(_:)))
                 pan.delegate = self
                 vc.view.addGestureRecognizer(pan)
+                ourDownPans.append({ [weak pan] in pan })
                 dismissPan = pan
                 // Apple's zoom transition installs its own hidden interactive-dismiss pan up the
                 // presentation chain and it wins fast flicks. Subordinate it exactly as StoryPager
@@ -168,6 +175,7 @@ struct StorySoloPager: UIViewControllerRepresentable {
                 watch.delegate = self
                 watch.cancelsTouchesInView = false
                 vc.view.addGestureRecognizer(watch)
+                ourDownPans.append({ [weak watch] in watch })
             }
         }
 
@@ -186,9 +194,15 @@ struct StorySoloPager: UIViewControllerRepresentable {
                 if swipeUpBaselineY == nil { swipeUpBaselineY = t.y }
                 let up = -(t.y - (swipeUpBaselineY ?? t.y))    // +up, zeroed at engagement
                 parent.onSwipeUpChanged(max(0, up))
-            case .ended, .cancelled:
+            case .ended:
                 let up = -(t.y - (swipeUpBaselineY ?? t.y))
                 parent.onSwipeUpEnded(up, -v.y)                // translation +up, velocity +up
+                swipeUpBaselineY = nil
+            // ⚠️ CANCELLED REPORTS NOTHING — see the same split in StoryPager. Judging a touch the
+            // system took away on its accumulated travel snapped the sheet open with the finger
+            // already gone. Zero fails every commit test, so it settles back.
+            case .cancelled:
+                parent.onSwipeUpEnded(0, 0)
                 swipeUpBaselineY = nil
             default: break
             }
@@ -290,7 +304,11 @@ struct StorySoloPager: UIViewControllerRepresentable {
                 card.transform = CGAffineTransform(translationX: tx, y: ty * 0.85)
                     .scaledBy(x: scale, y: scale)
                 parent.onDragChanged(ty)
-            case .ended, .cancelled:
+            // ⚠️ A CANCELLED PULL IS NOT A FINISHED PULL — see StoryPager for the full note. A call
+            // banner arriving past the threshold used to CLOSE the story instead of springing back.
+            case .cancelled:
+                springBackFromDismiss(card: card)
+            case .ended:
                 let ty = t.y, vy = g.velocity(in: host.view).y
                 if ty > 200 || (ty > 5 && vy > 200) {
                     NotificationCenter.default.post(name: .stopVideo, object: nil)
@@ -308,18 +326,24 @@ struct StorySoloPager: UIViewControllerRepresentable {
                         StoryPager.dismissActive = false
                     }
                 } else {
-                    NotificationCenter.default.post(name: .resumeStory, object: nil)
-                    UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.85,
-                                   initialSpringVelocity: 0.3, options: []) {
-                        card.transform = .identity
-                    } completion: { _ in
-                        StoryCardMorph.shared.clearMask()
-                        self.host?.view.backgroundColor = .black
-                        StoryPager.dismissActive = false
-                        self.parent.onCancel()
-                    }
+                    springBackFromDismiss(card: card)
                 }
             default: break
+            }
+        }
+
+        /// The card goes home and the story runs again. ONE implementation, shared by the gentle
+        /// release and by a cancellation, so the two cannot drift apart.
+        private func springBackFromDismiss(card: UIView) {
+            NotificationCenter.default.post(name: .resumeStory, object: nil)
+            UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.85,
+                           initialSpringVelocity: 0.3, options: []) {
+                card.transform = .identity
+            } completion: { _ in
+                StoryCardMorph.shared.clearMask()
+                self.host?.view.backgroundColor = .black
+                StoryPager.dismissActive = false
+                self.parent.onCancel()
             }
         }
 
@@ -357,8 +381,17 @@ struct StorySoloPager: UIViewControllerRepresentable {
         /// close never starts at all.
         ///
         /// ONLY `dismissPan`, so the swipe-UP to the viewers sheet is untouched.
+        // ⚠️ EVERY DOWN PAN WE OWN, NOT JUST `dismissPan`. The guard used to name one recogniser,
+        // and the PASSIVE watcher is never assigned to it — so on a viewer that installs the watcher
+        // (no hero dismiss, no library dismiss) a downward swipe with the reply keyboard up sailed
+        // past this and closed the whole viewer. His report, in his words: "if i open keyboad then i
+        // try to scroll down just means Close keyboad Not all story". It was fixed on two of the
+        // three routes and this was the third.
+        //
+        // Keeping the SET rather than the one reference means a future fourth pan is covered by
+        // construction instead of by remembering to add it here.
         func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-            guard g === dismissPan, keyboardUp else { return true }
+            guard ourDownPans.contains(where: { $0() === g }), keyboardUp else { return true }
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             return false
         }

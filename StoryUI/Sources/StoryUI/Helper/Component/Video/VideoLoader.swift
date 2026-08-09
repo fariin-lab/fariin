@@ -822,15 +822,30 @@ private extension PlayerView {
     }
 
     func stopVideo() {
-        if player?.timeControlStatus == .playing {
-            // BEFORE the seek, which erases the very number being kept. `.stopVideo` fires on a
-            // person swipe (and on the close, where the door clears the whole store anyway), and
-            // this is the only moment the position still exists on that path.
-            rememberPlaybackPosition()
-            player?.pause()
-            player?.seek(to: .zero)
-            state = .stopped
-        }
+        // ⚠️ A CLIP THAT HAS NOT STARTED YET STILL HAS TO BE STOPPED, and asking only for `.playing`
+        // is what let it keep going.
+        //
+        // A player that is spinning up reports `.waitingToPlayAtSpecifiedRate`, not `.playing`. So
+        // every `.stopVideo` on a page change was a no-op against a clip that was still loading, its
+        // rate stayed non-zero, and when the bytes finally arrived it began playing OFF SCREEN: you
+        // hear the story you swiped away from over the one you are looking at.
+        //
+        // The frozen bar is the same bug's other half. That page had already announced
+        // `storyBuffering = true` while it was current; its matching `false` now arrives after the
+        // swipe, where the host drops it as belonging to somebody else — and `didReportBuffering` is
+        // only re-armed by a NEW clip, so returning to that person leaves the bar held for good.
+        //
+        // `pause()` on an idle player is harmless, and the guards inside `rememberPlaybackPosition`
+        // already refuse to write a position for a clip that never reached its second second — so
+        // widening this cannot invent a resume point for a story nobody watched.
+        guard player?.timeControlStatus != .paused || state != .stopped else { return }
+        // BEFORE the seek, which erases the very number being kept. `.stopVideo` fires on a
+        // person swipe (and on the close, where the door clears the whole store anyway), and
+        // this is the only moment the position still exists on that path.
+        rememberPlaybackPosition()
+        player?.pause()
+        player?.seek(to: .zero)
+        state = .stopped
     }
 
     /// The clip's place in this viewer session, written down so the NEXT player built for this url
