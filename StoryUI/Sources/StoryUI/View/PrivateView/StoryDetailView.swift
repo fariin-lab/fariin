@@ -670,9 +670,18 @@ private extension StoryDetailView {
                 // zero here is what set up the divide-by-zero that killed build 463. The story
                 // already carries a sensible length from the host; the player refines it when it
                 // knows, and until then the existing one stands.
-                if duration.isFinite, duration > 0 { model.stories[index].duration = duration }
-                start(index: index)
-                state = media
+                //
+                // ⚠️ HOPPED for the same reason as `start(index:)`: a CACHED clip's setup can now
+                // run synchronously (CacheManager answers a main-thread hit in the same turn), so
+                // this closure can fire inside `updateUIView` — where these Binding/@State writes
+                // would be silently discarded, the video twin of his reopen-freeze repro.
+                DispatchQueue.main.async {
+                    if duration.isFinite, duration > 0, model.stories.indices.contains(index) {
+                        model.stories[index].duration = duration
+                    }
+                    start(index: index)
+                    state = media
+                }
             }
             .onChange(of: state) { _ in
                 playVideo()
@@ -1152,7 +1161,22 @@ private extension StoryDetailView {
     }
     
     func start(index: Int) {
-        if !model.stories[index].isReady {
+        // ⚠️ THE READY FLAG IS WRITTEN ONE TURN LATER, AND THAT ONE HOP IS THE WHOLE FIX for his
+        // 2026-08-09 repro: "first open works, REOPENING the same story sits paused."
+        //
+        // This is called from the media loaders' completion. On a FIRST open the picture comes from
+        // disk or network, the completion is asynchronous, and this write lands. On a REOPEN the
+        // picture is already in StoryMemoryCache, the loader answers IN THE SAME TURN — which is
+        // inside `updateUIView`, mid view-update — and a `@State` write made during a view update
+        // is DISCARDED by SwiftUI. `isReady` then stays false for the whole visit, and
+        // `startProgress` draws a bar that never moves over a picture that is plainly there. Not a
+        // pause: every pause flag was clear, which is why three pause fixes left this standing.
+        //
+        // The hop makes the write land after the update pass, wherever the call came from; the
+        // 0.05s tick reads it at most one frame later. Bounds re-checked inside the hop — the
+        // delete flow can shrink the bucket between the schedule and the landing.
+        DispatchQueue.main.async {
+            guard model.stories.indices.contains(index), !model.stories[index].isReady else { return }
             model.stories[index].isReady = true
         }
         prefetchNext(after: index)   // warm the next photo so advancing is instant
