@@ -189,7 +189,30 @@ struct StoryRowLongPress: UIViewRepresentable {
             super.didMoveToWindow()
             // Asked again on every window change: SwiftUI is free to move a representable between
             // containers, and re-asking is free (install is a no-op once it has one).
-            if window == nil { coordinator?.uninstall() } else { coordinator?.install(from: self) }
+            if window == nil { coordinator?.uninstall() } else { tryInstall() }
+        }
+        // ⚠️ A FAILED WALK MUST GET A SECOND CHANCE, and the archive row is why (his 2026-08-09
+        // "archive story long press is not working"). `install` climbs the superviews looking for
+        // the row's scroll view and — rightly — anchors NOWHERE when it finds none. But
+        // `didMoveToWindow` can run while SwiftUI is still assembling the ancestors of a
+        // `.background` representable, and the old install was once-only: miss that first walk and
+        // `press` stayed nil for the life of the screen, with nothing ever re-asking. The UIKit
+        // stories row never sees this because it hands the coordinator its own scroll view
+        // directly. So: re-try when the view is re-parented, and once more on the next runloop
+        // turn, when the hierarchy this view was being attached into has finished existing.
+        // `install` is idempotent, so the retries cost nothing once one of them has landed.
+        override func didMoveToSuperview() {
+            super.didMoveToSuperview()
+            tryInstall()
+        }
+        private func tryInstall() {
+            guard window != nil, let c = coordinator else { return }
+            c.install(from: self)
+            guard !c.isInstalled else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.window != nil else { return }
+                self.coordinator?.install(from: self)
+            }
         }
     }
 
@@ -198,6 +221,8 @@ struct StoryRowLongPress: UIViewRepresentable {
         private weak var overlay: CMOverlay?
         private weak var host: UIView?
         private var press: UILongPressGestureRecognizer?
+        /// Whether a recogniser is live — the Anchor's retry loop stops asking once it is.
+        var isInstalled: Bool { press != nil }
 
         init(target: @escaping (CGPoint) -> StoryMenuTarget?) { self.target = target }
 
