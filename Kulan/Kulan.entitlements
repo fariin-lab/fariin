@@ -25,5 +25,22 @@
 		<string>applinks:fariin.com</string>
 		<string>applinks:www.fariin.com</string>
 	</array>
+	<!-- Lets AgeCheck.swift ask Apple for an age BAND (child / teen / adult) without ever asking
+	     anybody for a birthday. Apple holds the real age on the Apple ID, and for children in a
+	     Family Sharing group a parent set it, so this is the only real age signal available to us:
+	     Google knows the age too and hands apps none of it, and email sign-up tells us nothing at
+	     all. It works whichever door somebody signed up through, because the question goes to the
+	     device rather than to the sign-in method.
+
+	     SAME RULE AS THE KEY ABOVE, and the same failure it is documented against: the App ID
+	     com.kulan.messenger.native must have the Declared Age Range capability enabled in the Apple
+	     Developer portal, or get_provisioning_profile mints a profile without the entitlement and
+	     the build dies at the signing step. ENABLED BY THE OWNER 2026-08-08, which is why this key
+	     is here now and was deliberately held back when AgeCheck.swift landed in 8612386.
+
+	     No second step was needed: fastlane runs get_provisioning_profile with force: true, so every
+	     build mints a fresh profile and picks the new capability up on its own. -->
+	<key>com.apple.developer.declared-age-range</key>
+	<true/>
 </dict>
 </plist>

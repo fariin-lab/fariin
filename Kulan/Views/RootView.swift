@@ -37,7 +37,10 @@ struct RootView: View {
                 WelcomeView(onAuthed: { Task { await route() } },
                             onDemo: { phase = .main })
             case .onboarding:
-                OnboardingView { phase = .main }
+                // The third and last way into .main. A new account finishing onboarding never goes
+                // back through route(), so without this the very newest users would be the only
+                // ones never asked their age until their second launch.
+                OnboardingView { phase = .main; Task { await askAgeOnce() } }
             case .proveEmail(let address):
                 // Wrapped in its own NavigationStack because it is standing in for the whole auth
                 // flow here rather than being pushed onto one, and LoginCodeView expects a bar to
@@ -163,6 +166,33 @@ struct RootView: View {
         }
     }
 
+    /// Ask Apple for an age band, once ever, and never anywhere near the boot path.
+    ///
+    /// WHERE THIS SITS IS THE WHOLE DESIGN. It is inside the background task that already runs AFTER
+    /// `phase = .main`, behind the profile refresh, the key publish and the send-queue drain. Three
+    /// reasons, and the first is the one this file keeps relearning:
+    ///
+    /// · THE LAUNCH PATH MUST NEVER WAIT. Everything above `phase = .main` is measured in the
+    ///   comments here as a cold-start cost; an awaited call there stalls boot for around ten
+    ///   seconds offline. This is behind the paint, so the chat list is already on screen.
+    /// · IT PRESENTS A SYSTEM SHEET. Apple's own, over our UI. Firing that as the first thing
+    ///   somebody sees on opening a messenger reads as an interruption rather than a question, and
+    ///   the answer we get from an annoyed person is "decline".
+    /// · IT ONLY EVER HAPPENS ONCE. `hasAnswer` is the guard, and a decline COUNTS as an answer on
+    ///   purpose. Apple lets a parent set "never share"; re-asking every launch would nag exactly
+    ///   the families most careful about their children, which is the opposite of the point.
+    ///
+    /// Not awaited by anything and its result is not read yet, which is honest rather than
+    /// incomplete: knowing somebody is 12 changes nothing until the protections exist. Those are the
+    /// same switches as the search-privacy work and land with it.
+    private func askAgeOnce() async {
+        guard !AgeCheck.hasAnswer else { return }
+        // A beat after the app has settled. Not a fix for a race, just manners: the first second of
+        // a cold launch is people finding their place, not a moment to put a modal in front of them.
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        await AgeCheck.ask()
+    }
+
     private func route() async {
         phase = .loading
         await AuthService.shared.bootstrap()   // adopts an existing session, creates nothing
@@ -207,6 +237,7 @@ struct RootView: View {
                 // Send anything an app kill left queued, whatever chat it belongs to — the queue's
                 // own contract. Until now it only re-drove when that exact chat was reopened.
                 await SendQueue.drainAll()
+                await askAgeOnce()
             }
             return
         }
@@ -229,6 +260,14 @@ struct RootView: View {
             Task { await SendQueue.drainAll() }   // queued sends from a previous run (see drainAll)
         }
         phase = ready ? .main : .onboarding
+        // THE FIRST-RUN PATH NEEDS IT TOO, and this is the one that matters most: a brand new
+        // account is exactly the person whose age nobody knows anything about. Adding it only to
+        // the cached path above would have meant the age question reached everybody EXCEPT new
+        // users, which is precisely backwards.
+        //
+        // Fired from the .main branch only. Somebody still in onboarding has no handle yet and is
+        // mid-flow; the next launch catches them, because `hasAnswer` is still false.
+        if ready { Task { await askAgeOnce() } }
     }
 
     /// The official channel, the admin permissions that decide whether the compose screens exist, and
