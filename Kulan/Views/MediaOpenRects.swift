@@ -101,6 +101,29 @@ import UIKit
         guard r.width > 1, r.height > 1 else { return nil }
         return r
     }
+
+    /// The rectangle the EYE sees for `key` right now, mid-animation included — against `liveRect`,
+    /// which reads MODEL geometry, where a running animation's end state is already committed.
+    ///
+    /// The row's press-down dip is why this exists (his 2026-08-09 zoom report): the card springs to
+    /// 0.92 over 0.28s, but the model says 0.92 the instant the finger lands. A window crop taken
+    /// with the model rectangle while the pixels are still ~0.96 keeps the middle of the card and
+    /// drops its outer band — same photo, tighter crop, content magnified. Converting through the
+    /// PRESENTATION tree reads the frame as drawn, so the crop and the pixels cannot disagree.
+    static func drawnRect(_ key: String) -> CGRect? {
+        guard let v = views[key]?.value else { return nil }
+        return drawnRect(of: v)
+    }
+
+    /// Same answer for a view that is not in the registry (the row's name label).
+    static func drawnRect(of v: UIView) -> CGRect? {
+        guard let w = v.window else { return nil }
+        let src = v.layer.presentation() ?? v.layer
+        let dst = w.layer.presentation() ?? w.layer
+        let r = src.convert(src.bounds, to: dst)
+        guard r.width > 1, r.height > 1 else { return nil }
+        return r
+    }
     /// The bubble's own corner radius, so a transition interpolates from the REAL shape instead of a
     /// hardcoded guess. The close used a flat 14 and the open had no radius at all, so media with a
     /// different bubble radius visibly changed shape at the moment the copy took over.

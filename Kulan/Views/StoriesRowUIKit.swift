@@ -1601,16 +1601,29 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
                   r.contains(p) else { return nil }
             return r
         }
+        // THE HIT USES THE MODEL RECT, THE LIFT USES THE DRAWN ONE. At press time the card is
+        // mid-press-dip: the model already says 0.92 while the pixels still show ~0.96, and a crop
+        // taken with the model rectangle magnifies the picture (his 2026-08-09 zoom report — see
+        // `MediaOpenRects.drawnRect`). The finger test stays on `liveRect`: it is the same answer
+        // the flight flies to, and a hit test does not care about a few points of spring.
+        func lifted(_ key: String, _ model: CGRect) -> CGRect {
+            MediaOpenRects.drawnRect(key) ?? model
+        }
         // My own card first: it is drawn first and nothing overlaps it.
         if let m = repo.mine, !m.stories.isEmpty, let r = hit(m.id) {
-            return StoryMenuTarget(key: MediaOpenRects.key(.storyRow, m.id), rect: r, actions: [
+            let key = MediaOpenRects.key(.storyRow, m.id)
+            return StoryMenuTarget(key: key, rect: lifted(key, r), actions: [
                 CMAction(title: "Add Story", icon: "ic_stories") { [weak self] in self?.onCompose() },
                 CMAction(title: "Posted Stories", icon: "circle.dashed") { [weak self] in self?.onOpen(m) },
-            ], labelRect: myCard.labelWindowRect, labelView: myCard.labelView)
+            ], labelRect: myCard.labelView.flatMap { MediaOpenRects.drawnRect(of: $0) } ?? myCard.labelWindowRect,
+               labelView: myCard.labelView)
         }
         for g in displayedOthers {
             guard let r = hit(g.id) else { continue }
-            return StoryMenuTarget(key: MediaOpenRects.key(.storyRow, g.id), rect: r, actions: [
+            let key = MediaOpenRects.key(.storyRow, g.id)
+            let lv = friendCards[g.id]?.labelView
+            // A friend's card dips on press exactly as mine does, so its lift takes the drawn rect too.
+            return StoryMenuTarget(key: key, rect: lifted(key, r), actions: [
                 CMAction(title: "Send Message", icon: "message") { [weak self] in self?.onMessage(g) },
                 CMAction(title: "Open Profile", icon: "person.crop.circle") { [weak self] in self?.onProfile(g) },
                 CMAction(title: "Hide Stories", icon: "archivebox", destructive: true) { [weak self] in
@@ -1618,8 +1631,8 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
                 },
                 // The name is lifted with the card now (his "also show Name"). It comes from the card
                 // itself rather than from the group, so what rises is the label the row is drawing.
-            ], labelRect: friendCards[g.id]?.labelWindowRect,
-               labelView: friendCards[g.id]?.labelView)
+            ], labelRect: lv.flatMap { MediaOpenRects.drawnRect(of: $0) } ?? friendCards[g.id]?.labelWindowRect,
+               labelView: lv)
         }
         return nil
     }
