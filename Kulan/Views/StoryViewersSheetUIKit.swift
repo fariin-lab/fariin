@@ -46,6 +46,24 @@ import UIKit.UIGestureRecognizerSubclass   // DirectionalSheetPan sets `state = 
 // exactly the disconnection the owner reported.
 //
 // WHAT IS STILL SWIFTUI, DELIBERATELY: the row's contents, through `UIHostingConfiguration`.
+// The search field's keyboard and clear button. Return = keyboard down, query and tall sheet stay
+// (Telegram). The X is HIS exit: "when i click x button go back to small sheet" — and it is the
+// only path that collapses, so backspacing a query to nothing never yanks the keyboard mid-thought
+// (`textFieldShouldClear` fires for the clear BUTTON alone, never for typing).
+extension StoryViewersSheetView: UITextFieldDelegate {
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        textField.resignFirstResponder()
+        return false
+    }
+    func textFieldShouldClear(_ textField: UITextField) -> Bool {
+        textField.text = ""
+        applyFilter()
+        textField.resignFirstResponder()
+        setSearchExpanded(false)
+        return false   // the clearing is done above; returning true would double-clear
+    }
+}
+
 final class StoryViewersSheetView: UIView {
 
     // MARK: Public surface
@@ -200,7 +218,19 @@ final class StoryViewersSheetView: UIView {
     /// True once a drag has decided the SHEET owns it rather than the list.
     private var dragOwnsSheet = false
 
-    private var sheetHeight: CGFloat { bounds.height * Self.heightFraction }
+    /// SEARCH GROWS THE SHEET TO (almost) THE WHOLE SCREEN — Telegram's rule, read from their
+    /// source on his order (2026-08-09: "there is not enough space when the keyboard appears…
+    /// first go read telegram"). Their viewers panel has two resting states, half and full, and
+    /// focusing search jumps it to full = screen height minus 60 on a 0.5s spring; leaving search
+    /// steps it back to half. Ours maps their "half" to the existing 0.60 sheet and their "full"
+    /// to this flag — same layout path, one number changes, so every child lays out through the
+    /// code that already positions it.
+    private var searchExpanded = false
+
+    private var sheetHeight: CGFloat {
+        searchExpanded ? bounds.height - max(60, safeAreaInsets.top + 8)
+                       : bounds.height * Self.heightFraction
+    }
     private var panelTop: CGFloat { bounds.height - sheetHeight * progress }
 
     // MARK: Init
@@ -374,6 +404,13 @@ final class StoryViewersSheetView: UIView {
         search.backgroundColor = UIColor.white.withAlphaComponent(0.12)
         search.textColor = .white
         search.addTarget(self, action: #selector(searchChanged), for: .editingChanged)
+        // The keyboard says SEARCH (his ask — the default return key said nothing useful), and
+        // return only lowers the keyboard: the query and the expanded sheet stay, Telegram's shape.
+        search.returnKeyType = .search
+        search.delegate = self
+        // Focus grows the sheet, leaving with an empty query shrinks it — see `searchExpanded`.
+        search.addTarget(self, action: #selector(searchBegan), for: .editingDidBegin)
+        search.addTarget(self, action: #selector(searchEnded), for: .editingDidEnd)
         panel.addSubview(search)
 
         table.backgroundColor = .clear
@@ -460,6 +497,16 @@ final class StoryViewersSheetView: UIView {
 
         switch g.state {
         case .began:
+            // A DRAG ON THE EXPANDED SHEET STEPS BACK ONE LEVEL, Telegram's rule: full+search →
+            // half, and only the NEXT drag can dismiss. The host's settle math is written against
+            // the half height, so letting a drag run while expanded would fight two height models.
+            if searchExpanded {
+                search.resignFirstResponder()
+                setSearchExpanded(false)
+                g.setTranslation(.zero, in: self)
+                dragOwnsSheet = false
+                return
+            }
             onDragActive?(true)   // finger beats spring: the host cancels any in-flight settle
             suspendForeignPans()  // catch any lazily-created system pan before it can ride along
             dragStart = progress
@@ -750,6 +797,27 @@ final class StoryViewersSheetView: UIView {
     }
 
     @objc private func searchChanged() { applyFilter() }
+
+    // MARK: Search expansion (Telegram's two resting heights — see `searchExpanded`)
+
+    @objc private func searchBegan() { setSearchExpanded(true) }
+    @objc private func searchEnded() {
+        // Keyboard down with a live query keeps the tall sheet (results need the room);
+        // down with an empty one has nothing to show and steps back to half.
+        if (search.text ?? "").isEmpty { setSearchExpanded(false) }
+    }
+
+    private func setSearchExpanded(_ on: Bool) {
+        guard searchExpanded != on else { return }
+        searchExpanded = on
+        // Telegram's 0.5s spring for exactly this jump. `.allowUserInteraction` for the same
+        // reason the page settles carry it: a finger must be able to interrupt.
+        UIView.animate(withDuration: 0.5, delay: 0, usingSpringWithDamping: 0.85,
+                       initialSpringVelocity: 0, options: [.allowUserInteraction]) {
+            self.setNeedsLayout()
+            self.layoutIfNeeded()
+        }
+    }
 
     private func applyFilter() {
         let me = AuthService.shared.uid ?? ""
