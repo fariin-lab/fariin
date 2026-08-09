@@ -106,13 +106,25 @@ struct PasswordView: View {
             } header: {
                 Text(isFirstPassword ? "New password" : "Choose a new password")
             } footer: {
-                // NAMES THE ADDRESS. For a Google or Apple account this is the moment a second way
-                // in appears, and the address it works with is not something they chose or would
-                // necessarily remember. Telling them here means the security email is a reminder
-                // rather than a surprise.
+                // THE ADDRESS IS NOT NAMED HERE, on the owner's instruction (2026-08-09): "noo need
+                // to mention what email i'll use just let user sing up it coul sing up email or
+                // google account email what even they want."
+                //
+                // It used to read "You'll sign in with <address> and this password." His objection
+                // is a fair one: a caption that recites your own email back at you is noise on a
+                // screen with two boxes and a button, and it reads as the app being uncertain about
+                // something it should simply handle.
+                //
+                // ⚠️ WHAT THIS COSTS, so nobody puts it back without knowing: for an Apple account
+                // using Hide My Email the login becomes something like
+                // f6dj84y9z2@privaterelay.appleid.com, which nobody could guess or remember. Those
+                // people now set a password without being shown the address it belongs to. The
+                // "a password was added" email names it, so the information exists, it is just no
+                // longer on this screen. If somebody ever reports "I set a password and cannot log
+                // in", this is the first place to look.
                 Text(isFirstPassword
-                     ? "You'll sign in with \(address) and this password. The way you sign in now keeps working too."
-                     : "Signing in with \(address) will use the new password. The old one stops working.")
+                     ? "The way you sign in now keeps working too."
+                     : "Your old password stops working.")
             }
 
             if let error {

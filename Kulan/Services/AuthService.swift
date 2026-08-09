@@ -560,6 +560,31 @@ final class AuthService: NSObject {
         guard let user = Auth.auth().currentUser else { throw AuthFlowError.notSignedIn }
         guard isConnected(method) else { throw AuthFlowError.notConnected }
         guard connectedMethods.count > 1 else { throw AuthFlowError.lastSignInMethod }
+        // ⚠️ THE WARNING GOES OUT **BEFORE** THE UNLINK, AND IT MUST BE AWAITED. This used to run
+        // after, as a detached fire-and-forget, and that combination meant the address being removed
+        // never heard about it.
+        //
+        // The server builds its recipient list from the account as it stands. Once the unlink has
+        // happened the removed address is gone from providerData, so it cannot be written to and
+        // cannot even be named in the mail. The one person who most needs the sentence "your login
+        // was taken off this account" was the only one guaranteed not to get it. On a takeover that
+        // is fatal: everything still attached belongs to the attacker, so the alert goes to them and
+        // the real owner hears nothing at all.
+        //
+        // Awaited rather than detached because detaching reintroduces the same bug through the back
+        // door — a detached task can just as easily run after the unlink as before it, and then the
+        // ordering is a coin toss rather than a guarantee.
+        //
+        // The cost, stated plainly: if the unlink fails after this, somebody gets told a login was
+        // removed when it was not. The guards above catch every ordinary reason it would fail, so
+        // what is left is a network error mid-call. A false alarm you can check is a far better
+        // failure than a silent takeover you cannot.
+        //
+        // The server subtracts this provider when it prints "ways in now", so the mail does not list
+        // the login it is telling you about. Nothing here passes an address; the server reads it
+        // from the account, or this would become a way to mail any stranger a frightening notice.
+        await reportSignInMethodChangeAwaiting(providerId: method.providerId, added: false)
+
         _ = try await user.unlink(fromProvider: method.providerId)
 
         // UNLINK TAKES THE LOGIN AND LEAVES THE ADDRESS. Firebase clears the provider and does not
@@ -584,9 +609,21 @@ final class AuthService: NSObject {
         // connected reads it — without this the removed row stays on screen until the next launch.
         // AFTER the reconcile, so it also picks up the repointed address.
         try? await user.reload()
-        // AFTER the reload, so the mail's "ways in now" line is read from the truth rather than
-        // from a cached list that still contains the method we just removed.
-        reportSignInMethodChange(providerId: method.providerId, added: false)
+    }
+
+    /// The same call as `reportSignInMethodChange`, awaited instead of detached.
+    ///
+    /// Exists for exactly one caller: the removal path, where the mail has to be sent while the
+    /// address being removed is still on the account. Detaching would leave the ordering to chance,
+    /// which is the bug it was written to fix.
+    ///
+    /// Still never throws. The mail is a report on the change, and a dead mailbox must not be able
+    /// to stop somebody removing a login from their own account.
+    private func reportSignInMethodChangeAwaiting(providerId: String, added: Bool) async {
+        guard let uid, !uid.isEmpty, !isAnonymousSession else { return }
+        _ = try? await Functions.functions(region: "me-central1")
+            .httpsCallable("notifySignInMethodChanged")
+            .call(["provider": providerId, "added": added])
     }
 
     /// Fire-and-forget, exactly like `reportLogin`. An email failing must never fail the change it

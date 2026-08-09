@@ -404,19 +404,14 @@ struct AccountSettingsView: View {
                               systemImage: "key.fill")
                     }
                 } footer: {
-                    // SHORTER, and it had to be. The first version read "Add a second way in:
-                    // <address> and a password, alongside how you sign in now." The owner circled it
-                    // on a real phone and asked what it was — which is the answer. Two clauses, a
-                    // colon and an address in the middle of a sentence is not a caption anybody
-                    // reads, it is a paragraph pretending to be one.
-                    //
-                    // The address stays in it, and that is not padding. For a Google account it is
-                    // the Google address, and for Apple with Hide My Email it is a privaterelay one
-                    // nobody could ever guess. Somebody who sets a password without being told which
-                    // address it belongs to has been given a login they cannot use.
+                    // NO ADDRESS HERE EITHER, same instruction, same reasoning as the footer inside
+                    // PasswordView. This row went through two wordings the owner rejected on a real
+                    // phone, both of which recited his own email back at him mid-sentence. The
+                    // caption's job is to say what the row does, not to read out data he can see two
+                    // rows below under Sign-in Methods.
                     Text(AuthService.shared.isConnected(.email)
-                         ? "You sign in with \(address) and this password."
-                         : "You'll also be able to sign in with \(address) and a password.")
+                         ? "Change the password you sign in with."
+                         : "Add a password as a second way to sign in.")
                 }
             }
 
