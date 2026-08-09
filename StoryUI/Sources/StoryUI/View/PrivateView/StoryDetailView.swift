@@ -1024,7 +1024,21 @@ private extension StoryDetailView {
             }
             // ⚠️ ONE GESTURE, AND IT STAYS ALIVE UNTIL THE FINGER LEAVES. Read this before moving
             // anything — this area has swung four times now. [[kulan-story-hold-pause-instant]].
-            .gesture(holdGesture)
+            // ⚠️ `.simultaneousGesture`, NEVER `.gesture`, AND THIS COST HIM THE 3D CUBE.
+            //
+            // `.gesture` CLAIMS the touch. The pager's page turn is a UIScrollView underneath this
+            // overlay, and the cube's fold angle is only computed while that scroll view is actually
+            // tracking (`getAngle` returns flat unless `StoryPager.horizontalScroll` is live). So a
+            // SwiftUI gesture that takes the touch first does not merely compete with the page
+            // swipe — it stops the scroll view from ever entering a tracking state, and the fold
+            // never runs. His report on the last beta: the 3D cube scroll is not working.
+            //
+            // [[kulan-scroll-gesture-rules]] says this in as many words, and `StoryCameraView` says
+            // it again next to its own swipe: a gesture that claims the touch eats both. The
+            // sequenced drag inside `holdGesture` is what made it claim; simultaneous lets the
+            // scroll view see the same touches, and the long press still fails at
+            // `maximumDistance: 10`, so a real swipe cancels the hold exactly as it should.
+            .simultaneousGesture(holdGesture)
             // The pause and the resume both hang off the phase, so there is exactly one place where
             // a finger changes what the story is doing.
             // ⚠️ THE ONE-PARAMETER FORM, because this file is in the StoryUI package and that
