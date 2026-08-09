@@ -54,6 +54,9 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// Whether we have already told the host it is buffering, so the notification is posted on the
     /// EDGE rather than on every KVO tick — `timeControlStatus` fires often.
     private var didReportBuffering = false
+    /// Whether the veil currently up carries a spinner, so a rebuild (a poster landing mid-load)
+    /// keeps the answer it was built with instead of resetting a cached clip's cover to "downloading".
+    private var veilHasSpinner = false
 
     /// Tell the story's progress bar to hold, or to carry on. One notification, posted only when the
     /// answer actually changes.
@@ -384,7 +387,9 @@ final class PlayerView: UIView, StoryVideoFrameSource {
                 guard let self, self.posterURL == urlString else { return }
                 self.posterImage = img
                 self.refreshBackdrop()   // the poster IS the backdrop; build it the moment it lands
-                if self.viewWithTag(999) != nil { self.addActivityIndicatory() }
+                // Rebuilt WITH THE ANSWER IT HAD — a poster landing late must not promote a cached
+                // clip's quiet cover back into a "loading" one.
+                if self.viewWithTag(999) != nil { self.addActivityIndicatory(spinning: self.veilHasSpinner) }
             }
         }.resume()
     }
@@ -422,7 +427,20 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         CATransaction.setDisableActions(true)
         playerLayer.isHidden = true
         CATransaction.commit()
-        addActivityIndicatory()
+        // A CLIP THAT IS ON DISK IS NOT LOADING, so its veil is a cover without a wheel — see
+        // `addActivityIndicatory`. Asked here, synchronously, because by the time the cache
+        // answers `loadVideo` the veil has already been up for the whole question.
+        let cachedFile = CacheManager.cachedFileIfUsable(for: validatedUrl)
+        addActivityIndicatory(spinning: cachedFile == nil)
+        // A CACHED CLIP CAN BE ITS OWN POSTER. A video with no thumbnail (the empty-thumb upload
+        // window, older stories) reaches here with nothing to cover with — the spinner over a bare
+        // gradient in his screenshot. Telegram decodes the cached file's first frame and shows THAT
+        // (`CachedVideoFirstFrameRepresentation`); ours lands in the remembered-frame slot, which
+        // the veil already draws SHARP at the clip's own gravity — it is pixel-for-pixel the frame
+        // the reveal will hand over to, the same promise that slot has always kept.
+        if posterImage == nil, StoryPlaybackResume.frame(validatedUrl) == nil, let file = cachedFile {
+            coverFromFirstFrame(of: file, for: validatedUrl)
+        }
         // (the stop happens ABOVE, before `self.url` moves — see the warning there)
         didRetryRemote = false
         cachedFileInUse = nil
@@ -441,6 +459,28 @@ final class PlayerView: UIView, StoryVideoFrameSource {
                 print(error)
                 self.didRetryRemote = true
                 self.setupPlayer(validatedUrl)
+            }
+        }
+    }
+
+    /// The cached clip's opening frame, decoded off-main and delivered into the remembered-frame
+    /// slot — where the veil, the canvas sampler and `currentVideoFrame`'s fallback all already
+    /// look. One seam, three readers, no new drawing path. Guarded at the landing: still this
+    /// clip, still under cover, and no REAL remembered frame has appeared meanwhile (a resume
+    /// frame from mid-clip outranks second zero).
+    private func coverFromFirstFrame(of file: URL, for story: URL) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: file))
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 1080, height: 1920)
+            guard let cg = try? generator.copyCGImage(at: .zero, actualTime: nil) else { return }
+            let image = UIImage(cgImage: cg)
+            DispatchQueue.main.async {
+                guard let self, self.url == story, self.playerLayer.isHidden,
+                      StoryPlaybackResume.frame(story) == nil else { return }
+                StoryPlaybackResume.rememberFrame(story, image: image)
+                self.refreshBackdrop()   // the frame is also the canvas's colour source
+                if self.viewWithTag(999) != nil { self.addActivityIndicatory(spinning: self.veilHasSpinner) }
             }
         }
     }
@@ -528,7 +568,13 @@ private extension PlayerView {
                 // GENUINELY WAITING ON BYTES, so the progress bar must wait too. Without this the
                 // segment kept counting through a stall and the story moved on while the video was
                 // still trying to start — the progress desynchronisation.
-                self.addActivityIndicatory()
+                //
+                // But the VEIL is only rebuilt for a stall with the picture already up. While the
+                // layer is still under cover this fires once on every clip's spin-up — Telegram
+                // excludes exactly that case (`.buffering(initial: false, whilePlaying: true)`) —
+                // and rebuilding here put the wheel back over a cached clip whose veil had rightly
+                // gone up without one. The bar hold stays for both: waiting on bytes is waiting.
+                if !self.playerLayer.isHidden { self.addActivityIndicatory() }
                 self.setBuffering(true)
             default:
                 self.setBuffering(false)
@@ -742,8 +788,16 @@ private extension PlayerView {
     /// `frozenVeil` lived here and is now `StoryCanvas.loadingVeil` — the same function, the same
     /// numbers, in the one file that owns everything drawn behind or over a story, so the photo half
     /// and the video half cannot drift apart in how a loading story looks.
-    func addActivityIndicatory() {
+    /// `spinning`: whether the wheel itself goes up. THE SPINNER IS FOR FETCHING, NOT FOR EXISTING.
+    /// Telegram's loading shimmer is keyed on whether the bytes are on disk ("contentLoaded"), never
+    /// on player readiness, so a cached story there never shows a loading state — his "already i
+    /// downloaded but still is loading". The veil goes up either way: it is the cover the
+    /// born-hidden layer reveals out of. Only the claim of loading is now reserved for actual
+    /// loading. And the wheel appears 0.2s late (Telegram's appearance timer), so a fast network
+    /// never flashes one for a story that arrives immediately.
+    func addActivityIndicatory(spinning: Bool = true) {
         removeActivityIndicatory()
+        veilHasSpinner = spinning
         // THE VIEW'S OWN SIZE, not UIScreen's — the veil must cover exactly the card the video
         // will paint in, or the two show the same picture at two different scales.
         let w = bounds.width > 1 ? bounds.width : UIScreen.main.bounds.width
@@ -789,12 +843,24 @@ private extension PlayerView {
             view.addSubview(iv)
         }
         self.addSubview(view)
+        guard spinning else { return }
         let activityView = UIActivityIndicatorView(style: .large)
         activityView.color = UIColor.lightGray.withAlphaComponent(0.7)
         activityView.frame = CGRect(x: w / 2, y: h / 2, width: .zero, height: .zero)
         view.addSubview(activityView)
         addConst(view: activityView)
         activityView.startAnimating()
+        // Invisible for its first 0.2s. A reveal that lands inside that window — the normal case
+        // for anything local or preloaded — never shows a wheel at all. The guard asks whether the
+        // VEIL this wheel belongs to is still on the card (its superview's superview): a veil that
+        // was torn down keeps its wheel dark, a NEW veil built meanwhile owns a wheel of its own,
+        // and a page pre-built offscreen — where `window` would answer nil — still gets its wheel
+        // the moment it is looked at.
+        activityView.alpha = 0
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak activityView] in
+            guard let activityView, activityView.superview?.superview != nil else { return }
+            activityView.alpha = 1
+        }
     }
 
     func setupPlayer() {

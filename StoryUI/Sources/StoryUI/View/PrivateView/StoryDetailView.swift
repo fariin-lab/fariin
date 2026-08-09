@@ -1285,9 +1285,12 @@ private extension StoryDetailView {
     }
     
     func resetAVPlayer() {
-        Task {
-            player.pause()
-        }
+        // THE OLD PLAYER IS THE ONE TO PAUSE, so the pause happens BEFORE the swap. This was
+        // `Task { player.pause() }` ABOVE the swap — but the task body reads `player` when it RUNS,
+        // which is after the line below has already replaced it, so it paused the brand-new silent
+        // player and the outgoing one was never told to stop. Tapping from a video onto a text or
+        // photo story left the old clip's audio running until deallocation got around to it.
+        player.pause()
         player = AVPlayer()
     }
     
@@ -1304,7 +1307,11 @@ private extension StoryDetailView {
         let isReady = state == .ready || state == .started
         
         if isReady, currentUser, video {
-            player.automaticallyWaitsToMinimizeStalling = false
+            // The `automaticallyWaitsToMinimizeStalling = false` that lived here silently defeated
+            // `setupPlayer`'s deliberate `true` on every single play call — the player was told to
+            // let AVFoundation wait, and then told the opposite before any clip ever started. With
+            // the override gone, a streamed clip holds on its cover until it can play through
+            // instead of starting on a stutter, which is what the setting was chosen for.
             Task {
                 player.play()
             }

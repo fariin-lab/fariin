@@ -77,6 +77,18 @@ final class CacheManager: NSObject {
         return size > 4096   // no real video is this small; a truncated file or an error page is
     }
 
+    /// The usable cache file for this url, or nil. The synchronous question `startVideo` asks to
+    /// decide whether the veil carries a spinner (bytes are actually missing) or only a cover (the
+    /// clip is on disk). Telegram keys its loading shimmer on exactly this — whether the media is
+    /// fetched — never on player readiness, which is why a cached story there never shows a loading
+    /// state at all. Same name, same directory, same size floor as `loadVideo`: two answers that
+    /// could drift apart would put the wheel back on cached clips.
+    static func cachedFileIfUsable(for url: URL) -> URL? {
+        let file = StoryStorage.directory("VideoCache").appendingPathComponent(cacheFileName(for: url))
+        guard FileManager.default.fileExists(atPath: file.path), isUsableCacheFile(file) else { return nil }
+        return file
+    }
+
     /// `speculative`: this video is being fetched for a story nobody has asked to watch yet, so it
     /// stands down on a metered or Low Data Mode connection. WITHOUT THIS THE RULE WAS BACKWARDS.
     /// `StoryPrefetcher.warmImage` already refused to pull a 200 KB photo on a constrained network
