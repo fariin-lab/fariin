@@ -561,8 +561,28 @@ final class AuthService: NSObject {
         guard isConnected(method) else { throw AuthFlowError.notConnected }
         guard connectedMethods.count > 1 else { throw AuthFlowError.lastSignInMethod }
         _ = try await user.unlink(fromProvider: method.providerId)
+
+        // UNLINK TAKES THE LOGIN AND LEAVES THE ADDRESS. Firebase clears the provider and does not
+        // touch `user.email`, so removing your email login leaves that address on the account
+        // permanently. The owner found this on his own account: no password provider left at all,
+        // google.com saying one address, and `user.email` still holding the one he had removed.
+        //
+        // Not cosmetic. `allEmails()` on the server reads `user.email`, so every security notice
+        // about the account — new sign-in, method changed, deletion scheduled — kept being posted to
+        // an address he had deliberately taken off. It also went on reserving that address against
+        // everybody else forever, because Firebase refuses a second account on an email it holds.
+        //
+        // Server-side because only the admin SDK can rewrite it without dragging the person through
+        // a verification round trip for an address they already proved to Apple or Google.
+        // Fire-and-forget for the same reason `reportSignInMethodChange` below is: the unlink they
+        // asked for has already succeeded, and failing it over bookkeeping would send them back to
+        // do it again.
+        _ = try? await Functions.functions(region: "me-central1")
+            .httpsCallable("reconcileAccountEmail").call([:])
+
         // providerData is read straight off the cached user, and every screen showing what is
         // connected reads it — without this the removed row stays on screen until the next launch.
+        // AFTER the reconcile, so it also picks up the repointed address.
         try? await user.reload()
         // AFTER the reload, so the mail's "ways in now" line is read from the truth rather than
         // from a cached list that still contains the method we just removed.
