@@ -38,7 +38,9 @@ struct UserView: View {
                             .foregroundColor(.white)
                             .lineLimit(1)
                         Text(date)
-                            .font(.system(size: 12, weight: .regular))
+                            // 13, up from 12 (owner 2026-08-09: "too small… but not too much") —
+                            // one point under the name so the hierarchy still reads name-first.
+                            .font(.system(size: 13, weight: .regular))
                             .foregroundColor(.white.opacity(0.7))
                             .lineLimit(1)
                     } else {
@@ -48,7 +50,7 @@ struct UserView: View {
                                 .foregroundColor(.white)
                                 .lineLimit(1)
                             Text(date)
-                                .font(.system(size: 12, weight: .regular))
+                                .font(.system(size: 13, weight: .regular))   // matches the no-badge branch
                                 .foregroundColor(.white.opacity(0.7))
                                 .lineLimit(1)
                                 // The name may be long; the time must not be the thing that gets cut,
