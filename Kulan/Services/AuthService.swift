@@ -300,16 +300,30 @@ final class AuthService: NSObject {
 
     /// The address a password would sign you in with, or nil when this account cannot have one.
     ///
-    /// Read off `providerData` first rather than `user.email`, because `user.email` MOVES: linking
-    /// an email credential rewrites it, which is the same behaviour that mis-delivered four
-    /// security mails in August. Any address the account can actually be reached at will do, and
-    /// the current `user.email` is the one Firebase will use, so it leads.
+    /// ⚠️ IT MUST BE A **PROVEN** ADDRESS, and the first version of this was not. Found on a real
+    /// phone, 2026-08-09: the Password row offered `admintufaax@gmail.com` while the Google row
+    /// directly beneath it read `akramsamatar@gmail.com`. Both are on the same account.
     ///
-    /// nil means the Password row does not appear at all. An account with no address anywhere on it
-    /// cannot have an email password, and a screen that can only fail is worse than no screen.
+    /// Firebase keeps TWO different things here and they drift apart. `user.email` is an
+    /// account-level field that MOVES whenever an email credential is linked, and it carries its own
+    /// `isEmailVerified` flag. `providerData` holds what each provider actually handed over. On that
+    /// account `user.email` was `admintufaax@gmail.com` with **emailVerified false**, while the
+    /// google.com entry said `akramsamatar@gmail.com`.
+    ///
+    /// Reading `user.email` blindly therefore offered to hang a password on an address NOBODY HAD
+    /// PROVED THE OWNER CONTROLS. Whoever really owns that mailbox could then walk in through Forgot
+    /// Password. That is precisely the hole the sign-up code was built to close, reopened by the
+    /// screen built to close it.
+    ///
+    /// Order now, strongest evidence first:
+    ///   1. `user.email` ONLY when `isEmailVerified` — proven, and the one Firebase itself favours.
+    ///   2. an address from `providerData` — Apple and Google verify before handing it over, so
+    ///      these are proven by construction. Apple's Hide My Email relay counts: Apple owns the
+    ///      domain and runs the forwarding.
+    ///   3. nil. The row does not appear. A screen that can only end badly is worse than no screen.
     var passwordAddress: String? {
         guard let user = Auth.auth().currentUser else { return nil }
-        if let e = user.email, !e.isEmpty { return e }
+        if user.isEmailVerified, let e = user.email, !e.isEmpty { return e }
         return user.providerData.compactMap(\.email).first(where: { !$0.isEmpty })
     }
 
@@ -332,7 +346,12 @@ final class AuthService: NSObject {
         guard let user = Auth.auth().currentUser else { throw AuthFlowError.notSignedIn }
 
         if isFirst {
-            guard let address = user.email, !address.isEmpty else { throw AuthFlowError.notSignedIn }
+            // ⚠️ `passwordAddress`, NEVER `user.email`. This line read `user.email` directly and that
+            // was the actual bug behind the mismatched screen: on an account whose account-level
+            // email is unverified it would have linked a password to an UNPROVEN address, handing a
+            // way in to whoever really owns that mailbox. The property resolves to a proven address
+            // or refuses; see its comment for the account this was caught on.
+            guard let address = passwordAddress, !address.isEmpty else { throw AuthFlowError.notSignedIn }
             _ = try await user.link(with: EmailAuthProvider.credential(withEmail: address,
                                                                       password: newPassword))
         } else {
