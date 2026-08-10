@@ -394,7 +394,17 @@ struct AccountSettingsView: View {
             // The row hides itself for an account that cannot have a password at all — one signed
             // in with no email address anywhere on it. Offering a screen that can only fail is
             // worse than not offering it.
-            if let address = AuthService.shared.passwordAddress {
+            //
+            // ⚠️ AND FOR APPLE'S HIDDEN ADDRESS, for the same reason one step further on. Hide My
+            // Email leaves the account on `…@privaterelay.appleid.com`; a password there is real,
+            // and unusable, because the sign-in screen asks for an address the person has never
+            // seen. `hasTypableAddress` is that test. Connecting Google gives the account an
+            // address they know and this row comes back on its own.
+            //
+            // Someone who set a password BEFORE this rule still sees Change Password, or they could
+            // never alter or remove the one they have.
+            if let address = AuthService.shared.passwordAddress,
+               AuthService.shared.hasTypableAddress || AuthService.shared.isConnected(.email) {
                 Section {
                     NavigationLink {
                         PasswordView(address: address,
@@ -510,7 +520,20 @@ struct AccountSettingsView: View {
         let _ = connectedTick   // re-reads providerData after a successful link
         Section {
             ForEach(AuthService.SignInMethod.allCases) { method in
-                signInRow(method)
+                // A PASSWORD IS NOT OFFERED WHEN THERE IS NO ADDRESS TO TYPE IT AGAINST.
+                //
+                // Apple's Hide My Email leaves the account on an unguessable relay address, and a
+                // password there is a credential that cannot be used at the sign-in screen. Offering
+                // it would hand somebody a backup that fails on the day they need it. Connecting
+                // Google gives the account a real address and the row appears by itself.
+                //
+                // Still shown when it is already SET, or an account that set one before this rule
+                // would have no way to see it or take it off.
+                if method != .email
+                    || AuthService.shared.isConnected(.email)
+                    || AuthService.shared.hasTypableAddress {
+                    signInRow(method)
+                }
             }
         } header: {
             Text("Sign-in Methods")
@@ -528,7 +551,11 @@ struct AccountSettingsView: View {
                 .frame(width: 26)
             VStack(alignment: .leading, spacing: 2) {
                 Text(method.title).foregroundStyle(.primary)
-                if let identifier, !identifier.isEmpty {
+                // THE ADDRESS BELONGS TO THE DOOR THAT IDENTIFIES AN ACCOUNT, and the password row
+                // is not one. Its address is always the account's own, so printing it here repeated
+                // the line above and made one account look like two. The other two rows keep it:
+                // "Google · you@gmail.com" answers WHICH Google account opens this.
+                if method != .email, let identifier, !identifier.isEmpty {
                     Text(identifier).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
@@ -546,7 +573,10 @@ struct AccountSettingsView: View {
                 // So: Remove appears only when another door is connected, and it goes through a
                 // verification screen. The checkmark stays when this is the only way in, because
                 // then there is genuinely nothing to offer.
-                if AuthService.shared.connectedMethods.count > 1 {
+                // ⚠️ NOT a count. Removing this must leave a door the person can actually open —
+                // an Apple-with-Hide-My-Email account that also set a password has two methods and
+                // only one of them can be used. See AuthService.removalLeavesAWayIn.
+                if AuthService.shared.removalLeavesAWayIn(method) {
                     // The other half of the takeover, gated for the same reason. The removal screen
                     // already re-verifies with a provider, and that step is exactly what the attack
                     // walks through: the credential it accepts can be one added a minute earlier on

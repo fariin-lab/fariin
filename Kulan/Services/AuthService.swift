@@ -321,10 +321,26 @@ final class AuthService: NSObject {
     ///      these are proven by construction. Apple's Hide My Email relay counts: Apple owns the
     ///      domain and runs the forwarding.
     ///   3. nil. The row does not appear. A screen that can only end badly is worse than no screen.
+    /// ⚠️ AND AMONG THE PROVEN ONES, PREFER ONE THE PERSON COULD TYPE.
+    ///
+    /// Same candidates as before and the same order — this only reorders, it never widens the set,
+    /// so the proven-address rule above is untouched. What it fixes: an account holding Apple with
+    /// Hide My Email AND Google has two proven addresses, and `user.email` is often the Apple relay.
+    /// Returning that meant the password was hung on `…@privaterelay.appleid.com` while a perfectly
+    /// good Gmail sat one entry further down — a login they could never type, when a usable one
+    /// existed. It also made `hasTypableAddress` say no to an account that plainly qualified.
     var passwordAddress: String? {
         guard let user = Auth.auth().currentUser else { return nil }
-        if user.isEmailVerified, let e = user.email, !e.isEmpty { return e }
-        return user.providerData.compactMap(\.email).first(where: { !$0.isEmpty })
+        let verifiedPrimary = (user.isEmailVerified && !(user.email ?? "").isEmpty) ? user.email : nil
+        let candidates = [verifiedPrimary].compactMap { $0 }
+            + user.providerData.compactMap(\.email).filter { !$0.isEmpty }
+        return candidates.first(where: { !Self.isRelayAddress($0) }) ?? candidates.first
+    }
+
+    /// Apple's Hide My Email forwarding address. Real, deliverable, and something the person has
+    /// never seen — so it identifies an account perfectly and cannot serve as a typed login.
+    static func isRelayAddress(_ address: String) -> Bool {
+        address.lowercased().hasSuffix("@privaterelay.appleid.com")
     }
 
     /// Set the account's password, whether or not it had one.
@@ -516,11 +532,19 @@ final class AuthService: NSObject {
             case .email:  return "password"
             }
         }
+        /// ⚠️ "Password", NOT "Email", and the difference is not cosmetic (owner, 2026-08-09).
+        ///
+        /// This row is not a second email identity. The password is always attached to the address
+        /// the account already has — `setPassword` reads it off the account and the screen never
+        /// asks for one — so it can never show anything the Google or Apple row above it did not
+        /// already say. Labelled "Email" it printed the same address twice and read as two separate
+        /// accounts; the owner looked at his own settings screen and asked how one email could be
+        /// two different logins. Calling it what it is answers that before it is asked.
         var title: String {
             switch self {
             case .apple:  return "Apple"
             case .google: return "Google"
-            case .email:  return "Email"
+            case .email:  return "Password"
             }
         }
     }
@@ -539,6 +563,46 @@ final class AuthService: NSObject {
 
     /// Every door currently attached to this account.
     var connectedMethods: [SignInMethod] { SignInMethod.allCases.filter { isConnected($0) } }
+
+    /// ⚠️ APPLE'S HIDDEN ADDRESS CANNOT BE TYPED, AND A PASSWORD ON IT IS A DOOR WITH NO HANDLE.
+    ///
+    /// Sign in with Apple offers Hide My Email, which gives the account something like
+    /// `f6dj84y9z2@privaterelay.appleid.com`. That address works perfectly as an identifier and is
+    /// useless as a LOGIN, because the person has never seen it and could not reproduce it. A
+    /// password is always attached to the account's own address (see `passwordAddress`, which never
+    /// takes one from the caller), so for those accounts "set a password" produces a credential that
+    /// can never be used at the sign-in screen.
+    ///
+    /// It reads as a second way in, which is worse than having none: it is the thing you reach for
+    /// on the day you cannot get in, and it fails exactly then.
+    /// Asks the question of the address the password would ACTUALLY be created on, which is why it
+    /// goes through `passwordAddress` rather than scanning the account itself. An account with a
+    /// relay address and a Gmail passes, because `passwordAddress` now hands back the Gmail.
+    var hasTypableAddress: Bool {
+        guard let a = passwordAddress, !a.isEmpty else { return false }
+        return !Self.isRelayAddress(a)
+    }
+
+    /// Can this door actually be opened by the person, in practice?
+    ///
+    /// Apple and Google always can — they are a tap, and the address behind them is theirs to
+    /// recover through Apple or Google. A password can only be used by somebody who can type the
+    /// address it belongs to, which is why this is not simply "is it connected".
+    func isUsable(_ method: SignInMethod) -> Bool {
+        switch method {
+        case .apple, .google: return true
+        case .email:          return hasTypableAddress
+        }
+    }
+
+    /// Would taking this method off still leave the person a way back in?
+    ///
+    /// Counting was not enough. The count said two, and both could be unusable: an Apple account
+    /// with Hide My Email that also set a password holds Apple + password, and removing Apple leaves
+    /// a password on an address they have never seen. The guard passed and they were locked out.
+    func removalLeavesAWayIn(_ method: SignInMethod) -> Bool {
+        connectedMethods.contains { $0 != method && isUsable($0) }
+    }
 
     /// Take a sign-in method OFF this account.
     ///
@@ -559,7 +623,12 @@ final class AuthService: NSObject {
     func disconnect(_ method: SignInMethod) async throws {
         guard let user = Auth.auth().currentUser else { throw AuthFlowError.notSignedIn }
         guard isConnected(method) else { throw AuthFlowError.notConnected }
-        guard connectedMethods.count > 1 else { throw AuthFlowError.lastSignInMethod }
+        // ⚠️ "AT LEAST ONE LEFT" IS NOT THE SAME AS "A WAY BACK IN", and this used to test the
+        // count. An Apple account using Hide My Email that also set a password holds two methods,
+        // and removing Apple leaves a password on `f6dj84y9z2@privaterelay.appleid.com` — an address
+        // the person has never seen and cannot type. Two became one, the guard was satisfied, and
+        // they were locked out of their own account by a screen that told them it was safe.
+        guard removalLeavesAWayIn(method) else { throw AuthFlowError.lastSignInMethod }
         // ⚠️ THE WARNING GOES OUT **BEFORE** THE UNLINK, AND IT MUST BE AWAITED. This used to run
         // after, as a detached fire-and-forget, and that combination meant the address being removed
         // never heard about it.
@@ -623,15 +692,16 @@ final class AuthService: NSObject {
         guard let uid, !uid.isEmpty, !isAnonymousSession else { return }
         _ = try? await Functions.functions(region: "me-central1")
             .httpsCallable("notifySignInMethodChanged")
-            .call(["provider": providerId, "added": added] as [String: Any]
-                    .merging(Self.originFields) { a, _ in a })
+            .call(Self.methodChangePayload(providerId: providerId, added: added))
     }
 
     /// WHERE THE CHANGE CAME FROM, for the security mail's detail block. Nothing on the server knows
     /// the handset, so the app has to say. The IP is deliberately NOT sent: the function reads that
     /// off the request itself, because a value the caller supplies is a value the caller can invent.
-    private static var originFields: [String: Any] {
-        ["device": UIDevice.current.model,
+    private static func methodChangePayload(providerId: String, added: Bool) -> [String: Any] {
+        ["provider": providerId,
+         "added": added,
+         "device": UIDevice.current.model,
          "os": "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)"]
     }
 
@@ -639,11 +709,13 @@ final class AuthService: NSObject {
     /// was only reporting on — and the function itself is written not to throw for the same reason.
     private func reportSignInMethodChange(providerId: String, added: Bool) {
         guard let uid, !uid.isEmpty, !isAnonymousSession else { return }
+        // Built HERE, not inside the detached task: it reads UIDevice, and reportLogin already sets
+        // the precedent of gathering those on the calling side rather than on a background thread.
+        let payload = Self.methodChangePayload(providerId: providerId, added: added)
         Task.detached {
             _ = try? await Functions.functions(region: "me-central1")
                 .httpsCallable("notifySignInMethodChanged")
-                .call(["provider": providerId, "added": added] as [String: Any]
-                        .merging(Self.originFields) { a, _ in a })
+                .call(payload)
         }
     }
 
