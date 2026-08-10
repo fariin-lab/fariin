@@ -108,6 +108,12 @@ struct ThreadView: View {
     @State private var showWallpaper = false      // "Change Wallpaper" from the profile menu opens the picker here
     // Hold-to-record voice gesture state (standard hold-to-record).
     @State private var recordLocked = false        // recording continues after finger lifts
+    // Listening back to a locked note before sending it. `reviewingNote` is the one-way step: the
+    // note has been closed so it can be played, and Resume is no longer offered. See lockedRecordingBar.
+    @State private var reviewingNote = false
+    @State private var previewPlayer: AVAudioPlayer?
+    @State private var previewPlaying = false
+    @State private var previewURL: URL?
     @State private var holdHint = false             // "hold to record" flash after an accidental tap
     @State private var pinIndex = 0                  // which of the (≤5) pinned messages the bar shows
     @State private var showPinnedSheet = false       // "See All" → full sheet of pinned messages
@@ -4632,20 +4638,62 @@ struct ThreadView: View {
     }
 
     // Locked (hands-free) recording bar — shown after you slide up to lock: delete · timer + waveform · send.
+    /// The locked bar. It used to be trash / timer / send and nothing else: you recorded, then either
+    /// sent it or binned it, with no way to hear it first. For people who speak rather than type —
+    /// which is most of this app's users — a two-minute note you cannot check before it leaves is the
+    /// one thing you most want back, and it cannot be unsent.
+    ///
+    /// Three states now, and the arrow between the last two only goes one way. See the note on
+    /// AudioRecorder.pause: an m4a is only playable once stopped, and cannot be appended to after,
+    /// so listening back necessarily closes the note. Pausing does not, which is why Resume sits on
+    /// the paused state and disappears from the reviewing one.
     private var lockedRecordingBar: some View {
         HStack(spacing: 14) {
             Button { cancelRecording() } label: {
                 Image(systemName: "trash.fill").font(.system(size: 18)).foregroundStyle(.red)
                     .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true)
             }
+
             HStack(spacing: 8) {
-                Image(systemName: "lock.fill").font(.system(size: 12)).foregroundStyle(.secondary)
-                RecordTimerText(recorder: recorder)
-                RecordWaveform(recorder: recorder, color: Theme.accent(dark))
+                if reviewingNote {
+                    // REVIEWING: play it back. The waveform is the finished one, not the live meter.
+                    Button { togglePreview() } label: {
+                        Image(systemName: previewPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 15)).foregroundStyle(Theme.accent(dark))
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    Text(timeString(recorder.elapsed)).font(.system(size: 15).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                } else {
+                    // RECORDING or PAUSED: pause holds the note, and it can still be continued.
+                    Button { recorder.isPaused ? recorder.resume() : recorder.pause() } label: {
+                        Image(systemName: recorder.isPaused ? "mic.fill" : "pause.fill")
+                            .font(.system(size: 15)).foregroundStyle(Theme.accent(dark))
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    RecordTimerText(recorder: recorder)
+                    RecordWaveform(recorder: recorder, color: Theme.accent(dark))
+                    // Only once it is standing still: offering "listen" mid-sentence would close the
+                    // note under the person's own voice.
+                    if recorder.isPaused {
+                        Button { beginPreview() } label: {
+                            Image(systemName: "play.circle")
+                                .font(.system(size: 19)).foregroundStyle(Theme.accent(dark))
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Listen back")
+                    }
+                }
             }
             .padding(.leading, 14).padding(.trailing, 18).frame(minHeight: 40)
             .liquidGlass(Capsule(), interactive: true)
             .clipShape(Capsule())   // keep the dotted waveform fully inside the pill's rounded edges
+
             Button { sendRecording() } label: {
                 // BLUE send button (white arrow on blue Liquid Glass), matching the normal composer send.
                 Image(systemName: "arrow.up").font(.system(size: 18, weight: .bold))
@@ -4655,6 +4703,50 @@ struct ThreadView: View {
                     .contentShape(Circle())
             }
         }
+        .animation(.spring(response: 0.28, dampingFraction: 0.85), value: recorder.isPaused)
+        .animation(.spring(response: 0.28, dampingFraction: 0.85), value: reviewingNote)
+    }
+
+    /// Close the note and start playing it. One-way — see lockedRecordingBar.
+    private func beginPreview() {
+        guard let (url, _, _) = recorder.finalizeForReview() else {
+            // Under a second: there is nothing worth hearing, and finalizeForReview has already
+            // cleaned up after itself. Treat it as a cancel rather than leaving an empty bar.
+            cancelRecording()
+            return
+        }
+        reviewingNote = true
+        previewURL = url
+        impact(.light)
+        startPreviewPlayback()
+    }
+
+    private func togglePreview() {
+        if previewPlaying { previewPlayer?.pause(); previewPlaying = false }
+        else { startPreviewPlayback() }
+    }
+
+    private func startPreviewPlayback() {
+        guard let url = previewURL else { return }
+        if previewPlayer == nil {
+            previewPlayer = try? AVAudioPlayer(contentsOf: url)
+            previewPlayer?.prepareToPlay()
+        }
+        // The recorder leaves the session on .playAndRecord, which plays through the EARPIECE on some
+        // handsets — a note you cannot hear reads as a note that did not record. Force the speaker
+        // for the listen-back, then let the recorder re-warm its own session afterwards.
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .duckOthers])
+        try? session.setActive(true)
+        previewPlaying = previewPlayer?.play() ?? false
+    }
+
+    private func stopPreviewPlayback() {
+        previewPlayer?.stop()
+        previewPlayer = nil
+        previewPlaying = false
+        previewURL = nil
+        reviewingNote = false
     }
 
     private func lockRecording() {
@@ -4667,11 +4759,15 @@ struct ThreadView: View {
         }
     }
     private func cancelRecording() {
+        stopPreviewPlayback()   // before recorder.cancel(), which deletes the file underneath it
         recorder.cancel()
         notify(.warning)
         resetRecordingState()
     }
     private func sendRecording() {
+        // Sending from the review bar must not leave the note playing over the send. The bytes are
+        // read by `finish()` inside stopAndSendAudio, which knows to use the finalized file.
+        stopPreviewPlayback()
         Task { await stopAndSendAudio() }
         impact(.light)
         resetRecordingState()

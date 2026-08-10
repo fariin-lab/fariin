@@ -214,8 +214,82 @@ final class AudioRecorder {
         return bars
     }
 
+    // MARK: - Pause, listen back, resume
+    //
+    // ⚠️ WHY THIS IS TWO STEPS AND NOT ONE, because it looks like an arbitrary split until you know:
+    // an m4a's header is only written by `stop()`, so a paused-but-unstopped file is NOT playable —
+    // and `AVAudioRecorder` cannot append after `stop()`. Those two facts pull in opposite directions,
+    // so the state machine follows them rather than fighting them:
+    //
+    //   recording ──pause()──▶ paused ──resume()──▶ recording      (nothing finalized, append still possible)
+    //                            │
+    //                     finalizeForReview()
+    //                            ▼
+    //                         reviewing        (playable, and deliberately one-way)
+    //
+    // So you may pause and carry on as often as you like, and the moment you ask to HEAR it the note
+    // is closed for additions. Anything else needs recording each stretch to its own file and
+    // stitching them together at send time — real work, and worth doing on its own rather than
+    // smuggled in here. The UI simply stops offering Resume once you have listened.
+
+    /// True while held mid-note. The file is intact and `resume()` will carry on appending to it.
+    var isPaused = false
+    /// Set once the note has been closed for playback. Present = reviewing.
+    private(set) var reviewURL: URL?
+    private var reviewDuration: Double = 0
+    private var reviewWaveform: [Int] = []
+
+    func pause() {
+        guard let r = recorder, r.isRecording else { return }
+        timer?.invalidate(); timer = nil
+        r.pause()                       // NOT stop() — stop() would close the file for good
+        isPaused = true
+    }
+
+    func resume() {
+        guard let r = recorder, isPaused else { return }
+        isPaused = false
+        r.record()
+        // `resuming: true` keeps the captured envelope, so the waveform continues rather than
+        // restarting from empty — the same path an interrupted recording already takes.
+        beginMetering(resuming: true)
+    }
+
+    /// Close the note so it can be PLAYED. One-way, by the nature of the format.
+    /// Returns nil for a note too short to send, having cleaned up after itself.
+    @discardableResult
+    func finalizeForReview() -> (URL, Double, [Int])? {
+        if let existing = reviewURL { return (existing, reviewDuration, reviewWaveform) }
+        timer?.invalidate(); timer = nil
+        guard let r = recorder, let url = fileURL else { return nil }
+        let duration = r.currentTime
+        r.stop()
+        let wf = waveform()
+        isPaused = false
+        isRecording = false
+        recorder = nil
+        Task { @MainActor in SleepBlocker.shared.remove("voice-record") }
+        guard duration >= 1.0 else {
+            try? FileManager.default.removeItem(at: url)
+            reset()
+            return nil
+        }
+        reviewURL = url; reviewDuration = duration; reviewWaveform = wf
+        elapsed = duration
+        return (url, duration, wf)
+    }
+
     /// Stop and return (data, duration, waveform). nil if too short or failed.
     func finish() -> (Data, Double, [Int])? {
+        // Already closed by a listen-back: read the file we kept rather than stopping a recorder
+        // that is gone. Without this, sending after previewing returned nil and silently dropped
+        // the note.
+        if let url = reviewURL {
+            let out = (try? Data(contentsOf: url)).map { ($0, reviewDuration, reviewWaveform) }
+            try? FileManager.default.removeItem(at: url)
+            reset()
+            return out
+        }
         timer?.invalidate(); timer = nil
         guard let recorder, let url = fileURL else { reset(); return nil }
         let duration = recorder.currentTime
@@ -235,6 +309,9 @@ final class AudioRecorder {
         timer?.invalidate(); timer = nil
         recorder?.stop()
         if let u = fileURL { try? FileManager.default.removeItem(at: u) }
+        // A note binned from the review bar has already had its recorder torn down, so `fileURL` is
+        // the only handle left to the bytes on disk — and it is the same file `reviewURL` names.
+        if let r = reviewURL, r != fileURL { try? FileManager.default.removeItem(at: r) }
         reset()
     }
 
@@ -242,6 +319,13 @@ final class AudioRecorder {
         isRecording = false
         Task { @MainActor in SleepBlocker.shared.remove("voice-record") }
         recorder = nil
+        // ⚠️ CLEARED HERE OR THE NEXT NOTE IS THE LAST ONE. `finish()` reads `reviewURL` first, so
+        // leaving it set after a send or a cancel would make the following recording return the
+        // PREVIOUS note's audio — and it would look like a send bug, not a state bug.
+        isPaused = false
+        reviewURL = nil
+        reviewDuration = 0
+        reviewWaveform = []
         levels = []
         allLevels = []
         // Do NOT setActive(false) here: prepare() below immediately setActive(true)s again, so the
