@@ -110,10 +110,30 @@ service cloud.firestore {
       // write it, so spoofing it locally, editing an API response or replacing the app changes
       // nothing that anybody else can see. Only the rule below, gated on an admin capability, may
       // touch it.
+      // `usernameChecks` is the throttle that stops somebody walking the namespace to learn which
+      // handles exist, and until 2026-08-09 THE PERSON BEING THROTTLED COULD RESET IT.
+      //
+      // `checkUsername` allows 40 checks a minute and keeps the tally at `users/{uid}.usernameChecks`
+      // — on the caller's own document. The field was not on this list, so the rules let its owner
+      // write it: set the count back to zero between calls and the limit never trips. A lock with the
+      // key taped to it. The comment in functions/index.js has described this hole for days as the
+      // example of what NOT to do; this is the fix it was asking for.
+      //
+      // Every other throttle in the project is already safe for a different reason: `rateLimits`,
+      // `alertSends`, `loginCodes` and `usernames` live in collections with NO match block at all,
+      // and Firestore is default-deny, so no client can reach them. This counter was the only one
+      // parked somewhere its subject could edit.
+      //
+      // Costs nothing to lock: the app never writes this field (checked across the whole iOS source),
+      // and the function writes it with the admin SDK, which does not go through these rules.
+      //
+      // ⚠️ `fcmTokens`/`voipTokens` belong here too and are deliberately NOT added yet — that is
+      // stage 4 of the push-token move, and adding them before the fleet has the new build would
+      // stop old phones registering for notifications. See the note on the /push subcollection.
       function serverOnlyUserFields() {
         return ['banned', 'bannedAt', 'bannedBy', 'banReason',
                 'handle', 'handleLower', 'usernameHistory',
-                'verification'];
+                'verification', 'usernameChecks'];
       }
 
       allow create: if signedIn() && request.auth.uid == uid
