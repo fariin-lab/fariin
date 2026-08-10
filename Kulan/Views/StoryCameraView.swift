@@ -55,10 +55,57 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     var onCapture: ((Data) -> Void)?
     var onVideo: ((URL) -> Void)?
 
+    /// ⚠️ ONE VIRTUAL DEVICE FIRST, AND THAT IS WHAT REMOVES THE LENS POP.
+    ///
+    /// His report: tapping .5 / 1 / 3 "feels like a sudden pop… no popping, flashing, or sudden
+    /// camera/lens switching, like Signal". Two separate causes, and this is the first.
+    ///
+    /// Asking for `.builtInUltraWideCamera` and `.builtInWideAngleCamera` separately means .5 is a
+    /// DIFFERENT PIECE OF HARDWARE from 1, so going between them tore the input out of a running
+    /// session and put another one in — a reconfiguration you can see, which is the flash.
+    ///
+    /// `.builtInTripleCamera` / `.builtInDualWideCamera` are Apple's VIRTUAL devices: all the lenses
+    /// behind one `AVCaptureDevice`, where the switchover is the system's own and is cross-faded in
+    /// hardware. It is the same device Apple's Camera app and Signal use, and it is why theirs does
+    /// not flash. Nothing switches inputs any more — .5, 1 and 3 are all zoom factors on one device
+    /// (see `deviceZoom`).
+    ///
+    /// The old pair stays as the fallback, because a phone with a single rear lens and every front
+    /// camera has no virtual device to offer and must still work exactly as before.
     private func device(for position: AVCaptureDevice.Position, ultraWide: Bool = false) -> AVCaptureDevice? {
+        if !ultraWide {
+            for t in [AVCaptureDevice.DeviceType.builtInTripleCamera, .builtInDualWideCamera] {
+                if let v = AVCaptureDevice.default(t, for: .video, position: position) { return v }
+            }
+        }
         if ultraWide, let uw = AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: position) { return uw }
         return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
     }
+
+    /// The real zoom factor for a factor as the PILL WRITES IT.
+    ///
+    /// On a virtual device `videoZoomFactor` 1.0 is the widest lens it has, which on a triple camera
+    /// is the ultra-wide — what the pill calls .5. `virtualDeviceSwitchOverVideoZoomFactors` says
+    /// where the next lens takes over, and its first entry is therefore exactly what the pill calls
+    /// 1×. So the whole mapping is one multiplication, and it is correct on every device without
+    /// knowing which one it is: a triple answers 2 (so .5→1, 1→2, 3→6), a phone with one rear lens
+    /// answers nothing and the base is 1 (so 1→1, 3→3, and .5 clamps to the widest it has).
+    private func deviceZoom(_ displayed: CGFloat, on device: AVCaptureDevice? = nil) -> CGFloat {
+        guard let dev = device ?? input?.device else { return max(1, displayed) }
+        let base = dev.virtualDeviceSwitchOverVideoZoomFactors.first.map { CGFloat(truncating: $0) } ?? 1
+        return max(dev.minAvailableVideoZoomFactor,
+                   min(displayed * base, dev.maxAvailableVideoZoomFactor))
+    }
+
+    /// Where the PILL says we are. Kept here rather than only in the view because `setInput` has to
+    /// re-apply it, and `setInput` runs on the session queue where the view's `@State` is unreachable.
+    ///
+    /// ⚠️ WITHOUT THIS THE CAMERA OPENS AT .5 WHILE THE PILL SAYS 1×. A virtual device's resting
+    /// `videoZoomFactor` is 1.0, and on that device 1.0 IS the ultra-wide. Every fresh session and
+    /// every flip therefore lands one lens wider than the control claims, which is a new bug the
+    /// moment `device(for:)` starts returning a triple camera. Applying it at the end of every input
+    /// change is what keeps the picture and the pill saying the same thing.
+    private var displayedZoom: CGFloat = 1
 
     /// ⚠️ THE OLD LENS IS NOT LET GO OF UNTIL THE NEW ONE IS IN. This removed the current input on
     /// its FIRST line and then had two ways to give up — no device, or `canAddInput` saying no — and
@@ -83,6 +130,14 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         session.addInput(newInput)
         input = newInput
         self.position = position
+        // THE NEW LENS STARTS WHERE THE PILL SAYS, not at the device's resting 1.0 — see
+        // `displayedZoom`. A front camera has no virtual device, so this resolves to 1.0 there and
+        // costs nothing; on a triple camera it is the difference between opening at 1x and opening
+        // at .5x with the control lit on 1x.
+        if (try? dev.lockForConfiguration()) != nil {
+            dev.videoZoomFactor = deviceZoom(displayedZoom, on: dev)
+            dev.unlockForConfiguration()
+        }
     }
 
     private func configureIfNeeded() {
@@ -241,24 +296,46 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         }
     }
 
-    // .5 → ultra-wide camera (if the device has one); 1×/3× → zoom factor on the wide lens.
+    /// TAP A LENS AND THE PICTURE TRAVELS THERE — it does not arrive.
+    ///
+    /// The second half of his zoom report. This assigned `videoZoomFactor` outright, which is an
+    /// instant cut: 1× to 3× was one frame wide and one frame tight with nothing between them, and
+    /// no amount of smoothing on the SwiftUI side can help because the pop is in the video itself.
+    ///
+    /// `ramp(toVideoZoomFactor:withRate:)` is AVFoundation's animated zoom and it is what Signal
+    /// uses (`didChangeZoomFactor` → `ramp`). The rate is in STOPS PER SECOND, so it is geometric:
+    /// the same rate covers .5→1 and 1→3 in proportionate time, which is why a single number feels
+    /// right in both directions rather than fast one way and slow the other. 4.0 lands a lens change
+    /// in about a quarter of a second.
+    ///
+    /// ⚠️ NO `beginConfiguration` ANYWHERE IN HERE ANY MORE. Swapping the input was the flash, and
+    /// with a virtual device there is nothing to swap — see `device(for:)`. A phone that only has
+    /// the plain wide lens simply ramps within it; it never had a .5 to give.
     func setZoom(_ level: CGFloat) {
         sessionQueue.async { [weak self] in
             guard let self else { return }
-            if level < 1 {
-                self.session.beginConfiguration()
-                self.setInput(position: self.position, ultraWide: true)
-                self.session.commitConfiguration()
-                return
+            // A DEVICE THAT CANNOT DO IT IN ONE STILL SWAPS, because the fallback path is a phone
+            // with two separate rear cameras and no virtual one. `virtualDeviceSwitchOverVideoZoom-
+            // Factors` is empty there, so this is the same test as "is the mapping meaningful".
+            let virtual = !(self.input?.device.virtualDeviceSwitchOverVideoZoomFactors.isEmpty ?? true)
+            if !virtual {
+                if level < 1, self.input?.device.deviceType != .builtInUltraWideCamera {
+                    self.session.beginConfiguration()
+                    self.setInput(position: self.position, ultraWide: true)
+                    self.session.commitConfiguration()
+                    return
+                }
+                if level >= 1, self.input?.device.deviceType == .builtInUltraWideCamera {
+                    self.session.beginConfiguration()
+                    self.setInput(position: self.position, ultraWide: false)
+                    self.session.commitConfiguration()
+                }
             }
-            // ensure we're on the wide lens for 1×/3×
-            if self.input?.device.deviceType == .builtInUltraWideCamera {
-                self.session.beginConfiguration()
-                self.setInput(position: self.position, ultraWide: false)
-                self.session.commitConfiguration()
-            }
+            self.displayedZoom = level
+            let target = self.deviceZoom(level)
             guard let dev = self.input?.device, (try? dev.lockForConfiguration()) != nil else { return }
-            dev.videoZoomFactor = max(1, min(level, dev.activeFormat.videoMaxZoomFactor))
+            dev.cancelVideoZoomRamp()      // a second tap re-aims from where the picture IS
+            dev.ramp(toVideoZoomFactor: target, withRate: 4.0)
             dev.unlockForConfiguration()
         }
     }
@@ -275,10 +352,17 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         output.capturePhoto(with: settings, delegate: self)
     }
 
-    // Continuous zoom for pinch gestures (clamped to the lens range).
-    func zoomContinuous(_ factor: CGFloat) {
+    /// Continuous zoom for pinch gestures, in the SAME units the pill speaks — a pinch and a tap
+    /// that land on 3 must put the picture in the same place, and before this one meant the device's
+    /// factor and the other meant the pill's.
+    ///
+    /// Assigned rather than ramped, deliberately: the finger IS the animation here, and a ramp under
+    /// a live gesture fights it. The ramp belongs to the taps, which have no finger to follow.
+    func zoomContinuous(_ displayed: CGFloat) {
         guard let dev = input?.device, (try? dev.lockForConfiguration()) != nil else { return }
-        dev.videoZoomFactor = max(1, min(factor, dev.activeFormat.videoMaxZoomFactor))
+        displayedZoom = displayed
+        dev.cancelVideoZoomRamp()   // a pinch during a tap's ramp takes over cleanly
+        dev.videoZoomFactor = deviceZoom(displayed)
         dev.unlockForConfiguration()
     }
 
@@ -348,6 +432,28 @@ struct StoryCameraView: View {
 
     private let previewCorner: CGFloat = 40
     private let barHeight: CGFloat = 88
+
+    /// THE HANDOVER TO THE EDITOR, WHICH USED TO BE A SLIDE.
+    ///
+    /// His report: take a photo and the editor "slides up from the bottom" — his second screenshot
+    /// caught it mid-slide, camera on top and the editor's rounded card climbing in underneath.
+    /// That slide is not ours: `.fullScreenCover` is a UIKit modal and `.coverVertical` is what a
+    /// modal does. Nothing in this file asked for it and nothing here could style it.
+    ///
+    /// What he asked for is Telegram's: the camera's buttons go, the picture stays where it is, the
+    /// editor's buttons arrive. Three steps that are all about CHROME, and the picture never moves —
+    /// so the fix is to stop moving anything and animate only the things that actually change.
+    ///
+    ///   1. `frozenShot` pins the captured frame inside the card the moment it exists, so the live
+    ///      preview cannot show one more frame of a scene the photo is no longer of.
+    ///   2. `handingOver` fades every camera control out over 0.22s, on the still.
+    ///   3. The cover is then raised with its animation disabled (see `AddStorySheet`), so it
+    ///      REPLACES rather than slides, and the editor fades its own controls in over the picture.
+    ///
+    /// A recording ends the same way — his "dont forget is i reacord video use same Transaction" —
+    /// minus the still, because the clip's own first frame is what the video editor opens on.
+    @State private var handingOver = false
+    @State private var frozenShot: UIImage?
 
     private var hasText: Bool { !storyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
@@ -441,6 +547,7 @@ struct StoryCameraView: View {
                 if !typing {
                     bottomBar
                         .frame(height: barHeight)
+                        .opacity(handingOver ? 0 : 1)
                 }
             }
         }
@@ -453,8 +560,26 @@ struct StoryCameraView: View {
         // inside it, the words and the two buttons lift themselves. Nothing else moves at all.
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .onAppear {
-            cam.onCapture = onCapture
-            cam.onVideo = onVideo
+            // ⚠️ THE CHROME LEAVES BEFORE THE EDITOR ARRIVES — see `handingOver`. Both of these used
+            // to hand straight on, so the first thing that moved was a whole modal sliding up from
+            // the floor. Now the buttons fade off the picture, and only then is the editor asked for.
+            cam.onCapture = { d in
+                frozenShot = UIImage(data: d)
+                withAnimation(.easeOut(duration: 0.22)) { handingOver = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
+                    onCapture(d)
+                    resetHandover()
+                }
+            }
+            cam.onVideo = { url in
+                // No still for a clip: the video editor opens on the clip's own first frame, which
+                // is the same picture the preview was showing when the recording stopped.
+                withAnimation(.easeOut(duration: 0.22)) { handingOver = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.24) {
+                    onVideo(url)
+                    resetHandover()
+                }
+            }
             cam.start()
             loadLibraryThumb()
         }
@@ -479,6 +604,21 @@ struct StoryCameraView: View {
         }
     }
 
+    /// PUT THE CAMERA BACK, UNDERNEATH THE EDITOR THAT IS NOW COVERING IT.
+    ///
+    /// ⚠️ IT IS DONE ON A DELAY RATHER THAN ON THE WAY BACK, AND THAT IS DELIBERATE. The obvious
+    /// place is `onAppear` when the editor closes, but a `fullScreenCover` does not promise the view
+    /// underneath either an `onDisappear` or an `onAppear` — and if that promise is not kept, closing
+    /// the editor returns you to a camera with no buttons and a frozen photo, which is a far worse
+    /// failure than the slide this replaces. Resetting from the same place that set it cannot strand:
+    /// by the time this runs the editor owns the whole screen, so nobody sees it happen.
+    private func resetHandover() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            frozenShot = nil
+            handingOver = false
+        }
+    }
+
     // MARK: Preview card
 
     private var preview: some View {
@@ -487,7 +627,11 @@ struct StoryCameraView: View {
             CameraPreview(session: cam.session)
                 .gesture(MagnificationGesture()
                     .onChanged { scale in cam.zoomContinuous(baseZoom * scale) }
-                    .onEnded { scale in baseZoom = max(1, baseZoom * scale) })
+                    // 0.5 IS A REAL FLOOR NOW, not 1. Both of these used to clamp at 1 because a
+                    // pinch spoke the DEVICE's units, where 1 is as wide as it goes; they speak the
+                    // pill's units now, where the widest lens is .5 — so clamping at 1 would have
+                    // made the ultra-wide unreachable by pinch and reset it on release.
+                    .onEnded { scale in baseZoom = max(0.5, baseZoom * scale) })
 
             // Camera access denied/restricted → explain + route to Settings instead of a dead black screen.
             if cam.denied {
@@ -504,6 +648,16 @@ struct StoryCameraView: View {
                     .background(.white, in: Capsule())
                 }
                 .padding(.horizontal, 40)
+            }
+
+            // THE CAPTURED FRAME, PINNED WHERE THE PREVIEW WAS. Above the live layer so the scene
+            // cannot move on underneath while the controls are still fading, and filling the same
+            // card, so nothing about the picture changes at the moment the photo is taken.
+            if let shot = frozenShot {
+                Image(uiImage: shot)
+                    .resizable()
+                    .scaledToFill()
+                    .allowsHitTesting(false)
             }
 
             VStack(spacing: 0) {
@@ -559,6 +713,7 @@ struct StoryCameraView: View {
                 if cam.recording { recordingClock.padding(.top, 18) }
             }
             .animation(.easeInOut(duration: 0.2), value: cam.recording)
+            .opacity(handingOver ? 0 : 1)
         }
     }
 
@@ -888,7 +1043,7 @@ struct StoryCameraView: View {
         let on = zoom == level
         return Button {
             zoom = level
-            baseZoom = max(1, level)   // a pinch after tapping a lens continues from THAT lens
+            baseZoom = level   // a pinch after tapping a lens continues from THAT lens
             cam.setZoom(level)
         } label: {
             Text(on ? "\(label)×" : label)

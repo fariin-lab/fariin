@@ -139,6 +139,20 @@ struct StoryEditorView: View {
     // never invisible on a white background). Sampled per-region (top = X, bottom = tools).
     @State private var topIconDark = false
     @State private var bottomIconDark = false
+    /// THE EDITOR'S CONTROLS ARRIVE, THE PICTURE IS ALREADY THERE.
+    ///
+    /// The other half of the camera handover (see `AddStorySheet`, and `handingOver` in
+    /// StoryCameraView). The cover no longer slides, so without this the whole screen — photo and
+    /// every button at once — would simply appear in one frame, which is a cut rather than a
+    /// transition. The picture appearing instantly is right: it is the same picture the camera was
+    /// already showing, in the same place, so there is nothing for it to animate FROM. Only the
+    /// controls are new, so only the controls fade.
+    ///
+    /// It fades in on EVERY entry, not only from the camera. The library path still arrives on a
+    /// sliding cover, where a quarter-second fade on the controls is at worst unnoticed — and one
+    /// behaviour that is always true beats a flag threaded through four call sites to make two
+    /// screens differ by 0.28s.
+    @State private var chromeIn = false
 
     // Text-on-photo overlays
     @State private var overlays: [TextOverlay] = []
@@ -350,8 +364,8 @@ struct StoryEditorView: View {
                 // pinned to the screen bottom and never moves for the keyboard; the caption pill
                 // sits ON the card (the reference layout) and rides the keyboard when focused.
                 // GONE DURING A TRIM, not merely faded — the filmstrip lands where they were.
-                toolRowLayer
-                captionLayer
+                toolRowLayer.opacity(chromeIn ? 1 : 0)
+                captionLayer.opacity(chromeIn ? 1 : 0)
             }
             // Aa's editor is a SIBLING of the canvas, not an overlay inside it: it needs the
             // keyboard avoidance the canvas must never have. Its own dim backdrop covers the
@@ -370,6 +384,12 @@ struct StoryEditorView: View {
                 .ignoresSafeArea(.keyboard)
             trimOverlay
                 .ignoresSafeArea(.keyboard)
+        }
+        // THE CONTROLS ARRIVE A BEAT AFTER THE PICTURE — see `chromeIn`. The delay is not decoration:
+        // it is the gap the camera's own fade-out leaves, so the two screens read as one handover
+        // rather than as a cross-fade where both sets of buttons are half-visible at once.
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.28).delay(0.04)) { chromeIn = true }
         }
         // Closing the composer must not leave a decoder and an audio session running behind it.
         .onDisappear { stopPreview() }

@@ -271,6 +271,10 @@ struct StoryVideoEditorView: View {
 
     struct StoryVideoShare: Identifiable { let id = UUID(); let payload: StoryVideoPayload; let caption: String }
 
+    /// The controls fade in on entry — see the note at `bottomStack` below. Matches the photo
+    /// editor so a clip and a picture arrive from the camera the same way.
+    @State private var chromeIn = false
+
     var body: some View {
         // Same two-layer split as the photo editor, and for the same reason: the canvas must never
         // move for the keyboard (the pen bakes strokes against `geo`), while the bar must move with
@@ -281,7 +285,15 @@ struct StoryVideoEditorView: View {
             if !showTrim, editingID == nil {
                 bottomStack
                     .animation(.easeInOut(duration: 0.3), value: showTrim)
+                    // THE CONTROLS ARRIVE, THE CLIP IS ALREADY THERE — the same handover the photo
+                    // editor does (`chromeIn` there), because a recording gets the same treatment as
+                    // a photo: the camera fades its buttons off, the cover REPLACES instead of
+                    // sliding (see `AddStorySheet`), and this is the arriving half.
+                    .opacity(chromeIn ? 1 : 0)
             }
+        }
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.28).delay(0.04)) { chromeIn = true }
         }
         // ALWAYS DARK, whatever the phone is set to. This is the screen he photographed rendering
         // light: grey wash, pale glass, the pen bar washed out. Not `.preferredColorScheme` — see

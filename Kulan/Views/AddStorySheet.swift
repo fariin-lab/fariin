@@ -86,11 +86,32 @@ struct AddStorySheet: View {
 
     var body: some View {
         StoryCameraView(
-            onCapture: { d in if let ui = UIImage(data: d) { editorImage = EditorImage(ui) } },
+            // ⚠️ RAISED WITHOUT ITS ANIMATION, WHICH IS THE WHOLE OF HIS "IT SLIDES UP FROM THE
+            // BOTTOM". `.fullScreenCover` is a UIKit modal and `.coverVertical` is simply what a
+            // modal does; there is no transition to style and nothing in the editor could have
+            // caused it. His second screenshot caught it mid-slide, camera above and the editor's
+            // rounded card climbing in below.
+            //
+            // Disabling animations for THIS state change alone — not with a `.transaction` on the
+            // view, which would flatten the camera's own mode slide and everything else in it —
+            // makes the cover replace rather than travel. The motion he asked for is then entirely
+            // ours: the camera fades its buttons off the frozen photo (`handingOver`), the editor
+            // fades its own in over the same picture (`chromeIn`). Nothing slides, so nothing has to
+            // be caught up with.
+            onCapture: { d in
+                guard let ui = UIImage(data: d) else { return }
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { editorImage = EditorImage(ui) }
+            },
             onClose: { dismiss() },
             // A recorded clip goes to the SAME editor a library video opens in, so a story filmed
             // here and a story picked from Photos are trimmed and captioned the same way.
-            onVideo: { url in editorVideo = EditorVideo(url) },
+            // Same handover for a recording — his "dont forget is i reacord video use same
+            // Transaction".
+            onVideo: { url in
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { editorVideo = EditorVideo(url) }
+            },
             // TEXT is a mode of the camera page now, not a cover raised over it, so the finished
             // story arrives here already rendered and goes straight to the audience sheet.
             onTextStory: { d in shareTextStory = StoryShareData(data: d) },
