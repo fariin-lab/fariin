@@ -612,6 +612,16 @@ struct StoryDetailView: View {
         }
         // Host shows/hides a sheet over the viewer (viewers list, share, menu) → freeze/resume.
         .onReceive(NotificationCenter.default.publisher(for: .pauseStory)) { _ in
+            // ⚠️ THE FRAME GOES INTO THE BANK BEFORE THE PLAYER STOPS, and the order is the whole
+            // point. A paused item's video output hands its buffer over ONCE; ask a beat later and
+            // there is no new buffer to copy. This is the moment the viewers sheet freezes the story
+            // it is coming up over, so it is the moment that decides whether the carousel has a real
+            // picture of this clip or falls back to its second-zero poster.
+            //
+            // It writes by CLIP URL into the same bank `StoryPlaybackResume` already keeps, so the
+            // cards can ask for a story's picture at draw time instead of a global pointer being
+            // photographed at exactly the right instant. See `bankCurrentFrame`.
+            StoryCardMorph.shared.bankCurrentFrame()
             hostPause.paused = true; pauseVideo()
         }
         .onReceive(NotificationCenter.default.publisher(for: .resumeStory)) { _ in

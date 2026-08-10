@@ -842,6 +842,32 @@ public final class StoryCardMorph {
         return (scaled, mediaURL)
     }
 
+    /// ⚠️ THE FRAME IS BANKED WHEN THE STORY IS FROZEN, NOT WHEN A CARD HAPPENS TO ASK FOR IT.
+    ///
+    /// `StoryPlaybackResume` already keeps one picture per clip, and its own note argues that asking
+    /// BY STORY is what removes the timing window `snapshotCard` has never quite closed. But it was
+    /// only ever written on a clip CHANGE or a `stopVideo` (`rememberPlaybackPosition`), and the
+    /// viewers sheet does neither — it PAUSES. So at the one moment the carousel needs a real frame
+    /// for the story it is coming up over, the bank was empty, every card fell back to `previewUrl`,
+    /// and for a video that url is the poster made at post time: second zero. **That gap is the whole
+    /// reason the capture-at-an-instant system exists**, and filling it here is what lets that system
+    /// be deleted rather than re-timed a fourth time.
+    ///
+    /// Called from the host pause and BEFORE the player is actually paused, because a paused item's
+    /// video output hands its buffer over exactly once — see `currentVideoFrame`.
+    ///
+    /// Cheap to call and safe to call often: a clip with no decoded frame answers nil and writes
+    /// nothing, and the bank is an `NSCache` keyed by the clip's own url, so re-banking the same
+    /// story just replaces one entry.
+    @MainActor
+    public func bankCurrentFrame() {
+        guard let source = frameSource,
+              let mediaURL = source.currentVideoURL,
+              let url = URL(string: mediaURL),
+              let frame = source.currentVideoFrame() else { return }
+        StoryPlaybackResume.rememberFrame(url, image: frame)
+    }
+
     /// Step the live card aside while the carousel row is being swiped.
     ///
     /// The story cannot follow a card that is mid-flight: it sits at the slot centre while the row
