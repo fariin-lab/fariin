@@ -1285,7 +1285,28 @@ struct StoryViewer: View {
         // carries stills the whole time and the live clip arrives with the collapse.
         .onChange(of: sheetStoryId) { _, id in
             guard showViewers, currentIsMine, !id.isEmpty else { return }
-            pendingJumpStoryId = id
+            // ⚠️ THE STORY ALREADY ON SCREEN IS NOT A JUMP.
+            //
+            // The open writes `sheetStoryId = targetStoryId` and `showViewers = true` in ONE
+            // transaction, so this handler runs with `showViewers` already true — and it stored a
+            // jump TO THE STORY THE VIEWER IS SHOWING on the first pull of every session. Under the
+            // immediate-jump design that self-jump was a no-op (the library guards
+            // `idx != getCurrentIndex()`); deferred, it became a non-empty `pendingJumpStoryId`
+            // that jammed `carouselOwnsSlot` true for the whole sheet session. Everything
+            // downstream of that flag then misfired at once, and each was a device report:
+            // the flip at 1% of the pull hid the live card for a beat before `driveMorph`'s
+            // `p < 0.9` un-hid it, and the carousel card underneath had no cover yet — his video
+            // flashing its 0-second frame the instant the drag begins; with the flag never
+            // transitioning again, the touch-down capture site went dead and `scheduleFrozenCapture`
+            // refused forever (`!carouselOwnsSlot`), so cards fell back to their posters; and
+            // nothing ever re-hid the live card, so after paging the row to another story the story
+            // he pulled up from stayed painted in the slot — his "the background behind the card
+            // still shows Story A".
+            //
+            // Same comparison in both directions, because a selection can come BACK: paging
+            // A → B → A again must clear the stale jump to B, or the close would spend it and land
+            // on a story the row is no longer centred on.
+            if id == targetStoryId { pendingJumpStoryId = "" } else { pendingJumpStoryId = id }
             // A 0.2s re-freeze lived here, because a jumped-to item arrived with a live material
             // that misrendered under the sheet's scale — "the centre card grew an extra blur bar and
             // the photo read as jumping". The canvas has no such state: it is two colours in a
