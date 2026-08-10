@@ -364,6 +364,9 @@ struct AccountSettingsView: View {
     @State private var connectedTick = 0        // bump to re-read providerData after a link
     @State private var disconnecting: AuthService.SignInMethod?   // → the verify-then-remove screen
     @State private var showConnectEmail = false
+    /// Setting a FIRST password on the address the account already has. Distinct from
+    /// `showConnectEmail`, which asks for an address as well — see `reallyConnect`.
+    @State private var showSetPassword = false
 
     var body: some View {
         List {
@@ -403,15 +406,24 @@ struct AccountSettingsView: View {
             //
             // Someone who set a password BEFORE this rule still sees Change Password, or they could
             // never alter or remove the one they have.
+            // ⚠️ CHANGE ONLY. SETTING A PASSWORD LIVES UNDER SIGN-IN METHODS, AND ONLY THERE.
+            //
+            // This row used to read "Set a Password" when there wasn't one, three lines above a
+            // "Password — Connect" row doing the same job. His 2026-08-10 screenshot has both circled
+            // with "same thing why?". They were: two entry points to one outcome, side by side, and
+            // the app looked confused about its own account model.
+            //
+            // A password is a way to sign in, so it belongs in the list of ways to sign in, beside
+            // Apple and Google, where you can also see whether it is set. What does NOT belong there
+            // is CHANGING one, because that list only offers Connect and Remove. So this section
+            // survives for exactly that job and appears only once a password exists.
             if let address = AuthService.shared.passwordAddress,
-               AuthService.shared.hasTypableAddress || AuthService.shared.isConnected(.email) {
+               AuthService.shared.isConnected(.email) {
                 Section {
                     NavigationLink {
-                        PasswordView(address: address,
-                                     isFirstPassword: !AuthService.shared.isConnected(.email))
+                        PasswordView(address: address, isFirstPassword: false)
                     } label: {
-                        Label(AuthService.shared.isConnected(.email) ? "Change Password" : "Set a Password",
-                              systemImage: "key.fill")
+                        Label("Change Password", systemImage: "key.fill")
                     }
                 } footer: {
                     // NO ADDRESS HERE EITHER, same instruction, same reasoning as the footer inside
@@ -419,9 +431,8 @@ struct AccountSettingsView: View {
                     // phone, both of which recited his own email back at him mid-sentence. The
                     // caption's job is to say what the row does, not to read out data he can see two
                     // rows below under Sign-in Methods.
-                    Text(AuthService.shared.isConnected(.email)
-                         ? "Change the password you sign in with."
-                         : "Add a password as a second way to sign in.")
+                    // One branch now: the section itself only exists when a password is set.
+                    Text("Change the password you sign in with.")
                 }
             }
 
@@ -445,6 +456,21 @@ struct AccountSettingsView: View {
             ConnectEmailView { email, password in
                 try await AuthService.shared.connectEmail(email: email, password: password)
                 connectedTick += 1
+            }
+        }
+        // Adding a FIRST password to the address the account already has. The same screen the old
+        // "Set a Password" row pushed, reached from the one place a password now lives.
+        //
+        // In its own NavigationStack because `PasswordView` sets a `navigationTitle`, and pushed from
+        // a NavigationLink it inherited the settings stack's bar to draw it in. Presented bare in a
+        // sheet there is no bar, so the screen would arrive untitled.
+        //
+        // `onDismiss` bumps the tick because the Sign-in Methods list reads the account's providers
+        // directly, and nothing tells SwiftUI they changed while a sheet was up. Without it you would
+        // set a password and the row would still say Connect until something else redrew the page.
+        .sheet(isPresented: $showSetPassword, onDismiss: { connectedTick += 1 }) {
+            NavigationStack {
+                PasswordView(address: AuthService.shared.passwordAddress ?? "", isFirstPassword: true)
             }
         }
         .alert("Couldn't connect", isPresented: Binding(get: { connectError != nil },
@@ -709,7 +735,22 @@ struct AccountSettingsView: View {
         case .apple:
             break                       // handled by the overlaid SignInWithAppleButton
         case .email:
-            showConnectEmail = true     // needs an email + password to link
+            // ⚠️ ONLY ASK FOR AN ADDRESS WHEN WE DO NOT ALREADY HAVE ONE.
+            //
+            // His 2026-08-10 screenshot circled "Set a Password" and the Password row together and
+            // asked why they are the same thing. They were not even the same thing, which was worse:
+            // this Connect opened `ConnectEmailView`, which asks for an email AND a password, on an
+            // account whose address was already sitting two rows above it under Google. It asked him
+            // to type an address the app had.
+            //
+            // An account with a typable address needs a PASSWORD, not an identity — that is the whole
+            // point of the rename from "Email" to "Password". Only an account with no usable address
+            // has to supply one.
+            if AuthService.shared.passwordAddress != nil, AuthService.shared.hasTypableAddress {
+                showSetPassword = true
+            } else {
+                showConnectEmail = true     // no address on file: needs an email + password to link
+            }
         case .google:
             connecting = .google
             Task {
