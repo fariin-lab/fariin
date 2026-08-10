@@ -33,6 +33,43 @@ final class AuthService: NSObject {
 
     var isSignedIn: Bool { uid != nil }
 
+    // MARK: - Which door you used last
+
+    /// WHICH DOOR YOU CAME IN BY LAST TIME, remembered on THIS PHONE so the sign-in screen can point
+    /// at it. TikTok's "Last login: Phone" badge, and Google and Facebook do the same.
+    ///
+    /// It exists because "which one did I use?" is a real question with a bad failure: pick the wrong
+    /// door and you are told there is no account, which reads as your account being gone. The owner
+    /// hit the same confusion from the other side, looking at his own settings and asking how one
+    /// email could be two logins.
+    ///
+    /// ⚠️ THE METHOD ONLY. NEVER THE ADDRESS. "Google" is a hint; "abdikasim@gmail.com" printed on a
+    /// signed-out phone is somebody's identity shown to whoever is holding it.
+    ///
+    /// ⚠️ AND IT DELIBERATELY SURVIVES SIGN-OUT, which is the one place it disagrees with
+    /// SessionWipe. Everything in that file is cleared so the next person to use this phone inherits
+    /// nothing, and that rule is right. This is the exception, because signed-out is exactly when
+    /// the hint is needed — after a reinstall or a sign-out, staring at three buttons. What it costs
+    /// is that somebody holding the phone learns the last person used Google. Weighed and accepted;
+    /// if that trade is ever refused, clear it in `SessionWipe.wipeAccountData()` and this feature
+    /// simply stops helping in the case it was built for.
+    private static let lastMethodKey = "auth.lastSignInMethod"
+
+    static var lastSignInMethod: SignInMethod? {
+        guard let raw = UserDefaults.standard.string(forKey: lastMethodKey) else { return nil }
+        return SignInMethod(rawValue: raw)
+    }
+
+    static func rememberSignInMethod(_ method: SignInMethod) {
+        UserDefaults.standard.set(method.rawValue, forKey: lastMethodKey)
+    }
+
+    /// Firebase names providers by id; the sign-in screen thinks in doors. One place to translate,
+    /// so a new provider cannot be recorded under a name the badge does not know.
+    static func methodFor(providerId: String) -> SignInMethod? {
+        SignInMethod.allCases.first { $0.providerId == providerId }
+    }
+
     // MARK: - Shared credential path (link-or-sign-in)
 
     /// The one rule every door goes through: anonymous session + new credential = LINK
@@ -40,10 +77,15 @@ final class AuthService: NSObject {
     private func authenticate(with credential: AuthCredential,
                               requireExistingAccount: Bool = false,
                               requireNewAccount: Bool = false) async throws {
+        // Recorded from the CREDENTIAL, at the one place every social door passes through, rather
+        // than at each call site — a door added later is remembered without anybody remembering to.
+        // Only on the success paths below, so a refused sign-in never rewrites the hint.
+        let door = Self.methodFor(providerId: credential.provider)
         if let user = Auth.auth().currentUser, user.isAnonymous {
             do {
                 let result = try await user.link(with: credential)
                 uid = result.user.uid
+                if let door { Self.rememberSignInMethod(door) }
                 reportLogin()
                 return
             } catch let e as NSError where e.code == AuthErrorCode.credentialAlreadyInUse.rawValue {
@@ -52,6 +94,7 @@ final class AuthService: NSObject {
                 let updated = (e.userInfo[AuthErrorUserInfoUpdatedCredentialKey] as? AuthCredential) ?? credential
                 let result = try await Auth.auth().signIn(with: updated)
                 uid = result.user.uid
+                if let door { Self.rememberSignInMethod(door) }
                 reportLogin()
                 return
             } catch let e as NSError where e.code == AuthErrorCode.emailAlreadyInUse.rawValue {
@@ -77,6 +120,7 @@ final class AuthService: NSObject {
             throw AuthFlowError.accountExists
         }
         uid = result.user.uid
+        if let door { Self.rememberSignInMethod(door) }
         reportLogin()
     }
 
@@ -234,6 +278,7 @@ final class AuthService: NSObject {
             // email at all. That's fixed by using createUser.)
             let result = try await Auth.auth().createUser(withEmail: email, password: password)
             uid = result.user.uid
+            Self.rememberSignInMethod(.email)
             reportLogin()
         } catch let e as NSError where e.code == AuthErrorCode.emailAlreadyInUse.rawValue {
             // A SIGN-UP door must not quietly sign you in (user decision 2026-07-24, matching
@@ -247,6 +292,7 @@ final class AuthService: NSObject {
     func signInEmail(email: String, password: String) async throws {
         let result = try await Auth.auth().signIn(withEmail: email, password: password)
         uid = result.user.uid
+        Self.rememberSignInMethod(.email)
         reportLogin()
     }
 

@@ -111,6 +111,44 @@ extension View {
             .background(Color.primary, in: Capsule())
     }
 
+    /// "Last used" — the small badge that says which door you came in by on this phone.
+    ///
+    /// TikTok's "Last login: Phone", and Google and Facebook do the same. It answers a real question
+    /// with a bad failure mode: pick the wrong door and the app says there is no account, which
+    /// reads as your account being gone rather than as you having knocked in the wrong place.
+    ///
+    /// Drawn as an OVERLAY pinned to the top-trailing corner, so it costs the row no height and the
+    /// three doors stay the identical 50pt pills they were. `alignmentGuide` lifts it half out of
+    /// the capsule the way a notification dot sits on an icon; `allowsHitTesting(false)` keeps the
+    /// whole pill tappable, since a label that swallowed the tap in its corner would be a bug that
+    /// only shows up on the one button people most want to press.
+    ///
+    /// It says the METHOD and nothing else. Never an address: this screen is shown to whoever is
+    /// holding a signed-out phone.
+    @ViewBuilder
+    func lastUsedBadge(_ show: Bool) -> some View {
+        if show {
+            self.overlay(alignment: .topTrailing) {
+                Text("Last used")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(AuthPalette.page)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Color.accentColor, in: Capsule())
+                    // SwiftUI places the badge so its guide lands on the parent's edge, so the sign
+                    // of each number is the opposite of what it looks like. `.top + 6` puts the
+                    // guide 6pt down the badge, which lifts the badge 6pt ABOVE the capsule — the
+                    // half-out-of-the-edge look. `.trailing + 10` puts the guide 10pt past the
+                    // badge's right edge, which pulls it 10pt INSIDE the capsule. Using -10 there
+                    // (the intuitive-looking sign) pushes it outside the button instead.
+                    .alignmentGuide(.top) { $0[.top] + 6 }
+                    .alignmentGuide(.trailing) { $0[.trailing] + 10 }
+                    .allowsHitTesting(false)
+            }
+        } else {
+            self
+        }
+    }
+
     /// The second choice: OUTLINED, not filled.
     ///
     /// It used to be a light grey capsule with a hairline on top, and grey-on-white is the weakest
@@ -189,6 +227,15 @@ struct AuthMethodView: View {
 
     private var title: String { mode == .create ? "Create Account" : "Log In" }
 
+    /// Which door to mark "Last used" — ON THE LOG IN SCREEN ONLY.
+    ///
+    /// On Create Account it would point at the account you already have while you are deliberately
+    /// making a new one, which is the opposite of helpful. Read once per body evaluation rather than
+    /// held in @State: it changes only on a successful sign-in, by which point this screen is gone.
+    private var lastDoor: AuthService.SignInMethod? {
+        mode == .login ? AuthService.lastSignInMethod : nil
+    }
+
     var body: some View {
         ZStack {
             AuthPalette.page.ignoresSafeArea()
@@ -240,6 +287,7 @@ struct AuthMethodView: View {
                 .id(scheme)
                 .frame(height: 50)              // matches authDoorPill exactly
                 .clipShape(Capsule())
+                .lastUsedBadge(lastDoor == .apple)
 
                 Button {
                     run { try await AuthService.shared.signInWithGoogle(requireExistingAccount: mode == .login,
@@ -250,6 +298,7 @@ struct AuthMethodView: View {
                     Label(title: { Text("Continue with Google") },
                           icon: { GoogleGIcon(size: 20) })
                         .authDoorPill()
+                        .lastUsedBadge(lastDoor == .google)
                 }
                 .disabled(busy)
 
@@ -257,6 +306,7 @@ struct AuthMethodView: View {
                     Label(title: { Text(mode == .create ? "Sign up with Email" : "Log in with Email") },
                           icon: { Image(systemName: "envelope.fill").font(.system(size: 18)) })
                         .authDoorPill()
+                        .lastUsedBadge(lastDoor == .email)
                 }
 
                 if busy { ProgressView().padding(.top, 6) }
