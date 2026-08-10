@@ -1861,6 +1861,14 @@ struct StoryViewer: View {
                                           // screenshot, photo-textured wedges). The original black
                                           // notch in the first 18% is the lesser wrong until the
                                           // hole truly CROPS (the parked mask-geometry work).
+                                          //
+                                          // ⚠️ THAT PARKED WORK HAS SINCE LANDED and the sentence
+                                          // above is now history: `applyMask`'s surround is its own
+                                          // layer with an even-odd cutout, so `outside` paints only
+                                          // BEYOND the hole and never over the notch. Read the note
+                                          // there before changing this argument again — the black
+                                          // wedges around a circular close were the cutout's shape,
+                                          // not this number.
                                           chrome: heroChrome(f),
                                           crop: hero.crop,
                                           // A circular door times its circle differently coming and

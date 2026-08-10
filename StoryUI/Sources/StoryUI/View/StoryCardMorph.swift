@@ -1001,7 +1001,8 @@ public final class StoryCardMorph {
         hole.frame = local
         // Capped at half the short side: a continuous curve asked for more than that degenerates,
         // and the crop gets very short at the end of a close.
-        hole.cornerRadius = max(0, min(cornerRadius, min(local.width, local.height) / 2))
+        let holeRadius = max(0, min(cornerRadius, min(local.width, local.height) / 2))
+        hole.cornerRadius = holeRadius
         // A true circle asks for the CIRCULAR curve; everything card-shaped stays on the squircle
         // so the hand-over to SwiftUI's `.continuous` clips cannot grow a crescent (the white
         // corners — see the note at the top of this function).
@@ -1017,7 +1018,35 @@ public final class StoryCardMorph {
                 cut.frame = surround.bounds
                 let path = CGMutablePath()
                 path.addRect(surround.bounds)
-                path.addRect(local)
+                // ⚠️ A CIRCULAR HOLE IS CUT OUT AS A CIRCLE, NOT AS ITS BOUNDING BOX — and his
+                // 2026-08-10 black-corners screenshot is what a rectangle costs here.
+                //
+                // MEASURED off that screenshot rather than reasoned (1183x2560, luminance mapped on a
+                // 24x60 grid): a bright circle running off both edges, four HARD BLACK wedges hugging
+                // it, and above and below them a faint dimmed picture at luminance 25-70. Three
+                // regions where the design has two.
+                //
+                // The rectangle above is the cause. For a CARD-shaped hole the gap between the hole's
+                // curve and its bounding box is four corner notches a few points across — invisible,
+                // and cutting them square is what keeps the squircle-vs-arc crescent war (the white
+                // corners) off this layer. For a CIRCLE the same gap is the whole of a square minus
+                // its inscribed disc: about a fifth of the crop, in four wedges the size of a thumb.
+                // Excluded from the surround, they are alpha 0 — cropped down to the presenter's
+                // wall, which early in a pull is near-solid black. The page furniture outside the
+                // crop meanwhile draws at `outside`, so the two meet along the square's edge and that
+                // seam is the artifact he circled.
+                //
+                // Cut as a circle they are simply outside the hole, like everything else outside the
+                // hole, and they fade on the same number as the rest of the page. Nothing else moves:
+                // the exact same arc the hole is drawn with (`addRoundedRect` draws CIRCULAR corners,
+                // which is the curve `circularHole` already puts on the hole, at the same radius), so
+                // the two shapes coincide and no crescent can open between them. The card path keeps
+                // its plain rectangle untouched.
+                if circularHole {
+                    path.addRoundedRect(in: local, cornerWidth: holeRadius, cornerHeight: holeRadius)
+                } else {
+                    path.addRect(local)
+                }
                 cut.path = path
             }
         }
