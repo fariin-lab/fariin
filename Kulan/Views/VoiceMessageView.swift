@@ -55,25 +55,23 @@ struct VoiceMessageView: View {
     var plainBackground: Bool = false
     var onScrub: (Bool) -> Void = { _ in }   // forwarded to the bubble so it blocks reply-swipe while scrubbing
 
-    @State private var player: AVAudioPlayer?
-    @State private var playing = false
-    @State private var loading = false
-    @State private var progress: Double = 0
-    @State private var timer: Timer?
-    @State private var scrubbing = false   // a live drag owns the scrubber — the 20Hz timer must not fight it
-    @State private var rate: Float = 1.0   // playback speed (1× / 1.5× / 2×), standard messenger style
+    /// ⚠️ THE PLAYER IS NOT IN HERE ANY MORE, AND THAT IS THE WHOLE POINT.
+    ///
+    /// It used to be `@State private var player: AVAudioPlayer?`, which tied the player's life to this
+    /// VIEW's life: leaving the chat tore the view down, released the last reference and killed the
+    /// audio mid-sentence, and `onDisappear` called `stop()` on top of that. For users who talk mostly
+    /// by voice that reads as the app being broken, so ownership moved to `VoiceNotePlayer.shared`,
+    /// which outlives every view. This bubble is now a VIEW OF that engine: it draws what the engine
+    /// says and asks it to do things. Nothing about the layout or the gestures changed.
+    @ObservedObject private var engine = VoiceNotePlayer.shared
 
-    // Playback caches: the chosen speed sticks for the WHOLE conversation, and a paused
-    // note's position survives its cell scrolling off-screen and back (cell reuse resets @State).
-    private static var rateByCid: [String: Float] = [:]
-    private static var pausedProgress: [String: Double] = [:]
+    private var playing: Bool { engine.isPlaying(message.id) }
+    private var loading: Bool { engine.isLoading(message.id) }
+    private var progress: Double { engine.progress(for: message.id) }
+    private var rate: Float { engine.rate(for: cid) }
 
     private var rateLabel: String { rate == 1 ? "1×" : (rate == 1.5 ? "1.5×" : "2×") }
-    private func cycleRate() {
-        rate = rate == 1 ? 1.5 : (rate == 1.5 ? 2 : 1)
-        Self.rateByCid[cid] = rate
-        if playing { player?.rate = rate }
-    }
+    private func cycleRate() { engine.cycleRate(cid: cid) }
 
     private var tint: Color {
         if plainBackground { return dark ? .white : .black }   // on the plain gallery page, never the white onAccent
@@ -126,7 +124,11 @@ struct VoiceMessageView: View {
                              // quieter than the played side, which is the only job this has.
                              unplayed: tint.opacity(0.45), playing: playing,
                              onSeek: { pct in seek(pct) },
-                             onScrub: { s in scrubbing = s; VoiceScrubState.active = s; onScrub(s) })
+                             // The engine holds the scrub flag now, because the 20Hz tick it has to
+                             // stand out of the way of lives there too.
+                             onScrub: { s in
+                                 engine.setScrubbing(s); VoiceScrubState.active = s; onScrub(s)
+                             })
                     .frame(width: 158, height: 26)
                 HStack(spacing: 8) {
                     Text(durationText).font(.caption2).foregroundStyle(tint.opacity(0.8))
@@ -159,45 +161,41 @@ struct VoiceMessageView: View {
             }
         }
         .onAppear {
-            rate = Self.rateByCid[cid] ?? 1                                   // per-chat speed sticks (standard)
-            if !playing, let saved = Self.pausedProgress[message.id] { progress = saved }   // restore paused position
-            // Auto-advance handoff for a bubble that was OFF-SCREEN when its turn came: the router parks
-            // the id; the freshly-realized cell claims it here (the notification would have been dropped).
+            // Speed and paused position are the engine's now, so there is nothing to restore here:
+            // this bubble reads them live. What is still needed is the auto-advance handoff for a
+            // bubble that was OFF-SCREEN when its turn came — the router parks the id and the
+            // freshly-realised cell claims it here, because the notification would have been dropped.
             if VoiceAudio.pendingPlayId == message.id {
                 VoiceAudio.pendingPlayId = nil
                 if !playing { toggle() }
             }
         }
         .onDisappear {
-            stop()
-            // Clean only the OPTIMISTIC just-recorded tmp file (still uploading). The DECRYPTED note now
-            // lives in the persistent, file-protected AudioCache (Application Support) — it must NOT be
-            // deleted here, or every scroll-away + relaunch would re-download & re-decrypt it (the bug).
+            // ⚠️ NO `stop()` HERE ANY MORE. THIS LINE WAS THE BUG.
+            //
+            // Leaving the chat, or simply scrolling the note off screen, tore this view down and this
+            // handler killed the audio. The engine outlives the view now, so the note keeps playing
+            // while you walk around the app, which is the whole feature.
+            //
+            // Clean only the OPTIMISTIC just-recorded tmp file, and only when this note is NOT the one
+            // playing. The DECRYPTED note lives in the persistent AudioCache and must never be deleted
+            // here, or every scroll-away would make it download and decrypt again.
             if !playing {
                 let fm = FileManager.default
                 fm.removeItemIfExists(at: fm.temporaryDirectory.appendingPathComponent("local-\(message.rowId).m4a"))
             }
         }
-        // Single-player rule: when ANOTHER note starts, pause this one. The new owner has
-        // already claimed VoiceAudio.activeId, so our teardown won't touch the shared session.
-        .onReceive(NotificationCenter.default.publisher(for: .voiceNoteStopOthers)) { note in
-            guard let id = note.object as? String, id != message.id, playing else { return }
-            pause()
-        }
-        // Auto-advance: the chat posts .voiceNotePlay with the NEXT note's id when the previous
-        // one finishes — if it's this bubble and it isn't already playing, start it.
+        // The single-player rule is enforced inside the engine (one player, one owner), so the
+        // `.voiceNoteStopOthers` handler that used to pause this bubble is gone with it.
+        //
+        // Auto-advance stays: the chat posts `.voiceNotePlay` with the NEXT note's id when one
+        // finishes, and if it is this bubble and it is not already playing, start it.
         .onReceive(NotificationCenter.default.publisher(for: .voiceNotePlay)) { note in
             guard let id = note.object as? String, id == message.id, !playing else { return }
             toggle()
         }
-        // Raise-to-ear: while a voice note plays, lifting the phone to your ear routes
-        // playback to the earpiece; lowering it returns to the speaker. Monitoring is on ONLY during playback.
-        .onReceive(NotificationCenter.default.publisher(for: UIDevice.proximityStateDidChangeNotification)) { _ in
-            guard playing else { return }
-            let toEar = UIDevice.current.proximityState
-            try? AVAudioSession.sharedInstance().setCategory(toEar ? .playAndRecord : .playback)
-            try? AVAudioSession.sharedInstance().setActive(true)
-        }
+        // Raise-to-ear also moved into the engine, for the same reason as the player: it was pointless
+        // on a view that stops existing the moment you leave the chat.
     }
 
     // Real captured waveform, or a neutral flat one for older messages that lack it.
@@ -211,133 +209,12 @@ struct VoiceMessageView: View {
             && PlayedVoice.shared.isUnplayed(cid: cid, messageId: message.id, createdAt: message.createdAt)
     }
 
-    private func seek(_ pct: Double) {
-        let pct = max(0, min(1, pct))
-        progress = pct
-        // BEFORE THE FIRST PLAY there is no AVAudioPlayer yet, and this used to `guard let p = player
-        // else { return }` — so on a note you had never played, dragging or tapping the waveform did
-        // nothing at all; it only started working after you pressed play once. Now the position is
-        // stashed instead, and play() picks it up (it already resumes a stored position), so you can
-        // scrub to where you want and then hit play.
-        guard let p = player else {
-            Self.pausedProgress[message.id] = pct
-            return
-        }
-        p.currentTime = pct * p.duration
-    }
+    /// Scrubbing before the first play still works: with no player yet the engine stashes the position
+    /// and picks it up when you press play.
+    private func seek(_ pct: Double) { engine.seek(pct, id: message.id) }
 
-    private func toggle() {
-        if playing { pause(); return }
-        if player != nil { play(); return }
-        Task { await load() }
-    }
+    private func toggle() { engine.toggle(message: message, cid: cid, isMe: isMe) }
 
-    private func load() async {
-        // Optimistic voice note (still uploading): play the just-recorded bytes directly.
-        if let local = message.localAudioData {
-            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("local-\(message.rowId).m4a")
-            try? local.write(to: tmp)
-            try? AVAudioSession.sharedInstance().setCategory(.playback)
-            try? AVAudioSession.sharedInstance().setActive(true)
-            player = try? AVAudioPlayer(contentsOf: tmp)
-            play()
-            return
-        }
-        // PERSISTENT cache hit → play from the local file instantly, no download, no decrypt (survives
-        // relaunch + scroll-away). This is the fix for "voice notes re-download every launch".
-        // Try the message id first (server id == the docID we stored under at send time), then the
-        // clientId as a belt: my OWN just-sent note is cached under BOTH at send time, so it plays
-        // instantly no matter whether the optimistic bubble has already reconciled to the server id yet.
-        // Without this, a reconciled own-note fell through to the download+decrypt path below and span on
-        // "loading" (user report: "when I send a voice then try to play it just loads").
-        if let local = AudioCache.url(for: message.id)
-            ?? message.clientId.flatMap({ AudioCache.url(for: $0) }) {
-            try? AVAudioSession.sharedInstance().setCategory(.playback)
-            try? AVAudioSession.sharedInstance().setActive(true)
-            player = try? AVAudioPlayer(contentsOf: local)
-            play()
-            return
-        }
-        guard let urlStr = message.audioUrl, let url = URL(string: urlStr), let meta = message.enc else { return }
-        loading = true
-        defer { loading = false }
-        guard let (cipher, _) = try? await MediaSession.shared.data(from: url),
-              let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else { return }
-        // Persist the decrypted note (Application Support, file-protected) so it never re-downloads.
-        let local = AudioCache.store(data, for: message.id)
-        try? AVAudioSession.sharedInstance().setCategory(.playback)
-        try? AVAudioSession.sharedInstance().setActive(true)
-        player = try? AVAudioPlayer(contentsOf: local)
-        play()
-    }
-
-    private func play() {
-        guard player != nil else { return }
-        guard !VoiceAudio.callActive else { return }   // never steal the session from an active call
-        // Claim playback ownership FIRST, then pause any other playing note (its teardown sees a
-        // different owner and leaves the shared session alone) — the single-player rule.
-        VoiceAudio.activeId = message.id
-        NotificationCenter.default.post(name: .voiceNoteStopOthers, object: message.id)
-        // Playing it = heard: clears the accent mic in the chat list + the dot here.
-        if !isMe { withAnimation(.easeOut(duration: 0.25)) {
-            PlayedVoice.shared.markPlayed(cid: cid, messageId: message.id, createdAt: message.createdAt)
-        } }
-        // Resume a paused position that survived cell reuse (progress restored in onAppear).
-        if let p = player, progress > 0, progress < 0.98, p.currentTime == 0 {
-            p.currentTime = progress * p.duration
-        }
-        player?.enableRate = true
-        player?.rate = rate
-        player?.play()
-        playing = true
-        SleepBlocker.shared.add("voice-play-\(message.id)")          // don't auto-lock mid-listen
-        UIDevice.current.isProximityMonitoringEnabled = true         // raise-to-ear active only while playing
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
-            guard let p = player else { return }
-            if p.isPlaying {
-                if !scrubbing {   // a live drag owns the scrubber — don't fight the finger
-                    progress = p.duration > 0 ? p.currentTime / p.duration : 0
-                }
-            } else {
-                playing = false
-                progress = 0
-                Self.pausedProgress.removeValue(forKey: message.id)   // finished → next play starts fresh
-                timer?.invalidate(); timer = nil
-                p.currentTime = 0
-                playbackEnded(natural: true)
-            }
-        }
-    }
-
-    private func pause() {
-        player?.pause(); playing = false; timer?.invalidate(); timer = nil
-        Self.pausedProgress[message.id] = progress                    // survives cell reuse
-        playbackEnded(natural: false)
-    }
-    private func stop() {
-        if playing { Self.pausedProgress[message.id] = progress }     // scrolled away mid-play → resumable
-        let hadPlayer = player != nil
-        player?.stop(); playing = false; timer?.invalidate(); timer = nil
-        if hadPlayer { playbackEnded(natural: false) }                // bubbles that never played touch NOTHING
-    }
-
-    // Teardown — OWNER-ONLY (this was the critical bug: every bubble scrolling off-screen deactivated
-    // the shared session, cutting the user's music and the auto-advance chain's own playback). Only the
-    // note that currently owns playback releases the session/proximity; and never during a call.
-    private func playbackEnded(natural: Bool) {
-        SleepBlocker.shared.remove("voice-play-\(message.id)")
-        guard VoiceAudio.activeId == message.id else { return }   // another note owns audio now — hands off
-        VoiceAudio.activeId = nil
-        UIDevice.current.isProximityMonitoringEnabled = false
-        if !VoiceAudio.callActive {
-            // Leave the category on plain playback (raise-to-ear may have set .playAndRecord — the mic
-            // must not stay hot), then hand the session back so music/podcasts resume.
-            try? AVAudioSession.sharedInstance().setCategory(.playback)
-            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
-        }
-        if natural { NotificationCenter.default.post(name: .voiceNoteFinished, object: message.id) }
-    }
 }
 
 extension FileManager {
