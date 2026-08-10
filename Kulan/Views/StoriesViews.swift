@@ -1369,16 +1369,46 @@ struct StoryViewer: View {
         // architecture — but we can keep their RULE, which is the part that shows: nothing loads
         // while the sheet is up. The selection is remembered and spent at the close, so the slot
         // carries stills the whole time and the live clip arrives with the collapse.
-        // ⚠️ THERE IS NO `sheetStoryId` HANDLER ANY MORE, AND ITS ABSENCE IS THE POINT.
+        // ⚠️ THE STORY UNDERNEATH MOVES THE INSTANT THE ROW DOES. THIS IS BUILD 516's BEHAVIOUR,
+        // PUT BACK, AND IT IS PUT BACK ON HIS BISECTION RATHER THAN ON MY REASONING.
         //
-        // It existed to keep a second copy of "which story has the row been moved to" in
-        // `pendingJumpStoryId`, and keeping a copy in step by hand is what failed. Both readers ask
-        // the ids directly now: `rowIsOnAnotherStory` decides who owns the slot, and `closeViewers`
-        // works out where to land. Neither can be stale, because neither remembers anything.
+        // He tested it down to the build: **516 correct, 517 wrong**. `fc16da9a` is in 517 and not in
+        // 516, and `fc16da9a` is the commit that stopped posting this immediately and started
+        // remembering the selection to spend at the close. Everything I changed today was aimed at
+        // the flag that deferral needed. The deferral itself was the bug, so none of it moved.
         //
-        // (A 0.2s re-freeze also lived here, for a jumped-to item arriving with a live material that
-        // misrendered under the sheet's scale. The canvas has no such state — two colours in a layer,
-        // set when the photo lands, scaled with the card — so there is nothing to re-freeze.)
+        // WHY DEFERRING SEEMED RIGHT, AND WHY IT NO LONGER APPLIES. `fc16da9a` was fixing a real
+        // report: this viewer draws one story at a time through one `PlayerView`, so jumping tore
+        // clip A out of the layer on screen and began downloading B under a 100pt thumbnail. A had a
+        // paused frame, B had nothing, and the gap was visible — "the real-time cover disappears
+        // when I swipe the sheet".
+        //
+        // The cards no longer depend on the live player for their picture. Each one fetches its own
+        // frame from the bank at draw time (`cardMedia`), and the bank is filled when the story
+        // freezes (`StoryCardMorph.bankCurrentFrame`). So tearing the player away no longer empties
+        // anything the row is drawing. The visible half of that report is answered by the frame bank
+        // instead of by the deferral, which is what makes going back to 516's behaviour safe now
+        // when it would not have been then.
+        //
+        // What is NOT yet answered is the invisible half: an immediate jump still starts a download
+        // under the sheet. Telegram's answer is `initializeVideoIfReady` refusing to build a player
+        // at all while the mode is `.pause`. That is the right fix and it belongs on the LOADING, not
+        // on the navigation — a separate change, and deliberately not bundled here.
+        .onChange(of: sheetStoryId) { _, id in
+            // ⚠️ `mineOnly` TOO, NOT `currentIsMine` ALONE. `currentIsMine` depends on
+            // `currentBucketUid`, which only arrives after the library's `onUserChanged`, so on a
+            // fresh open it can still be empty — the note at `onSwipeUpChanged` says exactly this,
+            // which is why the swipe-up that OPENS this sheet accepts either. This guard demanding
+            // the stricter one is how the handler came to be silently skipped for a whole session.
+            guard showViewers, currentIsMine || mineOnly, !id.isEmpty else { return }
+            NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: id)
+            // The anchor moves with it. `currentStoryId` means "the item the library is on", and it
+            // is otherwise only written by `onItemSeen`, which the library WITHHOLDS while a story is
+            // paused — and the story is paused for the entire time this sheet is up. Left stale,
+            // `rowIsOnAnotherStory` would stay true after the jump had already landed and the live
+            // card would be held aside for no reason.
+            currentStoryId = id
+        }
         // The COVER'S OWN BACKING (not just an inner canvas) must be opaque black while the viewers
         // sheet is up — otherwise the .zoom transition composites the clear backing over the inner
         // black canvas and the light Chats list bleeds through as the "white" bug. Clear only at rest,
