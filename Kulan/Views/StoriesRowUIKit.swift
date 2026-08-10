@@ -345,17 +345,43 @@ final class StorySkeletonUIView: UIView {
         highlight.endPoint = CGPoint(x: 1, y: 0.5)
         layer.addSublayer(highlight)
         applyColors()
-        _ = registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (v: StorySkeletonUIView, _) in
-            v.applyColors()
-        }
+        // The trait observer is GONE with the trait: `applyColors` no longer asks what the style is,
+        // so re-running it on a style change would repaint the same two colours it already has. A
+        // subscription that cannot change anything is a subscription a later reader has to prove is
+        // dead, so it goes with the branch it existed for.
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    /// ⚠️ THE STORY ROW IS ALWAYS DARK, SO THIS SHIMMER IS ALWAYS THE DARK ONE. MEASURED, TWICE.
+    ///
+    /// His 2026-08-10 report, the sixth in the corner family: light corners on one card in the row
+    /// while every neighbour's corners are pure black. Sampled off his screenshot rather than
+    /// reasoned about, because this family has cost several fixes that were argued rather than
+    /// measured — the four corners of that card read 231, 234, 247 and 253 against 0,0,0 on the
+    /// cards either side.
+    ///
+    /// 231-234 is `systemGray4` (209) under a white highlight at 0.55, which is precisely this
+    /// function's LIGHT branch, and it is the SAME NUMBER `5deeae9a` recorded for the grey wedges in
+    /// the viewer a few hours earlier ("226-243 … nothing else in this app is that colour, remember
+    /// the number"). That fix pinned the viewer's placeholder and left a note that if light greys
+    /// turned up anywhere else it was the thread. They have, and this is it.
+    ///
+    /// So the trait is not asked any more. Every story surface in this app is dark by standing rule
+    /// (`storyAlwaysDark`), and a view that can resolve LIGHT inside it is a view that can paint a
+    /// near-white block on a black screen. Pinned HERE and not in `SkeletonFill`, which the chat and
+    /// call lists share and where the light shimmer is the right answer — the same call-site rule
+    /// `5deeae9a` followed.
+    ///
+    /// ⚠️ STILL UNEXPLAINED, AND NOT FIXED BY THIS: how the shimmer reaches the corner at all. It
+    /// sits inside `clip`, which has `clipsToBounds` and the card's radius, so it should not be able
+    /// to paint outside the rounded shape whatever colour it is. This makes the artifact
+    /// `systemGray5` (~44) against black instead of ~240, which is the difference between glaring
+    /// and invisible — but the geometry question is open and a second report here means it is that,
+    /// not the colour. Do not re-argue the colour: it is measured.
     private func applyColors() {
-        let dark = traitCollection.userInterfaceStyle == .dark
-        backgroundColor = dark ? .systemGray5 : .systemGray4
-        let tint = UIColor.white.withAlphaComponent(dark ? 0.14 : 0.55)
+        backgroundColor = .systemGray5
+        let tint = UIColor.white.withAlphaComponent(0.14)
         highlight.colors = [UIColor.clear.cgColor, tint.cgColor, UIColor.clear.cgColor]
     }
 
