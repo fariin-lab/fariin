@@ -1764,6 +1764,12 @@ struct UsernameEditView: View {
     private var clean: String { ChatService.sanitizeHandle(draft) }
     private var unchanged: Bool { clean.lowercased() == handle.lowercased() }
 
+    /// Letters still available. Never negative: `sanitizeHandle` truncates at the maximum.
+    private var remaining: Int { max(0, Limits.usernameMaxChars - clean.count) }
+    /// The counter stays hidden until this many or fewer are left. WhatsApp's threshold: theirs
+    /// appears at 21 of 30, which is 9 remaining.
+    private static let counterAppearsAt = 9
+
     var body: some View {
         Form {
             Section {
@@ -1776,6 +1782,28 @@ struct UsernameEditView: View {
                             if c != v { draft = c }
                             schedule(c)
                         }
+                    // HOW MANY LETTERS ARE LEFT, and only once that is a real question.
+                    //
+                    // WhatsApp's counter, from the owner's screenshot: nothing at all until you are
+                    // near the ceiling, then a number that counts DOWN as you type. Theirs appears
+                    // at 21 of 30, which is the same rule as "show it when 9 or fewer remain", so
+                    // that is what this is — expressed as the remainder rather than the length, or
+                    // it would silently stop matching if the maximum ever moved.
+                    //
+                    // A counter that is always on screen is worse than none: for the twenty
+                    // characters nobody is anywhere near the limit it is a number that means
+                    // nothing, sitting in the one place the eye goes to check the name.
+                    //
+                    // It cannot go negative — sanitizeHandle truncates at the maximum, so the field
+                    // simply stops accepting letters and this reads 0.
+                    if remaining <= Self.counterAppearsAt {
+                        Text("\(remaining)")
+                            .font(.subheadline)
+                            .monospacedDigit()          // so the field does not jog as 10 becomes 9
+                            .foregroundStyle(remaining == 0 ? .red : .secondary)
+                            .transition(.opacity)
+                            .accessibilityLabel("\(remaining) characters left")
+                    }
                     // Clear, inside the field, only while there is something to clear.
                     if !draft.isEmpty {
                         Button { draft = ""; status = .quiet; lastAsked = ""; focused = true } label: {
@@ -1787,6 +1815,13 @@ struct UsernameEditView: View {
                         .transition(.opacity.combined(with: .scale(scale: 0.8)))
                     }
                 }
+                // Drives BOTH transitions in this row: the counter appearing at nine left, and the
+                // clear button appearing on the first letter. A `.transition` with nothing animating
+                // the change behind it does nothing at all, so without this the counter would pop in
+                // rather than fade. Keyed to the two things that actually change, not to `draft`,
+                // which would re-run the animation on every keystroke.
+                .animation(.smooth(duration: 0.18), value: remaining <= Self.counterAppearsAt)
+                .animation(.smooth(duration: 0.18), value: draft.isEmpty)
             } footer: {
                 // The one line that changes. Fixed height so the form does not twitch as it swaps.
                 statusLine
