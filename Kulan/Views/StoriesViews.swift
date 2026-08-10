@@ -657,6 +657,13 @@ struct StoryViewer: View {
     /// Which story the owner footer's viewers belong to, so a story change empties it instead of
     /// leaving the previous one's count and faces up during the fetch. See `loadBarViewers`.
     @State private var lastBarViewersStoryId: String = ""
+    /// What the last fetch said about each of MY stories, for the length of this viewer session.
+    ///
+    /// The footer used to blank on every item change and wait out a Firestore round trip, so tapping
+    /// back and forth repainted "0 Views" each way — half of his "the count comes late". Keyed by
+    /// story id, which is the whole safety argument: an entry can only ever be shown for the story it
+    /// was fetched for. Dies with the viewer, so a count is never older than this sitting.
+    @State private var viewersByStory: [String: [StoryViewerInfo]] = [:]
 
     /// TRUE while the CAROUSEL'S OWN card owns the slot and the real story card must stand aside.
     ///
@@ -3257,10 +3264,20 @@ struct StoryViewer: View {
         let id = currentStoryId
         if lastBarViewersStoryId != id {
             lastBarViewersStoryId = id
-            barViewers = []
+            // ⚠️ THIS STORY'S OWN LAST ANSWER, NOT AN EMPTY BAR — the second half of his "the count
+            // comes late". Clearing was right about the danger and too blunt about the cure: the
+            // rule is that a story must never wear ANOTHER story's numbers, not that it must forget
+            // its own. Keyed by id, so it cannot break that rule, and every entry in here was really
+            // fetched for really this story.
+            //
+            // Tapping back and forth through your own stories, and re-opening the viewer, both used
+            // to repaint "0 Views" for a Firestore round trip every single time. Now only a story
+            // nobody has asked about yet waits, and the refresh below still lands over the top.
+            barViewers = viewersByStory[id] ?? []
         }
         Task {
             let v = await StoriesService.shared.fetchViewers(storyId: id)
+            viewersByStory[id] = v
             if id == currentStoryId { barViewers = v }
         }
     }
