@@ -1554,7 +1554,24 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
         scrollToAuthor(uid)
     }
 
-    /// `proxy.scrollTo(uid, anchor: .center)`: centre the card, clamped to the ends of the content.
+    /// ENSURE VISIBLE, NEVER CENTRE — his 2026-08-10 instruction, and Telegram's rule read from
+    /// their source before it.
+    ///
+    /// This used to be `proxy.scrollTo(uid, anchor: .center)` translated literally: work out the
+    /// card's x, subtract half the viewport, set the offset. It moved the row on EVERY change of
+    /// active person, including the open tap, whether or not the card had ever left the screen. So
+    /// closing a story whose card was sitting in plain sight still slid the whole row sideways to
+    /// put that card in the middle, which is the animation he is asking to be rid of: a card that
+    /// never went anywhere does not need bringing back.
+    ///
+    /// `StoryPeerListComponent.setPreviewedItem` scrolls only when the item's frame does not
+    /// intersect the row's bounds, and then by `scrollRectToVisible(frame.insetBy(dx: -40),
+    /// animated: false)` — the minimum that puts it on screen with a 40pt margin, unanimated, never
+    /// centred. His three rules are that call: fully visible does nothing, partly or wholly off
+    /// screen scrolls just far enough, and the flight then lands on the card wherever it now is.
+    ///
+    /// Unanimated stays, and it matters more than ever now: the close asks for the card's rectangle
+    /// immediately afterwards, and a scroll still settling would hand the flight a moving target.
     private func scrollToAuthor(_ uid: String) {
         guard let index = displayedIds.firstIndex(where: { id in
             // The scroll is keyed by AUTHOR, the cards by group id — the same pairing the SwiftUI
@@ -1563,10 +1580,21 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
         }) else { return }
         let w = StoryRowMetrics.cardW
         let x = StoryRowMetrics.hPad + CGFloat(index + 1) * (w + StoryRowMetrics.spacing)
-        let target = x + w / 2 - scrollView.bounds.width / 2
-        let maxX = max(0, scrollView.contentSize.width - scrollView.bounds.width)
-        scrollView.setContentOffset(CGPoint(x: min(max(0, target), maxX), y: 0), animated: false)
+        // `scrollView.bounds.origin` IS the content offset, so this rectangle is exactly what is on
+        // screen right now — no arithmetic to get wrong. The card is given the same y and height so
+        // `contains` asks a purely horizontal question.
+        let visible = scrollView.bounds
+        let card = CGRect(x: x, y: visible.minY, width: w, height: visible.height)
+        // RULE 1: already all the way inside → the row does not move. This is the report.
+        guard !visible.contains(card) else { return }
+        // RULE 2: off screen or cut off → the minimum that brings it in, with Telegram's 40pt of
+        // breathing room, so a card does not arrive flush against the edge reading as still cut off.
+        scrollView.scrollRectToVisible(card.insetBy(dx: -Self.ensureVisibleMargin, dy: 0),
+                                       animated: false)
     }
+
+    /// Telegram's `-40` in `scrollRectToVisible(itemFrame.insetBy(dx: -40))`.
+    private static let ensureVisibleMargin: CGFloat = 40
 
     // MARK: Prefetch
 
