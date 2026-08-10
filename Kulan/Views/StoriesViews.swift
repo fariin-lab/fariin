@@ -649,19 +649,18 @@ struct StoryViewer: View {
     private var carouselOwnsSlot: Bool {
         carouselInteracting || sheetPaging || !pendingJumpStoryId.isEmpty
     }
-    /// The frame each of my VIDEO stories was actually showing the first time the sheet came up over
-    /// it, by story id. The carousel draws this instead of the poster.
-    ///
-    /// The live card only occupies the centre slot while nothing is being swiped; the moment a swipe
-    /// starts it steps aside (`StoryCardMorph.setHidden`) and the row draws its own card from
-    /// `previewUrl`. For a video that url is the poster, which is second zero — so the picture in the
-    /// slot jumped from the frame he was watching to the start of the clip at the first millimetre of
-    /// every swipe. His report, and the last corner of the app where a video story still showed
-    /// second zero.
-    ///
-    /// CAPTURED ONCE AND NEVER REFRESHED, which is his own instruction ("it should remain fixed and
-    /// stable… keep the original cover"). Cleared when the viewer goes away.
-    @State private var frozenCovers: [String: UIImage] = [:]
+    // ⚠️ THERE IS NO COVER DICTIONARY ANY MORE, AND THAT IS DELIBERATE.
+    //
+    // `frozenCovers` lived here: one bitmap per video story, filled by photographing the live card
+    // through a single global pointer at a single player view, at an instant that had to be exactly
+    // right. The instant was moved three times (`16ba3c63` on the pull, `13952868` settle-and-verify,
+    // `8693f1ee` a sweep beside it) and the picture was still wrong on build 520.
+    //
+    // Each card asks the frame bank for a picture of its OWN clip at draw time instead — see
+    // `cardMedia`. There is no capture site, so there is no moment to get wrong; there is no host
+    // state, so it cannot be stale, cannot be cleared at the wrong time and cannot be filed under
+    // the wrong story. The bank is written where the story is actually frozen
+    // (`StoryCardMorph.bankCurrentFrame`), which is the one place that always knows the answer.
     /// The morph has no card to move. Only ever true when something upstream has gone wrong; it makes
     /// the story fade rather than sit there at full size under the sheet. See `driveMorph`.
     @State private var morphUnavailable = false
@@ -1145,51 +1144,31 @@ struct StoryViewer: View {
             // Unconditional — this must keep arriving while the morph is unavailable and after the
             // sheet's own early-return paths, or the caption stays stuck at whatever it last heard.
             NotificationCenter.default.post(name: .init("storySheetProgress"), object: p)
-            // ⚠️ NO CAPTURE FROM HERE ANY MORE. This fired the instant the pull crossed 0.9, which is
-            // MID-MOTION: the caption fade is driven by this very number, so at 0.9 the caption is
-            // still ~10% drawn and its scrim is still there — and that is what got baked into the
-            // frozen cover. His 2026-08-07 report, with the bottom of the card circled: "sometimes
-            // appear caption and shadow". Sometimes, because whether it caught the tail of the fade
-            // depended on how fast he pulled.
+            // ⚠️ NO CAPTURE FROM HERE, AND NO SCHEDULED ONE EITHER. Two versions of this line have
+            // shipped: photograph at 0.9 (which is MID-MOTION, so the half-faded caption and its
+            // scrim got baked in — his "sometimes appear caption and shadow"), then a 0.35s
+            // settle-and-verify that only narrowed the same window.
             //
-            // It SCHEDULES instead, through the same settle-and-verify the post-swipe path uses: wait
-            // for the pull to finish, then check the sheet is still up and nothing is moving. A cover
-            // taken there has the caption fully gone, because the fade ended before the timer did.
-            // Removing the capture from here outright would have been the obvious mistake — the first
-            // story of a visit is only ever reached by this path, so it would have had no cover at
-            // all and the carousel would have fallen back to the poster.
-            if p > 0.9 { scheduleFrozenCapture() }
+            // The pull no longer decides what any card shows. Each card reads the frame bank for its
+            // own clip when it draws, and the bank was filled at the pause that STARTED this pull.
+            // A picture that is fetched cannot be caught at the wrong moment, so there is no moment
+            // left to move.
         }
         // The carousel row took over, or gave the centre back — by a finger on the row OR by the
         // sheet being thrown sideways (both slide cards through the slot, both need the copy).
         // See StoryCardMorph.setHidden.
         .onChange(of: carouselOwnsSlot) { _, on in
-            // ⚠️ PHOTOGRAPH THE STORY BEING LEFT FIRST, WHILE IT IS STILL THE LIVE ONE.
+            // ⚠️ THE TWO CAPTURES THAT USED TO BOOKEND THIS LINE ARE GONE. One fired on the way in
+            // ("photograph the story being left, while it is still the live one") and one on the way
+            // out. Both existed because the row's cards drew from a dictionary somebody had to fill
+            // in time; they draw from the frame bank now and fill themselves.
             //
-            // His 2026-08-09 report: the frame a video is actually showing survives the pull up, but
-            // the moment he swipes to the next card the story he left falls back to its poster —
-            // second zero, a different picture — and only comes back when he swipes onto it again.
-            //
-            // Every capture site ran too late to help it. The pull-up one fires while the story is
-            // centred, so it needs the buffer to still be there; the post-swipe one fires when the
-            // row has landed, and by then `sheetStoryId` is the card he swiped TO, because `index`
-            // moves with the scroll position mid-drag. So the outgoing story had no frozen cover to
-            // draw and the carousel did the only thing left — its poster.
-            //
-            // This is the one moment that cannot be too late or too early: the finger has just gone
-            // down, `sheetStoryId` still names the story under it, and the live card has not been
-            // hidden yet (the line below is what hides it). `snapshotCard` reads the player's own
-            // decoded frame, so what is stored is exactly the picture that was on screen — and
-            // `captureFrozenCover` declines a story it already has, so this costs nothing on the
-            // second swipe past the same card.
-            if on { captureFrozenCover(force: true) }
+            // ⚠️ THIS HANDOVER ITSELF IS STILL HERE AND IS STILL THE BUG. `setHidden` swaps the live
+            // card out for the row's copy on an EDGE, and `carouselOwnsSlot` is a boolean fed by
+            // three independent inputs, which is what puts story A behind a card showing story B.
+            // It goes in the next step, when the live card learns to travel with its own row card
+            // instead of standing aside for it. Left standing on purpose so this step is one change.
             StoryCardMorph.shared.setHidden(on)
-            // The swipe is over and the live card is back. Once the story underneath has finished
-            // landing on the card he stopped at (the same beat `sheetStoryId`'s handler waits for
-            // its re-freeze), photograph THIS story too, so the next swipe leaves a true cover
-            // behind as well. A story already photographed is left alone — see frozenCovers.
-            guard !on else { return }
-            scheduleFrozenCapture()
         }
         // Safety net: never leave a story paused after the viewer goes away (the swipe-down dismiss posts
         // pauseStory and does not resume on commit; a sheet up at teardown can also skip the resume).
@@ -1201,10 +1180,10 @@ struct StoryViewer: View {
             // Same reason the chrome is restored here: a viewer torn down with the sheet still up
             // must not hand the next one a caption that is already faded out.
             NotificationCenter.default.post(name: .init("storySheetProgress"), object: CGFloat(0))
-            // The frozen covers belong to ONE viewing session. Kept across sessions they would be
-            // bitmaps of frames nobody is watching any more, and the next open would show a cover
-            // from the last one.
-            frozenCovers.removeAll()
+            // (The per-session cover dictionary that used to be emptied here is gone. The frame bank
+            // it was built from has always been cleared by the door and the presenter's dismissal
+            // belt — `StoryPlaybackResume.clearAll` — which is the same "one viewing session" rule
+            // in the one place that owns it.)
             // The sheet state belongs to one session too, and it does NOT die with this overlay
             // (host @State). A viewer torn down mid-pull — the last story deleted under an open
             // sheet, a system-cancelled drag that parked it at a few percent — left `showViewers`
@@ -1700,94 +1679,18 @@ struct StoryViewer: View {
                         top: topInset + (avail - countArea - h) / 2)
     }
 
-    /// Put the LIVE story where the drag says it should be. This is the whole of the frozen-frame
-    /// fix.
-    ///
-    /// There is no picture of the story any more. The real view shrinks into the slot with its
-    /// player paused where it stands, so a video you are 21 seconds into shows second 21 — it is
-    /// still the same layer drawing it, and nothing is swapped for anything at any point. See
-    /// `StoryCardMorph` for why this is a UIKit transform and not the SwiftUI `.scaleEffect` that
-    /// was reverted twice.
-    ///
-    /// The rectangle handed over is the SAME frame interpolation the deleted morph card used, so the
-    /// motion the owner already signed off is unchanged; only the pixels inside it are real now.
-    /// Photograph the live card for the story the sheet is on, if it is a video and has not been
-    /// photographed already. See `frozenCovers` for why only videos and why only once.
-    /// Photograph the card ONCE THE SHEET HAS STOPPED MOVING, never during the pull.
-    ///
-    /// The caption's fade is driven by the pull's own progress, so a snapshot taken while that number
-    /// is still climbing catches the caption part-drawn and its scrim with it — the thing he circled
-    /// at the bottom of the card. Waiting a beat and then re-checking that the sheet is up, settled
-    /// and not being swiped is what makes the cover a picture of the story and nothing else.
-    ///
-    /// Cheap to call as often as you like: `captureFrozenCover` already declines a story it has, and
-    /// a stale timer lands on the guard below.
-    private func scheduleFrozenCapture() {
-        // ⚠️ STILLNESS, NOT JUST OPENNESS. The old guard asked only whether the sheet was past 0.9,
-        // which a finger HOLDING it at 0.92 satisfies — and the caption's fade is driven by that same
-        // number, so the snapshot would still catch it part-drawn. Remembering the progress and
-        // requiring it to be UNCHANGED a beat later is what actually says "nothing is moving": a
-        // pull still under way cannot hold a number steady for a third of a second.
-        let at = viewersProgress
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            guard showViewers, viewersProgress > 0.9, viewersProgress == at,
-                  !carouselOwnsSlot else { return }
-            captureFrozenCover()
-        }
-    }
-
-    /// `force`: take a new picture even when this story already has one. Only the swipe-begin site
-    /// asks for it, and it needs it: the sheet can be pulled DOWN, the story watched on for another
-    /// ten seconds and the sheet pulled up again, all inside one viewing session — and the cover
-    /// stored the first time is by then a picture of where the clip used to be. It is only ever
-    /// replaced by a SUCCESSFUL snapshot (`snapshotCard` answering nil leaves the old one alone), so
-    /// a refresh can improve the cover and cannot take one away.
-    private func captureFrozenCover(force: Bool = false) {
-        guard showViewers else { return }
-        let live = StoriesRepository.shared.mine?.stories ?? myStories
-        // A photo's poster IS the photo, so the row's own card already matches and a snapshot would
-        // only be a second, staler copy of it.
-        // ⚠️ THE SNAPSHOT IS FILED UNDER THE CLIP IT IS ACTUALLY A PICTURE OF, never under whichever
-        // story the sheet happens to be pointing at when we asked.
-        //
-        // Those two are NOT the same at the one moment that matters. Paging the sheet sideways
-        // commits `sheetStoryId = B` and clears `sheetPaging` in one transaction; the carousel then
-        // starts its own retarget, which raises `carouselInteracting`, which lands back here with
-        // `force: true` — while `jumpToStoryItem` has only just been posted and the live player is
-        // still showing A. Filing A's frame under B with `force` destroyed B's real cover, and B
-        // then drew A's picture until the live card took over. His 2026-08-09 report, in as many
-        // words: the cover that was correct during the swipe is wrong the moment it lands.
-        //
-        // Comparing urls does not narrow that window, it removes the question: a frame that does not
-        // belong to this story is simply not stored, and the story keeps whatever it had.
-        if !sheetStoryId.isEmpty, force || frozenCovers[sheetStoryId] == nil,
-           let s = live.first(where: { $0.id == sheetStoryId }), s.isVideo,
-           let shot = StoryCardMorph.shared.snapshotCard(width: cardSlot.w),
-           shot.mediaURL == s.mediaUrl {
-            frozenCovers[sheetStoryId] = shot.image
-        }
-        // ⚠️ AND EVERY OTHER VIDEO STORY THAT HAS ALREADY DRAWN SOMETHING, WHICH IS WHAT MAKES THIS
-        // STOP DEPENDING ON A MOMENT.
-        //
-        // The line above photographs THE LIVE CARD, so it can only ever answer for the one story the
-        // sheet is pointed at, through one global pointer at one player view, at one instant. Two
-        // fixes have now been aimed at moving that instant (settle-and-verify, then the touch-down
-        // capture) and he has reported the same thing after both: leave a card and it falls back to
-        // its poster — second zero, a different picture — and coming back only looks right because
-        // the LIVE card is showing again underneath.
-        //
-        // `StoryPlaybackResume` already holds the last frame every clip actually rendered, keyed by
-        // its own url, written whenever a story pauses — and pausing the story is precisely what
-        // pulling this sheet up does. So the cover can be ASKED FOR BY STORY instead of caught in
-        // flight, for every card in the row at once, whether or not the timing of any one capture
-        // worked out. A story with no remembered frame (never opened this session) is skipped and
-        // keeps its poster, which is what it had before.
-        for s in live where s.isVideo && frozenCovers[s.id] == nil {
-            guard let u = URL(string: s.mediaUrl),
-                  let f = StoryPlaybackResume.cardFrame(u, width: cardSlot.w) else { continue }
-            frozenCovers[s.id] = f
-        }
-    }
+    // ⚠️ `scheduleFrozenCapture` AND `captureFrozenCover` ARE GONE, AND NOTHING REPLACES THEM HERE.
+    //
+    // Between them they were a 0.35s settle-and-verify timer, a force flag, a url cross-check, a
+    // live-card photograph through one global pointer, and a sweep over every other story — all to
+    // answer one question: what picture does this card show? A card answers that for itself now, at
+    // draw time, from the frame bank keyed by its own clip (`cardMedia`).
+    //
+    // The reason this could not have been done before today is that the bank was EMPTY at the one
+    // moment it mattered. It was written only when a clip changed or stopped, and the viewers sheet
+    // does neither — it pauses. `StoryCardMorph.bankCurrentFrame`, called from the pause itself,
+    // is what filled that hole, and filling it is what made every line above unnecessary rather
+    // than merely badly timed.
 
     /// THE LINE UNDER THE NAME: which audience this story went to.
     ///
@@ -2731,8 +2634,7 @@ struct StoryViewer: View {
                               // underneath. Same size, same place, so the exchange is invisible.
                               hideActiveContent: !carouselOwnsSlot,
                               onInteracting: { carouselInteracting = $0 },
-                              pageDrag: pageDragBox,
-                              frozenCovers: frozenCovers)
+                              pageDrag: pageDragBox)
                 .padding(.top, blockTop)
                 .opacity(Double(carIn))
                 .allowsHitTesting(carIn > 0.5)
@@ -3439,10 +3341,6 @@ struct MyStoriesCarousel: View {
     /// invalidated the host's whole body — the pager, the sheet, every overlay — to move this row.
     /// See `pageDragBox` on the host.
     @ObservedObject var pageDrag: StorySheetPageDrag
-    /// Frames photographed off the live card, by story id — see the host's `frozenCovers`. A story in
-    /// here draws THIS instead of its `previewUrl`, because for a video the previewUrl is the poster
-    /// and the poster is second zero.
-    var frozenCovers: [String: UIImage] = [:]
 
     @State private var byStory: [String: [StoryViewerInfo]] = [:]   // per-story viewers (counts)
     // Native paged scroll position: the id of the card snapped to centre. Seeded to the opened-on story
@@ -3500,9 +3398,7 @@ struct MyStoriesCarousel: View {
 
     init(stories: [Story], activeId: Binding<String>, slotW: CGFloat, slotH: CGFloat, miniH: CGFloat, cropY: CGFloat,
          onActiveTap: @escaping () -> Void = {}, hideActiveContent: Bool = false,
-         onInteracting: @escaping (Bool) -> Void = { _ in }, pageDrag: StorySheetPageDrag,
-         frozenCovers: [String: UIImage] = [:]) {
-        self.frozenCovers = frozenCovers
+         onInteracting: @escaping (Bool) -> Void = { _ in }, pageDrag: StorySheetPageDrag) {
         self.stories = stories
         self._activeId = activeId
         self.slotW = slotW
@@ -3646,7 +3542,21 @@ struct MyStoriesCarousel: View {
     /// The fill lives INSIDE an overlay of `Color.clear` for the same reason every other fill in this
     /// file does: a bare `scaledToFill` reports its own oversized layout and the ZStack adopts it.
     @ViewBuilder private func cardMedia(_ s: Story) -> some View {
-        if let shot = frozenCovers[s.id] {
+        // ⚠️ ASKED FOR BY STORY, AT DRAW TIME. There is no capture here, no timing and no moment to
+        // get right — this card asks the frame bank for a picture of ITS OWN clip, and the bank was
+        // written when that clip was frozen (see `StoryCardMorph.bankCurrentFrame`).
+        //
+        // What this replaces is the whole reason this area kept breaking: a dictionary the host
+        // filled by PHOTOGRAPHING the live card through one global pointer at one player, at an
+        // instant that was moved three times (`16ba3c63`, `13952868`, `8693f1ee`) and was still
+        // wrong on build 520. A card that fetches its own picture cannot be handed the wrong story's
+        // frame, cannot be left holding a stale one, and cannot miss its turn.
+        //
+        // Nil is the normal answer for a photo (nothing is ever banked for one, and a photo's poster
+        // IS the photo) and for a video nobody has watched this session. Both fall through to the
+        // poster below, which is exactly what they had before.
+        if s.isVideo, let u = URL(string: s.mediaUrl),
+           let shot = StoryPlaybackResume.cardFrame(u, width: slotW) {
             // ⚠️ PINNED TO THE SLOT, exactly like the branch below. `Color.clear` is size-NEUTRAL: it
             // accepts whatever size it is proposed, and inside the cover-flow `ZStack` that proposal
             // is not the card, it is the container. The poster branch cannot drift that way because

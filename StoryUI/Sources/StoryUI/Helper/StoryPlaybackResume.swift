@@ -70,7 +70,23 @@ public enum StoryPlaybackResume {
         guard let image else { return }
         let cost = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
         frames.setObject(image, forKey: url.absoluteString as NSString, cost: cost)
+        // A new frame for this clip makes every card-sized copy of the old one wrong. Dropping them
+        // here is what lets `cardFrame` be called from a view body: the expensive part happens once
+        // per (clip, width) and a re-bank is the only thing that can make it happen again.
+        cardFrames = cardFrames.filter { !$0.key.hasPrefix(url.absoluteString + "|") }
     }
+
+    /// Card-sized copies of the banked frames, keyed `<url>|<width>`.
+    ///
+    /// ⚠️ THIS MEMO IS WHAT MAKES THE DRAW-TIME READ AFFORDABLE, and without it the read is a bug.
+    /// `fitted` runs a `UIGraphicsImageRenderer` pass; the carousel asks for every card's picture on
+    /// every body evaluation, and a body evaluation happens on every frame of a scroll. That is N
+    /// bitmap re-renders per frame, which is the kind of thing that reads as "the row is laggy".
+    ///
+    /// Small enough not to need an `NSCache`: these are already downscaled to the card's width
+    /// (~120pt), so a whole session's worth is on the order of a megabyte, and `clearAll` empties it
+    /// with everything else when the viewer goes.
+    private static var cardFrames: [String: UIImage] = [:]
     static func frame(_ url: URL) -> UIImage? { frames.object(forKey: url.absoluteString as NSString) }
 
     /// ⚠️ THE SAME PICTURE, FOR THE APP, BY STORY — and it needs no capture and no timing.
@@ -89,8 +105,12 @@ public enum StoryPlaybackResume {
     /// Copied down to the width it will be drawn at, because what is kept here is the clip's full
     /// resolution and the carousel draws it about a third that wide.
     public static func cardFrame(_ url: URL, width targetW: CGFloat) -> UIImage? {
+        let key = "\(url.absoluteString)|\(Int(targetW.rounded()))"
+        if let memo = cardFrames[key] { return memo }
         guard let f = frame(url) else { return nil }
-        return fitted(f, width: targetW)
+        let out = fitted(f, width: targetW)
+        cardFrames[key] = out
+        return out
     }
 
     /// A copy no bigger than it needs to be. Returns the original when it is already small enough,
@@ -108,7 +128,7 @@ public enum StoryPlaybackResume {
     }
 
     /// The viewer is gone: a story opened later must start at its beginning.
-    public static func clearAll() { positions = [:]; frames.removeAllObjects() }
+    public static func clearAll() { positions = [:]; frames.removeAllObjects(); cardFrames = [:] }
 }
 
 /// A WAY FOR STORYUI TO ASK THE APP FOR A POSTER IT HAS ALREADY DECODED.

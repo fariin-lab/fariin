@@ -792,55 +792,17 @@ public final class StoryCardMorph {
         CATransaction.commit()
     }
 
-    /// The card exactly as it looks right now, cropped to the story and no bigger than it needs to be.
-    ///
-    /// WHY THE CAROUSEL NEEDS THIS. The row draws its cards from `previewUrl`, and for a video that
-    /// url is the poster generated at post time — second zero. That is fine until the live card
-    /// steps aside for a swipe (`setHidden`), because at that instant the slot stops showing the
-    /// frame you were watching and starts showing the first frame of the clip. Same complaint this
-    /// whole file was written for, in the one place the transform does not reach: "swiping between
-    /// stories must not replace the background video cover."
-    ///
-    /// ⚠️ THE PLAYER IS THE ONLY SOURCE, AND THAT IS WHAT KEEPS THE CAPTION OUT.
-    ///
-    /// This used to fall back to `card.drawHierarchy` when the player had no frame to give. A card is
-    /// the story AND everything drawn over it — caption, its scrim, the header, the progress bars —
-    /// so that fallback photographed the chrome along with the picture, and the carousel then showed
-    /// a cover with a caption baked into it. His report, twice, with the bottom of the card circled:
-    /// "sometimes appear caption and shadow". SOMETIMES, because the caption's fade is driven by the
-    /// pull's own progress and whether the capture caught its tail depended on how fast he pulled.
-    ///
-    /// Two timing fixes were aimed at this before (move the capture off the pull, then require the
-    /// progress to be UNCHANGED for a beat). Both narrowed the window and neither closed it, because
-    /// a window is the wrong thing to narrow: as long as the picture CAN contain chrome, some timing
-    /// puts chrome in it. A decoded video frame cannot contain chrome at any timing, so there is no
-    /// window left to get wrong.
-    ///
-    /// The cost is nil instead of a screenshot when the player has no frame, and nil already had a
-    /// meaning here — the caller keeps the poster, which is second-zero rather than wrong. That is
-    /// the same answer the old black-picture rejection gave, and this is only ever called for a video
-    /// that is being watched, where `frameSource` is registered and decoding.
-    /// Returns the picture AND the clip it is a picture of. The caller must check that url against
-    /// the story it is about to file this under — see `currentVideoURL`.
-    public func snapshotCard(width targetW: CGFloat) -> (image: UIImage, mediaURL: String)? {
-        guard card != nil, let source = frameSource,
-              let mediaURL = source.currentVideoURL,
-              let frame = source.currentVideoFrame() else { return nil }
-        // Down to the size it will be DRAWN at. A decoded frame is the clip's full resolution, and
-        // these are held for the length of a viewing session — one per video story — so keeping
-        // 1080x1920 bitmaps around to draw them a third of that wide is megabytes for nothing. The
-        // old screen-capture path sized itself the same way and this keeps that.
-        guard targetW > 1, frame.size.width > targetW else { return (frame, mediaURL) }
-        let h = frame.size.height * (targetW / frame.size.width)
-        let fmt = UIGraphicsImageRendererFormat()
-        fmt.scale = UIScreen.main.scale
-        fmt.opaque = true
-        let size = CGSize(width: targetW, height: h)
-        let scaled = UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
-            frame.draw(in: CGRect(origin: .zero, size: size))
-        }
-        return (scaled, mediaURL)
-    }
+    // ⚠️ `snapshotCard` IS DELETED, AND ITS WHOLE REASON FOR EXISTING WENT WITH IT.
+    //
+    // It answered "what is the live card showing right now", so the host could file that picture
+    // under a story id and the row could draw it. That is a question with a subject that changes
+    // under you: one global `frameSource`, three pages alive, and one instant to ask. Every
+    // wrong-cover report in this area traced back to it, and moving the instant three times never
+    // fixed it.
+    //
+    // Cards fetch their own picture from the frame bank now, keyed by their own clip
+    // (`StoryPlaybackResume.cardFrame`), and `bankCurrentFrame` below fills that bank at the pause.
+    // Nobody has to ask at the right moment, so nobody can ask at the wrong one.
 
     /// ⚠️ THE FRAME IS BANKED WHEN THE STORY IS FROZEN, NOT WHEN A CARD HAPPENS TO ASK FOR IT.
     ///
