@@ -176,6 +176,12 @@ struct StoryRowLongPress: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) {
         context.coordinator.target = target
         (uiView as? Anchor)?.coordinator = context.coordinator
+        // A dead press only heals inside an install attempt, and the attempts above fire on
+        // reparenting — which is exactly when the damage happens, but not the only time. If the
+        // strip's backing scroll view is swapped LATER, with this anchor left where it is, no
+        // UIView callback fires at all: this is the one hook that still runs (every SwiftUI
+        // re-render of the row), and install is a no-op while the press is alive.
+        (uiView as? Anchor)?.heal()
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(target: target) }
@@ -203,6 +209,11 @@ struct StoryRowLongPress: UIViewRepresentable {
         // `install` is idempotent, so the retries cost nothing once one of them has landed.
         override func didMoveToSuperview() {
             super.didMoveToSuperview()
+            tryInstall()
+        }
+        /// Re-anchor if the press's host has died — see the liveness check at the top of
+        /// `install`. Called from `updateUIView`; a live press makes this a no-op.
+        func heal() {
             tryInstall()
         }
         private func tryInstall() {
@@ -240,6 +251,19 @@ struct StoryRowLongPress: UIViewRepresentable {
         /// `allowWindow`: whether a failed climb may fall back to the window (see below). The UIKit
         /// stories row calls this with a view inside its own scroller and never needs it.
         func install(from view: UIView, allowWindow: Bool = false) {
+            // ⚠️ A PRESS WHOSE HOST HAS LEFT THE WINDOW IS NOT INSTALLED, IT IS EMBALMED — the
+            // third archive report ("long press archive story plz fix, more days"). The guard
+            // below treats any non-nil `press` as job done, but the recogniser lives on `host`,
+            // and nothing ever asked whether that view is still on screen. SwiftUI is free to swap
+            // the strip's backing scroll view, or to reparent this anchor between hosts WITHOUT
+            // dropping its window (didMoveToSuperview fires, didMoveToWindow does not — so the
+            // uninstall that handles the window-drop case never runs). Either way the press stays
+            // wired to a dead view, `isInstalled` answers true, every later install attempt turns
+            // back at the guard, and the screen has no press for the rest of its life — exactly
+            // like having none, which is what he keeps photographing. A recogniser on a live host
+            // is untouched (the chat row's UIKit scroller never dies), so this is a no-op
+            // everywhere the press already worked.
+            if press != nil, host == nil || host?.window == nil { uninstall() }
             guard press == nil else { return }
             // The row's own scroll view, found by climbing. This is the chat list's answer too —
             // it hands `install` a view inside its scroller, so the first step up finds it.
