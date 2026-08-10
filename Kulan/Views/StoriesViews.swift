@@ -679,9 +679,11 @@ struct StoryViewer: View {
     /// · The open writes `sheetStoryId` and `showViewers` in ONE transaction, so the handler stored a
     ///   jump to the story already on screen and jammed the flag TRUE for a whole sheet session.
     /// · `75aa9522` fixed that with `id == targetStoryId`, but `targetStoryId` falls back to
-    ///   "first unseen, else first" whenever `currentStoryId` is empty — and `currentStoryId` is
+    ///   "first unseen, else first" whenever `currentStoryId` is empty — and `currentStoryId` was
     ///   written by `onItemSeen`, which the library WITHHOLDS while a story is paused, held or
-    ///   buffering. So that comparison could answer "not a jump" about the wrong story.
+    ///   buffering. So that comparison could answer "not a jump" about the wrong story. (It is
+    ///   written by the ungated `onItemChanged` now — see `isUploadingItem` — so the empty window is
+    ///   one 20fps tick rather than the whole time a story sits paused.)
     /// · **The handler's guard requires `currentIsMine`, while the swipe-up that opens the sheet
     ///   accepts `currentIsMine || mineOnly`** — because `currentBucketUid` arrives a beat late on a
     ///   fresh open, which the note at `onSwipeUpChanged` states in as many words. On that beat the
@@ -893,13 +895,18 @@ struct StoryViewer: View {
     /// in flight is the question that was meant all along, and `uploadingStories` is the list the
     /// viewer is already drawing them from, so the bar and the item cannot disagree.
     ///
-    /// ⚠️ THE OTHER HALF IS NOT FIXED HERE AND MUST NOT BE FORGOTTEN. `currentStoryId` is written by
-    /// `onItemSeen`, which is a WATCHED receipt — StoryDetailView withholds it while a story is
-    /// paused, held, folding, buffering or behind the keyboard (deliberately: for a view-once story
-    /// that receipt SPENDS the view). So the id can lag one or more pages behind the picture, and
-    /// while a real post is genuinely in the air the bar can still ride onto a neighbour. Closing
-    /// that needs an ungated "which item is on screen" signal from the library beside the receipt,
-    /// which is a change to the pager and belongs in its own commit.
+    /// ⚠️ AND THE OTHER HALF IS CLOSED NOW TOO — `currentStoryId` NO LONGER COMES FROM A RECEIPT.
+    ///
+    /// It used to be written by `onItemSeen`, which is a WATCHED receipt: StoryDetailView withholds
+    /// it while a story is paused, held, folding, buffering or behind the keyboard (deliberately —
+    /// for a view-once story delivering it SPENDS the view). The viewers sheet pauses the story for
+    /// its entire life, so under the sheet the id could stop moving altogether and the bar rode onto
+    /// whatever was last WATCHED. That is why he reported this a second time on 2026-08-10 with a
+    /// screenshot of an EIGHTEEN HOUR OLD view-once story wearing the bar.
+    ///
+    /// The library now publishes `onItemChanged` beside the receipt — the item changing, no gate,
+    /// within one 20fps tick — and that is what writes this id. Both halves of the answer are
+    /// current: which item is on screen, and whether that exact placeholder is still in flight.
     private var isUploadingItem: Bool {
         guard StoriesService.isPending(currentStoryId), uploadSvc.uploading else { return false }
         return uploadSvc.uploadingStories.contains { $0.id == currentStoryId }
@@ -1573,17 +1580,47 @@ struct StoryViewer: View {
                 loadBarViewers()
             },
             onItemSeen: { id in
-                currentStoryId = id
                 // ⚠️ THE LOOKAHEAD USED TO START HERE AND IT CANNOT. This callback is a SEEN
                 // RECEIPT, and the library withholds it while the story is paused, held or
                 // buffering — so the next clip's download waited on this clip's download. It now
                 // runs off the item CHANGING, inside the viewer, on the same flattened list; see
                 // the note at the top of `StoryDetailView.startProgress`.
-                // The synthetic still-uploading item has no real doc — don't persist it as "seen"
-                // (junk entry) or fetch its (non-existent) viewers.
+                //
+                // Nothing about "what is on screen" belongs here either, for the same reason and
+                // now for the same fix — see `onItemChanged` below. What is left is the only work
+                // that genuinely means WATCHED: persisting the seen mark and the view receipt.
+                // The synthetic still-uploading item has no real doc — don't persist it as "seen".
                 guard !StoriesService.isPending(id) else { return }
                 StoryPrefs.markStorySeen(id)
-                markSeenItem(id); loadBarViewers()
+                markSeenItem(id)
+            },
+            // ⚠️ WHICH ITEM IS ON SCREEN COMES FROM HERE NOW, NOT FROM THE SEEN RECEIPT, AND THAT
+            // IS THE FIX FOR BOTH OF HIS 2026-08-10 REPORTS.
+            //
+            // `currentStoryId` and everything hanging off it — the "Uploading…" bar
+            // (`isUploadingItem`) and the owner's view count (`loadBarViewers`) — used to be written
+            // by `onItemSeen`. That is a WATCHED receipt: the library withholds it while a story is
+            // paused, held, folding, buffering or behind the keyboard, and for a view-once story
+            // delivering it SPENDS the single view. So it is the one signal in the library that is
+            // deliberately late, and it was being used to answer a question that cannot be late.
+            //
+            // The viewers sheet pauses the story for its whole life and the watchdog re-asserts that
+            // pause twice a second, so under the sheet the receipt may never arrive at all — the id
+            // stays stuck on whatever was last WATCHED. That is both reports in one sentence: an
+            // eighteen-hour-old story wearing the "Uploading…" bar because the stuck id still
+            // matched a placeholder, and the view count arriving late because the fetch is keyed on
+            // the same id.
+            //
+            // `onItemChanged` fires on the item changing with no gate at all, within one 20fps tick.
+            // Same split Telegram draws: `markAsSeen` waits for real playback, the current item is
+            // published immediately.
+            onItemChanged: { id in
+                currentStoryId = id
+                // The synthetic still-uploading item has no real doc, so there are no viewers to
+                // fetch — but it MUST still become `currentStoryId`, because that is exactly how the
+                // "Uploading…" bar knows the placeholder is the thing on screen.
+                guard !StoriesService.isPending(id) else { return }
+                loadBarViewers()
             },
             onDrag: { d in dragDown = d },   // fade my overlays out as the card is pulled down
             showMore: true, // "…" is a native dropdown menu in the header; its buttons post notifications

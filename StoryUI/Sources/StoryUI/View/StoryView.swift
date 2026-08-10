@@ -22,6 +22,10 @@ public struct StoryView: View {
     let onProfile: ((StoryUIUser) -> Void)?
     let onUserChanged: ((String) -> Void)?   // fires the current bucket id on open + each page change
     let onItemSeen: ((String) -> Void)?      // fires each individual story id as it becomes visible
+    /// Fires the story id on screen the moment it changes, with NO watched gate — see
+    /// `StoryDetailView.onItemChanged`. Answer "what am I looking at" with this one, never with
+    /// `onItemSeen`, which is a receipt and is withheld while a story is paused or held.
+    let onItemChanged: ((String) -> Void)?
     let onDrag: ((CGFloat) -> Void)?         // swipe-down amount (so the host can hide its overlays)
     let showMore: Bool                      // show the header "…" dropdown menu
     let onSwipeUp: (() -> Void)?            // up-swipe → host opens the views sheet
@@ -49,6 +53,7 @@ public struct StoryView: View {
         onProfile: ((StoryUIUser) -> Void)? = nil,
         onUserChanged: ((String) -> Void)? = nil,
         onItemSeen: ((String) -> Void)? = nil,
+        onItemChanged: ((String) -> Void)? = nil,
         onDrag: ((CGFloat) -> Void)? = nil,
         showMore: Bool = false,
         onSwipeUp: (() -> Void)? = nil,
@@ -66,6 +71,7 @@ public struct StoryView: View {
         self.onProfile = onProfile
         self.onUserChanged = onUserChanged
         self.onItemSeen = onItemSeen
+        self.onItemChanged = onItemChanged
         self.onDrag = onDrag
         self.showMore = showMore
         self.onSwipeUp = onSwipeUp
@@ -93,6 +99,7 @@ public struct StoryView: View {
                         userClosure: userClosure,
                         onProfile: onProfile,
                         onItemSeen: onItemSeen,
+                        onItemChanged: onItemChanged,
                         showMore: showMore,
                         onDragChanged: { dy in onDrag?(dy) },
                         onCommit: {
@@ -117,6 +124,7 @@ public struct StoryView: View {
                         userClosure: userClosure,
                         onProfile: onProfile,
                         onItemSeen: onItemSeen,
+                        onItemChanged: onItemChanged,
                         showMore: showMore,
                         onDragChanged: { dy in onDrag?(dy) },   // fade the host overlays as the card slides
                         // Swipe-commit close: the card has ALREADY slid off in UIKit, so remove the cover with

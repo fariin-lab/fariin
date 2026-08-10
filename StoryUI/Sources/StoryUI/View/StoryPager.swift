@@ -15,6 +15,9 @@ struct StoryPager: UIViewControllerRepresentable {
     let userClosure: UserCompletionHandler?
     let onProfile: ((StoryUIUser) -> Void)?
     let onItemSeen: ((String) -> Void)?
+    /// Ungated "which item is on screen" — see `StoryDetailView.onItemChanged`. Passed straight
+    /// through; this pager has no opinion about it.
+    let onItemChanged: ((String) -> Void)?
     let showMore: Bool                    // show the header "…" dropdown menu
     let onDragChanged: (CGFloat) -> Void   // overlay fade only; the card itself moves in UIKit (smooth)
     let onCommit: () -> Void               // pulled past threshold -> dismiss
@@ -239,6 +242,7 @@ struct StoryPager: UIViewControllerRepresentable {
                 userClosure: parent.userClosure,
                 onProfile: parent.onProfile,
                 onItemSeen: parent.onItemSeen,
+                onItemChanged: parent.onItemChanged,
                 showMore: parent.showMore
             )
             let vc = StoryPageHostVC(rootView: root)

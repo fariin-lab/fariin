@@ -21,6 +21,9 @@ struct StorySoloPager: UIViewControllerRepresentable {
     let userClosure: UserCompletionHandler?
     let onProfile: ((StoryUIUser) -> Void)?
     let onItemSeen: ((String) -> Void)?
+    /// Ungated "which item is on screen" — see `StoryDetailView.onItemChanged`. Passed straight
+    /// through; this pager has no opinion about it.
+    let onItemChanged: ((String) -> Void)?
     let showMore: Bool
     let onDragChanged: (CGFloat) -> Void   // overlay fade only; the card itself moves in UIKit
     let onCommit: () -> Void               // pulled past threshold -> dismiss
@@ -110,6 +113,7 @@ struct StorySoloPager: UIViewControllerRepresentable {
                 userClosure: parent.userClosure,
                 onProfile: parent.onProfile,
                 onItemSeen: parent.onItemSeen,
+                onItemChanged: parent.onItemChanged,
                 showMore: parent.showMore
             )
             // No `AnyView`: StoryPageHostVC takes the concrete view now, so SwiftUI keeps the

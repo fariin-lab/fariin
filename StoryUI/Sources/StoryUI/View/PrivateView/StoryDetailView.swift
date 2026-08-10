@@ -141,9 +141,28 @@ struct StoryDetailView: View {
     let userClosure: UserCompletionHandler?
     var onProfile: ((StoryUIUser) -> Void)?
     var onItemSeen: ((String) -> Void)?
+    /// WHICH ITEM IS ON SCREEN — the ungated twin of `onItemSeen`, and NOT a receipt.
+    ///
+    /// `onItemSeen` means WATCHED, so it is withheld while a story is paused, held, folding,
+    /// buffering or behind the keyboard, and for a view-once story it SPENDS the single view. That
+    /// makes it the wrong thing to answer "what am I looking at" with, and the host was using it for
+    /// exactly that: the "Uploading…" bar and the owner's view count both hang off it. The viewers
+    /// sheet pauses the story for its whole life, so the answer could sit a page or more behind the
+    /// picture — his 2026-08-10 reports, both of them: an eighteen-hour-old story wearing the
+    /// "Uploading…" bar, and the view count arriving late.
+    ///
+    /// This fires on the item CHANGING and nothing else, which is the same edge the lookahead
+    /// already uses (see `startProgress`) and the same separation Telegram draws: `markAsSeen` waits
+    /// for real playback, while `StoryContentContextImpl.updateState` reports the current item
+    /// immediately. Two questions, two answers.
+    var onItemChanged: ((String) -> Void)?
     var showMore: Bool = false   // show the header "…" dropdown menu (buttons post notifications to the host)
     var isDismissing: Bool = false   // true while swiping down to close → cube fold off (no skew)
     @State private var lastSeenItem: String = ""
+    /// The item `onItemChanged` last reported. Its own latch, not shared with `lastPrefetchItem`
+    /// beside it: the two happen to move on the same edge today and they answer different questions,
+    /// so tying them together is how one silently changes when the other is tuned.
+    @State private var lastChangedItem: String = ""
     /// The item the lookahead was last started from. Separate from `lastSeenItem` on purpose — see
     /// the note at the top of `startProgress`.
     @State private var lastPrefetchItem: String = ""
@@ -220,13 +239,15 @@ struct StoryDetailView: View {
     /// no-ops on first paint and still handle bucket changes.
     init(viewModel: StoryViewModel, model: StoryUIModel, isPresented: Binding<Bool>,
          userClosure: UserCompletionHandler?, onProfile: ((StoryUIUser) -> Void)? = nil,
-         onItemSeen: ((String) -> Void)? = nil, showMore: Bool = false, isDismissing: Bool = false) {
+         onItemSeen: ((String) -> Void)? = nil, onItemChanged: ((String) -> Void)? = nil,
+         showMore: Bool = false, isDismissing: Bool = false) {
         self.viewModel = viewModel
         _model = State(initialValue: model)
         _isPresented = isPresented
         self.userClosure = userClosure
         self.onProfile = onProfile
         self.onItemSeen = onItemSeen
+        self.onItemChanged = onItemChanged
         self.showMore = showMore
         self.isDismissing = isDismissing
         // A page swiped two people away is dismantled and REBUILT when you come back, so the resume
@@ -1320,6 +1341,21 @@ private extension StoryDetailView {
             if isBuffering, bufferingURL != cur.mediaURL {
                 isBuffering = false
                 bufferingURL = ""
+            }
+            // ⚠️ AND THE HOST IS TOLD WHICH ITEM IS ON SCREEN, HERE, WHERE NOTHING GATES IT.
+            //
+            // See `onItemChanged`. The host used to learn this from `onItemSeen`, which is the
+            // WATCHED receipt below — withheld while paused, held, folding, buffering or behind the
+            // keyboard. The viewers sheet pauses the story for its entire life, so anything hanging
+            // off that answer (the "Uploading…" bar, the owner's view count) was reading an id that
+            // could be pages behind the picture, and stayed there for as long as the sheet was up.
+            //
+            // This block already exists because the lookahead had the same problem and was moved
+            // out of the receipt for the same reason. It runs on the 20fps timer with no pause
+            // guard, so the report lands within one tick of the item actually changing.
+            if cur.id != lastChangedItem {
+                lastChangedItem = cur.id
+                onItemChanged?(cur.id)
             }
             if cur.id != lastPrefetchItem {
                 lastPrefetchItem = cur.id
