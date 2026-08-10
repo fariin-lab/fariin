@@ -173,7 +173,29 @@ struct StoryImage: View {
                 // show the shimmer skeleton. load() retries with backoff so a transient failure —
                 // a brief network blip, or a cold disk cache right after an app update — recovers on
                 // its own instead of freezing the card on a dead black "photo" icon.
-                SkeletonFill()
+                //
+                // ⚠️ AND IT IS ALWAYS THE DARK SKELETON, WHATEVER THE APP IS WEARING.
+                //
+                // His 2026-08-10 report — "when I click a story to open, the first opening story
+                // corners" with all four circled — MEASURED off the screenshot: neutral grey wedges
+                // outside the card's rounded corners, running 226 to 243 across the wedge. That
+                // gentle ramp is the giveaway: it is not a flat fill, it is THIS view's shimmer
+                // sweep, and 226-243 is `systemGray4` plus a white highlight, i.e. the LIGHT half of
+                // the branch below, drawn while his whole app is in dark mode.
+                //
+                // It shows in the corners rather than across the card because the flight's cover cuts
+                // its own corners transparent ON PURPOSE (`StoryCardShot.crop`'s over-cut, which is
+                // what keeps photographed chat-list pixels out of them), so for the first frames of an
+                // open the corners are a window onto the story page underneath — and that page is
+                // still this placeholder.
+                //
+                // A story card is a dark surface in both appearances: the viewer is black, the
+                // carousel is black, and a loaded card draws `StoryCanvas`'s near-black gradient. A
+                // light-grey shimmer there is a hole in it, not a placeholder for it — the same
+                // reasoning as the composer's segmented control, which pins its trait rather than
+                // hardcoding colours. Pinned here rather than in `SkeletonFill`, which is shared with
+                // the chat and call lists where the light shimmer is correct.
+                SkeletonFill().environment(\.colorScheme, .dark)
             }
         }
         .animation(.easeOut(duration: 0.25), value: image != nil)   // fade in when loaded
