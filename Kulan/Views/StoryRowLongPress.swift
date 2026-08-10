@@ -74,7 +74,18 @@ enum StoryRowPress {
 @MainActor final class StoryPressDebug: ObservableObject {
     static let shared = StoryPressDebug()
     /// ⚠️ FALSE BEFORE ANY TESTFLIGHT BUILD.
-    static let on = true
+    ///
+    /// OFF as of 2026-08-10, and the readout draws nothing while it is. It rode in 524 and 525 on
+    /// purpose, against this rule, to collect the three lines — and the three lines never came back.
+    /// A third build carrying debug text on his screen is not worth a fourth chance at an answer he
+    /// has twice not sent.
+    ///
+    /// ⚠️ THE MACHINERY STAYS, DORMANT, AND THAT IS DELIBERATE. The archive long press is still
+    /// unexplained after three fixes reasoned out of this file, so the instrument is the most
+    /// valuable thing in it. Flip this one word to bring the readout back; do not rebuild it from
+    /// scratch, and do not delete it on a tidy-up pass. `StoryPressDebugReadout` returns nothing at
+    /// all while this is false, and the `note…` calls are writes to an object nobody renders.
+    static let on = false
 
     @Published var anchor = "anchor  —"
     @Published var gate   = "gate    —"
