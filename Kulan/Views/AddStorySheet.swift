@@ -193,8 +193,13 @@ struct StoryLibraryPicker: View {
     @State private var picked: [PHAsset] = []
     @State private var resolving = false      // Add tapped: fetching the full images / video files
     /// A ceiling on one batch. Nothing in the editor enforces a count, but each image is held at
-    /// full resolution and this is the one place that can add ten of them in a single tap.
-    private static let batchLimit = 10
+    /// full resolution and this is the one place that can add a whole handful in a single tap.
+    ///
+    /// FIVE, on the owner's word (2026-08-10): "story limit when you chose select now 10 plz make it
+    /// 5 only". It was ten. The memory argument gets better rather than worse with the smaller
+    /// number, so there is nothing to weigh here — halving the worst case halves the peak the editor
+    /// has to hold at full resolution.
+    private static let batchLimit = 5
     @State private var tooMany = false
     /// A batch where some, or all, of the ticks would not resolve: an iCloud original that will not
     /// come down, or a video whose file cannot be exported. The count so the notice can say how many
