@@ -623,7 +623,16 @@ final class AuthService: NSObject {
         guard let uid, !uid.isEmpty, !isAnonymousSession else { return }
         _ = try? await Functions.functions(region: "me-central1")
             .httpsCallable("notifySignInMethodChanged")
-            .call(["provider": providerId, "added": added])
+            .call(["provider": providerId, "added": added] as [String: Any]
+                    .merging(Self.originFields) { a, _ in a })
+    }
+
+    /// WHERE THE CHANGE CAME FROM, for the security mail's detail block. Nothing on the server knows
+    /// the handset, so the app has to say. The IP is deliberately NOT sent: the function reads that
+    /// off the request itself, because a value the caller supplies is a value the caller can invent.
+    private static var originFields: [String: Any] {
+        ["device": UIDevice.current.model,
+         "os": "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)"]
     }
 
     /// Fire-and-forget, exactly like `reportLogin`. An email failing must never fail the change it
@@ -633,7 +642,8 @@ final class AuthService: NSObject {
         Task.detached {
             _ = try? await Functions.functions(region: "me-central1")
                 .httpsCallable("notifySignInMethodChanged")
-                .call(["provider": providerId, "added": added])
+                .call(["provider": providerId, "added": added] as [String: Any]
+                        .merging(Self.originFields) { a, _ in a })
         }
     }
 
