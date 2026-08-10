@@ -539,7 +539,17 @@ struct StoryDetailView: View {
             // the one being left is the one whose id no longer matches — and its `timerProgress`
             // still holds where the finger got to.
             if newValue != model.id { rememberPosition() }
-            resetProgress()
+            // ⚠️ THE PAGE BEING LEFT IS STILL VISIBLE, so it keeps its picture through the slide.
+            //
+            // This onChange fires on EVERY mounted page. On a finger swipe the pager writes
+            // `currentStoryUser` in `didFinishAnimating`, after the slide, so a full reset here was
+            // invisible. Auto-advance and tap-advance write it FIRST and the slide follows — and the
+            // unconditional `timerProgress = 0` re-rendered the departing page onto its first story
+            // in the opening frame of that slide. His report: reach person A's last story, the move
+            // to B begins, and A flips back to story 1 while still flying off. `keepPosition` clears
+            // every latch but leaves the drawn item alone; the full wipe happens in the
+            // `newValue == model.id` branch the next time this page takes the screen.
+            resetProgress(keepPosition: newValue != model.id)
             // When this bucket becomes current, open where it was left in this session, else at the
             // FIRST UNSEEN item (e.g. a new story D after A/B/C were seen), else at the start.
             // Asking `firstUnseenIndex` here unconditionally is what restarted a fully-watched
@@ -1153,8 +1163,17 @@ private extension StoryDetailView {
         return min(0.98, max(0, CGFloat(t / s.duration)))
     }
 
-    func resetProgress() {
-        timerProgress = 0
+    /// `keepPosition` is the DEPARTING page's variant of this reset, and it exists for one reason:
+    /// the page being left is still on screen. `UIPageViewController` slides it off over ~0.3s, and
+    /// `timerProgress` is what the body DRAWS — zeroing it re-rendered the page onto item 0 in the
+    /// first frame of the slide, so a person left on their last story visibly snapped back to their
+    /// first while flying off (his 2026-08-10 report). It also made the departing page's `VideoView`
+    /// swap to item 0's url and start loading a clip nobody is watching. So the machinery latches
+    /// all still clear, and only the picture stays. Safe because the tick's advancing work is gated
+    /// on `isCurrent` (`startProgress`), and the position is wiped properly the next time this page
+    /// becomes current — the `newValue == model.id` branch runs the full reset and then restores.
+    func resetProgress(keepPosition: Bool = false) {
+        if !keepPosition { timerProgress = 0 }
         isAdvancing = false
         isPaused = false   // safety: never carry a stuck pause across a user switch (R1 freeze fix)
         scenePaused = false
