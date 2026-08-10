@@ -5738,7 +5738,17 @@ struct MessageBubble: View, Equatable {
                     withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) { dragX = 0 }
                     swipeArmed = false
                 }
-                VoiceScrubState.touchOnWaveform = false   // belt: a stuck flag would kill reply everywhere
+                // ⚠️ THE BELT THAT USED TO CLEAR `touchOnWaveform` HERE IS GONE, AND IT HAD TO GO.
+                //
+                // It was written when the flag was raised by the waveform's `.began`, as insurance
+                // against it sticking. The flag is now claimed at TOUCH-DOWN and released in the
+                // recogniser's own `reset()`, which UIKit runs at the end of every gesture however
+                // it finishes — so nothing can stick, and there is nothing left to insure.
+                //
+                // Worse, it is now a bug: this gesture ends at ITS threshold, which can be while the
+                // finger is still down and still scrubbing. Clearing another live gesture's
+                // ownership flag mid-gesture is the exact class of cross-ownership that produced the
+                // report this fix is for. One owner, one lifetime.
                 let fire = !VoiceScrubState.active && dragX <= -50
                 swipeArmed = false
                 swipeFollowing = false

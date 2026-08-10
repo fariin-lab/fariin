@@ -487,7 +487,12 @@ struct WaveformGestureArea: UIViewRepresentable {
             switch g.state {
             case .began:
                 startPct = max(0, min(1, parent.progress))
-                VoiceScrubState.touchOnWaveform = true   // refuse swipe-to-reply for this whole gesture
+                // `touchOnWaveform` is NOT set here any more — it is claimed at touch-down in
+                // `AxisLockedScrubRecognizer.touchesBegan` and released in its `reset()`. Setting it
+                // at `.began` made it depend on movement, which is the race that let a fast drag
+                // reach the reply swipe first. `active` still belongs here: it means "a scrub is
+                // really under way", which is a different fact and is what suppresses the reply
+                // FIRING at the end.
                 VoiceScrubState.active = true
                 parent.onScrub(true)
                 fallthrough
@@ -516,14 +521,41 @@ final class AxisLockedScrubRecognizer: UIPanGestureRecognizer {
         super.touchesBegan(touches, with: event)
         decided = false
         startPoint = touches.first?.location(in: view) ?? .zero
+        // ⚠️ OWNERSHIP IS CLAIMED AT TOUCH-DOWN, NOT AT `.began` — his "when I drag the wave it
+        // sometimes goes to reply".
+        //
+        // The flag used to be raised in the pan's `.began`, and the reply swipe's own comment claims
+        // that happens first because a pan begins at ~10pt while the reply gesture waits for 18pt.
+        // That is a RACE, not a rule, and it loses two ways. A fast flick can cross both thresholds
+        // inside ONE touch event, and nothing orders a UIKit recogniser's callback against SwiftUI's
+        // — so the bubble can start sliding before the flag exists. And if this recogniser FAILS on
+        // the axis test below, `.began` never arrives at all, so the flag is never set and the reply
+        // swipe owns a gesture that started on the waveform.
+        //
+        // A finger that lands on the waveform is on the waveform. That is knowable at touch-down,
+        // with no movement and no threshold, and it is what "the waveform is a no-reply zone" has
+        // always meant. Cleared in `reset()`, which UIKit guarantees at the end of every gesture
+        // however it finishes, so a failed or cancelled touch cannot leave it stuck on.
+        VoiceScrubState.touchOnWaveform = true
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
         if !decided, let p = touches.first?.location(in: view) {
             let dx = abs(p.x - startPoint.x), dy = abs(p.y - startPoint.y)
-            if dx > 3 || dy > 3 {           // 3pt is enough to tell the axis apart
+            // ⚠️ 10pt, AND VERTICAL HAS TO WIN CLEARLY — the other half of the same report.
+            //
+            // Deciding at 3pt meant deciding on the noisiest movement a drag ever produces: the
+            // first millimetre of a thumb, which arcs. A bare `dy > dx` then killed the scrub on a
+            // 5-vs-4 tie that was a horizontal drag in every sense a person would recognise, and
+            // once failed it stays failed for the whole gesture — the finger keeps moving sideways
+            // over the waveform and the bubble slides away to reply instead.
+            //
+            // 10pt is the distance UIKit's own pan uses before it will call itself a pan, and the
+            // 1.4 factor means a drag has to be genuinely, visibly downward to be handed to the
+            // list. An honest vertical scroll clears both easily and still fails instantly.
+            if dx > 10 || dy > 10 {
                 decided = true
-                if dy > dx { state = .failed; return }   // vertical: not ours, ever
+                if dy > dx * 1.4 { state = .failed; return }   // vertical: not ours, ever
             }
         }
         super.touchesMoved(touches, with: event)
@@ -532,5 +564,8 @@ final class AxisLockedScrubRecognizer: UIPanGestureRecognizer {
     override func reset() {
         super.reset()
         decided = false
+        // The one place that runs at the end of EVERY gesture — recognised, failed or cancelled —
+        // so the no-reply zone can never outlive the finger that claimed it.
+        VoiceScrubState.touchOnWaveform = false
     }
 }
