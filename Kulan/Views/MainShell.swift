@@ -72,6 +72,16 @@ struct MainShell: View {
                 legacyTabView
             }
         }
+        // THE VOICE NOTE THAT IS STILL PLAYING, wherever you have walked to.
+        //
+        // `safeAreaInset` rather than an overlay, deliberately: an overlay would sit ON TOP of each
+        // tab's own header, and every screen underneath would keep laying out as though the bar were
+        // not there. An inset makes the room, so nothing is covered and nothing has to know about it.
+        //
+        // Mounted here, on the tab shell, so it survives moving between tabs and pushing into another
+        // chat. It draws nothing at all unless a note is playing outside the chat on screen — see
+        // `VoiceNotePlayer.barVisible`.
+        .safeAreaInset(edge: .top, spacing: 0) { VoiceNoteBar() }
         // (The window dim that used to live here is gone — see the note above `MainShell`. The
         // presenter's own wall covers the tab bar and every tab's content, because it IS a screen
         // over them, and it is driven by the flight's fraction rather than by a bool.)

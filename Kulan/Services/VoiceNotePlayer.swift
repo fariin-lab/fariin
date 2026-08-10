@@ -39,6 +39,19 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     @Published private(set) var progress: Double = 0
     /// Whether the note now playing is one of mine, so the bar can say "You".
     @Published private(set) var isMine = false
+    /// Show the floating bar? Only when a note is actually playing AND its chat is not the one on
+    /// screen, because there the bubble already shows everything the bar would.
+    ///
+    /// ⚠️ `AppRouter.activeChatId` IS ALREADY THE ANSWER — I nearly added a second copy of it. It is
+    /// set by `ThreadView` (and the official channel) on appear and cleared on disappear, and three
+    /// other features already lean on it to mean "the chat currently on screen". A second field
+    /// saying the same thing is how two sources of truth start disagreeing.
+    ///
+    /// Loading deliberately does not count: a bar that flashes for the half second before audio
+    /// starts, in the chat you are already reading, is noise.
+    var barVisible: Bool {
+        playing && !messageId.isEmpty && cid != (AppRouter.shared.activeChatId ?? "")
+    }
 
     private var player: AVAudioPlayer?
     private var timer: Timer?
@@ -157,10 +170,12 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     private func start() {
         guard let p = player else { return }
         guard !VoiceAudio.callActive else { return }   // never steal the session from a call
-        // Claim ownership FIRST, then tell any other note to stand down: its teardown sees a different
-        // owner and leaves the shared session alone.
+        // `activeId` still marks who owns the audio session, because the RECORDER and the call
+        // services read it. But the `.voiceNoteStopOthers` broadcast that used to go with it is gone:
+        // it existed to make many independent per-bubble players behave like one, and there is only
+        // one player now, so nothing can be playing for it to stop. A post with no listener reads to
+        // the next person like a rule still being enforced somewhere.
         VoiceAudio.activeId = messageId
-        NotificationCenter.default.post(name: .voiceNoteStopOthers, object: messageId)
         // Playing it counts as heard.
         if !isMine {
             let id = messageId, c = cid, at = createdAt
