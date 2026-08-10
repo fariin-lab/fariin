@@ -858,7 +858,30 @@ struct StoryViewer: View {
     @State private var uploadSvc = StoriesService.shared   // observed → the "Uploading…" bar tracks the upload
     // The current item is the still-uploading synthetic placeholder → show the "Uploading…" bar (both
     // buttons cancel the upload), suppress the Views footer + delete (there's no real story doc yet).
-    private var isUploadingItem: Bool { StoriesService.isPending(currentStoryId) && uploadSvc.uploading }
+    /// ⚠️ AND THE PLACEHOLDER HAS TO STILL BE IN THE AIR, not merely have been once.
+    ///
+    /// His 2026-08-10 report: post A and B, let them finish, post C, open the viewer — and the
+    /// "Uploading…" bar is on A and B as well. His screenshot is the proof and it is not subtle: an
+    /// EIGHTEEN HOUR OLD view-once story wearing the bar and the cancel button.
+    ///
+    /// `isPending` only asks whether the id carries the placeholder prefix, which stays true for the
+    /// rest of the session once the id has been seen, and `uploading` is a single global flag that C
+    /// holds up on everyone's behalf. So any id left over from a finished post kept answering yes for
+    /// as long as ANY post was running. Asking the service whether this exact placeholder is still
+    /// in flight is the question that was meant all along, and `uploadingStories` is the list the
+    /// viewer is already drawing them from, so the bar and the item cannot disagree.
+    ///
+    /// ⚠️ THE OTHER HALF IS NOT FIXED HERE AND MUST NOT BE FORGOTTEN. `currentStoryId` is written by
+    /// `onItemSeen`, which is a WATCHED receipt — StoryDetailView withholds it while a story is
+    /// paused, held, folding, buffering or behind the keyboard (deliberately: for a view-once story
+    /// that receipt SPENDS the view). So the id can lag one or more pages behind the picture, and
+    /// while a real post is genuinely in the air the bar can still ride onto a neighbour. Closing
+    /// that needs an ungated "which item is on screen" signal from the library beside the receipt,
+    /// which is a change to the pager and belongs in its own commit.
+    private var isUploadingItem: Bool {
+        guard StoriesService.isPending(currentStoryId), uploadSvc.uploading else { return false }
+        return uploadSvc.uploadingStories.contains { $0.id == currentStoryId }
+    }
     // Home-indicator inset (the story ignoresSafeArea, so overlays must add it back themselves).
     private var bottomInset: CGFloat {
         UIApplication.shared.connectedScenes
