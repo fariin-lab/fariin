@@ -1837,8 +1837,39 @@ struct UsernameEditView: View {
                 Text(why).foregroundStyle(.red)
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
+
+            // THE LINK, BUILT AS YOU TYPE. Telegram's "This link opens a chat with you:
+            // https://t.me/<name>", which is the thing that makes a username feel like it is worth
+            // choosing: it stops being a setting and becomes an address you can hand to somebody.
+            //
+            // Shown at EVERY state, including while the name is invalid or taken — Telegram does the
+            // same, because the line's job is to show what the link WOULD be, not to be a second
+            // verdict. The status line directly above is the verdict, and two of them disagreeing on
+            // one screen is worse than none.
+            //
+            // The format is the one the app actually opens: KulanApp routes both
+            // https://fariin.com/u/<handle> and kulan://u/<handle>, and fariin.com is in the
+            // entitlements. It is written here rather than hardcoded twice — if the path ever moves,
+            // it moves in one place.
+            //
+            // Selectable, not tappable. Copying it is the whole point; opening a chat with yourself
+            // is not.
+            VStack(alignment: .leading, spacing: 2) {
+                Text("This link opens a chat with you:")
+                Text(Self.profileLink(for: clean))
+                    .foregroundStyle(.tint)
+                    .textSelection(.enabled)
+            }
+            .padding(.top, 6)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The public address for a handle. Empty draft shows the bare domain, the way Telegram shows a
+    /// bare `https://t.me/` before you have typed anything — the shape of the thing you are about to
+    /// own, rather than a blank.
+    static func profileLink(for handle: String) -> String {
+        "https://fariin.com/u/\(handle)"
     }
 
     /// Debounced availability check. Everything that makes this feel instant instead of chattery is
