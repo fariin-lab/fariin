@@ -382,10 +382,41 @@ struct StoryDetailView: View {
                             // above it and stay readable — which is what their `insertSubview(
                             // captionItemView, aboveSubview: self.contentDimView)` arranges too.
                             .overlay(
-                                Color.black
+                                // ⚠️ A SHAPE WITH A VIEW OPACITY, NOT A COLOUR WITH A COLOUR
+                                // OPACITY. `Color` HAS ITS OWN `opacity(_:)` AND IT WINS.
+                                //
+                                // His report: the dim "appears only after the keyboard is fully
+                                // opened… suddenly, all at once", when the intent written here has
+                                // always been for it to rise with the keyboard.
+                                //
+                                // This was `Color.black.opacity(replyDimOn ? 0.8 : 0)`, and that
+                                // call does NOT reach `View.opacity`: `Color` declares its own
+                                // `opacity(_:) -> Color`, which is more specific, so the expression
+                                // built a different COLOUR VALUE rather than applying an animatable
+                                // view property. `.animation(value:)` below had nothing of its own
+                                // to drive.
+                                //
+                                // `Rectangle().fill(.black)` is a view, so `.opacity` on it is
+                                // unambiguously the view modifier — the animatable one. Writing it
+                                // as a shape rather than reordering the chain is deliberate: a
+                                // reader can see WHICH opacity this is without knowing the overload
+                                // rule that caused the bug.
+                                //
+                                // ⚠️ REASONED FROM THE SOURCE, NOT MEASURED, and it is the only
+                                // candidate reading can reach — everything else on this path (the
+                                // duration comes from the notification, `chromeHidden` is the
+                                // viewers sheet and is false here, `isKeyboardOpen` is set in
+                                // `keyboardWillShow` which fires BEFORE the keyboard moves) is
+                                // already correct. If it still pops on a device, the answer is not
+                                // in this expression and the next step is to instrument rather than
+                                // to re-argue it.
+                                Rectangle()
+                                    .fill(.black)
                                     .opacity(replyDimOn ? 0.8 : 0)
-                                    // The keyboard's OWN duration and curve, so the picture darkens
-                                    // with the keyboard rising rather than lagging behind it.
+                                    // The keyboard's OWN duration, so the picture darkens with the
+                                    // keyboard rising rather than lagging behind it. `animationDuration`
+                                    // is read from the notification (`KeyboardManager`), so this is
+                                    // the real number the system is using, not a guess at it.
                                     .animation(.easeInOut(duration: keyboardManager.animationDuration),
                                                value: replyDimOn)
                                     .allowsHitTesting(false)
