@@ -584,30 +584,53 @@ public final class StoryCardMorph {
         let circular = !sheet && cornerRadius >= min(targetSize.width, targetSize.height) / 2 - 0.5
         let cropRect: CGRect
         var circleMorph: CGFloat = 1
-        if circular {
-            if exiting {
-                // LEAVING: a circle inside the first 15%, held for the whole flight home. His spec,
-                // "reach a 100% full circle mask within the first 10-15% of the drag".
-                circleMorph = 1 - min(1, f / Self.circleRushSpan)
-            } else {
-                // OPENING: NOT A CIRCLE AT ALL ANY MORE. His 2026-08-08 order in as many words —
-                // "when opening the story it should open normally like the other stories, not as a
-                // circle. Only when I close should it transition back into the circular avatar."
-                // That is Snapchat's and WhatsApp's asymmetry: out as a card, home as a circle.
-                //
-                // `circleMorph = 1` IS the card, so an opening circular door now takes exactly the
-                // same shape journey as a story-row card: a small rounded rectangle at the ring's
-                // rect, growing to the full 9:16. The host drops the cover for these doors in the
-                // same breath (`stageHeroOpen`), because a round cover in a card-shaped seat would
-                // show its own empty corners.
-                //
-                // `circleOpenStart` / `circleOpenEnd` are kept rather than deleted: they are the
-                // only record of why the open's window had to END before the surround arrived, and
-                // that constraint comes straight back the day anyone re-introduces a shaped open.
-                circleMorph = 1
-            }
-            let h = restW + (restH - restW) * circleMorph
-            cropRect = CGRect(x: content.minX, y: content.midY - h / 2, width: restW, height: h)
+        if circular, exiting {
+            // LEAVING: a circle inside the first 15%, held for the whole flight home. His spec,
+            // "reach a 100% full circle mask within the first 10-15% of the drag".
+            circleMorph = 1 - min(1, f / Self.circleRushSpan)
+            // ⚠️ A TRUE CIRCLE THE WHOLE WAY, AND ITS DIAMETER IS FREE TO EXCEED THE CARD.
+            //
+            // The width-locked journey below (width pinned to `restW`, only the height and radius
+            // travelling) was the THIRD shape this door has worn, built so nothing could clip the
+            // mask sideways — and its intermediate frames are a flat-sided pill taller than it is
+            // wide, which is his 2026-08-10 screenshot next to Snapchat's. The requirement, in his
+            // words: width == height, cornerRadius = width / 2, at every moment, with the diameter
+            // allowed to pass the screen width and the excess simply running off the edges.
+            //
+            // So the crop is a SQUARE whose side travels from the card's DIAGONAL — the circle that
+            // CONTAINS the whole card, so the first frame cuts nothing — down to the card's width,
+            // the circle the flight home already holds. While the side exceeds `restW` the circle
+            // bulges past the card's own bounds; a mask hole beyond the layer's pixels cuts nothing
+            // there, so what shows is the middle band of an oversized circle: curved top and bottom
+            // on screen, the sides running off it. The old flat-sides bug cannot return, because the
+            // shape never lingers between the card's width and height — it is wider than BOTH until
+            // the moment it is a circle of the card's width.
+            //
+            // ⚠️ ACCEPTED COST, on purpose: at the very start of a drag the containing circle does
+            // not reach the card's 12pt corners, so they render square for the first frames of the
+            // rush. Snapchat's card is edge-to-edge square at rest, so this is exactly their look;
+            // capping the circle to preserve a 12pt curve is how the pill got built.
+            let diagonal = (restW * restW + restH * restH).squareRoot()
+            let side = restW + (diagonal - restW) * circleMorph
+            cropRect = CGRect(x: content.midX - side / 2, y: content.midY - side / 2,
+                              width: side, height: side)
+        } else if circular {
+            // OPENING: NOT A CIRCLE AT ALL ANY MORE. His 2026-08-08 order in as many words —
+            // "when opening the story it should open normally like the other stories, not as a
+            // circle. Only when I close should it transition back into the circular avatar."
+            // That is Snapchat's and WhatsApp's asymmetry: out as a card, home as a circle.
+            //
+            // `circleMorph = 1` IS the card, so an opening circular door now takes exactly the
+            // same shape journey as a story-row card: a small rounded rectangle at the ring's
+            // rect, growing to the full 9:16. The host drops the cover for these doors in the
+            // same breath (`stageHeroOpen`), because a round cover in a card-shaped seat would
+            // show its own empty corners.
+            //
+            // `circleOpenStart` / `circleOpenEnd` are kept rather than deleted: they are the
+            // only record of why the open's window had to END before the surround arrived, and
+            // that constraint comes straight back the day anyone re-introduces a shaped open.
+            circleMorph = 1
+            cropRect = CGRect(x: content.minX, y: content.midY - restH / 2, width: restW, height: restH)
         } else {
             let tightH = min(restH, visibleH / scale)
             let cropH = restH + (tightH - restH) * max(0, min(1, crop))
@@ -618,8 +641,14 @@ public final class StoryCardMorph {
         // width while it is a circle, the card's own corner once it has become the card. Worked out
         // in the view's own coordinates, because the crop is — the non-circular radius below is a
         // screen-space number and the two must never be mixed.
-        let circleRadiusInView = (restW / 2)
-            + (cardCornerRadius / max(scale, 0.05) - restW / 2) * circleMorph
+        //
+        // On the way OUT the crop is a true square (see the diagonal journey above), so half its
+        // side IS the circle's radius at every frame — width == height == 2r, his rule verbatim.
+        // The opening door still blends toward the card's own corner, because its `circleMorph`
+        // is pinned to 1 and its shape is the card.
+        let circleRadiusInView = (circular && exiting)
+            ? cropRect.width / 2
+            : (restW / 2) + (cardCornerRadius / max(scale, 0.05) - restW / 2) * circleMorph
 
         // CATransaction: the mask's geometry is implicitly ANIMATED, so without this it chases the
         // transform by a quarter second and the crop visibly lags the card under the finger. A
@@ -731,6 +760,11 @@ public final class StoryCardMorph {
         let flightRadius = capped * (circular ? scale : 1)
         applyMask(on: card, sheet: sheet, rect: cropRect,
                   cornerRadius: (sheet ? cornerRadius * f : flightRadius) / scale,
+                  // The exiting circle is a CIRCULAR curve, not a squircle — the same rule the
+                  // cover already obeys (see its `cornerCurve` above): `.continuous` at exactly
+                  // half the width degenerates into something that is neither, and against the
+                  // avatar ring underneath the mismatch is a visible seam at the hand-over.
+                  circularHole: circular && exiting,
                   // ⚠️ NOTHING OUTSIDE A CIRCLE, EVER — the first half of his 2026-08-08 report:
                   // "plz dont show transition images or mirror, just make like snapchat".
                   //
@@ -881,6 +915,7 @@ public final class StoryCardMorph {
     /// surround with no second view, no SwiftUI write and no animation of its own. 0 is the hard crop
     /// this has always done.
     private func applyMask(on card: UIView, sheet: Bool, rect: CGRect, cornerRadius: CGFloat,
+                           circularHole: Bool = false,
                            outside: CGFloat = 0, outsideRadius: CGFloat = 0) {
         // ⚠️ A LAYER WITH A CORNER RADIUS, NOT A BEZIER PATH, AND THE REASON IS HIS WHITE CORNERS.
         //
@@ -979,6 +1014,10 @@ public final class StoryCardMorph {
         // Capped at half the short side: a continuous curve asked for more than that degenerates,
         // and the crop gets very short at the end of a close.
         hole.cornerRadius = max(0, min(cornerRadius, min(local.width, local.height) / 2))
+        // A true circle asks for the CIRCULAR curve; everything card-shaped stays on the squircle
+        // so the hand-over to SwiftUI's `.continuous` clips cannot grow a crescent (the white
+        // corners — see the note at the top of this function).
+        hole.cornerCurve = circularHole ? .circular : .continuous
         // The surround — the page furniture beyond the card's rect, at the flight's fade. Its
         // cutout keeps it out of the card's rect entirely (see the note at the top): the notches
         // between the hole's curve and the card's square content belong to nobody, which IS the crop.
