@@ -672,8 +672,23 @@ struct StoryViewer: View {
     /// are anchored on the SAME expression the open used (`targetStoryId`), so they agree by
     /// construction on the first pull and can only diverge when the row has genuinely moved. It is
     /// the shape Telegram uses: one authoritative current-item id, everything else derived from it.
+    /// ⚠️ `showViewers` FIRST, AND IT IS NOT DECORATION. THIS SHIPPED WITHOUT IT AND BLACKED THE
+    /// STORY OUT — my regression in `b87fcfe1`, his report in as many words: "screen story is going
+    /// black".
+    ///
+    /// The stored flag this replaced was WIPED at `closeViewers` and again at `onDisappear`, so it
+    /// was structurally incapable of being true outside a sheet session. A computed answer has no
+    /// such lifetime, and `sheetStoryId` is never cleared — it just keeps naming the last card the
+    /// row was on. So once the sheet had been opened and closed even once, the very next advance
+    /// moved `targetStoryId`, the two ids stopped matching, `carouselOwnsSlot` went true with no
+    /// sheet on screen, and `setHidden` put the live card at alpha 0 over a black page. Nothing put
+    /// it back until another sheet open and close.
+    ///
+    /// The lesson is the one this whole rebuild is about, arriving from the other side: replacing
+    /// stored state with a computed answer removes staleness and ALSO removes the lifetime the
+    /// stored version got for free from being cleared. The scope has to be put back explicitly.
     private var rowIsOnAnotherStory: Bool {
-        !sheetStoryId.isEmpty && sheetStoryId != targetStoryId
+        showViewers && !sheetStoryId.isEmpty && sheetStoryId != targetStoryId
     }
     // ⚠️ THERE IS NO COVER DICTIONARY ANY MORE, AND THAT IS DELIBERATE.
     //
@@ -1143,7 +1158,18 @@ struct StoryViewer: View {
         .onChange(of: showViewers) { _, on in
             guard !on else { return }
             sheetAnimator.cancel(); viewersProgress = 0
+            // ⚠️ EVERY INPUT TO `carouselOwnsSlot` DIES WITH THE SHEET, not just this one.
+            //
+            // All three of them can only mean anything while there is a sheet, and any one of them
+            // left standing afterwards puts the live card at alpha 0 with nothing drawn over it —
+            // a black story page, which is what his "screen story is going black" report was. The
+            // third input is scoped in `rowIsOnAnotherStory` itself; these two are owned here.
+            //
+            // `sheetPaging` was the live risk: it is cleared by the sheet's own page commit and by
+            // `settleViewers`, and a close arriving mid page-drag reaches neither.
             carouselInteracting = false
+            sheetPaging = false
+            pageDragBox.value = 0
             // Same rule as driveMorph: a hero flight owns the card and this teardown must not
             // reset it out from under one.
             guard !hero.live else { return }
