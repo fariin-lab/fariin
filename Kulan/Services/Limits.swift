@@ -56,7 +56,15 @@ enum Limits {
     static let groupDescChars = 512
 
     // Profile
-    static let usernameMinChars = 3
+    /// ⚠️ MUST MATCH `USERNAME_MIN` in functions-username. The server is the one that counts; this
+    /// copy only decides when the Done button lights up, so a disagreement shows as a button you can
+    /// press that then fails.
+    ///
+    /// FOUR, not three (raised 2026-08-10) and deliberately not Telegram's five: Somali given names
+    /// are very often exactly four letters — Ubah, Amal, Deeq, Muna, Asha, Iqra, Nimo, Hani, Suad —
+    /// and a five-character floor would refuse a large share of this app's users their own first
+    /// name. The reasoning in full sits beside the server constant.
+    static let usernameMinChars = 4
     static let usernameMaxChars = 30
     static let bioChars = 140
     static let profilePhotoBytes = 8 * 1024 * 1024              // 8 MB — storage.rules profiles/
