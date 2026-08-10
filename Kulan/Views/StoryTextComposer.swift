@@ -110,27 +110,35 @@ struct StoryTextCard: View {
                     Button { close() } label: { glassCircle { Image(systemName: "xmark") } }
                         .buttonStyle(.plain)
                     Spacer()
-                    // The colour button IS a colour: an open ring showing the card's own ink, which
-                    // is what his drawing has in that corner. A paint-palette glyph would say
-                    // "settings" where this says "this one, tap for the next".
-                    Button { styleIndex += 1 } label: {
-                        glassCircle {
-                            Circle().strokeBorder(style.ink, lineWidth: 2).frame(width: 21, height: 21)
-                        }
-                    }
-                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 14).padding(.top, 14)
 
                 Spacer(minLength: 0)
 
                 HStack {
-                    Button { fontIndex += 1 } label: {
-                        glassCircle {
-                            Text("Aa").font(.system(size: 16, weight: .bold)).foregroundStyle(style.ink)
+                    // ⚠️ THE TWO STYLE BUTTONS SIT TOGETHER, and the colour one came DOWN from the
+                    // top-right corner to get here (owner 2026-08-10, with the move drawn on his
+                    // screenshot). They change the same thing — how the card looks — so they belong
+                    // in the same reach, and the top corners are left to the two that LEAVE: the X,
+                    // and the checkmark opposite this pair.
+                    HStack(spacing: 12) {
+                        Button { fontIndex += 1 } label: {
+                            glassCircle {
+                                Text("Aa").font(.system(size: 16, weight: .bold)).foregroundStyle(style.ink)
+                            }
                         }
+                        .buttonStyle(.plain)
+                        // The colour button IS a colour: an open ring showing the card's own ink,
+                        // which is what his drawing had in the corner it used to live in. A
+                        // paint-palette glyph would say "settings" where this says "this one, tap
+                        // for the next".
+                        Button { styleIndex += 1 } label: {
+                            glassCircle {
+                                Circle().strokeBorder(style.ink, lineWidth: 2).frame(width: 21, height: 21)
+                            }
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                     Spacer()
                     // Only while the keyboard is up, exactly as he drew it: it is the way OUT of
                     // typing, and with the keyboard down there is nothing for it to do.
@@ -162,8 +170,10 @@ struct StoryTextCard: View {
         }
         // NO KEYBOARD ON ARRIVAL (owner 2026-08-03: "dont open keyboard in story when i click text
         // tab"). Tapping TEXT is choosing a MODE, not asking to type — and a keyboard that arrives
-        // uninvited covers the colour button, the Aa and the CAMERA/TEXT switch you may have come
-        // to use. Tap the card when you want to write; the background already listens.
+        // uninvited covers the CAMERA/TEXT switch you may have come to use. Tap the card when you
+        // want to write; the background already listens.
+        // (The Aa and the colour ring used to be in that list. They ride above the keyboard now that
+        // both live in the bottom bar, so they are no longer a reason for this rule — the switch is.)
         .onChange(of: focused) { _, f in withAnimation(.easeInOut(duration: 0.2)) { typing = f } }
         // X with text typed → confirm before throwing the status away (don't lose it on a stray tap).
         // A native ALERT, not confirmationDialog: over a full-screen presentation the dialog renders
