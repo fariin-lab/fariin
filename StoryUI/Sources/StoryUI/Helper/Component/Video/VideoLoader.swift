@@ -717,13 +717,37 @@ private extension PlayerView {
                 // segment kept counting through a stall and the story moved on while the video was
                 // still trying to start — the progress desynchronisation.
                 //
-                // But the VEIL is only rebuilt for a stall with the picture already up. While the
-                // layer is still under cover this fires once on every clip's spin-up — Telegram
-                // excludes exactly that case (`.buffering(initial: false, whilePlaying: true)`) —
-                // and rebuilding here put the wheel back over a cached clip whose veil had rightly
-                // gone up without one. The bar hold stays for both: waiting on bytes is waiting.
-                if !self.playerLayer.isHidden { self.addActivityIndicatory() }
+                // ⚠️ AND THE VEIL IS NOT REBUILT OVER A PICTURE THAT IS ALREADY ON SCREEN. THIS IS
+                // HIS 0-SECOND FLASH, and he bisected it to build 514.
+                //
+                // A veil is a COVER: it draws the poster, or the remembered frame. For a video both
+                // of those are second zero. Putting one up over a clip that is visibly playing at
+                // ten seconds does not indicate loading, it REPLACES the picture with the start of
+                // the clip. `99ab7d18` narrowed this to "only with the picture up", which is the
+                // half that is visible, and `coverFromFirstFrame` in the same build gave that cover
+                // a real decoded frame-zero image where it used to be a bare gradient — which is
+                // why 514 is exactly where he started seeing "the 0-second frame".
+                //
+                // It stranded, too, and that is the swipe-up half of his report. A streaming clip
+                // dips in and out of this state through its first seconds; only `.playing` took the
+                // cover down, and pulling the sheet up pauses the story — so `.playing` never came
+                // back, and the frame-zero cover stayed up. **Only while playing, only in the first
+                // seconds, and never if he long-pressed to pause first**, which is his report word
+                // for word.
+                //
+                // Telegram's stall indicator is an OVERLAY on the running picture, never a
+                // replacement, and they exclude initial buffering from it outright. The bar hold
+                // below is the honest part of this and it stays: waiting on bytes is waiting.
                 self.setBuffering(true)
+            case .paused:
+                // ⚠️ A DELIBERATE PAUSE IS NOT A STALL, AND IT MUST CLEAR ONE. Belt for any cover
+                // raised by a stall an instant before playback was stopped: `.playing` is the only
+                // other thing that takes a veil down, and a pause means it is not coming. Without
+                // this, a clip stalled at the exact moment the sheet pull pauses it keeps its cover
+                // for the rest of the session. Guarded on the layer being visible, because a veil
+                // over a HIDDEN layer is the real load and taking it down would show black.
+                if !self.playerLayer.isHidden { self.removeActivityIndicatory() }
+                self.setBuffering(false)
             default:
                 self.setBuffering(false)
             }
