@@ -664,6 +664,8 @@ struct StoryViewer: View {
     /// story id, which is the whole safety argument: an entry can only ever be shown for the story it
     /// was fetched for. Dies with the viewer, so a count is never older than this sitting.
     @State private var viewersByStory: [String: [StoryViewerInfo]] = [:]
+    /// Whether `prefetchMyStoryCounts` has already swept this viewing.
+    @State private var prefetchedCounts = false
 
     /// TRUE while the CAROUSEL'S OWN card owns the slot and the real story card must stand aside.
     ///
@@ -1585,6 +1587,10 @@ struct StoryViewer: View {
                 currentBucketUid = uid
                 publishActive(uid)
                 loadBarViewers()
+                // The counts for ALL of my stories start here, together, rather than one at a time
+                // as each becomes current — see `prefetchMyStoryCounts`. This is the earliest moment
+                // the viewer knows whose bucket it is on.
+                prefetchMyStoryCounts()
             },
             onItemSeen: { id in
                 // ⚠️ THE LOOKAHEAD USED TO START HERE AND IT CANNOT. This callback is a SEEN
@@ -3248,6 +3254,44 @@ struct StoryViewer: View {
             .background(Color.black)
             // NO own swipe gesture here: the footer sits inside storyLayer, whose single drag already
             // owns swipe-up-to-open. A second gesture here double-fired (open + close) on footer flicks.
+    }
+
+    /// EVERY ONE OF MY STORIES' COUNTS, IN PARALLEL, THE MOMENT THE VIEWER OPENS.
+    ///
+    /// His report: open your own story and the footer reads "0 Views" for a second or two before the
+    /// real number appears. `ed41361d` stopped that happening on a RE-visit; this is the first visit,
+    /// which it deliberately did not cover.
+    ///
+    /// The fetch used to be one story at a time, started when that story became the current item. So
+    /// the first count could not begin until the viewer had opened AND settled on an item, and every
+    /// later story paid its own round trip when you reached it. This starts all of them at once, at
+    /// the moment the viewer knows the bucket is mine — the same `withTaskGroup` shape the viewers
+    /// sheet already uses for its carousel (`loadAll`), pointed at the footer's cache instead.
+    ///
+    /// Once per session: `myStories` is stable for a viewing and a second sweep would buy nothing.
+    ///
+    /// ⚠️ THIS SHORTENS THE WAIT, IT DOES NOT REMOVE IT, and the difference matters because he asked
+    /// for Telegram's behaviour. Telegram does not fetch a count at all: `StoryListContext.Item`
+    /// carries `views` (seenCount, reactedCount, a few recent peers) DOWN WITH THE STORY, and the
+    /// full list is only requested when you open the list. Ours reads the whole `views` subcollection
+    /// — every viewer document, names resolved — to display one number. Matching them properly means
+    /// a counter denormalised onto the story doc, which is a server change and the owner's call.
+    private func prefetchMyStoryCounts() {
+        guard currentIsMine || mineOnly, !prefetchedCounts else { return }
+        prefetchedCounts = true
+        let mine = myStories
+        guard !mine.isEmpty else { return }
+        Task {
+            await withTaskGroup(of: (String, [StoryViewerInfo]).self) { group in
+                for s in mine { group.addTask { (s.id, await StoriesService.shared.fetchViewers(storyId: s.id)) } }
+                for await (id, v) in group {
+                    viewersByStory[id] = v
+                    // The one on screen paints as soon as ITS answer lands, whichever order they
+                    // arrive in — the group is not awaited as a batch for exactly that reason.
+                    if id == currentStoryId { barViewers = v }
+                }
+            }
+        }
     }
 
     private func loadBarViewers() {
