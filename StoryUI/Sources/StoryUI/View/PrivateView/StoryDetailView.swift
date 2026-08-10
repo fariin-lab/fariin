@@ -620,8 +620,12 @@ struct StoryDetailView: View {
             //
             // It writes by CLIP URL into the same bank `StoryPlaybackResume` already keeps, so the
             // cards can ask for a story's picture at draw time instead of a global pointer being
-            // photographed at exactly the right instant. See `bankCurrentFrame`.
-            StoryCardMorph.shared.bankCurrentFrame()
+            // photographed at exactly the right instant. See `bankCurrentState`.
+            //
+            // ⚠️ AND THE PLAYHEAD GOES WITH IT, which is what makes coming back symmetric. The
+            // picture alone was enough for the CARD (the row draws the bank) and not for the story
+            // (it needs the position), and only one of those two is on screen once the row settles.
+            StoryCardMorph.shared.bankCurrentState()
             hostPause.paused = true; pauseVideo()
         }
         .onReceive(NotificationCenter.default.publisher(for: .resumeStory)) { _ in
@@ -745,6 +749,26 @@ private extension StoryDetailView {
                 start(index: index)
             }
             .onAppear {
+                // ⚠️ THE CLIP BEING THROWN AWAY WRITES ITS PLACE DOWN FIRST, and this line is the
+                // whole reason his bug had a SIDE to it.
+                //
+                // A photo story appearing means the `VideoView` is being unmounted: `startVideo`
+                // will not run (there is no next url for that view), `stopVideo` will not run, and
+                // `deinit` is not a place that can safely touch MainActor state — so every path
+                // that remembers a playhead is skipped, and `resetAVPlayer` below replaces the
+                // whole `AVPlayer` holding it. Come back to that video and `setupPlayer` has
+                // nothing to `peek`, so it starts at zero. Pass through a VIDEO instead and the one
+                // `PlayerView` is reused, `startVideo` remembers on the way out, and the return is
+                // correct. One neighbour of a story is a photo and the other is a clip, which is
+                // exactly "it works one way and not the other".
+                //
+                // Here rather than inside `resetAVPlayer` because these extension methods are NOT
+                // main-actor isolated (see the note in `playVideo`) and this call is; a body
+                // closure is. The sheet's pause writes the same thing
+                // (`StoryCardMorph.bankCurrentState`) and writing it twice costs one dictionary
+                // entry — this is the copy for the paths with no sheet at all, tapping forward
+                // from a video onto a photo and tapping back.
+                StoryCardMorph.shared.rememberPlaybackState()
                 resetAVPlayer()
             }
         case .video:
@@ -1555,6 +1579,9 @@ private extension StoryDetailView {
         viewModel.lastIndex[model.id] = min(max(0, raw), max(0, model.stories.count - 1))
     }
     
+    /// ⚠️ THE CLIP'S PLACE IS WRITTEN DOWN BY THE CALLER, ONE LINE ABOVE THIS ONE, and it has to be:
+    /// this function drops the `AVPlayer` that knows it. See the note at the `.onAppear` that calls
+    /// this — it is the reason the reset-to-zero bug had a side to it.
     func resetAVPlayer() {
         // THE OLD PLAYER IS THE ONE TO PAUSE, so the pause happens BEFORE the swap. This was
         // `Task { player.pause() }` ABOVE the swap — but the task body reads `player` when it RUNS,

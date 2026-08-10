@@ -27,9 +27,16 @@ public protocol StoryVideoFrameSource: AnyObject {
     /// wrong-cover report in this area traces back to that.
     var currentVideoURL: String? { get }
     /// ⚠️ AND WHERE IN THE CLIP IT IS, which is the difference between a frame worth keeping and a
-    /// frame that will overwrite one. See `bankCurrentFrame`. NaN or a negative is a normal answer
+    /// frame that will overwrite one. See `bankCurrentState`. NaN or a negative is a normal answer
     /// from a player that has no item yet, and it fails the caller's test like any other.
     var currentVideoSeconds: Double { get }
+    /// WRITE THE PLAYHEAD DOWN, under the player's own guards.
+    ///
+    /// The picture and the position are two halves of one answer and they must be written at the
+    /// same moments, or coming back to a clip shows one without the other — see `bankCurrentState`.
+    /// The player owns the guards (over a second in, not in the last second) because it is the only
+    /// thing that knows the clip's real duration.
+    func rememberPlaybackState()
 }
 
 /// One handle on the story card that is actually on screen.
@@ -805,7 +812,7 @@ public final class StoryCardMorph {
     // fixed it.
     //
     // Cards fetch their own picture from the frame bank now, keyed by their own clip
-    // (`StoryPlaybackResume.cardFrame`), and `bankCurrentFrame` below fills that bank at the pause.
+    // (`StoryPlaybackResume.cardFrame`), and `bankCurrentState` below fills that bank at the pause.
     // Nobody has to ask at the right moment, so nobody can ask at the wrong one.
 
     /// ⚠️ THE FRAME IS BANKED WHEN THE STORY IS FROZEN, NOT WHEN A CARD HAPPENS TO ASK FOR IT.
@@ -844,16 +851,58 @@ public final class StoryCardMorph {
     /// Same fence as the other writer now, from the same number. A clip genuinely near its start has
     /// nothing to lose: the bank keeps whatever it had, and an empty bank still falls through to the
     /// poster, which is second zero anyway. There is no case where refusing this write is worse.
+    ///
+    /// ⚠️ AND IT WRITES THE POSITION TOO, WHICH IS WHY IT IS NO LONGER CALLED `bankCurrentFrame`.
+    ///
+    /// His 2026-08-10 report, the second half of it: the fence above fixed swiping the carousel one
+    /// way and coming back, and swiping the OTHER way still came back to second zero. The fence was
+    /// never the whole answer, because the picture and the playhead were being written by different
+    /// people at different moments.
+    ///
+    /// `rememberPlaybackPosition` writes BOTH, and it runs from `startVideo`/`stopVideo` — the paths
+    /// that only exist while one `PlayerView` is handed a second clip. This one ran at the pause,
+    /// which is the one moment the sheet guarantees, and wrote only the picture. So the carousel card
+    /// was right (it draws the bank) and the LIVE story came back at zero (it needs the position),
+    /// and which of the two you are looking at is decided by `hideActiveContent: !carouselOwnsSlot` —
+    /// the card while the row is moving, the real story once it settles. That is the whole report:
+    /// the picture during the swipe, second zero the moment it lands.
+    ///
+    /// The direction decided it because the two neighbours are not the same kind of story. Passing
+    /// through another VIDEO reuses the one `PlayerView`, so `startVideo` runs and writes the
+    /// position on the way out. Passing through a PHOTO unmounts the video view entirely and
+    /// `StoryDetailView.resetAVPlayer` throws the `AVPlayer` away — no `startVideo`, no `stopVideo`,
+    /// nothing written, and `deinit` is not a place that can safely reach MainActor state. One side
+    /// of a video story is a photo and the other is a clip, and the bug picks its side accordingly.
+    ///
+    /// Writing both halves here removes the question. The pause is a moment nothing can miss: the
+    /// sheet posts it on the way up and re-asserts it twice a second for as long as it is open
+    /// (`StoriesViews`' watchdog), so by the time any teardown happens the record is already made.
+    /// Telegram never needs this because their `videoNode` is only released when the media id
+    /// changes — pausing does not tear a player down, so there is no state to save. Ours is rebuilt,
+    /// so the state is what travels.
     @MainActor
-    public func bankCurrentFrame() {
+    public func bankCurrentState() {
         guard let source = frameSource,
               let mediaURL = source.currentVideoURL,
               let url = URL(string: mediaURL) else { return }
         let t = source.currentVideoSeconds
         guard t.isFinite, t > 1 else { return }
+        // The playhead FIRST, and unconditionally: a clip that has no decodable frame to hand over
+        // (a paused item gives its buffer up exactly once) must still come back to where it was.
+        // Tying the position to the picture is how a failed frame copy became a rewind.
+        source.rememberPlaybackState()
         guard let frame = source.currentVideoFrame() else { return }
         StoryPlaybackResume.rememberFrame(url, image: frame)
     }
+
+    /// THE PLAYHEAD ALONE, for a caller that is about to take the player away rather than freeze it.
+    ///
+    /// `StoryDetailView.resetAVPlayer` replaces the whole `AVPlayer` when a photo story arrives, and
+    /// nothing else on that path writes anything down — see the note there. No frame is asked for:
+    /// the clip is not being paused to be looked at, it is being dropped, and the bank already holds
+    /// whatever it was showing.
+    @MainActor
+    public func rememberPlaybackState() { frameSource?.rememberPlaybackState() }
 
     /// Step the live card aside while the carousel row is being swiped.
     ///

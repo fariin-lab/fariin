@@ -723,7 +723,7 @@ struct StoryViewer: View {
     // `cardMedia`. There is no capture site, so there is no moment to get wrong; there is no host
     // state, so it cannot be stale, cannot be cleared at the wrong time and cannot be filed under
     // the wrong story. The bank is written where the story is actually frozen
-    // (`StoryCardMorph.bankCurrentFrame`), which is the one place that always knows the answer.
+    // (`StoryCardMorph.bankCurrentState`), which is the one place that always knows the answer.
     /// The morph has no card to move. Only ever true when something upstream has gone wrong; it makes
     /// the story fade rather than sit there at full size under the sheet. See `driveMorph`.
     @State private var morphUnavailable = false
@@ -1385,7 +1385,7 @@ struct StoryViewer: View {
         //
         // The cards no longer depend on the live player for their picture. Each one fetches its own
         // frame from the bank at draw time (`cardMedia`), and the bank is filled when the story
-        // freezes (`StoryCardMorph.bankCurrentFrame`). So tearing the player away no longer empties
+        // freezes (`StoryCardMorph.bankCurrentState`). So tearing the player away no longer empties
         // anything the row is drawing. The visible half of that report is answered by the frame bank
         // instead of by the deferral, which is what makes going back to 516's behaviour safe now
         // when it would not have been then.
@@ -1805,7 +1805,7 @@ struct StoryViewer: View {
     //
     // The reason this could not have been done before today is that the bank was EMPTY at the one
     // moment it mattered. It was written only when a clip changed or stopped, and the viewers sheet
-    // does neither — it pauses. `StoryCardMorph.bankCurrentFrame`, called from the pause itself,
+    // does neither — it pauses. `StoryCardMorph.bankCurrentState`, called from the pause itself,
     // is what filled that hole, and filling it is what made every line above unnecessary rather
     // than merely badly timed.
 
@@ -3749,7 +3749,7 @@ struct MyStoriesCarousel: View {
     @ViewBuilder private func cardMedia(_ s: Story) -> some View {
         // ⚠️ ASKED FOR BY STORY, AT DRAW TIME. There is no capture here, no timing and no moment to
         // get right — this card asks the frame bank for a picture of ITS OWN clip, and the bank was
-        // written when that clip was frozen (see `StoryCardMorph.bankCurrentFrame`).
+        // written when that clip was frozen (see `StoryCardMorph.bankCurrentState`).
         //
         // What this replaces is the whole reason this area kept breaking: a dictionary the host
         // filled by PHOTOGRAPHING the live card through one global pointer at one player, at an
