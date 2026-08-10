@@ -26,6 +26,10 @@ public protocol StoryVideoFrameSource: AnyObject {
     /// could be about a story the user is not looking at, and the caller had no way to tell. Every
     /// wrong-cover report in this area traces back to that.
     var currentVideoURL: String? { get }
+    /// ⚠️ AND WHERE IN THE CLIP IT IS, which is the difference between a frame worth keeping and a
+    /// frame that will overwrite one. See `bankCurrentFrame`. NaN or a negative is a normal answer
+    /// from a player that has no item yet, and it fails the caller's test like any other.
+    var currentVideoSeconds: Double { get }
 }
 
 /// One handle on the story card that is actually on screen.
@@ -821,12 +825,33 @@ public final class StoryCardMorph {
     /// Cheap to call and safe to call often: a clip with no decoded frame answers nil and writes
     /// nothing, and the bank is an `NSCache` keyed by the clip's own url, so re-banking the same
     /// story just replaces one entry.
+    /// ⚠️ AND IT REFUSES TO BANK SECOND ZERO OVER SOMETHING BETTER.
+    ///
+    /// His 2026-08-10 report: a video paused at 20s, pull the sheet up and the mini card correctly
+    /// shows the 20s frame; swipe the carousel away and back and it is second zero again.
+    ///
+    /// The bank has TWO writers and they did not agree. `rememberPlaybackPosition` has always been
+    /// fenced at `t > 1` — a position under a second is not worth resuming to, and it banks the
+    /// picture "in the same breath and under the same guard". This one had no fence at all. So the
+    /// sequence is: the sheet pauses, 20s is banked, the card is right. Swiping away moves the
+    /// player to another clip; swiping BACK builds a fresh player for this one, and the sheet is
+    /// still up so the story is paused again the moment it arrives — with `.pauseStory` calling
+    /// straight into here while that fresh player is still at the beginning and has not finished
+    /// seeking to the position it remembered. A frame of second zero went into the bank, and
+    /// `rememberFrame` also drops the card-sized copies, so the good 20s picture was gone twice
+    /// over.
+    ///
+    /// Same fence as the other writer now, from the same number. A clip genuinely near its start has
+    /// nothing to lose: the bank keeps whatever it had, and an empty bank still falls through to the
+    /// poster, which is second zero anyway. There is no case where refusing this write is worse.
     @MainActor
     public func bankCurrentFrame() {
         guard let source = frameSource,
               let mediaURL = source.currentVideoURL,
-              let url = URL(string: mediaURL),
-              let frame = source.currentVideoFrame() else { return }
+              let url = URL(string: mediaURL) else { return }
+        let t = source.currentVideoSeconds
+        guard t.isFinite, t > 1 else { return }
+        guard let frame = source.currentVideoFrame() else { return }
         StoryPlaybackResume.rememberFrame(url, image: frame)
     }
 

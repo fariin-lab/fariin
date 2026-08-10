@@ -455,6 +455,15 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// protocol note: without it a snapshot is an answer with no question attached.
     var currentVideoURL: String? { self.url?.absoluteString }
 
+    /// Where this clip is, for callers deciding whether the frame is worth keeping. A player with no
+    /// item answers 0 rather than pretending — see `bankCurrentFrame`, which treats anything under a
+    /// second as "not worth overwriting the bank with", exactly as `rememberPlaybackPosition` does.
+    var currentVideoSeconds: Double {
+        guard let p = player, p.currentItem != nil else { return 0 }
+        let t = p.currentTime().seconds
+        return t.isFinite ? t : 0
+    }
+
     func currentVideoFrame() -> UIImage? {
         if let item = player?.currentItem, let out = frameOutput,
            let buffer = out.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) {
