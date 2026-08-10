@@ -35,7 +35,9 @@ enum ChatService {
         if h.count > Limits.usernameMaxChars { return "Usernames are at most \(Limits.usernameMaxChars) characters." }
         if h.hasPrefix("_") || h.hasSuffix("_") { return "Usernames can't start or end with _." }
         if h.contains("__") { return "Usernames can't contain two _ in a row." }
-        if h.allSatisfy(\.isNumber) { return "Usernames can't be only numbers." }
+        // AT LEAST ONE LETTER, matching the server. Not the same as "not only digits": `123_456` has
+        // no letter yet is not all digits, and it reads like an account or phone number.
+        if !h.contains(where: \.isLetter) { return "Usernames need at least one letter." }
         return nil
     }
 
