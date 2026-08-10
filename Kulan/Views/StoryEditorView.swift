@@ -846,6 +846,27 @@ struct StoryEditorView: View {
         // higher than that, and a pill measured from the screen would hang below it on the black.
         // Focused, the keyboard is the floor and a small gap is enough.
         .padding(.bottom, captionFocused ? 8 : cardBottomGap + 14)
+        // ⚠️ AND THIS PADDING MOVES ON THE KEYBOARD'S CLOCK, NOT INSTANTLY. THAT IS HIS JUMP.
+        //
+        // His report: while the keyboard is open the bar is right, and dismissing it makes the bar
+        // "jump and then drop down". Both halves of that sentence are literally what happened, and
+        // they are two different movements:
+        //
+        //   1. Losing focus flips this padding from 8 to `cardBottomGap + 14` — about 70pt — in a
+        //      SINGLE FRAME, while the keyboard is still fully up. The bar leaps UP. That is the jump.
+        //   2. Then SwiftUI's keyboard avoidance lowers the safe-area inset over the system's 0.25s
+        //      curve and the bar rides it down. That is the drop.
+        //
+        // The two end positions were never wrong, which is why he says the open state is correct;
+        // only the path between them was, because one of the two movements was not animated at all.
+        // It is the same fault the note at the top of `body` describes and thought it had removed —
+        // "two state changes, two moments, neither animated with the keyboard" — surviving in the one
+        // number that still switches on focus.
+        //
+        // Nothing here measures a keyboard, and that rule stands: this is a DURATION, not a height.
+        // Resigning first responder starts the keyboard's animation in the same runloop turn as the
+        // focus flip, so matching its length is enough to make the two one motion.
+        .animation(.easeOut(duration: 0.25), value: captionFocused)
         .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // trash owns the bottom while dragging text
     }
 
