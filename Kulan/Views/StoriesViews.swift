@@ -632,10 +632,6 @@ struct StoryViewer: View {
     /// Is a sheet page-drag in flight? The boolean half of `pageDragBox`, kept as ordinary `@State`
     /// because the host really does have to re-render when it flips — twice per drag, not per frame.
     @State private var sheetPaging = false
-    /// The story the carousel has been moved to while the sheet is up, waiting to be spent at the
-    /// close. Empty means the story underneath is already the selected one. See the `sheetStoryId`
-    /// handler for why the jump is deferred at all.
-    @State private var pendingJumpStoryId: String = ""
     /// Which story the owner footer's viewers belong to, so a story change empties it instead of
     /// leaving the previous one's count and faces up during the fetch. See `loadBarViewers`.
     @State private var lastBarViewersStoryId: String = ""
@@ -647,7 +643,37 @@ struct StoryViewer: View {
     /// the thing on screen. Without it the slot would show the story you paged away from while the
     /// sheet below it listed the viewers of the one you paged to.
     private var carouselOwnsSlot: Bool {
-        carouselInteracting || sheetPaging || !pendingJumpStoryId.isEmpty
+        carouselInteracting || sheetPaging || rowIsOnAnotherStory
+    }
+
+    /// Is the card in the centre of the row a DIFFERENT story from the one the player is holding?
+    ///
+    /// ⚠️ COMPUTED FROM TWO IDS, NOT REMEMBERED IN A FLAG, AND THAT IS THE FIX FOR HIS REPORT.
+    ///
+    /// This was `!pendingJumpStoryId.isEmpty` — a stored value written by an `onChange` on
+    /// `sheetStoryId`. Stored state can be written at the wrong moment, cleared at the wrong moment,
+    /// or never written at all, and all three of those happened here:
+    ///
+    /// · The open writes `sheetStoryId` and `showViewers` in ONE transaction, so the handler stored a
+    ///   jump to the story already on screen and jammed the flag TRUE for a whole sheet session.
+    /// · `75aa9522` fixed that with `id == targetStoryId`, but `targetStoryId` falls back to
+    ///   "first unseen, else first" whenever `currentStoryId` is empty — and `currentStoryId` is
+    ///   written by `onItemSeen`, which the library WITHHOLDS while a story is paused, held or
+    ///   buffering. So that comparison could answer "not a jump" about the wrong story.
+    /// · **The handler's guard requires `currentIsMine`, while the swipe-up that opens the sheet
+    ///   accepts `currentIsMine || mineOnly`** — because `currentBucketUid` arrives a beat late on a
+    ///   fresh open, which the note at `onSwipeUpChanged` states in as many words. On that beat the
+    ///   sheet opens and the handler is silently dead, so the flag is never written for that session
+    ///   and the story he pulled up from stays painted in the slot. That is his report exactly: "the
+    ///   first story I swipe up from becomes stuck as the background", and it is why paging only
+    ///   moved the card and never the thing behind it.
+    ///
+    /// Asking the two ids has no guard to fail, nothing to clear and nothing to go stale. Both sides
+    /// are anchored on the SAME expression the open used (`targetStoryId`), so they agree by
+    /// construction on the first pull and can only diverge when the row has genuinely moved. It is
+    /// the shape Telegram uses: one authoritative current-item id, everything else derived from it.
+    private var rowIsOnAnotherStory: Bool {
+        !sheetStoryId.isEmpty && sheetStoryId != targetStoryId
     }
     // ⚠️ THERE IS NO COVER DICTIONARY ANY MORE, AND THAT IS DELIBERATE.
     //
@@ -1163,11 +1189,20 @@ struct StoryViewer: View {
             // out. Both existed because the row's cards drew from a dictionary somebody had to fill
             // in time; they draw from the frame bank now and fill themselves.
             //
-            // ⚠️ THIS HANDOVER ITSELF IS STILL HERE AND IS STILL THE BUG. `setHidden` swaps the live
-            // card out for the row's copy on an EDGE, and `carouselOwnsSlot` is a boolean fed by
-            // three independent inputs, which is what puts story A behind a card showing story B.
-            // It goes in the next step, when the live card learns to travel with its own row card
-            // instead of standing aside for it. Left standing on purpose so this step is one change.
+            // ⚠️ THE HANDOVER STAYS, BUT ITS THIRD INPUT IS NO LONGER A REMEMBERED FLAG.
+            //
+            // The swap itself was never the wrong idea: the live card sits at the slot centre and
+            // cannot slide, so for the length of a swipe the row draws its own card and the real one
+            // waits underneath. What broke was the ANSWER to "is the centred card the story the
+            // player is holding" — kept in `pendingJumpStoryId`, written by a handler whose guard
+            // could be skipped on the very beat the sheet opens. Skipped once, the live card was
+            // never told to stand aside for the rest of that session, and it sat there painting
+            // story A behind a card showing story B.
+            //
+            // `rowIsOnAnotherStory` computes that answer from the two ids every time it is asked, so
+            // there is no write to miss and nothing to go stale. The two gesture inputs beside it
+            // (`carouselInteracting`, `sheetPaging`) were never the problem: both are owned by one
+            // writer each and both self-clear.
             StoryCardMorph.shared.setHidden(on)
         }
         // Safety net: never leave a story paused after the viewer goes away (the swipe-down dismiss posts
@@ -1192,9 +1227,10 @@ struct StoryViewer: View {
             progressWatchdog?.cancel(); progressWatchdog = nil
             showViewers = false
             viewersProgress = 0
-            // A selection belongs to the sheet session that made it. Carried across, it would jump
-            // the next viewer to a story nobody chose.
-            pendingJumpStoryId = ""
+            // (Nothing to clear for the selection any more. It was a stored `pendingJumpStoryId`
+            // that had to be wiped here or it would jump the NEXT viewer to a story nobody chose;
+            // the selection is read from `sheetStoryId` at the close instead, and `sheetStoryId` is
+            // re-seeded by every open.)
         }
         // Freeze the running story + progress while any sheet is shown over it; resume on dismiss.
         .onChange(of: sheetUp) { _, up in
@@ -1262,36 +1298,16 @@ struct StoryViewer: View {
         // architecture — but we can keep their RULE, which is the part that shows: nothing loads
         // while the sheet is up. The selection is remembered and spent at the close, so the slot
         // carries stills the whole time and the live clip arrives with the collapse.
-        .onChange(of: sheetStoryId) { _, id in
-            guard showViewers, currentIsMine, !id.isEmpty else { return }
-            // ⚠️ THE STORY ALREADY ON SCREEN IS NOT A JUMP.
-            //
-            // The open writes `sheetStoryId = targetStoryId` and `showViewers = true` in ONE
-            // transaction, so this handler runs with `showViewers` already true — and it stored a
-            // jump TO THE STORY THE VIEWER IS SHOWING on the first pull of every session. Under the
-            // immediate-jump design that self-jump was a no-op (the library guards
-            // `idx != getCurrentIndex()`); deferred, it became a non-empty `pendingJumpStoryId`
-            // that jammed `carouselOwnsSlot` true for the whole sheet session. Everything
-            // downstream of that flag then misfired at once, and each was a device report:
-            // the flip at 1% of the pull hid the live card for a beat before `driveMorph`'s
-            // `p < 0.9` un-hid it, and the carousel card underneath had no cover yet — his video
-            // flashing its 0-second frame the instant the drag begins; with the flag never
-            // transitioning again, the touch-down capture site went dead and `scheduleFrozenCapture`
-            // refused forever (`!carouselOwnsSlot`), so cards fell back to their posters; and
-            // nothing ever re-hid the live card, so after paging the row to another story the story
-            // he pulled up from stayed painted in the slot — his "the background behind the card
-            // still shows Story A".
-            //
-            // Same comparison in both directions, because a selection can come BACK: paging
-            // A → B → A again must clear the stale jump to B, or the close would spend it and land
-            // on a story the row is no longer centred on.
-            if id == targetStoryId { pendingJumpStoryId = "" } else { pendingJumpStoryId = id }
-            // A 0.2s re-freeze lived here, because a jumped-to item arrived with a live material
-            // that misrendered under the sheet's scale — "the centre card grew an extra blur bar and
-            // the photo read as jumping". The canvas has no such state: it is two colours in a
-            // layer, it is set the moment the new photo lands, and it scales with the card rather
-            // than being recomputed against it. Nothing to re-freeze, and no timer racing the load.
-        }
+        // ⚠️ THERE IS NO `sheetStoryId` HANDLER ANY MORE, AND ITS ABSENCE IS THE POINT.
+        //
+        // It existed to keep a second copy of "which story has the row been moved to" in
+        // `pendingJumpStoryId`, and keeping a copy in step by hand is what failed. Both readers ask
+        // the ids directly now: `rowIsOnAnotherStory` decides who owns the slot, and `closeViewers`
+        // works out where to land. Neither can be stale, because neither remembers anything.
+        //
+        // (A 0.2s re-freeze also lived here, for a jumped-to item arriving with a live material that
+        // misrendered under the sheet's scale. The canvas has no such state — two colours in a layer,
+        // set when the photo lands, scaled with the card — so there is nothing to re-freeze.)
         // The COVER'S OWN BACKING (not just an inner canvas) must be opaque black while the viewers
         // sheet is up — otherwise the .zoom transition composites the clear backing over the inner
         // black canvas and the light Chats list bleeds through as the "white" bug. Clear only at rest,
@@ -2804,9 +2820,30 @@ struct StoryViewer: View {
         // behind a card that is already flying back to full screen, so the load is covered by the
         // motion instead of happening under a 100pt thumbnail. Posted before the animator so the
         // library has the whole collapse to get its first frame up.
-        if !pendingJumpStoryId.isEmpty {
-            NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: pendingJumpStoryId)
-            pendingJumpStoryId = ""
+        // ⚠️ ASKED, NOT REMEMBERED. This used to spend a `pendingJumpStoryId` that an `onChange`
+        // handler had written earlier — and when that handler was silently skipped (its guard wanted
+        // `currentIsMine`, which arrives a beat after the sheet can open), there was nothing to spend
+        // and the close landed back on the story he started from. His report, second half.
+        //
+        // The row's own centred card is the answer and it is sitting right there. The library's
+        // receiver already refuses a jump to the item it is on (`idx != getCurrentIndex()`), so the
+        // "already there" case needs no test of ours.
+        if rowIsOnAnotherStory {
+            let landing = sheetStoryId
+            NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: landing)
+            // ⚠️ AND THE ANCHOR MOVES WITH IT, IN THE SAME BREATH.
+            //
+            // `currentStoryId` means "the item the library is on", and we have just told it to be on
+            // `landing`. Without this line it keeps naming the old story until `onItemSeen` fires —
+            // which the library WITHHOLDS while a story is paused, and the story stays paused until
+            // the very end of the collapse. So for the whole of that collapse `rowIsOnAnotherStory`
+            // would still answer true, the carousel would still own the slot, and the story would
+            // grow back to full screen with the live card standing aside.
+            //
+            // This is not a second copy of anything: it is the one anchor, updated at the moment the
+            // thing it describes actually changed, instead of waiting for a receipt that cannot
+            // arrive yet.
+            currentStoryId = landing
         }
         sheetAnimator.animate(from: viewersProgress, to: 0, velocity: velocity, write: { viewersProgress = $0 }) {
             // Reaching here means the close actually finished (a re-open cancels this animator).
