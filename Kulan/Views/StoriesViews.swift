@@ -990,51 +990,6 @@ struct StoryViewer: View {
         // The modifier chain outgrew the Swift type-checker (CI: "unable to type-check in
         // reasonable time") — body is now three separately-checked pieces. Purely structural.
         lifecycleGlue(sheetsAndMenus(coreLayers))
-            .overlay(alignment: .top) { slotDebug }
-    }
-
-    /// ⚠️ TEMPORARY DIAGNOSTIC FOR ONE APPETIZE PREVIEW — SET `showSlotDebug` BACK TO FALSE BEFORE
-    /// ANY TESTFLIGHT SHIP.
-    ///
-    /// Three fixes have now been aimed at "the story behind the card does not follow the card" and
-    /// the owner has reported it unchanged after every one. Each was reasoned from source, and each
-    /// time the reasoning said the code was already correct — which means the model of what is
-    /// happening on screen is wrong, not the arithmetic. There is no Mac here to observe it with, so
-    /// the app is asked to say what it thinks instead. One screenshot answers what a day of reading
-    /// could not.
-    ///
-    /// It reads state and nothing else, so it cannot change behaviour.
-    private static let showSlotDebug = true
-
-    /// Story id → something a person can read in a screenshot.
-    private func debugLabel(_ id: String) -> String {
-        guard !id.isEmpty else { return "(empty)" }
-        let live = StoriesRepository.shared.mine?.stories ?? myStories
-        guard let s = live.first(where: { $0.id == id }) else { return String(id.prefix(4)) + "?" }
-        let c = s.caption.isEmpty ? String(id.prefix(4)) : s.caption
-        return c + (s.isVideo ? " [v]" : " [p]")
-    }
-
-    @ViewBuilder private var slotDebug: some View {
-        if Self.showSlotDebug, showViewers {
-            let cardRect = StoryCardMorph.shared.debugCardFrame
-            let slot = cardSlot
-            VStack(alignment: .leading, spacing: 1) {
-                Text("row    \(debugLabel(sheetStoryId))")
-                Text("player \(debugLabel(targetStoryId))")
-                Text("seen   \(debugLabel(currentStoryId))")
-                Text("owns \(carouselOwnsSlot ? "YES" : "no") · diff:\(rowIsOnAnotherStory ? "Y" : "n") drag:\(carouselInteracting ? "Y" : "n") page:\(sheetPaging ? "Y" : "n")")
-                Text("prog \(String(format: "%.2f", viewersProgress)) · alpha \(String(format: "%.2f", StoryCardMorph.shared.debugCardAlpha))")
-                Text("card \(Int(cardRect.origin.x)),\(Int(cardRect.origin.y)) \(Int(cardRect.width))x\(Int(cardRect.height))")
-                Text("slot \(Int((UIScreen.main.bounds.width - slot.w) / 2)),\(Int(slot.top)) \(Int(slot.w))x\(Int(slot.h))")
-            }
-            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-            .foregroundStyle(.white)
-            .padding(6)
-            .background(Color.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .padding(.top, 54)
-            .allowsHitTesting(false)
-        }
     }
 
     private var coreLayers: some View {

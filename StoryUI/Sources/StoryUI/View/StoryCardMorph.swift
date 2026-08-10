@@ -804,19 +804,6 @@ public final class StoryCardMorph {
     // (`StoryPlaybackResume.cardFrame`), and `bankCurrentFrame` below fills that bank at the pause.
     // Nobody has to ask at the right moment, so nobody can ask at the wrong one.
 
-    // MARK: - Diagnostics
-    //
-    // ⚠️ TEMPORARY, FOR ONE APPETIZE PREVIEW. Remove with the host's `slotDebug` overlay before any
-    // TestFlight ship. Read-only, so they cannot change behaviour, but they are noise in a shipped
-    // build and the owner has never asked for a debug readout in the app.
-
-    /// The live card's alpha. `setHidden` writes this; -1 means there is no card at all.
-    public var debugCardAlpha: CGFloat { card?.alpha ?? -1 }
-    /// Where the live card actually is ON SCREEN, transform included. If this is bigger than the
-    /// carousel's centre slot while the sheet is open, the story sticks out around the row's card and
-    /// no amount of ownership logic will hide it — that is a geometry fault, not a state fault.
-    public var debugCardFrame: CGRect { card.map { $0.convert($0.bounds, to: nil) } ?? .zero }
-
     /// ⚠️ THE FRAME IS BANKED WHEN THE STORY IS FROZEN, NOT WHEN A CARD HAPPENS TO ASK FOR IT.
     ///
     /// `StoryPlaybackResume` already keeps one picture per clip, and its own note argues that asking
