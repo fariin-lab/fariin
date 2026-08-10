@@ -1698,6 +1698,10 @@ struct ArchivedChatsView: View {
                         // story you pressed. That is what he is seeing. Out here each card carries
                         // its own menu, and `.id(authorUid)` keeps that menu bound to its person.
                         if !archivedStories.isEmpty { archivedStoriesRow }
+                        // ⚠️ TEMPORARY — comes out with `StoryPressDebug.on`. Fourth report on this
+                        // row's long press, three source-reasoned fixes shipped and reported dead.
+                        // See the note above `StoryPressDebug`.
+                        if !archivedStories.isEmpty { StoryPressDebugReadout() }
                         List(selection: $selection) {   // stable binding (Set selects only in edit mode) -> smooth edit transition
                             ForEach(archived) { conv in
                                 Button {

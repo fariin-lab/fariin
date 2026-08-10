@@ -52,6 +52,67 @@ enum StoryRowPress {
     }
 }
 
+// MARK: - TEMPORARY: the archive press reports on itself
+//
+// ⚠️ THIS WHOLE SECTION COMES OUT BEFORE ANYTHING SHIPS. `StoryPressDebug.on` goes back to false and
+// the readout goes with it. It is read-only and cannot change behaviour.
+//
+// The archive row's long press is on its FOURTH report. `f776c5f2` gave the climb a retry,
+// `c44cbb6a` gave it the gated window fallback, `71a4bc7a` stopped an embalmed press from claiming
+// to be installed — every one of them reasoned from this file, every one of them shipped, and he
+// has reported it dead after each. Three rounds of reading concluded "this code is already
+// correct", which is the same shape as the story-slot bug on 2026-08-10: when the arithmetic keeps
+// saying it works and the screen keeps saying it does not, the MODEL is wrong, not the arithmetic.
+// There is no Mac here to observe the real thing with, so the app answers instead.
+//
+// Three questions, in the order they can fail:
+//   1. Did a recogniser get installed at all, and on WHAT — the row's scroll view, or the window?
+//   2. Was it offered the press, and did the gate let it begin, or refuse it and why?
+//   3. Did the handler run, and which of its guards turned it back?
+//
+// Whichever line is still a dash is the one that never happened, and that is the answer.
+@MainActor final class StoryPressDebug: ObservableObject {
+    static let shared = StoryPressDebug()
+    /// ⚠️ FALSE BEFORE ANY TESTFLIGHT BUILD.
+    static let on = true
+
+    @Published var anchor = "anchor  —"
+    @Published var gate   = "gate    —"
+    @Published var began  = "press   —"
+
+    /// Written from inside gesture callbacks, so the SwiftUI update is deferred a runloop turn: a
+    /// re-render raised mid-press would re-enter `updateUIView` → `heal()` while the recogniser that
+    /// is reporting is still running, and a diagnostic that changes the thing it is measuring is
+    /// worse than none.
+    private func later(_ apply: @escaping () -> Void) {
+        guard Self.on else { return }
+        DispatchQueue.main.async(execute: apply)
+    }
+    func noteAnchor(_ s: String) { later { self.anchor = "anchor  " + s } }
+    func noteGate(_ s: String)   { later { self.gate   = "gate    " + s } }
+    func noteBegan(_ s: String)  { later { self.began  = "press   " + s } }
+}
+
+/// The readout. Three lines under the archived stories row, where his finger already is.
+struct StoryPressDebugReadout: View {
+    @ObservedObject private var d = StoryPressDebug.shared
+    @ViewBuilder var body: some View {
+        if StoryPressDebug.on {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(d.anchor)
+                Text(d.gate)
+                Text(d.began)
+            }
+            .font(.system(size: 11, weight: .medium, design: .monospaced))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+            .background(Color.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .padding(.horizontal, 12)
+        }
+    }
+}
+
 /// What a press on the row found: which card, where it is, and what its menu should say.
 struct StoryMenuTarget {
     /// `MediaOpenRects` key, so the real card can be hidden while its picture is lifted.
@@ -263,7 +324,10 @@ struct StoryRowLongPress: UIViewRepresentable {
             // like having none, which is what he keeps photographing. A recogniser on a live host
             // is untouched (the chat row's UIKit scroller never dies), so this is a no-op
             // everywhere the press already worked.
-            if press != nil, host == nil || host?.window == nil { uninstall() }
+            if press != nil, host == nil || host?.window == nil {
+                StoryPressDebug.shared.noteAnchor("host died, re-anchoring")
+                uninstall()
+            }
             guard press == nil else { return }
             // The row's own scroll view, found by climbing. This is the chat list's answer too —
             // it hands `install` a view inside its scroller, so the first step up finds it.
@@ -287,8 +351,18 @@ struct StoryRowLongPress: UIViewRepresentable {
             // belongs to the same screen we do. Everywhere else the recogniser fails at 0.2s having
             // cancelled nothing, which is exactly what having no recogniser did.
             let anchor: UIView? = scroll ?? (allowWindow ? view.window : nil)
-            guard let anchor else { return }
+            guard let anchor else {
+                // Not a failure yet on the sync pass — the window fallback is deliberately held
+                // back one runloop turn. It IS a failure if the async pass lands here too, which is
+                // what the line says when it stops changing.
+                StoryPressDebug.shared.noteAnchor(allowWindow ? "NONE — no scroll view, no window"
+                                                             : "waiting (no scroll view yet)")
+                return
+            }
             gated = scroll == nil
+            StoryPressDebug.shared.noteAnchor(scroll == nil
+                                              ? "window (gated)"
+                                              : "scroll view \(type(of: anchor))")
             origin = view
             let g = UILongPressGestureRecognizer(target: self, action: #selector(pressed(_:)))
             g.minimumPressDuration = 0.2      // the reference app's number, and the chat menu's
@@ -314,11 +388,26 @@ struct StoryRowLongPress: UIViewRepresentable {
         /// bounded to the row and keeps its old behaviour exactly — including swallowing the tap on
         /// a press that finds no card, which the chat list has shipped with since `bf976c8d`.
         func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-            guard gated else { return true }
+            guard gated else {
+                StoryPressDebug.shared.noteGate("open (scroll anchor, no gate)")
+                return true
+            }
             let p = g.location(in: nil)
-            guard target(p) != nil, let origin, origin.window != nil else { return false }
-            guard let hit = origin.window?.hitTest(p, with: nil) else { return false }
-            return screenContainer(of: hit) === screenContainer(of: origin)
+            guard target(p) != nil else {
+                StoryPressDebug.shared.noteGate("NO CARD at \(Int(p.x)),\(Int(p.y))")
+                return false
+            }
+            guard let origin, origin.window != nil else {
+                StoryPressDebug.shared.noteGate("origin has no window")
+                return false
+            }
+            guard let hit = origin.window?.hitTest(p, with: nil) else {
+                StoryPressDebug.shared.noteGate("nothing hit-tested there")
+                return false
+            }
+            let same = screenContainer(of: hit) === screenContainer(of: origin)
+            StoryPressDebug.shared.noteGate(same ? "ALLOWED" : "other screen (\(type(of: hit)))")
+            return same
         }
 
         func uninstall() {
@@ -358,9 +447,26 @@ struct StoryRowLongPress: UIViewRepresentable {
                 // Raised BEFORE the early-outs below: the finger is already past the threshold, so
                 // the tap must be swallowed even on a press that finds no card to lift.
                 StoryRowPress.began()
-                guard overlay == nil,
-                      let window = g.view?.window,
-                      let t = target(p),
+                guard overlay == nil else {
+                    StoryPressDebug.shared.noteBegan("a menu is already up")
+                    return
+                }
+                // ⚠️ A WINDOW-ANCHORED RECOGNISER'S `view` IS THE WINDOW ITSELF, and `UIWindow.window`
+                // is not a promise anybody wrote down — it is an implementation detail of UIKit that
+                // this line has been quietly betting the whole feature on ever since `c44cbb6a` gave
+                // the archive row a window anchor. If it ever answers nil, this handler returns in
+                // silence with the gate already passed and the recogniser already begun: precisely
+                // the "wired, shipped and does nothing" shape this press keeps being reported for.
+                // Costs one `as?` to stop depending on it.
+                guard let window = (g.view as? UIWindow) ?? g.view?.window else {
+                    StoryPressDebug.shared.noteBegan("no window on \(g.view.map { "\(type(of: $0))" } ?? "nil")")
+                    return
+                }
+                guard let t = target(p) else {
+                    StoryPressDebug.shared.noteBegan("began, but no card at \(Int(p.x)),\(Int(p.y))")
+                    return
+                }
+                guard
                       // ⚠️ CUT AT ZERO, AND LET THE LAYER DO THE ROUNDING. This asked for 24 and got
                       // a corner that did not match the card (his 2026-08-08 report, "when i long
                       // press story dont change the runded corners").
@@ -378,7 +484,11 @@ struct StoryRowLongPress: UIViewRepresentable {
                       // square corners of a window crop are removed by the one cut that is already
                       // guaranteed to agree with the card.
                       let shot = StoryCardShot.crop(t.rect, in: window, cornerRadius: 0)
-                else { return }
+                else {
+                    StoryPressDebug.shared.noteBegan("could not photograph the card")
+                    return
+                }
+                StoryPressDebug.shared.noteBegan("MENU SHOWN")
                 let image = UIImageView(image: shot)
                 image.frame = CGRect(origin: .zero, size: t.rect.size)
                 image.contentMode = .scaleAspectFill   // only ever scales uniformly; belt anyway
