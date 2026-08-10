@@ -13,6 +13,27 @@ import PhotosUI
 final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate,
                          AVCaptureFileOutputRecordingDelegate {
     let session = AVCaptureSession()
+    /// ⚠️ ONE SERIAL QUEUE OWNS THE SESSION, AND THAT IS THE BLACK PREVIEW.
+    ///
+    /// Every one of these calls used to go to `DispatchQueue.global(qos:)`, which is CONCURRENT: two
+    /// blocks submitted to it run AT THE SAME TIME on different threads. An `AVCaptureSession` may
+    /// not be configured that way — Apple's own camera sample gives it a dedicated serial queue for
+    /// exactly this reason — and this screen submits from six places, two of which the CAMERA / TEXT
+    /// switch fires back to back.
+    ///
+    /// His 2026-08-10 report is that pair: TEXT dispatches `stop()`, CAMERA dispatches `start()`, and
+    /// they race. Two endings, both photographed. If `stopRunning` lands after `startRunning` the
+    /// session is stopped while the camera page is on screen — dead black. If instead
+    /// `configureIfNeeded`'s `beginConfiguration` overlaps the stop, the session keeps its input (so
+    /// the green privacy dot is LIT, which is what his screenshot shows) while the preview layer's
+    /// connection never comes back — a live camera nobody can see.
+    ///
+    /// `configureIfNeeded`'s own `guard session.inputs.isEmpty` was unsafe for the same reason: two
+    /// threads can both read "empty" before either adds anything, and configure it twice.
+    ///
+    /// Serial means the operations happen in the order they were asked for, which is all this ever
+    /// needed. It is not a lock and it does not block the main thread.
+    private let sessionQueue = DispatchQueue(label: "story.camera.session")
     private let output = AVCapturePhotoOutput()
     private let movieOutput = AVCaptureMovieFileOutput()
     private var input: AVCaptureDeviceInput?
@@ -39,11 +60,29 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position)
     }
 
+    /// ⚠️ THE OLD LENS IS NOT LET GO OF UNTIL THE NEW ONE IS IN. This removed the current input on
+    /// its FIRST line and then had two ways to give up — no device, or `canAddInput` saying no — and
+    /// either left the session running with no camera attached at all. `input` still pointed at the
+    /// removed one, so `configureIfNeeded` (which asks whether `session.inputs` is empty, and the
+    /// audio input keeps it non-empty) would never rebuild it either: black for the rest of the
+    /// screen's life, through every flip and every zoom tap after it.
+    ///
+    /// Now the new input is built and accepted BEFORE the old one goes, and if anything refuses, the
+    /// old input is put back. A failed lens change leaves the camera exactly as it was.
     private func setInput(position: AVCaptureDevice.Position, ultraWide: Bool = false) {
-        if let input { session.removeInput(input) }
         guard let dev = device(for: position, ultraWide: ultraWide) ?? device(for: position),
               let newInput = try? AVCaptureDeviceInput(device: dev) else { return }
-        if session.canAddInput(newInput) { session.addInput(newInput); input = newInput; self.position = position }
+        let previous = input
+        if let previous { session.removeInput(previous) }
+        guard session.canAddInput(newInput) else {
+            // Put back what was working. `canAddInput` was true for it a moment ago, so this
+            // restores the state rather than hoping.
+            if let previous, session.canAddInput(previous) { session.addInput(previous) }
+            return
+        }
+        session.addInput(newInput)
+        input = newInput
+        self.position = position
     }
 
     private func configureIfNeeded() {
@@ -79,7 +118,7 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     /// `didStartRecordingTo`. The shutter has to answer the finger, not the capture pipeline.
     func startRecording() {
         guard session.isRunning, !movieOutput.isRecording else { return }
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        sessionQueue.async { [weak self] in
             guard let self else { return }
             self.attachAudioIfNeeded()   // no-op after the first time; the prompt path only
             self.setTorch(self.flashOn)  // VIDEO'S FLASH IS THE TORCH, and it was never switched on
@@ -104,7 +143,7 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     }
 
     func stopRecording() {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        sessionQueue.async { [weak self] in
             guard let self else { return }
             self.setTorch(false)   // never leave the lamp burning after the clip
             guard self.movieOutput.isRecording else { return }
@@ -116,7 +155,7 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     /// setting for the NEXT shot, so this is the one case that has to reach the hardware at once.
     func applyTorchNow() {
         let want = flashOn
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in self?.setTorch(want) }
+        sessionQueue.async { [weak self] in self?.setTorch(want) }
     }
 
     /// The lamp, for video. Separate from the photo flash, which is a per-shot setting on the
@@ -170,7 +209,7 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
             // Surface a denial instead of silently leaving a dead black preview.
             DispatchQueue.main.async { self.denied = !granted }
             guard granted else { return }
-            DispatchQueue.global(qos: .userInitiated).async {
+            self.sessionQueue.async {
                 self.configureIfNeeded()
                 if !self.session.isRunning { self.session.startRunning() }
             }
@@ -178,7 +217,7 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     }
 
     func stop() {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        sessionQueue.async { [weak self] in
             guard let self else { return }
             // Before the session goes, or the lamp is left burning on a camera nobody is looking
             // at — backgrounding the app mid-clip is the way to reach that.
@@ -189,7 +228,7 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     }
 
     func flip() {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        sessionQueue.async { [weak self] in
             guard let self else { return }
             // The lamp belongs to the lens being left behind: switch it off BEFORE the swap, or it
             // stays lit on a device nothing is pointing at any more.
@@ -204,7 +243,7 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
 
     // .5 → ultra-wide camera (if the device has one); 1×/3× → zoom factor on the wide lens.
     func setZoom(_ level: CGFloat) {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        sessionQueue.async { [weak self] in
             guard let self else { return }
             if level < 1 {
                 self.session.beginConfiguration()
