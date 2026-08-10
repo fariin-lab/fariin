@@ -76,18 +76,27 @@ service cloud.firestore {
     // Profiles: any signed-in user can look up a handle to start a chat,
     // but you can only create/edit your OWN profile.
     match /users/{uid} {
-      // GET, NOT READ, and this one word was the whole user directory. `allow read` grants get AND
-      // list, and Firestore's `list` means "run any query you like against this collection", so one
-      // signed-in phone could page through every user document in Fariin. Proven by
-      // rules-tests/user-directory.test.js, which runs the same suite against the live ruleset and
-      // this one: both sweeps are ALLOWED on live and DENIED here, while single-profile fetches pass
-      // on both. Full reasoning sits in Kulan/firestore.rules, the file firebase.json deploys.
+      // ✅ DONE, 2026-08-10. The four query sites are handled and the directory is CLOSED.
       //
-      // ⚠️ DOES NOT SHIP ALONE. Four query sites in the app break until handle lookup moves to a
-      // Cloud Function: ChatService.findByHandle and .searchUsers, AnnouncementAdmin.searchPeople,
-      // VerificationAdmin.search. Everything else is safe: 42 of the 46 places the app touches this
-      // collection are .document(uid) fetches, which `get` still allows.
+      // `findByHandle` no longer queries this collection: it reads ONE `usernames/{name}` document
+      // (get-only, see that block below) to turn an exact name into a uid, then fetches that profile
+      // like any other. `searchUsers` no longer prefix-searches at all — it was returning twenty
+      // accounts for two typed letters, which is a directory you can walk alphabetically, and it is
+      // now an exact lookup returning at most one person. The two ADMIN screens
+      // (AnnouncementAdmin.searchPeople, VerificationAdmin.search) genuinely need to sweep, so they
+      // are served by the `list` branch below rather than by opening this to everybody.
+      //
+      // The owner's standard, from WhatsApp's policy: "strangers must type your exact, full username
+      // to attempt to contact you", and spammers cannot "search random words or scrape a public
+      // directory". `get` is exactly that sentence expressed as a rule.
+      //
+      // ⚠️ RESTORING THE PREFIX SEARCH MEANS RESTORING `list` FOR EVERYONE. They are one decision,
+      // not two. rules-tests/user-directory.test.js proves this.
       allow get: if signedIn();
+      // Moderation is the one job that cannot work name-by-name: finding who to verify or warn means
+      // sweeping. Admins are a handful of accounts held in `admins/{uid}`, which only the owner can
+      // write, so this is a named, revocable exception rather than a hole.
+      allow list: if isAdmin();
 
       // FIELDS THE OWNER OF THE DOCUMENT MAY NOT WRITE. Only the server (the claimUsername
       // transaction, which runs with admin rights and bypasses these rules) or a moderator sets
@@ -274,6 +283,36 @@ service cloud.firestore {
         allow read: if signedIn() && request.auth.uid == uid;
         allow write: if adminCan('targetChosen');
       }
+    }
+
+    // ── THE NAME-TO-ACCOUNT MAP, AND THE ONLY WAY TO FIND SOMEBODY BY USERNAME ──
+    //
+    // `usernames/{lower}` is where uniqueness is decided (claimUsername writes it inside its
+    // transaction). It had NO match block at all, which made it unreachable by every client — and
+    // that was correct while the app found people by QUERYING profiles. Closing that query is what
+    // makes this block necessary: something has to turn "@ayaan" into an account.
+    //
+    // ⚠️ GET, AND NEVER LIST. This is the whole point and the two words are not interchangeable.
+    // `get` answers one question about one name you already typed in full. `list` would let somebody
+    // page through every username in Fariin, which is precisely the directory just closed next door —
+    // it would move the hole rather than fix it.
+    //
+    // What a `get` reveals: whether a name is taken, and which account holds it. Taken-ness is
+    // already public through `checkUsername` (it has to be — the person choosing a name must be told
+    // it is gone), and a uid is not a secret, it sits in every conversation you share. What it does
+    // NOT reveal is any name you did not already know.
+    //
+    // ⚠️ It also bypasses `checkUsername`'s 40-a-minute throttle, so a determined script can test
+    // names one read at a time. That is a real cost, accepted: it is dictionary GUESSING, which every
+    // platform with usernames permits, and it is enormously harder than the alphabetical walk this
+    // replaces. App Check is the proper answer to scripted clients and is still UNENFORCED.
+    //
+    // Writes stay closed. claimUsername runs with admin rights and does not pass through here; a
+    // client writing this directly would be taking a name without the transaction that keeps two
+    // people from taking the same one.
+    match /usernames/{name} {
+      allow get: if signedIn();
+      allow list, write: if false;
     }
 
     // Abuse reports (App Store Guideline 1.2 — users must be able to flag content

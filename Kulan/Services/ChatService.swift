@@ -2251,20 +2251,38 @@ enum ChatService {
 
     // MARK: - Discovery
 
+    /// THE EXACT NAME, OR NOTHING. There is no directory to browse behind this.
+    ///
+    /// It used to QUERY the users collection for `handleLower == h`, which needed `list` permission
+    /// on every profile in Fariin — and `list` in Firestore is not "read a few", it is "run any query
+    /// you like", so granting it for this one lookup published the whole user base to anybody with an
+    /// account. `searchUsers` below then used exactly that to return twenty people for two typed
+    /// letters, which is a directory you can walk alphabetically.
+    ///
+    /// Now it reads ONE document, `usernames/{name}`, whose rule allows `get` and never `list`. You
+    /// must already know the whole name; there is no way to ask what names exist. That is WhatsApp's
+    /// model, in their words: "strangers must type your exact, full username."
+    ///
+    /// Two reads instead of one query, and the second one is a plain document fetch the app makes
+    /// everywhere else, so it is cached like any other profile.
     static func findByHandle(_ handle: String) async -> UserProfile? {
         var h = handle.trimmingCharacters(in: .whitespaces).lowercased()
         if h.hasPrefix("@") { h.removeFirst() }   // users type "@ayaan"
         guard !h.isEmpty else { return nil }
         do {
-            let snap = try await db.collection("users")
-                .whereField("handleLower", isEqualTo: h)
-                .limit(to: 1).getDocuments()
-            guard let d = snap.documents.first else { return nil }
-            let u = UserProfile(id: d.documentID, data: d.data())
+            let nameDoc = try await db.collection("usernames").document(h).getDocument()
+            guard let nd = nameDoc.data(), let owner = nd["uid"] as? String, !owner.isEmpty else { return nil }
+            // A RELEASED NAME STILL NAMES ITS OLD OWNER. `claimUsername` keeps the record with a
+            // `releasedAt` stamp so nobody can snatch the name during the grace period — it is a
+            // hold, not a pointer. Following it would let somebody reach you by a name you gave up.
+            if let released = nd["releasedAt"], !(released is NSNull) { return nil }
+            let d = try await db.collection("users").document(owner).getDocument()
+            guard let data = d.data() else { return nil }
+            let u = UserProfile(id: d.documentID, data: data)
             // An account scheduled for deletion is invisible: it must not be findable or startable a
             // chat with while it sits in its grace period. Filtered HERE rather than in a security
             // rule because Firestore rules are not filters - a data-dependent read rule would make
-            // this whole query fail instead of skipping the row.
+            // this whole read fail instead of skipping the row.
             if u.isAwaitingDeletion { return nil }
             guard u.id != uid else { return nil }   // never "find" yourself
             return ProfileStore.indexed(u)          // warms photo / call-privacy / verification
@@ -2274,27 +2292,21 @@ enum ChatService {
         }
     }
 
+    /// ⚠️ NO PREFIX SEARCH. THIS IS DELIBERATE AND IT MUST NOT BE PUT BACK.
+    ///
+    /// This used to take two letters and return twenty accounts ordered by username. That is a public
+    /// directory: type `ab`, get twenty people, walk the alphabet, and you have everybody. It is the
+    /// exact thing WhatsApp describes when they say spammers cannot "search random words or scrape a
+    /// public directory to find you" — and we had it switched on.
+    ///
+    /// It is now an exact lookup that returns at most one person, so the search screen still works
+    /// for somebody who was given a full username. Kept as a list-returning function rather than
+    /// deleted so its callers do not change shape, and so this comment sits where anybody restoring
+    /// "search suggestions" will read it first. Restoring the prefix query also means restoring
+    /// `list` permission on every profile; the two are the same decision.
     static func searchUsers(prefix: String) async -> [UserProfile] {
-        var q = prefix.trimmingCharacters(in: .whitespaces).lowercased()
-        if q.hasPrefix("@") { q.removeFirst() }
-        guard q.count >= 2 else { return [] }   // min length: don't hammer Firestore on 1 char
-        do {
-            let snap = try await db.collection("users")
-                .order(by: "handleLower")
-                .start(at: [q]).end(at: [q + "\u{f8ff}"])
-                .limit(to: 20).getDocuments()
-            return snap.documents.compactMap { d -> UserProfile? in
-                let u = UserProfile(id: d.documentID, data: d.data())
-                if u.isAwaitingDeletion { return nil }   // hidden during its grace period
-                guard u.id != uid else { return nil }
-                // Through the one hook, so a search result can draw a verified mark. Without this the
-                // list that most needs the badge is the only list that never has it.
-                return ProfileStore.indexed(u)
-            }
-        } catch {
-            print("searchUsers failed:", error)
-            return []
-        }
+        guard let one = await findByHandle(prefix) else { return [] }
+        return [one]
     }
 }
 
