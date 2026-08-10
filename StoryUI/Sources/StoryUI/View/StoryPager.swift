@@ -133,6 +133,26 @@ struct StoryPager: UIViewControllerRepresentable {
         // `UIVisualEffectView` to the pager for the app to composite. Removed with the rest of the
         // blur system; what pulls away now is the card, over the live chat list, as below.
         private var didInstallPan = false
+
+        /// ⚠️ A PROGRAMMATIC PAGE TURN IS IN FLIGHT. Without this the app CRASHES — his
+        /// `Kulan-2026-08-10-114950.ips`, build 520, `SIGABRT` from a UIKit assertion:
+        /// `-[UIPageViewController _flushViewController:animated:]` ← `_UIQueuingScrollView
+        /// _replaceViews:updatingContents:` ← `_scrollViewAnimationEnded:`.
+        ///
+        /// `UIPageViewController` cannot be told to change pages while it is already changing them.
+        /// Its queuing scroll view flushes the outgoing controller when the animation ends, and if a
+        /// second `setViewControllers` has replaced the queue in the meantime, that flush asserts.
+        /// Apple state the constraint plainly; we were simply not honouring it.
+        ///
+        /// `syncIfNeeded` runs from `updateUIViewController`, so it fires on EVERY SwiftUI update.
+        /// Tap forward to the next person and then again before the ~0.3s slide has landed — which is
+        /// ordinary use, not abuse — and the second call arrives mid-transition.
+        private var isTurning = false
+        /// A sync that arrived while a turn was in flight. Dropping it outright would leave the pager
+        /// showing one person while the view model names another, so it is replayed once the turn
+        /// lands. The replay is cheap and self-terminating: `syncIfNeeded` returns immediately once
+        /// the shown page already matches.
+        private var syncPending = false
         /// Whether the passive watcher has already told the host it is past the fade threshold. One
         /// report per crossing, not one per frame — see `handleDismissWatch`.
         private var watchDragPastThreshold = false
@@ -281,11 +301,35 @@ struct StoryPager: UIViewControllerRepresentable {
             // asked for was still sliding in. Apple owns this animation's duration and we cannot
             // shorten it; the least we can do is not compete with it. The completion is roughly
             // where the old hop landed anyway, minus the contention.
+            // ⚠️ NEVER TWO TURNS AT ONCE, AND NEVER OVER THE TOP OF A FINGER. This is the crash
+            // guard — see `isTurning`. The scroll-view test covers the interactive case: an
+            // interactive swipe reports through `didFinishAnimating`, not through the completion
+            // below, so `isTurning` alone would not see it.
+            if isTurning || internalScroll.map({ $0.isTracking || $0.isDragging || $0.isDecelerating }) == true {
+                syncPending = true
+                return
+            }
             let next = parent.viewModel.currentStoryUser
+            isTurning = true
             pager.setViewControllers([target], direction: to > from ? .forward : .reverse,
                                      animated: true) { [weak self] _ in
-                self?.prewarmNeighbours(of: next)
+                guard let self else { return }
+                self.isTurning = false
+                self.prewarmNeighbours(of: next)
+                self.replayPendingSync()
             }
+        }
+
+        /// Re-run a sync that was refused mid-turn, one runloop later.
+        ///
+        /// The hop is deliberate: this is called from inside `setViewControllers`' completion and
+        /// from `didFinishAnimating`, and UIKit is still unwinding its own transition bookkeeping at
+        /// both of those points. Starting the next turn from inside the previous one's teardown is a
+        /// smaller version of the very thing that crashed.
+        private func replayPendingSync() {
+            guard syncPending else { return }
+            syncPending = false
+            DispatchQueue.main.async { [weak self] in self?.syncIfNeeded() }
         }
 
         /// BUILD **AND LAY OUT** THE PEOPLE EITHER SIDE, BEFORE THE FINGER ASKS FOR THEM.
@@ -338,6 +382,11 @@ struct StoryPager: UIViewControllerRepresentable {
 
         func pageViewController(_ pvc: UIPageViewController, didFinishAnimating finished: Bool,
                                 previousViewControllers: [UIViewController], transitionCompleted completed: Bool) {
+            // ⚠️ THE INTERACTIVE TRANSITION IS OVER WHETHER OR NOT IT COMMITTED, so the pending-sync
+            // replay is released BEFORE the `completed` guard. A swipe the person changed their mind
+            // about still ends a transition, and a sync refused during it must not be stranded — that
+            // is how the pager ends up showing one person while the view model names another.
+            defer { replayPendingSync() }
             guard completed, let cur = (pvc.viewControllers?.first as? StoryPageHostVC)?.bucketID else { return }
             parent.viewModel.currentStoryUser = cur   // StoryView's onChange fires onUserChanged
             // A swipe lands here rather than in `syncIfNeeded`, and the person AFTER the one he just
