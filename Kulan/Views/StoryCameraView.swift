@@ -665,24 +665,40 @@ struct StoryCameraView: View {
 
     // MARK: Black bar under the card
 
-    @ViewBuilder private var bottomBar: some View {
-        if mode == .text { textBar } else { cameraBar }
-    }
-
-    /// TEXT mode: the switch, and the send button. No library and no flip — neither has anything to
-    /// do here, and his drawing has neither.
+    /// ⚠️ EXACTLY ONE SWITCH, AND IT LIVES OUT HERE. His 2026-08-10 screenshot: tap TEXT and BOTH
+    /// words light up at once, the pill glass under each of them, the letters faintly doubled.
+    ///
+    /// This was `if mode == .text { textBar } else { cameraBar }` with a `modePicker` inside EACH
+    /// branch. The two branches of an `if` are two different views to SwiftUI, so changing `mode`
+    /// inserts one and removes the other — and `mode` is only ever written inside
+    /// `withAnimation(modeCurve)`, so that swap is a 0.25s CROSS-FADE. For those 0.25s there are two
+    /// `UISegmentedControl`s alive, centred in the same ZStack, sitting exactly on top of each
+    /// other: the outgoing one still selecting CAMERA, the incoming one already selecting TEXT. Two
+    /// highlights, because there were two controls.
+    ///
+    /// Now the switch is declared once, outside the branch, so it is the SAME view before and after
+    /// and it simply slides its own indicator across. Only the side controls — which really are
+    /// different per mode — cross-fade.
     ///
     /// THE SWITCH IS DEAD CENTRE, and that is why this is a ZStack rather than an HStack.
     ///
     /// It used to be one HStack per mode with the side controls as siblings, so the switch sat
-    /// wherever the Spacers left it: pushed left here by the send button, and roughly centred in
-    /// CAMERA only because the library card and the flip button happen to weigh about the same. So
-    /// it JUMPED sideways when he changed tab — his two screenshots, one above the other. Centred in
-    /// a ZStack with the side controls floating over it, nothing beside it can move it, whatever
+    /// wherever the Spacers left it: pushed left by the send button, and roughly centred in CAMERA
+    /// only because the library card and the flip button happen to weigh about the same. So it
+    /// JUMPED sideways when he changed tab — his two screenshots, one above the other. Centred in a
+    /// ZStack with the side controls floating over it, nothing beside it can move it, whatever
     /// appears or disappears there.
-    private var textBar: some View {
+    private var bottomBar: some View {
         ZStack {
             modePicker
+            if mode == .text { textSideControls } else { cameraSideControls }
+        }
+        .padding(.horizontal, 20)
+    }
+
+    /// TEXT mode: the send button. No library and no flip — neither has anything to do here, and his
+    /// drawing has neither.
+    private var textSideControls: some View {
             HStack {
                 Spacer(minLength: 0)
                 // 40x40, the arrow and nothing else (owner 2026-08-06: "remove the NEXT text…
@@ -706,16 +722,12 @@ struct StoryCameraView: View {
                 .disabled(!hasText)
                 .accessibilityLabel("Next")
             }
-        }
-        .padding(.horizontal, 20)
     }
 
-    private var cameraBar: some View {
-        // Centred exactly as TEXT is — see the note there. It also means the switch cannot drift when
-        // the library card and the flip button step aside mid-recording, which was the old comment's
-        // whole worry and was being held together by the two side controls happening to match.
-        ZStack {
-            modePicker
+    /// Centred exactly as TEXT is — see the note on `bottomBar`. It also means the switch cannot
+    /// drift when the library card and the flip button step aside mid-recording, which was the old
+    /// comment's whole worry and was being held together by the two side controls happening to match.
+    private var cameraSideControls: some View {
             HStack {
             // While recording, the library and the flip step aside: neither can be used mid-clip,
             // and his mock has only the switch down there.
@@ -740,8 +752,6 @@ struct StoryCameraView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Flip camera")
             }
-        }
-        .padding(.horizontal, 20)
     }
 
     /// A little deck of pictures, which is what the reference draws: the newest photo in front with a
