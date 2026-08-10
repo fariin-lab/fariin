@@ -2771,25 +2771,66 @@ struct StoryViewer: View {
                               let live = StoriesRepository.shared.mine?.stories ?? myStories
                               guard let i = live.firstIndex(where: { $0.id == sheetStoryId }),
                                     live.indices.contains(i + d) else {
-                                  withAnimation(.easeOut(duration: 0.28)) { pageDragBox.value = 0 }
-                                  sheetPaging = false
+                                  // Same rule as the commit below: the flag describes the MOVEMENT,
+                                  // so it cannot be dropped on the frame the movement starts.
+                                  withAnimation(.easeOut(duration: 0.28)) {
+                                      pageDragBox.value = 0
+                                  } completion: {
+                                      sheetPaging = false
+                                  }
                                   return
                               }
                               // The drag zeroes IN THE SAME TRANSACTION as the id flip, on the
                               // panel's own 0.28s return curve — the row glides its remaining
                               // distance while the new sheet slides in, one motion.
+                              //
+                              // ⚠️ AND THE FLAG OUTLIVES THE GESTURE, BECAUSE THE MOTION DOES.
+                              //
+                              // `sheetPaging = false` used to run on this line, one frame into a
+                              // 0.28s glide the row has not started yet. For the whole glide
+                              // `carouselOwnsSlot` was false, so the live story was handed back to
+                              // the slot while the row was still two thirds of a card off centre,
+                              // and the cards slid straight over the top of it — his overlapping
+                              // cards. The gesture is over; the movement it started is not, and this
+                              // flag describes the movement.
                               withAnimation(.easeOut(duration: 0.28)) {
                                   sheetStoryId = live[i + d].id
                                   pageDragBox.value = 0
+                              } completion: {
+                                  sheetPaging = false
                               }
-                              sheetPaging = false
                           },
                           // THE ONLY PER-FRAME WRITE, and it goes to the box. The boolean beside
                           // it changes twice a drag, which is what the host actually needs to know.
                           onPageDrag: { f in
+                              // ⚠️ A DRAG THAT IS GIVEN UP DOES NOT TELEPORT THE ROW.
+                              //
+                              // The sheet answers an abandoned page by calling this with 0 and THEN
+                              // springing its panel home over 0.3s. Written straight through, the row
+                              // jumped back to centre in one frame while the panel was still
+                              // travelling: two halves of one gesture on two different clocks, which
+                              // is the other half of his "swipe is not smooth". It now walks home on
+                              // the panel's own curve, and `sheetPaging` stays up until it arrives,
+                              // for the same reason the commit's does.
+                              //
+                              // (SwiftUI's `.spring(response:dampingFraction:)` is not arithmetically
+                              // identical to UIKit's `usingSpringWithDamping` — see the translation
+                              // note in the row's UIKit rewrite — but over 0.3s at 0.9 damping the
+                              // two are within a frame of each other, and the alternative is a jump.)
+                              guard f != 0 else {
+                                  guard pageDragBox.value != 0 else {
+                                      if sheetPaging { sheetPaging = false }
+                                      return
+                                  }
+                                  withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+                                      pageDragBox.value = 0
+                                  } completion: {
+                                      sheetPaging = false
+                                  }
+                                  return
+                              }
                               pageDragBox.value = f
-                              let paging = f != 0
-                              if sheetPaging != paging { sheetPaging = paging }
+                              if !sheetPaging { sheetPaging = true }
                           },
                           // A viewer's profile opens in the SAME sheet the story header uses, so
                           // there is one profile screen in this viewer and not two that drift.
@@ -3485,8 +3526,26 @@ struct MyStoriesCarousel: View {
     /// — the whole glide ran with the story exposed. `retargeting` closes that path and the
     /// fractional test is the belt for any path neither of them knows about: whatever the reason, a
     /// row that is not sitting on a whole card has not finished moving.
+    /// ⚠️ AND THE BELT MUST BE MEASURED ON THE ROW THAT IS ON SCREEN, NOT ON `scroll` ALONE.
+    ///
+    /// His 2026-08-10 report, "the window cards are overlapping when I swipe the viewers sheet",
+    /// MEASURED off the screenshot rather than reasoned: the four row cards were exactly where this
+    /// file's own formula puts them at 0.63 of a card past centre, spacing perfect, while the card
+    /// filling the slot sat at dead centre wearing the scale of a card 0.37 to the LEFT. Position and
+    /// scale disagreeing by exactly the page-drag is the signature of the live story — the one view
+    /// that is parked at the slot centre and cannot slide — being on screen during a swipe.
+    ///
+    /// The row's real position is `scroll - pageDrag.value`, and this line only ever looked at
+    /// `scroll`. A sheet page-drag moves the row entirely through `pageDrag`: `scroll` stays on a
+    /// whole number for the length of the drag, so the belt answered "landed" while the row was
+    /// visibly two thirds of a card away. Both gesture flags can be false there too — the commit
+    /// clears `sheetPaging` on the first frame of a 0.28s glide, and a drag abandoned below the
+    /// commit threshold clears it with the panel still springing home — which is exactly the "any
+    /// path neither of them knows about" this test was written to cover and could not, because it
+    /// was reading the wrong number.
     private var rowBusy: Bool {
-        scrollerBusy || retargeting || abs(scroll - scroll.rounded()) > 0.002
+        let onScreen = scroll - pageDrag.value
+        return scrollerBusy || retargeting || abs(onScreen - onScreen.rounded()) > 0.002
     }
 
     /// The card the carousel considers centred. Derived, never stored: with `scroll` continuous
