@@ -68,8 +68,22 @@ public enum StoryPlaybackResume {
 
     static func rememberFrame(_ url: URL, image: UIImage?) {
         guard let image else { return }
+        let key = url.absoluteString as NSString
+        // ⚠️ THE SAME PICTURE IS NOT A NEW PICTURE, and saying so is what stops the card copies being
+        // thrown away twice a second.
+        //
+        // `currentVideoFrame` falls back to THIS cache when the player has no fresh buffer to give
+        // (a paused item hands its buffer over exactly once), so a re-bank while a story is frozen
+        // usually arrives holding the very object already stored here. Every such call used to reach
+        // the line below and drop every card-sized copy of it — and the viewers sheet re-asserts its
+        // pause twice a second for as long as it is open, so the carousel was re-running `fitted`
+        // for every card twice a second for a frame that had not changed.
+        //
+        // An identity check, not an equality one: this is only ever about the fallback handing back
+        // the object it was given, and comparing pixels would cost more than the work it saves.
+        if frames.object(forKey: key) === image { return }
         let cost = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
-        frames.setObject(image, forKey: url.absoluteString as NSString, cost: cost)
+        frames.setObject(image, forKey: key, cost: cost)
         // A new frame for this clip makes every card-sized copy of the old one wrong. Dropping them
         // here is what lets `cardFrame` be called from a view body: the expensive part happens once
         // per (clip, width) and a re-bank is the only thing that can make it happen again.
