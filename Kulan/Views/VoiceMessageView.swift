@@ -92,7 +92,25 @@ struct VoiceMessageView: View {
             // scroll. A plain tap gesture reads identically and claims nothing.
             Group {
                 if loading { ProgressView().tint(tint) }
-                else { Image(systemName: playing ? "pause.fill" : "play.fill").font(.system(size: 17)) }
+                else {
+                    Image(systemName: playing ? "pause.fill" : "play.fill")
+                        .font(.system(size: 17))
+                        // THE ICON MOVES BETWEEN THE TWO SHAPES INSTEAD OF BEING REPLACED — his
+                        // "play fast, play and pause" report, where rapid tapping felt heavy.
+                        //
+                        // Nothing here was slow: the tap toggles immediately. What was missing is
+                        // any motion, so a fast double tap swapped one glyph for another with no
+                        // travel and read as a stutter. Signal spends real effort on exactly this
+                        // beat — their button is a Lottie scrub between the play and pause states
+                        // with a guard so a second tap mid-animation does not restart it
+                        // (`AudioMessageView`, "Do nothing if we're already there") — and a
+                        // symbol-effect replace is the same idea with none of the machinery.
+                        //
+                        // `.byLayer` keeps it a bounce rather than a cross-fade, and because the
+                        // animation is driven by the VALUE it is interruptible: tap again halfway
+                        // and it retargets from where it is instead of queueing.
+                        .contentTransition(.symbolEffect(.replace.byLayer))
+                }
             }
             .foregroundStyle(tint)
             .frame(width: 42, height: 42)
@@ -102,7 +120,11 @@ struct VoiceMessageView: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 WaveformBars(bars: displayBars, progress: progress, played: tint,
-                             unplayed: tint.opacity(0.3), playing: playing,
+                             // 0.45, not 0.3. The unplayed half is most of the bar for most of a
+                             // note's life, and at 30% of the tint on a saturated bubble it read as
+                             // washed rather than as a waveform waiting to be played. Still clearly
+                             // quieter than the played side, which is the only job this has.
+                             unplayed: tint.opacity(0.45), playing: playing,
                              onSeek: { pct in seek(pct) },
                              onScrub: { s in scrubbing = s; VoiceScrubState.active = s; onScrub(s) })
                     .frame(width: 158, height: 26)
@@ -329,6 +351,38 @@ extension FileManager {
 // Premium waveform (standard style): rounded amplitude bars, the played portion
 // tinted, draggable to seek. Drawn in a Canvas (one pass — cheap to redraw on progress).
 struct WaveformBars: View {
+    /// ⚠️ WHY EVERY BAR USED TO BE THE SAME HEIGHT, AND WHY THE FIX IS HERE AND NOT IN THE RECORDER.
+    ///
+    /// His 2026-08-10 report, with our bubble beside WhatsApp's and Signal's: ours reads as a fence,
+    /// theirs read as a voice. Measured rather than judged, and the cause is the top of the scale.
+    ///
+    /// `AudioRecorder.perceptualLevel` maps the microphone's dB onto 0…1 with SILENCE at −50 dB and
+    /// FULL HEIGHT AT 0 dBFS — the loudest sound the hardware can represent, which is a clipped
+    /// scream held to the microphone. Ordinary speech on a phone sits between about −30 and −18 dB,
+    /// so every bar of every note landed between roughly 12 and 18 points of the 26 available. Never
+    /// the top, never the bottom, and a picket fence is exactly what that arithmetic draws.
+    ///
+    /// Signal's own numbers (`AudioWaveform.swift`, read from source): silence is also −50, but full
+    /// height is **−20 dB**, `clippingThreshold`, and the mapping is a plain clamped `inverseLerp`
+    /// between the two. A 30 dB window instead of our 50, with the top set where a person actually
+    /// speaks. That is the whole difference. Their loud syllables reach the ceiling and clamp; ours
+    /// were still in the middle of the range.
+    ///
+    /// ⚠️ AND IT IS DELIBERATELY **NOT** PER-CLIP NORMALISATION. Scaling each note to its own
+    /// loudest moment would make a whisper draw identically to a shout — Signal's comment is explicit
+    /// that a quiet note is meant to render visibly short. An absolute window keeps the real
+    /// difference between notes, which is information, not decoration.
+    ///
+    /// Done at DRAW time, on the stored 0…100, so it re-shapes every voice note ever sent as well as
+    /// every new one, with no migration, no re-record and no server change. Exact rather than
+    /// approximate: undoing the recorder's `pow(norm, 0.85)` recovers its `norm`, which is
+    /// `(dB + 50) / 50`, and multiplying by 50/30 rebases that onto Signal's −50…−20 window.
+    static func display(_ stored: Int) -> CGFloat {
+        let v = CGFloat(max(0, min(100, stored))) / 100
+        guard v > 0 else { return 0 }
+        return min(1, pow(v, 1 / 0.85) * (50.0 / 30.0))
+    }
+
     let bars: [Int]          // 0…100
     var progress: Double     // 0…1
     var played: Color
@@ -351,8 +405,8 @@ struct WaveformBars: View {
                     let barW = max(2, slot * 0.5)
                     let playedTo = Int(Double(count) * progress)
                     for (i, v) in bars.enumerated() {
-                        let norm = CGFloat(max(0, min(100, v))) / 100
-                        var h = max(3, norm * size.height)
+                        let norm = Self.display(v)
+                        var h = max(2, norm * size.height)
                         // Subtle live wobble on already-played bars during playback.
                         if playing && i <= playedTo {
                             let wob = sin(phase * 6 + Double(i) * 0.5)
@@ -427,7 +481,12 @@ struct LiveWaveform: View {
             HStack(alignment: .center, spacing: 2) {
                 ForEach(Array(levels.enumerated()), id: \.offset) { _, lvl in
                     Capsule().fill(color)
-                        .frame(width: 2.5, height: max(3, CGFloat(lvl) * geo.size.height))
+                        // THE SAME WINDOW THE FINISHED NOTE IS DRAWN IN — see `WaveformBars.display`.
+                        // These are the recorder's raw 0…1 levels, so without this the bar you watch
+                        // while speaking is flat and the bubble it turns into is not. What you see
+                        // recording should be what you get.
+                        .frame(width: 2.5,
+                               height: max(2, WaveformBars.display(Int(lvl * 100)) * geo.size.height))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
