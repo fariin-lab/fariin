@@ -189,13 +189,25 @@ struct Message: Identifiable, Equatable {
     }
     var linkPreview: LinkPreviewData? = nil
 
-    /// Display-order time: the sender's TAP time when sane, else the server arrival time.
-    /// Standard messenger rule — a slow-uploading photo stays ABOVE a fast text sent after it;
-    /// messages never swap when the upload finishes. The 1h sanity cap ignores broken clocks.
-    var sortAt: Date {
-        if let c = clientTs, abs(createdAt.timeIntervalSince(c)) < 3600 { return c }
-        return createdAt
-    }
+    /// Did the SERVER actually stamp this, or is `createdAt` the local stand-in?
+    ///
+    /// Firestore hands back an unresolved `serverTimestamp()` as nil while a write is still in flight,
+    /// and the initialiser below falls back to `Date()` so nothing is ever undated. Which means
+    /// `createdAt` is sometimes the server's clock and sometimes this phone's, with nothing to tell them
+    /// apart — and the clock-offset measurement in `ThreadRepository.orderKey` would be poisoned by rows
+    /// whose "server time" is really local. This flag is that difference, and it is why the measurement
+    /// can be trusted.
+    var hasServerTime = false
+
+    /// ⚠️ `sortAt` USED TO LIVE HERE AND IT IS DELIBERATELY GONE. It returned the sender's tap time
+    /// whenever that was within an hour of the server's, which meant the conversation was ordered by
+    /// comparing one phone's clock against another's — his report of his own bubble drawing above a
+    /// friend's message that was genuinely sent first. Two phones a few seconds apart is all it takes,
+    /// and the hour-wide guard only ever caught clocks that were wildly wrong.
+    ///
+    /// Ordering now belongs to `ThreadRepository`, because it cannot be decided by one message on its
+    /// own: it needs every message by that author to work out that author's clock error first. Read the
+    /// note above `ThreadRepository.orderKey`.
 
     /// Local optimistic IMAGE message — shows the picked photo instantly before upload.
     init(localImageData: Data, width: Double, height: Double, authorId: String, clientId: String, sendState: MessageSendState) {
@@ -408,7 +420,10 @@ struct Message: Identifiable, Equatable {
         }
         if let ts = data["createdAt"] as? Timestamp {
             self.createdAt = ts.dateValue()
+            self.hasServerTime = true
         } else {
+            // Still in flight. Dated with this phone's clock so nothing is ever undated, and flagged so
+            // the ordering knows this is not the server speaking.
             self.createdAt = Date()
         }
         if let ms = (data["clientTs"] as? NSNumber)?.doubleValue {

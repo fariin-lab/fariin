@@ -226,6 +226,71 @@ final class ThreadRepository {
         }
     }
 
+    // MARK: - One timeline for everybody
+
+    /// authorId → how far that person's clock is from the server's, in seconds.
+    ///
+    /// Rebuilt from the window on every snapshot. Median rather than average, so one message sent
+    /// across a clock correction cannot drag the whole conversation sideways.
+    private var clockOffset: [String: TimeInterval] = [:]
+
+    private func recomputeClockOffsets<C: Collection>(_ msgs: C) where C.Element == Message {
+        var samples: [String: [TimeInterval]] = [:]
+        for m in msgs {
+            // Both halves have to be real. `hasServerTime` is what stops a still-in-flight row, whose
+            // "server time" is actually this phone's clock, from measuring an offset of roughly zero
+            // and flattening the correction it exists to make.
+            guard m.hasServerTime, let tap = m.clientTs else { continue }
+            samples[m.authorId, default: []].append(m.createdAt.timeIntervalSince(tap))
+        }
+        clockOffset = samples.compactMapValues { list in
+            let s = list.sorted()
+            return s.isEmpty ? nil : s[s.count / 2]
+        }
+    }
+
+    /// WHERE A MESSAGE SITS. Every message, from every person, expressed on ONE clock.
+    ///
+    /// ⚠️ THIS IS THE FIX FOR HIS "MY MESSAGE WENT ABOVE HIS" REPORT. The old rule sorted by the
+    /// sender's own tap time, which meant a two-person conversation was ordered by comparing HIS phone's
+    /// clock against his friend's. Two handsets a few seconds apart is all it takes to swap two messages
+    /// sent at the same moment, and the server's timestamp — the one clock both people actually share —
+    /// was written on every message and then ignored.
+    ///
+    /// Signal does not have this bug because they never compare two devices: their conversation queries
+    /// all order by `date_received`, which is `System.currentTimeMillis()` on the phone you are holding,
+    /// for outgoing messages as well as incoming. One clock, theirs. We cannot copy that literally —
+    /// they own a local database and write a row the moment a message lands, while we are handed a
+    /// server timestamp and no arrival time, and a reinstall would have no arrival times at all.
+    ///
+    /// So the one clock here is the SERVER'S, and every message is projected onto it. The projection
+    /// costs nothing to send: a message already carries its sender's tap time AND the server's, so the
+    /// gap between them IS that sender's clock error, sitting in the data. Add it back and everyone
+    /// lands on the same timeline.
+    ///
+    /// ⚠️ AND THE TAP TIME MUST STAY IN THE ANSWER — do not "simplify" this to plain `createdAt`. Tap
+    /// time is what keeps a photo that took thirty seconds to upload ABOVE a text sent five seconds
+    /// after it, instead of dropping below when the upload lands. Correcting the tap time preserves that
+    /// within each person while fixing the comparison between people. Plain server order throws it away.
+    func orderKey(_ m: Message) -> Date {
+        let offset = clockOffset[m.authorId]
+        if let tap = m.clientTs {
+            if let offset { return tap.addingTimeInterval(offset) }
+            // No sample for this author yet. A stamped message can speak for itself; an unstamped one
+            // only has its own clock, which for MY messages is the right clock anyway.
+            return m.hasServerTime ? m.createdAt : tap
+        }
+        if m.hasServerTime { return m.createdAt }
+        // An optimistic row built locally: no tap time on it, and `createdAt` is this phone's clock at
+        // the moment it was made. Same correction applies.
+        return m.createdAt.addingTimeInterval(offset ?? 0)
+    }
+
+    private func inOrder(_ a: Message, _ b: Message) -> Bool {
+        let ka = orderKey(a), kb = orderKey(b)
+        return ka == kb ? a.rowId < b.rowId : ka < kb
+    }
+
     /// Display list = confirmed server messages + any optimistic ones not yet echoed.
     /// Stored (not computed) so every read in one render is the same snapshot and we
     /// don't re-filter per row.
@@ -241,7 +306,7 @@ final class ThreadRepository {
         // Pending sends are MERGED by send time, not appended: an uploading photo stays exactly where
         // it was sent even when later texts confirm first (order never shuffles on upload finish).
         var merged = (messages + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) })
-            .sorted { $0.sortAt == $1.sortAt ? $0.rowId < $1.rowId : $0.sortAt < $1.sortAt }
+            .sorted(by: inOrder)
             .filter { !HiddenMessages.isHidden($0.id) }   // drop messages the user deleted "for me"
 
         // ROW IDS MUST BE UNIQUE. `rowId` is `clientId ?? id`, and the list feeds it straight into a
@@ -728,6 +793,10 @@ final class ThreadRepository {
     }
 
     private func rebuild() {
+        // BEFORE anything is sorted: measure each person's clock against the server's, from the whole
+        // window rather than the filtered view, so a blocked or expired message still contributes a
+        // sample. `refreshItems` reuses whatever this leaves behind.
+        recomputeClockOffsets(byId.values)
         var msgs = byId.values.filter { !hiddenByBlock($0) }
         // Deletes the user has made but the server has not confirmed yet (see markDeletedLocally).
         // Ids for messages that are no longer here at all cost nothing and are pruned on the next
@@ -746,9 +815,11 @@ final class ThreadRepository {
                 var c = m; c.reactions.removeValue(forKey: otherUid); return c
             }
         }
-        // Sort by SEND time (sortAt = sender tap time when present) — a slow-uploading photo keeps its
-        // place above a fast text sent after it. rowId tie-break keeps equal-time order deterministic.
-        var sorted = msgs.sorted { $0.sortAt == $1.sortAt ? $0.rowId < $1.rowId : $0.sortAt < $1.sortAt }
+        // Sort on ONE clock — see the long note above `orderKey`. Each person's tap time is corrected by
+        // their own measured clock error, so a slow-uploading photo still keeps its place above a fast
+        // text sent after it, while two people typing at once are no longer ordered by whose handset
+        // happens to run fast. rowId tie-break keeps equal-time order deterministic.
+        var sorted = msgs.sorted(by: inOrder)
         // Double-echo dedupe: a retry racing a slow-but-successful original can produce TWO server docs
         // with the same clientId. Show only the FIRST (earlier) one — the duplicate is invisible to the
         // user even before any server-side cleanup.
