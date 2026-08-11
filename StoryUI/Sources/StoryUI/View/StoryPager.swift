@@ -84,8 +84,28 @@ struct StoryPager: UIViewControllerRepresentable {
     /// publish to see it.
     static var cubeTurnActive = false
 
+    /// TRUE FOR THE WHOLE OF ANY PROGRAMMATIC PERSON-TO-PERSON TURN — cube or flat — and it is what
+    /// the TAP asks before it moves anybody (`StoryDetailView.updateStory`).
+    ///
+    /// His 2026-08-12 report: tapping the right side repeatedly during a cube turn kept navigating
+    /// and then "suddenly takes me back to the story I had already left". Refusing the SYNC mid-turn
+    /// (`isTurning`, which this mirrors) was never enough, because the page being left is still on
+    /// screen for the length of the turn and still answers taps — and `getNextStory` computes the
+    /// destination from ITS OWN position, so a late tap on the departing page writes "the person
+    /// after ME", which is the person you have already gone past. That is the bounce.
+    ///
+    /// So a tap during a turn is DROPPED, not queued: his rule, and Telegram's shape too — their
+    /// peer move runs through one commit whose settle owns the screen until it lands.
+    ///
+    /// ⚠️ IT MUST NEVER STRAND TRUE or tapping stops working for the rest of the viewer's life. It
+    /// is written in exactly the three places `isTurning` is, and cleared again when a pager is
+    /// built — the same belt `dismissActive` has.
+    static var personTurnActive = false
+
     func makeUIViewController(context: Context) -> UIPageViewController {
         StoryPager.dismissActive = false   // fresh viewer never inherits a stale flag
+        StoryPager.personTurnActive = false
+        StoryPager.cubeTurnActive = false
         let pager = StoryPagerVC(transitionStyle: .scroll, navigationOrientation: .horizontal)
         pager.dataSource = context.coordinator
         pager.delegate = context.coordinator
@@ -385,6 +405,8 @@ struct StoryPager: UIViewControllerRepresentable {
             }
             let next = parent.viewModel.currentStoryUser
             isTurning = true
+            // The tap's lock, raised with the sync's — see `StoryPager.personTurnActive`.
+            StoryPager.personTurnActive = true
             // ⚠️ THE CUBE PATH IS A SEPARATE BRANCH AND THE FLAT ONE BELOW IS UNTOUCHED — his
             // instruction, so the two can be compared without one having been rewritten to suit the
             // other. See `StoryPager.personTransition`.
@@ -403,6 +425,7 @@ struct StoryPager: UIViewControllerRepresentable {
                 pager.setViewControllers([target], direction: to > from ? .forward : .reverse,
                                          animated: true) { [weak self] _ in
                     StoryPager.cubeTurnActive = false
+                    StoryPager.personTurnActive = false
                     guard let self else { return }
                     self.isTurning = false
                     self.prewarmNeighbours(of: next)
@@ -445,6 +468,7 @@ struct StoryPager: UIViewControllerRepresentable {
             // contention the note above exists to avoid. Our own clock owns the turn now, so the
             // guard comes down and the warm starts when the movement is actually over.
             DispatchQueue.main.asyncAfter(deadline: .now() + StoryPager.personTurnDuration) { [weak self] in
+                StoryPager.personTurnActive = false
                 guard let self else { return }
                 self.isTurning = false
                 self.prewarmNeighbours(of: next)
