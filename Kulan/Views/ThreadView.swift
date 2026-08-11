@@ -1152,9 +1152,19 @@ struct ThreadView: View {
                 drainGate.done = true
                 Task { await drainSendQueue() }          // re-drive any text send lost to an app kill
             }
-            // No recorder.prepare() here: it triggered the mic-permission prompt the moment ANY
-            // chat opened. Permission is asked on the first real hold (requestAndStart), and the
-            // session re-warms itself after each record (AudioRecorder.reset → prepare).
+            // No unconditional recorder.prepare() here: it triggered the mic-permission prompt the
+            // moment ANY chat opened. Permission is asked on the first real hold (requestAndStart),
+            // and the session re-warms itself after each record (AudioRecorder.reset → prepare).
+            //
+            // …but when permission is ALREADY GRANTED there is no prompt to fear, and NOT warming
+            // was his "sometimes the tap says hold to record, tap again works" bug: the first hold
+            // in a fresh chat hit a recorder still assembling itself (async permission callback +
+            // session setup on a background queue), so `isRecording` was still false when a real
+            // tap's finger lifted, and the tap-to-lock guard read that as nothing recording. The
+            // second tap found the recorder the first one's cleanup had warmed. Warm it up front
+            // instead — prepare() prompts nothing when permission is granted and no-ops when a
+            // recorder already stands.
+            if AVAudioApplication.shared.recordPermission == .granted { recorder.prepare() }
             // Call/Siri/alarm mid-record: the recording is PRESERVED (paused, file kept) — flip to the
             // locked bar so the user can send or cancel the partial note (was: recording discarded).
             recorder.onInterrupt = {
@@ -4670,10 +4680,14 @@ struct ThreadView: View {
         if cancelled || recordCancelArmed {
             cancelRecording()
         } else if Date().timeIntervalSince(holdBeganAt) < 0.30, abs(t.width) < 10, abs(t.height) < 10,
-                  recorder.isRecording {
-            // ^ `isRecording` because a FIRST-EVER tap goes through the permission prompt and the
-            // recorder may not have started: locking then would show a dead bar counting nothing.
-            // That tap falls through to the hint instead, and the next one records.
+                  AVAudioApplication.shared.recordPermission == .granted {
+            // ^ Permission GRANTED, deliberately NOT `recorder.isRecording`: a cold-started
+            // recorder assembles itself asynchronously, so `isRecording` can still be false the
+            // instant a real tap's finger lifts — that stricter guard read warm-up as "nothing
+            // recording" and flashed the hint (his "sometimes forgets, tap again works" report).
+            // With permission granted the recording IS coming, a beat behind the finger, and the
+            // locked bar picks it up. A first-ever tap that lands on the permission prompt still
+            // falls through to the hint: not granted yet, nothing to lock.
             // TAP TO RECORD HANDS-FREE — his order, and deliberately OUR OWN invention: WhatsApp,
             // Telegram and Messenger all flash a "hold to record" hint here (checked against their
             // apps 2026-08-11, in the voice research pass). Recording already started at touch-down,
