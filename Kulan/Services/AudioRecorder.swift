@@ -25,10 +25,9 @@ final class AudioRecorder {
     private let tauAttack: Float = 0.050        // 50 ms rise  — fast attack (PPM-like), catches transients
     private let tauDecay:  Float = 0.300        // 300 ms fall — slow decay, the natural VU "settle"
     private let noiseFloorDB: Float = -50       // below this = silence (0)
-    private let waveWindow = 80                 // live scrolling bar count — sized for the locked
-                                                // bar's FULL-WIDTH strip (2026-08-11); 48 filled
-                                                // only the old cramped pill and left the wide one
-                                                // half empty. Overflow slides off the pill's clip.
+    private let waveWindow = 80                 // recent-levels window. The strip draws the WHOLE
+                                                // note via liveBars() now; this window's remaining
+                                                // customer is the mic halo (levels.last).
     private let maxWaveSamples = 900            // bounded streaming buffer (halved by RMS when exceeded)
 
     // Voice-tuned AAC: 24 kHz mono comfortably covers speech (≤ ~8 kHz voiced energy, Nyquist 12 kHz)
@@ -202,6 +201,12 @@ final class AudioRecorder {
         }
         allLevels = reduced
     }
+
+    /// The WHOLE note so far, reduced to `count` bars — the locked bar's live strip draws this
+    /// (his reference screenshot: at 0:21 the strip holds both speech bursts AND the silences
+    /// between them, the note's whole story compressed to fit, not a trailing window). Same
+    /// reduction the finished bubble gets, so what you watch is what you send.
+    func liveBars(_ count: Int) -> [Int] { waveform(count) }
 
     // Reduce all captured levels to `count` bars via RMS per bucket (preserves perceived energy far
     // better than a plain mean, which washes out peaks), quantized to 0…100 for compact storage.

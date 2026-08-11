@@ -492,31 +492,9 @@ struct WaveformBars: View {
     }
 }
 
-// Live recording waveform: scrolling capsules from the most recent mic levels.
-struct LiveWaveform: View {
-    let levels: [Float]      // 0…1
-    var color: Color
-
-    var body: some View {
-        GeometryReader { geo in
-            HStack(alignment: .center, spacing: 2) {
-                ForEach(Array(levels.enumerated()), id: \.offset) { _, lvl in
-                    Capsule().fill(color)
-                        // THE SAME WINDOW THE FINISHED NOTE IS DRAWN IN — see `WaveformBars.display`.
-                        // These are the recorder's raw 0…1 levels, so without this the bar you watch
-                        // while speaking is flat and the bubble it turns into is not. What you see
-                        // recording should be what you get.
-                        .frame(width: 2.5,
-                               height: max(2, WaveformBars.display(Int(lvl * 100)) * geo.size.height))
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
-            // Light interpolating spring on top of the recorder's meter ballistics: gives each bar a
-            // touch of momentum as it settles, so the waveform reads fluid rather than stepped.
-            .animation(.interpolatingSpring(stiffness: 260, damping: 26), value: levels)
-        }
-    }
-}
+// (LiveWaveform, the scrolling trailing-window strip, was deleted 2026-08-11: the locked bar
+// draws the WHOLE note so far through WaveformBars + AudioRecorder.liveBars now — his reference
+// screenshot — and this view's only caller went with it.)
 
 // MARK: - Waveform gestures (UIKit)
 
