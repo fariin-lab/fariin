@@ -123,6 +123,7 @@ struct ThreadView: View {
     @State private var holdHint = false             // "hold to record" flash after an accidental tap
     @State private var voiceViewOnce = false        // "1" armed on the recording bar → send as one-time listen
     @State private var voiceOnceToast = false       // the little auto-fading confirmation when it arms
+    @State private var micPulse = false             // continuous "breathing" of the recording halo
     @State private var pinIndex = 0                  // which of the (≤5) pinned messages the bar shows
     @State private var showPinnedSheet = false       // "See All" → full sheet of pinned messages
     @State private var recordDrag: CGSize = .zero   // live finger translation while holding
@@ -4700,16 +4701,30 @@ struct ThreadView: View {
             }
             // The big mic under the finger, follows it 1:1. ACCENT, NOT RED — his screenshot of the
             // reference: the button is the chat colour sitting in a soft halo of itself; red is the
-            // recording signal on the LEFT of the bar, not the button. The halo replaces the old
-            // red shadow.
+            // recording signal on the LEFT of the bar, not the button.
+            //
+            // THE HALO IS ALIVE — restored, not invented: `3c6674de` built exactly this on his
+            // request (a halo that breathes on its own and SWELLS with the live voice level, the
+            // reference's blob idea) and it was lost in a later mic rebuild. He asked for it again
+            // on 2026-08-11 with the reference open. Two rings at different depths, both riding
+            // the recorder's metered level, whose VU ballistics already smooth the motion.
             ZStack {
+                let lvl = CGFloat(recorder.levels.last ?? 0)
+                Circle().fill(Theme.accent(dark).opacity(0.12))
+                    .frame(width: 78, height: 78)
+                    .scaleEffect(1.10 + 0.85 * lvl + (micPulse ? 0.08 : 0))
                 Circle().fill(Theme.accent(dark).opacity(0.22))
                     .frame(width: 78, height: 78)
+                    .scaleEffect(1 + 0.40 * lvl)
                 Circle().fill(Theme.accent(dark))
                     .frame(width: 56, height: 56)
                 Image("ic_mic").renderingMode(.template).resizable().scaledToFit()
                     .frame(width: 24, height: 28).foregroundStyle(.white)
             }
+            .animation(.easeOut(duration: 0.12), value: recorder.levels.last ?? 0)
+            .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: micPulse)
+            .onAppear { micPulse = true }
+            .onDisappear { micPulse = false }
             .offset(x: clampedDrag.width, y: clampedDrag.height)
         }
         .padding(.trailing, 12).padding(.bottom, 0)   // centre over the in-pill mic
