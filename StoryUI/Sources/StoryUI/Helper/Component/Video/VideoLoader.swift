@@ -529,7 +529,29 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     func rememberPlaybackState() { rememberPlaybackFrame() }
 
     func currentVideoFrame() -> UIImage? {
-        if let item = player?.currentItem, let out = frameOutput,
+        // ⚠️ ONLY THE CLIP THIS VIEW HAS ACTUALLY ADOPTED, AND THAT IS HIS "TWO VIDEOS, ONE COVER".
+        //
+        // `self.url` moves to the next story SYNCHRONOUSLY in `startVideo`, but the shared player
+        // keeps the PREVIOUS item until `setupPlayer` runs from the cache's async callback — the same
+        // gap `revealVideoIfReady` guards against, written up at `awaitedItem`. Inside it,
+        // `currentVideoURL` already says story C while this output still holds story B's pixels, and
+        // `currentVideoSeconds` still reads B's playhead, so it sails past the `t > 1` fence too.
+        //
+        // The viewers sheet re-asserts `.pauseStory` twice a second, and every one of those reaches
+        // `bankCurrentState`. Land one in that window and B's frame is filed under C's url — and
+        // `cardFrames` memoises it, so C wears B's picture for the rest of the session. That is his
+        // report exactly: two different videos, the same cover.
+        //
+        // `awaitedItem` is the precise sentinel: nil while the url has moved and the item has not,
+        // set on the line after the swap. `frameOutputItem` is the second half — the output is only
+        // re-pointed at the new item inside `attachFrameOutput`, so an output still bound to the old
+        // one must not answer either.
+        //
+        // Nil is a normal answer here and every caller already falls back to the poster, which is the
+        // right picture for a story nobody has watched. Failing closed costs a cover; failing open
+        // costs the WRONG cover, and only one of those is reported as a bug.
+        if let item = player?.currentItem, item === awaitedItem, frameOutputItem === item,
+           let out = frameOutput,
            let buffer = out.copyPixelBuffer(forItemTime: item.currentTime(), itemTimeForDisplay: nil) {
             let ci = CIImage(cvPixelBuffer: buffer)
             if let cg = frameContext.createCGImage(ci, from: ci.extent) {
