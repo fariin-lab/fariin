@@ -3890,8 +3890,16 @@ struct MyStoriesCarousel: View {
         // Nil is the normal answer for a photo (nothing is ever banked for one, and a photo's poster
         // IS the photo) and for a video nobody has watched this session. Both fall through to the
         // poster below, which is exactly what they had before.
+        //
+        // TELEGRAM'S SPLIT (their collapsed row, read from source 2026-08-11, and his written rule):
+        // only the card whose story the sheet is over may show a mid-clip frame — that clip is
+        // genuinely paused there. Every SIBLING card shows its own cover: a banked first-second
+        // frame if one exists, else the poster. A sibling wearing "where some clip last was" is how
+        // three different videos read as one cover — his 2026-08-11 report.
         if s.isVideo, let u = URL(string: s.mediaUrl),
-           let shot = StoryPlaybackResume.cardFrame(u, width: slotW) {
+           let shot = (s.id == activeId
+                        ? StoryPlaybackResume.cardFrame(u, width: slotW)
+                        : StoryPlaybackResume.cardCoverFrame(u, width: slotW)) {
             // ⚠️ PINNED TO THE SLOT, exactly like the branch below. `Color.clear` is size-NEUTRAL: it
             // accepts whatever size it is proposed, and inside the cover-flow `ZStack` that proposal
             // is not the card, it is the container. The poster branch cannot drift that way because

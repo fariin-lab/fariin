@@ -131,6 +131,31 @@ public enum StoryPlaybackResume {
         return out
     }
 
+    /// The card picture for a story the sheet is NOT over: its own COVER, never a mid-clip frame.
+    ///
+    /// Telegram's collapsed row, read from `StoryItemSetContainerComponent` (2026-08-11): only the
+    /// CENTRAL card keeps the frame it was paused on — its video node stays alive, paused. Every
+    /// OTHER card is rebuilt from scratch in `.pause` mode, never constructs a player, and draws
+    /// that item's own cover image, even for an item watched earlier in the session. His written
+    /// rule is the same rule: "the story I scroll up from uses its current frame; all other cards
+    /// use their own initial cover."
+    ///
+    /// So a sibling card takes the deal the loading veil already takes: a banked frame only when it
+    /// is from the clip's start (`coverFromFirstFrame`'s decode at zero, or a bank written inside
+    /// the first second), and the poster otherwise. The mid-clip "where the clip last was" pictures
+    /// stay for the one card whose clip is genuinely paused there — `cardFrame`, above.
+    ///
+    /// The memo key ends in `|cover` and still begins `<url>|`, so `rememberFrame`'s prefix sweep
+    /// drops these copies together with the plain ones when a new frame arrives for the clip.
+    public static func cardCoverFrame(_ url: URL, width targetW: CGFloat) -> UIImage? {
+        let key = "\(url.absoluteString)|\(Int(targetW.rounded()))|cover"
+        if let memo = cardFrames[key] { return memo }
+        guard let f = usableCoverFrame(url) else { return nil }
+        let out = fitted(f, width: targetW)
+        cardFrames[key] = out
+        return out
+    }
+
     /// A copy no bigger than it needs to be. Returns the original when it is already small enough,
     /// so this is free in the common case.
     public static func fitted(_ image: UIImage, width targetW: CGFloat) -> UIImage {

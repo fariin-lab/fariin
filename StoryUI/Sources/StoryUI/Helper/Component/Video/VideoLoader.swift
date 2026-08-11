@@ -508,8 +508,19 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// Where this clip is, for callers deciding whether the frame is worth keeping. A player with no
     /// item answers 0 rather than pretending — see `bankCurrentState`, which treats anything under a
     /// second as "not worth overwriting the bank with", exactly as `rememberPlaybackFrame` does.
+    ///
+    /// ⚠️ THE SAME ADOPTION GATE AS `currentVideoFrame`, for the same window: across the
+    /// `startVideo` → `setupPlayer` gap `self.url` already names the next story while the player
+    /// still holds the previous clip, so an ungated read here is the OLD clip's playhead under the
+    /// NEW story's name. `currentVideoFrame` was gated for that (5869ec23) and this was not, which
+    /// left one path open: the bank's identity fast-path restamps an existing frame's clip-second,
+    /// so a foreign playhead could mark a story's honest second-zero cover as mid-clip and cost it
+    /// (`usableCoverFrame` refuses mid-clip pictures). Answering 0 makes every writer's `t > 1`
+    /// fence refuse the write, which is the cheap end of the same trade: failing closed costs one
+    /// re-bank half a second later; failing open poisons the cover.
     var currentVideoSeconds: Double {
-        guard let p = player, p.currentItem != nil else { return 0 }
+        guard let p = player, let item = p.currentItem,
+              item === awaitedItem, frameOutputItem === item else { return 0 }
         let t = p.currentTime().seconds
         return t.isFinite ? t : 0
     }
@@ -1161,7 +1172,10 @@ private extension PlayerView {
     /// second zero in all but name (the poster already shows it), and the last second is the
     /// natural end the auto-advance already owns.
     private func rememberPlaybackFrame() {
-        guard let story = self.url, let p = player, p.currentItem != nil else { return }
+        // The adoption gate, third copy: url, item and output must agree before the playhead may be
+        // written under this story's name — see `currentVideoSeconds` for the window it closes.
+        guard let story = self.url, let p = player, let item = p.currentItem,
+              item === awaitedItem, frameOutputItem === item else { return }
         let t = p.currentTime().seconds
         guard t.isFinite, t > 1, duration <= 0 || t < duration - 1 else { return }
         // `currentVideoFrame` reads the player's own display output; nil is a normal answer and
