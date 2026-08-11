@@ -3550,6 +3550,13 @@ struct ThreadView: View {
                         .foregroundStyle(mine ? Color.white.opacity(0.75) : .secondary)
                 }
             }
+            // ONE WIDTH FOR EVERY CALL BUBBLE — his screenshot: content-hugging made "Tap to call
+            // back" bubbles wide and "32 sec" ones narrow, a ragged column. Same cure the voice
+            // note got: a fixed width, sized to hold the longest case ("Missed voice call / Tap to
+            // call back · 12:58 PM") and landing near the voice bubble's own footprint, so calls
+            // and notes read as one family. 232 + 28 padding = 260, inside the 70% cap on the
+            // smallest phones.
+            .frame(width: 232, alignment: .leading)
             .padding(.vertical, 11).padding(.horizontal, 14)
             .background(mine ? myBubbleFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
