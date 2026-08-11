@@ -766,8 +766,8 @@ struct LiveCallBarBackground: View {
                 ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.green))
                 // Back wave: taller, slower, left-to-right. Front wave: shorter, quicker, the
                 // other way — two directions is what makes it read as liquid rather than a march.
-                drawWave(&ctx, size: size, t: t, lift: 7, amp: 3.4, breath: 1.6, len: 95, speed: 1.5, opacity: 0.16)
-                drawWave(&ctx, size: size, t: t, lift: 4, amp: 2.6, breath: 1.2, len: 62, speed: -2.3, opacity: 0.12)
+                drawWave(&ctx, size: size, t: t, lift: 4, amp: 5.0, breath: 2.0, len: 130, speed: 1.1, opacity: 0.20)
+                drawWave(&ctx, size: size, t: t, lift: 1, amp: 4.0, breath: 1.5, len: 80, speed: -1.7, opacity: 0.14)
             }
         }
     }
@@ -787,7 +787,18 @@ struct LiveCallBarBackground: View {
         }
         p.addLine(to: CGPoint(x: size.width, y: size.height))
         p.closeSubpath()
-        ctx.fill(p, with: .color(.white.opacity(opacity)))
+        // ⚠️ A GRADIENT FILL, NOT A FLAT ONE — his screenshot from the live build: a flat white
+        // wash gave the crest a hard edge, so the wave read as a separate lighter band glued to
+        // the bottom of a flat green ("looks two separate"). The reference's bar reads as ONE
+        // surface because its swells have no boundary. Filling the wave with a vertical gradient
+        // that reaches ZERO just below its own highest possible crest deletes the edge: the swell
+        // is brightest at the bar's bottom and dissolves into the green on the way up, and two
+        // overlapping swells now blend instead of stacking a visible step.
+        let top = size.height - lift - (amp + breath) - 2
+        ctx.fill(p, with: .linearGradient(
+            Gradient(colors: [.white.opacity(0), .white.opacity(opacity)]),
+            startPoint: CGPoint(x: 0, y: top),
+            endPoint: CGPoint(x: 0, y: size.height)))
     }
 }
 
