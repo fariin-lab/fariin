@@ -644,32 +644,26 @@ final class AxisLockedScrubRecognizer: UIPanGestureRecognizer {
 
 // MARK: - One-time voice pill
 
-// A one-time voice note draws as a PILL, deliberately not as the waveform player — the same idiom
-// as the view-once photo above it in ThreadView, and our own look rather than the reference's
-// badge-on-a-bubble. No waveform is even sent for these, no scrubbing, no speed: one tap, one
-// listen. Pause and resume DURING that listen are allowed for as long as the engine still holds
-// the note; the moment it moves off (finished, dismissed, another note started) the pill reads
-// "Played" and is inert.
-//
-// Consumption is device-local (`ViewedOnce`, written by the engine the moment playback starts),
-// exactly like the photo. The engine never touches AudioCache for these — the decrypted bytes live
-// in a throwaway file it shreds when the listen ends.
+// A one-time voice note draws as a PILL, the same idiom as the view-once photo — and it behaves
+// like it too, on his order with the reference open: the tap does not play inline, it opens
+// `OneTimeVoicePage` full screen, where the note can be replayed freely, and CLOSING the page is
+// what spends the listen (ThreadView's cover marks it on dismiss, exactly the photo's flow).
+// After that the pill reads "Played" and is inert. The sender's pill never opens anything and
+// flips to "Opened" off the receipts-gated voice-played signal.
 struct OneTimeVoicePill: View {
     let message: Message
     let cid: String
     let isMe: Bool
     let dark: Bool
-    /// ThreadView's snapshot of ViewedOnce at row build. `consumedLive` below re-reads it on engine
-    /// transitions, because the row does NOT reconfigure when the engine marks the note mid-session
-    /// — trusting the snapshot alone let a finished note offer itself for a second listen.
+    /// ThreadView's snapshot of ViewedOnce at row build (kept fresh by the viewedOnceTick
+    /// reconfigure on page close). `consumedLive` re-reads it on appear and on cell reuse.
     let consumed: Bool
     let tint: Color
     let meta: AnyView
+    /// Opens the full-screen page — routed through the bubble's onTapImage so the voice page rides
+    /// the exact cover the view-once photo uses, dismissal mark included.
+    var onOpen: () -> Void = {}
 
-    private var engine: VoiceNotePlayer { .shared }
-    @State private var playing = false
-    @State private var loading = false
-    @State private var active = false        // the engine currently holds THIS note: the one listen
     @State private var consumedLive = false
 
     /// Sender side only: has the other person spent their listen? Same live read as the voice
@@ -682,7 +676,7 @@ struct OneTimeVoicePill: View {
         return conv.voicePlayedByOther(me, createdAtMillis: message.createdAt.timeIntervalSince1970 * 1000)
     }
 
-    private var spent: Bool { !isMe && (consumed || consumedLive) && !active }
+    private var spent: Bool { !isMe && (consumed || consumedLive) }
     private var durationText: String {
         let d = Int(message.duration ?? 0)
         return String(format: "%d:%02d", d / 60, d % 60)
@@ -690,25 +684,22 @@ struct OneTimeVoicePill: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            if loading {
-                ProgressView().tint(tint).frame(width: 18, height: 18)
-            } else {
-                Image(systemName: icon).font(.system(size: 18, weight: .semibold))
-            }
+            Image(systemName: icon).font(.system(size: 18, weight: .semibold))
             Text(label).font(.system(size: 15, weight: .medium)).italic(spent || (isMe && openedByOther))
             meta
         }
         .foregroundStyle(tint.opacity(spent || (isMe && openedByOther) ? 0.6 : 1))
         .contentShape(Capsule())
-        .onTapGesture { tap() }
-        .onReceive(VoiceNotePlayer.shared.objectWillChange.receive(on: DispatchQueue.main)) { _ in sync() }
-        .onChange(of: message.id) { _, _ in consumedLive = ViewedOnce.contains(message.id); sync() }   // hosted cells are reused
-        .onAppear { consumedLive = ViewedOnce.contains(message.id); sync() }
+        .onTapGesture {
+            guard !isMe, !spent, message.sendState == nil else { return }
+            onOpen()
+        }
+        .onChange(of: message.id) { _, _ in consumedLive = ViewedOnce.contains(message.id) }   // hosted cells are reused
+        .onAppear { consumedLive = ViewedOnce.contains(message.id) }
     }
 
     private var icon: String {
         if isMe { return openedByOther ? "circle.slash" : "1.circle" }
-        if active { return playing ? "pause.fill" : "play.fill" }
         return spent ? "circle.slash" : "1.circle"
     }
     private var label: String {
@@ -716,25 +707,161 @@ struct OneTimeVoicePill: View {
         if spent { return "Played" }
         return "Voice message · " + durationText
     }
+}
 
-    private func tap() {
-        guard !isMe else { return }                       // the sender cannot replay a one-time note
-        if active { engine.toggle(message: message, cid: cid, isMe: isMe); return }   // pause/resume the one listen
-        guard !consumed, !consumedLive, message.sendState == nil else { return }
-        engine.toggle(message: message, cid: cid, isMe: isMe)
+// MARK: - One-time voice page
+
+// The room where the one listen happens — his order, the reference's model, the view-once photo's
+// architecture: while this page is up the note plays and replays as often as wanted; leaving the
+// page is what burns it (ThreadView's cover marks consumption on dismiss). The decrypted bytes
+// live in one tmp file owned by this page and are shredded on the way out — never AudioCache.
+// Playback is a private AVAudioPlayer, not the shared engine: the engine outlives screens by
+// design, and a note that must die with its screen is the one thing it must never hold.
+struct OneTimeVoicePage: View {
+    let message: Message
+    let cid: String
+    let dark: Bool
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var player: AVAudioPlayer?
+    @State private var tmpURL: URL?
+    @State private var playing = false
+    @State private var progress: Double = 0
+    @State private var failed = false
+    @State private var ticker: Timer?
+
+    private var durationText: String {
+        let d = Int(player?.duration ?? message.duration ?? 0)
+        return String(format: "%d:%02d", d / 60, d % 60)
+    }
+    private var elapsedText: String {
+        let d = Int((player?.duration ?? 0) * progress)
+        return String(format: "%d:%02d", d / 60, d % 60)
     }
 
-    private func sync() {
-        let a = engine.messageId == message.id && engine.hasNote
-        if a != active {
-            active = a
-            // Transition edges are the only moments consumption can have changed — reading the
-            // UserDefaults-backed set on every 20Hz tick would be waste.
-            consumedLive = ViewedOnce.contains(message.id)
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VStack(spacing: 0) {
+                HStack {
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                            .frame(width: 36, height: 36)
+                            .background(.white.opacity(0.12), in: Circle())
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 16).padding(.top, 8)
+                Spacer()
+                VStack(spacing: 22) {
+                    Image(systemName: "1.circle")
+                        .font(.system(size: 54, weight: .light)).foregroundStyle(.white.opacity(0.9))
+                    Text("One-time voice message")
+                        .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                    if failed {
+                        Text("Could not load this voice message.")
+                            .font(.system(size: 14)).foregroundStyle(.white.opacity(0.7))
+                    } else if player == nil {
+                        ProgressView().tint(.white)
+                    } else {
+                        Button { toggle() } label: {
+                            Image(systemName: playing ? "pause.fill" : "play.fill")
+                                .font(.system(size: 30)).foregroundStyle(.black)
+                                .frame(width: 84, height: 84)
+                                .background(.white, in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        // A thin progress line — no waveform exists for a one-time note on purpose
+                        // (none is ever sent), so the line is the honest picture.
+                        VStack(spacing: 6) {
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    Capsule().fill(.white.opacity(0.25))
+                                    Capsule().fill(.white)
+                                        .frame(width: max(4, geo.size.width * progress))
+                                }
+                            }
+                            .frame(width: 220, height: 4)
+                            HStack {
+                                Text(elapsedText)
+                                Spacer()
+                                Text(durationText)
+                            }
+                            .font(.system(size: 12).monospacedDigit())
+                            .foregroundStyle(.white.opacity(0.7))
+                            .frame(width: 220)
+                        }
+                    }
+                }
+                Spacer()
+                Text("It's gone when you leave this screen")
+                    .font(.system(size: 13)).foregroundStyle(.white.opacity(0.55))
+                    .padding(.bottom, 26)
+            }
         }
-        let p = engine.isPlaying(message.id)
-        if p != playing { playing = p }
-        let l = engine.isLoading(message.id)
-        if l != loading { loading = l }
+        .task { await load() }
+        .onDisappear { teardown() }
+    }
+
+    private func toggle() {
+        guard let p = player else { return }
+        if playing { p.pause(); playing = false; return }
+        if progress >= 0.999 { p.currentTime = 0; progress = 0 }   // replay from the top
+        p.play(); playing = true
+        startTicker()
+    }
+
+    private func load() async {
+        // The shared engine must not talk over the room.
+        VoiceNotePlayer.shared.pause()
+        guard let urlStr = message.audioUrl, let url = URL(string: urlStr), let meta = message.enc,
+              let (cipher, _) = try? await MediaSession.shared.data(from: url),
+              let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
+            failed = true
+            return
+        }
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voice-once-page-\(message.id).m4a")
+        try? data.write(to: tmp)
+        tmpURL = tmp
+        try? AVAudioSession.sharedInstance().setCategory(.playback)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        player = try? AVAudioPlayer(contentsOf: tmp)
+        guard player != nil else { failed = true; return }
+        // The room plays as it opens — nobody opens a one-time note to look at it.
+        player?.play()
+        playing = true
+        startTicker()
+        // The sender's "Opened" rides the same receipts-gated voice-played signal every ordinary
+        // note sends (the gate lives inside; receipts off means the sender learns nothing).
+        ChatService.markVoicePlayedThrottled(cid, createdAtMillis: message.createdAt.timeIntervalSince1970 * 1000)
+    }
+
+    private func startTicker() {
+        ticker?.invalidate()
+        ticker = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                guard let p = player else { return }
+                if p.isPlaying {
+                    progress = p.duration > 0 ? p.currentTime / p.duration : 0
+                } else if playing {
+                    // Ran to the end: park at the start, ready for a free replay in this room.
+                    playing = false
+                    progress = 1
+                    ticker?.invalidate(); ticker = nil
+                }
+            }
+        }
+    }
+
+    private func teardown() {
+        ticker?.invalidate(); ticker = nil
+        player?.stop(); player = nil
+        if let t = tmpURL { try? FileManager.default.removeItem(at: t) }
+        tmpURL = nil
+        if !VoiceAudio.callActive {
+            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        }
     }
 }

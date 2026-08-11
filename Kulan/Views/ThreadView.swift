@@ -761,7 +761,13 @@ struct ThreadView: View {
             // (and .interactiveDismissDisabled did NOT suppress it), so it's removed — the in-viewer
             // image-only pan (suppressDismissPan: false) owns the drag-down close, like the album viewer.
             Group {
-                if msg.viewOnce {
+                if msg.viewOnce, msg.isAudio {
+                    // ONE-TIME VOICE opens as a PAGE — his order, the reference's model, and the
+                    // exact shape of the view-once photo below: replay freely while the page is
+                    // up, and closing it is what spends the listen (the same onDismiss mark).
+                    OneTimeVoicePage(message: msg, cid: cid, dark: dark)
+                        .onAppear { if msg.authorId != me { pendingViewOnceConsume = msg } }
+                } else if msg.viewOnce {
                     // View-once opens ALONE (no paging into it, not part of the gallery).
                     ImageViewerView(message: msg, cid: cid,
                                     onDeleteForMe: { m in deleteForMe(m) },
@@ -6007,7 +6013,11 @@ struct MessageBubble: View, Equatable {
             OneTimeVoicePill(message: message, cid: cid, isMe: isMe, dark: dark,
                              consumed: isViewedOnce,
                              tint: isMe ? onMyBubble : (dark ? Color.white : .black),
-                             meta: AnyView(metaRow))
+                             meta: AnyView(metaRow),
+                             // The photo pill's route: through onTapImage into the view-once
+                             // cover, whose audio branch is the voice page and whose dismissal
+                             // is the consumption mark.
+                             onOpen: { onTapImage(message) })
                 .padding(.horizontal, 15).padding(.vertical, 11)
                 .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
                 .clipShape(Capsule())

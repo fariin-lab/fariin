@@ -82,9 +82,8 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     /// The playing note's own timestamp. `PlayedVoice` keys its receipts on it, so it has to be the
     /// message's date and not the moment we happened to press play.
     private var createdAt: Date = .distantPast
-    /// The loaded note is a ONE-TIME listen. Its decrypted bytes live at `transientURL` (never the
-    /// AudioCache), and starting it marks it consumed on this device.
-    private var isViewOnce = false
+    /// A loaded one-time note's decrypted bytes live here (never the AudioCache). Belt only now —
+    /// one-time notes play in OneTimeVoicePage, not through this engine.
     private var transientURL: URL?
 
     /// Shred a one-time note's decrypted file. Called wherever the engine moves off a note —
@@ -287,7 +286,6 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         self.messageId = message.id
         self.cid = cid
         self.isMine = isMe
-        self.isViewOnce = message.viewOnce
         // Kept for the played receipt below, which needs the message's OWN timestamp rather than now.
         self.createdAt = message.createdAt
 
@@ -362,10 +360,10 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         // one player now, so nothing can be playing for it to stop. A post with no listener reads to
         // the next person like a rule still being enforced somewhere.
         VoiceAudio.activeId = messageId
-        // A one-time note is SPENT the moment it starts, and the mark is written now, not at the
-        // end: an app kill mid-listen must not hand back a second listen. Pause and resume within
-        // this one load still work — the pill allows them while the engine holds the note.
-        if isViewOnce && !isMine { ViewedOnce.mark(messageId) }
+        // (One-time notes are not consumed here any more: they play in OneTimeVoicePage, never
+        // through this engine, and CLOSING that page is what spends the listen — his order, the
+        // photo model. The engine's no-cache viewOnce path below stays as a belt: if any future
+        // code routes one here, the bytes still never touch the persistent cache.)
         // Playing it counts as heard.
         if !isMine {
             let id = messageId, c = cid, at = createdAt
