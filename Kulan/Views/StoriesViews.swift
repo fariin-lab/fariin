@@ -1964,7 +1964,28 @@ struct StoryViewer: View {
                                           // there before changing this argument again — the black
                                           // wedges around a circular close were the cutout's shape,
                                           // not this number.
-                                          chrome: heroChrome(f),
+                                          //
+                                          // ⚠️ SO THE EXIT TAKES THE 0 AFTER ALL (owner 2026-08-11,
+                                          // with a screenshot of the bands): the revert above was
+                                          // right for the code as it stood and is wrong for the code
+                                          // as it is.
+                                          //
+                                          // What he photographed is this number. `outside` is the
+                                          // alpha the story renders at BEYOND the hole — the SAME
+                                          // view tree, drawn again — and `heroChrome` holds it at 1
+                                          // for the first 18% of the pull (~76pt of 420). The hole
+                                          // is always the full card WIDTH, so what is left over is
+                                          // exactly two full-width strips, one above the card and
+                                          // one below: his "mirror at the top and bottom", showing
+                                          // the story's own header and picture over the darkened
+                                          // chat list.
+                                          //
+                                          // Zero on the way OUT makes the hole a true crop from the
+                                          // first frame, which is what a card flying home should be.
+                                          // The way IN keeps it, because that is the black notch
+                                          // filler the original revert was protecting and no report
+                                          // has ever been about the open.
+                                          chrome: hero.exiting ? 0 : heroChrome(f),
                                           crop: hero.crop,
                                           // A circular door times its circle differently coming and
                                           // going — see `StoryCardMorph.circleRushSpan`. This is the

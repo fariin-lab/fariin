@@ -933,16 +933,30 @@ final class StoryCardUIView: UIControl {
         onBadge?()
     }
 
+    /// How far the card dips under a finger. One number, because the way back has to start from
+    /// exactly where the way out ended — see `applyVisibility`.
+    static let pressDip: CGFloat = 0.92
+
     override var isHighlighted: Bool {
         didSet {
             guard isHighlighted != oldValue else { return }
-            let t: CGAffineTransform = isHighlighted ? CGAffineTransform(scaleX: 0.92, y: 0.92) : .identity
+            // ⚠️ NOT WHILE THE MENU HAS THE CARD. The long-press recogniser cancels this control's
+            // tracking the moment it wins, so `isHighlighted` goes false and this would spring the
+            // card back to full size BEHIND the alpha-0 — which is the whole bug: by the time the
+            // menu closes there is no dip left to animate out of. See `applyVisibility`.
+            guard !menuHoldsCard else { return }
+            let t: CGAffineTransform = isHighlighted
+                ? CGAffineTransform(scaleX: Self.pressDip, y: Self.pressDip) : .identity
             // `.spring(response: 0.28, dampingFraction: 0.7)`, and it runs on the WHOLE card — so the
             // rectangle the flight reads is wherever the spring-back has got to, which is what makes
             // the dip and the lift read as one motion.
             StorySpring.run(response: 0.28, damping: 0.7) { self.transform = t }
         }
     }
+
+    /// TRUE while the menu's photograph of this card is the thing on screen and the real card is
+    /// standing aside at alpha 0.
+    private var menuHoldsCard = false
 
     // MARK: Layout
 
@@ -1022,8 +1036,34 @@ final class StoryCardUIView: UIControl {
     /// (a fresh card fades in on the re-sort, a departing one fades out, and my own card cross-fades
     /// with the uploading placeholder). Writing it from here would slam any of those back to 1 on
     /// the next visibility change.
+    /// ⚠️ AND THE DIP IS HELD WHILE THE CARD IS AWAY, WHICH IS THE ZOOM-IN (owner 2026-08-11: the
+    /// card zooms out smoothly under a long press and JUMPS back when the menu closes).
+    ///
+    /// The two directions were never the same mechanism. Out is a 0.28s spring on `transform`
+    /// (`isHighlighted`). In was a bare `alpha = 1` — and by then the card had no dip left to come
+    /// out of: the long press cancels this control's tracking as it wins, so the spring back to
+    /// `.identity` had already run, invisibly, behind the alpha-0. Revealing therefore painted a
+    /// full-size card under a photograph taken at 92%, in one frame. That step IS the jump.
+    ///
+    /// So the card now KEEPS its dip for as long as it is hidden, and the reveal springs it home with
+    /// the same `StorySpring.run(response: 0.28, damping: 0.7)` the dip used — his instruction in as
+    /// many words: the same mechanism and the same timing, run backwards.
+    ///
+    /// The menu's own copy still slides home over its 0.2s ease (Telegram's close, and deliberately
+    /// spring-free — see `CMContextMenu.dismiss`). It is opaque and on top for those 0.2s, by which
+    /// point this spring is within about a percent of home, so the hand-over is a continuation
+    /// instead of a step.
     func applyVisibility() {
         let hidden = !rectKey.isEmpty && MediaSourceVisibility.shared.hiddenId == rectKey
+        if hidden {
+            menuHoldsCard = true
+            // Re-asserted rather than assumed: the dip's own spring may have been cancelled to
+            // `.identity` before this ran, and a card revealed from full size is the bug itself.
+            transform = CGAffineTransform(scaleX: Self.pressDip, y: Self.pressDip)
+        } else if menuHoldsCard {
+            menuHoldsCard = false
+            StorySpring.run(response: 0.28, damping: 0.7) { self.transform = .identity }
+        }
         heroBox.alpha = hidden ? 0 : 1
         nameLabel.alpha = hidden && MediaSourceVisibility.shared.hidesLabel ? 0 : 1
     }
