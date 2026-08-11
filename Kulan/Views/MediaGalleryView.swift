@@ -66,7 +66,10 @@ struct MediaGalleryView: View {
     private var expandedAll: [Message] { all.flatMap { $0.expandedGalleryItems(cid: cid) } }
 
     private var mediaItems: [Message] {
-        expandedAll.filter { ($0.isImage || $0.isVideo) && !$0.isGif }.filter { m in
+        // ⚠️ `!viewOnce` HERE IS A HOLE CLOSED, not a nicety (found 2026-08-11 while adding the
+        // voice exclusion below): a view-once photo was never filtered from this grid, so the
+        // person it was burned for could simply reopen it from All Media.
+        expandedAll.filter { ($0.isImage || $0.isVideo) && !$0.isGif && !$0.viewOnce }.filter { m in
             switch mediaFilter {
             case .all:    return true
             case .photos: return m.isImage
@@ -75,7 +78,9 @@ struct MediaGalleryView: View {
         }
     }
     private var gifItems: [Message]  { all.filter { $0.isGif } }
-    private var voiceItems: [Message] { all.filter { $0.isAudio } }
+    // One-time notes are excluded the way view-once photos never reach the photo grid: a gallery
+    // replay would be a second listen.
+    private var voiceItems: [Message] { all.filter { $0.isAudio && !$0.viewOnce } }
     private var fileItems: [Message]  { all.filter { $0.isFile } }
     private var linkItems: [Message] {
         all.filter { !$0.isImage && !$0.isVideo && !$0.isGif && !$0.isAudio && !$0.isFile && Self.firstURL(in: $0.text) != nil }

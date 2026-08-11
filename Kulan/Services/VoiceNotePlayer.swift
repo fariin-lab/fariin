@@ -82,6 +82,18 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     /// The playing note's own timestamp. `PlayedVoice` keys its receipts on it, so it has to be the
     /// message's date and not the moment we happened to press play.
     private var createdAt: Date = .distantPast
+    /// The loaded note is a ONE-TIME listen. Its decrypted bytes live at `transientURL` (never the
+    /// AudioCache), and starting it marks it consumed on this device.
+    private var isViewOnce = false
+    private var transientURL: URL?
+
+    /// Shred a one-time note's decrypted file. Called wherever the engine moves off a note —
+    /// another load, the bar's dismiss, or the note finishing.
+    private func disposeTransient() {
+        guard let t = transientURL else { return }
+        try? FileManager.default.removeItem(at: t)
+        transientURL = nil
+    }
     /// A finger owns the scrubber. The 20Hz tick must not fight it.
     private var scrubbing = false
 
@@ -116,7 +128,9 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             followOn = []
             return
         }
-        followOn = Array(items.dropFirst(idx + 1).filter(\.isAudio).prefix(Self.followOnCap))
+        // One-time notes are excluded: auto-advance playing one would SPEND its single listen on a
+        // person who never chose to open it. They are only ever played by a deliberate tap.
+        followOn = Array(items.dropFirst(idx + 1).filter { $0.isAudio && !$0.viewOnce }.prefix(Self.followOnCap))
     }
 
     private override init() {
@@ -263,6 +277,9 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         // Clearing costs nothing: coming back reloads from the cache and resumes at the position
         // `pause()` just saved.
         player = nil
+        // Moving off whatever was loaded ends a one-time note's single listen: its decrypted bytes
+        // go now, before anything else can happen to them.
+        disposeTransient()
         // Nothing is open until the new note actually starts, so the bar goes now rather than hovering
         // over a note that may never play.
         hasNote = false
@@ -270,6 +287,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         self.messageId = message.id
         self.cid = cid
         self.isMine = isMe
+        self.isViewOnce = message.viewOnce
         // Kept for the played receipt below, which needs the message's OWN timestamp rather than now.
         self.createdAt = message.createdAt
 
@@ -278,6 +296,26 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             let tmp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("local-\(message.rowId).m4a")
             try? local.write(to: tmp)
+            open(tmp)
+            return
+        }
+        // ONE-TIME VOICE: never the cache, in either direction. The decrypted bytes live in one
+        // throwaway file for exactly this listen, and `disposeTransient` shreds it the moment the
+        // engine moves off the note — finish, dismiss, or another note taking over.
+        if message.viewOnce {
+            guard let urlStr = message.audioUrl, let url = URL(string: urlStr), let meta = message.enc else {
+                clearNowPlaying(); return
+            }
+            loadingId = message.id
+            defer { loadingId = "" }
+            guard let (cipher, _) = try? await MediaSession.shared.data(from: url),
+                  let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
+                clearNowPlaying(); return
+            }
+            let tmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("voice-once-\(message.id).m4a")
+            try? data.write(to: tmp)
+            transientURL = tmp
             open(tmp)
             return
         }
@@ -324,6 +362,10 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         // one player now, so nothing can be playing for it to stop. A post with no listener reads to
         // the next person like a rule still being enforced somewhere.
         VoiceAudio.activeId = messageId
+        // A one-time note is SPENT the moment it starts, and the mark is written now, not at the
+        // end: an app kill mid-listen must not hand back a second listen. Pause and resume within
+        // this one load still work — the pill allows them while the engine holds the note.
+        if isViewOnce && !isMine { ViewedOnce.mark(messageId) }
         // Playing it counts as heard.
         if !isMine {
             let id = messageId, c = cid, at = createdAt
@@ -376,6 +418,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             // handed back. MUST come after `release()`, which identifies itself by `messageId`.
             hasNote = false
             clearNowPlaying()
+            disposeTransient()   // a finished one-time note's bytes do not outlive the listen
             // CHAIN ON. Inside the chat the chat still does it, and should: it scrolls the next bubble
             // into view on the way, which nothing in here can do. Outside the chat nobody would, which
             // is what used to end a run of notes the moment you walked away — so the engine plays the
@@ -420,6 +463,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         progress = 0
         hasNote = false
         clearNowPlaying()
+        disposeTransient()   // dismissing a one-time note ends its single listen for good
     }
 
     /// Give the audio session back. OWNER-ONLY, and never during a call: this is the rule that stopped

@@ -1197,7 +1197,7 @@ enum ChatService {
 
     /// Encrypt + send a voice note. Same E2EE pipeline as photos: the m4a bytes
     /// are sealed and the ciphertext uploaded; the server never hears the audio.
-    static func sendAudio(cid: String, data: Data, duration: Double, waveform: [Int] = [], replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
+    static func sendAudio(cid: String, data: Data, duration: Double, waveform: [Int] = [], replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false, viewOnce: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload
         var members = group
         if members == nil, !cid.contains("_") {
@@ -1219,8 +1219,13 @@ enum ChatService {
         // "loading" spin). Store under BOTH keys the bubble can be identified by: the FINAL message id
         // (== the server doc id the reconciled bubble carries) AND the clientId (the optimistic bubble,
         // and a belt in case reconcile timing differs). VoiceMessageView.load() checks both.
-        AudioCache.store(data, for: msgRef.documentID)
-        if let clientId { AudioCache.store(data, for: clientId) }
+        // NOT for a one-time note: the sender's pill is inert (senders cannot replay, same rule as
+        // the view-once photo), so caching our own plaintext would be a copy nobody can reach kept
+        // for no one.
+        if !viewOnce {
+            AudioCache.store(data, for: msgRef.documentID)
+            if let clientId { AudioCache.store(data, for: clientId) }
+        }
         let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).m4a.enc")
 
         // Encrypt the reply snippet the same way as the conversation (group vs 1:1).
@@ -1234,18 +1239,23 @@ enum ChatService {
 
         let batch = db.batch()
         var msg: [String: Any] = [
-            "type": "audio", "audioUrl": url, "duration": duration, "waveform": waveform,
+            // A one-time note carries NO waveform, the same instinct as the view-once photo
+            // skipping its blurhash: the preview machinery must not keep a shape of something
+            // meant to exist for one listen.
+            "type": "audio", "audioUrl": url, "duration": duration, "waveform": viewOnce ? [] : waveform,
             "enc": meta.asDict, "text": "", "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
             "clientTs": clientTs,
         ]
         if let clientId { msg["clientId"] = clientId }   // reconcile the optimistic bubble in place
         if let replyEnc { msg["replyTo"] = replyEnc }    // voice notes can be replies too (Bug 1)
         if forwarded { msg["forwarded"] = true }
+        if viewOnce { msg["viewOnce"] = true }           // one-time voice (same field the photo uses)
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
             // Length rides inside the marker ("🎤 Voice message · 0:53") so the chat list
             // can show it without a schema change; old plain markers still parse (prefix match).
-            "lastMessage": "🎤 Voice message · " + voiceDurationLabel(duration),
+            "lastMessage": viewOnce ? "🎤 One-time voice message"
+                                    : "🎤 Voice message · " + voiceDurationLabel(duration),
             "lastSender": uid,
             "updatedAt": FieldValue.serverTimestamp(),
         ]

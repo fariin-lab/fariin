@@ -121,6 +121,8 @@ struct ThreadView: View {
     @State private var previewProgress: Double = 0
     @State private var previewTimer: Timer?
     @State private var holdHint = false             // "hold to record" flash after an accidental tap
+    @State private var voiceViewOnce = false        // "1" armed on the recording bar → send as one-time listen
+    @State private var voiceOnceToast = false       // the little auto-fading confirmation when it arms
     @State private var pinIndex = 0                  // which of the (≤5) pinned messages the bar shows
     @State private var showPinnedSheet = false       // "See All" → full sheet of pinned messages
     @State private var recordDrag: CGSize = .zero   // live finger translation while holding
@@ -1081,7 +1083,9 @@ struct ThreadView: View {
         .onReceive(NotificationCenter.default.publisher(for: .voiceNoteFinished)) { note in
             guard let id = note.object as? String,
                   let idx = repo.items.firstIndex(where: { $0.id == id }) else { return }
-            guard let next = repo.items.dropFirst(idx + 1).first(where: { $0.isAudio }) else { return }
+            // Never chain INTO a one-time note: auto-advance would spend its single listen on
+            // somebody who never chose to open it.
+            guard let next = repo.items.dropFirst(idx + 1).first(where: { $0.isAudio && !$0.viewOnce }) else { return }
             nativeScrollTarget = next.rowId
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 NotificationCenter.default.post(name: .voiceNotePlay, object: next.id)
@@ -4337,6 +4341,17 @@ struct ThreadView: View {
                     .offset(y: -8)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
+            // The reference's little confirmation when the "1" is armed, in OUR notice style —
+            // appears over the bar and goes by itself, same rhythm as the hold hint above.
+            if voiceOnceToast {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill").font(.system(size: 14))
+                    Text("Set to one-time listen").font(.system(size: 13, weight: .medium))
+                }
+                .modifier(ChatNoticePill())
+                .offset(y: -8)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
         }
         // Big red mic + lock, ON TOP of the whole composer so it's never clipped/behind the pill.
         .overlay(alignment: .bottomTrailing) {
@@ -4777,6 +4792,25 @@ struct ThreadView: View {
                     RecordTimerText(recorder: recorder)
                     RecordWaveform(recorder: recorder, color: Theme.accent(dark))
                 }
+                // ONE-TIME LISTEN — the reference's "1" at the strip's end, in both states, with
+                // the same fill-when-armed idiom the photo picker's badge uses. Arming it flashes
+                // the little confirmation over the bar.
+                Button {
+                    voiceViewOnce.toggle()
+                    if voiceViewOnce {
+                        withAnimation(.easeOut(duration: 0.2)) { voiceOnceToast = true }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+                            withAnimation(.easeIn(duration: 0.25)) { voiceOnceToast = false }
+                        }
+                    }
+                } label: {
+                    Image(systemName: voiceViewOnce ? "1.circle.fill" : "1.circle")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(voiceViewOnce ? Color(hex: 0x3DA1FD) : .primary)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(voiceViewOnce ? "One-time listen on" : "One-time listen off")
             }
             .padding(.leading, 14).padding(.trailing, 18).frame(minHeight: 40)
             .liquidGlass(Capsule(), interactive: true)
@@ -4909,12 +4943,16 @@ struct ThreadView: View {
         // Sending from the review bar must not leave the note playing over the send. The bytes are
         // read by `finish()` inside stopAndSendAudio, which knows to use the finalized file.
         stopPreviewPlayback()
-        Task { await stopAndSendAudio() }
+        // ⚠️ CAPTURED BEFORE resetRecordingState, which clears the flag — the Task below races the
+        // reset, and reading the @State inside it sent every one-time note as ordinary.
+        let once = voiceViewOnce
+        Task { await stopAndSendAudio(viewOnce: once) }
         impact(.light)
         resetRecordingState()
     }
     private func resetRecordingState() {
         withAnimation { recordLocked = false; recordDrag = .zero; recordCancelArmed = false; holdStarted = false }
+        voiceViewOnce = false   // the "1" arms ONE note; the next recording starts ordinary
     }
     private func flashHoldHint() {
         withAnimation(.easeOut(duration: 0.2)) { holdHint = true }
@@ -4933,7 +4971,7 @@ struct ThreadView: View {
         let s = Int(t); return String(format: "%d:%02d", s / 60, s % 60)
     }
 
-    private func stopAndSendAudio() async {
+    private func stopAndSendAudio(viewOnce: Bool = false) async {
         // If finish() returns nil at the boundary (elapsed vs live currentTime can differ ~0.05s),
         // still tear down cleanly so the recording UI never gets stuck. Keep replyingTo though:
         // a dropped too-short note must not destroy the reply target — the user just retries.
@@ -4950,13 +4988,14 @@ struct ThreadView: View {
         await MainActor.run {
             // The optimistic bubble must carry the quote too — without it the voice reply
             // looked quote-less until the server echo reconciled (read as "reply didn't work").
-            var pending = Message(localAudioData: data, duration: dur, waveform: wf,
+            var pending = Message(localAudioData: data, duration: dur, waveform: viewOnce ? [] : wf,
                                   authorId: me, clientId: clientId, sendState: .sending)
             pending.replyTo = reply
+            pending.viewOnce = viewOnce   // the optimistic bubble draws the pill, not the player
             repo.addPending(pending)
             withAnimation(.easeInOut(duration: 0.2)) { replyingTo = nil }
         }
-        do { try await ChatService.sendAudio(cid: cid, data: data, duration: dur, waveform: wf, replyTo: reply, clientId: clientId, group: isGroup ? groupMembers : nil) }
+        do { try await ChatService.sendAudio(cid: cid, data: data, duration: dur, waveform: wf, replyTo: reply, clientId: clientId, group: isGroup ? groupMembers : nil, viewOnce: viewOnce) }
         catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
     }
 
@@ -5935,6 +5974,17 @@ struct MessageBubble: View, Equatable {
             // it quieter than the original version he rejected — it is still a CAPSULE rather than a
             // bubble, and it still carries no time and no tick.
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)), in: Capsule())
+        } else if message.isAudio, message.viewOnce {
+            // ONE-TIME VOICE: a pill, exactly the view-once photo's idiom further down this chain —
+            // never the waveform player. The pill itself is live (it watches the engine for its one
+            // listen); the bubble chrome here matches the photo pill's.
+            OneTimeVoicePill(message: message, cid: cid, isMe: isMe, dark: dark,
+                             consumed: isViewedOnce,
+                             tint: isMe ? onMyBubble : (dark ? Color.white : .black),
+                             meta: AnyView(metaRow))
+                .padding(.horizontal, 15).padding(.vertical, 11)
+                .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                .clipShape(Capsule())
         } else if message.isAudio {
             // WIDTH-ON-PLAY ROOT CAUSE (deep dive): VoiceMessageView is a DETERMINISTIC 212pt wide (play
             // button 42 + HStack spacing 12 + waveform 158) in every playback state — the speed toggle sits

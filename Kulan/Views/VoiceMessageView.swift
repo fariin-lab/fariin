@@ -619,3 +619,100 @@ final class AxisLockedScrubRecognizer: UIPanGestureRecognizer {
         VoiceScrubState.touchOnWaveform = false
     }
 }
+
+// MARK: - One-time voice pill
+
+// A one-time voice note draws as a PILL, deliberately not as the waveform player — the same idiom
+// as the view-once photo above it in ThreadView, and our own look rather than the reference's
+// badge-on-a-bubble. No waveform is even sent for these, no scrubbing, no speed: one tap, one
+// listen. Pause and resume DURING that listen are allowed for as long as the engine still holds
+// the note; the moment it moves off (finished, dismissed, another note started) the pill reads
+// "Played" and is inert.
+//
+// Consumption is device-local (`ViewedOnce`, written by the engine the moment playback starts),
+// exactly like the photo. The engine never touches AudioCache for these — the decrypted bytes live
+// in a throwaway file it shreds when the listen ends.
+struct OneTimeVoicePill: View {
+    let message: Message
+    let cid: String
+    let isMe: Bool
+    let dark: Bool
+    /// ThreadView's snapshot of ViewedOnce at row build. `consumedLive` below re-reads it on engine
+    /// transitions, because the row does NOT reconfigure when the engine marks the note mid-session
+    /// — trusting the snapshot alone let a finished note offer itself for a second listen.
+    let consumed: Bool
+    let tint: Color
+    let meta: AnyView
+
+    private var engine: VoiceNotePlayer { .shared }
+    @State private var playing = false
+    @State private var loading = false
+    @State private var active = false        // the engine currently holds THIS note: the one listen
+    @State private var consumedLive = false
+
+    /// Sender side only: has the other person spent their listen? Same live read as the voice
+    /// bubble's mic receipt — nothing shows if their read receipts are off, and that is the rule.
+    private var openedByOther: Bool {
+        guard isMe else { return false }
+        let me = AuthService.shared.uid ?? ""
+        guard let conv = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })
+        else { return false }
+        return conv.voicePlayedByOther(me, createdAtMillis: message.createdAt.timeIntervalSince1970 * 1000)
+    }
+
+    private var spent: Bool { !isMe && (consumed || consumedLive) && !active }
+    private var durationText: String {
+        let d = Int(message.duration ?? 0)
+        return String(format: "%d:%02d", d / 60, d % 60)
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if loading {
+                ProgressView().tint(tint).frame(width: 18, height: 18)
+            } else {
+                Image(systemName: icon).font(.system(size: 18, weight: .semibold))
+            }
+            Text(label).font(.system(size: 15, weight: .medium)).italic(spent || (isMe && openedByOther))
+            meta
+        }
+        .foregroundStyle(tint.opacity(spent || (isMe && openedByOther) ? 0.6 : 1))
+        .contentShape(Capsule())
+        .onTapGesture { tap() }
+        .onReceive(VoiceNotePlayer.shared.objectWillChange.receive(on: DispatchQueue.main)) { _ in sync() }
+        .onChange(of: message.id) { _, _ in consumedLive = ViewedOnce.contains(message.id); sync() }   // hosted cells are reused
+        .onAppear { consumedLive = ViewedOnce.contains(message.id); sync() }
+    }
+
+    private var icon: String {
+        if isMe { return openedByOther ? "circle.slash" : "1.circle" }
+        if active { return playing ? "pause.fill" : "play.fill" }
+        return spent ? "circle.slash" : "1.circle"
+    }
+    private var label: String {
+        if isMe { return openedByOther ? "Opened" : "Voice message" }
+        if spent { return "Played" }
+        return "Voice message · " + durationText
+    }
+
+    private func tap() {
+        guard !isMe else { return }                       // the sender cannot replay a one-time note
+        if active { engine.toggle(message: message, cid: cid, isMe: isMe); return }   // pause/resume the one listen
+        guard !consumed, !consumedLive, message.sendState == nil else { return }
+        engine.toggle(message: message, cid: cid, isMe: isMe)
+    }
+
+    private func sync() {
+        let a = engine.messageId == message.id && engine.hasNote
+        if a != active {
+            active = a
+            // Transition edges are the only moments consumption can have changed — reading the
+            // UserDefaults-backed set on every 20Hz tick would be waste.
+            consumedLive = ViewedOnce.contains(message.id)
+        }
+        let p = engine.isPlaying(message.id)
+        if p != playing { playing = p }
+        let l = engine.isLoading(message.id)
+        if l != loading { loading = l }
+    }
+}
