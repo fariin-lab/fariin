@@ -749,30 +749,45 @@ struct FloatingCallWindow: View {
 
 // MARK: - LiveCallBarBackground
 
-// The "alive" wash for the minimized call bars (user reference: the reference app's animated call banner): a
-// soft band of light drifting across the green every ~3s, so the bar reads as a LIVE call rather
-// than a static banner. (The sign-up logo used the same trick until its sweep was removed on
-// 2026-08-05; this one stays, because here the movement means the call is still running.)
-// TimelineView-driven at
-// 30fps over a 40pt strip — GPU-trivial, and it only exists while a bar is on screen.
+// The "alive" wash for the minimized call bars. HIS 2026-08-11 ORDER, reference open: not a band
+// of light — a WAVE. The reference's call banner runs soft undulating curves along the bar's
+// bottom edge, constantly rippling, and that motion is what says "this call is still running".
+// (This bar's first build was a drifting light sweep; he looked at the reference beside it and
+// asked for the wave itself, so the sweep is gone.) Two translucent white curves at different
+// wavelengths and opposite directions, each breathing its height a little, over the same green.
+// TimelineView-driven at 30fps over a 40pt strip — one Canvas, GPU-trivial, and it only exists
+// while a bar is on screen. No C++ anywhere, which he asked about: the reference animates theirs
+// with ordinary UI code too; their C++ is the call audio, not the banner.
 struct LiveCallBarBackground: View {
     var body: some View {
-        GeometryReader { geo in
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-                let t = context.date.timeIntervalSinceReferenceDate
-                let phase = CGFloat(t.truncatingRemainder(dividingBy: 2.6) / 2.6)
-                // 0.32 white, wide band: the first pass used 0.16 and was invisible on a bright
-                // screen (user: "still sees no wave"). This reads clearly without shouting.
-                Color.green.overlay(
-                    LinearGradient(colors: [.clear, .white.opacity(0.32), .clear],
-                                   startPoint: .leading, endPoint: .trailing)
-                        .frame(width: geo.size.width * 0.75)
-                        .offset(x: -geo.size.width * 0.75 + phase * (geo.size.width * 1.75)),
-                    alignment: .leading
-                )
-                .clipped()
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            Canvas { ctx, size in
+                ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.green))
+                // Back wave: taller, slower, left-to-right. Front wave: shorter, quicker, the
+                // other way — two directions is what makes it read as liquid rather than a march.
+                drawWave(&ctx, size: size, t: t, lift: 7, amp: 3.4, breath: 1.6, len: 95, speed: 1.5, opacity: 0.16)
+                drawWave(&ctx, size: size, t: t, lift: 4, amp: 2.6, breath: 1.2, len: 62, speed: -2.3, opacity: 0.12)
             }
         }
+    }
+
+    private func drawWave(_ ctx: inout GraphicsContext, size: CGSize, t: Double,
+                          lift: CGFloat, amp: CGFloat, breath: CGFloat,
+                          len: CGFloat, speed: Double, opacity: Double) {
+        // The height itself breathes slowly (amp ± breath), so even a still moment ripples.
+        let a = amp + breath * CGFloat(sin(t * 0.9 + Double(len)))
+        var p = Path()
+        p.move(to: CGPoint(x: 0, y: size.height))
+        var x: CGFloat = 0
+        while x <= size.width + 3 {
+            let y = size.height - lift - a * CGFloat(sin(Double(x / len) * 2 * .pi + t * speed))
+            p.addLine(to: CGPoint(x: min(x, size.width), y: y))
+            x += 3
+        }
+        p.addLine(to: CGPoint(x: size.width, y: size.height))
+        p.closeSubpath()
+        ctx.fill(p, with: .color(.white.opacity(opacity)))
     }
 }
 
