@@ -145,8 +145,43 @@ public enum StoryPlaybackResume {
         }
     }
 
+    // MARK: - Telegram's card: where the clip was, and the file to see it in
+
+    /// WHERE EACH CLIP WAS WHEN THE SHEET CAME UP — for the CARDS, and for nothing else.
+    ///
+    /// ⚠️ THIS IS NOT THE RESUME STORE COMING BACK. That store was deleted on his written rule and
+    /// stays deleted: a story returned to RESTARTS AT ZERO, always (see this file's header). Nothing
+    /// seeks a playing story to this number, and nothing may — it exists so a small card can show the
+    /// frame the story is sitting on while the sheet is open, which is a different question from
+    /// where playback should begin. If you find yourself passing this to a player that is about to
+    /// play, you are re-introducing the bug that made a clip run from 0:14 under a bar at zero.
+    ///
+    /// It is written even when the frame capture fails, because the PLAYHEAD is reliable where the
+    /// video output is not — that asymmetry is what build 539 proved on his device.
+    private static var cardTimes: [String: Double] = [:]
+    static func rememberCardTime(_ url: URL, _ seconds: Double) {
+        guard seconds.isFinite, seconds > 1 else { return }
+        cardTimes[url.absoluteString] = seconds
+    }
+    /// Nil means "not watched into this session" — the poster is the honest picture for that.
+    public static func cardTime(_ url: URL) -> Double? { cardTimes[url.absoluteString] }
+
+    /// The clip's file ON THIS PHONE, or nil. The card player may only ever read a local file: an
+    /// `AVURLAsset` over the network would fetch the whole clip a second time, on the mobile data
+    /// most of these users are on, to hold one still frame.
+    public static func localFile(for story: URL) -> URL? {
+        CacheManager.cachedFileIfUsable(for: story)
+    }
+
     /// The viewer is gone: a story opened later must start at its beginning.
-    public static func clearAll() { frames.removeAllObjects(); cardFrames = [:] }
+    public static func clearAll() {
+        frames.removeAllObjects()
+        cardFrames = [:]
+        cardTimes = [:]
+        // The card players go with the viewer. Holding decoders open for a screen nobody is looking
+        // at is exactly the cost that makes copying Telegram's per-item players dangerous.
+        StoryCardPlayerPool.shared.releaseAll()
+    }
 }
 
 /// WHICH STORY A PLAYER'S CLOCK BELONGS TO — the seam that lets the progress bar read the player.

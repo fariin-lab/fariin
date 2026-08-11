@@ -923,6 +923,12 @@ public final class StoryCardMorph {
               let url = URL(string: mediaURL) else { return }
         let t = source.currentVideoSeconds
         guard t.isFinite, t > 1 else { return }
+        // ⚠️ THE PLAYHEAD IS RECORDED FIRST, AND ON ITS OWN. It is reliable where the video output
+        // is not (build 539 proved that: the bank was asked correctly and the buffer never came),
+        // and it is all Telegram's answer needs — a card player seeks the file to this second and
+        // holds it. See `StoryPlaybackResume.rememberCardTime`, and note it is NOT a resume store:
+        // playback still restarts at zero on a revisit.
+        StoryPlaybackResume.rememberCardTime(url, t)
         // The player's own writer first — its guards also refuse the clip's last second, where the
         // buffer is often already gone. A paused item gives its buffer up exactly once, so the
         // explicit bank below is the belt for the moment the writer had nothing to copy.

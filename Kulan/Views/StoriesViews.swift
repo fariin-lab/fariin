@@ -3864,7 +3864,30 @@ struct MyStoriesCarousel: View {
         // Nil is the normal answer for a photo (nothing is ever banked for one, and a photo's poster
         // IS the photo) and for a video nobody has watched this session. Both fall through to the
         // poster below, which is exactly what they had before.
+        // ⚠️ TELEGRAM'S ANSWER FIRST: THE CARD IS A PAUSED PLAYER, NOT A PICTURE.
+        //
+        // Read from their source on his order — `StoryItemContentComponent` never photographs a
+        // video. A card that leaves the centre keeps its video node, alive and merely paused, so the
+        // frame stays because the layer stays; the frame-0 cover is a layer permanently UNDERNEATH
+        // and shows only if the node is destroyed. Two builds of ours tried to fix the photograph
+        // instead (539: ask every player; then decode from the file) and he still saw the upload
+        // cover, so the photograph is not the thing to fix.
+        //
+        // The cover sits under the player here for the same reason it does in theirs: a seek takes a
+        // moment to render, and what fills the card until then must be the story's own picture, never
+        // black. See `StoryCardPausedFrame` for the one thing deliberately not copied — they give
+        // every visible item a player, and iOS caps how many decoders may exist at once.
         if s.isVideo, let u = URL(string: s.mediaUrl),
+           let t = StoryPlaybackResume.cardTime(u),
+           let file = StoryPlaybackResume.localFile(for: u) {
+            ZStack {
+                StoryImage(url: s.previewUrl, fitCanvas: true, cardFillThreshold: slotH / slotW)
+                Color.clear
+                    .frame(width: slotW, height: slotH)
+                    .overlay(StoryCardPausedFrame(file: file, key: u.absoluteString, seconds: t))
+                    .clipped()
+            }
+        } else if s.isVideo, let u = URL(string: s.mediaUrl),
            let shot = StoryPlaybackResume.cardFrame(u, width: slotW) {
             // ⚠️ PINNED TO THE SLOT, exactly like the branch below. `Color.clear` is size-NEUTRAL: it
             // accepts whatever size it is proposed, and inside the cover-flow `ZStack` that proposal
