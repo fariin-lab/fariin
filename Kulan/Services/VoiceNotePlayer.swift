@@ -344,11 +344,22 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         // A call owns the session, or the file will not open (truncated, still uploading, wrong bytes).
         // Either way nothing is going to play, so leave nothing behind claiming otherwise.
         guard !VoiceAudio.callActive else { clearNowPlaying(); return }
-        try? AVAudioSession.sharedInstance().setCategory(.playback)
-        try? AVAudioSession.sharedInstance().setActive(true)
-        player = try? AVAudioPlayer(contentsOf: url)
-        guard player != nil else { clearNowPlaying(); return }
-        start()
+        // ⚠️ ACTIVATION OFF THE MAIN THREAD — his "the wave jumps on the first play, then normal".
+        // setActive(true) renegotiates the audio hardware for ~100-300ms, and doing it on main
+        // froze whatever frame was mid-flight: the eye reads the dropped frames as a jump it
+        // cannot quite catch. Only the FIRST play pays it (pause holds the session since the
+        // late-play fix), which is exactly the first-time-only shape he reported.
+        let forNote = messageId
+        Task.detached(priority: .userInitiated) {
+            try? AVAudioSession.sharedInstance().setCategory(.playback)
+            try? AVAudioSession.sharedInstance().setActive(true)
+            await MainActor.run { [weak self] in
+                guard let self, self.messageId == forNote else { return }   // another note took over meanwhile
+                self.player = try? AVAudioPlayer(contentsOf: url)
+                guard self.player != nil else { self.clearNowPlaying(); return }
+                self.start()
+            }
+        }
     }
 
     private func start() {
@@ -364,12 +375,13 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         // through this engine, and CLOSING that page is what spends the listen — his order, the
         // photo model. The engine's no-cache viewOnce path below stays as a belt: if any future
         // code routes one here, the bytes still never touch the persistent cache.)
-        // Playing it counts as heard.
+        // Playing it counts as heard. NOT inside withAnimation any more — that global transaction
+        // animated EVERY view update landing in the same instant (the waveform's recolor, the
+        // icon swap), which was the second half of his first-play "jump". The bubble's own
+        // `.animation(value: unheard)` animates the dot's fade by itself, locally.
         if !isMine {
             let id = messageId, c = cid, at = createdAt
-            withAnimation(.easeOut(duration: 0.25)) {
-                PlayedVoice.shared.markPlayed(cid: c, messageId: id, createdAt: at)
-            }
+            PlayedVoice.shared.markPlayed(cid: c, messageId: id, createdAt: at)
             // And now the SENDER is told too, which is the half that never existed: the line above only
             // ever wrote to this phone's own UserDefaults, so somebody could send a two-minute note and
             // never learn whether it was heard. Throttled and gated on the read-receipts setting inside.
