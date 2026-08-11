@@ -105,8 +105,40 @@ final class ConversationsRepository {
     private var flushScheduled = false
     private let minPublishInterval: TimeInterval = 0.15
 
+    // MARK: - Arrival voice prefetch
+    //
+    // His "what makes them fast" order: the reference downloads a voice note when it ARRIVES, so
+    // the first tap never spins. The in-chat sweep covers the chat you are inside; this covers
+    // every other chat, straight off the list's own snapshots — a chat whose newest message
+    // becomes a voice note from the other side gets its recent notes pulled into the AudioCache
+    // before the chat is ever opened. The stamp map makes each new marker fire exactly once.
+    private var voicePrefetchStamp: [String: String] = [:]
+    private var voicePrefetchInFlight = Set<String>()
+
+    private func prefetchArrivedVoice(_ convs: [Conversation]) {
+        let me = Auth.auth().currentUser?.uid ?? ""
+        guard !me.isEmpty else { return }
+        for c in convs {
+            let marker = c.lastMessageCipher
+            // The voice marker is written PLAIN (sendAudio), so the prefix test needs no decrypt.
+            // One-time notes also carry the 🎤 prefix and are filtered inside the fetch — they are
+            // never cached anywhere, arrival included.
+            guard marker.hasPrefix("🎤"), !c.lastSender.isEmpty, c.lastSender != me else { continue }
+            guard voicePrefetchStamp[c.id] != marker else { continue }
+            voicePrefetchStamp[c.id] = marker
+            guard !voicePrefetchInFlight.contains(c.id) else { continue }
+            voicePrefetchInFlight.insert(c.id)
+            let cid = c.id
+            Task { @MainActor [weak self] in
+                await ChatService.prefetchNewestVoice(cid: cid)
+                self?.voicePrefetchInFlight.remove(cid)
+            }
+        }
+    }
+
     private func publish(_ convs: [Conversation]) {
         if !convs.isEmpty { rememberHadChats() }
+        prefetchArrivedVoice(convs)
         guard convs != conversations else { hasLoaded = true; return }   // no-op snapshot → no re-render
         if Date().timeIntervalSince(lastPublish) >= minPublishInterval {
             lastPublish = Date()

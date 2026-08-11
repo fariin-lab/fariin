@@ -1096,7 +1096,25 @@ final class CallService: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 45, execute: w)   // ~45s, like big apps
     }
 
+    // The CALLEE's own ring-out. The caller cancels an unanswered call after its timeout, but a
+    // caller whose app DIES mid-ring cancels nothing, and this phone rang forever. Sixty seconds,
+    // then the call ends as MISSED — written explicitly, so the end-reason inference never has to
+    // guess about a ring-out, and the last corner of the false-"Declined" family is closed: a
+    // decline is a finger, a ring-out is this timer, and neither can be read as the other.
+    private var calleeRingWork: DispatchWorkItem?
+    private func armCalleeRingTimeout(_ id: String) {
+        calleeRingWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.state == .incoming, self.callId == id else { return }
+            self.endReason = .missed
+            self.finishCall(updateRemote: true, clearCallKit: true, localUser: false)
+        }
+        calleeRingWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60, execute: work)
+    }
+
     private func cancelTimers() {
+        calleeRingWork?.cancel(); calleeRingWork = nil
         noAnswerWork?.cancel(); noAnswerWork = nil
         iceRestartWork?.cancel(); iceRestartWork = nil
         reconnectGiveUpWork?.cancel(); reconnectGiveUpWork = nil
@@ -1465,6 +1483,7 @@ final class CallService: NSObject {
                                                         video: isVideoCall, callerUid: caller)
                     self.markRinging()
                     self.watchRingingCancel(doc.documentID)   // tear down if the caller cancels before I answer
+                    self.armCalleeRingTimeout(doc.documentID) // and end as MISSED if nobody ever does either
                 }
             }
     }
@@ -1493,6 +1512,7 @@ final class CallService: NSObject {
         self.isCaller = false
         self.state = .incoming   // so the UI can present once answered
         Task { await refreshIceServers() }   // ensure fresh TURN before the callee builds its connection
+        armCalleeRingTimeout(callId)         // a dead caller cancels nothing; end as MISSED after 60s
         // markRinging() is DEFERRED until the gate below answers (audit). Telling the caller
         // "Ringing…" and then ending the call a round-trip later gave a blocked caller a distinct
         // signature — ring-then-instant-decline when my app is killed, versus a silent 45s ring-out

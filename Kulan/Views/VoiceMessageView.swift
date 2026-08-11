@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import UIKit
+import FirebaseFunctions
 
 // Voice-note chain events (auto-advance): when a note finishes naturally, the chat looks up
 // the NEXT voice message and asks its bubble to play — voicemail-style hands-free listening.
@@ -886,6 +887,14 @@ struct OneTimeVoicePage: View {
     }
 
     private func teardown() {
+        // THE SERVER BURN, on the way out — leaving the room is the consumption. Gated on the
+        // player having existed: a page that never managed to load must not delete a note nobody
+        // heard. Fire-and-forget; the function refuses groups (device-local there, like the
+        // photo) and refuses everything that is not a one-time audio message from someone else.
+        if player != nil {
+            Functions.functions(region: "me-central1").httpsCallable("consumeOnceVoice")
+                .call(["cid": cid, "messageId": message.id]) { _, _ in }
+        }
         ticker?.invalidate(); ticker = nil
         player?.stop(); player = nil
         if let t = tmpURL { try? FileManager.default.removeItem(at: t) }
