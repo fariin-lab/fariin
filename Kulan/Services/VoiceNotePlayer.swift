@@ -94,6 +94,31 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     /// paused themselves, and never resumes one that a pulled headphone stopped on purpose.
     private var resumeAfterInterruption = false
 
+    /// THE REST OF THE RUN, so leaving the chat does not end it.
+    ///
+    /// People do not send one voice note, they send four, and the second most common thing that happens
+    /// to a note is the next one starting by itself. That chaining lived entirely in `ThreadView` — it
+    /// reads the loaded message list, which dies with the view — so walking away finished the note in
+    /// your ear and stopped dead.
+    ///
+    /// The chat hands this over on its way out. Inside the chat nothing changes and the chat still
+    /// drives the chain, because it can also scroll the next bubble into view and the engine cannot.
+    /// Capped, because a long history can hold far more voice notes than any run a person means to sit
+    /// through.
+    private var followOn: [Message] = []
+    private static let followOnCap = 30
+
+    /// Called by the chat as it disappears. Anything that is not a voice note after `id` is dropped, and
+    /// an `id` that is not in this list at all (nothing playing, or a note from a different chat) empties
+    /// the run rather than guessing.
+    func handOff(followOn items: [Message], after id: String) {
+        guard !id.isEmpty, let idx = items.firstIndex(where: { $0.id == id }) else {
+            followOn = []
+            return
+        }
+        followOn = Array(items.dropFirst(idx + 1).filter(\.isAudio).prefix(Self.followOnCap))
+    }
+
     private override init() {
         super.init()
         // RAISE TO EAR, owned here now. It was on the bubble, which meant it stopped working the
@@ -219,6 +244,11 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     // MARK: - Play / pause
 
     func toggle(message: Message, cid: String, isMe: Bool) {
+        // A DELIBERATE TAP ENDS THE OLD RUN. This is the only entry a person drives, so a run handed
+        // over earlier is stale the moment they pick something themselves. The chain below calls `load`
+        // directly and so passes straight over this — which is the point, otherwise the run would clear
+        // itself after playing exactly one more note.
+        followOn = []
         if playing && messageId == message.id { pause(); return }
         if messageId == message.id, player != nil { start(); return }
         Task { await load(message: message, cid: cid, isMe: isMe) }
@@ -300,6 +330,10 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             withAnimation(.easeOut(duration: 0.25)) {
                 PlayedVoice.shared.markPlayed(cid: c, messageId: id, createdAt: at)
             }
+            // And now the SENDER is told too, which is the half that never existed: the line above only
+            // ever wrote to this phone's own UserDefaults, so somebody could send a two-minute note and
+            // never learn whether it was heard. Throttled and gated on the read-receipts setting inside.
+            ChatService.markVoicePlayedThrottled(c, createdAtMillis: at.timeIntervalSince1970 * 1000)
         }
         // Resume where it was left, including a position chosen by scrubbing before the first play.
         if let saved = pausedProgress[messageId], saved > 0, saved < 0.98, p.currentTime == 0 {
@@ -342,6 +376,16 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             // handed back. MUST come after `release()`, which identifies itself by `messageId`.
             hasNote = false
             clearNowPlaying()
+            // CHAIN ON. Inside the chat the chat still does it, and should: it scrolls the next bubble
+            // into view on the way, which nothing in here can do. Outside the chat nobody would, which
+            // is what used to end a run of notes the moment you walked away — so the engine plays the
+            // next one itself, out of the run the chat handed over as it left.
+            if cid != (AppRouter.shared.activeChatId ?? ""), !followOn.isEmpty {
+                let next = followOn.removeFirst()
+                let mine = next.authorId == (AuthService.shared.uid ?? "")
+                Task { await load(message: next, cid: cid, isMe: mine) }
+                return
+            }
             // Hands the chain on: the chat finds the NEXT voice note and asks it to play.
             NotificationCenter.default.post(name: .voiceNoteFinished, object: finished)
         }
@@ -369,6 +413,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     /// Stop and forget, for the bar's close button.
     func dismiss() {
         resumeAfterInterruption = false   // they ended it; a call finishing must not bring it back
+        followOn = []                     // closing the bar ends the run, not just the note on it
         pause()
         player = nil
         messageId = ""

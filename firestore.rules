@@ -521,7 +521,13 @@ service cloud.firestore {
       function privateMapsUntouched() {
         return ownKeyOnly('blockedBy') && ownKeyOnly('blockedAt') && ownKeyOnly('blockClearedAt')
             && ownKeyOnly('clearedAt') && ownKeyOnly('mutedBy') && ownKeyOnly('pinnedBy')
-            && ownKeyOnly('archivedBy') && ownKeyOnly('pinOrder') && ownKeyOnly('lastRead');
+            && ownKeyOnly('archivedBy') && ownKeyOnly('pinOrder') && ownKeyOnly('lastRead')
+            // Voice-note played receipts. On this list for the same reason `lastRead` is: it is MY
+            // statement about what I have heard, and without the pin the other member could forge it
+            // — writing themselves a "you played my note" mark you never gave, or wiping yours to
+            // hide that they heard you. It is also how somebody with read receipts switched off
+            // would have leaked one anyway.
+            && ownKeyOnly('lastPlayedVoice');
       }
       // The other party of a 1:1 being created.
       function otherMember() {
@@ -669,7 +675,7 @@ service cloud.firestore {
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
                  'lastMessage', 'lastSender', 'lastImageUrl', 'lastImageEnc', 'updatedAt',
                  'unreadCount', 'typing', 'lastRead', 'pinnedBy', 'mutedBy', 'archivedBy',
-                 'clearedAt', 'pinOrder', 'blockedBy', 'blockedAt',
+                 'clearedAt', 'pinOrder', 'blockedBy', 'blockedAt', 'lastPlayedVoice',
                  'lastReactionEnc', 'lastReactionBy', 'lastReactionToAuthor', 'lastReactionAt',
                  'names', 'photos', 'posters'
                ])
@@ -684,6 +690,17 @@ service cloud.firestore {
                 || request.resource.data.get('photos', {}).diff(resource.data.get('photos', {})).affectedKeys().hasOnly([request.auth.uid]))
             && (!('posters' in request.resource.data.diff(resource.data).affectedKeys())
                 || request.resource.data.get('posters', {}).diff(resource.data.get('posters', {})).affectedKeys().hasOnly([request.auth.uid]))
+            // A member may only ever say what THEY have heard. Pinned here, on the same shape as the
+            // three above, rather than by adding `lastPlayedVoice` to `privateMapsUntouched()` — this
+            // branch does not call that function at all.
+            //
+            // ⚠️ WHICH IS A GAP THAT PREDATES THIS FIELD AND IS NOT BEING WIDENED HERE: in a GROUP,
+            // `lastRead`, `pinnedBy`, `mutedBy`, `clearedAt` and `archivedBy` are on the allowed list
+            // with no per-uid pin, so one member can write another member's copy of them. The 1:1
+            // branch has been pinned since the block comment above it was written; this branch never
+            // was. Worth its own pass, with every group call site checked first.
+            && (!('lastPlayedVoice' in request.resource.data.diff(resource.data).affectedKeys())
+                || request.resource.data.get('lastPlayedVoice', {}).diff(resource.data.get('lastPlayedVoice', {})).affectedKeys().hasOnly([request.auth.uid]))
           )
           // Group NON-admin may EDIT INFO only when the admin enabled membersCanEditInfo.
           || (

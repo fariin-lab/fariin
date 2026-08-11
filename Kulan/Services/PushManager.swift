@@ -172,6 +172,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     var pendingChatPhoto: String? // fallback header photo
     var pendingInviteCode: String? // a kulan://g/<code> invite link to resolve into a Join sheet
     var activeChatId: String?     // the chat currently on screen (suppresses its own banners)
+    /// A specific message to land on once that chat is open, rather than opening wherever the chat
+    /// normally opens. Set beside `pendingChatId`, consumed once by ThreadView.
+    ///
+    /// Added for the floating voice-note bar: it could say WHICH CHAT the note was in and nothing more,
+    /// so tapping it dropped you at the bottom to hunt for the one bubble that was moving. Everything
+    /// else was already there — the player knows the message id, and the thread already knows how to
+    /// page back to a message and flash it, because that is what a tap on a reply quote does. This is
+    /// the wire between them. Nothing else sets it, so every other caller behaves exactly as before.
+    var pendingMessageId: String?
 }
 
 // Clear a chat's delivered notifications + fix the app badge when you read it.

@@ -2097,6 +2097,49 @@ enum ChatService {
         }
     }
 
+    // MARK: - Voice-note played receipts
+
+    /// Tell the sender their voice note was actually heard. WhatsApp turns the mic icon blue for this,
+    /// and it was the one voice signal we sent nothing for.
+    ///
+    /// ⚠️ GATED ON `readReceipts`, WHICH IS DELIBERATELY *UNLIKE* WHATSAPP. Theirs fires even with read
+    /// receipts switched off — there is no setting that hides a voice-note play receipt over there. Ours
+    /// is a receipt like any other, and somebody who has told us not to send receipts has told us not to
+    /// send this one. Privacy lives on the WRITE here, exactly as it does in `markRead`.
+    ///
+    /// A WATERMARK, not a per-message flag: one small field on the conversation document the chat is
+    /// already listening to, instead of a write against every note. Same shape as `lastRead`.
+    ///
+    /// Throttled on the same 2s shape as `markReadThrottled` and for the same reason — a run of four
+    /// notes played back to back would otherwise be four billed writes, and the value is monotonic so
+    /// the newest one covers them all.
+    private static var playedCooldownUntil: [String: Date] = [:]
+    private static var playedPending: [String: Double] = [:]
+    @MainActor
+    static func markVoicePlayedThrottled(_ cid: String, createdAtMillis: Double) {
+        guard pref("readReceipts") else { return }
+        if OfficialChannel.isOfficial(cid) { return }   // no conversation document to write to
+        // Never move the mark backwards: playing an OLD note after a new one must not un-hear the new one.
+        playedPending[cid] = max(playedPending[cid] ?? 0, createdAtMillis)
+        let now = Date()
+        if let until = playedCooldownUntil[cid], until > now { return }
+        playedCooldownUntil[cid] = now.addingTimeInterval(2)
+        flushVoicePlayed(cid)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.05) {
+            if playedPending[cid] != nil { markVoicePlayedThrottled(cid, createdAtMillis: 0) }
+        }
+    }
+
+    @MainActor
+    private static func flushVoicePlayed(_ cid: String) {
+        guard let ms = playedPending.removeValue(forKey: cid), ms > 0 else { return }
+        let me = uid
+        Task {
+            try? await db.collection("conversations").document(cid)
+                .setData(["lastPlayedVoice": [me: ms]], merge: true)
+        }
+    }
+
     // THE OFFICIAL CHANNEL HAS NO CONVERSATION DOCUMENT. Its per-person state (muted, pinned,
     // archived, cleared) lives in one small document the person owns, so these five actions are
     // routed here rather than at every call site. Doing it at the call sites would have meant an

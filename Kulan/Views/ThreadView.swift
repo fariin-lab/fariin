@@ -1010,9 +1010,45 @@ struct ThreadView: View {
         .safeAreaInset(edge: .top) { if searchActive { searchBar } }
         // Media auto-download policies: prefetch this chat's videos/voice per setting +
         // network, so tapping them later plays instantly (files skipped over 200 MB).
-        .task(id: cid) {
+        //
+        // ⚠️ KEYED ON THE MESSAGE COUNT, NOT JUST THE CHAT — this used to be `.task(id: cid)`, which
+        // meant it ran ONCE, on open, over whatever happened to be loaded at that second. So the case
+        // that matters most was never covered: a note that ARRIVES while you are sitting in the chat.
+        // She sends one, you tap it, and it spins, because the only sweep this chat will ever do already
+        // happened. Older history you scrolled back to was missed for the same reason.
+        //
+        // The count also gives the debounce for free. `.task(id:)` cancels and restarts when the id
+        // changes, so a burst of five arriving messages does not start five sweeps — the first four are
+        // cancelled inside the sleep and one sweep runs 1.2s after the last one lands. The sweep itself
+        // is already idempotent: it skips anything cached and anything in flight.
+        .task(id: "\(cid)-\(repo.items.count)") {
             try? await Task.sleep(nanoseconds: 1_200_000_000)   // let the open settle first
+            guard !Task.isCancelled else { return }
             MediaAutoDownloader.sweep(repo.items, cid: cid)
+        }
+        // LAND ON THE NOTE, not just in its chat. Tapping the floating voice bar used to open the
+        // conversation wherever it normally opens, leaving you to hunt for the one bubble that was
+        // moving. `initialScrollId` above covers the note already being loaded; this covers the rest by
+        // paging back to it, which is the same `ensureLoaded` + `flashAndScroll` pair a tap on a reply
+        // quote has always used.
+        //
+        // ⚠️ CONSUMED IMMEDIATELY, BEFORE THE AWAIT. If it were cleared afterwards, walking into a
+        // different chat while this was still paging would let THAT chat pick the id up and go looking
+        // for a message that was never in it.
+        .task(id: cid) {
+            guard let target = AppRouter.shared.pendingMessageId else { return }
+            AppRouter.shared.pendingMessageId = nil
+            // The repository starts loading with the view, so give the first page a moment to land
+            // rather than paging backwards from an empty list.
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+            if !repo.items.contains(where: { $0.id == target }) {
+                await repo.ensureLoaded(target)
+            }
+            // Not in this chat at all, or too far back to reach: leave the chat where it opened rather
+            // than scrolling somewhere arbitrary.
+            guard repo.items.contains(where: { $0.id == target }) else { return }
+            flashAndScroll(target)
         }
         .toolbar(searchActive ? .hidden : .automatic, for: .navigationBar)
     }
@@ -1151,6 +1187,14 @@ struct ThreadView: View {
             }
         }
         .onDisappear {
+            // HAND THE REST OF THE RUN TO THE ENGINE BEFORE ANYTHING ELSE HERE. The auto-advance chain
+            // is an `.onReceive` on this view and reads `repo.items`, so both die with it: a run of four
+            // notes finished the one in your ear and stopped. This is the last moment the list still
+            // exists, and it is before `repo.stop()` on purpose. The engine ignores it whenever the
+            // playing note is not from this chat, and drops it again the moment the person picks a note
+            // themselves.
+            VoiceNotePlayer.shared.handOff(followOn: repo.items,
+                                           after: VoiceNotePlayer.shared.messageId)
             repo.stop()
             groupCallListener?.remove(); groupCallListener = nil
             AppRouter.shared.activeChatId = nil
@@ -2228,6 +2272,15 @@ struct ThreadView: View {
             // the divider. Computed synchronously (unreadOnOpen seeds from the cached conversation) so
             // it's ready when the list performs its first open; consumed exactly once.
             initialScrollId: {
+                // Arrived by tapping the floating voice bar: open ON the note that is playing rather
+                // than at the bottom, so there is no jump to watch. Only when it is already loaded,
+                // which is the usual case since you were just in this chat. Anything further back is
+                // paged in and scrolled to by the `.task` below instead. Read, not consumed — the task
+                // is the one place that clears it.
+                if let target = AppRouter.shared.pendingMessageId,
+                   let row = repo.items.first(where: { $0.id == target })?.rowId {
+                    return row
+                }
                 guard unreadOnOpen > 0 else { return nil }
                 let msgs = repo.messages
                 // Same rule as anchorUnread: with more unread than we hold, don't pretend the oldest

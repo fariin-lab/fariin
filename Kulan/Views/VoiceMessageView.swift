@@ -98,6 +98,16 @@ struct VoiceMessageView: View {
     private var rate: Float { engine.rate(for: cid) }
 
     private var rateLabel: String { rate == 1 ? "1×" : (rate == 1.5 ? "1.5×" : "2×") }
+
+    /// Has the other side played THIS note of mine? Read live off the conversation the chat list is
+    /// already listening to, so it lights up the moment their receipt lands, with no listener of its own.
+    private var heardByOther: Bool {
+        guard isMe else { return false }
+        let me = AuthService.shared.uid ?? ""
+        guard let conv = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })
+        else { return false }
+        return conv.voicePlayedByOther(me, createdAtMillis: message.createdAt.timeIntervalSince1970 * 1000)
+    }
     private func cycleRate() { engine.cycleRate(cid: cid) }
 
     private var tint: Color {
@@ -265,6 +275,22 @@ struct VoiceMessageView: View {
                 .background(tint.opacity(0.16), in: Capsule())
                 .contentShape(Capsule())
                 .onTapGesture { cycleRate() }
+            // THEY HEARD IT. On my own notes only, and only in a chat — this is the thing WhatsApp says
+            // with a blue microphone, and the one voice signal we sent nothing for at all.
+            //
+            // ⚠️ IT DIMS, IT DOES NOT TURN BLUE, and that is forced rather than chosen. WhatsApp can use
+            // a colour because their bubble is a pale green; ours is whatever chat colour the person
+            // picked, and the only ink guaranteed to read on it is `tint`. A blue would vanish on a blue
+            // bubble. Faint-to-solid is the one contrast that survives every colour and both appearances.
+            //
+            // Drawn at BOTH states rather than appearing when they listen, for the reason the speed pill
+            // carries above: the row is pre-measured before any of this arrives, and something that
+            // shows up later changes the height that was already measured.
+            if isMe && !plainBackground {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(tint.opacity(heardByOther ? 1 : 0.35))
+            }
         }
         .frame(width: Self.contentWidth(for: message), alignment: .leading)
         .overlay(alignment: .trailing) { trailingMeta?() }

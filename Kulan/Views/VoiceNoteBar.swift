@@ -78,8 +78,16 @@ struct VoiceNoteBar: View {
             // TAP THE BODY TO GO BACK TO IT. Through `AppRouter.pendingChatId`, which is the route
             // every other "open this chat" already uses (push taps, the in-app banner, forwarding), so
             // the tab foregrounding and the push are somebody else's solved problem.
+            //
+            // ⚠️ THE MESSAGE ID GOES WITH IT, AND IT HAS TO BE SET FIRST. That route only ever carried
+            // a chat, so this dropped you at the bottom of the conversation to go looking for the one
+            // bubble that was moving. `pendingChatId` is what MainShell watches, so writing it last
+            // guarantees the message is already parked when the chat is pushed.
             .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .onTapGesture { AppRouter.shared.pendingChatId = engine.cid }
+            .onTapGesture {
+                AppRouter.shared.pendingMessageId = engine.messageId
+                AppRouter.shared.pendingChatId = engine.cid
+            }
             .transition(.move(edge: .top).combined(with: .opacity))
             .animation(.spring(response: 0.34, dampingFraction: 0.86), value: engine.barVisible)
         }

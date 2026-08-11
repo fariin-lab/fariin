@@ -446,6 +446,10 @@ struct Conversation: Identifiable, Equatable, Hashable {
     var blockedBy: [String: Bool]
     var blockedAt: [String: Double]    // when each user blocked (ms) — hides later messages
     var pinOrder: [String: Double]     // per-user manual order for pinned chats
+    /// uid → the createdAt (ms) of the NEWEST voice note that person has played. A watermark, not a
+    /// per-message flag, for the same reason `lastRead` is one: one small field on a document the chat
+    /// already listens to, instead of a write against every message. See `voicePlayedByOther`.
+    var lastPlayedVoice: [String: Double]
     var pinnedMessageId: String        // a pinned message in this chat ("" = none)
     var disappearSeconds: Int          // auto-delete timer (0 = off), shared by both members
     var convType: String               // "group" = group chat; "" / "direct" = 1:1
@@ -503,6 +507,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         self.blockedBy = boolMap(data["blockedBy"])
         self.blockedAt = doubleMap(data["blockedAt"])
         self.pinOrder = doubleMap(data["pinOrder"])
+        self.lastPlayedVoice = doubleMap(data["lastPlayedVoice"])
         self.pinnedMessageId = data["pinnedMessageId"] as? String ?? ""
         self.disappearSeconds = (data["disappearSeconds"] as? NSNumber)?.intValue ?? 0
         self.convType = data["type"] as? String ?? ""
@@ -659,6 +664,21 @@ struct Conversation: Identifiable, Equatable, Hashable {
     func lastReadByOther(_ me: String) -> Bool {
         if isGroup { return others(me).allSatisfy { (unreadCount[$0] ?? 0) <= 0 } }
         return (unreadCount[otherUid(me)] ?? 0) <= 0
+    }
+    /// HAS SOMEBODY ELSE PLAYED MY VOICE NOTE? WhatsApp turns the sender's mic icon blue for exactly
+    /// this, and it is the one voice-note signal we had nothing for: you could send a two-minute note
+    /// and never learn whether it was heard.
+    ///
+    /// A watermark comparison, so it inherits the watermark's one flaw honestly: playing your newest
+    /// note while skipping an older one marks the older one played too. That is the same approximation
+    /// `PlayedVoice.upTo` already makes on the listening side, and it buys one small field instead of a
+    /// write against every message.
+    ///
+    /// In a group it takes ANYBODY having played it, not everybody — a note read out to eight people is
+    /// heard once it is heard, and holding the mark back until the last silent member opens the app
+    /// would leave it dark forever.
+    func voicePlayedByOther(_ me: String, createdAtMillis: Double) -> Bool {
+        others(me).contains { (lastPlayedVoice[$0] ?? 0) >= createdAtMillis }
     }
     /// A reaction newer than the last message → the chat list previews it ("Reacted 🙏").
     /// Hidden for silently-blocked reactors, and for reactions older than a delete-for-me.
