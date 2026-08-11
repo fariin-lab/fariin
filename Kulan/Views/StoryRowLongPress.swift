@@ -335,7 +335,26 @@ struct StoryRowLongPress: UIViewRepresentable {
             // like having none, which is what he keeps photographing. A recogniser on a live host
             // is untouched (the chat row's UIKit scroller never dies), so this is a no-op
             // everywhere the press already worked.
-            if press != nil, host == nil || host?.window == nil {
+            // ⚠️ AND A WINDOW HOST IS ALIVE BY DEFINITION — THE SAME BET `pressed()` STOPPED MAKING,
+            // still being made here. THIS IS THE ARCHIVE PRESS, and it is why three fixes missed.
+            //
+            // `UIWindow.window` is an implementation detail nobody promised, which the note at
+            // `pressed()`'s `guard let window` says in as many words before spending an `as?` to stop
+            // depending on it. This line was left betting on it. When the climb below finds no scroll
+            // view the anchor IS the window, so `host` is a `UIWindow` — and if `UIWindow.window`
+            // answers nil, this reads a perfectly live host as DEAD.
+            //
+            // What follows is the whole reported symptom. `uninstall()` also dismisses any overlay,
+            // `heal()` runs from `updateUIView`, and `ArchivedChatsView` re-renders on every
+            // Firestore conversation update — so the recogniser is torn off and re-added over and
+            // over, and a menu can never survive long enough to be seen. It is archive-only because
+            // the archive is the ONLY screen that falls back to a window anchor: the chat list hands
+            // `install` a view inside its own UIKit scroller, so its host is that scroller and this
+            // test is honest there.
+            //
+            // A window cannot be "not in a window", so it is only dead if it is nil.
+            let hostDied = host == nil || ((host as? UIWindow) == nil && host?.window == nil)
+            if press != nil, hostDied {
                 StoryPressDebug.shared.noteAnchor("host died, re-anchoring")
                 uninstall()
             }

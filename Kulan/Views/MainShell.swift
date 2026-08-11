@@ -1598,6 +1598,12 @@ struct ArchivedChatsView: View {
                 // the same view. One key, declared once, and there is nothing left to disagree.
                 ForEach(archivedStories, id: \.authorUid) { g in
                     Button {
+                        // ⚠️ A PRESS THAT RAISED THE MENU MUST NOT ALSO OPEN THE STORY. The chat
+                        // list's card has carried this guard since the press was built
+                        // (`StoriesRowUIKit`'s `guard !StoryRowPress.swallowsTap`); the archive card
+                        // never got it, so the moment the long press starts working the release
+                        // would fire this too and the story would open over its own menu.
+                        guard !StoryRowPress.swallowsTap else { return }
                         // Archived stories are a drawer of ONE person each — no paging out of the
                         // card you tapped into somebody else's, which the row does and this must not.
                         StoryDoor.open(g, from: "arch-\(g.id)", deliveredToMe: true,
@@ -1618,7 +1624,18 @@ struct ArchivedChatsView: View {
                                 .font(.system(size: 12)).lineLimit(1).frame(width: storyCardW)
                         }
                     }
-                    .buttonStyle(.plain)
+                    // ⚠️ THE DIP, WHICH THIS CARD NEVER HAD (owner 2026-08-11: "zoom out and zoom in
+                    // you forget here archive page stories"). `.plain` draws no press feedback at
+                    // all, so an archive card sat perfectly still under a finger while the chat
+                    // list's dipped — and the long press, which takes a beat, felt like nothing was
+                    // happening even on the builds where it fired.
+                    //
+                    // The chat list's numbers exactly (`StoryCardView.pressDip` 0.92, response 0.28,
+                    // damping 0.7), expressed in SwiftUI because this card is SwiftUI: `StorySpring`
+                    // is a UIViewPropertyAnimator and has no view here to run on. Same shape, same
+                    // timing, both directions — the way back is the way out, which is the rule the
+                    // row's own zoom-in had to be taught today.
+                    .buttonStyle(StoryPressDipStyle())
                     // The flight's source. Same 24 the card is actually drawn with, so the story
                     // lands as a CARD here rather than the circle a ringed avatar gets — the shape
                     // is read from this number and nowhere else.
@@ -1649,6 +1666,17 @@ struct ArchivedChatsView: View {
     /// cutting the pair under one 24pt radius would round the label's bottom. The card's height is
     /// known exactly (`storyCardW * 1.46`, the frame two lines up from the reporter), so the strip
     /// that is lifted is the top of that rect and nothing else.
+    /// The chat-list row's press dip, for a SwiftUI card. See the note at the archive card's
+    /// `buttonStyle`. Kept beside its one caller rather than in a shared file: the row's own dip is
+    /// UIKit and this is deliberately its twin, not its replacement.
+    private struct StoryPressDipStyle: ButtonStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            configuration.label
+                .scaleEffect(configuration.isPressed ? 0.92 : 1)
+                .animation(.spring(response: 0.28, dampingFraction: 0.7), value: configuration.isPressed)
+        }
+    }
+
     private func archivedMenuTarget(at p: CGPoint) -> StoryMenuTarget? {
         for g in archivedStories {
             let key = MediaOpenRects.key(.storyRow, "arch-\(g.id)")
