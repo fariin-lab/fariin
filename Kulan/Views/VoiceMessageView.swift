@@ -215,21 +215,10 @@ struct VoiceMessageView: View {
                             // Colour is irrelevant under destinationOut — only the alpha is read, and
                             // this has to be fully opaque to cut a clean hole.
                             .foregroundStyle(.black)
-                            // THE ICON MOVES BETWEEN THE TWO SHAPES INSTEAD OF BEING REPLACED — his
-                            // "play fast, play and pause" report, where rapid tapping felt heavy.
-                            //
-                            // Nothing there was slow: the tap toggles immediately. What was missing is
-                            // any motion, so a fast double tap swapped one glyph for another with no
-                            // travel and read as a stutter. Signal spends real effort on exactly this
-                            // beat — their button is a Lottie scrub between the play and pause states
-                            // with a guard so a second tap mid-animation does not restart it
-                            // (`AudioMessageView`, "Do nothing if we're already there") — and a
-                            // symbol-effect replace is the same idea with none of the machinery.
-                            //
-                            // `.byLayer` keeps it a bounce rather than a cross-fade, and because the
-                            // animation is driven by the VALUE it is interruptible: tap again halfway
-                            // and it retargets from where it is instead of queueing.
-                            .contentTransition(.symbolEffect(.replace.byLayer))
+                            // ⚠️ NO transition on the glyph swap. A symbol-effect bounce was tried here
+                            // (the icon travelled between play and pause) and he reported it as LAG:
+                            // the audio toggles instantly but the button looked like it answered late.
+                            // WhatsApp swaps the glyph with no motion at all. Keep it instant.
                             .blendMode(.destinationOut)
                     }
                     .compositingGroup()
