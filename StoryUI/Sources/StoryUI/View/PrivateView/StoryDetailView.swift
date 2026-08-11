@@ -1227,6 +1227,18 @@ private extension StoryDetailView {
     }
     
     func getAngle(proxy: GeometryProxy) -> Angle {
+        // ⚠️ IN CUBE MODE THIS FOLD IS OFF, AND THE PAGER'S DISPLAY LINK OWNS IT INSTEAD.
+        //
+        // Two things folding the same pages is what produced the shake and the black flash that
+        // `02cc55d1` removed the UIKit link to fix. The link is back (see `StoryPager.updateCubeLink`)
+        // because THIS fold cannot work on a finger swipe: the angle comes from
+        // `proxy.frame(in: .global)`, and a GeometryReader re-evaluates on SIZE, not POSITION — a
+        // swipe moves the pages by scroll offset, so nothing re-samples it and the page stays flat.
+        // His 2026-08-12 report is exactly that, and the tap only worked by accident.
+        //
+        // ⚠️ THESE TWO LINES ARE ONE SWITCH. Turning this back on without stopping the link brings
+        // the shake back; the `flat` setting below is untouched and still folds under a finger.
+        if StoryPager.personTransition == .cube { return .zero }
         // Cube is INERT while a swipe-down dismiss moves the card: the fold angle derives from
         // the page's GLOBAL minX, and the dismiss transform shifts it — a fast flick otherwise
         // slams the page into a sudden violent 3D fold (flipped/black frames on close).
