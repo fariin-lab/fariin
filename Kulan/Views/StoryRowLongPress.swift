@@ -73,19 +73,18 @@ enum StoryRowPress {
 // Whichever line is still a dash is the one that never happened, and that is the answer.
 @MainActor final class StoryPressDebug: ObservableObject {
     static let shared = StoryPressDebug()
-    /// ⚠️ FALSE BEFORE ANY TESTFLIGHT BUILD.
+    /// ⚠️ ON AGAIN as of 2026-08-12, deliberately. The FOURTH fix (`4b159b64`, the UIWindow-host
+    /// `install()` test) shipped in build 535 and he confirmed the press still dead there, so the
+    /// standing plan applies: no fifth round of reasoning from this file — the app answers instead.
+    /// The two earlier rides (524/525) produced nothing because the three lines were asked for as
+    /// TYPED text; he reports in screenshots, so this time the ask is "long-press, then screenshot
+    /// the archive page" and the lines are written to be read from a photo.
     ///
-    /// OFF as of 2026-08-10, and the readout draws nothing while it is. It rode in 524 and 525 on
-    /// purpose, against this rule, to collect the three lines — and the three lines never came back.
-    /// A third build carrying debug text on his screen is not worth a fourth chance at an answer he
-    /// has twice not sent.
-    ///
-    /// ⚠️ THE MACHINERY STAYS, DORMANT, AND THAT IS DELIBERATE. The archive long press is still
-    /// unexplained after three fixes reasoned out of this file, so the instrument is the most
-    /// valuable thing in it. Flip this one word to bring the readout back; do not rebuild it from
-    /// scratch, and do not delete it on a tidy-up pass. `StoryPressDebugReadout` returns nothing at
-    /// all while this is false, and the `note…` calls are writes to an object nobody renders.
-    static let on = false
+    /// Goes back to false the moment the answer is in hand, and the machinery STAYS, dormant —
+    /// do not rebuild it from scratch, and do not delete it on a tidy-up pass.
+    /// `StoryPressDebugReadout` returns nothing at all while this is false, and the `note…` calls
+    /// are writes to an object nobody renders.
+    static let on = true
 
     @Published var anchor = "anchor  —"
     @Published var gate   = "gate    —"
