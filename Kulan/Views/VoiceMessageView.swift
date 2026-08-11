@@ -170,8 +170,14 @@ struct VoiceMessageView: View {
         }
         .frame(width: Self.contentWidth(for: message), alignment: .leading)
         .animation(.easeOut(duration: 0.2), value: unheard)
-        .onReceive(VoiceNotePlayer.shared.objectWillChange.receive(on: DispatchQueue.main)) { _ in
-            sync()
+        // ⚠️ The RAW objectWillChange, with the main-queue hop INSIDE the closure — not
+        // `.receive(on:)`. Wrapping the publisher rebuilt it on every body evaluation, and each
+        // rebuild tore the old subscription down: an engine event landing in that gap was simply
+        // lost, and a bubble whose start-event died there kept drawing "play" under audible sound
+        // (his intermittent report). The raw publisher is one stable instance, so the subscription
+        // survives re-renders; the async hop still reads the engine AFTER the new values land.
+        .onReceive(VoiceNotePlayer.shared.objectWillChange) { _ in
+            DispatchQueue.main.async { sync() }
         }
         // Hosted cells are REUSED: the same view can wake up holding a different message, and the
         // mirrored @State would still describe the old one (a recycled bubble drawing another

@@ -395,9 +395,15 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         enable(true)
         updateNowPlaying()
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+        // ⚠️ `.common` MODE, like the recorder's meter — `Timer.scheduledTimer` lands in .default,
+        // which the run loop STARVES while a finger tracks a scroll. The knob froze mid-play and
+        // the bubbles' mirrored state went stale exactly while the person browsed the chat (his
+        // "sound plays but nothing shows playing, sometimes" report — the sometimes was scrolling).
+        let t = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
     }
 
     private func tick() {

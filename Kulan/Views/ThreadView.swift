@@ -4954,7 +4954,9 @@ struct ThreadView: View {
     /// the playback engine uses, so the two look identical in motion.
     private func startPreviewTicker() {
         previewTimer?.invalidate()
-        previewTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+        // .common mode via the add below — a .default timer starves while a finger tracks the
+        // chat's scroll, freezing the review progress mid-listen (same fix as the engine's tick).
+        let t = Timer(timeInterval: 0.05, repeats: true) { _ in
             MainActor.assumeIsolated {
                 guard let p = previewPlayer else { return }
                 if p.isPlaying {
@@ -4969,6 +4971,8 @@ struct ThreadView: View {
                 }
             }
         }
+        RunLoop.main.add(t, forMode: .common)
+        previewTimer = t
     }
 
     private func stopPreviewTicker() {
