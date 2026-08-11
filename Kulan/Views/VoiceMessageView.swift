@@ -72,16 +72,19 @@ struct VoiceMessageView: View {
     /// neighbours. `duration` travels in the message and is the same before, during and after playback,
     /// so the pre-measure and the render can never disagree. A width that consulted the player would
     /// bring that straight back.
-    static func waveWidth(for message: Message) -> CGFloat {
-        let secs = min(max(message.duration ?? 0, 0), 45)
-        return 110 + CGFloat(secs / 45) * 48        // 110 at 0s, up to 158 at 45s and beyond
-    }
-    /// play button + HStack spacing + waveform. 154 at the short end, 202 at the long end. His
-    /// 2026-08-11 report with WhatsApp beside ours: the note reads as a BLOCK. Slimmed to their
-    /// scale — button 42→34, row spacing 12→10, wave 26→22, line gap 4→2 — every number here and
-    /// nowhere else, so the pre-measure (which calls this) and the render can never disagree.
+    /// ONE FIXED WIDTH FOR EVERY NOTE — his 2026-08-11 night order, reversing the grow-with-
+    /// duration experiment from earlier the same day: "people are adopted to WhatsApp's note
+    /// size". The reference draws every voice bubble the same wide familiar shape regardless of
+    /// length, and that sameness is itself the thing people recognise. A constant is trivially
+    /// duration-deterministic, so the bloom rule (pre-measure == render, always) holds for free.
+    /// The `message` parameter stays: every call site already passes it, and the day this becomes
+    /// per-note again the signature will not have to change back.
+    static func waveWidth(for message: Message) -> CGFloat { 190 }
+    /// play button + HStack spacing + waveform: 38 + 10 + 190 = 238, ~the reference's footprint
+    /// on a standard phone. Every number here and nowhere else, so the pre-measure (which calls
+    /// this) and the render can never disagree.
     static func contentWidth(for message: Message) -> CGFloat {
-        34 + 10 + waveWidth(for: message)
+        38 + 10 + waveWidth(for: message)
     }
 
     /// ⚠️ THE PLAYER IS NOT IN HERE ANY MORE, AND THAT IS THE WHOLE POINT.
@@ -146,7 +149,7 @@ struct VoiceMessageView: View {
         // it centred on both and ended up sitting roughly 10pt BELOW the middle of the wave. Nothing in
         // the bubble lined up with anything. Now the button is boxed with the wave alone, so the two are
         // on one line, which is what both references do.
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 10) {
                 playButton
                 WaveformBars(bars: displayBars, progress: progress, played: tint,
@@ -161,7 +164,7 @@ struct VoiceMessageView: View {
                              onScrub: { s in
                                  engine.setScrubbing(s); VoiceScrubState.active = s; onScrub(s)
                              })
-                    .frame(width: Self.waveWidth(for: message), height: 22)
+                    .frame(width: Self.waveWidth(for: message), height: 26)
             }
             bottomLine
         }
@@ -233,14 +236,14 @@ struct VoiceMessageView: View {
         Group {
             if loading {
                 ProgressView().tint(tint)
-                    .frame(width: 34, height: 34)
+                    .frame(width: 38, height: 38)
                     .background(tint.opacity(0.22), in: Circle())
             } else {
                 Circle().fill(tint)
-                    .frame(width: 34, height: 34)
+                    .frame(width: 38, height: 38)
                     .overlay {
                         Image(systemName: playing ? "pause.fill" : "play.fill")
-                            .font(.system(size: 13))
+                            .font(.system(size: 14))
                             // Colour is irrelevant under destinationOut — only the alpha is read, and
                             // this has to be fully opaque to cut a clean hole.
                             .foregroundStyle(.black)
@@ -253,7 +256,7 @@ struct VoiceMessageView: View {
                     .compositingGroup()
             }
         }
-        .frame(width: 34, height: 34)
+        .frame(width: 38, height: 38)
         .contentShape(Circle())
         .onTapGesture { toggle() }
     }
