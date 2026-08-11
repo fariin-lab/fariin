@@ -373,19 +373,12 @@ struct AccountSettingsView: View {
             // No avatar header and no profile fields here (username/name/bio/photo all live in
             // Edit Profile, reached from the Settings header). Account is ONLY data + session
             // actions — a settings page, not profile management (user direction 2026-07-22).
-            Section {
-                Button { Task { await exportData() } } label: {
-                    HStack {
-                        Label("Export My Data", systemImage: "square.and.arrow.up")
-                        Spacer()
-                        if exporting { ProgressView() }
-                    }
-                }
-                .tint(.primary)
-                .disabled(exporting)
-            } footer: {
-                Text("Saves your profile and all chats to a text file you can share or keep.")
-            }
+            // ⚠️ EXPORT MY DATA USED TO BE THE FIRST THING ON THIS PAGE. It is now below Sign-in
+            // Methods, because both references put it there and they are right: Signal's
+            // `AccountSettingsFragment` lists "Request account data" second from LAST, immediately
+            // before Delete, and WhatsApp files "Request account info" in the same low position. It is
+            // a button most people press once in their life or never, and it was standing in front of
+            // everything they actually opened this page for.
 
             // ABOVE Sign-in Methods, and filed under the word people actually look for.
             //
@@ -439,9 +432,38 @@ struct AccountSettingsView: View {
             signInMethodsSection
 
             Section {
-                Button(role: .destructive) { showSignOut = true } label: {
+                Button { Task { await exportData() } } label: {
+                    HStack {
+                        Label("Export My Data", systemImage: "square.and.arrow.up")
+                        Spacer()
+                        if exporting { ProgressView() }
+                    }
+                }
+                .tint(.primary)
+                .disabled(exporting)
+            } footer: {
+                Text("Saves your profile and all chats to a text file you can share or keep.")
+            }
+
+            // ⚠️ SIGN OUT IS NOT DESTRUCTIVE AND MUST NOT BE PAINTED AS THOUGH IT WERE.
+            //
+            // It carried `role: .destructive`, so it drew red, in the SAME card as Delete Account and
+            // one row above it. Signing out is completely reversible — you sign back in and everything
+            // is there. Red is the app promising that something cannot be undone, and spending it on a
+            // routine action teaches people to stop reading red, which is the last habit anyone should
+            // have directly above a button that ends their account.
+            //
+            // Signal does not even put sign out on this screen, and in both references Delete sits
+            // ALONE at the bottom of its own group. Two sections now, so there is real space between
+            // the reversible thing and the permanent one.
+            Section {
+                Button { showSignOut = true } label: {
                     Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
                 }
+                .tint(.primary)
+            }
+
+            Section {
                 Button(role: .destructive) { showDelete = true } label: {
                     Label("Delete Account", systemImage: "trash")
                         .frame(maxWidth: .infinity, alignment: .leading)
