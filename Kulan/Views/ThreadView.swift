@@ -3505,23 +3505,26 @@ struct ThreadView: View {
         return HStack(spacing: 0) {
             if mine { Spacer(minLength: 60) }
             // No flexible Spacer inside -> the bubble hugs its content (compact, not a banner).
-            HStack(alignment: .center, spacing: 10) {
+            // The reference's HEFT, our layout — his side-by-side: ours read as thin next to their
+            // call bubble. Same structure, one size up across the board: title 15→17, detail
+            // 12→14, the icon disc 34→40, and the padding to carry it.
+            HStack(alignment: .center, spacing: 11) {
                 ZStack {
-                    Circle().fill(circleBg).frame(width: 34, height: 34)
+                    Circle().fill(circleBg).frame(width: 40, height: 40)
                     Image(systemName: iconName)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(iconColor)
                 }
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(statusText)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(mine ? Color.white : .primary)
                     Text(detail)
-                        .font(.system(size: 12))
+                        .font(.system(size: 14))
                         .foregroundStyle(mine ? Color.white.opacity(0.75) : .secondary)
                 }
             }
-            .padding(.vertical, 8).padding(.horizontal, 12)
+            .padding(.vertical, 11).padding(.horizontal, 14)
             .background(mine ? myBubbleFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             // Tap target is ONLY the bubble — NOT the full-width row. The old .contentShape/
