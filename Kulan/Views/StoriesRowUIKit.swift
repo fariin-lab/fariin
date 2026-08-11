@@ -1062,7 +1062,14 @@ final class StoryCardUIView: UIControl {
             transform = CGAffineTransform(scaleX: Self.pressDip, y: Self.pressDip)
         } else if menuHoldsCard {
             menuHoldsCard = false
-            StorySpring.run(response: 0.28, damping: 0.7) { self.transform = .identity }
+            // INSTANT, NOT A SPRING — the un-dip has ALREADY been flown, by the menu's copy
+            // (2026-08-12, his third report on this close). While this card was hidden the copy
+            // travelled to the identity-size rect (`menuTarget`'s correction), and the reveal
+            // happens only after it LANDS. A spring here is a second, slower un-dip running
+            // underneath an already-landed picture: for 0.28s the card grew out from behind the
+            // copy's edges, which is exactly "the zoom-in happens inside the card". Telegram
+            // reveals the source in one frame at the end of the flight; so does this now.
+            transform = .identity
         }
         heroBox.alpha = hidden ? 0 : 1
         nameLabel.alpha = hidden && MediaSourceVisibility.shared.hidesLabel ? 0 : 1
@@ -1708,7 +1715,19 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
         // `MediaOpenRects.drawnRect`). The finger test stays on `liveRect`: it is the same answer
         // the flight flies to, and a hit test does not care about a few points of spring.
         func lifted(_ key: String, _ model: CGRect) -> CGRect {
-            MediaOpenRects.drawnRect(key) ?? model
+            guard let drawn = MediaOpenRects.drawnRect(key) else { return model }
+            // ASKED AGAIN AT THE CLOSE, the card is HIDDEN and held at the press dip — the drawn
+            // rectangle is 8% small, and it is not where the card will REST. The copy must land on
+            // the identity-size rect, because the reveal that follows paints the card at identity
+            // in one frame (`applyVisibility`). Landing on the dipped rect and letting the card
+            // spring the difference is the two-actor overlap he photographed three times.
+            // At PRESS time the card is not hidden yet, so the crop still photographs the true
+            // drawn pixels — this correction cannot touch the open.
+            if MediaSourceVisibility.shared.hiddenId == key {
+                let grow = drawn.width * (1 / StoryCardUIView.pressDip - 1) / 2
+                return drawn.insetBy(dx: -grow, dy: -grow * (drawn.height / max(1, drawn.width)))
+            }
+            return drawn
         }
         // My own card first: it is drawn first and nothing overlaps it.
         if let m = repo.mine, !m.stories.isEmpty, let r = hit(m.id) {

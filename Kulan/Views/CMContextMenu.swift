@@ -331,6 +331,15 @@ final class CMOverlay: UIView {
     /// nothing, because the preview is on its way to that exact rectangle.
     var onWillDismiss: (() -> Void)?
 
+    /// THE COPY HAS LANDED — reveal the real thing NOW. Telegram's close keeps the source hidden
+    /// for the whole flight and swaps in one step at the end; a source revealed at the START runs
+    /// its own catch-up animation underneath the flying copy and grows out from behind its edges
+    /// (his three reports on the story row's zoom-in). Fired from the close animation's completion,
+    /// one runloop turn BEFORE the copy is removed, so the reveal (which may paint on the next
+    /// pass — SwiftUI, or a Combine hop) has a frame of identical overlapped pixels to paint under
+    /// instead of an empty slot. nil for the chat menu, which reveals in `onWillDismiss` as ever.
+    var onDidLand: (() -> Void)?
+
     /// WHERE THE LIFT LANDS, asked at the moment it starts going home rather than remembered from
     /// the press. nil, or a nil answer, keeps the rectangle it came from.
     ///
@@ -346,6 +355,7 @@ final class CMOverlay: UIView {
         dismissing = true
         onWillDismiss?()
         guard animated else {
+            onDidLand?()
             removeFromSuperview()
             onDismissed(); then?()
             return
@@ -393,9 +403,18 @@ final class CMOverlay: UIView {
                 self.card.alpha = 0
                 self.bar?.alpha = 0
             } completion: { _ in
-                self.removeFromSuperview()
-                self.onDismissed()
-                then?()
+                // LAND, REVEAL, THEN LEAVE — in that order, with one runloop turn between the
+                // last two. The reveal may paint on the NEXT pass (SwiftUI opacity, a Combine
+                // main-queue hop), and removing the copy in the same breath left one frame of
+                // empty slot. For that turn the copy sits exactly on the landed rect over a card
+                // painting the same pixels at the same size: an invisible overlap, then the copy
+                // goes. This is the single-frame swap Telegram ends every close with.
+                self.onDidLand?()
+                DispatchQueue.main.async {
+                    self.removeFromSuperview()
+                    self.onDismissed()
+                    then?()
+                }
             }
             return
         }
@@ -419,6 +438,7 @@ final class CMOverlay: UIView {
             self.card.alpha = 0
             self.bar?.alpha = 0
         } completion: { _ in
+            self.onDidLand?()
             self.removeFromSuperview()
             self.onDismissed()
             then?()

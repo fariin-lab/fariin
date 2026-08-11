@@ -569,25 +569,23 @@ struct StoryRowLongPress: UIViewRepresentable {
                                   motion: .telegram) { [weak self] in
                     self?.overlay = nil
                 }
-                // The card comes back as the return spring STARTS, not after the lift is gone — a
-                // SwiftUI reveal paints on the next pass, and waiting would leave one frame with an
-                // empty slot in the row. See `CMOverlay.onWillDismiss`.
+                // ⚠️ THE CARD STAYS HIDDEN FOR THE WHOLE FLIGHT (2026-08-12, his THIRD report on the
+                // close). Revealing at dismiss-START — the previous rule here — meant the real card
+                // ran its own 0.28s un-dip spring UNDERNEATH the flying copy, on a later clock, and
+                // grew out from behind the copy's fixed edges: "the zoom-in happens inside the
+                // card". Telegram keeps the source hidden until the copy lands and swaps in one
+                // frame; `onDidLand` is that moment, and `CMOverlay` holds the copy one extra
+                // runloop turn so the async reveal has identical pixels to paint under, never an
+                // empty slot.
                 //
-                // ⚠️ AND THE COPY'S NAME GOES IN THE SAME BREATH, OR THE NAME IS ON SCREEN TWICE.
-                //
-                // His 2026-08-08 screenshot: two "Test Zahra", one sharp and one offset and blurred.
-                // The reveal above brings the real card back INSTANTLY while the lifted copy takes
-                // 0.4s to spring home, so for that whole spring both are drawn. The pictures
-                // doubling is invisible — they are the same photograph landing on itself — but the
-                // NAME the lift gained in `5401903` is a line of text sliding over a line of text
-                // that is not moving, and the eye reads that immediately.
-                //
-                // A hard cut, not a fade: at this instant the copy is still up at the lifted size,
-                // so its name is nowhere near the real one and there is nothing to cross-fade with.
-                // What flies home is the picture, which is what it did before the name was added and
-                // is the half that actually has somewhere to fly to.
+                // THE COPY'S NAME still goes at dismiss-start, hard cut, or the name is on screen
+                // twice: his 2026-08-08 screenshot, two "Test Zahra". The name has nowhere to fly
+                // to (the real one never moved) and text sliding over standing text reads
+                // immediately, where the picture landing on itself does not.
                 o.onWillDismiss = {
                     liftedName?.alpha = 0
+                }
+                o.onDidLand = {
                     MediaSourceVisibility.shared.reveal()
                 }
                 // AND WHERE IT LANDS IS ASKED AGAIN AT THE CLOSE, not remembered from here.
