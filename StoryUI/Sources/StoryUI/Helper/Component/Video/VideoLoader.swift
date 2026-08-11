@@ -75,7 +75,10 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// `blurredImage(_:radius: 10, iterations: 3)` only on `decodeTinyThumbnail(immediateThumbnailData)`
     /// — the inline bytes that are all it has when there is nothing else at all.
     private var cover: (image: UIImage, isFrame: Bool)? {
-        if let resumed = self.url.flatMap({ StoryPlaybackResume.frame($0) }) { return (resumed, true) }
+        // Only a frame from the clip's START. Playback always begins at zero now (see
+        // StoryPlaybackResume's header), so a mid-clip banked frame would cover second zero with a
+        // picture of 0:20 — the picture-and-position disagreement, drawn by the veil itself.
+        if let banked = self.url.flatMap({ StoryPlaybackResume.usableCoverFrame($0) }) { return (banked, true) }
         if let poster = posterImage { return (poster, true) }
         if let thumb = blurThumbImage { return (thumb, false) }
         return nil
@@ -288,11 +291,9 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // keeps re-asking on every later change, so the strictest thing that can happen is the
         // cover staying up ONE turn longer — never a stranded spinner.
         guard !itemSwapSettling else { return }
-        // ⚠️ AND NOT WHILE THE RESUME SEEK IS STILL IN THE AIR. `isReadyForDisplay` says this layer
-        // has A frame, never WHICH frame, and the first one a fresh item can show is second zero.
-        // See `pendingResumeSeek`: the seek's completion clears this and calls straight back in
-        // here, and `startVideo` clears it for a new clip, so the cover can never be stranded.
-        guard !pendingResumeSeek else { return }
+        // (A `pendingResumeSeek` guard lived here while `setupPlayer` seeked to a remembered
+        // position. There is no resume seek any more — a story always restarts at zero, the
+        // owner's 2026-08-11 rule — so the first displayable frame IS the frame being handed to.)
         guard playerLayer.isReadyForDisplay else { return }
         // A LAYER WITH A FRAME KNOWS ITS SIZE, so ask the item directly rather than wait to be told.
         // The observer below is still what usually answers first; this is here so that a clip whose
@@ -348,6 +349,7 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         sizeObservation = nil
         statusObservation = nil
         readyObservation = nil
+        if let tok = endObservationToken { NotificationCenter.default.removeObserver(tok) }
         player = nil
     }
 
@@ -370,30 +372,13 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// be answering about the flushed clip inside that turn — see the guard in `revealVideoIfReady`.
     private var itemSwapSettling = false
 
-    /// TRUE between issuing the resume seek and that seek landing — see the guard in
-    /// `revealVideoIfReady`, which is the only reader.
-    ///
-    /// ⚠️ THIS IS THE OTHER HALF OF HIS "IT ONLY RESETS WHEN I COME BACK FROM ONE SIDE".
-    ///
-    /// `setupPlayer` seeks to the remembered position and the seek is ASYNCHRONOUS, but the cover
-    /// came down on `isReadyForDisplay` alone — which means "this layer has a frame", not "this
-    /// layer has the frame you asked for". The first frame a fresh item is ready to display is
-    /// second zero, every time.
-    ///
-    /// It shows on one side and not the other because of `StoryItemPreloader`: the prefetch window
-    /// is `index + 1 ..< index + 1 + lookahead`, forward only. Come back to a clip the window had
-    /// warmed and `take` hands over an item whose first frames are already decoded, so
-    /// `isReadyForDisplay` is true almost at once — the cover comes off at second zero and the seek
-    /// lands after. Come back to one it had not warmed and the item takes long enough that the seek
-    /// wins, which is the direction that looked correct. Nothing about it was ever reliable; that is
-    /// his "the right one sometimes is not working very well".
-    ///
-    /// Telegram's rule is that a still image view is ALWAYS present under the video
-    /// (`insertSubview(videoNode.view, aboveSubview: self.imageView)`). Ours is the veil, and the
-    /// veil is already drawing the banked frame from the exact second we are seeking to — so holding
-    /// it for those few frames hands over from a still of 20s to a clip at 20s with nothing in
-    /// between.
-    private var pendingResumeSeek = false
+    /// The end-of-clip report for the CURRENT item, recreated per item and scoped to the item
+    /// object — Telegram advances a video only from the player's own completion
+    /// (`videoNode.playbackCompleted` → `presentationProgressUpdated(1.0, canSwitch: true)`), never
+    /// from progress arithmetic, and this is our half of that rule. The bar is capped just under
+    /// the segment boundary (`syncBarToPlayer`), so this report is the ONLY thing that can complete
+    /// a video segment: the clip can neither be cut off early nor outlived by its own bar.
+    private var endObservationToken: NSObjectProtocol?
 
     /// The item the current `frameOutput` was added to, so it can be taken off again. Weak: the
     /// player owns its items and this must never be the reason one stays alive.
@@ -472,7 +457,7 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// THE SECOND ANSWER IS WHY THE FROZEN COVER STOPPED RESETTING TO SECOND ZERO. His 2026-08-09
     /// report: watch a video to 10s, pull the sheet, swipe the carousel away and back — the card
     /// wore the FIRST frame. The story is paused under the sheet, and a paused item's video output
-    /// hands its buffer over ONCE: the pause path (`rememberPlaybackPosition`) reads it into
+    /// hands its buffer over ONCE: the pause path (`rememberPlaybackFrame`) reads it into
     /// `StoryPlaybackResume.rememberFrame`, so when `snapshotCard` asks a beat later for the SAME
     /// time there is no new buffer, this answered nil, and the caller fell back to the poster —
     /// which is second zero by construction. The remembered frame IS the 10s picture, decoded from
@@ -487,25 +472,26 @@ final class PlayerView: UIView, StoryVideoFrameSource {
 
     /// Where this clip is, for callers deciding whether the frame is worth keeping. A player with no
     /// item answers 0 rather than pretending — see `bankCurrentState`, which treats anything under a
-    /// second as "not worth overwriting the bank with", exactly as `rememberPlaybackPosition` does.
+    /// second as "not worth overwriting the bank with", exactly as `rememberPlaybackFrame` does.
     var currentVideoSeconds: Double {
         guard let p = player, p.currentItem != nil else { return 0 }
         let t = p.currentTime().seconds
         return t.isFinite ? t : 0
     }
 
-    /// WRITE THE PLAYHEAD DOWN NOW, because whoever is asking is about to freeze this player or take
-    /// it away — see `StoryVideoFrameSource.rememberPlaybackState`.
+    /// WRITE THE FRAME DOWN NOW, because whoever is asking is about to freeze this player or take
+    /// it away — see `StoryVideoFrameSource.rememberPlaybackState`. The frame ONLY: there is no
+    /// stored playback position any more (a story always restarts at zero — the owner's 2026-08-11
+    /// rule and Telegram's behaviour), so what travels across a teardown is the picture the cards
+    /// draw, never a seek target.
     ///
     /// Two callers, and neither of them can reach the guards or should have to know them:
     /// `StoryCardMorph.bankCurrentState` at the sheet's pause, and `StoryDetailView.resetAVPlayer`
-    /// when a photo story replaces the whole `AVPlayer`. Until this existed the position was written
-    /// ONLY by `startVideo`/`stopVideo` — the paths that run when one `PlayerView` is handed a
-    /// second clip — so a video left for a PHOTO wrote nothing at all and came back at zero.
+    /// when a photo story replaces the whole `AVPlayer`.
     ///
     /// ⚠️ It lives in the class body and not in the private extension below with the function it
     /// calls: a `private extension` member cannot satisfy a public protocol requirement.
-    func rememberPlaybackState() { rememberPlaybackPosition() }
+    func rememberPlaybackState() { rememberPlaybackFrame() }
 
     func currentVideoFrame() -> UIImage? {
         if let item = player?.currentItem, let out = frameOutput,
@@ -568,10 +554,20 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     func startVideo(url: URL?) {
         guard let validatedUrl = url else { return }
         if self.url == url { return }
-        // The story this view is LEAVING keeps its place (his 20s → sheet swipe → back → 20s).
+        // The story this view is LEAVING banks its last picture for the cards — and ONLY the
+        // picture. Its position deliberately dies with this navigation: a story moved away from is
+        // PASSED, and a passed story restarts from zero on its next visit (the owner's 2026-08-11
+        // rule; Telegram removes the item's whole player on navigation and a revisit seeks to 0).
         // Here as well as in `stopVideo`, because a paused player (the sheet pauses, it does not
-        // stop) reaches this point with its position intact and `stopVideo`'s guard never fires.
-        rememberPlaybackPosition()
+        // stop) reaches this point with its frame unbanked and `stopVideo`'s guard never fires.
+        rememberPlaybackFrame()
+        // The old clip's clock and end-report go with it: the bar must never read the previous
+        // story's player across the load gap, and a stale clip's end must never advance this one.
+        if let p = player { StoryPlaybackClock.detach(p) }
+        if let tok = endObservationToken {
+            NotificationCenter.default.removeObserver(tok)
+            endObservationToken = nil
+        }
         // ⚠️ STOP THE OLD CLIP WHILE `self.url` STILL NAMES IT. `stopVideo` remembers the playhead
         // and the frame too, and it keys them by `self.url` — with the stop AFTER the line below,
         // it wrote clip A's picture and position under clip B's address. That poisoned entry then
@@ -594,10 +590,6 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // AND THERE IS NOTHING TO REVEAL UNTIL THE NEW ITEM IS ATTACHED. Without this the old clip
         // would answer the reveal's questions for as long as the cache takes to reply.
         awaitedItem = nil
-        // A SEEK STILL IN THE AIR BELONGS TO THE CLIP BEING LEFT, and its completion may never
-        // arrive now that the item is going. Left standing it would hold the NEXT clip under its
-        // cover for ever, which is the one failure this gate must not be able to cause.
-        pendingResumeSeek = false
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         playerLayer.isHidden = true
@@ -621,7 +613,7 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // (`CachedVideoFirstFrameRepresentation`); ours lands in the remembered-frame slot, which
         // the veil already draws SHARP at the clip's own gravity — it is pixel-for-pixel the frame
         // the reveal will hand over to, the same promise that slot has always kept.
-        if posterImage == nil, StoryPlaybackResume.frame(validatedUrl) == nil, let file = cachedFile {
+        if posterImage == nil, StoryPlaybackResume.usableCoverFrame(validatedUrl) == nil, let file = cachedFile {
             coverFromFirstFrame(of: file, for: validatedUrl)
         }
         // (the stop happens ABOVE, before `self.url` moves — see the warning there)
@@ -655,8 +647,9 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// The cached clip's opening frame, decoded off-main and delivered into the remembered-frame
     /// slot — where the veil, the canvas sampler and `currentVideoFrame`'s fallback all already
     /// look. One seam, three readers, no new drawing path. Guarded at the landing: still this
-    /// clip, still under cover, and no REAL remembered frame has appeared meanwhile (a resume
-    /// frame from mid-clip outranks second zero).
+    /// clip, still under cover, and no usable cover has appeared meanwhile. Playback always starts
+    /// at zero now, so second zero is exactly the honest cover — banked with `at: 0` so
+    /// `usableCoverFrame` will hand it back.
     private func coverFromFirstFrame(of file: URL, for story: URL) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let generator = AVAssetImageGenerator(asset: AVURLAsset(url: file))
@@ -666,8 +659,8 @@ final class PlayerView: UIView, StoryVideoFrameSource {
             let image = UIImage(cgImage: cg)
             DispatchQueue.main.async {
                 guard let self, self.url == story, self.playerLayer.isHidden,
-                      StoryPlaybackResume.frame(story) == nil else { return }
-                StoryPlaybackResume.rememberFrame(story, image: image)
+                      StoryPlaybackResume.usableCoverFrame(story) == nil else { return }
+                StoryPlaybackResume.rememberFrame(story, image: image, at: 0)
                 self.refreshBackdrop()   // the frame is also the canvas's colour source
                 if self.viewWithTag(999) != nil { self.addActivityIndicatory(spinning: self.veilHasSpinner) }
             }
@@ -736,34 +729,34 @@ private extension PlayerView {
         // picture — attached down at the bottom of this function, it still belonged to the OLD
         // clip while the `.initial` observations above it were already firing.
         attachFrameOutput()
-        // BACK TO WHERE HE WAS, same session (see StoryPlaybackResume). Keyed by the STORY's url,
-        // not this function's parameter — `url` here is usually the cache FILE. Asked for once:
-        // `take`, so a later rebuild of the same story in a fresh session starts clean. Seeking an
-        // item that is not ready yet is fine — AVPlayer queues the seek and applies it on ready.
-        // ⚠️ CONSUMED ONLY ONCE THE SEEK IS ACTUALLY ISSUED, and that is not pedantry: this whole
-        // function runs a SECOND time when the first attempt fails. `handleFailedItem` throws away a
-        // bad cache file and calls `setupPlayer(remote)` to stream instead — and by then `take` had
-        // already eaten the position, so the retry started the clip at zero while the progress bar,
-        // which reads the same store with `peek`, was still sitting at twenty seconds. The picture
-        // and the bar disagreed for the rest of the item. Reading with `peek` and removing after the
-        // seek keeps the retry honest, and the entry still dies with the session as before.
-        // ⚠️ AND THE COVER STAYS UP UNTIL THE SEEK LANDS — see `pendingResumeSeek`. The completion
-        // fires whether the seek finished or was cut short by another one, and clearing the flag
-        // there rather than on `finished` is deliberate: the strictest thing that can happen is one
-        // extra covered frame, never a story stuck under its own veil.
-        if let story = self.url, let resume = StoryPlaybackResume.peek(story) {
-            pendingResumeSeek = true
-            self.player?.seek(to: CMTime(seconds: resume, preferredTimescale: 600),
-                              toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-                // AVPlayer does not promise which queue this lands on, and everything below it is a
-                // layer — the same hop `sizeObservation` already makes for the same reason.
-                DispatchQueue.main.async {
-                    guard let view = self else { return }
-                    view.pendingResumeSeek = false
-                    view.revealVideoIfReady()
-                }
-            }
-            _ = StoryPlaybackResume.take(story)
+        // NO RESUME SEEK, ON PURPOSE. A block here used to seek to the story's remembered position,
+        // which is how a returned-to clip played from 0:14 under a bar that had just started at
+        // zero. The owner's 2026-08-11 rule is Telegram's: a story navigated back to RESTARTS from
+        // its beginning, always. Their revisit builds a fresh player and seeks it straight to 0
+        // (`ownsContentNodeUpdated` in StoryItemContentComponent), and no per-item position is
+        // stored anywhere in their story code. A fresh item starts at zero by construction, so
+        // there is nothing to do here — and the veil above is already a second-zero picture
+        // (`usableCoverFrame`), so the hand-over matches.
+        //
+        // THE CLOCK: from this moment the player's time speaks for THIS story and the progress bar
+        // may read it — see StoryPlaybackClock. Before this line the player still held the previous
+        // clip, which is exactly why the bar refuses to read an unattached player.
+        if let story = self.url, let p = self.player {
+            StoryPlaybackClock.attach(story, to: p)
+        }
+        // THE END OF A CLIP IS THE PLAYER'S TO REPORT — Telegram's `videoNode.playbackCompleted` is
+        // the only thing that advances a video story there, never progress arithmetic, and
+        // `.storyVideoFinished` is ours. Scoped to this exact item and re-checked against the
+        // current item when it fires, so a stale clip finishing mid-swap can never complete
+        // somebody else's segment.
+        if let tok = endObservationToken { NotificationCenter.default.removeObserver(tok) }
+        endObservationToken = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+        ) { [weak self, weak item] _ in
+            guard let self, let item, let story = self.url,
+                  self.player?.currentItem === item else { return }
+            NotificationCenter.default.post(name: .storyVideoFinished, object: nil,
+                                            userInfo: ["url": story.absoluteString])
         }
 
         observation = player?.observe(\.timeControlStatus, options: [.new, .initial]) { [weak self] player, change in
@@ -934,9 +927,9 @@ private extension PlayerView {
         // swipe, where the host drops it as belonging to somebody else — and `didReportBuffering` is
         // only re-armed by a NEW clip, so returning to that person leaves the bar held for good.
         //
-        // `pause()` on an idle player is harmless, and the guards inside `rememberPlaybackPosition`
-        // already refuse to write a position for a clip that never reached its second second — so
-        // widening this cannot invent a resume point for a story nobody watched.
+        // `pause()` on an idle player is harmless, and the guards inside `rememberPlaybackFrame`
+        // already refuse to bank a frame for a clip that never reached its second second — so
+        // widening this cannot invent a card picture for a story nobody watched.
         guard player?.timeControlStatus != .paused || state != .stopped else { return }
         // ⚠️ THE REWIND KEEPS THE OLD CONDITION, AND ONLY THE REWIND.
         //
@@ -952,30 +945,30 @@ private extension PlayerView {
         // stays behind the condition it always had. A clip that was genuinely playing and is being
         // left behind still rewinds; a paused one is left exactly where the person stopped it.
         let wasPlaying = player?.timeControlStatus == .playing
-        // BEFORE the seek, which erases the very number being kept. `.stopVideo` fires on a
+        // BEFORE the seek, which rewinds the very picture being kept. `.stopVideo` fires on a
         // person swipe (and on the close, where the door clears the whole store anyway), and
-        // this is the only moment the position still exists on that path.
-        rememberPlaybackPosition()
+        // this is the last moment the mid-clip frame is still on the layer on that path.
+        rememberPlaybackFrame()
         player?.pause()
         if wasPlaying { player?.seek(to: .zero) }
         state = .stopped
     }
 
-    /// The clip's place in this viewer session, written down so the NEXT player built for this url
-    /// starts there instead of at zero. Only a position a person would call "the middle": the first
-    /// second is a restart in all but name, and the last is the natural end the auto-advance
-    /// already owns.
-    private func rememberPlaybackPosition() {
+    /// The last picture this clip showed, banked for the cards — and NOTHING else. The playback
+    /// position used to be written here too, so the next player built for this url could resume it;
+    /// that is gone, deliberately: a story always restarts at zero now (the owner's 2026-08-11
+    /// rule, and Telegram's behaviour), so a stored position had exactly one power left — to
+    /// disagree with the progress bar. The middle-of-the-clip guard stays: the first second is
+    /// second zero in all but name (the poster already shows it), and the last second is the
+    /// natural end the auto-advance already owns.
+    private func rememberPlaybackFrame() {
         guard let story = self.url, let p = player, p.currentItem != nil else { return }
         let t = p.currentTime().seconds
         guard t.isFinite, t > 1, duration <= 0 || t < duration - 1 else { return }
-        StoryPlaybackResume.remember(story, seconds: t)
-        // AND THE PICTURE IT WAS SHOWING, in the same breath and under the same guard — a position
-        // worth resuming to is exactly a frame worth coming back to. Without this the clip resumed
-        // at 10s underneath a poster of second zero, which is the half of it he can actually see.
         // `currentVideoFrame` reads the player's own display output; nil is a normal answer and
-        // simply leaves the poster in charge, as before.
-        StoryPlaybackResume.rememberFrame(story, image: currentVideoFrame())
+        // simply leaves the poster in charge, as before. Banked WITH its clip-second, so the veil
+        // can tell an honest second-zero cover from a mid-clip card picture (`usableCoverFrame`).
+        StoryPlaybackResume.rememberFrame(story, image: currentVideoFrame(), at: t)
     }
 
     func restartVideo() {

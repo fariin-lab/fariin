@@ -585,6 +585,19 @@ struct StoryDetailView: View {
             if buffering != isBuffering { isBuffering = buffering }
             bufferingURL = buffering ? sender : ""
         }
+        // THE CLIP SAYS IT ENDED; ONLY THEN DOES A VIDEO SEGMENT COMPLETE. Telegram's
+        // `videoNode.playbackCompleted` is the single thing that advances a video story there —
+        // position updates carry `canSwitch = false` — and this is our half of that rule: the bar
+        // is capped under the boundary (`syncBarToPlayer`) and this report crosses it. Guarded to
+        // the sender being the clip actually on screen, so a stale end (a clip finishing during a
+        // fast swipe, or on a page being left) can never advance a story it does not belong to.
+        .onReceive(NotificationCenter.default.publisher(for: .storyVideoFinished)) { note in
+            guard viewModel.currentStoryUser == model.id,
+                  !model.stories.isEmpty, !isDismissing,
+                  let sender = note.userInfo?["url"] as? String,
+                  sender == getStory(with: getCurrentIndex()).mediaURL else { return }
+            advanceFromVideoEnd()
+        }
         .onChange(of: viewModel.currentStoryUser) { newValue in
             NotificationCenter.default.post(name: .stopVideo, object: nil)
             // ON THE WAY OUT, BEFORE `resetProgress` WIPES IT. This fires on every mounted page, so
@@ -606,11 +619,13 @@ struct StoryDetailView: View {
             // FIRST UNSEEN item (e.g. a new story D after A/B/C were seen), else at the start.
             // Asking `firstUnseenIndex` here unconditionally is what restarted a fully-watched
             // person at item 1 every single time you swiped back to them.
-            // The fraction rides along for a video left mid-play, same as the sheet jump: the item
-            // resumed and the position resumed are one memory, not two.
+            // The ITEM is remembered, the position inside it is not: a video returned to restarts
+            // from zero (the owner's 2026-08-11 rule, and Telegram's behaviour — a revisited item
+            // is a fresh player seeked to 0), so the bar starts the segment exactly where the
+            // player will: at its beginning.
             if newValue == model.id {
                 let i = resumeIndex()
-                timerProgress = CGFloat(i) + resumeFraction(at: i)
+                timerProgress = CGFloat(i)
                 // The page being handed the screen is not folding, whatever the last geometry
                 // snapshot said. `resetProgress` above cleared this too, but a preference delivered
                 // mid-transition can arrive AFTER it — see the note in `startProgress`.
@@ -724,10 +739,9 @@ struct StoryDetailView: View {
                   let id = note.object as? String,
                   let idx = model.stories.firstIndex(where: { $0.id == id }),
                   idx != getCurrentIndex() else { return }
-            // Landing on a video watched earlier this session: the bar starts where the player
-            // will (see `resumeFraction`), or the segment counts a full duration over a clip with
-            // only its tail left.
-            timerProgress = CGFloat(idx) + resumeFraction(at: idx)
+            // A video landed on this way restarts from zero like every other return, so the bar
+            // starts the segment exactly where the player will: at its beginning.
+            timerProgress = CGFloat(idx)
         }
         // Seamless per-item delete (host trash tap). Compute the adjacent index FIRST, then drop the item from
         // THIS bucket in-place and slide to it — the user never sees a blank frame. The host removes it from the
@@ -801,25 +815,18 @@ private extension StoryDetailView {
                 start(index: index)
             }
             .onAppear {
-                // ⚠️ THE CLIP BEING THROWN AWAY WRITES ITS PLACE DOWN FIRST, and this line is the
-                // whole reason his bug had a SIDE to it.
-                //
-                // A photo story appearing means the `VideoView` is being unmounted: `startVideo`
-                // will not run (there is no next url for that view), `stopVideo` will not run, and
-                // `deinit` is not a place that can safely touch MainActor state — so every path
-                // that remembers a playhead is skipped, and `resetAVPlayer` below replaces the
-                // whole `AVPlayer` holding it. Come back to that video and `setupPlayer` has
-                // nothing to `peek`, so it starts at zero. Pass through a VIDEO instead and the one
-                // `PlayerView` is reused, `startVideo` remembers on the way out, and the return is
-                // correct. One neighbour of a story is a photo and the other is a clip, which is
-                // exactly "it works one way and not the other".
+                // ⚠️ THE CLIP BEING THROWN AWAY BANKS ITS LAST PICTURE FIRST. A photo story
+                // appearing means the `VideoView` is being unmounted: `startVideo` will not run
+                // (there is no next url for that view), `stopVideo` will not run, and `deinit` is
+                // not a place that can safely touch MainActor state — so every path that banks the
+                // frame is skipped while `resetAVPlayer` below drops the `AVPlayer` still holding
+                // it. The frame is what the carousel cards draw. The POSITION is deliberately not
+                // kept by anyone any more: a video returned to restarts from zero — the owner's
+                // 2026-08-11 rule.
                 //
                 // Here rather than inside `resetAVPlayer` because these extension methods are NOT
                 // main-actor isolated (see the note in `playVideo`) and this call is; a body
-                // closure is. The sheet's pause writes the same thing
-                // (`StoryCardMorph.bankCurrentState`) and writing it twice costs one dictionary
-                // entry — this is the copy for the paths with no sheet at all, tapping forward
-                // from a video onto a photo and tapping back.
+                // closure is.
                 StoryCardMorph.shared.rememberPlaybackState()
                 resetAVPlayer()
             }
@@ -1232,22 +1239,11 @@ private extension StoryDetailView {
         return Angle(degrees: 45 * progress)
     }
     
-    /// How much of a video segment was already watched THIS SESSION, as the bar's fraction.
-    ///
-    /// `peek`, never `take`: the player is the one that consumes the memory (when it seeks, in
-    /// `setupPlayer`), and this runs before that player exists. Measured against the story's
-    /// DECLARED duration because that is the clock the bar counts with (`getProgressBarFrame`);
-    /// capped just under 1 so a position near the end can never advance the story on the first
-    /// tick. Zero for photos, for videos never left mid-play, and for every fresh session — the
-    /// door empties the store at close.
-    func resumeFraction(at index: Int) -> CGFloat {
-        guard index >= 0, index < model.stories.count else { return 0 }
-        let s = model.stories[index]
-        guard s.config.mediaType == .video, s.duration > 0,
-              let u = URL(string: s.mediaURL),
-              let t = StoryPlaybackResume.peek(u) else { return 0 }
-        return min(0.98, max(0, CGFloat(t / s.duration)))
-    }
+    // DELETED HERE: `resumeFraction(at:)`. It topped the bar up to a REMEMBERED playback position
+    // so bar and player could resume together. There is no remembered position any more — a video
+    // returned to restarts from zero (the owner's 2026-08-11 rule, Telegram's behaviour) — so its
+    // two call sites hand the bar a bare index and the player starts the clip at its beginning.
+    // Left as a note because a function that used to exist is a function somebody will reinvent.
 
     /// `keepPosition` is the DEPARTING page's variant of this reset, and it exists for one reason:
     /// the page being left is still on screen. `UIPageViewController` slides it off over ~0.3s, and
@@ -1491,12 +1487,65 @@ private extension StoryDetailView {
             }
             if timerProgress < CGFloat(model.stories.count) {
                 if story.isReady {
-                    getProgressBarFrame(duration: story.duration)
+                    // TWO KINDS OF SEGMENT, TWO CLOCKS. A photo has no player, so wall time against
+                    // its declared duration is the only clock there is. A video HAS a clock — the
+                    // player's — and the bar reads that one, so the two can never disagree again.
+                    if story.config.mediaType == .video {
+                        syncBarToPlayer(index: index, story: story)
+                    } else {
+                        getProgressBarFrame(duration: story.duration)
+                    }
                 }
             } else if !isAdvancing {
                 isAdvancing = true   // fire the user-advance once, not every 0.1s tick
                 updateStory()
             }
+        }
+    }
+
+    /// THE BAR READS THE PLAYER, FOR A VIDEO — Telegram's rule, and the reason their bar cannot
+    /// disagree with the picture (`StoryItemContentComponent.updateVideoPlaybackProgress`: the
+    /// bar's fraction is the player's own reported timestamp over its duration, sixty times a
+    /// second). Ours accumulated wall time against the declared duration and never asked the player
+    /// once, so every seek, stall, slow start and rebuilt player put the two clocks apart for the
+    /// rest of the segment — his 2026-08-11 report: come back to a video and it plays from 0:14
+    /// under a bar that starts at zero and outlives the clip.
+    ///
+    /// Held still while the player is not yet on this story's clip (the `startVideo`→`setupPlayer`
+    /// gap, a return to a story whose player is still being rebuilt — see `StoryPlaybackClock`): a
+    /// bar that cannot read its own clip does not guess. Capped just under the segment boundary so
+    /// the segment can only be COMPLETED by the player's own end-of-clip report
+    /// (`.storyVideoFinished`), never by bar arithmetic — Telegram's `canSwitch` rule exactly.
+    func syncBarToPlayer(index: Int, story: Story) {
+        // An item that can never play again keeps the old wall clock, so a broken clip still hands
+        // the screen on after its declared duration instead of freezing the story for good.
+        if player.currentItem?.status == .failed {
+            getProgressBarFrame(duration: story.duration)
+            return
+        }
+        guard StoryPlaybackClock.story(for: player)?.absoluteString == story.mediaURL else { return }
+        let t = player.currentTime().seconds
+        guard t.isFinite, t >= 0 else { return }
+        // The player's real duration once it knows it, the declared one until then — the same
+        // preference Telegram applies (`effectiveDuration`), so the fraction and the clip end
+        // together even when the host's declared length is a little off.
+        var duration = story.duration
+        if let real = player.currentItem?.duration.seconds, real.isFinite, real > 0 { duration = real }
+        guard duration > 0 else { return }
+        timerProgress = CGFloat(index) + min(0.999, max(0, CGFloat(t / duration)))
+    }
+
+    /// The video's own end, arriving as a completed segment: exactly what the tick's integer
+    /// crossing used to do by arithmetic, done once, on the player's word. The end of the LAST
+    /// item advances to the next person through the same `updateStory` the arithmetic used.
+    func advanceFromVideoEnd() {
+        if !timerProgress.isFinite { timerProgress = 0 }
+        if Int(timerProgress) + 1 >= model.stories.count {
+            guard !isAdvancing else { return }
+            isAdvancing = true
+            updateStory()
+        } else {
+            timerProgress = CGFloat(Int(timerProgress) + 1)
         }
     }
     
@@ -1656,6 +1705,9 @@ private extension StoryDetailView {
         // player and the outgoing one was never told to stop. Tapping from a video onto a text or
         // photo story left the old clip's audio running until deallocation got around to it.
         player.pause()
+        // Its clock entry goes with it — the bar must never read a dropped player's time. (The map
+        // is weak-keyed so this is belt: the dead player would take its entry anyway.)
+        StoryPlaybackClock.detach(player)
         player = AVPlayer()
     }
     
