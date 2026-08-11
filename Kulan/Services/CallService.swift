@@ -1650,14 +1650,20 @@ final class CallService: NSObject {
                 pc.setLocalDescription(local) { _ in
                     var data: [String: Any] = ["answer": ["sdp": local.sdp, "type": "answer"], "status": "active"]
                     data["cams.\(self.me)"] = self.cameraOn   // publish my camera state (per-side)
-                    // ONLY IF IT IS STILL RINGING (audit). answer() removes the cancel watcher and
-                    // then waits on the mic prompt and TURN; a caller who cancels inside that window
-                    // writes status:"ended", and this unconditional write used to overwrite it — so
-                    // the callee never learned, sat on "Reconnecting…" for ~20s, and left the call
-                    // doc stuck as "active" forever. A transaction keeps the ended state.
+                    // NOT ENDED — deliberately no longer "== ringing" (his 3:48 AM two-phone
+                    // report: he accepted, sat on Connecting… forever, and the CALLER kept
+                    // ringing). The ringing status is written by markRinging AFTER the async
+                    // caller-allowed gate resolves, and a person who accepts fast — CallKit shows
+                    // the call instantly, the gate reads over a half-asleep radio — answers a doc
+                    // whose status is not yet "ringing". The old guard read that as "not
+                    // answerable" and silently dropped the answer on the floor: this side stuck
+                    // Connecting, that side ringing a call already picked up. The one state that
+                    // must genuinely refuse an answer is "ended" (the caller cancelled — the case
+                    // this transaction exists for, and it still holds); anything else is a live
+                    // call being answered.
                     ref.firestore.runTransaction({ txn, _ -> Any? in
                         guard let snap = try? txn.getDocument(ref),
-                              (snap.data()?["status"] as? String) == "ringing" else { return nil }
+                              (snap.data()?["status"] as? String) != "ended" else { return nil }
                         txn.updateData(data, forDocument: ref)
                         return nil
                     }, completion: { _, _ in })
