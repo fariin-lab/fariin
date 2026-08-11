@@ -52,6 +52,38 @@ struct StoryPager: UIViewControllerRepresentable {
     /// own — see the note at the `CATransition` in `syncIfNeeded`.
     static let personTurnDuration: CFTimeInterval = 0.10
 
+    /// WHICH PERSON-TO-PERSON TRANSITION IS RUNNING — both are kept, on the owner's instruction
+    /// (2026-08-11: "do not delete the current Flat Animation… I want both implementations available
+    /// so I can test").
+    ///
+    /// `flat` is the shipped one and is untouched by any of this: the 100ms `CATransition` push in
+    /// `syncIfNeeded`. `cube` reuses the 3D fold this viewer has always had for finger swipes
+    /// (`StoryDetailView.getAngle`) rather than inventing a second animation — his other
+    /// instruction, and the right call anyway: one fold, driven two ways.
+    public enum PersonTransition: String {
+        case flat, cube
+    }
+
+    /// Read at the moment of each turn, so flipping it takes effect on the very next tap without
+    /// reopening the viewer. Defaults to `flat`, which is exactly what shipped.
+    public static var personTransition: PersonTransition {
+        get { PersonTransition(rawValue: UserDefaults.standard.string(forKey: "story.personTransition") ?? "") ?? .flat }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "story.personTransition") }
+    }
+
+    /// TRUE while a PROGRAMMATIC cube turn is in flight — a tap, or an auto-advance.
+    ///
+    /// ⚠️ THE CUBE'S GATE NEEDS THIS AND CANNOT WORK WITHOUT IT. `getAngle` folds only while the
+    /// pager's scroll view is live (tracking / dragging / decelerating), because any OTHER movement
+    /// of a page's origin — Apple's zoom dismiss, a layout shift — must never fold the pages. A
+    /// programmatic turn moves the pages by FRAME and never touches those flags, so the fold would
+    /// simply not run and a tap would slide flat however the setting was written.
+    ///
+    /// Cleared on the turn's completion, and it is deliberately a plain static rather than state:
+    /// `getAngle` is read from a SwiftUI body during the animation and must not have to wait for a
+    /// publish to see it.
+    static var cubeTurnActive = false
+
     func makeUIViewController(context: Context) -> UIPageViewController {
         StoryPager.dismissActive = false   // fresh viewer never inherits a stale flag
         let pager = StoryPagerVC(transitionStyle: .scroll, navigationOrientation: .horizontal)
@@ -353,6 +385,31 @@ struct StoryPager: UIViewControllerRepresentable {
             }
             let next = parent.viewModel.currentStoryUser
             isTurning = true
+            // ⚠️ THE CUBE PATH IS A SEPARATE BRANCH AND THE FLAT ONE BELOW IS UNTOUCHED — his
+            // instruction, so the two can be compared without one having been rewritten to suit the
+            // other. See `StoryPager.personTransition`.
+            //
+            // It hands the turn back to `UIPageViewController`'s own animated move, which is what
+            // the fold needs: that move slides the pages by FRAME, so every page's global origin
+            // travels and `getAngle` has something real to derive an angle from — exactly the same
+            // input a finger swipe gives it. The flat push cannot be used here because a
+            // `CATransition` animates the CONTAINER's rendered content, so the pages never move
+            // individually and there is nothing to fold.
+            //
+            // `cubeTurnActive` opens the fold's gate for the length of it, and the completion is what
+            // closes it, so an interrupted turn cannot strand the pages mid-rotation.
+            if StoryPager.personTransition == .cube {
+                StoryPager.cubeTurnActive = true
+                pager.setViewControllers([target], direction: to > from ? .forward : .reverse,
+                                         animated: true) { [weak self] _ in
+                    StoryPager.cubeTurnActive = false
+                    guard let self else { return }
+                    self.isTurning = false
+                    self.prewarmNeighbours(of: next)
+                    self.replayPendingSync()
+                }
+                return
+            }
             // ⚠️ OUR OWN TURN, NOT APPLE'S — owner 2026-08-11: the flat slide "feels too slow and
             // heavy", and he asked for roughly 100ms.
             //
