@@ -507,11 +507,22 @@ struct LiveWaveform: View {
 
     var body: some View {
         GeometryReader { geo in
+            let slot: CGFloat = 4.5   // 2.5 bar + 2 gap — must match the HStack below
             HStack(alignment: .center, spacing: 2) {
-                ForEach(levels) { bar in
+                ForEach(Array(levels.enumerated()), id: \.element.id) { i, bar in
+                    // THE EXIT SUCKS THE BAR IN — his circled reference screenshot: a bar
+                    // approaching the left edge shrinks toward a dot and vanishes, instead of
+                    // leaving at full height and being beheaded by the clip. The taper factor is
+                    // the bar's distance from the strip's left edge over the taper width; while
+                    // the row is still shorter than the strip nothing is near that edge, so young
+                    // recordings are untouched. Because the bars TRAVEL now (permanent ids), each
+                    // one walks down this ramp itself — which is exactly the sucking.
+                    let fromRight = CGFloat(levels.count - 1 - i) * slot
+                    let fromLeft = geo.size.width - fromRight
+                    let taper = max(0, min(1, fromLeft / 36))
                     Capsule().fill(color)
                         .frame(width: 2.5,
-                               height: max(2, WaveformBars.display(Int(bar.level * 100)) * geo.size.height))
+                               height: max(2, WaveformBars.display(Int(bar.level * 100)) * geo.size.height * taper))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
@@ -519,7 +530,7 @@ struct LiveWaveform: View {
             // eases in and the row's leftward step reads as travel rather than teleport.
             .animation(.interpolatingSpring(stiffness: 260, damping: 26), value: levels)
         }
-        .clipped()   // the oldest bar dies AT the strip's edge, not outside the pill
+        .clipped()   // whatever survives the taper still dies AT the strip's edge, never outside the pill
     }
 }
 
