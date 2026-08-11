@@ -125,6 +125,38 @@ final class CarouselScrollerView: UIView {
         addGestureRecognizer(tap)
     }
 
+    /// ⚠️ THE HAND-OVER STARTS ON TOUCH-DOWN, NOT ON THE DRAG (owner 2026-08-11: swipe the sheet's
+    /// cards SLOWLY and everything is right; FLICK the first one and the preview cards stack on top
+    /// of each other).
+    ///
+    /// The live story card sits in the centre slot and cannot slide, so for the length of a swipe the
+    /// row draws its OWN card there and the live one stands aside — `carouselOwnsSlot` →
+    /// `hideActiveContent`. That signal was raised in `scrollViewWillBeginDragging`, which UIKit only
+    /// calls once the pan has passed its recognition threshold, and it then has to cross a SwiftUI
+    /// update before the live card actually hides.
+    ///
+    /// A slow drag has moved a few points in that window, so the swap is invisible. A FLICK has
+    /// already carried the row a long way: for those frames the carousel's card and the live card are
+    /// both on screen, side by side and overlapping — which is exactly what he photographed.
+    ///
+    /// Touch-down happens BEFORE the threshold, so the same signal now has the whole
+    /// finger-down-to-recognised window to land, and the flick can no longer outrun it. Nothing else
+    /// changes: `settle` still lowers it, and a touch that never becomes a drag is a TAP, which is
+    /// handled here too and ends in `settle` either way.
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        coordinator?.parent.onInteracting(true)
+    }
+
+    /// A finger that lands and lifts without dragging and without hitting the tap recogniser would
+    /// otherwise leave the live card standing aside for good. `settle` is the one place that lowers
+    /// the flag, so a cancelled touch has to reach it.
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesCancelled(touches, with: event)
+        guard !scroller.isTracking, !scroller.isDragging, !scroller.isDecelerating, !animating else { return }
+        coordinator?.parent.onInteracting(false)
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         scroller.frame = bounds
