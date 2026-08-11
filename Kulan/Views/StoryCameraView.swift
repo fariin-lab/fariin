@@ -782,6 +782,11 @@ struct StoryCameraView: View {
     /// How far the camera has been pulled down, in points. The card FOLLOWS the finger — see the
     /// vertical branch of the mode swipe.
     @State private var dismissY: CGFloat = 0
+    // The drag has DECIDED it is a dismissal. Signal decides the axis once, at the first movement
+    // (their DirectionalPanGestureRecognizer), and from then on the screen follows the finger BOTH
+    // ways — the old live axis test here re-judged every event, so a finger that came back up or
+    // drifted sideways stopped being written and the card froze mid-screen (his 535 report).
+    @State private var dismissActive = false
     /// How close the finger is to locking the recording, 0 to 1. Drives the lock's own growth so the
     /// gesture can be FELT before it completes.
     @State private var lockProgress: CGFloat = 0
@@ -825,12 +830,16 @@ struct StoryCameraView: View {
 
     var body: some View {
         ZStack {
-            // The wall thins as the card travels, so what is behind the camera shows through the way
-            // it does on every interactive dismissal in the app.
+            // ⚠️ SOLID BLACK, NEVER THINNED. The wall used to fade as the card travelled, meaning to
+            // show "what is behind the camera" — but this is a `fullScreenCover`, and a .fullScreen
+            // modal REMOVES the presenting screen from the window once it is up. There was nothing
+            // behind the wall but the hosting controller's flat systemBackground, so a thinned black
+            // over it rendered as a featureless GREY wall — his 2026-08-11 screenshot exactly.
+            // Signal's own story camera (`presentFullScreen` → .fullScreen from
+            // StoriesViewController) drags over plain black for the same structural reason; only
+            // their chat-list camera, presented .overFullScreen, reveals the real screen. Black is
+            // the honest floor here, and it is also their look.
             Color.black.ignoresSafeArea()
-                // Converted explicitly: `opacity` wants a Double and `dismissY` is a CGFloat, and
-                // letting the type checker bridge that inside an expression made `/` ambiguous.
-                .opacity(Double(1 - min(dismissY, 320) / 520))
             VStack(spacing: 0) {
                 // ⚠️ BOTH PAGES STAY MOUNTED AND SLIDE. This was `if mode == .camera { preview }
                 // else { card }`, and a SwiftUI if/else is not a page change, it is a REPLACEMENT:
@@ -904,34 +913,55 @@ struct StoryCameraView: View {
                         // drag is clearly vertical: the same test `onEnded` uses, applied live so the
                         // sideways CAMERA/TEXT swipe cannot start dragging the screen down with it.
                         .onChanged { v in
-                            guard !typing, !cam.recording, mode == .camera else { return }
+                            guard !typing, mode == .camera else { return }
+                            guard !cam.recording else {
+                                // Recording started under a live drag: put the card back and stand
+                                // down, or it stays stranded wherever the finger left it.
+                                if dismissActive { dismissActive = false; dismissY = 0 }
+                                return
+                            }
                             let dy = v.translation.height
-                            guard dy > 0, dy > abs(v.translation.width) * 1.5 else { return }
-                            dismissY = dy
+                            if !dismissActive {
+                                // The axis is judged ONCE, at entry — Signal's directional pan. A
+                                // sideways CAMERA/TEXT swipe never becomes a dismissal, and a
+                                // dismissal never freezes for turning diagonal later.
+                                guard dy > 0, dy > abs(v.translation.width) * 1.5 else { return }
+                                dismissActive = true
+                            }
+                            // 1:1 with the finger, clamped at the origin (Signal: `max(0, offset.y)`
+                            // — the card never rides above its resting place). The 24pt the gesture
+                            // spent proving itself is subtracted so tracking starts from ZERO under
+                            // the finger instead of arriving with a jump.
+                            dismissY = max(0, dy - 24)
                         }
                         .onEnded { v in
-                            guard !typing, !cam.recording else { return }
+                            let wasDismissing = dismissActive
+                            dismissActive = false
+                            guard !typing, !cam.recording else { dismissY = 0; return }
                             let dx = v.translation.width, dy = v.translation.height
+                            if wasDismissing {
+                                // Signal's commit rule is DISTANCE ONLY: 200pt of travel, judged
+                                // where the finger let go (their `distanceToTriggerDismiss`), no
+                                // velocity clause — a short flick snaps back, and a drag brought
+                                // back under the line un-arms itself by simply being under it.
+                                if dismissY >= 200 {
+                                    // Left where the finger put it: the cover slides the rest of
+                                    // the way from here, and springing back under a dismissal is
+                                    // a flicker.
+                                    onClose()
+                                } else {
+                                    // Their cancel is a plain 0.1s animation, not a spring.
+                                    withAnimation(.easeInOut(duration: 0.1)) { dismissY = 0 }
+                                }
+                                return
+                            }
                             // VERTICAL FIRST, and only when it is clearly vertical. Both reference
                             // cameras put the gallery above and the exit below, and reading the axes
                             // in one place is what stops a lazy diagonal doing both.
                             if abs(dy) > 60, abs(dy) > abs(dx) * 1.5 {
-                                guard mode == .camera else { dismissY = 0; return }
-                                if dy < 0 { onLibrary(); dismissY = 0; return }
-                                // Past the threshold OR thrown: a fast flick should not have to
-                                // travel the whole way, which is the half that makes an interactive
-                                // dismiss feel native rather than strict.
-                                if dy > 140 || v.predictedEndTranslation.height > 320 {
-                                    onClose()
-                                    // Left where the finger put it: the cover is going away, and
-                                    // springing back under a dismissal is a flicker.
-                                } else {
-                                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { dismissY = 0 }
-                                }
+                                guard mode == .camera else { return }
+                                if dy < 0 { onLibrary() }
                                 return
-                            }
-                            if dismissY != 0 {
-                                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { dismissY = 0 }
                             }
                             guard abs(dx) > 60, abs(dx) > abs(dy) * 1.5 else { return }
                             let next: Mode = dx < 0 ? .text : .camera
@@ -948,13 +978,12 @@ struct StoryCameraView: View {
                         .opacity(handingOver ? 0 : 1)
                 }
             }
-            // THE WHOLE CAMERA RIDES THE FINGER. Offset and a slight shrink from the top, which is
-            // the shape every interactive dismissal in this app uses — the card reads as being
-            // pushed away rather than as a screen being deleted. No animation modifier here on
-            // purpose: while the finger is down the FINGER is the animation, and the spring back is
-            // applied at the release instead.
+            // THE WHOLE CAMERA RIDES THE FINGER — translation ONLY. Signal's camera dismiss never
+            // scales (that transition belongs to their media VIEWER, not the camera); the token
+            // shrink this carried (3.8% at a real drag) read as nothing anyway. No animation
+            // modifier here on purpose: while the finger is down the FINGER is the animation, and
+            // the put-back is applied at the release instead.
             .offset(y: dismissY)
-            .scaleEffect(1 - min(dismissY, 320) / 2600, anchor: .top)
         }
         // THE PAGE DOES NOT RESIZE FOR THE KEYBOARD (owner 2026-08-04: "the entire editor frame moves
         // upward and a black background appears behind the keyboard").
