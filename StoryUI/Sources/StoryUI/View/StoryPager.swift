@@ -242,6 +242,9 @@ struct StoryPager: UIViewControllerRepresentable {
         @objc private func keyboardShown() { keyboardUp = true }
         @objc private func keyboardHidden() { keyboardUp = false }
         fileprivate var cubeLink: CADisplayLink?   // fileprivate so dismantleUIViewController can invalidate it
+        /// Whether any page currently carries a cube transform. Lets the resting frames cost one
+        /// comparison instead of a write to every page's layer — see `applyCube`.
+        private var cubeApplied = false
         // Baseline translation captured the instant the swipe-UP pan engages. The recognizer only
         // begins after the finger has already travelled ~its 8pt threshold plus whatever it moved
         // while the competing pans were failing — so translation(in:) is already ~30-40pt at the
@@ -374,6 +377,9 @@ struct StoryPager: UIViewControllerRepresentable {
 
         func syncIfNeeded() {
             neutralizePagerScrollIfHostOwnsSwipe()   // re-assert on every update; UIPageViewController may reset it
+            // The setting can change while a viewer is open (Settings → Stories), and the link is
+            // what draws the cube — re-checked here so the very next turn honours it.
+            updateCubeLink()
             guard let pager else { return }
             let shown = (pager.viewControllers?.first as? StoryPageHostVC)?.bucketID
             // Initial population: stories/currentStoryUser weren't ready at makeUIViewController time
@@ -648,18 +654,80 @@ struct StoryPager: UIViewControllerRepresentable {
                 pager.view.addGestureRecognizer(upPan)
                 scroll.panGestureRecognizer.require(toFail: upPan)
             }
-            // NO UIKit cube display-link: the cube is now the StoryUI library's SwiftUI rotation3DEffect
-            // (getAngle in StoryDetailView). The old CADisplayLink applyCube fought it and caused the
-            // shake/black, so it's disabled — the pager just provides the horizontal slide.
+            // The cube's display link is started here and re-checked on every update — see
+            // `updateCubeLink`. It is the ONE owner of the fold in cube mode.
+            updateCubeLink()
+        }
+
+        /// ⚠️ ONE OWNER FOR THE FOLD, AND WHICH ONE DEPENDS ON THE SETTING.
+        ///
+        /// His 2026-08-12 report: the cube folds on a TAP and does nothing on a finger swipe. The
+        /// cause is in this file's own history. `02cc55d1` retired this display link in favour of
+        /// SwiftUI's `rotation3DEffect` (`StoryDetailView.getAngle`), and that angle is derived from
+        /// `proxy.frame(in: .global)` — **a GeometryReader re-evaluates on a SIZE change, not on a
+        /// POSITION change**, a trap already written up twice in this repo. A finger swipe moves the
+        /// pages by the scroll view's `contentOffset`: no size changes, no layout is invalidated, and
+        /// the incoming page is not even current yet (`currentStoryUser` is written in
+        /// `didFinishAnimating`, at the END of the swipe), so its 20fps tick does not run either.
+        /// Nothing re-samples the angle, so the page stays flat. A TAP escapes it by accident: the
+        /// view model is written FIRST, so the incoming page ticks and re-renders all through Apple's
+        /// animated turn. Working by accident on one path and not at all on the other.
+        ///
+        /// This link reads `layer.position` and `contentOffset` directly, so position is exactly what
+        /// it is made of, and it covers both paths with one mechanism.
+        ///
+        /// ⚠️ IT MUST NOT RUN WHILE SWIFTUI IS ALSO FOLDING — that is what produced the shake and the
+        /// black flash `02cc55d1` was fixing. `getAngle` returns zero in cube mode for precisely this
+        /// reason; the two are one switch, and flipping one without the other brings the shake back.
+        func updateCubeLink() {
+            let wantsCube = StoryPager.personTransition == .cube
+            if wantsCube, cubeLink == nil {
+                let link = CADisplayLink(target: self, selector: #selector(applyCube))
+                // `.common` so the fold keeps running while the scroll view is tracking a finger,
+                // which is the entire case this exists for.
+                link.add(to: .main, forMode: .common)
+                cubeLink = link
+            } else if !wantsCube, let link = cubeLink {
+                link.invalidate()
+                cubeLink = nil
+                resetCubeTransforms()
+            }
+        }
+
+        /// Every page back to flat. A page keeps whatever transform it was last given, so leaving
+        /// cube mode — or coming to rest — must put them back or a page stays folded on screen.
+        private func resetCubeTransforms() {
+            cubeApplied = false
+            guard let scroll = internalScroll else { return }
+            let w = scroll.bounds.width
+            for sub in scroll.subviews where abs(sub.bounds.width - w) < 1.0 {
+                sub.layer.transform = CATransform3DIdentity
+            }
         }
 
         // The cube: rotate each page around the shared vertical edge with perspective depth, driven
         // by its position relative to screen centre. Centre page = flat; ±1 page = 90° (edge-on, hidden).
         @objc func applyCube() {
-            guard let scroll = internalScroll, !StoryCardMorph.heroDismissActive else { return }
-            // Only do per-frame transform work while a horizontal swipe is actually in motion. At rest the
-            // pages are already settled (centred page = identity from the last frame), so skip the churn.
-            guard scroll.isDragging || scroll.isDecelerating || scroll.isTracking else { return }
+            guard let scroll = internalScroll else { return }
+            // Only do per-frame transform work while the pages are actually in motion; at rest this
+            // is pure churn at 60-120Hz. The two dismissal flags are the same pair `getAngle` refuses
+            // on: during a swipe-down the card is being moved by something that is not a page swipe,
+            // and a fold derived from page position would be derived from a lie.
+            //
+            // ⚠️ `cubeTurnActive` IS IN THE TEST, and without it a TAP folds nothing: a programmatic
+            // turn animates the scroll view without ever setting `isDragging`/`isTracking`, and
+            // `isDecelerating` is a finger's word, not UIKit's.
+            let moving = (scroll.isDragging || scroll.isDecelerating || scroll.isTracking
+                          || StoryPager.cubeTurnActive)
+                && !StoryPager.dismissActive && !StoryCardMorph.heroDismissActive
+            guard moving else {
+                // Came to rest (or a dismissal took over): put the pages back flat ONCE, not every
+                // frame. Without this a page keeps the last fold it was given and the next thing
+                // drawn is a story standing at an angle.
+                if cubeApplied { resetCubeTransforms() }
+                return
+            }
+            cubeApplied = true
             let w = scroll.bounds.width
             guard w > 1 else { return }
             for sub in scroll.subviews {
