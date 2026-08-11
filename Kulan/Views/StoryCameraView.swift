@@ -1,5 +1,8 @@
 import SwiftUI
 import AVFoundation
+// The volume-button shutter only. `AVCaptureEventInteraction` and its `AVCaptureEvent` live in
+// AVKit, not AVFoundation — see `CaptureEventCatcher`.
+import AVKit
 import UIKit
 import Photos
 import PhotosUI
