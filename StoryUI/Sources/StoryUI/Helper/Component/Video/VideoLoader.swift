@@ -75,10 +75,23 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// `blurredImage(_:radius: 10, iterations: 3)` only on `decodeTinyThumbnail(immediateThumbnailData)`
     /// — the inline bytes that are all it has when there is nothing else at all.
     private var cover: (image: UIImage, isFrame: Bool)? {
-        // Only a frame from the clip's START. Playback always begins at zero now (see
-        // StoryPlaybackResume's header), so a mid-clip banked frame would cover second zero with a
-        // picture of 0:20 — the picture-and-position disagreement, drawn by the veil itself.
-        if let banked = self.url.flatMap({ StoryPlaybackResume.usableCoverFrame($0) }) { return (banked, true) }
+        // ⚠️ WHOSE PICTURE THIS IS. Normally the clip attached to the player, but while the story is
+        // frozen the page can be showing a story this player has deliberately not loaded — see
+        // `showFrozenCover`. The still on screen must be THAT story's, or the card behind the sheet
+        // wears the picture of the clip still sitting in the player.
+        let subject = frozenCoverStory ?? self.url
+        // Normally only a frame from the clip's START. Playback begins at zero on any ordinary
+        // navigation (see StoryPlaybackResume's header), so a mid-clip banked frame would cover
+        // second zero with a picture of 0:20 — the picture-and-position disagreement, drawn by the
+        // veil itself.
+        //
+        // ⚠️ EXCEPT WHEN THE CLIP REALLY IS THERE. Adopting an item the player never let go of
+        // leaves it at the second it was paused on, so its banked frame is not a lie about what is
+        // behind the veil — it is a photograph of it, and it is the ONLY cover that hands over
+        // invisibly. See `coverIsMidClip`.
+        let banked = coverIsMidClip ? subject.flatMap({ StoryPlaybackResume.frame($0) })
+                                    : subject.flatMap({ StoryPlaybackResume.usableCoverFrame($0) })
+        if let banked { return (banked, true) }
         if let poster = posterImage { return (poster, true) }
         if let thumb = blurThumbImage { return (thumb, false) }
         return nil
@@ -350,6 +363,7 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         statusObservation = nil
         readyObservation = nil
         if let tok = endObservationToken { NotificationCenter.default.removeObserver(tok) }
+        freezeTokens.forEach { NotificationCenter.default.removeObserver($0) }
         player = nil
     }
 
@@ -371,6 +385,27 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// TRUE for the runloop turn in which `setupPlayer` swaps items. `isReadyForDisplay` can still
     /// be answering about the flushed clip inside that turn — see the guard in `revealVideoIfReady`.
     private var itemSwapSettling = false
+
+    /// Where the story moved while frozen, if anywhere. Spent on the thaw — and cleared without
+    /// being spent if the story comes back to the clip that is already loaded, which is the whole
+    /// point of the exercise.
+    ///
+    /// (Whether the host IS frozen is not kept here: see `StoryHostFreeze`, which survives this view
+    /// being destroyed and rebuilt around a photo story.)
+    private var frozenPendingURL: URL?
+
+    /// The story the veil is currently speaking for while frozen, when that is NOT the clip in the
+    /// player. Nil the rest of the time, and then `cover` reads the attached clip as it always has.
+    private var frozenCoverStory: URL?
+
+    /// The thaw registration, kept so `deinit` can take it off again.
+    private var freezeTokens: [NSObjectProtocol] = []
+
+    /// TRUE while the clip behind the veil really is where its banked frame says it is — the
+    /// adoption path, where the player never let the clip go. `usableCoverFrame`'s "start of the
+    /// clip only" rule exists because playback normally RESTARTS, which would make a mid-clip still
+    /// a lie; here it is the truth, and the only cover that hands over without a jump.
+    private var coverIsMidClip = false
 
     /// The end-of-clip report for the CURRENT item, recreated per item and scoped to the item
     /// object — Telegram advances a video only from the player's own completion
@@ -553,7 +588,69 @@ final class PlayerView: UIView, StoryVideoFrameSource {
 
     func startVideo(url: URL?) {
         guard let validatedUrl = url else { return }
-        if self.url == url { return }
+        if self.url == url {
+            // BACK ON THE CLIP THAT NEVER LEFT. While frozen the story can move away and return; the
+            // player was never touched, so all that is owed is the picture — see `showFrozenCover`.
+            if frozenPendingURL != nil { frozenPendingURL = nil; revealFrozenClip() }
+            return
+        }
+        // ⚠️ A FROZEN STORY BUILDS NO PLAYER. This is Telegram's `initializeVideoIfReady`, which
+        // opens `if case .pause = self.progressMode.mode { return }` — a paused item never
+        // constructs a `videoNode` at all, and a node that already exists is only ever `pause()`d,
+        // never released (the release is tied to the media id CHANGING, not to the pause).
+        //
+        // His 2026-08-11 report: watch a video, swipe up to open the viewers sheet, swipe the little
+        // cards to another story and back, and the video is at 0:00. The sheet pauses the story and
+        // the jump posts IMMEDIATELY (it must — deferring it is what made the story underneath stay
+        // on the wrong item, which he bisected to build 517), so the shared player was handed the
+        // next story's clip and A's item was destroyed with it. Read from their source: in the
+        // collapsed/preview state Telegram keeps every card's view alive, forces all of them to
+        // `.pause`, and therefore builds NO player for the one you swipe to — so the story you were
+        // watching keeps its own paused player, its position and its last frame, for free.
+        //
+        // Ours has one player for the whole viewer, so the equivalent is to refuse the work rather
+        // than to hand it a new clip: remember where the story went, show THAT story's still, and
+        // leave the attached clip exactly where it is. The move is spent on the thaw.
+        //
+        // ⚠️ THIS IS THE SHEET ONLY. A normal navigation — tap, auto-advance, person swipe — is not
+        // frozen, falls straight through, and still restarts from zero, which is the rule he
+        // confirmed is correct and Telegram's own behaviour once the set is back at full screen.
+        if StoryHostFreeze.active, player?.currentItem != nil, self.url != nil {
+            frozenPendingURL = validatedUrl
+            showFrozenCover(for: validatedUrl)
+            return
+        }
+        // ⚠️ THE PLAYER MAY ALREADY BE ON THIS EXACT CLIP, AND REBUILDING IT IS WHAT PUTS IT BACK TO
+        // 0:00. This is the other half of his report, and it arrives by a different road.
+        //
+        // The player is shared by the whole viewer; THIS VIEW is not. Moving the story onto a PHOTO
+        // swaps the video view out for an image view entirely, so the `PlayerView` is destroyed —
+        // and coming back builds a brand new one whose `url` is nil, which walks straight into the
+        // full teardown below and rebuilds a clip the shared player is still holding, paused, at the
+        // exact second it was left on. One neighbour card being a photo was enough to lose the
+        // position that the frozen branch above had just gone to the trouble of keeping.
+        //
+        // `StoryPlaybackClock` already knows which story the player's clip belongs to (it exists so
+        // the progress bar can read the player safely), so the question is answerable without
+        // guessing from asset urls: if the attached item IS this story, take it over instead of
+        // replacing it. `setupPlayer` does everything else exactly as it always has — observers,
+        // gravity, canvas, the end report — only the item swap is skipped.
+        if let p = player, let attached = p.currentItem,
+           StoryPlaybackClock.story(for: p) == validatedUrl {
+            self.url = validatedUrl
+            canvasSourced = false
+            presentedSize = .zero
+            didRetryRemote = false
+            didReportBuffering = false
+            // A cover for the beat before this view's own layer has rendered the clip. The banked
+            // frame IS the frame the player is sitting on, so the hand-over is that still to that
+            // same still — see `coverIsMidClip`. No spinner: nothing is being fetched.
+            coverIsMidClip = true
+            addActivityIndicatory(spinning: false)
+            setupPlayer(adopting: attached, story: validatedUrl)
+            return
+        }
+        coverIsMidClip = false
         // The story this view is LEAVING banks its last picture for the cards — and ONLY the
         // picture. Its position deliberately dies with this navigation: a story moved away from is
         // PASSED, and a passed story restarts from zero on its next visit (the owner's 2026-08-11
@@ -644,6 +741,60 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         }
     }
 
+    // MARK: - Frozen: the story moves, the player does not
+
+    /// The story moved while the host had it frozen. Put THAT story's still up over the layer and
+    /// leave the player alone — the clip keeps its item, its position and its decoded frame.
+    ///
+    /// The still is the same veil every load already uses, so there is no new drawing path; the only
+    /// difference is `frozenCoverStory`, which tells `cover` whose picture to ask for. No spinner:
+    /// nothing is loading, and a wheel would claim otherwise.
+    private func showFrozenCover(for story: URL) {
+        frozenCoverStory = story
+        // The canvas belongs to the picture on screen, and the picture is about to change.
+        canvasSourced = false
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playerLayer.isHidden = true
+        CATransaction.commit()
+        refreshBackdrop()
+        addActivityIndicatory(spinning: false)
+    }
+
+    /// The story came back to the clip that never left. Take the borrowed still down and show the
+    /// layer again — it is still holding the exact frame it was paused on.
+    ///
+    /// Deliberately NOT `revealVideoIfReady`: that gate exists to decide whether a NEW clip has a
+    /// frame yet, and its first question is whether the layer is hidden by a load. Nothing here was
+    /// loaded, nothing was swapped, and `awaitedItem` still names the item that has been attached
+    /// the whole time — so the honest thing is simply to undo the cover.
+    private func revealFrozenClip() {
+        frozenCoverStory = nil
+        canvasSourced = false
+        refreshBackdrop()
+        guard player?.currentItem != nil else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playerLayer.isHidden = false
+        CATransaction.commit()
+        removeActivityIndicatory()
+    }
+
+    /// The host let go. If the story ended up somewhere else, THAT is the moment to load it.
+    ///
+    /// ⚠️ The freeze itself is cleared by `StoryHostFreeze`'s own observer, which is installed once
+    /// and therefore always runs — including for a view built after the freeze began. This handler
+    /// only spends what THIS view deferred, and the order does not matter: `startVideo` below reads
+    /// the shared answer, which is already false by the time any of this can reach it.
+    private func spendPendingMove() {
+        guard let pending = frozenPendingURL else { return }
+        frozenPendingURL = nil
+        frozenCoverStory = nil
+        // Straight through the normal path now: nothing is frozen, so this is an ordinary
+        // navigation and the new clip starts at zero exactly as any other does.
+        startVideo(url: pending)
+    }
+
     /// The cached clip's opening frame, decoded off-main and delivered into the remembered-frame
     /// slot — where the veil, the canvas sampler and `currentVideoFrame`'s fallback all already
     /// look. One seam, three readers, no new drawing path. Guarded at the landing: still this
@@ -703,7 +854,25 @@ final class PlayerView: UIView, StoryVideoFrameSource {
 //MARK: - Configure
 
 private extension PlayerView {
-    func setupPlayer(_ url: URL) {
+    /// TAKE OVER THE CLIP THE PLAYER IS ALREADY HOLDING, instead of replacing it.
+    ///
+    /// Used when this view has been rebuilt around a player that never let go of the story it is
+    /// being asked for — see the note at the adoption branch in `startVideo`. Everything about the
+    /// setup is identical; the one thing that must not happen is the item swap, because that is what
+    /// puts a clip back to 0:00.
+    ///
+    /// `story` is passed separately because the normal path is called with the CACHE FILE's url and
+    /// this one is not, and the length probe has to read something local — the attached item's own
+    /// asset, never the remote story url.
+    func setupPlayer(adopting item: AVPlayerItem, story: URL) {
+        let probe = (item.asset as? AVURLAsset)?.url ?? story
+        // The file genuinely in use, so the status observer's own guards recognise this clip and a
+        // failure can still throw the bad copy away.
+        cachedFileInUse = probe
+        setupPlayer(probe, adopting: item)
+    }
+
+    func setupPlayer(_ url: URL, adopting adopted: AVPlayerItem? = nil) {
         // Stories are sound-on media: .playback plays through the ringer
         // switch. The default (.soloAmbient) muted every story video on a silenced phone.
         try? AVAudioSession.sharedInstance().setCategory(.playback)
@@ -716,12 +885,20 @@ private extension PlayerView {
             self.itemSwapSettling = false
             self.revealVideoIfReady()
         }
-        self.player?.replaceCurrentItem(with: nil)
-        // AN ITEM PREPARED WHILE YOU WERE WATCHING THE STORY BEFORE, if there is one. It has already
-        // had its tracks loaded and its first frames decoded, so it starts on the frame rather than
-        // on a beat of nothing. See StoryItemPreloader.
-        let item = StoryItemPreloader.take(url) ?? AVPlayerItem(url: url)
-        self.player?.replaceCurrentItem(with: item)
+        let item: AVPlayerItem
+        if let adopted {
+            // ⚠️ NOT A LINE OF THIS BRANCH MAY TOUCH THE PLAYER'S ITEM. It is already attached, it is
+            // already at the second the person left it on, and replacing it — even with an item for
+            // the same file — is exactly the rewind this exists to prevent.
+            item = adopted
+        } else {
+            self.player?.replaceCurrentItem(with: nil)
+            // AN ITEM PREPARED WHILE YOU WERE WATCHING THE STORY BEFORE, if there is one. It has already
+            // had its tracks loaded and its first frames decoded, so it starts on the frame rather than
+            // on a beat of nothing. See StoryItemPreloader.
+            item = StoryItemPreloader.take(url) ?? AVPlayerItem(url: url)
+            self.player?.replaceCurrentItem(with: item)
+        }
         // THE CLIP THE COVER IS WAITING FOR. Until this line there was no item to be ready, and
         // `revealVideoIfReady` refuses on that — see its note on the previous clip's readiness.
         awaitedItem = item
@@ -1135,6 +1312,18 @@ private extension PlayerView {
             if Thread.isMainThread { self.revealVideoIfReady() }
             else { DispatchQueue.main.async { self.revealVideoIfReady() } }
         }
+        // WHO IS FROZEN is the library's answer, not this view's — see `StoryHostFreeze`. What this
+        // view keeps for itself is the move it deferred, so it needs to hear the THAW.
+        //
+        // Registered here rather than in `addObserverToVideo` deliberately: that runs per CLIP, and
+        // this axis outlives every clip put through the layer. The token is kept and removed in
+        // `deinit` — a block-based observer holds its closure, and the closure holds this view,
+        // until it is removed by hand.
+        StoryHostFreeze.install()
+        freezeTokens.append(NotificationCenter.default.addObserver(
+            forName: .resumeStory, object: nil, queue: .main) { [weak self] _ in
+                self?.spendPendingMove()
+            })
         self.layer.addSublayer(canvasLayer)   // behind everything
         self.addSubview(contentView)
         // layoutSubviews owns this geometry now (see its note) — the one-shot frame here only

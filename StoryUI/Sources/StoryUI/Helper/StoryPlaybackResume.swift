@@ -146,7 +146,48 @@ public enum StoryPlaybackResume {
     }
 
     /// The viewer is gone: a story opened later must start at its beginning.
-    public static func clearAll() { frames.removeAllObjects(); cardFrames = [:] }
+    ///
+    /// The host freeze is dropped here too. It is cleared by `.resumeStory` in the normal way; this
+    /// is the belt that guarantees a viewer can never be entered with a stale one standing.
+    public static func clearAll() {
+        frames.removeAllObjects()
+        cardFrames = [:]
+        StoryHostFreeze.reset()
+    }
+}
+
+/// HAS THE HOST FROZEN THE STORY — Telegram's `.pause` progress mode, as one answer the whole
+/// library can ask.
+///
+/// It is deliberately NOT per-view state. A `PlayerView` is destroyed and rebuilt whenever the story
+/// on screen changes between a clip and a PHOTO, so a flag living on the view would be born `false`
+/// on exactly the path that needs it most: frozen on a video, swipe the sheet's cards onto a photo
+/// and back, and the rebuilt view would not know the story was still frozen. There is one story
+/// viewer at a time, so one answer is the truthful shape.
+///
+/// ⚠️ IT MUST NEVER STRAND TRUE. A stuck freeze would stop every later story from ever loading, so
+/// it is cleared by `.resumeStory` — which the host posts at every moment the story is definitely
+/// meant to be running — and again by `clearAll` when the viewer goes. The gate that reads it also
+/// refuses to defer when there is no clip loaded yet, so even a stranded `true` cannot stop a story
+/// from starting; at worst it would stop one from changing.
+@MainActor
+enum StoryHostFreeze {
+    private(set) static var active = false
+    private static var installed = false
+
+    /// Called from every `PlayerView`'s init; does its work once.
+    static func install() {
+        guard !installed else { return }
+        installed = true
+        NotificationCenter.default.addObserver(forName: .pauseStory, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { active = true }
+        }
+        NotificationCenter.default.addObserver(forName: .resumeStory, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { active = false }
+        }
+    }
+
+    static func reset() { active = false }
 }
 
 /// WHICH STORY A PLAYER'S CLOCK BELONGS TO — the seam that lets the progress bar read the player.

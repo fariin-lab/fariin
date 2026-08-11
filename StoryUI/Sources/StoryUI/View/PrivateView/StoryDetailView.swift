@@ -828,7 +828,18 @@ private extension StoryDetailView {
                 // main-actor isolated (see the note in `playVideo`) and this call is; a body
                 // closure is.
                 StoryCardMorph.shared.rememberPlaybackState()
-                resetAVPlayer()
+                // ⚠️ NOT WHILE THE HOST HAS THE STORY FROZEN. This throws the whole `AVPlayer` away,
+                // and under the viewers sheet that is the paused clip the person is coming BACK to:
+                // swiping the sheet's cards from a video onto a photo would silently destroy the
+                // player the frozen path in `VideoLoader.startVideo` has just gone to the trouble of
+                // keeping, and the return would rebuild at 0:00. Telegram's cards do not tear
+                // anything down either — a paused item is paused, never released.
+                //
+                // Safe to leave running: it is paused, so there is no audio and no decoding, and the
+                // next real navigation replaces it as it always has. `hostPause.paused` is read
+                // directly here rather than watched, which is why this can stay out of the body —
+                // see the note on `HostPauseBox`.
+                if !hostPause.paused { resetAVPlayer() }
             }
         case .video:
             VideoView(
