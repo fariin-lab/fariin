@@ -502,16 +502,16 @@ struct WaveformBars: View {
 // the recorder's 10Hz `liveWindow`, not the 30Hz meter — thirty bars a second was a stampede.
 // Heights go through WaveformBars.display, so silence enters as the same dots the bubble draws.
 struct LiveWaveform: View {
-    let levels: [Float]      // 0…1
-    var color: Color
+    let levels: [AudioRecorder.LiveBar]   // per-sample PERMANENT ids — see LiveBar's note: identity
+    var color: Color                      // by offset froze the strip once the window filled
 
     var body: some View {
         GeometryReader { geo in
             HStack(alignment: .center, spacing: 2) {
-                ForEach(Array(levels.enumerated()), id: \.offset) { _, lvl in
+                ForEach(levels) { bar in
                     Capsule().fill(color)
                         .frame(width: 2.5,
-                               height: max(2, WaveformBars.display(Int(lvl * 100)) * geo.size.height))
+                               height: max(2, WaveformBars.display(Int(bar.level * 100)) * geo.size.height))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)

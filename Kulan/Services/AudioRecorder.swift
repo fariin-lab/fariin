@@ -17,12 +17,20 @@ final class AudioRecorder {
     var elapsed: TimeInterval = 0
     var currentTime: TimeInterval { recorder?.currentTime ?? 0 }   // live (not the 0.05s-throttled `elapsed`)
     var levels: [Float] = []          // recent normalized levels (0…1), 30Hz — feeds the mic halo
+    /// One bar of the live strip. ⚠️ The PERMANENT id is the point (his "wave stops moving for 2-3
+    /// seconds" on 531): identified by array position, a full window's removeFirst+append made
+    /// SwiftUI keep every bar where it stood and morph its HEIGHT to its neighbour's value — steady
+    /// speech is all similar heights, so the strip read as frozen until something distinct (a
+    /// silence) happened to pass. With a per-sample id the bars are the same views sliding one slot
+    /// left each tick: true travel, whatever the loudness.
+    struct LiveBar: Equatable, Identifiable { let id: Int; let level: Float }
     /// The live strip's scrolling window, sampled at 10Hz (every 3rd meter tick): bars enter on
     /// the right at a pace a person can follow and travel left — the reference's live view. 30Hz
     /// made the flow frantic; the whole-note compressed strip (tried 2026-08-11) re-bucketed on
     /// every tick and read as lag. This is the middle that looks alive.
-    var liveWindow: [Float] = []
+    var liveWindow: [LiveBar] = []
     private var liveTick = 0
+    private var liveSeq = 0
     private var allLevels: [Float] = []
 
     // ── Metering DSP state ──────────────────────────────────────────────────────────────────
@@ -175,7 +183,8 @@ final class AudioRecorder {
             }
             self.liveTick += 1
             if self.liveTick % 3 == 0 {   // 10Hz into the visible strip
-                self.liveWindow.append(level)
+                self.liveWindow.append(LiveBar(id: self.liveSeq, level: level))
+                self.liveSeq += 1
                 if self.liveWindow.count > self.waveWindow {
                     self.liveWindow.removeFirst(self.liveWindow.count - self.waveWindow)
                 }
