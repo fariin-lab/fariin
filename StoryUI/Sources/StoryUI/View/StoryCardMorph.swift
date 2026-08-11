@@ -35,6 +35,20 @@ public protocol StoryVideoFrameSource: AnyObject {
     /// `StoryPlaybackResume`'s header). The player owns the guards (over a second in, not in the
     /// last second) because it is the only thing that knows the clip's real duration.
     func rememberPlaybackState()
+    /// ⚠️ THE PICTURE OUT OF THE FILE, when the player will not hand over its own.
+    ///
+    /// `currentVideoFrame()` reads an `AVPlayerItemVideoOutput`, and a paused item vends its buffer
+    /// at most once — on some clips and some phones, never. Build 539 proved that on his device: the
+    /// bank was being asked correctly and still came back empty. Telegram never has this problem
+    /// because they do not photograph anything — the small card IS the paused player, so the frame
+    /// stays because the layer stays.
+    ///
+    /// We have ONE shared player and picture cards, so the honest translation is to take the same
+    /// pixels from the same source Telegram's layer is showing: the video file itself, decoded at
+    /// the exact second the story is sitting on. It cannot be refused, it needs no second player
+    /// (iOS limits how many videos can decode at once, which is the danger in copying their
+    /// per-item players literally), and the result on screen is the same frame.
+    func bankFrameFromFile(at seconds: Double)
 }
 
 /// One handle on the story card that is actually on screen.
@@ -913,8 +927,13 @@ public final class StoryCardMorph {
         // buffer is often already gone. A paused item gives its buffer up exactly once, so the
         // explicit bank below is the belt for the moment the writer had nothing to copy.
         source.rememberPlaybackState()
-        guard let frame = source.currentVideoFrame() else { return }
-        StoryPlaybackResume.rememberFrame(url, image: frame, at: t)
+        if let frame = source.currentVideoFrame() {
+            StoryPlaybackResume.rememberFrame(url, image: frame, at: t)
+        } else {
+            // ⚠️ NIL HERE IS NOT RARE, AND ASSUMING IT WAS COST BUILD 539. The player's video output
+            // simply refuses on some clips; the file always answers. See `bankFrameFromFile`.
+            source.bankFrameFromFile(at: t)
+        }
     }
 
     /// THE LAST FRAME, for a caller that is about to take the player away rather than freeze it.

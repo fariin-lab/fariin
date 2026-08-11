@@ -44,6 +44,8 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     private var statusObservation: NSKeyValueObservation?
     /// The cache file currently loaded, so a failure can throw the bad copy away.
     private var cachedFileInUse: URL?
+    /// A file decode is already running for this view — see `bankFrameFromFile`.
+    private var fileDecodeInFlight = false
     /// One retry per story, or a dead URL becomes an endless download loop.
     private var didRetryRemote = false
     /// The clip's cover — `thumb.jpg`, a full-size photograph of this clip's own opening frame —
@@ -672,6 +674,44 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// clip, still under cover, and no usable cover has appeared meanwhile. Playback always starts
     /// at zero now, so second zero is exactly the honest cover — banked with `at: 0` so
     /// `usableCoverFrame` will hand it back.
+    /// THE FRAME THE STORY IS SITTING ON, TAKEN FROM THE FILE — the belt for a player whose video
+    /// output will not vend a buffer (see the protocol note on `bankFrameFromFile`).
+    ///
+    /// ⚠️ ZERO TOLERANCE ON THE SEEK, AND IT IS THE WHOLE POINT. `AVAssetImageGenerator` defaults to
+    /// a generous tolerance and snaps to the nearest KEYFRAME, which on a story clip can be seconds
+    /// away — a different picture from the one on screen, which is exactly the complaint. Exact
+    /// seeking costs a little decoding and happens once, while the sheet is up and nothing is
+    /// playing.
+    ///
+    /// The LOCAL file only: an `AVURLAsset` over the network would fetch the clip a second time on
+    /// the mobile data most of these users are on, to draw a thumbnail. No cached file, no picture —
+    /// the poster stays, exactly as before.
+    ///
+    /// One at a time (`fileDecodeInFlight`): the viewers sheet re-asserts its pause twice a second,
+    /// and without this each of those would start another decode of the same clip.
+    func bankFrameFromFile(at seconds: Double) {
+        guard let story = self.url, !fileDecodeInFlight, seconds.isFinite, seconds > 0 else { return }
+        guard let file = cachedFileInUse ?? CacheManager.cachedFileIfUsable(for: story) else { return }
+        fileDecodeInFlight = true
+        let at = CMTime(seconds: seconds, preferredTimescale: 600)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: file))
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 1080, height: 1920)
+            generator.requestedTimeToleranceBefore = .zero
+            generator.requestedTimeToleranceAfter = .zero
+            let cg = try? generator.copyCGImage(at: at, actualTime: nil)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.fileDecodeInFlight = false
+                // The view may have been handed another clip while this decoded; a picture filed
+                // under the wrong story is the bug this whole area keeps producing.
+                guard self.url == story, let cg else { return }
+                StoryPlaybackResume.rememberFrame(story, image: UIImage(cgImage: cg), at: seconds)
+            }
+        }
+    }
+
     private func coverFromFirstFrame(of file: URL, for story: URL) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let generator = AVAssetImageGenerator(asset: AVURLAsset(url: file))
