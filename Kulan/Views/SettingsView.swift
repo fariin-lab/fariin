@@ -233,8 +233,19 @@ struct SettingsView: View {
                     else { showEdit = true }
                 }
             VStack(spacing: 8) {
-                Text(profile.me?.name ?? "You")
-                    .font(.title2.weight(.bold)).foregroundStyle(.primary)
+                // ⚠️ THE BADGE WAS NEVER DRAWN ON MY OWN NAME (owner 2026-08-11: "iam not seeing
+                // verify mark in my profile setting"). His account really is verified — active and
+                // official in the data, read back live — and every screen that draws OTHER people
+                // (the chat list, contact info, calls, groups, the announcement console) has carried
+                // `VerifiedMark` all along. This screen and the story header simply never asked.
+                //
+                // Same component as everywhere else, deliberately: a screen that draws its own tick
+                // is a screen that can disagree with the app about who is verified.
+                HStack(spacing: 6) {
+                    Text(profile.me?.name ?? "You")
+                        .font(.title2.weight(.bold)).foregroundStyle(.primary)
+                    if let uid = profile.me?.id { VerifiedMark(uid: uid, size: 18, explains: true) }
+                }
                 if let h = profile.me?.handle, !h.isEmpty {
                     Text("@\(h)").font(.subheadline).foregroundStyle(.secondary)
                 }
@@ -1213,6 +1224,14 @@ struct AboutView: View {
 struct StorySettingsView: View {
     @AppStorage("storyViewReceipts") private var viewReceipts = true
     @AppStorage("storiesOptedOut") private var optedOut = false
+    /// ⚠️ THE SAME DEFAULTS KEY `StoryPager.personTransition` READS, spelled out rather than shared:
+    /// the library owns the enum and the app owns the switch, and a `@AppStorage` cannot bind to a
+    /// computed property across a package boundary. `true` is `.cube`, absent/false is `.flat` —
+    /// which is what shipped, so an untouched install behaves exactly as it did.
+    @AppStorage("story.personTransition") private var transitionRaw = "flat"
+    private var cubeTransition: Binding<Bool> {
+        Binding(get: { transitionRaw == "cube" }, set: { transitionRaw = $0 ? "cube" : "flat" })
+    }
     @State private var confirmOff = false
     @State private var audiences = StoryAudienceStore.shared
     @State private var contacts: [StoryContact] = []
@@ -1256,6 +1275,14 @@ struct StorySettingsView: View {
                     Toggle("View Receipts", isOn: $viewReceipts).tint(.green)
                 } footer: {
                     Text("See and share when stories are viewed. If disabled, you won't see when others view your stories.")
+                }
+                // BOTH TRANSITIONS, SWITCHABLE, because he asked to compare them rather than to
+                // replace one with the other. Read at the moment of each turn, so flipping it takes
+                // effect on the very next tap without leaving this screen.
+                Section {
+                    Toggle("3D Cube Transition", isOn: cubeTransition).tint(.green)
+                } footer: {
+                    Text("Turn the page like a cube when moving between people's stories. Off uses the flat slide.")
                 }
             }
             Section {

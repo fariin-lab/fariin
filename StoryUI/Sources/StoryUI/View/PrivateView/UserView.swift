@@ -11,6 +11,10 @@ struct UserView: View {
 
     var image: String
     var name: String
+    /// The app's verification tick, answered by the host — see `StoryUIUser.isVerified`. Drawn beside
+    /// the name in both header shapes, because a badge that appears only on some stories reads as a
+    /// bug rather than as a distinction.
+    var isVerified: Bool = false
     var date: String
     /// Who this story went to. Nil draws nothing and the header keeps its old two-line shape.
     var audience: StoryAudienceBadge? = nil
@@ -19,6 +23,19 @@ struct UserView: View {
     var isMyStory: Bool = false    // my own story → Delete (red) instead of Hide Stories; no Forward
 
     @Binding var isPresented: Bool
+
+    /// The same glyph and the same blue the app's own `VerifiedMark` draws, so a tick on a story
+    /// looks like a tick everywhere else. Nothing when the host says no, so this costs an untouched
+    /// header exactly nothing.
+    @ViewBuilder private var verifiedTick: some View {
+        if isVerified {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white, Color(red: 0.0, green: 0.48, blue: 1.0))
+                .symbolRenderingMode(.palette)
+                .accessibilityLabel("Verified")
+        }
+    }
 
     var body: some View {
         HStack(spacing: Constant.UserView.hStackSpace) {
@@ -33,10 +50,13 @@ struct UserView: View {
                     // shape it had before the audience line existed: name, time under it (owner,
                     // 2026-08-07: "show only name and time like before, name up time under name").
                     if audience == nil {
-                        Text(name)
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundColor(.white)
-                            .lineLimit(1)
+                        HStack(spacing: 4) {
+                            Text(name)
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                            verifiedTick
+                        }
                         Text(date)
                             // 13, up from 12 (owner 2026-08-09: "too small… but not too much") —
                             // one point under the name so the hierarchy still reads name-first.
@@ -45,10 +65,13 @@ struct UserView: View {
                             .lineLimit(1)
                     } else {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
-                            Text(name)
-                                .font(.system(size: 14, weight: .semibold))
-                                .foregroundColor(.white)
-                                .lineLimit(1)
+                            HStack(spacing: 4) {
+                                Text(name)
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .lineLimit(1)
+                                verifiedTick
+                            }
                             Text(date)
                                 .font(.system(size: 13, weight: .regular))   // matches the no-badge branch
                                 .foregroundColor(.white.opacity(0.7))

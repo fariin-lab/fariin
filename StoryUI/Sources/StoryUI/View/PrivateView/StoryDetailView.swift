@@ -938,6 +938,7 @@ private extension StoryDetailView {
             UserView(
                 image: image,
                 name: name,
+                isVerified: model.user.isVerified,
                 date: date,
                 audience: audience,
                 onProfile: { onProfile?(model.user) },
@@ -1215,6 +1216,18 @@ private extension StoryDetailView {
     }
     
     func getAngle(proxy: GeometryProxy) -> Angle {
+        // ⚠️ IN CUBE MODE THIS FOLD IS OFF, AND THE PAGER'S DISPLAY LINK OWNS IT INSTEAD.
+        //
+        // Two things folding the same pages is what produced the shake and the black flash that
+        // `02cc55d1` removed the UIKit link to fix. The link is back (see `StoryPager.updateCubeLink`)
+        // because THIS fold cannot work on a finger swipe: the angle comes from
+        // `proxy.frame(in: .global)`, and a GeometryReader re-evaluates on SIZE, not POSITION — a
+        // swipe moves the pages by scroll offset, so nothing re-samples it and the page stays flat.
+        // His 2026-08-12 report is exactly that, and the tap only worked by accident.
+        //
+        // ⚠️ THESE TWO LINES ARE ONE SWITCH. Turning this back on without stopping the link brings
+        // the shake back; the `flat` setting below is untouched and still folds under a finger.
+        if StoryPager.personTransition == .cube { return .zero }
         // Cube is INERT while a swipe-down dismiss moves the card: the fold angle derives from
         // the page's GLOBAL minX, and the dismiss transform shifts it — a fast flick otherwise
         // slams the page into a sudden violent 3D fold (flipped/black frames on close).
@@ -1229,9 +1242,14 @@ private extension StoryDetailView {
         // friends pager has none for the first beat after mount — in both cases nothing is being
         // page-swiped, so nothing may fold. The old `if let` fell through on nil and computed an
         // angle, which let the OPEN hero fold the page before the pager had bound its scroll.
-        guard let s = StoryPager.horizontalScroll, s.isTracking || s.isDragging || s.isDecelerating else {
-            return .zero
-        }
+        // ⚠️ AND A PROGRAMMATIC CUBE TURN COUNTS AS MOVEMENT TOO. A tap moves the pages by frame and
+        // never touches the scroller's flags, so without this the fold would only ever run under a
+        // finger and a tapped turn would slide flat whatever the setting said. Narrow on purpose:
+        // the flag is raised around one `setViewControllers` and lowered in its completion, so
+        // nothing else — the zoom dismiss, a layout shift — can reach it. See
+        // `StoryPager.cubeTurnActive`.
+        let live = StoryPager.horizontalScroll.map { $0.isTracking || $0.isDragging || $0.isDecelerating } ?? false
+        guard live || StoryPager.cubeTurnActive else { return .zero }
         // StoryUI library's cube (tiskender2/StoryUI): angle = 45° × (minX / width). Combined with the
         // pager's horizontal slide + the .leading/.trailing anchor + perspective 2.5, this IS the cube —
         // pure SwiftUI, no UIKit transform feedback (so no shake/black).
@@ -1550,6 +1568,29 @@ private extension StoryDetailView {
     }
     
     func updateStory(direction: StoryDirectionEnum = .next) {
+        // ⚠️ ONLY THE PAGE THE VIEWER IS ACTUALLY ON MAY MOVE IT, and this guard is the other half of
+        // his 2026-08-12 bounce-back ("it suddenly takes me back to the story I had already left").
+        //
+        // A person turn keeps the departing page on screen for the length of the slide, and that page
+        // still answers taps. `getNextStory` reads `model.id` — ITS OWN person — so a tap that lands
+        // on the page being left writes "the person after ME", which by then is the person already
+        // being left behind. One late tap therefore drags the viewer backwards, and it looks exactly
+        // like a queued tap firing in reverse.
+        //
+        // The same guard every other host-facing handler in this file already carries (the seen
+        // receipt, the item-changed report, the resume). A page that is not current reports nothing
+        // and moves nothing.
+        //
+        // ⚠️ AND BOTH REFUSALS PUT `isAdvancing` BACK. Every caller sets it true immediately before
+        // calling here ("an advance is in flight"), and it is otherwise cleared only by a full
+        // `resetProgress`. A refusal that left it standing would mean no advance is running AND no
+        // further one can start — the last item of a person would stop answering taps for good.
+        guard viewModel.currentStoryUser == model.id else { isAdvancing = false; return }
+        // ⚠️ ONE TURN AT A TIME, AND A TAP DURING ONE IS DROPPED, NOT QUEUED — his rule in writing:
+        // "the navigation must be locked until the current 3D Cube transition finishes… each tap
+        // should move forward only once". Queuing is what made a fast series of taps land somewhere
+        // he had not asked for. See `StoryPager.personTurnActive`.
+        guard !StoryPager.personTurnActive else { isAdvancing = false; return }
         if direction == .previous {
             getPreviousStory()
         } else {

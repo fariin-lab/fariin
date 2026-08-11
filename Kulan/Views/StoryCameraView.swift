@@ -1,5 +1,8 @@
 import SwiftUI
 import AVFoundation
+// The volume-button shutter only. `AVCaptureEventInteraction` and its `AVCaptureEvent` live in
+// AVKit, not AVFoundation — see `CaptureEventCatcher`.
+import AVKit
 import UIKit
 import Photos
 import PhotosUI
@@ -11,7 +14,9 @@ import PhotosUI
 // MARK: - Capture session controller
 
 final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelegate,
-                         AVCaptureFileOutputRecordingDelegate {
+                         AVCaptureFileOutputRecordingDelegate,
+                         AVCaptureMetadataOutputObjectsDelegate,
+                         AVCaptureVideoDataOutputSampleBufferDelegate {
     let session = AVCaptureSession()
     /// ⚠️ ONE SERIAL QUEUE OWNS THE SESSION, AND THAT IS THE BLACK PREVIEW.
     ///
@@ -54,6 +59,83 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     @Published var recording = false
     var onCapture: ((Data) -> Void)?
     var onVideo: ((URL) -> Void)?
+
+    // MARK: - Focus and exposure
+
+    /// A QR code framed right now, as its payload. Nil the moment it leaves the frame for good.
+    /// Only links this app can actually open are ever published — see `metadataOutput`.
+    @Published var framedCode: URL?
+
+    /// The blurred last frame of the previous session, drawn while the camera boots so the screen is
+    /// never black. Telegram keeps exactly this (a blurred JPEG of the last frame, written to tmp and
+    /// shown as the boot placeholder); ours lives for the app's lifetime rather than on disk, which
+    /// covers the case that actually looks broken — leaving the camera and coming straight back.
+    @Published var bootPlaceholder: UIImage?
+
+    private let metaOutput = AVCaptureMetadataOutput()
+    private let frameOutput = AVCaptureVideoDataOutput()
+    private let frameQueue = DispatchQueue(label: "story.camera.frames")
+    /// The most recent frame, kept small and blurred, refreshed at most every 2 seconds — the same
+    /// throttle Telegram uses, for the same reason: this exists to paper over a black screen, not to
+    /// be a viewfinder, and decoding every frame to do it would cost more than it saves.
+    private var lastFrameAt: CFTimeInterval = 0
+    private let frameContext = CIContext(options: [.useSoftwareRenderer: false])
+
+    /// FOCUS AND EXPOSURE AT A POINT, which is the gesture every camera has and ours had none of.
+    ///
+    /// Both at once and from one tap, which is what Signal and Telegram both do
+    /// (`focus(with: .autoFocus, exposureMode: .autoExpose, monitorSubjectAreaChange: true)`), rather
+    /// than offering two controls for what a person thinks of as "look here".
+    ///
+    /// `isSubjectAreaChangeMonitoringEnabled` is the other half and it is not optional: without it a
+    /// tap locks the lens on that spot for good, so walking to another room leaves the picture soft
+    /// with nothing to tell the camera to try again. With it, the device posts
+    /// `AVCaptureDeviceSubjectAreaDidChange` when the scene moves and `resetFocus` puts it back to
+    /// continuous — see the observer in `configureIfNeeded`.
+    func focus(atDevicePoint point: CGPoint) {
+        sessionQueue.async { [weak self] in
+            guard let dev = self?.input?.device, (try? dev.lockForConfiguration()) != nil else { return }
+            if dev.isFocusPointOfInterestSupported, dev.isFocusModeSupported(.autoFocus) {
+                dev.focusPointOfInterest = point
+                dev.focusMode = .autoFocus
+            }
+            if dev.isExposurePointOfInterestSupported, dev.isExposureModeSupported(.autoExpose) {
+                dev.exposurePointOfInterest = point
+                dev.exposureMode = .autoExpose
+            }
+            dev.isSubjectAreaChangeMonitoringEnabled = true
+            dev.unlockForConfiguration()
+        }
+    }
+
+    /// Back to the middle, and back to continuous. Called when the scene itself changes, never from a
+    /// tap: a person who has just chosen a subject has not asked for it to be forgotten.
+    @objc private func subjectAreaChanged() {
+        sessionQueue.async { [weak self] in
+            guard let dev = self?.input?.device, (try? dev.lockForConfiguration()) != nil else { return }
+            let centre = CGPoint(x: 0.5, y: 0.5)
+            if dev.isFocusPointOfInterestSupported, dev.isFocusModeSupported(.continuousAutoFocus) {
+                dev.focusPointOfInterest = centre
+                dev.focusMode = .continuousAutoFocus
+            }
+            if dev.isExposurePointOfInterestSupported, dev.isExposureModeSupported(.continuousAutoExposure) {
+                dev.exposurePointOfInterest = centre
+                dev.exposureMode = .continuousAutoExposure
+            }
+            // Off again, or the reset re-arms itself and fires forever on a moving scene.
+            dev.isSubjectAreaChangeMonitoringEnabled = false
+            dev.unlockForConfiguration()
+        }
+    }
+
+    /// How far the shutter-drag zoom may go, in the pill's units. The device's own ceiling divided by
+    /// the virtual-device base, so it means the same thing the pill means, and capped at 8 because
+    /// past that a hand-held phone is photographing its own shake.
+    var maxDisplayedZoom: CGFloat {
+        guard let dev = input?.device else { return 1 }
+        let base = dev.virtualDeviceSwitchOverVideoZoomFactors.first.map { CGFloat(truncating: $0) } ?? 1
+        return min(8, max(1, dev.maxAvailableVideoZoomFactor / base))
+    }
 
     /// ⚠️ ONE VIRTUAL DEVICE FIRST, AND THAT IS WHAT REMOVES THE LENS POP.
     ///
@@ -150,7 +232,32 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         setInput(position: .back)
         if session.canAddOutput(output) { session.addOutput(output) }
         if session.canAddOutput(movieOutput) { session.addOutput(movieOutput) }
+        // ⚠️ EVERY ONE OF THESE IS OPTIONAL, AND THE GUARDS ARE THE POINT. A movie output and a video
+        // data output can refuse to share a session on some configurations, and a session that
+        // refuses to configure is a black camera. Each of the two additions below is asked for
+        // politely and simply does not happen if the answer is no: the QR chip and the boot
+        // placeholder are both features you would not miss, and neither is worth the camera itself.
+        if session.canAddOutput(metaOutput) {
+            session.addOutput(metaOutput)
+            metaOutput.setMetadataObjectsDelegate(self, queue: .main)
+            // AFTER `addOutput`, never before: the available types are empty until the output belongs
+            // to a session, and assigning a type that is not available raises.
+            if metaOutput.availableMetadataObjectTypes.contains(.qr) {
+                metaOutput.metadataObjectTypes = [.qr]
+            }
+        }
+        if session.canAddOutput(frameOutput) {
+            frameOutput.alwaysDiscardsLateVideoFrames = true
+            frameOutput.setSampleBufferDelegate(self, queue: frameQueue)
+            session.addOutput(frameOutput)
+        }
         session.commitConfiguration()
+        // The scene moved, so whatever a tap chose is no longer what is in front of the lens. One
+        // registration for the life of the camera; the device it names changes with every flip, so it
+        // is deliberately not scoped to an object.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(subjectAreaChanged),
+            name: AVCaptureDevice.subjectAreaDidChangeNotification, object: nil)
         // A story is short by nature, and a cap means a forgotten recording cannot fill the disk.
         movieOutput.maxRecordedDuration = CMTime(seconds: 60, preferredTimescale: 600)
         // ALREADY ALLOWED THE MICROPHONE? Then take it now, while nothing is happening, instead of
@@ -223,7 +330,10 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     }
 
     private func publishLightAvailability() {
-        let can = input?.device.hasFlash == true || input?.device.hasTorch == true
+        // THE FRONT CAMERA HAS A LAMP AFTER ALL — the screen. Without this line the flash button is
+        // hidden on the selfie camera (no hardware flash, no torch), so the screen flash added for it
+        // could never be switched on and would have been dead code. See `needsScreenFlash`.
+        let can = input?.device.hasFlash == true || input?.device.hasTorch == true || position == .front
         DispatchQueue.main.async { self.hasLight = can }
     }
 
@@ -258,6 +368,72 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         }
     }
 
+    // MARK: - QR in the frame
+
+    /// ⚠️ ONLY LINKS THIS APP CAN OPEN, which is Telegram's rule (they filter to `t.me/…` and ignore
+    /// everything else) and it is the difference between a feature and a nuisance. A general QR
+    /// reader on a story camera would offer to open a stranger's website every time a poster drifts
+    /// through the frame; this offers a Fariin profile and nothing else.
+    ///
+    /// Published on the main queue because the delegate is set with `queue: .main` — a `@Published`
+    /// write from anywhere else would be a purple runtime warning at best.
+    func metadataOutput(_ output: AVCaptureMetadataOutput,
+                        didOutput metadataObjects: [AVMetadataObject],
+                        from connection: AVCaptureConnection) {
+        let found = metadataObjects
+            .compactMap { $0 as? AVMetadataMachineReadableCodeObject }
+            .compactMap(\.stringValue)
+            .compactMap { Self.openableLink(from: $0) }
+            .first
+        // Nil is only written when the code has genuinely gone: a QR wobbling at the edge of
+        // detection would otherwise flicker the chip on and off several times a second.
+        if let found {
+            if framedCode != found { framedCode = found }
+        } else if framedCode != nil, metadataObjects.isEmpty {
+            framedCode = nil
+        }
+    }
+
+    /// A profile link this build knows how to open, or nil. Accepts the app's own scheme and the
+    /// website's profile path, which are the two shapes a Fariin profile QR can be.
+    static func openableLink(from raw: String) -> URL? {
+        guard let url = URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
+        if url.scheme == "kulan" { return url }
+        guard let host = url.host?.lowercased(),
+              host == "fariin.com" || host == "www.fariin.com" else { return nil }
+        // `/u/<handle>` is the profile route the app already resolves; anything else on the domain
+        // is a web page and not ours to open.
+        let parts = url.path.split(separator: "/")
+        guard parts.count == 2, parts[0] == "u" else { return nil }
+        return URL(string: "kulan://u/\(parts[1])")
+    }
+
+    // MARK: - The last frame, for the boot placeholder and the flip
+
+    /// A small blurred copy of what the camera can see, refreshed at most every two seconds.
+    ///
+    /// It costs one downscale and one blur per two seconds, on a background queue, and it buys two
+    /// things that both read as polish: a picture instead of black while the session starts, and
+    /// something to hold over the preview while the lens is being swapped.
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
+        let now = CACurrentMediaTime()
+        guard now - lastFrameAt > 2, let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        lastFrameAt = now
+        let ci = CIImage(cvPixelBuffer: buffer)
+        // Downscaled FIRST and then blurred: a gaussian over a full-size frame is many times the
+        // work for a picture that is about to be shown at a fortieth of the detail.
+        let small = ci.transformed(by: CGAffineTransform(scaleX: 0.08, y: 0.08))
+        guard let blurred = CIFilter(name: "CIGaussianBlur",
+                                     parameters: [kCIInputImageKey: small, kCIInputRadiusKey: 3])?.outputImage,
+              let cg = frameContext.createCGImage(blurred, from: small.extent) else { return }
+        // The preview is mirrored for the front camera and the raw buffer is not, so a placeholder
+        // taken on the front camera would be a reversed picture of the person looking at it.
+        let orientation: UIImage.Orientation = position == .front ? .leftMirrored : .right
+        let image = UIImage(cgImage: cg, scale: 1, orientation: orientation)
+        DispatchQueue.main.async { [weak self] in self?.bootPlaceholder = image }
+    }
+
     func start() {
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             guard let self else { return }
@@ -283,6 +459,9 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     }
 
     func flip() {
+        // Raised BEFORE the queue hop, so the cover is already on screen by the time the session
+        // starts tearing the input out — dispatching first would show the cut it exists to hide.
+        switching = true
         sessionQueue.async { [weak self] in
             guard let self else { return }
             // The lamp belongs to the lens being left behind: switch it off BEFORE the swap, or it
@@ -293,6 +472,9 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
             self.session.commitConfiguration()
             if self.movieOutput.isRecording { self.setTorch(self.flashOn) }
             self.publishLightAvailability()
+            // The new lens needs a beat to produce its first frame; lifting the cover the instant the
+            // session commits would uncover a black layer, which is the cut with extra steps.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { self.switching = false }
         }
     }
 
@@ -340,6 +522,17 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         }
     }
 
+    /// TRUE for the moment a lens change is in flight, so the view can hold something over the
+    /// preview instead of letting the picture cut. Telegram covers the same window with a snapshot
+    /// and a blur; ours is the blur, over the frame the preview layer is still showing.
+    @Published var switching = false
+
+    /// Does THIS lens need the screen to light the shot? The front camera has no flash on any phone
+    /// we ship to, so with the flash switched on the only light available is the display itself —
+    /// which is exactly what Telegram does (`CameraFrontFlashOverlayController` plus a brightness
+    /// ramp). The view owns the overlay and the brightness; this is the question it asks.
+    var needsScreenFlash: Bool { flashOn && position == .front && input?.device.hasFlash != true }
+
     func capture() {
         guard session.isRunning else { return }   // don't capture before the session is ready
         let settings = AVCapturePhotoSettings()
@@ -372,17 +565,161 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     }
 }
 
+// MARK: - The focus reticle
+
+/// Apple's own shape for "the camera is looking here": a thin square that arrives a little large,
+/// settles, holds, and fades. It is given a fresh identity on every tap (`.id(focusShownAt)`), so a
+/// second tap restarts the animation instead of inheriting the first one's half-faded state.
+private struct FocusReticle: View {
+    @State private var scale: CGFloat = 1.35
+    @State private var shown = true
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .stroke(Color.yellow, lineWidth: 1.5)
+            .frame(width: 74, height: 74)
+            .overlay(alignment: .leading) { tick.offset(x: -1) }
+            .overlay(alignment: .trailing) { tick.offset(x: 1) }
+            .scaleEffect(scale)
+            .opacity(shown ? 1 : 0)
+            .onAppear {
+                withAnimation(.easeOut(duration: 0.2)) { scale = 1 }
+                // Held long enough to be read, then gone on its own. Nothing clears it: the view
+                // simply stops drawing, which is why there is no state to leak.
+                withAnimation(.easeInOut(duration: 0.35).delay(1.1)) { shown = false }
+            }
+    }
+
+    private var tick: some View {
+        Rectangle().fill(Color.yellow).frame(width: 6, height: 1.5)
+    }
+}
+
+// MARK: - The volume buttons, as a shutter
+
+/// PRESS FOR A PHOTO, HOLD FOR A VIDEO — the same rule as the on-screen shutter, on the buttons
+/// people actually brace the phone with. Both reference cameras have it.
+///
+/// `AVCaptureEventInteraction` is the public API for this and the only one that is allowed: reading
+/// the volume keys by observing audio session changes is the old trick and it is rejected. It hands
+/// over a press phase, so the tap-versus-hold decision is ours to make, and it matches the shutter's
+/// own 0.22s so the two controls cannot disagree about what a hold is.
+private struct CaptureEventCatcher: UIViewRepresentable {
+    var onPhoto: () -> Void
+    var onHoldStart: () -> Void
+    var onHoldEnd: () -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.isUserInteractionEnabled = false   // it is a listener, not a control
+        let interaction = AVCaptureEventInteraction { event in
+            context.coordinator.handle(event)
+        }
+        v.addInteraction(interaction)
+        return v
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onPhoto = onPhoto
+        context.coordinator.onHoldStart = onHoldStart
+        context.coordinator.onHoldEnd = onHoldEnd
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var onPhoto: () -> Void = {}
+        var onHoldStart: () -> Void = {}
+        var onHoldEnd: () -> Void = {}
+        private var holdTimer: DispatchWorkItem?
+        private var holding = false
+
+        func handle(_ event: AVCaptureEvent) {
+            switch event.phase {
+            case .began:
+                holding = false
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.holding = true
+                    self.onHoldStart()
+                }
+                holdTimer = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: work)
+            case .ended:
+                holdTimer?.cancel()
+                holdTimer = nil
+                // A press that never became a hold is a photo; one that did is a recording ending.
+                if holding { onHoldEnd() } else { onPhoto() }
+                holding = false
+            case .cancelled:
+                holdTimer?.cancel()
+                holdTimer = nil
+                if holding { onHoldEnd() }
+                holding = false
+            @unknown default:
+                break
+            }
+        }
+    }
+}
+
 // MARK: - Live preview (AVCaptureVideoPreviewLayer)
 
 struct CameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
+    /// A tap, reported as BOTH points: where the lens should look (0-1 in the device's own space) and
+    /// where the finger landed in this view (for the reticle).
+    ///
+    /// ⚠️ THE CONVERSION CAN ONLY HAPPEN HERE. `captureDevicePointConverted(fromLayerPoint:)` belongs
+    /// to the preview layer, and the layer knows things nothing else does: the video gravity, the
+    /// crop the aspect fill is applying, and the mirroring on the front camera. A SwiftUI gesture
+    /// outside this view would have to reinvent all three and would be wrong on every phone whose
+    /// preview is not exactly the sensor's shape.
+    var onTapToFocus: ((_ devicePoint: CGPoint, _ viewPoint: CGPoint) -> Void)?
+    /// Double tap flips the camera. It lives HERE rather than as a SwiftUI `.onTapGesture(count: 2)`
+    /// so the two taps can be arbitrated properly — see `require(toFail:)` below.
+    var onDoubleTap: (() -> Void)?
+
     func makeUIView(context: Context) -> PreviewView {
         let v = PreviewView()
         v.layer.session = session
         v.layer.videoGravity = .resizeAspectFill
+        let double = UITapGestureRecognizer(target: context.coordinator,
+                                            action: #selector(Coordinator.handleDouble(_:)))
+        double.numberOfTapsRequired = 2
+        let single = UITapGestureRecognizer(target: context.coordinator,
+                                            action: #selector(Coordinator.handleSingle(_:)))
+        // ⚠️ THE FOCUS TAP MUST LOSE TO THE FLIP, and this is the only way to say it properly. Signal
+        // wires exactly this pair (`didTapFocusExpose` requiring `didDoubleTapToSwitchCamera` to
+        // fail). Without it a double-tap-to-flip also drops a focus reticle on the way past — and
+        // doing it with a timer instead lands the focus AFTER the flip, on the other camera.
+        single.require(toFail: double)
+        v.addGestureRecognizer(double)
+        v.addGestureRecognizer(single)
+        context.coordinator.view = v
         return v
     }
-    func updateUIView(_ uiView: PreviewView, context: Context) {}
+
+    func updateUIView(_ uiView: PreviewView, context: Context) {
+        context.coordinator.onTap = onTapToFocus
+        context.coordinator.onDouble = onDoubleTap
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        weak var view: PreviewView?
+        var onTap: ((CGPoint, CGPoint) -> Void)?
+        var onDouble: (() -> Void)?
+
+        @objc func handleSingle(_ g: UITapGestureRecognizer) {
+            guard let view else { return }
+            let point = g.location(in: view)
+            onTap?(view.layer.captureDevicePointConverted(fromLayerPoint: point), point)
+        }
+
+        @objc func handleDouble(_ g: UITapGestureRecognizer) { onDouble?() }
+    }
 
     final class PreviewView: UIView {
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
@@ -430,6 +767,30 @@ struct StoryCameraView: View {
     @State private var recordSeconds = 0
     @Environment(\.scenePhase) private var scenePhase
 
+    /// Where the last focus tap landed, in the preview's own coordinates, and when — the `id` on the
+    /// reticle so a second tap restarts the animation rather than joining the first one's.
+    @State private var focusPoint: CGPoint?
+    @State private var focusShownAt = Date.distantPast
+    /// The screen-flash overlay for the front camera, and the brightness to put back afterwards.
+    @State private var screenFlash = false
+    @State private var brightnessBeforeFlash: CGFloat?
+    /// How far the phone is turned, for the controls only — the preview itself never rotates.
+    @State private var deviceTilt: Angle = .zero
+    /// The zoom the shutter drag started from, so an upward drag ramps from where the picture WAS
+    /// rather than from 1× every time.
+    @State private var zoomAtRecordStart: CGFloat = 1
+    /// How far the camera has been pulled down, in points. The card FOLLOWS the finger — see the
+    /// vertical branch of the mode swipe.
+    @State private var dismissY: CGFloat = 0
+    // The drag has DECIDED it is a dismissal. Signal decides the axis once, at the first movement
+    // (their DirectionalPanGestureRecognizer), and from then on the screen follows the finger BOTH
+    // ways — the old live axis test here re-judged every event, so a finger that came back up or
+    // drifted sideways stopped being written and the card froze mid-screen (his 535 report).
+    @State private var dismissActive = false
+    /// How close the finger is to locking the recording, 0 to 1. Drives the lock's own growth so the
+    /// gesture can be FELT before it completes.
+    @State private var lockProgress: CGFloat = 0
+
     private let previewCorner: CGFloat = 40
     private let barHeight: CGFloat = 88
 
@@ -469,6 +830,15 @@ struct StoryCameraView: View {
 
     var body: some View {
         ZStack {
+            // ⚠️ SOLID BLACK, NEVER THINNED. The wall used to fade as the card travelled, meaning to
+            // show "what is behind the camera" — but this is a `fullScreenCover`, and a .fullScreen
+            // modal REMOVES the presenting screen from the window once it is up. There was nothing
+            // behind the wall but the hosting controller's flat systemBackground, so a thinned black
+            // over it rendered as a featureless GREY wall — his 2026-08-11 screenshot exactly.
+            // Signal's own story camera (`presentFullScreen` → .fullScreen from
+            // StoriesViewController) drags over plain black for the same structural reason; only
+            // their chat-list camera, presented .overFullScreen, reveals the real screen. Black is
+            // the honest floor here, and it is also their look.
             Color.black.ignoresSafeArea()
             VStack(spacing: 0) {
                 // ⚠️ BOTH PAGES STAY MOUNTED AND SLIDE. This was `if mode == .camera { preview }
@@ -531,10 +901,83 @@ struct StoryCameraView: View {
                 // gesture that CLAIMS the touch eats both (kulan-scroll-gesture-rules; this exact
                 // mistake has cost us a build before).
                 .simultaneousGesture(
-                    DragGesture(minimumDistance: 24)
+                    // ⚠️ `.global`, AND THAT ONE ARGUMENT IS HIS SHAKE (2026-08-12: "the camera
+                    // shakes/jitters during the gesture").
+                    //
+                    // A `DragGesture` measures in its own view's LOCAL space by default — and this
+                    // gesture's view is inside the very `VStack` that `.offset(y: dismissY)` moves.
+                    // So the drag moved the ruler it was being measured with: finger goes down 100,
+                    // the card goes down 100, the local translation now reads less than 100, so
+                    // `dismissY` shrinks, so the card comes back up, so the translation grows again.
+                    // That is a feedback loop running at screen refresh rate, and what it looks like
+                    // is the camera vibrating under the finger.
+                    //
+                    // Window space cannot move, so the reported translation is the finger's real
+                    // travel and the card follows it exactly once. Same reason
+                    // `StoryPager.applyCube` reads `layer.position` instead of `frame` — a value you
+                    // are writing must never be read back through the thing you wrote it to.
+                    DragGesture(minimumDistance: 24, coordinateSpace: .global)
+                        // ⚠️ THE CARD FOLLOWS THE FINGER GOING DOWN (owner 2026-08-11: "is working
+                        // but is not following my finger"). It was judged only in `onEnded`, so a
+                        // downward swipe was a FLICK: nothing moved until it was already over, and
+                        // the camera simply vanished. Signal's close is interactive — their
+                        // `PhotoCaptureInteractiveDismiss` is a real vertical pan that carries the
+                        // screen — and this is that, in the gesture that already owns this axis.
+                        //
+                        // Only downward, only in camera mode, never mid-recording, and only once the
+                        // drag is clearly vertical: the same test `onEnded` uses, applied live so the
+                        // sideways CAMERA/TEXT swipe cannot start dragging the screen down with it.
+                        .onChanged { v in
+                            guard !typing, mode == .camera else { return }
+                            guard !cam.recording else {
+                                // Recording started under a live drag: put the card back and stand
+                                // down, or it stays stranded wherever the finger left it.
+                                if dismissActive { dismissActive = false; dismissY = 0 }
+                                return
+                            }
+                            let dy = v.translation.height
+                            if !dismissActive {
+                                // The axis is judged ONCE, at entry — Signal's directional pan. A
+                                // sideways CAMERA/TEXT swipe never becomes a dismissal, and a
+                                // dismissal never freezes for turning diagonal later.
+                                guard dy > 0, dy > abs(v.translation.width) * 1.5 else { return }
+                                dismissActive = true
+                            }
+                            // 1:1 with the finger, clamped at the origin (Signal: `max(0, offset.y)`
+                            // — the card never rides above its resting place). The 24pt the gesture
+                            // spent proving itself is subtracted so tracking starts from ZERO under
+                            // the finger instead of arriving with a jump.
+                            dismissY = max(0, dy - 24)
+                        }
                         .onEnded { v in
-                            guard !typing, !cam.recording else { return }
+                            let wasDismissing = dismissActive
+                            dismissActive = false
+                            guard !typing, !cam.recording else { dismissY = 0; return }
                             let dx = v.translation.width, dy = v.translation.height
+                            if wasDismissing {
+                                // Signal's commit rule is DISTANCE ONLY: 200pt of travel, judged
+                                // where the finger let go (their `distanceToTriggerDismiss`), no
+                                // velocity clause — a short flick snaps back, and a drag brought
+                                // back under the line un-arms itself by simply being under it.
+                                if dismissY >= 200 {
+                                    // Left where the finger put it: the cover slides the rest of
+                                    // the way from here, and springing back under a dismissal is
+                                    // a flicker.
+                                    onClose()
+                                } else {
+                                    // Their cancel is a plain 0.1s animation, not a spring.
+                                    withAnimation(.easeInOut(duration: 0.1)) { dismissY = 0 }
+                                }
+                                return
+                            }
+                            // VERTICAL FIRST, and only when it is clearly vertical. Both reference
+                            // cameras put the gallery above and the exit below, and reading the axes
+                            // in one place is what stops a lazy diagonal doing both.
+                            if abs(dy) > 60, abs(dy) > abs(dx) * 1.5 {
+                                guard mode == .camera else { return }
+                                if dy < 0 { onLibrary() }
+                                return
+                            }
                             guard abs(dx) > 60, abs(dx) > abs(dy) * 1.5 else { return }
                             let next: Mode = dx < 0 ? .text : .camera
                             guard next != mode else { return }
@@ -550,6 +993,12 @@ struct StoryCameraView: View {
                         .opacity(handingOver ? 0 : 1)
                 }
             }
+            // THE WHOLE CAMERA RIDES THE FINGER — translation ONLY. Signal's camera dismiss never
+            // scales (that transition belongs to their media VIEWER, not the camera); the token
+            // shrink this carried (3.8% at a real drag) read as nothing anyway. No animation
+            // modifier here on purpose: while the finger is down the FINGER is the animation, and
+            // the put-back is applied at the release instead.
+            .offset(y: dismissY)
         }
         // THE PAGE DOES NOT RESIZE FOR THE KEYBOARD (owner 2026-08-04: "the entire editor frame moves
         // upward and a black background appears behind the keyboard").
@@ -559,6 +1008,87 @@ struct StoryCameraView: View {
         // The card now keeps the whole screen and the keyboard simply sits over its lower part;
         // inside it, the words and the two buttons lift themselves. Nothing else moves at all.
         .ignoresSafeArea(.keyboard, edges: .bottom)
+        // THE VOLUME KEYS, AS A SHUTTER. Zero-sized and non-interactive: it exists only to host the
+        // capture interaction, and it must not take a point of layout or a single touch from
+        // anything on the screen. Only in camera mode — the keys belong to the system again while a
+        // text story is being typed.
+        .background {
+            if mode == .camera {
+                CaptureEventCatcher(
+                    onPhoto: {
+                        guard !cam.recording else { cam.stopRecording(); return }
+                        captureWithScreenFlashIfNeeded()
+                    },
+                    onHoldStart: {
+                        guard !cam.recording else { return }
+                        locked = false
+                        cam.recording = true
+                        zoomAtRecordStart = baseZoom
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        cam.startRecording()
+                    },
+                    onHoldEnd: { if cam.recording { cam.stopRecording() } })
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+            }
+        }
+        // THE SCREEN IS THE FRONT CAMERA'S FLASH — white, over everything, ignoring the safe area so
+        // it lights the whole panel. See `captureWithScreenFlashIfNeeded`.
+        .overlay {
+            if screenFlash {
+                Color.white.ignoresSafeArea().allowsHitTesting(false).transition(.opacity)
+            }
+        }
+        // A QR IN THE FRAME, OFFERED RATHER THAN OBEYED. Telegram shows a chip you may tap; nothing
+        // opens itself, because a camera that navigates away on its own is a camera you cannot point
+        // at a poster. Only Fariin profile links ever reach here — see `openableLink`.
+        .overlay(alignment: .top) {
+            if let code = cam.framedCode, mode == .camera, !cam.recording {
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    onClose()
+                    // After the camera has gone, or the route opens behind a full-screen cover.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        UIApplication.shared.open(code)
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "qrcode.viewfinder").font(.system(size: 15, weight: .semibold))
+                        Text("Open profile").font(.subheadline.weight(.semibold))
+                    }
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 16).frame(height: 40)
+                    .background(.white, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 84)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: cam.framedCode)
+        // ⚠️ THE PREVIEW NEVER ROTATES, ONLY THE CONTROLS. That is what every camera does: the
+        // picture stays the right way up under your thumb and the glyphs turn to meet your eye. The
+        // whole chrome is counter-rotated by one angle, so nothing can turn a different amount from
+        // anything else.
+        .onReceive(NotificationCenter.default.publisher(
+            for: UIDevice.orientationDidChangeNotification)) { _ in
+                let next: Angle
+                switch UIDevice.current.orientation {
+                case .landscapeLeft:      next = .degrees(90)
+                case .landscapeRight:     next = .degrees(-90)
+                case .portraitUpsideDown: next = .zero   // ignored: a story is portrait
+                default:                  next = .zero   // face up/down/unknown keep the last upright
+                }
+                guard next != deviceTilt else { return }
+                withAnimation(.easeInOut(duration: 0.3)) { deviceTilt = next }
+            }
+        .onAppear {
+            // A camera left framing a shot must not dim and lock — Signal blocks the idle timer for
+            // exactly the time the camera is up. Released in `onDisappear`, which is the only place
+            // it can be, or the whole app stops sleeping.
+            UIApplication.shared.isIdleTimerDisabled = true
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        }
         .onAppear {
             // ⚠️ THE CHROME LEAVES BEFORE THE EDITOR ARRIVES — see `handingOver`. Both of these used
             // to hand straight on, so the first thing that moved was a whole modal sliding up from
@@ -583,12 +1113,21 @@ struct StoryCameraView: View {
             cam.start()
             loadLibraryThumb()
         }
-        .onDisappear { cam.stopRecording(); cam.stop() }
+        .onDisappear {
+            cam.stopRecording(); cam.stop()
+            UIApplication.shared.isIdleTimerDisabled = false
+            UIDevice.current.endGeneratingDeviceOrientationNotifications()
+            // A screen flash interrupted by leaving would otherwise leave the display pinned at full
+            // brightness for the rest of the session.
+            if let b = brightnessBeforeFlash { UIScreen.main.brightness = b; brightnessBeforeFlash = nil }
+        }
         // The clock, ticking only while there is something to count. Restarting from zero lives here
         // rather than in the gesture, so every way a recording can begin is counted the same way.
         .onChange(of: cam.recording) { _, on in
             recordSeconds = 0
-            if !on { locked = false }
+            // The lock and its growth belong to ONE recording. Carrying either into the next one
+            // would draw a lit, grown lock over a clip nobody has locked.
+            if !on { locked = false; lockProgress = 0 }
         }
         .task(id: "\(cam.recording)-\(recordSeconds)") {
             guard cam.recording else { return }
@@ -619,12 +1158,68 @@ struct StoryCameraView: View {
         }
     }
 
+    /// The flip, from the button and from the double tap, so the two can never drift apart.
+    ///
+    /// ⚠️ THE ZOOM GOES BACK TO 1× WITH IT, and that is not tidying. The pill's number is a REAR-lens
+    /// idea: `deviceZoom` multiplies by the virtual device's first switch-over factor, and the front
+    /// camera has no such device. Carrying .5 or 3 across would leave the pill saying one thing and
+    /// the picture showing another — the mismatch build 526 went to some trouble to remove. All three
+    /// are reset because they are three different things: `zoom` is what the pill draws, `baseZoom`
+    /// is what the next pinch multiplies from, and `setZoom` is the device.
+    private func flipCamera() {
+        guard !cam.denied else { return }
+        cam.flip()
+        zoom = 1
+        baseZoom = 1
+        cam.setZoom(1)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    /// A PHOTO ON THE FRONT CAMERA IN THE DARK, lit by the only lamp that phone has: its screen.
+    ///
+    /// Telegram's shape exactly — a white overlay, the display pushed to full brightness, a beat for
+    /// the exposure to settle, then the shot, then the brightness put back. The 0.12s wait is not
+    /// decoration: auto-exposure needs a moment to see the new light, and without it the picture is
+    /// taken in the dark it was trying to fix.
+    private func captureWithScreenFlashIfNeeded() {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        guard cam.needsScreenFlash else { cam.capture(); return }
+        brightnessBeforeFlash = UIScreen.main.brightness
+        withAnimation(.easeOut(duration: 0.08)) { screenFlash = true }
+        UIScreen.main.brightness = 1.0
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            cam.capture()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                withAnimation(.easeOut(duration: 0.18)) { screenFlash = false }
+                if let b = brightnessBeforeFlash { UIScreen.main.brightness = b }
+                brightnessBeforeFlash = nil
+            }
+        }
+    }
+
     // MARK: Preview card
 
     private var preview: some View {
         ZStack {
             Color.black
-            CameraPreview(session: cam.session)
+            // A PICTURE INSTEAD OF BLACK WHILE THE SESSION STARTS. Telegram keeps a blurred last
+            // frame for exactly this; ours is the same idea, held in memory. Under the live preview,
+            // so it is simply covered the moment there is a real frame — no timing, no fade to get
+            // wrong. Also what the flip cover blurs over.
+            if let placeholder = cam.bootPlaceholder {
+                Image(uiImage: placeholder)
+                    .resizable()
+                    .scaledToFill()
+                    .allowsHitTesting(false)
+            }
+            CameraPreview(session: cam.session,
+                          onTapToFocus: { devicePoint, viewPoint in
+                              cam.focus(atDevicePoint: devicePoint)
+                              focusPoint = viewPoint
+                              focusShownAt = Date()
+                              UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                          },
+                          onDoubleTap: { flipCamera() })
                 .gesture(MagnificationGesture()
                     .onChanged { scale in cam.zoomContinuous(baseZoom * scale) }
                     // 0.5 IS A REAL FLOOR NOW, not 1. Both of these used to clamp at 1 because a
@@ -632,6 +1227,34 @@ struct StoryCameraView: View {
                     // pill's units now, where the widest lens is .5 — so clamping at 1 would have
                     // made the ultra-wide unreachable by pinch and reset it on release.
                     .onEnded { scale in baseZoom = max(0.5, baseZoom * scale) })
+                // (The double tap that flips lives in `CameraPreview` now, beside the focus tap, so
+                // the two can be arbitrated with `require(toFail:)`. See `flipCamera`.)
+                //
+                // THE FLIP'S COVER. Telegram pins a snapshot over the preview and fades a dark blur
+                // across it while the session swaps inputs; ours is the blur over the frame the
+                // preview layer is still holding, which comes to the same picture without asking
+                // `drawHierarchy` for a snapshot it cannot reliably take of a video layer.
+                .overlay {
+                    if cam.switching {
+                        Rectangle()
+                            .fill(.ultraThinMaterial)
+                            .environment(\.colorScheme, .dark)
+                            .allowsHitTesting(false)
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.easeOut(duration: 0.16), value: cam.switching)
+                // THE FOCUS RETICLE — Apple's own shape: a square that lands slightly large and
+                // settles, then fades. Signal animates a Lottie file here; this is the same gesture
+                // read in one view, and it disappears on its own so there is no state to clear.
+                .overlay(alignment: .topLeading) {
+                    if let p = focusPoint {
+                        FocusReticle()
+                            .position(x: p.x, y: p.y)
+                            .allowsHitTesting(false)
+                            .id(focusShownAt)
+                    }
+                }
 
             // Camera access denied/restricted → explain + route to Settings instead of a dead black screen.
             if cam.denied {
@@ -728,6 +1351,7 @@ struct StoryCameraView: View {
         .padding(5)
         .background(.ultraThinMaterial, in: Capsule())
         .environment(\.colorScheme, .dark)
+        .rotationEffect(deviceTilt)   // the numbers read upright whichever way the phone is held
         .animation(.easeInOut(duration: 0.2), value: zoom)
     }
 
@@ -744,7 +1368,9 @@ struct StoryCameraView: View {
     private var shutter: some View {
         // Recording → this is the stop button, which is the whole point of the lock. Not recording →
         // an ordinary shutter. One control, two jobs, decided by what is happening.
-        Button { if cam.recording { cam.stopRecording() } else { cam.capture() } } label: {
+        Button {
+            if cam.recording { cam.stopRecording() } else { captureWithScreenFlashIfNeeded() }
+        } label: {
             ZStack {
                 Circle().stroke(.white.opacity(0.55), lineWidth: 3).frame(width: 84, height: 84)
                 if cam.recording {
@@ -774,19 +1400,61 @@ struct StoryCameraView: View {
                     // if the start genuinely fails.
                     cam.recording = true
                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    // Where the picture is as the recording starts, so an upward drag ramps FROM here
+                    // rather than snapping to 1× first.
+                    zoomAtRecordStart = baseZoom
                     cam.startRecording()
                 }
         )
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { v in
+                    // ⚠️ THE SLIDE IS FELT AS IT HAPPENS (owner 2026-08-11: "there's no animation,
+                    // i am not feeling if i locked"). The lock used to be a pure threshold — nothing
+                    // moved for 59 points and then it silently latched — so the only way to learn
+                    // whether it had worked was to lift your finger and find out.
+                    //
+                    // Signal drives their `LockView` from a continuous `sliderTrackingProgress` with
+                    // an unlocked/locking/locked state; this is the same idea on our control: the
+                    // lock grows and brightens as the thumb approaches it, so the gesture reports on
+                    // itself the whole way. See `lockButton`.
+                    if cam.recording, !locked {
+                        lockProgress = min(1, max(0, v.translation.width / 60))
+                    }
                     // Far enough right, hands free. 60pt is past anything a thumb wobbles.
                     if cam.recording, !locked, v.translation.width > 60 {
                         locked = true
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        lockProgress = 1
+                        UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
                     }
+                    // DRAG UP FROM THE SHUTTER TO ZOOM WHILE RECORDING — both reference cameras have
+                    // it, and it is the only way to zoom one-handed with the shutter already held.
+                    //
+                    // The two axes are kept apart the way Signal keeps them: sideways is the LOCK and
+                    // upward is the ZOOM, and neither is read while the other is winning. Without
+                    // that, sliding diagonally to lock also racks the lens to 8×.
+                    guard cam.recording else { return }
+                    let up = -v.translation.height
+                    guard up > 10, abs(v.translation.width) < 40 else { return }
+                    // A 60pt-per-step ramp, Telegram's number, from where the recording started up to
+                    // whatever this lens can actually do.
+                    let steps = (up - 10) / 60
+                    let target = min(cam.maxDisplayedZoom, zoomAtRecordStart + steps)
+                    cam.zoomContinuous(target)
+                    zoom = 0   // no pill entry matches a dragged zoom; light none of them
                 }
-                .onEnded { _ in if cam.recording, !locked { cam.stopRecording() } }
+                .onEnded { v in
+                    // The dragged zoom is where the next pinch continues from, exactly as a tapped
+                    // lens is (`zoomButton`), or letting go would silently rewind the picture.
+                    if cam.recording, -v.translation.height > 10, abs(v.translation.width) < 40 {
+                        baseZoom = min(cam.maxDisplayedZoom,
+                                       zoomAtRecordStart + (-v.translation.height - 10) / 60)
+                    }
+                    // A slide that did NOT reach the lock relaxes it back rather than leaving the
+                    // control part-grown over a recording that is ending anyway.
+                    if !locked { withAnimation(.easeOut(duration: 0.18)) { lockProgress = 0 } }
+                    if cam.recording, !locked { cam.stopRecording() }
+                }
         )
         .accessibilityLabel(cam.recording ? "Stop recording" : "Take photo, hold to record")
     }
@@ -804,17 +1472,35 @@ struct StoryCameraView: View {
     /// The lock, to the right of the shutter, exactly where his mock puts it. It is a target as well
     /// as a sign: slide onto it, or tap it, and the recording keeps going without your finger.
     private var lockButton: some View {
-        Button { locked = true } label: {
+        Button {
+            locked = true
+            lockProgress = 1
+            UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+        } label: {
             Image(systemName: locked ? "lock.fill" : "lock")
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
+                // Yellow the moment it latches, so the state is readable at a glance and not only by
+                // the shape of a small glyph.
+                .foregroundStyle(locked ? Color.yellow : .white)
                 .frame(width: 48, height: 48)
                 .background(.ultraThinMaterial, in: Circle())
                 .environment(\.colorScheme, .dark)
-                .overlay(Circle().strokeBorder(.white.opacity(locked ? 0.9 : 0.35), lineWidth: 1.5))
+                // The ring FILLS as the thumb approaches — the continuous half of the feedback, so
+                // the gesture is legible before it completes rather than only after.
+                .overlay(
+                    Circle().strokeBorder(
+                        locked ? Color.yellow.opacity(0.95)
+                               : Color.white.opacity(0.35 + 0.55 * lockProgress),
+                        lineWidth: 1.5 + 1.5 * lockProgress)
+                )
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        // Grows towards the finger on the way, then pops on the latch. Two different motions on
+        // purpose: the growth tracks the drag, the pop announces that it took.
+        .scaleEffect(locked ? 1.18 : 1 + 0.22 * lockProgress)
+        .animation(.spring(response: 0.26, dampingFraction: 0.6), value: locked)
+        .animation(.easeOut(duration: 0.1), value: lockProgress)
         .accessibilityLabel("Keep recording without holding")
     }
 
@@ -886,18 +1572,19 @@ struct StoryCameraView: View {
             HStack {
             // While recording, the library and the flip step aside: neither can be used mid-clip,
             // and his mock has only the switch down there.
-            Button { onLibrary() } label: { libraryCard }
+            Button { onLibrary() } label: { libraryCard.rotationEffect(deviceTilt) }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Choose from library")
                 .opacity(cam.recording ? 0 : 1)
                 .disabled(cam.recording)
             Spacer(minLength: 8)
-            Button { cam.flip() } label: {
+            Button { flipCamera() } label: {
                 // The symbol the app already used for this, not a newer one I would be guessing at:
                 // a wrong SF Symbol name is a BLANK button on the device and a green build in CI.
                 Image(systemName: "arrow.triangle.2.circlepath")
                     .font(.system(size: 19, weight: .medium))
                     .foregroundStyle(.white)
+                    .rotationEffect(deviceTilt)
                     .frame(width: 46, height: 46)
                     .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 1.5))
                     // Same fix as the X above, applied here before it is reported here: a ring drawn
@@ -1034,6 +1721,9 @@ struct StoryCameraView: View {
         Image(systemName: name)
             .font(.system(size: 17, weight: .semibold))
             .foregroundStyle(.white)
+            // Only the GLYPH turns. Rotating the circle as well would spin a shape that looks
+            // identical at every angle and drag its glass highlight round with it.
+            .rotationEffect(deviceTilt)
             .frame(width: 46, height: 46)
             .liquidGlass(Circle(), interactive: true)
             .contentShape(Circle())
