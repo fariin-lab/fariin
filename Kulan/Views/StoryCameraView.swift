@@ -828,7 +828,9 @@ struct StoryCameraView: View {
             // The wall thins as the card travels, so what is behind the camera shows through the way
             // it does on every interactive dismissal in the app.
             Color.black.ignoresSafeArea()
-                .opacity(1 - min(dismissY, 320) / 520)
+                // Converted explicitly: `opacity` wants a Double and `dismissY` is a CGFloat, and
+                // letting the type checker bridge that inside an expression made `/` ambiguous.
+                .opacity(Double(1 - min(dismissY, 320) / 520))
             VStack(spacing: 0) {
                 // ⚠️ BOTH PAGES STAY MOUNTED AND SLIDE. This was `if mode == .camera { preview }
                 // else { card }`, and a SwiftUI if/else is not a page change, it is a REPLACEMENT:
