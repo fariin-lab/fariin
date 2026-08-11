@@ -368,7 +368,27 @@ final class CMOverlay: UIView {
                 self.blurView.effect = nil
                 self.blurView.backgroundColor = nil
                 self.setPreviewShadow(false)
-                self.previewView.frame = home
+                // ⚠️ SCALED AS ONE UNIT, NOT RESIZED (owner 2026-08-11: the zoom-out moves the whole
+                // card, the zoom-in "is being applied to the image inside the card").
+                //
+                // This was `previewView.frame = home`, and a frame animation is a RESIZE: the lifted
+                // container's children have autoresizing masks (`StoryRowLongPress`), so every step
+                // re-lays them out and the card image re-renders at a new size inside a corner radius
+                // that is fixed in POINTS. The picture appears to grow within the card instead of the
+                // card growing — which is exactly what he photographed, avatar escaping the corner
+                // and all.
+                //
+                // It only shows on the CLOSE because that is the only end that changes size: the copy
+                // was photographed while the card was dipped to 0.92 and `home` is the live,
+                // un-dipped rect, so the close has ~8% to travel and the open has none.
+                //
+                // A transform scales the whole lifted unit and touches no child's layout — the same
+                // kind of animation the zoom-out already is (the real card's own `transform` spring),
+                // which is the symmetry he asked for. Uniform on purpose: separate x and y would
+                // distort a card whose aspect is not exactly the source's.
+                let s = home.width / max(1, self.previewView.bounds.width)
+                self.previewView.transform = CGAffineTransform(scaleX: s, y: s)
+                self.previewView.center = CGPoint(x: home.midX, y: home.midY)
                 self.card.transform = CGAffineTransform(scaleX: 0.01, y: 0.01)
                 self.card.alpha = 0
                 self.bar?.alpha = 0
