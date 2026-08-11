@@ -274,14 +274,25 @@ struct StoryLibraryPicker: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                Picker("", selection: $tab) {
-                    Text("Photos").tag(0)
-                    Text("Albums").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 16).padding(.vertical, 8)
+                // APPLE'S CONTROL, NOT SWIFTUI'S PICTURE OF IT (owner 2026-08-11: "change to the
+                // other design for apple, not custom").
+                //
+                // This was `Picker(.segmented)`, and the trap is already written down from the
+                // camera bar's five attempts: **SwiftUI's segmented Picker does not render as the
+                // system's glass control here.** It is documented as the same control, but SwiftUI
+                // drives it through its own appearance path and it comes out as the flat grey track
+                // in his screenshot. UIKit's `UISegmentedControl`, handed nothing at all, draws the
+                // real thing. See `ComposerTypeSwitch` in StoryCameraView.
+                //
+                // Deliberately its OWN representable rather than sharing the camera's: that one is
+                // Signal's control down to the uppercase titles and the 14pt rounded font, it took
+                // five attempts to get right, and it ships on a screen this one has no business
+                // changing. Same rule, different words.
+                GlassSegmentedSwitch(titles: ["Photos", "Collections"], selection: $tab)
+                    .frame(height: 40)
+                    .padding(.horizontal, 16).padding(.vertical, 8)
 
-                if tab == 0 { photosTab } else { albumsTab }
+                if tab == 0 { photosTab } else { collectionsTab }
                 if allowsMultiple, !picked.isEmpty { selectionBar }
             }
             // ONE BLACK, not two. The theme fix made the bar dark; it did not make it the SAME dark.
@@ -529,30 +540,90 @@ struct StoryLibraryPicker: View {
         }
     }
 
-    // MARK: - Albums tab
-    private var albumsTab: some View {
-        List(store.albums) { album in
-            Button { openAlbum = album } label: {
-                HStack(spacing: 12) {
+    // MARK: - Collections tab
+    //
+    // APPLE'S SHAPE, NOT OUR OWN (owner 2026-08-11, with the layout drawn out): Recents and
+    // Favourites pinned at the top with no heading, then a big **Albums** heading and everything
+    // else under it. What was here was a plain `List` of 54pt thumbnails with a chevron on each
+    // row — the system's default list, which is exactly what he means by "custom": it looks like a
+    // settings screen, not like Photos.
+    //
+    // Rebuilt as a scroll of plain rows so the numbers are ours to match his drawing: an 80pt
+    // rounded-square cover, the title over its count, and a hairline that starts at the cover's own
+    // leading edge. No chevron — Photos has none, and a row that is entirely tappable does not need
+    // one to say so.
+    private var collectionsTab: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(store.pinned.enumerated()), id: \.element.id) { i, album in
+                    albumRow(album)
+                    if i < store.pinned.count - 1 { rowDivider }
+                }
+                if !store.albums.isEmpty {
+                    Text("Albums")
+                        .font(.title2.weight(.bold))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, Self.rowInset)
+                        // Air above it, because it is a section break and not another row. Less
+                        // underneath: the hairline below belongs to the first album, not to this.
+                        .padding(.top, store.pinned.isEmpty ? 8 : 26)
+                        .padding(.bottom, 10)
+                    rowDivider
+                }
+                ForEach(Array(store.albums.enumerated()), id: \.element.id) { i, album in
+                    albumRow(album)
+                    if i < store.albums.count - 1 { rowDivider }
+                }
+            }
+            .padding(.top, 6)
+        }
+        // Only while there is genuinely nothing yet. Both lists are written in one go when the fetch
+        // lands, so an empty `pinned` AND `albums` is the loading state — and a library with no
+        // albums at all resolves to the same spinner for a beat and then an empty screen, which is
+        // the truth about a library with no albums.
+        .overlay { if store.pinned.isEmpty && store.albums.isEmpty { ProgressView() } }
+    }
+
+    /// The row inset, and the hairline's leading edge — one number so the two cannot drift.
+    private static let rowInset: CGFloat = 20
+
+    private var rowDivider: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.10))
+            .frame(height: 0.5)
+            .padding(.leading, Self.rowInset)
+    }
+
+    private func albumRow(_ album: AlbumInfo) -> some View {
+        Button { openAlbum = album } label: {
+            HStack(spacing: 14) {
+                Group {
                     if let cover = album.cover {
                         StoryThumb(asset: cover, store: store)
-                            .frame(width: 54, height: 54).clipShape(RoundedRectangle(cornerRadius: 8))
                     } else {
-                        RoundedRectangle(cornerRadius: 8).fill(Color(.systemGray5)).frame(width: 54, height: 54)
+                        // A collection with no cover still gets the same block, so the titles down
+                        // the screen stay on one line as the eye travels.
+                        Rectangle().fill(Color(.systemGray5))
                     }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(album.title).foregroundStyle(.primary).lineLimit(1)
-                        Text("\(album.count)").font(.footnote).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.footnote).foregroundStyle(.tertiary)
                 }
-                .contentShape(Rectangle())   // whole row tappable (Spacer area too), not just the icons/text
+                .frame(width: 80, height: 80)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(album.title)
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Text("\(album.count)")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, Self.rowInset)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())   // the whole row, Spacer included
         }
-        .listStyle(.plain)
-        .overlay { if store.albums.isEmpty { ProgressView() } }
+        .buttonStyle(.plain)
     }
 
     private func albumGrid(_ album: AlbumInfo) -> some View {
@@ -689,6 +760,60 @@ struct StoryThumb: View {
     }
 }
 
+/// THE SYSTEM'S SEGMENTED CONTROL, WITH NOTHING DONE TO IT.
+///
+/// ⚠️ **ANYTHING PAINTED ON THE TRACK TURNS IT INTO FLAT GREY PLASTIC**, and that single fact is the
+/// whole of this file's worth of history: no `backgroundColor`, no background image, no divider
+/// image, no tint. On a dark sheet a material has nothing to refract, so every wash or tint resolves
+/// to grey — which is what SwiftUI's `Picker(.segmented)` was giving us here, and what he
+/// photographed. Only the font and the two title colours are set, and the dark trait is PINNED
+/// rather than hardcoding white, because a hardcoded white is a restyle and a restyled system
+/// control is a custom one again.
+///
+/// Full width by design (no `.fixedSize()`): the segments split the bar evenly the way the Photos
+/// picker's does, rather than shrinking to their words.
+struct GlassSegmentedSwitch: UIViewRepresentable {
+    let titles: [String]
+    @Binding var selection: Int
+
+    /// 40pt tall, the height he asked for on the camera's bar (2026-08-09, "make it 40px") and the
+    /// same one the Photos album bar uses. The default track is ~32.
+    private final class TallSegmentedControl: UISegmentedControl {
+        override var intrinsicContentSize: CGSize {
+            var s = super.intrinsicContentSize
+            s.height = 40
+            return s
+        }
+    }
+
+    func makeUIView(context: Context) -> UISegmentedControl {
+        let control = TallSegmentedControl(items: titles)
+        control.selectedSegmentIndex = selection
+        control.overrideUserInterfaceStyle = .dark   // this sheet is always dark; see storyAlwaysDark
+        let normal = UIFont.preferredFont(forTextStyle: .body)
+        let selected = UIFontDescriptor.preferredFontDescriptor(withTextStyle: .body)
+            .withSymbolicTraits(.traitBold).map { UIFont(descriptor: $0, size: normal.pointSize) } ?? normal
+        control.setTitleTextAttributes([.font: normal, .foregroundColor: UIColor.secondaryLabel], for: .normal)
+        control.setTitleTextAttributes([.font: selected, .foregroundColor: UIColor.label], for: .selected)
+        control.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
+        return control
+    }
+
+    func updateUIView(_ control: UISegmentedControl, context: Context) {
+        context.coordinator.onChange = { selection = $0 }
+        // Only when it actually differs: writing the same index back mid-update restarts the
+        // selection animation.
+        if control.selectedSegmentIndex != selection { control.selectedSegmentIndex = selection }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var onChange: (Int) -> Void = { _ in }
+        @objc func changed(_ sender: UISegmentedControl) { onChange(sender.selectedSegmentIndex) }
+    }
+}
+
 struct AlbumInfo: Identifiable, Hashable {
     let id: String
     let collection: PHAssetCollection
@@ -702,6 +827,10 @@ struct AlbumInfo: Identifiable, Hashable {
 @MainActor
 final class PhotoGridStore: ObservableObject {
     @Published var assets: [PHAsset] = []
+    /// Recents and Favourites, in that order — the two that sit above the `Albums` heading.
+    @Published var pinned: [AlbumInfo] = []
+    /// Everything else: the remaining smart albums (Videos, Selfies, Screenshots…) and the ones the
+    /// person made themselves.
     @Published var albums: [AlbumInfo] = []
     private let manager = PHCachingImageManager()
 
@@ -731,24 +860,44 @@ final class PhotoGridStore: ObservableObject {
         }
     }
 
+    /// RECENTS AND FAVOURITES COME OUT SEPARATELY, because the Collections screen pins them above
+    /// everything else the way Apple's Photos does — see `collectionsTab`. They used to arrive in
+    /// the same flat list as every other album, which is why the screen could only ever be one long
+    /// undifferentiated list.
     func loadAlbums() {
         PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
             guard status == .authorized || status == .limited else { return }
-            var out: [AlbumInfo] = []
             let imgOpts = PHFetchOptions()
             imgOpts.predicate = Self.mediaPredicate
+            // An album with nothing this picker can post is not shown at all — the count and the
+            // cover both come from the SAME filtered fetch, so neither can promise something the
+            // grid behind it would not have.
+            func info(_ coll: PHAssetCollection) -> AlbumInfo? {
+                let assets = PHAsset.fetchAssets(in: coll, options: imgOpts)
+                guard assets.count > 0 else { return nil }
+                return AlbumInfo(id: coll.localIdentifier, collection: coll,
+                                 title: coll.localizedTitle ?? "Album",
+                                 count: assets.count, cover: assets.firstObject)
+            }
+            // `.smartAlbumUserLibrary` IS "Recents" — the name is the only surprising thing about it.
+            var pinnedOut: [AlbumInfo] = []
+            for subtype in [PHAssetCollectionSubtype.smartAlbumUserLibrary, .smartAlbumFavorites] {
+                PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: subtype, options: nil)
+                    .enumerateObjects { coll, _, _ in if let i = info(coll) { pinnedOut.append(i) } }
+            }
+            let pinnedIDs = Set(pinnedOut.map(\.id))
+            var out: [AlbumInfo] = []
             func collect(_ collections: PHFetchResult<PHAssetCollection>) {
                 collections.enumerateObjects { coll, _, _ in
-                    let assets = PHAsset.fetchAssets(in: coll, options: imgOpts)
-                    guard assets.count > 0 else { return }
-                    out.append(AlbumInfo(id: coll.localIdentifier, collection: coll,
-                                         title: coll.localizedTitle ?? "Album",
-                                         count: assets.count, cover: assets.firstObject))
+                    // Skipped rather than deduplicated afterwards: the two pinned ones are fetched
+                    // by subtype above and would otherwise appear twice, once in each place.
+                    guard !pinnedIDs.contains(coll.localIdentifier), let i = info(coll) else { return }
+                    out.append(i)
                 }
             }
             collect(PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .any, options: nil))
             collect(PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil))
-            Task { @MainActor in self.albums = out }
+            Task { @MainActor in self.pinned = pinnedOut; self.albums = out }
         }
     }
 
