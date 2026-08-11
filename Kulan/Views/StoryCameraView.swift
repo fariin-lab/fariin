@@ -779,6 +779,12 @@ struct StoryCameraView: View {
     /// The zoom the shutter drag started from, so an upward drag ramps from where the picture WAS
     /// rather than from 1× every time.
     @State private var zoomAtRecordStart: CGFloat = 1
+    /// How far the camera has been pulled down, in points. The card FOLLOWS the finger — see the
+    /// vertical branch of the mode swipe.
+    @State private var dismissY: CGFloat = 0
+    /// How close the finger is to locking the recording, 0 to 1. Drives the lock's own growth so the
+    /// gesture can be FELT before it completes.
+    @State private var lockProgress: CGFloat = 0
 
     private let previewCorner: CGFloat = 40
     private let barHeight: CGFloat = 88
@@ -819,7 +825,10 @@ struct StoryCameraView: View {
 
     var body: some View {
         ZStack {
+            // The wall thins as the card travels, so what is behind the camera shows through the way
+            // it does on every interactive dismissal in the app.
             Color.black.ignoresSafeArea()
+                .opacity(1 - min(dismissY, 320) / 520)
             VStack(spacing: 0) {
                 // ⚠️ BOTH PAGES STAY MOUNTED AND SLIDE. This was `if mode == .camera { preview }
                 // else { card }`, and a SwiftUI if/else is not a page change, it is a REPLACEMENT:
@@ -882,6 +891,22 @@ struct StoryCameraView: View {
                 // mistake has cost us a build before).
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 24)
+                        // ⚠️ THE CARD FOLLOWS THE FINGER GOING DOWN (owner 2026-08-11: "is working
+                        // but is not following my finger"). It was judged only in `onEnded`, so a
+                        // downward swipe was a FLICK: nothing moved until it was already over, and
+                        // the camera simply vanished. Signal's close is interactive — their
+                        // `PhotoCaptureInteractiveDismiss` is a real vertical pan that carries the
+                        // screen — and this is that, in the gesture that already owns this axis.
+                        //
+                        // Only downward, only in camera mode, never mid-recording, and only once the
+                        // drag is clearly vertical: the same test `onEnded` uses, applied live so the
+                        // sideways CAMERA/TEXT swipe cannot start dragging the screen down with it.
+                        .onChanged { v in
+                            guard !typing, !cam.recording, mode == .camera else { return }
+                            let dy = v.translation.height
+                            guard dy > 0, dy > abs(v.translation.width) * 1.5 else { return }
+                            dismissY = dy
+                        }
                         .onEnded { v in
                             guard !typing, !cam.recording else { return }
                             let dx = v.translation.width, dy = v.translation.height
@@ -889,9 +914,22 @@ struct StoryCameraView: View {
                             // cameras put the gallery above and the exit below, and reading the axes
                             // in one place is what stops a lazy diagonal doing both.
                             if abs(dy) > 60, abs(dy) > abs(dx) * 1.5 {
-                                guard mode == .camera else { return }
-                                if dy < 0 { onLibrary() } else { onClose() }
+                                guard mode == .camera else { dismissY = 0; return }
+                                if dy < 0 { onLibrary(); dismissY = 0; return }
+                                // Past the threshold OR thrown: a fast flick should not have to
+                                // travel the whole way, which is the half that makes an interactive
+                                // dismiss feel native rather than strict.
+                                if dy > 140 || v.predictedEndTranslation.height > 320 {
+                                    onClose()
+                                    // Left where the finger put it: the cover is going away, and
+                                    // springing back under a dismissal is a flicker.
+                                } else {
+                                    withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { dismissY = 0 }
+                                }
                                 return
+                            }
+                            if dismissY != 0 {
+                                withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) { dismissY = 0 }
                             }
                             guard abs(dx) > 60, abs(dx) > abs(dy) * 1.5 else { return }
                             let next: Mode = dx < 0 ? .text : .camera
@@ -908,6 +946,13 @@ struct StoryCameraView: View {
                         .opacity(handingOver ? 0 : 1)
                 }
             }
+            // THE WHOLE CAMERA RIDES THE FINGER. Offset and a slight shrink from the top, which is
+            // the shape every interactive dismissal in this app uses — the card reads as being
+            // pushed away rather than as a screen being deleted. No animation modifier here on
+            // purpose: while the finger is down the FINGER is the animation, and the spring back is
+            // applied at the release instead.
+            .offset(y: dismissY)
+            .scaleEffect(1 - min(dismissY, 320) / 2600, anchor: .top)
         }
         // THE PAGE DOES NOT RESIZE FOR THE KEYBOARD (owner 2026-08-04: "the entire editor frame moves
         // upward and a black background appears behind the keyboard").
@@ -1034,7 +1079,9 @@ struct StoryCameraView: View {
         // rather than in the gesture, so every way a recording can begin is counted the same way.
         .onChange(of: cam.recording) { _, on in
             recordSeconds = 0
-            if !on { locked = false }
+            // The lock and its growth belong to ONE recording. Carrying either into the next one
+            // would draw a lit, grown lock over a clip nobody has locked.
+            if !on { locked = false; lockProgress = 0 }
         }
         .task(id: "\(cam.recording)-\(recordSeconds)") {
             guard cam.recording else { return }
@@ -1316,9 +1363,22 @@ struct StoryCameraView: View {
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { v in
+                    // ⚠️ THE SLIDE IS FELT AS IT HAPPENS (owner 2026-08-11: "there's no animation,
+                    // i am not feeling if i locked"). The lock used to be a pure threshold — nothing
+                    // moved for 59 points and then it silently latched — so the only way to learn
+                    // whether it had worked was to lift your finger and find out.
+                    //
+                    // Signal drives their `LockView` from a continuous `sliderTrackingProgress` with
+                    // an unlocked/locking/locked state; this is the same idea on our control: the
+                    // lock grows and brightens as the thumb approaches it, so the gesture reports on
+                    // itself the whole way. See `lockButton`.
+                    if cam.recording, !locked {
+                        lockProgress = min(1, max(0, v.translation.width / 60))
+                    }
                     // Far enough right, hands free. 60pt is past anything a thumb wobbles.
                     if cam.recording, !locked, v.translation.width > 60 {
                         locked = true
+                        lockProgress = 1
                         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
                     }
                     // DRAG UP FROM THE SHUTTER TO ZOOM WHILE RECORDING — both reference cameras have
@@ -1344,6 +1404,9 @@ struct StoryCameraView: View {
                         baseZoom = min(cam.maxDisplayedZoom,
                                        zoomAtRecordStart + (-v.translation.height - 10) / 60)
                     }
+                    // A slide that did NOT reach the lock relaxes it back rather than leaving the
+                    // control part-grown over a recording that is ending anyway.
+                    if !locked { withAnimation(.easeOut(duration: 0.18)) { lockProgress = 0 } }
                     if cam.recording, !locked { cam.stopRecording() }
                 }
         )
@@ -1363,17 +1426,35 @@ struct StoryCameraView: View {
     /// The lock, to the right of the shutter, exactly where his mock puts it. It is a target as well
     /// as a sign: slide onto it, or tap it, and the recording keeps going without your finger.
     private var lockButton: some View {
-        Button { locked = true } label: {
+        Button {
+            locked = true
+            lockProgress = 1
+            UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+        } label: {
             Image(systemName: locked ? "lock.fill" : "lock")
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.white)
+                // Yellow the moment it latches, so the state is readable at a glance and not only by
+                // the shape of a small glyph.
+                .foregroundStyle(locked ? Color.yellow : .white)
                 .frame(width: 48, height: 48)
                 .background(.ultraThinMaterial, in: Circle())
                 .environment(\.colorScheme, .dark)
-                .overlay(Circle().strokeBorder(.white.opacity(locked ? 0.9 : 0.35), lineWidth: 1.5))
+                // The ring FILLS as the thumb approaches — the continuous half of the feedback, so
+                // the gesture is legible before it completes rather than only after.
+                .overlay(
+                    Circle().strokeBorder(
+                        locked ? Color.yellow.opacity(0.95)
+                               : Color.white.opacity(0.35 + 0.55 * lockProgress),
+                        lineWidth: 1.5 + 1.5 * lockProgress)
+                )
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        // Grows towards the finger on the way, then pops on the latch. Two different motions on
+        // purpose: the growth tracks the drag, the pop announces that it took.
+        .scaleEffect(locked ? 1.18 : 1 + 0.22 * lockProgress)
+        .animation(.spring(response: 0.26, dampingFraction: 0.6), value: locked)
+        .animation(.easeOut(duration: 0.1), value: lockProgress)
         .accessibilityLabel("Keep recording without holding")
     }
 
