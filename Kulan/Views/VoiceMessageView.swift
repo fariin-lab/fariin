@@ -517,19 +517,24 @@ struct LiveWaveform: View {
             let slot: CGFloat = 4.5   // 2.5 bar + 2 gap — must match the HStack below
             HStack(alignment: .center, spacing: 2) {
                 ForEach(Array(levels.enumerated()), id: \.element.id) { i, bar in
-                    // THE EXIT SUCKS THE BAR IN — his circled reference screenshot: a bar
-                    // approaching the left edge shrinks toward a dot and vanishes, instead of
-                    // leaving at full height and being beheaded by the clip. The taper factor is
-                    // the bar's distance from the strip's left edge over the taper width; while
-                    // the row is still shorter than the strip nothing is near that edge, so young
-                    // recordings are untouched. Because the bars TRAVEL now (permanent ids), each
-                    // one walks down this ramp itself — which is exactly the sucking.
+                    // A BAR IS WHAT WAS HEARD, THE WHOLE WAY ACROSS — his second report: the first
+                    // taper was 36pt wide, so tall bars began shrinking in the MIDDLE of the strip
+                    // and the picture stopped being true. The duck is 14pt now, the bar's own last
+                    // breath at the exit and nothing more: silence travels as dots untouched (the
+                    // 2pt floor already is the dot), speech travels at full height, and only a
+                    // tall bar touching the edge bows out. While the row is shorter than the strip
+                    // nothing is near that edge, so young recordings are never shaped.
                     let fromRight = CGFloat(levels.count - 1 - i) * slot
                     let fromLeft = geo.size.width - fromRight
-                    let taper = max(0, min(1, fromLeft / 36))
+                    let taper = max(0, min(1, fromLeft / 14))
                     Capsule().fill(color)
                         .frame(width: 2.5,
                                height: max(2, WaveformBars.display(Int(bar.level * 100)) * geo.size.height * taper))
+                        // A new bar ARRIVES at its true height — .identity kills the insertion
+                        // grow-in the implicit animation gave it, which read as bars entering
+                        // small and swelling into place ("it depends what wave heard, not fixed").
+                        // The spring below still animates the leftward travel.
+                        .transition(.identity)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
