@@ -1556,6 +1556,29 @@ private extension StoryDetailView {
     }
     
     func updateStory(direction: StoryDirectionEnum = .next) {
+        // ⚠️ ONLY THE PAGE THE VIEWER IS ACTUALLY ON MAY MOVE IT, and this guard is the other half of
+        // his 2026-08-12 bounce-back ("it suddenly takes me back to the story I had already left").
+        //
+        // A person turn keeps the departing page on screen for the length of the slide, and that page
+        // still answers taps. `getNextStory` reads `model.id` — ITS OWN person — so a tap that lands
+        // on the page being left writes "the person after ME", which by then is the person already
+        // being left behind. One late tap therefore drags the viewer backwards, and it looks exactly
+        // like a queued tap firing in reverse.
+        //
+        // The same guard every other host-facing handler in this file already carries (the seen
+        // receipt, the item-changed report, the resume). A page that is not current reports nothing
+        // and moves nothing.
+        //
+        // ⚠️ AND BOTH REFUSALS PUT `isAdvancing` BACK. Every caller sets it true immediately before
+        // calling here ("an advance is in flight"), and it is otherwise cleared only by a full
+        // `resetProgress`. A refusal that left it standing would mean no advance is running AND no
+        // further one can start — the last item of a person would stop answering taps for good.
+        guard viewModel.currentStoryUser == model.id else { isAdvancing = false; return }
+        // ⚠️ ONE TURN AT A TIME, AND A TAP DURING ONE IS DROPPED, NOT QUEUED — his rule in writing:
+        // "the navigation must be locked until the current 3D Cube transition finishes… each tap
+        // should move forward only once". Queuing is what made a fast series of taps land somewhere
+        // he had not asked for. See `StoryPager.personTurnActive`.
+        guard !StoryPager.personTurnActive else { isAdvancing = false; return }
         if direction == .previous {
             getPreviousStory()
         } else {
