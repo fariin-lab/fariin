@@ -953,6 +953,18 @@ final class CallService: NSObject {
         // Keep the toggle state honest no matter WHAT moved the route (picker, AirPods
         // connecting mid-call, CallKit) — the button highlight reads from this.
         isSpeaker = audioRoute == .speaker
+        // ECHO CANCELLATION FOLLOWS THE ROUTE — his two-phone report: both sides on loudspeaker,
+        // he heard his own voice come back until the other side left speaker. The AEC mode was
+        // only ever chosen by CAMERA (applyVideoAudioPolicy), so a VOICE call flipped to
+        // loudspeaker kept the earpiece-tuned canceller (.voiceChat) working against a
+        // loudspeaker's acoustics — which is precisely the hear-yourself bug that mode split
+        // exists to prevent. The mode now tracks where the sound actually comes OUT, on every
+        // route change from any cause: loudspeaker → .videoChat (loudspeaker-tuned AEC, video or
+        // not), anything else → .voiceChat. External devices keep .voiceChat: there is no
+        // acoustic path from an AirPod to the mic worth retuning for, and their own processing
+        // does the rest.
+        let wantMode: AVAudioSession.Mode = (audioRoute == .speaker) ? .videoChat : .voiceChat
+        if session.mode != wantMode { try? session.setMode(wantMode) }
         // Manual earpiece choice / external route: intent follows reality so we don't re-assert later.
         // NOT while video is showing, though. Clearing it unconditionally meant plugging in AirPods
         // destroyed the speakerphone intent a video call had set, so UNPLUGGING them later landed the
@@ -1770,8 +1782,16 @@ final class CallService: NSObject {
         guard state != .ended, state != .idle else { return }   // re-entry guard: only finish once
         cancelTimers()
         stopRingback()
-        if endReason == .none {   // infer it: connected→hang up, else caller=missed / callee=declined
-            endReason = connectedDate != nil ? .hangup : (isCaller ? .missed : .declined)
+        if endReason == .none {
+            // Connected → hang up. Not connected: the CALLER's end is a miss, and the CALLEE's end
+            // is a decline ONLY when a human did it (`localUser` — the CallKit End/Decline path).
+            // ⚠️ It used to say declined for EVERY callee-side end, so a teardown the person never
+            // touched — mic permission refused mid-answer, a cold-launch answer that found no
+            // offer, any internal failure while ringing — told the caller "Declined", and the
+            // callee could honestly swear they never declined (his 1:40 AM report, exactly that
+            // shape). A failure is a failure; only a finger gets to be a refusal.
+            endReason = connectedDate != nil ? .hangup
+                      : (isCaller ? .missed : (localUser ? .declined : .failed))
         }
         // Write a call record into the chat (once). Each side writes its own row.
         // callId != nil matters: denying the mic on an OUTGOING call hangs up before the call doc is

@@ -445,7 +445,16 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         playing = false
         timer?.invalidate(); timer = nil
         pausedProgress[messageId] = progress
-        release()
+        // ⚠️ THE AUDIO SESSION IS NOT GIVEN BACK ON A PAUSE ANY MORE — his "still late play"
+        // report. `release()` here deactivated the session, so EVERY resume paid setActive(true)'s
+        // audio-hardware renegotiation (~100-300ms of silence after the tap) before a sound came
+        // out. A paused note is still open (`hasNote`) and still the owner; only finishing or
+        // dismissing releases now. The cost, accepted knowingly: another app's music will not
+        // resume while a note sits paused — the trade every reference messenger makes, because a
+        // play button that answers instantly is the thing a voice-first user touches most.
+        // Screen-sleep and raise-to-ear still stand down, they never needed the session.
+        SleepBlocker.shared.remove("voice-play")
+        UIDevice.current.isProximityMonitoringEnabled = false
         // The note stays OPEN on a pause — that is the whole point of `hasNote`. The lock screen keeps
         // its entry, now reading paused, so play is still one tap away without unlocking.
         updateNowPlaying()
@@ -456,6 +465,8 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         resumeAfterInterruption = false   // they ended it; a call finishing must not bring it back
         followOn = []                     // closing the bar ends the run, not just the note on it
         pause()
+        release()   // pause() holds the session now (instant resume); dismissing is the real end,
+                    // and this must run BEFORE messageId clears — release identifies itself by it
         player = nil
         messageId = ""
         progress = 0
