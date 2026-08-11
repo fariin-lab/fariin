@@ -44,6 +44,14 @@ struct StoryPager: UIViewControllerRepresentable {
     // zoom-transition interactive dismiss, layout shifts — must never fold the pages.
     static weak var horizontalScroll: UIScrollView?
 
+    /// HOW LONG A PROGRAMMATIC PERSON-TO-PERSON TURN TAKES — the owner's number (2026-08-11:
+    /// "approximately 0.10 seconds… feels fast and responsive"). It replaces
+    /// `UIPageViewController`'s own slide, whose duration is private and several times this.
+    ///
+    /// ⚠️ NOTHING TO DO WITH THE 3D CUBE, which is driven by the finger and has no duration of its
+    /// own — see the note at the `CATransition` in `syncIfNeeded`.
+    static let personTurnDuration: CFTimeInterval = 0.10
+
     func makeUIViewController(context: Context) -> UIPageViewController {
         StoryPager.dismissActive = false   // fresh viewer never inherits a stale flag
         let pager = StoryPagerVC(transitionStyle: .scroll, navigationOrientation: .horizontal)
@@ -334,21 +342,52 @@ struct StoryPager: UIViewControllerRepresentable {
             // ⚠️ THE WARM WAITS FOR THE TURN TO FINISH. It used to start one runloop after the
             // transition began, which is DURING it — and laying out a SwiftUI story page is not
             // cheap, so it spent main-thread time on the person after next while the person you
-            // asked for was still sliding in. Apple owns this animation's duration and we cannot
-            // shorten it; the least we can do is not compete with it. The completion is roughly
-            // where the old hop landed anyway, minus the contention.
+            // asked for was still arriving.
             // ⚠️ NEVER TWO TURNS AT ONCE, AND NEVER OVER THE TOP OF A FINGER. This is the crash
             // guard — see `isTurning`. The scroll-view test covers the interactive case: an
-            // interactive swipe reports through `didFinishAnimating`, not through the completion
-            // below, so `isTurning` alone would not see it.
+            // interactive swipe reports through `didFinishAnimating`, not through this path, so
+            // `isTurning` alone would not see it.
             if isTurning || internalScroll.map({ $0.isTracking || $0.isDragging || $0.isDecelerating }) == true {
                 syncPending = true
                 return
             }
             let next = parent.viewModel.currentStoryUser
             isTurning = true
+            // ⚠️ OUR OWN TURN, NOT APPLE'S — owner 2026-08-11: the flat slide "feels too slow and
+            // heavy", and he asked for roughly 100ms.
+            //
+            // This was `animated: true`, which hands the whole thing to `UIPageViewController`: its
+            // duration is private, it is around three to five times this, and the comment that used
+            // to sit here said in as many words that we could not shorten it. That was true of THAT
+            // call and not of the screen. Handing UIKit `animated: false` makes the swap instant, and
+            // a `CATransition` on the pager's own layer draws the movement at whatever duration we
+            // name — a push, which is the same shape the flat slide had, so nothing about the look
+            // changes except how long it takes.
+            //
+            // It also runs on the render server rather than through UIKit's transition machinery, so
+            // it costs the main thread nothing at the moment the next person's page is laying out.
+            //
+            // ⚠️ THIS DOES NOT TOUCH THE 3D CUBE, and that is the owner's explicit instruction. The
+            // cube belongs to the FINGER: `getAngle` folds pages while `StoryPager.horizontalScroll`
+            // is tracking, and an interactive swipe never reaches this code — it lands through
+            // `didFinishAnimating`, by which time `shown` already equals `currentStoryUser` and the
+            // guard above has returned. This path is only ever a PROGRAMMATIC turn: tapping past the
+            // end of a person, or auto-advance.
+            let slide = CATransition()
+            slide.type = .push
+            slide.subtype = to > from ? .fromRight : .fromLeft
+            slide.duration = StoryPager.personTurnDuration
+            // Out fast, settle at the end: at 100ms an ease-in would read as a stutter rather than
+            // as easing, because there is not enough time to feel the acceleration.
+            slide.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            pager.view.layer.add(slide, forKey: "personTurn")
             pager.setViewControllers([target], direction: to > from ? .forward : .reverse,
-                                     animated: true) { [weak self] _ in
+                                     animated: false)
+            // ⚠️ NOT `setViewControllers`' COMPLETION ANY MORE. With `animated: false` UIKit calls it
+            // immediately, so the warm would start ON TOP of the transition we just began — the very
+            // contention the note above exists to avoid. Our own clock owns the turn now, so the
+            // guard comes down and the warm starts when the movement is actually over.
+            DispatchQueue.main.asyncAfter(deadline: .now() + StoryPager.personTurnDuration) { [weak self] in
                 guard let self else { return }
                 self.isTurning = false
                 self.prewarmNeighbours(of: next)
