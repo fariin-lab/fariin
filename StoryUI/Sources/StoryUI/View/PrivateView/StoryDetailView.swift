@@ -1230,9 +1230,14 @@ private extension StoryDetailView {
         // friends pager has none for the first beat after mount — in both cases nothing is being
         // page-swiped, so nothing may fold. The old `if let` fell through on nil and computed an
         // angle, which let the OPEN hero fold the page before the pager had bound its scroll.
-        guard let s = StoryPager.horizontalScroll, s.isTracking || s.isDragging || s.isDecelerating else {
-            return .zero
-        }
+        // ⚠️ AND A PROGRAMMATIC CUBE TURN COUNTS AS MOVEMENT TOO. A tap moves the pages by frame and
+        // never touches the scroller's flags, so without this the fold would only ever run under a
+        // finger and a tapped turn would slide flat whatever the setting said. Narrow on purpose:
+        // the flag is raised around one `setViewControllers` and lowered in its completion, so
+        // nothing else — the zoom dismiss, a layout shift — can reach it. See
+        // `StoryPager.cubeTurnActive`.
+        let live = StoryPager.horizontalScroll.map { $0.isTracking || $0.isDragging || $0.isDecelerating } ?? false
+        guard live || StoryPager.cubeTurnActive else { return .zero }
         // StoryUI library's cube (tiskender2/StoryUI): angle = 45° × (minX / width). Combined with the
         // pager's horizontal slide + the .leading/.trailing anchor + perspective 2.5, this IS the cube —
         // pure SwiftUI, no UIKit transform feedback (so no shake/black).
