@@ -1178,6 +1178,13 @@ struct ThreadView: View {
                 holdStarted = false   // recordingHeld is computed (holdStarted && !recordLocked) → goes false
                 recordLocked = true
             }
+            // A parked note from last time — leaving the chat, or the whole app, mid-recording —
+            // is adopted back and the bar lands on the review: listen, continue with the red mic,
+            // send or bin. His order, the reference's model: nothing recorded is silently gone.
+            if !recordLocked, AudioRecorder.hasDraft(cid), recorder.adoptDraft(cid: cid) {
+                recordLocked = true
+                beginPreview()
+            }
             // Restore an unsent draft (local-only). Never clobber text already being typed.
             // SILENTLY (audit M6): the programmatic set used to fire the typing broadcast — opening a
             // chat with a parked draft showed "typing…" to the other person with zero keystrokes.
@@ -1239,15 +1246,28 @@ struct ThreadView: View {
             // Messages that arrived while the chat was OPEN were read live but only onAppear reset
             // the stored counter — leaving showed a stale unread badge. Reset on the way out too.
             Task { await ChatService.resetUnread(cid) }
-            // Don't leave a half-finished recording running when you leave the chat — unless it's
-            // LOCKED: an in-chat push (profile tap) also fires onDisappear, and cancelling there
-            // destroyed a hands-free recording mid-take. A locked recording survives navigation.
-            if recorder.isRecording && !recordLocked {
+            // Leaving with a recording: a HELD (unlocked) one dies with the finger — the gesture
+            // is gone. A LOCKED session (recording or reviewing) PARKS instead — his order, the
+            // reference's model: the note stops, its stretches move to a per-chat draft on disk,
+            // and the chat's next appearance lands on the review bar. Nothing recorded is lost
+            // until the person sends or bins it. (This replaces "a locked recording survives
+            // navigation": an in-chat push parks too now — a pause, not the destruction that
+            // comment guarded against — and popping back adopts the draft straight away.)
+            if recordLocked {
+                parkRecordingDraft()
+            } else if recorder.isRecording {
                 recorder.cancel()
                 recordDrag = .zero; holdStarted = false
                 recordCancelArmed = false   // audit: a stale armed flag silently discarded the NEXT
                                             // stationary-hold voice note on release
             }
+        }
+        // Closing the app mid-recording parks the note exactly like leaving the chat — his spec
+        // from the reference: kill the app, come back, the chat opens onto the review bar with
+        // everything you said still there. Background IS the park point because a killed app gets
+        // no goodbye at all; parking on the way to background is the last reliable moment.
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
+            if recordLocked { parkRecordingDraft() }
         }
         // Voice-note recording indicator, sender side: isRecording is the single source of truth —
         // it flips for every path (hold, lock, send, cancel, too-short, interruption), so no per-path
@@ -4794,13 +4814,16 @@ struct ThreadView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    // SCRUBBABLE — his order with the reference's review open ("can we move sound
+                    // wherever we want?"), reversing the old checking-is-not-editing stance. Same
+                    // gesture machinery as the sent bubble: tap lands, horizontal drag scrubs,
+                    // vertical is refused so nothing else moves.
                     WaveformBars(bars: previewWaveform.isEmpty ? Array(repeating: 30, count: 28) : previewWaveform,
                                  progress: previewProgress,
                                  played: Theme.accent(dark),
                                  unplayed: Theme.accent(dark).opacity(0.35),
-                                 onSeek: { _ in })
+                                 onSeek: { pct in seekPreview(pct) })
                         .frame(height: 22).frame(maxWidth: .infinity)
-                        .allowsHitTesting(false)   // checking it is not editing it
                     // Total on the right, the reference's order: play · wave · time.
                     Text(timeString(recorder.elapsed)).font(.system(size: 15).monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -4907,6 +4930,20 @@ struct ThreadView: View {
         else { startPreviewPlayback() }
     }
 
+    /// Drag or tap on the review waveform: move the playhead anywhere, playing or paused. Works
+    /// before the first play too — startPreviewPlayback builds the player lazily and AVAudioPlayer
+    /// honours a currentTime set while paused.
+    private func seekPreview(_ pct: Double) {
+        if previewPlayer == nil, let url = previewURL {
+            previewPlayer = try? AVAudioPlayer(contentsOf: url)
+            previewPlayer?.prepareToPlay()
+        }
+        guard let p = previewPlayer else { return }
+        let clamped = max(0, min(1, pct))
+        p.currentTime = clamped * p.duration
+        previewProgress = clamped
+    }
+
     /// Drives the review waveform. 20Hz, and only while the preview is actually running — the same rate
     /// the playback engine uses, so the two look identical in motion.
     private func startPreviewTicker() {
@@ -4971,7 +5008,16 @@ struct ThreadView: View {
     private func cancelRecording() {
         stopPreviewPlayback()   // before recorder.cancel(), which deletes the file underneath it
         recorder.cancel()
+        AudioRecorder.discardDraft(cid)   // a binned note takes its parked draft with it
         notify(.warning)
+        resetRecordingState()
+    }
+
+    /// Leaving the chat (or the app) with a locked session: stop, move the note to its per-chat
+    /// draft on disk, and clear the bar. The next appearance of this chat adopts it back.
+    private func parkRecordingDraft() {
+        stopPreviewPlayback()
+        recorder.parkDraft(cid: cid)
         resetRecordingState()
     }
     private func sendRecording() {
@@ -5010,6 +5056,9 @@ struct ThreadView: View {
         // If finish() returns nil at the boundary (elapsed vs live currentTime can differ ~0.05s),
         // still tear down cleanly so the recording UI never gets stuck. Keep replyingTo though:
         // a dropped too-short note must not destroy the reply target — the user just retries.
+        // The draft folder goes either way: on success the note leaves as a message; on a nil
+        // finish the segment files are already cleaned and stale meta must not resurrect them.
+        defer { AudioRecorder.discardDraft(cid) }
         guard let (data, dur, wf) = await recorder.finish() else { return }
         // Optimistic: show the voice bubble INSTANTLY (springs in, playable from the local
         // recording), then reconcile when the upload echoes back — no dead lag on release.

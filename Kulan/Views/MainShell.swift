@@ -931,6 +931,7 @@ struct ChatsView: View {
                     }
                 },
                 draft: Drafts.shared.text(conv.id),
+                voiceDraftSecs: AudioRecorder.draftIndex[conv.id] ?? 0,
                 voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
             .equatable()   // skip rebuild when this conversation is unchanged
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -964,6 +965,7 @@ struct ChatsView: View {
             .filter { c in
                 c.isGroup || !c.lastMessageCipher.isEmpty || c.hasUnreadMark(me) || c.isPinned(me)
                     || !Drafts.shared.text(c.id).isEmpty
+                    || AudioRecorder.draftIndex[c.id] != nil   // a parked voice draft keeps its chat listed
             }
             .filter { c in   // Filter: 0 = All, 1 = Unread, 2 = Groups
                 switch chatFilter {
@@ -1717,6 +1719,7 @@ struct ArchivedChatsView: View {
                                 } label: {
                                     ChatRow(conv: conv, me: me, dark: dark,
                                             draft: Drafts.shared.text(conv.id),
+                                            voiceDraftSecs: AudioRecorder.draftIndex[conv.id] ?? 0,
                                             voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
                                 }
                                 .buttonStyle(.plain)
@@ -1872,6 +1875,7 @@ struct ChatRow: View, Equatable {
     var storySeen: [Bool] = []      // per-segment seen flags for this person's stories ([] = no active story)
     var onStoryTap: (() -> Void)? = nil   // tap the ringed avatar → open their story (not the chat)
     var draft: String = ""          // unsent composer text (local-only) → "Draft:" preview
+    var voiceDraftSecs: Double = 0  // parked voice recording (local-only) → "Draft: 🎤 0:05" preview
     var voiceUnplayed: Bool = false // newest incoming voice note not played yet → accent mic
 
     // The 15s self-clear the THREAD's typing already had, applied to the row (audit HIGH: a sender
@@ -1893,7 +1897,13 @@ struct ChatRow: View, Equatable {
     static func == (l: ChatRow, r: ChatRow) -> Bool {
         l.conv == r.conv && l.me == r.me && l.dark == r.dark
             && l.storySeen == r.storySeen
-            && l.draft == r.draft && l.voiceUnplayed == r.voiceUnplayed
+            && l.draft == r.draft && l.voiceDraftSecs == r.voiceDraftSecs
+            && l.voiceUnplayed == r.voiceUnplayed
+    }
+
+    private var voiceDraftLabel: String {
+        let s = Int(voiceDraftSecs)
+        return String(format: "%d:%02d", s / 60, s % 60)
     }
 
     private var decodedLast: String {
@@ -2034,6 +2044,14 @@ struct ChatRow: View, Equatable {
                 .font(.system(size: 14)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
         } else if let t = typingLabel, !activityExpired {
             Text(t).font(.system(size: 14)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
+        } else if voiceDraftSecs > 0 {
+            // A parked voice recording (his reference screenshots): the same red "Draft:" the text
+            // draft below wears, then the mic and the note's length. Wins over a text draft — the
+            // recording is the thing most in danger of being forgotten.
+            (Text("Draft: ").foregroundStyle(.red)
+             + Text(Image(systemName: "mic.fill")).font(.system(size: 12))
+             + Text(" " + voiceDraftLabel).foregroundStyle(.secondary))
+                .font(.system(size: 14)).lineLimit(1)
         } else if !draft.isEmpty {
             (Text("Draft: ").foregroundStyle(.red) + Text(draft).foregroundStyle(.secondary))
                 // 2 lines is the design, but the first layout pass can offer almost no width, and

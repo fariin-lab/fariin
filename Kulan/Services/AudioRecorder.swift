@@ -289,20 +289,34 @@ final class AudioRecorder {
 
     /// Continue recording after a pause-review: the next stretch goes to a fresh file. The audio
     /// session is still warm, so this starts as fast as the first touch did.
+    ///
+    /// ⚠️ `!isRecording`, NOT `recorder == nil`: an ADOPTED draft's chat has already run
+    /// prepare() on appear, so a warmed idle recorder stands ready — the nil guard read that as
+    /// "busy" and the review bar's red mic silently did nothing after a draft was adopted. A
+    /// standing idle recorder IS the next stretch, pre-warmed; only actual recording refuses.
     func resume() {
-        guard recorder == nil, !segments.isEmpty else { return }
+        guard !isRecording, !segments.isEmpty else { return }
         // The preview no longer covers the note. A multi-stretch preview is its own stitched file
         // and would leak here; a single-stretch preview IS the stretch, so it must survive.
         if let r = reviewURL, !segments.contains(where: { $0.url == r }) {
             try? FileManager.default.removeItem(at: r)
         }
         reviewURL = nil; reviewDuration = 0; reviewWaveform = []
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("voice-\(UUID().uuidString).m4a")
-        guard let r = try? AVAudioRecorder(url: url, settings: settings) else { return }
-        r.isMeteringEnabled = true
-        r.record()
-        recorder = r; fileURL = url
+        if let r = recorder {
+            let s = AVAudioSession.sharedInstance()
+            if s.category != .playAndRecord {
+                try? s.setCategory(.playAndRecord, mode: .default, options: [.duckOthers])
+                try? s.setActive(true)
+            }
+            r.record()
+        } else {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("voice-\(UUID().uuidString).m4a")
+            guard let r = try? AVAudioRecorder(url: url, settings: settings) else { return }
+            r.isMeteringEnabled = true
+            r.record()
+            recorder = r; fileURL = url
+        }
         isRecording = true
         Task { @MainActor in SleepBlocker.shared.add("voice-record") }
         // `resuming: true` keeps the captured envelope and `completedElapsed`, so the waveform and
@@ -336,6 +350,106 @@ final class AudioRecorder {
             try? FileManager.default.removeItem(at: out)
         }
         return nil
+    }
+
+    // MARK: - Recording drafts (the note survives leaving the chat, and the app itself)
+    //
+    // His order, the reference's behaviour: walking out of the chat — or out of the app — while a
+    // hands-free recording runs must never lose the note. The recording STOPS (a stretch closes,
+    // exactly like a pause) and everything moves into a per-chat draft folder in Application
+    // Support, which survives relaunch. Coming back adopts the stretches into the recorder again
+    // and the chat lands on the review bar: listen, keep recording, send or bin — nothing is gone
+    // until the person says so.
+
+    private static func draftDir(_ cid: String) -> URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("VoiceDrafts", isDirectory: true)
+            .appendingPathComponent(cid, isDirectory: true)
+    }
+
+    static func hasDraft(_ cid: String) -> Bool {
+        FileManager.default.fileExists(atPath: draftDir(cid).appendingPathComponent("meta.json").path)
+    }
+
+    /// Chat-list index of parked drafts: cid → total seconds. Loaded from disk once at first read,
+    /// kept true by park/discard, so the list rows (his reference screenshots: "Draft: 🎤 0:05")
+    /// never touch the filesystem per render.
+    static private(set) var draftIndex: [String: Double] = loadDraftIndex()
+    private static func loadDraftIndex() -> [String: Double] {
+        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("VoiceDrafts", isDirectory: true)
+        guard let kids = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+        else { return [:] }
+        var out: [String: Double] = [:]
+        for k in kids where k.hasDirectoryPath {
+            if let data = try? Data(contentsOf: k.appendingPathComponent("meta.json")),
+               let meta = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let durations = meta["durations"] as? [Double] {
+                out[k.lastPathComponent] = durations.reduce(0, +)
+            }
+        }
+        return out
+    }
+
+    /// The draft is spent (sent or binned) — its folder goes with it.
+    static func discardDraft(_ cid: String) {
+        try? FileManager.default.removeItem(at: draftDir(cid))
+        draftIndex.removeValue(forKey: cid)
+    }
+
+    /// Close the live stretch and move every stretch into the draft folder. The recorder resets
+    /// and re-warms; the note waits on disk. Staged through a sibling folder because an ADOPTED
+    /// draft's stretches already live in the destination — removing the folder first would have
+    /// deleted the very files being parked.
+    func parkDraft(cid: String) {
+        timer?.invalidate(); timer = nil
+        closeCurrentSegment()
+        isRecording = false
+        Task { @MainActor in SleepBlocker.shared.remove("voice-record") }
+        guard !segments.isEmpty else { reset(); return }
+        let fm = FileManager.default
+        let dir = Self.draftDir(cid)
+        let staging = dir.deletingLastPathComponent().appendingPathComponent(cid + ".staging", isDirectory: true)
+        try? fm.removeItem(at: staging)
+        try? fm.createDirectory(at: staging, withIntermediateDirectories: true)
+        var files: [String] = [], durations: [Double] = []
+        for (i, seg) in segments.enumerated() {
+            let name = "seg\(i).m4a"
+            try? fm.moveItem(at: seg.url, to: staging.appendingPathComponent(name))
+            files.append(name); durations.append(seg.duration)
+        }
+        let meta: [String: Any] = ["files": files, "durations": durations, "bars": waveform(64)]
+        if let data = try? JSONSerialization.data(withJSONObject: meta) {
+            try? data.write(to: staging.appendingPathComponent("meta.json"))
+        }
+        try? fm.removeItem(at: dir)
+        try? fm.moveItem(at: staging, to: dir)
+        Self.draftIndex[cid] = completedElapsed   // the chat list's "Draft: 🎤 0:05" reads this
+        // A stitched preview lives in tmp and is not a stretch — it does not follow the draft.
+        if let r = reviewURL { try? fm.removeItem(at: r) }
+        segments = []   // the files are the draft's now; reset() must not think they are its own
+        reset()
+    }
+
+    /// Coming back to a chat with a parked note: the draft's stretches become the recorder's
+    /// segments again, ready for pauseForReview (listen), resume (keep recording), send or trash.
+    func adoptDraft(cid: String) -> Bool {
+        guard !isRecording else { return false }   // a live recording always wins over a parked one
+        let dir = Self.draftDir(cid)
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent("meta.json")),
+              let meta = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let files = meta["files"] as? [String],
+              let durations = meta["durations"] as? [Double],
+              files.count == durations.count, !files.isEmpty else { return false }
+        segments = zip(files, durations).map { (url: dir.appendingPathComponent($0), duration: $1) }
+        completedElapsed = durations.reduce(0, +)
+        elapsed = completedElapsed
+        // Re-seed the level history from the stored bars, so the review (and any stretch recorded
+        // after it) draws the note's real shape instead of a flat fallback.
+        if let bars = meta["bars"] as? [Int] {
+            allLevels = bars.map { Float(max(0, min(100, $0))) / 100 }
+        }
+        return true
     }
 
     private func cleanupSegmentFiles() {
