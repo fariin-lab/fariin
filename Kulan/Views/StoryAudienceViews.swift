@@ -654,10 +654,16 @@ struct NewAudienceButton: UIViewRepresentable {
         // padding and leaves the title on UIButton's default 17pt BODY font, so the capsule came out
         // roughly as tall as a table row and towered over the "Stories" heading beside it.
         //
-        // 15pt semibold for the word and 13pt for the plus, which is the proportion iOS uses for a
-        // header accessory and the proportion Signal's own "+ New" reads at. Scaled through
-        // UIFontMetrics so it still grows for anyone using larger text — a hardcoded 15 would be the
-        // one control on the screen that ignored the setting.
+        // 15pt semibold for the word and 11pt for the plus. Scaled through UIFontMetrics so it still
+        // grows for anyone using larger text — a hardcoded 15 would be the one control on the screen
+        // that ignored the setting.
+        //
+        // ⚠️ THE PLUS IS 11, NOT 13 (owner 2026-08-11, both screens circled: "the + icon make it
+        // small not to much"). A symbol drawn at the SAME weight as the word beside it reads BIGGER
+        // than the word even at a smaller point size — the glyph fills its box while a capital N
+        // does not — so matching the two sizes by number is what made it tower. 11 lands the plus at
+        // about the word's cap height, which is the proportion iOS uses for a header accessory.
+        // Two points, not four: he asked for smaller, not for a hairline.
         //
         // (Said plainly: these are matched by eye and by iOS convention. I could not read Signal's
         // source to copy their constants, and inventing numbers and calling them Signal's would be
@@ -669,7 +675,7 @@ struct NewAudienceButton: UIViewRepresentable {
         cfg.attributedTitle = AttributedString("New", attributes: title)
         cfg.image = UIImage(systemName: "plus",
                             withConfiguration: UIImage.SymbolConfiguration(
-                                font: metrics.scaledFont(for: .systemFont(ofSize: 13, weight: .semibold))))
+                                font: metrics.scaledFont(for: .systemFont(ofSize: 11, weight: .semibold))))
         cfg.imagePadding = 4
         cfg.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
         cfg.cornerStyle = .capsule
