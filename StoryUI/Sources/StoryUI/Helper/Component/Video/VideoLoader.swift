@@ -896,7 +896,10 @@ private extension PlayerView {
         }
         // The frame output was attached right after the item swap, where it belongs to the new
         // clip before any observation can fire. (attachFrameOutput is idempotent.)
-        StoryCardMorph.shared.frameSource = self
+        // REGISTERED, not assigned. The single slot is last-writer-wins, and the neighbour prewarm
+        // is routinely the last writer — see `StoryCardMorph.frameSources`. Registering keeps this
+        // player answerable for its OWN clip no matter who sets up after it.
+        StoryCardMorph.shared.registerFrameSource(self)
         // CLEAR, not black: the backdrop lives behind this layer and a black fill would cover it.
         // The view's own backgroundColor still guarantees nothing shows through when there is no
         // poster to blur.

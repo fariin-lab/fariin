@@ -267,6 +267,37 @@ public final class StoryCardMorph {
     /// asked for frames, and must not be kept alive by having been asked once.
     public weak var frameSource: StoryVideoFrameSource?
 
+    /// ⚠️ EVERY LIVE PLAYER, NOT ONLY THE LAST ONE TO SET UP — and that is his 2026-08-12 report
+    /// ("the side card reverts to the upload cover the moment it leaves the centre").
+    ///
+    /// `frameSource` above is ONE slot, written in `setupPlayer` by whichever `PlayerView` ran last.
+    /// The viewer keeps three pages alive and warms the NEIGHBOURS one runloop after a page is
+    /// populated, so the last writer is routinely a neighbour's idle player — one that has never
+    /// played, reports 0 seconds, and is refused by `bankCurrentState`'s `t > 1` fence. The story
+    /// actually on screen was therefore never banked at all, for the entire life of the sheet, and
+    /// every card fell back to `previewUrl` — for a video, the poster made at post time.
+    ///
+    /// The centre looked correct only because the LIVE story layer shows through the centre slot
+    /// (`hideActiveContent`). The swipe hides that layer, and what it uncovers is the card's own
+    /// picture, which had always been the poster. Nothing was ever lost at the swipe; nothing was
+    /// ever there.
+    ///
+    /// A registry removes the question rather than re-timing it — the same lesson `snapshotCard`
+    /// taught above. Every player knows its OWN clip and its OWN playhead, so banking all of them
+    /// files each picture under the url it actually came from: there is no "which one is the
+    /// subject" left to get wrong, and an idle neighbour still fails the fence exactly as before.
+    ///
+    /// Weak, so a player that dies with its page leaves the registry on its own — nothing to clear
+    /// and nothing to leak.
+    private let frameSources = NSHashTable<AnyObject>.weakObjects()
+
+    /// Called by every `PlayerView` as it takes a clip on. Keeps the single-slot API working for the
+    /// callers that legitimately mean "the newest player" while the registry answers "all of them".
+    public func registerFrameSource(_ source: StoryVideoFrameSource) {
+        frameSources.add(source)
+        frameSource = source
+    }
+
     /// Make the page see-through for a hero flight: what pulls away has to be the story, over the
     /// chat list, not a black page with a story in it. Registered by whichever pager installed the
     /// hero pan, because the page's background belongs to the pager.
@@ -856,10 +887,25 @@ public final class StoryCardMorph {
     /// `StoryPlaybackResume`'s header. The only continuation left is a live player that was paused
     /// and never torn down, which needs no memory. What still travels is the PICTURE, because the
     /// carousel cards draw "the last frame this clip showed" and that stays true either way.
+    /// ⚠️ ASKS EVERY LIVE PLAYER, NOT THE ONE GLOBAL SLOT — see `frameSources` for why the slot was
+    /// routinely pointed at a neighbour's idle player and the story on screen was never banked.
     @MainActor
     public func bankCurrentState() {
-        guard let source = frameSource,
-              let mediaURL = source.currentVideoURL,
+        for case let source as StoryVideoFrameSource in frameSources.allObjects {
+            bank(source)
+        }
+        // Belt for a player that somehow never reached the registry. Banking a clip twice costs
+        // nothing: `rememberFrame` recognises the same picture by identity and only refreshes its
+        // timestamp.
+        if let source = frameSource { bank(source) }
+    }
+
+    /// One player, banked under ITS OWN clip. Every guard that used to live in `bankCurrentState`
+    /// lives here, unchanged — including the fence that refuses to write second zero over something
+    /// better (the long note above).
+    @MainActor
+    private func bank(_ source: StoryVideoFrameSource) {
+        guard let mediaURL = source.currentVideoURL,
               let url = URL(string: mediaURL) else { return }
         let t = source.currentVideoSeconds
         guard t.isFinite, t > 1 else { return }
