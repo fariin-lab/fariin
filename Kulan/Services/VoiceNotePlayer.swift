@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import MediaPlayer
 import UIKit
 
 /// THE ONE VOICE-NOTE PLAYER IN THE APP, and it does not belong to a bubble.
@@ -39,8 +40,17 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     @Published private(set) var progress: Double = 0
     /// Whether the note now playing is one of mine, so the bar can say "You".
     @Published private(set) var isMine = false
-    /// Show the floating bar? Only when a note is actually playing AND its chat is not the one on
-    /// screen, because there the bubble already shows everything the bar would.
+    /// A note is OPEN: it has been started and has not finished or been dismissed. Not the same as
+    /// `playing`.
+    ///
+    /// ⚠️ THE BAR USED TO KEY OFF `playing`, AND THAT ONLY WORKED WHILE NOTHING COULD PAUSE US BUT THE
+    /// USER. It cannot survive the two handlers added below: unplugging headphones pauses, and so does
+    /// a phone call, and both would have taken the bar away with them — pausing a note and removing the
+    /// only control that could restart it, with the note stranded in a chat the person has left. Open
+    /// is the honest condition, and the bar draws play-vs-pause from `playing`.
+    @Published private(set) var hasNote = false
+    /// Show the floating bar? Only when a note is open AND its chat is not the one on screen, because
+    /// there the bubble already shows everything the bar would.
     ///
     /// ⚠️ `AppRouter.activeChatId` IS ALREADY THE ANSWER — I nearly added a second copy of it. It is
     /// set by `ThreadView` (and the official channel) on appear and cleared on disappear, and three
@@ -50,7 +60,21 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     /// Loading deliberately does not count: a bar that flashes for the half second before audio
     /// starts, in the chat you are already reading, is noise.
     var barVisible: Bool {
-        playing && !messageId.isEmpty && cid != (AppRouter.shared.activeChatId ?? "")
+        hasNote && !messageId.isEmpty && cid != (AppRouter.shared.activeChatId ?? "")
+    }
+
+    /// Who the open note is from, for the bar and for the lock screen. One answer, because those two
+    /// must never disagree about what is playing.
+    ///
+    /// `displayName` is the app's own answer and the only correct one: `title` is the GROUP name and is
+    /// empty for a one-to-one chat, where the name lives in the `names` map instead. Reading `title`
+    /// directly would have labelled every private chat "Voice message".
+    var noteTitle: String {
+        let me = AuthService.shared.uid ?? ""
+        let conv = ConversationsRepository.shared.conversations.first { $0.id == cid }
+        let title = conv?.displayName(me) ?? ""
+        if isMine { return title.isEmpty ? "You" : "You · \(title)" }
+        return title.isEmpty ? "Voice message" : title
     }
 
     private var player: AVAudioPlayer?
@@ -66,6 +90,9 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     /// behaviour is unchanged.
     private var rateByCid: [String: Float] = [:]
     private var pausedProgress: [String: Double] = [:]
+    /// Set only when an interruption is what stopped us, so `.ended` never resumes a note the person
+    /// paused themselves, and never resumes one that a pulled headphone stopped on purpose.
+    private var resumeAfterInterruption = false
 
     private override init() {
         super.init()
@@ -81,6 +108,69 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
                 try? AVAudioSession.sharedInstance().setActive(true)
             }
         }
+
+        // HEADPHONES OUT MUST NOT PUT A PRIVATE NOTE ON THE SPEAKER.
+        //
+        // iOS does not do this for you. With `.playback` and an AVAudioPlayer, pulling the cable or
+        // taking an AirPod out reroutes to the built-in speaker and playback carries straight on, out
+        // loud, in front of whoever is standing there. `CallService` has always handled this for calls;
+        // voice notes never did. It is a privacy fault, not a rough edge.
+        //
+        // ⚠️ ONLY `.oldDeviceUnavailable`. Route changes fire constantly, and two of them are our own
+        // doing: raise-to-ear swaps the category (`.categoryChange`) and the speaker override fires
+        // `.override`. Pausing on those would stop the note every time the phone came off the ear.
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let self, self.playing else { return }
+                guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                      AVAudioSession.RouteChangeReason(rawValue: raw) == .oldDeviceUnavailable
+                else { return }
+                // Deliberately no auto-resume when they are plugged back in. Apple's own rule, and the
+                // right one: the person pulled them out, and starting again by itself is the exact
+                // thing this handler exists to prevent.
+                self.resumeAfterInterruption = false
+                self.pause()
+            }
+        }
+
+        // A CALL, SIRI OR AN ALARM NO LONGER ENDS THE NOTE FOR GOOD.
+        //
+        // `AudioRecorder` has handled this since it was written: it hears the interruption, pauses, and
+        // keeps the file. The player had no handler at all, so a call arriving mid-note stopped the
+        // audio, left the progress where it fell, and never came back — with nothing on screen saying
+        // why. The system tells us when it is safe to carry on; we only had to listen.
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                      let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+                switch type {
+                case .began:
+                    guard self.playing else { return }
+                    self.resumeAfterInterruption = true
+                    self.pause()
+                case .ended:
+                    guard self.resumeAfterInterruption else { return }
+                    self.resumeAfterInterruption = false
+                    let opts = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt)
+                        .map(AVAudioSession.InterruptionOptions.init) ?? []
+                    // `.shouldResume` is the system saying the thing that took the audio has given it
+                    // back. Without it — Siri still open, another app now playing — resuming would be
+                    // us fighting for the speaker.
+                    guard opts.contains(.shouldResume), !VoiceAudio.callActive, self.player != nil
+                    else { return }
+                    self.start()
+                @unknown default:
+                    break
+                }
+            }
+        }
+
+        wireRemoteCommands()
     }
 
     // MARK: - What the bubble asks
@@ -98,7 +188,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     func cycleRate(cid: String) {
         let next: Float = rate(for: cid) == 1 ? 1.5 : (rate(for: cid) == 1.5 ? 2 : 1)
         rateByCid[cid] = next
-        if playing { player?.rate = next }
+        if playing { player?.rate = next; updateNowPlaying() }   // the lock screen clock runs at 2× too
         objectWillChange.send()
     }
 
@@ -113,9 +203,18 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         }
         progress = pct
         p.currentTime = pct * p.duration
+        // The lock screen follows the bubble's scrub — but NOT on every frame of it. A drag calls this
+        // at gesture rate, and pushing a whole new now-playing dictionary sixty times a second is the
+        // waste the comment on `updateNowPlaying` exists to prevent. Mid-drag is skipped and the finger
+        // lifting publishes the final position, below. A lock-screen scrub arrives here with `scrubbing`
+        // false, so that one lands immediately.
+        if !scrubbing { updateNowPlaying() }
     }
 
-    func setScrubbing(_ on: Bool) { scrubbing = on }
+    func setScrubbing(_ on: Bool) {
+        scrubbing = on
+        if !on { updateNowPlaying() }   // finger lifted: publish where it actually landed
+    }
 
     // MARK: - Play / pause
 
@@ -128,6 +227,16 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     private func load(message: Message, cid: String, isMe: Bool) async {
         // Taking over from whatever was playing: park its position first so it can be resumed.
         if playing { pause() }
+        // ⚠️ AND THE OLD PLAYER GOES WITH IT. It used to be left alive under the new note's id, so when
+        // the new one failed to load — no signal, a key we could not fetch — `toggle` saw
+        // `player != nil` for the new id and played the PREVIOUS note's audio under the new bubble.
+        // Clearing costs nothing: coming back reloads from the cache and resumes at the position
+        // `pause()` just saved.
+        player = nil
+        // Nothing is open until the new note actually starts, so the bar goes now rather than hovering
+        // over a note that may never play.
+        hasNote = false
+        resumeAfterInterruption = false
         self.messageId = message.id
         self.cid = cid
         self.isMine = isMe
@@ -150,20 +259,29 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             open(cached)
             return
         }
-        guard let urlStr = message.audioUrl, let url = URL(string: urlStr), let meta = message.enc else { return }
+        // Nothing to fetch, or the fetch/decrypt failed: hand the lock screen back rather than leaving
+        // the previous note's entry sitting on it with no player behind it.
+        guard let urlStr = message.audioUrl, let url = URL(string: urlStr), let meta = message.enc else {
+            clearNowPlaying(); return
+        }
         loadingId = message.id
         defer { loadingId = "" }
         guard let (cipher, _) = try? await MediaSession.shared.data(from: url),
-              let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else { return }
+              let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
+            clearNowPlaying(); return
+        }
         // Persist the decrypted note so it never downloads twice.
         open(AudioCache.store(data, for: message.id))
     }
 
     private func open(_ url: URL) {
-        guard !VoiceAudio.callActive else { return }
+        // A call owns the session, or the file will not open (truncated, still uploading, wrong bytes).
+        // Either way nothing is going to play, so leave nothing behind claiming otherwise.
+        guard !VoiceAudio.callActive else { clearNowPlaying(); return }
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         try? AVAudioSession.sharedInstance().setActive(true)
         player = try? AVAudioPlayer(contentsOf: url)
+        guard player != nil else { clearNowPlaying(); return }
         start()
     }
 
@@ -188,12 +306,20 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             p.currentTime = saved * p.duration
             progress = saved
         }
+        // Re-activate before playing. `pause()` gives the session back so other audio can carry on, and
+        // an interruption takes it away outright — both leave us deactivated, and resuming from either
+        // has to ask for it again rather than assume AVAudioPlayer will.
+        try? AVAudioSession.sharedInstance().setCategory(.playback)
+        try? AVAudioSession.sharedInstance().setActive(true)
         p.enableRate = true
         p.rate = rateByCid[cid] ?? 1
         p.play()
         playing = true
+        hasNote = true
         SleepBlocker.shared.add("voice-play")
         UIDevice.current.isProximityMonitoringEnabled = true
+        enable(true)
+        updateNowPlaying()
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
@@ -212,9 +338,20 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             timer?.invalidate(); timer = nil
             p.currentTime = 0
             release()
+            // Played to the end: the note is no longer open, so the bar goes and the lock screen is
+            // handed back. MUST come after `release()`, which identifies itself by `messageId`.
+            hasNote = false
+            clearNowPlaying()
             // Hands the chain on: the chat finds the NEXT voice note and asks it to play.
             NotificationCenter.default.post(name: .voiceNoteFinished, object: finished)
         }
+    }
+
+    /// Carry on with the open note. The bar's play button and nothing else — the bubble goes through
+    /// `toggle`, which also has to cope with the note not being loaded yet.
+    func resume() {
+        guard player != nil, !playing else { return }
+        start()
     }
 
     func pause() {
@@ -224,14 +361,20 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         timer?.invalidate(); timer = nil
         pausedProgress[messageId] = progress
         release()
+        // The note stays OPEN on a pause — that is the whole point of `hasNote`. The lock screen keeps
+        // its entry, now reading paused, so play is still one tap away without unlocking.
+        updateNowPlaying()
     }
 
     /// Stop and forget, for the bar's close button.
     func dismiss() {
+        resumeAfterInterruption = false   // they ended it; a call finishing must not bring it back
         pause()
         player = nil
         messageId = ""
         progress = 0
+        hasNote = false
+        clearNowPlaying()
     }
 
     /// Give the audio session back. OWNER-ONLY, and never during a call: this is the rule that stopped
@@ -247,5 +390,91 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             try? AVAudioSession.sharedInstance().setCategory(.playback)
             try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
         }
+    }
+
+    // MARK: - The lock screen, the car, and the AirPods
+
+    /// A note already survives the screen locking — and until now there was no way to reach it once it
+    /// had. Nothing appeared on the lock screen, pinching an AirPod did nothing, the car showed nothing,
+    /// and stopping it meant unlocking the phone and finding the bar. Playing audio the system cannot
+    /// see is playing audio the person cannot control.
+    ///
+    /// ⚠️ TARGETS ARE ADDED EXACTLY ONCE, FROM `init`. `addTarget` appends, so wiring these per note
+    /// would stack a new handler on every play and one tap would fire all of them. The commands are
+    /// switched on and off with `enable(_:)` instead, and stay off while nothing is open so the system
+    /// never routes a play from some other app's controls into ours.
+    ///
+    /// ⚠️ THESE HOP TO THE MAIN ACTOR RATHER THAN ASSUMING IT. The observers above can use
+    /// `MainActor.assumeIsolated` because they were registered with `queue: .main`, which guarantees it.
+    /// Apple does not document the same guarantee for remote commands, and `assumeIsolated` on a thread
+    /// that is not the main one is not a wrong answer, it is a crash — triggered by a car stereo or a
+    /// pinched AirPod, which is exactly the report nobody could ever reproduce. `.success` is returned
+    /// up front because the real answer is not known yet; the system does nothing with it either way.
+    private func wireRemoteCommands() {
+        // `addTarget` hands back a token for removing the handler again. We never remove these — they
+        // live as long as the app — so it is dropped deliberately rather than left as a warning.
+        let c = MPRemoteCommandCenter.shared()
+        _ = c.playCommand.addTarget { [weak self] _ in
+            Task { @MainActor in self?.resume() }
+            return .success
+        }
+        _ = c.pauseCommand.addTarget { [weak self] _ in
+            Task { @MainActor in self?.pause() }
+            return .success
+        }
+        // What an AirPod pinch and a steering-wheel button actually send.
+        _ = c.togglePlayPauseCommand.addTarget { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.playing ? self.pause() : self.resume()
+            }
+            return .success
+        }
+        _ = c.changePlaybackPositionCommand.addTarget { [weak self] event in
+            guard let e = event as? MPChangePlaybackPositionCommandEvent else { return .commandFailed }
+            let at = e.positionTime
+            Task { @MainActor in
+                guard let self, let p = self.player, p.duration > 0 else { return }
+                self.seek(at / p.duration, id: self.messageId)
+            }
+            return .success
+        }
+        enable(false)
+    }
+
+    private func enable(_ on: Bool) {
+        let c = MPRemoteCommandCenter.shared()
+        c.playCommand.isEnabled = on
+        c.pauseCommand.isEnabled = on
+        c.togglePlayPauseCommand.isEnabled = on
+        c.changePlaybackPositionCommand.isEnabled = on
+    }
+
+    /// Elapsed time is published, not ticked. The system extrapolates from the position and the rate we
+    /// hand it, so this is called on state changes only — pushing a new dictionary 20 times a second
+    /// behind a locked screen would be pure waste, and it is what makes lock-screen scrubbing jitter.
+    private func updateNowPlaying() {
+        guard hasNote, let p = player else {
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            return
+        }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = [
+            MPMediaItemPropertyTitle: noteTitle,
+            MPMediaItemPropertyArtist: "Voice message",
+            MPMediaItemPropertyPlaybackDuration: p.duration,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: p.currentTime,
+            // Zero means paused. The lock screen reads the rate, not a separate flag, and a paused note
+            // left claiming rate 1 keeps a clock running that is not moving. `0.0` spelled out: in an
+            // `Any` dictionary a bare `0` gives the type checker room to call it an Int.
+            MPNowPlayingInfoPropertyPlaybackRate: playing ? Double(p.rate) : 0.0,
+            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
+        ]
+    }
+
+    /// Hand the lock screen back. Whatever was playing before us (music, a podcast) becomes the now
+    /// playing app again on its own; leaving a finished voice note sitting there would not.
+    private func clearNowPlaying() {
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        enable(false)
     }
 }
