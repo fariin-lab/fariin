@@ -94,16 +94,42 @@ public enum StoryPlaybackResume {
     private static var cardFrames: [String: UIImage] = [:]
     static func frame(_ url: URL) -> UIImage? { frames.object(forKey: url.absoluteString as NSString)?.image }
 
-    /// The banked frame, but ONLY when it is the picture playback will actually hand over to.
+    /// ⚠️ SECOND ZERO LIVES IN ITS OWN SLOT, AND THAT SEPARATION IS THE WHOLE POINT.
+    ///
+    /// This store answers two different questions with two different pictures. A CARD asks "where
+    /// was this clip when I last saw it"; a COVER asks "what is about to play". Since the position
+    /// store went (a story returned to always restarts at zero), those two answers stopped being the
+    /// same picture — 0:20 for the card, 0:00 for the cover — and for one build they were fought
+    /// over in a single slot. Build 533's regression is exactly that fight: `coverFromFirstFrame`
+    /// asked "is there a usable cover?", a 0:20 card picture answered no, and the decode then wrote
+    /// second zero straight over it. His report is the carousel card falling back to the upload
+    /// poster the moment it leaves the centre, which is what a bank holding second zero looks like.
+    ///
+    /// Two slots cannot overwrite each other, so neither question can cost the other its answer.
+    private static let covers: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.totalCostLimit = 24 * 1024 * 1024
+        return c
+    }()
+
+    /// The clip's opening frame, for the veil. Deliberately NOT `rememberFrame`: this picture is
+    /// second zero by construction and must never become what a card draws.
+    static func rememberCover(_ url: URL, image: UIImage?) {
+        guard let image else { return }
+        let cost = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
+        covers.setObject(image, forKey: url.absoluteString as NSString, cost: cost)
+    }
+
+    /// The picture playback will actually hand over to, or nil.
     ///
     /// Playback always starts at second zero now (see the header), so an honest loading cover is a
-    /// frame from the clip's start — `coverFromFirstFrame`'s decode, or a bank written in the first
-    /// second. A frame from 0:20 over a clip about to play 0:00 is the "picture and position
-    /// disagree" family of bug in reverse, and the veil must not draw it. The CARDS still may: a
-    /// card says "this is where the clip last was", a cover says "this is what is about to play",
-    /// and the same picture can be true for one and a lie for the other.
+    /// frame from the clip's start: the decode above, or a card frame that happens to have been
+    /// banked inside the first second. A frame from 0:20 over a clip about to play 0:00 is the
+    /// "picture and position disagree" family of bug in reverse, and the veil must not draw it.
     static func usableCoverFrame(_ url: URL) -> UIImage? {
-        guard let banked = frames.object(forKey: url.absoluteString as NSString) else { return nil }
+        let key = url.absoluteString as NSString
+        if let decoded = covers.object(forKey: key) { return decoded }
+        guard let banked = frames.object(forKey: key) else { return nil }
         return banked.seconds <= 1 ? banked.image : nil
     }
 
@@ -146,7 +172,7 @@ public enum StoryPlaybackResume {
     }
 
     /// The viewer is gone: a story opened later must start at its beginning.
-    public static func clearAll() { frames.removeAllObjects(); cardFrames = [:] }
+    public static func clearAll() { frames.removeAllObjects(); covers.removeAllObjects(); cardFrames = [:] }
 }
 
 /// WHICH STORY A PLAYER'S CLOCK BELONGS TO — the seam that lets the progress bar read the player.

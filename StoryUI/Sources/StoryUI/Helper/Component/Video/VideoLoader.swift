@@ -210,8 +210,14 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // the player still holds the PREVIOUS clip, and a canvas sourced from its buffer here would
         // latch A's colours onto B for the whole visit (`canvasSourced` never re-asks). Before the
         // attach, the remembered frame — keyed by THIS clip's url — is the only live answer allowed.
+        // Either slot will do for COLOURS — a gradient sampled off 0:20 and one sampled off 0:00 are
+        // the same two colours in practice, and this is the only reader for which that is true. The
+        // cover slot has to be asked explicitly because `coverFromFirstFrame` stopped writing into
+        // the card bank (see its note): without this line a clip with no poster loses the very
+        // colour source that decode exists to provide, and the canvas sits at neutral black.
         let live = awaitedItem != nil ? currentVideoFrame()
-                                      : self.url.flatMap { StoryPlaybackResume.frame($0) }
+                                      : self.url.flatMap { StoryPlaybackResume.frame($0)
+                                                        ?? StoryPlaybackResume.usableCoverFrame($0) }
         // The embedded thumbnail is a legitimate colour source and is the ONLY one available on a
         // first visit to a story whose `thumb.jpg` is missing — which is exactly the case that left
         // the canvas at its neutral black in his screenshots.
@@ -648,8 +654,14 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// slot — where the veil, the canvas sampler and `currentVideoFrame`'s fallback all already
     /// look. One seam, three readers, no new drawing path. Guarded at the landing: still this
     /// clip, still under cover, and no usable cover has appeared meanwhile. Playback always starts
-    /// at zero now, so second zero is exactly the honest cover — banked with `at: 0` so
-    /// `usableCoverFrame` will hand it back.
+    /// at zero now, so second zero is exactly the honest cover.
+    ///
+    /// ⚠️ INTO THE COVER SLOT, NEVER THE FRAME BANK, and that distinction is a shipped regression.
+    /// This decode used to land in the same slot the carousel cards read. A story paused at 0:20 has
+    /// a card picture of 0:20 and no usable cover, so the guard below passed and this wrote second
+    /// zero over the card — his "the side card goes back to the upload cover the moment it leaves
+    /// the centre", build 533. `rememberCover` keeps the veil's picture and the card's picture
+    /// apart, so filling one can never empty the other.
     private func coverFromFirstFrame(of file: URL, for story: URL) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let generator = AVAssetImageGenerator(asset: AVURLAsset(url: file))
@@ -660,7 +672,7 @@ final class PlayerView: UIView, StoryVideoFrameSource {
             DispatchQueue.main.async {
                 guard let self, self.url == story, self.playerLayer.isHidden,
                       StoryPlaybackResume.usableCoverFrame(story) == nil else { return }
-                StoryPlaybackResume.rememberFrame(story, image: image, at: 0)
+                StoryPlaybackResume.rememberCover(story, image: image)
                 self.refreshBackdrop()   // the frame is also the canvas's colour source
                 if self.viewWithTag(999) != nil { self.addActivityIndicatory(spinning: self.veilHasSpinner) }
             }
