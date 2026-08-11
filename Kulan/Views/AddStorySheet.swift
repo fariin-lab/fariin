@@ -288,8 +288,19 @@ struct StoryLibraryPicker: View {
                 // Signal's control down to the uppercase titles and the 14pt rounded font, it took
                 // five attempts to get right, and it ships on a screen this one has no business
                 // changing. Same rule, different words.
+                // ⚠️ `.fixedSize(vertical:)`, NOT `.frame(height:)`, AND THAT IS THE WHOLE OF HIS
+                // "make it 40px" ON THIS BAR.
+                //
+                // A `.frame(height: 40)` gives the representable a 40pt SLOT; it does not make the
+                // control 40pt tall. UIKit lays the segmented control out at its own intrinsic
+                // height inside that slot and centres it, so the capsule he can actually see came
+                // out around 34 with three points of dead space above and below it. Asking for the
+                // vertical intrinsic to be honoured makes the control ITSELF the 40, which is how
+                // the camera's CAMERA/TEXT bar got to the same number he approved there.
+                //
+                // Horizontal is deliberately NOT fixed: the segments still split the full width.
                 GlassSegmentedSwitch(titles: ["Photos", "Collections"], selection: $tab)
-                    .frame(height: 40)
+                    .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 16).padding(.vertical, 8)
 
                 if tab == 0 { photosTab } else { collectionsTab }
