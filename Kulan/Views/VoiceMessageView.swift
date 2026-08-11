@@ -76,10 +76,12 @@ struct VoiceMessageView: View {
         let secs = min(max(message.duration ?? 0, 0), 45)
         return 110 + CGFloat(secs / 45) * 48        // 110 at 0s, up to 158 at 45s and beyond
     }
-    /// play button + HStack spacing + waveform. 164 at the short end, 212 at the long end — the long end
-    /// is deliberately the old fixed width, so nothing can get WIDER than it does today.
+    /// play button + HStack spacing + waveform. 154 at the short end, 202 at the long end. His
+    /// 2026-08-11 report with WhatsApp beside ours: the note reads as a BLOCK. Slimmed to their
+    /// scale — button 42→34, row spacing 12→10, wave 26→22, line gap 4→2 — every number here and
+    /// nowhere else, so the pre-measure (which calls this) and the render can never disagree.
     static func contentWidth(for message: Message) -> CGFloat {
-        42 + 12 + waveWidth(for: message)
+        34 + 10 + waveWidth(for: message)
     }
 
     /// ⚠️ THE PLAYER IS NOT IN HERE ANY MORE, AND THAT IS THE WHOLE POINT.
@@ -90,12 +92,31 @@ struct VoiceMessageView: View {
     /// by voice that reads as the app being broken, so ownership moved to `VoiceNotePlayer.shared`,
     /// which outlives every view. This bubble is now a VIEW OF that engine: it draws what the engine
     /// says and asks it to do things. Nothing about the layout or the gestures changed.
-    @ObservedObject private var engine = VoiceNotePlayer.shared
+    /// ⚠️ NOT `@ObservedObject`, AND THAT IS A FIX, NOT A STYLE CHOICE. Observing the shared engine
+    /// re-rendered EVERY voice bubble on screen twenty times a second while ANY note played — the
+    /// engine's 20Hz progress tick invalidates every observer, and his test chats are stacked with
+    /// notes. Each bubble now mirrors its own four facts into @State in `sync()`, written only on
+    /// change, so a tick re-renders the one bubble whose numbers moved and the rest stay parked.
+    private var engine: VoiceNotePlayer { .shared }
 
-    private var playing: Bool { engine.isPlaying(message.id) }
-    private var loading: Bool { engine.isLoading(message.id) }
-    private var progress: Double { engine.progress(for: message.id) }
-    private var rate: Float { engine.rate(for: cid) }
+    @State private var playing = false
+    @State private var loading = false
+    @State private var progress: Double = 0
+    @State private var rate: Float = 1
+
+    /// Mirror the engine facts this one bubble draws. `objectWillChange` fires BEFORE the values
+    /// land (willSet), which is why the subscription below hops through the main queue once — by
+    /// the time this runs, the engine's numbers are the new ones.
+    private func sync() {
+        let p = engine.isPlaying(message.id)
+        if playing != p { playing = p }
+        let l = engine.isLoading(message.id)
+        if loading != l { loading = l }
+        let pr = engine.progress(for: message.id)
+        if progress != pr { progress = pr }
+        let r = engine.rate(for: cid)
+        if rate != r { rate = r }
+    }
 
     private var rateLabel: String { rate == 1 ? "1×" : (rate == 1.5 ? "1.5×" : "2×") }
 
@@ -125,8 +146,8 @@ struct VoiceMessageView: View {
         // it centred on both and ended up sitting roughly 10pt BELOW the middle of the wave. Nothing in
         // the bubble lined up with anything. Now the button is boxed with the wave alone, so the two are
         // on one line, which is what both references do.
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 10) {
                 playButton
                 WaveformBars(bars: displayBars, progress: progress, played: tint,
                              // 0.45, not 0.3. The unplayed half is most of the bar for most of a
@@ -140,13 +161,21 @@ struct VoiceMessageView: View {
                              onScrub: { s in
                                  engine.setScrubbing(s); VoiceScrubState.active = s; onScrub(s)
                              })
-                    .frame(width: Self.waveWidth(for: message), height: 26)
+                    .frame(width: Self.waveWidth(for: message), height: 22)
             }
             bottomLine
         }
         .frame(width: Self.contentWidth(for: message), alignment: .leading)
         .animation(.easeOut(duration: 0.2), value: unheard)
+        .onReceive(VoiceNotePlayer.shared.objectWillChange.receive(on: DispatchQueue.main)) { _ in
+            sync()
+        }
+        // Hosted cells are REUSED: the same view can wake up holding a different message, and the
+        // mirrored @State would still describe the old one (a recycled bubble drawing another
+        // note's play state). Re-sync the moment the identity changes.
+        .onChange(of: message.id) { _, _ in sync() }
         .onAppear {
+            sync()   // first render used the @State defaults; read the engine's truth now
             // Speed and paused position are the engine's now, so there is nothing to restore here:
             // this bubble reads them live. What is still needed is the auto-advance handoff for a
             // bubble that was OFF-SCREEN when its turn came — the router parks the id and the
@@ -204,14 +233,14 @@ struct VoiceMessageView: View {
         Group {
             if loading {
                 ProgressView().tint(tint)
-                    .frame(width: 42, height: 42)
+                    .frame(width: 34, height: 34)
                     .background(tint.opacity(0.22), in: Circle())
             } else {
                 Circle().fill(tint)
-                    .frame(width: 42, height: 42)
+                    .frame(width: 34, height: 34)
                     .overlay {
                         Image(systemName: playing ? "pause.fill" : "play.fill")
-                            .font(.system(size: 16))
+                            .font(.system(size: 13))
                             // Colour is irrelevant under destinationOut — only the alpha is read, and
                             // this has to be fully opaque to cut a clean hole.
                             .foregroundStyle(.black)
@@ -224,7 +253,7 @@ struct VoiceMessageView: View {
                     .compositingGroup()
             }
         }
-        .frame(width: 42, height: 42)
+        .frame(width: 34, height: 34)
         .contentShape(Circle())
         .onTapGesture { toggle() }
     }
@@ -259,8 +288,8 @@ struct VoiceMessageView: View {
             // Rendering it unconditionally makes the pre-measure and the played render IDENTICAL, so
             // nothing shifts. Before load it simply pre-selects the rate cycleRate() applies on play.
             // Tap gesture, not a Button — same reason as the play disc above.
-            Text(rateLabel).font(.system(size: 11, weight: .bold)).foregroundStyle(tint)
-                .padding(.horizontal, 6).padding(.vertical, 2)
+            Text(rateLabel).font(.system(size: 10, weight: .bold)).foregroundStyle(tint)
+                .padding(.horizontal, 5).padding(.vertical, 1)
                 .background(tint.opacity(0.16), in: Capsule())
                 .contentShape(Capsule())
                 .onTapGesture { cycleRate() }

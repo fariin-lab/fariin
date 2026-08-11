@@ -5918,9 +5918,9 @@ struct MessageBubble: View, Equatable {
             // THE WIDTH IS STILL A CONSTANT, IT IS JUST NO LONGER THE SAME CONSTANT FOR EVERY NOTE.
             // `contentWidth` is worked out from the message's own `duration` and nothing else, so it is
             // identical at pre-measure and at render and in every playback state — which is the property
-            // the bloom fix actually needed. 212 was only ever the width of the widest case; it is still
-            // the ceiling (a 45s note and up), and a short note is now allowed to be narrow instead of
-            // padding itself out to match. Nothing can get wider than it does today.
+            // the bloom fix actually needed. 212 was only ever the width of the widest case (202 since
+            // the 2026-08-11 slim-down); a 45s note and up is still the ceiling, and a short note is
+            // allowed to be narrow instead of padding itself out to match.
             //
             // metaRow is no longer a row of its own here. It is handed INTO the voice view and laid over
             // the trailing edge of the duration line, so the clock and the duration share one line the
@@ -5933,7 +5933,9 @@ struct MessageBubble: View, Equatable {
             }
             .frame(width: VoiceMessageView.contentWidth(for: message), alignment: .leading)
             .padding(.horizontal, 13)
-            .padding(.vertical, 9)
+            // 7, not the 9 the other bubbles wear: part of his 2026-08-11 "slim like WhatsApp"
+            // order, together with the smaller numbers inside VoiceMessageView itself.
+            .padding(.vertical, 7)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if message.isFile {
