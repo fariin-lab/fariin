@@ -1269,6 +1269,12 @@ struct ThreadView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
             if recordLocked { parkRecordingDraft() }
         }
+        // Scrubbing the review knob right-to-left runs along the HOME INDICATOR's strip, and iOS
+        // read it as the app-switch swipe (his report: "the app thinks I am swiping to leave").
+        // While the locked bar owns the bottom edge, the system gesture goes soft: the first swipe
+        // is ours, and leaving the app takes the deliberate second swipe. Off the moment the bar
+        // closes — nobody wants a sticky home indicator in a chat.
+        .defersSystemGestures(on: recordLocked ? .bottom : [])
         // Voice-note recording indicator, sender side: isRecording is the single source of truth —
         // it flips for every path (hold, lock, send, cancel, too-short, interruption), so no per-path
         // wiring. While ON, refresh every 10s: receivers self-clear at 15s and a note runs longer.
