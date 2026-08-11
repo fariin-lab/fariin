@@ -949,6 +949,7 @@ private extension StoryDetailView {
             UserView(
                 image: image,
                 name: name,
+                isVerified: model.user.isVerified,
                 date: date,
                 audience: audience,
                 onProfile: { onProfile?(model.user) },
