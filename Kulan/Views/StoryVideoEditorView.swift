@@ -112,6 +112,23 @@ struct StoryVideoEditorView: View {
     /// The post, packed for StoryEditorView, when a picture joins a video-first post. See the
     /// picker sheet below for why the composer takes over at that moment.
     @State private var handOff: HandOffPost?
+    /// The hand-off, PACKED BUT NOT PRESENTED, waiting for the picker sheet to finish going away.
+    ///
+    /// ⚠️ HIS 2026-08-12 REPORT LIVES HERE: start a VIDEO story, use + to add four pictures, tap Add,
+    /// and nothing arrives — only the original clip. A picture cannot join this screen's model (a
+    /// `Clip` IS a video), so pictures move the whole post to `StoryEditorView`, which has to be
+    /// PRESENTED. The cover doing that used to sit inside the picker sheet's own content, and the
+    /// Add path dismisses that sheet before the hand-off is packed several `await` hops later — so
+    /// the thing that would have presented the composer no longer existed, and `beginHandOff`
+    /// deliberately mutates nothing, which is exactly "only the original video is shown".
+    ///
+    /// The single-tap image path escaped it only because it never dismissed the sheet.
+    ///
+    /// So both paths now do the same thing: PACK here, close the picker, and present from
+    /// `onDismiss` — the one moment SwiftUI guarantees the sheet is gone and a cover asked for by
+    /// this screen can actually appear. The comment at the sheet has warned about this since the
+    /// hand-off was written; the Add path simply did not honour it.
+    @State private var stagedHandOff: HandOffPost?
 
     struct HandOffPost: Identifiable {
         let id = UUID()
@@ -207,7 +224,34 @@ struct StoryVideoEditorView: View {
         // The asset id travels with each picture, so the composer the post lands in can keep the
         // same five-item ceiling ticking against the same items — see `DraftItem.assetID`.
         for p in images { seed.append(StoryEditorView.DraftItem(image: p.image, assetID: p.assetID)) }
-        handOff = HandOffPost(items: seed, caption: caption)
+        // STAGED, NOT PRESENTED — see `stagedHandOff`. Packing and presenting are two moments now,
+        // and which one closes the picker depends on who got there first.
+        stagedHandOff = HandOffPost(items: seed, caption: caption)
+        if showAddPicker {
+            // The sheet is still up (a single tapped picture): close it and let `onDismiss` present.
+            showAddPicker = false
+        } else {
+            // ⚠️ THE SHEET HAS ALREADY GONE, AND THIS BRANCH IS THE OTHER HALF OF HIS BUG. The Add
+            // path packs across several `await` hops while the picker dismisses ITSELF the moment
+            // it hands the batch over (`StoryLibraryPicker`'s own `dismiss()`), so `onDismiss` has
+            // long since fired with nothing staged. Waiting for a second dismissal that will never
+            // come is exactly how the composer failed to appear at all.
+            presentStagedHandOff()
+        }
+    }
+
+    /// Show the packed composer, once the picker is out of the way.
+    ///
+    /// The runloop hop is not decoration: a cover asked for in the same turn as a dismissal is the
+    /// silent-no-show this screen has been bitten by twice. One turn later the sheet is genuinely
+    /// gone and this screen can present.
+    @MainActor private func presentStagedHandOff() {
+        guard stagedHandOff != nil else { return }
+        DispatchQueue.main.async {
+            guard let staged = stagedHandOff else { return }
+            stagedHandOff = nil
+            handOff = staged
+        }
     }
 
     /// Park the live tools back onto the clip they belong to.
@@ -450,8 +494,21 @@ struct StoryVideoEditorView: View {
         // presented from INSIDE the picker sheet (a cover asked for while a sheet is dismissing
         // silently never appears — AddStorySheet learned that the hard way), seeded with every
         // clip's trim, mute, drawing and text, plus the caption, plus the new picture.
-        .sheet(isPresented: $showAddPicker) {
+        // ⚠️ THE COMPOSER IS PRESENTED FROM `onDismiss`, AND THAT IS THE FIX (his 2026-08-12 report).
+        //
+        // The rule the old comment above states is right — a cover asked for while a sheet is
+        // dismissing silently never appears — but the answer to it was wrong: the cover was put
+        // INSIDE the sheet, which only survives while the sheet does. The Add path dismisses, so its
+        // presenter died before the hand-off was packed, and nothing appeared at all.
+        //
+        // `onDismiss` is the one moment SwiftUI promises the sheet is gone. The cover now belongs to
+        // THIS screen (see below the sheet, not inside it), so it is owned by a view that is always
+        // alive, and both paths — a single tapped picture and a multi-select Add — take the same
+        // route: pack, close, present.
+        .sheet(isPresented: $showAddPicker, onDismiss: { presentStagedHandOff() }) {
             StoryLibraryPicker(
+                // Packs and closes the picker; the composer opens from `onDismiss` above. It used to
+                // rely on the sheet STAYING up, which is why this one worked and Add did not.
                 onImage: { ui, id in beginHandOff(adding: [(ui, id)]) },
                 // A VIDEO pick closes the picker and lands back HERE with the new clip selected
                 // and playing (owner 2026-08-05: "the app should return directly to the Story
@@ -491,12 +548,15 @@ struct StoryVideoEditorView: View {
                         if !images.isEmpty { await MainActor.run { beginHandOff(adding: images) } }
                     }
                 })
-            .fullScreenCover(item: $handOff) { post in
-                StoryEditorView(source: post.items.first?.image ?? UIImage(),
-                                onPosted: { onPosted(); dismiss() },
-                                seedItems: post.items,
-                                seedCaption: post.caption)
-            }
+        }
+        // OWNED BY THIS SCREEN, NOT BY THE PICKER SHEET. Inside the sheet it could only present
+        // while the sheet was up, which is the whole of his report. Out here the presenter outlives
+        // every dismissal, and `onDismiss` above decides the moment.
+        .fullScreenCover(item: $handOff) { post in
+            StoryEditorView(source: post.items.first?.image ?? UIImage(),
+                            onPosted: { onPosted(); dismiss() },
+                            seedItems: post.items,
+                            seedCaption: post.caption)
         }
         .toolbar(.hidden, for: .navigationBar)
         .task { await load() }
