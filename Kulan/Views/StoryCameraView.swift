@@ -632,6 +632,34 @@ struct StoryCameraView: View {
                     // pill's units now, where the widest lens is .5 — so clamping at 1 would have
                     // made the ultra-wide unreachable by pinch and reset it on release.
                     .onEnded { scale in baseZoom = max(0.5, baseZoom * scale) })
+                // DOUBLE-TAP FLIPS THE CAMERA (owner 2026-08-11). Every big camera has this and ours
+                // only had the button. It is a plain toggle — `flip()` swaps to whichever side is not
+                // current, so a second double-tap comes straight back.
+                //
+                // ⚠️ THE ZOOM GOES BACK TO 1× WITH IT, and that is not tidying. The pill's number is
+                // a REAR-lens idea: `deviceZoom` multiplies by the first switch-over factor of the
+                // virtual device, and the front camera has no such device. Carrying .5 or 3 across
+                // the flip would leave the pill saying one thing and the picture showing another —
+                // the exact mismatch build 526 went to some trouble to remove. Both halves of the
+                // zoom state are reset, because `baseZoom` is what the next pinch multiplies from.
+                //
+                // ⚠️ `.onTapGesture` and NOT a `TapGesture` in `.gesture`, and no
+                // `.highPriorityGesture` anywhere near it: the preview already carries the pinch, and
+                // an ancestor carries the CAMERA/TEXT swipe. A gesture that CLAIMS the touch eats
+                // both, which is the rule in kulan-scroll-gesture-rules and has cost a build before.
+                // Nothing else on this preview uses a tap today, so a two-tap gesture here cannot
+                // steal one — and when tap-to-focus arrives it will need `count: 1` alongside this,
+                // which SwiftUI resolves by waiting out the double-tap interval.
+                .onTapGesture(count: 2) {
+                    guard !cam.denied else { return }
+                    cam.flip()
+                    // All THREE, or the pill lies. `zoom` is what the pill draws, `baseZoom` is what
+                    // the next pinch multiplies from, and `setZoom` is the device itself.
+                    zoom = 1
+                    baseZoom = 1
+                    cam.setZoom(1)
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                }
 
             // Camera access denied/restricted → explain + route to Settings instead of a dead black screen.
             if cam.denied {
