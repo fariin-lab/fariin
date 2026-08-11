@@ -214,46 +214,21 @@ final class AudioRecorder {
         return bars
     }
 
-    // MARK: - Pause, listen back, resume
+    // MARK: - Listen back
     //
-    // ⚠️ WHY THIS IS TWO STEPS AND NOT ONE, because it looks like an arbitrary split until you know:
-    // an m4a's header is only written by `stop()`, so a paused-but-unstopped file is NOT playable —
-    // and `AVAudioRecorder` cannot append after `stop()`. Those two facts pull in opposite directions,
-    // so the state machine follows them rather than fighting them:
-    //
-    //   recording ──pause()──▶ paused ──resume()──▶ recording      (nothing finalized, append still possible)
-    //                            │
-    //                     finalizeForReview()
-    //                            ▼
-    //                         reviewing        (playable, and deliberately one-way)
-    //
-    // So you may pause and carry on as often as you like, and the moment you ask to HEAR it the note
-    // is closed for additions. Anything else needs recording each stretch to its own file and
-    // stitching them together at send time — real work, and worth doing on its own rather than
-    // smuggled in here. The UI simply stops offering Resume once you have listened.
+    // ⚠️ THERE IS NO USER-FACING PAUSE-AND-RESUME ANY MORE, AND THE FORMAT IS WHY. An m4a's header is
+    // only written by `stop()`, so a paused-but-unstopped file is NOT playable — and `AVAudioRecorder`
+    // cannot append after `stop()`. The reference app's pause therefore does something we cannot copy
+    // in one file: it lets you LISTEN and then continue recording, which needs a file per stretch and
+    // stitching at send time. His 2026-08-11 order made pause open the review directly, so the old
+    // hold-open pause()/resume() pair lost its only caller and was deleted rather than left as a trap.
+    // (The interruption handler pauses the AVAudioRecorder directly — that one never needs playback.)
+    // If stitching is ever built, that is its own piece of work; do not resurrect the half-measure.
 
-    /// True while held mid-note. The file is intact and `resume()` will carry on appending to it.
-    var isPaused = false
     /// Set once the note has been closed for playback. Present = reviewing.
     private(set) var reviewURL: URL?
     private var reviewDuration: Double = 0
     private var reviewWaveform: [Int] = []
-
-    func pause() {
-        guard let r = recorder, r.isRecording else { return }
-        timer?.invalidate(); timer = nil
-        r.pause()                       // NOT stop() — stop() would close the file for good
-        isPaused = true
-    }
-
-    func resume() {
-        guard let r = recorder, isPaused else { return }
-        isPaused = false
-        r.record()
-        // `resuming: true` keeps the captured envelope, so the waveform continues rather than
-        // restarting from empty — the same path an interrupted recording already takes.
-        beginMetering(resuming: true)
-    }
 
     /// Close the note so it can be PLAYED. One-way, by the nature of the format.
     /// Returns nil for a note too short to send, having cleaned up after itself.
@@ -262,10 +237,15 @@ final class AudioRecorder {
         if let existing = reviewURL { return (existing, reviewDuration, reviewWaveform) }
         timer?.invalidate(); timer = nil
         guard let r = recorder, let url = fileURL else { return nil }
-        let duration = r.currentTime
+        // ⚠️ NOT `r.currentTime` ALONE. AVAudioRecorder's currentTime is only valid WHILE RECORDING —
+        // on a PAUSED recorder it reads 0, so a person who tapped pause and then stop watched the
+        // `>= 1.0` guard below bin their whole note (his report: after pause, cannot listen, cannot
+        // send). `elapsed` is this class's own clock, frozen by the metering timer at the moment of
+        // the pause, so the max of the two is right in both states: live recorder → currentTime is
+        // ahead of the throttled tick; paused recorder → elapsed is the only truthful one.
+        let duration = max(r.currentTime, elapsed)
         r.stop()
         let wf = waveform()
-        isPaused = false
         isRecording = false
         recorder = nil
         Task { @MainActor in SleepBlocker.shared.remove("voice-record") }
@@ -322,7 +302,6 @@ final class AudioRecorder {
         // ⚠️ CLEARED HERE OR THE NEXT NOTE IS THE LAST ONE. `finish()` reads `reviewURL` first, so
         // leaving it set after a send or a cancel would make the following recording return the
         // PREVIOUS note's audio — and it would look like a send bug, not a state bug.
-        isPaused = false
         reviewURL = nil
         reviewDuration = 0
         reviewWaveform = []

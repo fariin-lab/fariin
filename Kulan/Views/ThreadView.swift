@@ -126,6 +126,7 @@ struct ThreadView: View {
     @State private var recordDrag: CGSize = .zero   // live finger translation while holding
     @State private var recordCancelArmed = false    // dragged left past the cancel threshold
     @State private var holdStarted = false          // guards a single start per hold
+    @State private var holdBeganAt: Date = .distantPast   // touch-down time: a sub-0.3s release is a TAP, not a hold
     @State private var micDenied = false            // mic permission denied → "open Settings" alert
     @State private var recordingBlockedByCall = false   // tried to record while a call owns the mic
     @State private var recorder = AudioRecorder()
@@ -4572,12 +4573,15 @@ struct ThreadView: View {
             Spacer(minLength: 8)
             HStack(spacing: 3) {
                 Image(systemName: "chevron.left").font(.system(size: 12, weight: .semibold))
-                Text("slide to cancel").font(.system(size: 14))
+                Text("Slide to cancel").font(.system(size: 15))
             }
             .foregroundStyle(recordCancelArmed ? Color.red : Color.secondary)
             .animation(.easeInOut(duration: 0.15), value: recordCancelArmed)
             // Fade the hint as the finger slides toward the cancel threshold.
             .opacity(1.0 - min(1.0, Double(-clampedDrag.width) / 90.0) * 0.6)
+            // Second Spacer: the hint sits CENTRED in the bar the way the reference draws it,
+            // instead of hugging the trailing edge.
+            Spacer(minLength: 8)
         }
         .padding(.horizontal, 14).frame(height: 40)   // strict 40px during recording — no vertical distortion
     }
@@ -4632,6 +4636,7 @@ struct ThreadView: View {
             return
         }
         holdStarted = true
+        holdBeganAt = Date()
         recorder.requestAndStart()
         impact(.medium)
     }
@@ -4648,6 +4653,19 @@ struct ThreadView: View {
         guard holdStarted, !recordLocked else { return }   // locked = keep going, the bar owns it
         if cancelled || recordCancelArmed {
             cancelRecording()
+        } else if Date().timeIntervalSince(holdBeganAt) < 0.30, abs(t.width) < 10, abs(t.height) < 10,
+                  recorder.isRecording {
+            // ^ `isRecording` because a FIRST-EVER tap goes through the permission prompt and the
+            // recorder may not have started: locking then would show a dead bar counting nothing.
+            // That tap falls through to the hint instead, and the next one records.
+            // TAP TO RECORD HANDS-FREE — his order, and deliberately OUR OWN invention: WhatsApp,
+            // Telegram and Messenger all flash a "hold to record" hint here (checked against their
+            // apps 2026-08-11, in the voice research pass). Recording already started at touch-down,
+            // so a quick clean tap simply keeps it running and jumps straight to the locked bar —
+            // same destination as slide-to-lock, with no finger held. Measured by WALL CLOCK from
+            // touch-down, not `recorder.elapsed`: on a cold audio session record() can lag behind
+            // the finger, and a real tap would have read as elapsed 0 and fallen into the hint.
+            lockRecording()
         } else if recorder.elapsed < 1.0 {
             // Match AudioRecorder.finish()'s 1.0s floor EXACTLY — a hold under 1s can't produce a note
             // (finish returns nil), so treat it as an accidental tap here instead of "sending" nothing.
@@ -4665,11 +4683,15 @@ struct ThreadView: View {
             if !recordCancelArmed {
                 lockTarget.offset(y: -86)
             }
-            // Big red mic (the "before" size), follows the finger 1:1.
+            // The big mic under the finger, follows it 1:1. ACCENT, NOT RED — his screenshot of the
+            // reference: the button is the chat colour sitting in a soft halo of itself; red is the
+            // recording signal on the LEFT of the bar, not the button. The halo replaces the old
+            // red shadow.
             ZStack {
-                Circle().fill(Color.red)
+                Circle().fill(Theme.accent(dark).opacity(0.22))
+                    .frame(width: 78, height: 78)
+                Circle().fill(Theme.accent(dark))
                     .frame(width: 56, height: 56)
-                    .shadow(color: .red.opacity(0.4), radius: 6)
                 Image("ic_mic").renderingMode(.template).resizable().scaledToFit()
                     .frame(width: 24, height: 28).foregroundStyle(.white)
             }
@@ -4736,35 +4758,26 @@ struct ThreadView: View {
                         .frame(height: 22)
                         .allowsHitTesting(false)   // checking it is not editing it
                 } else {
-                    // RECORDING or PAUSED: pause holds the note, and it can still be continued.
-                    Button { recorder.isPaused ? recorder.resume() : recorder.pause() } label: {
-                        Image(systemName: recorder.isPaused ? "mic.fill" : "pause.fill")
-                            .font(.system(size: 15)).foregroundStyle(Theme.accent(dark))
+                    // RECORDING: ONE control, and PAUSE IS IT — his 2026-08-11 screenshots of the
+                    // reference bar: tapping pause lands you straight on the review pill, with the
+                    // bin and send waiting either side. The separate stop square (and the old
+                    // pause-that-holds) are gone, and that is honesty rather than simplification:
+                    // an m4a closes the moment it becomes playable and cannot be appended to after,
+                    // so a pause you could LISTEN during and then resume — what the reference's red
+                    // mic does — needs a file per stretch and stitching we do not have. One red
+                    // pause that opens the review is the whole truth. RED, like the reference's,
+                    // not the accent: it is the recording-side control, and red is the recording
+                    // signal everywhere else in this bar.
+                    Button { beginPreview() } label: {
+                        Image(systemName: "pause.fill")
+                            .font(.system(size: 15)).foregroundStyle(.red)
                             .frame(width: 22, height: 22)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Pause and listen back")
                     RecordTimerText(recorder: recorder)
                     RecordWaveform(recorder: recorder, color: Theme.accent(dark))
-                    // STOP, AND THEN YOU HEAR IT. This is the step WhatsApp has and we did not: stop,
-                    // play it back, then send or bin, with nothing leaving until you say so.
-                    //
-                    // ⚠️ IT USED TO BE HIDDEN BEHIND PAUSE — a `play.circle` that only appeared once
-                    // `recorder.isPaused`. Two taps and a guess, on the one step whose whole purpose is
-                    // to stop a note going out before you have heard it. A stop square is what the
-                    // reference app puts here and it is always available.
-                    //
-                    // Stopping is still what closes the note, and that has not changed: an m4a is only
-                    // playable once stopped and cannot be appended to afterwards, so listening is the
-                    // last step and Resume is not offered past it. Pause is still there, beside it, for
-                    // when you only want to gather your thoughts.
-                    Button { beginPreview() } label: {
-                        Image(systemName: "stop.circle.fill")
-                            .font(.system(size: 20)).foregroundStyle(Theme.accent(dark))
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Stop and listen back")
                 }
             }
             .padding(.leading, 14).padding(.trailing, 18).frame(minHeight: 40)
@@ -4780,7 +4793,6 @@ struct ThreadView: View {
                     .contentShape(Circle())
             }
         }
-        .animation(.spring(response: 0.28, dampingFraction: 0.85), value: recorder.isPaused)
         .animation(.spring(response: 0.28, dampingFraction: 0.85), value: reviewingNote)
     }
 
