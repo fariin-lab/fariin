@@ -233,8 +233,19 @@ struct SettingsView: View {
                     else { showEdit = true }
                 }
             VStack(spacing: 8) {
-                Text(profile.me?.name ?? "You")
-                    .font(.title2.weight(.bold)).foregroundStyle(.primary)
+                // ⚠️ THE BADGE WAS NEVER DRAWN ON MY OWN NAME (owner 2026-08-11: "iam not seeing
+                // verify mark in my profile setting"). His account really is verified — active and
+                // official in the data, read back live — and every screen that draws OTHER people
+                // (the chat list, contact info, calls, groups, the announcement console) has carried
+                // `VerifiedMark` all along. This screen and the story header simply never asked.
+                //
+                // Same component as everywhere else, deliberately: a screen that draws its own tick
+                // is a screen that can disagree with the app about who is verified.
+                HStack(spacing: 6) {
+                    Text(profile.me?.name ?? "You")
+                        .font(.title2.weight(.bold)).foregroundStyle(.primary)
+                    if let uid = profile.me?.id { VerifiedMark(uid: uid, size: 18, explains: true) }
+                }
                 if let h = profile.me?.handle, !h.isEmpty {
                     Text("@\(h)").font(.subheadline).foregroundStyle(.secondary)
                 }
