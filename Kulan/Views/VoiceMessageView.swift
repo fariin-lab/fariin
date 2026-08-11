@@ -373,7 +373,14 @@ struct WaveformBars: View {
     static func display(_ stored: Int) -> CGFloat {
         let v = CGFloat(max(0, min(100, stored))) / 100
         guard v > 0 else { return 0 }
-        return min(1, pow(v, 1 / 0.85) * (50.0 / 30.0))
+        let boosted = pow(v, 1 / 0.85) * (50.0 / 30.0)
+        // ⚠️ A SOFT CEILING, NOT `min(1, …)` — his "ours looks boxy" report. The hard clamp cut
+        // every loud-ish syllable to the identical full height, and a run of identical full-height
+        // bars is a rectangle, not a voice. Below the knee nothing changes; above it the curve
+        // compresses toward 1 asymptotically, so loud bars still crest visibly differently while
+        // speech keeps owning the top of the range (the whole point of the −20dB window above).
+        if boosted <= 0.82 { return boosted }
+        return 0.82 + (1 - exp(-(boosted - 0.82) * 2.2)) * 0.18
     }
 
     let bars: [Int]          // 0…100
@@ -399,11 +406,26 @@ struct WaveformBars: View {
             // would have been 20 redraws a second to draw the identical picture. The canvas now redraws
             // when `progress` changes, which is the only thing that can change what it looks like.
             Canvas { ctx, size in
-                let count = max(bars.count, 1)
+                // AIR BETWEEN THE BARS — his "ours looks boxy" report with the reference beside it.
+                // All 40 stored bars drawn into a 110pt slim bubble gave a 2.75pt slot: a 2pt bar
+                // with a 0.75pt gap, which is a picket fence pressed into a plank. Downsample at
+                // DRAW time so a slot is never narrower than 4pt (2pt bar, 2pt of air — the
+                // reference's rhythm), taking each bucket's LOUDEST bar so peaks survive the merge.
+                // Draw-time like the height remap below, so every old note is re-shaped too.
+                let all = bars
+                let maxBars = max(8, Int(size.width / 4))
+                let step = max(1, Int((Double(all.count) / Double(maxBars)).rounded(.up)))
+                var drawn: [Int] = []
+                var b = 0
+                while b < all.count {
+                    drawn.append(all[b..<min(b + step, all.count)].max() ?? 0)
+                    b += step
+                }
+                let count = max(drawn.count, 1)
                 let slot = size.width / CGFloat(count)
                 let barW = max(2, slot * 0.5)
                 let playedTo = Int(Double(count) * progress)
-                for (i, v) in bars.enumerated() {
+                for (i, v) in drawn.enumerated() {
                     let h = max(2, Self.display(v) * size.height)
                     let x = CGFloat(i) * slot + (slot - barW) / 2
                     let rect = CGRect(x: x, y: (size.height - h) / 2, width: barW, height: h)
