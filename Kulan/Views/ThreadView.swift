@@ -3509,7 +3509,7 @@ struct ThreadView: View {
         // Second line: status + time, kept short so the bubble stays compact.
         let detail: String = {
             if declined { return "Declined · \(time)" }
-            if incomingMissed { return "Tap to call back · \(time)" }
+            if incomingMissed { return "Call back · \(time)" }   // short: the bubble wears the COMPACT width now
             if missed { return "No answer · \(time)" }            // MY unanswered outgoing call
             if let d = m.callDuration, d > 0 { return "\(callLogDuration(d)) · \(time)" }
             return "\(mine ? "Outgoing" : "Incoming") · \(time)"
@@ -3545,18 +3545,19 @@ struct ThreadView: View {
                     Text(statusText)
                         .font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(mine ? Color.white : .primary)
+                        .lineLimit(1)
                     Text(detail)
                         .font(.system(size: 14))
                         .foregroundStyle(mine ? Color.white.opacity(0.75) : .secondary)
+                        .lineLimit(1)
                 }
             }
-            // ONE WIDTH FOR EVERY CALL BUBBLE — his screenshot: content-hugging made "Tap to call
-            // back" bubbles wide and "32 sec" ones narrow, a ragged column. Same cure the voice
-            // note got: a fixed width, sized to hold the longest case ("Missed voice call / Tap to
-            // call back · 12:58 PM") and landing near the voice bubble's own footprint, so calls
-            // and notes read as one family. 232 + 28 padding = 260, inside the 70% cap on the
-            // smallest phones.
-            .frame(width: 232, alignment: .leading)
+            // ONE WIDTH FOR EVERY CALL BUBBLE, AND IT IS THE COMPACT ONE — his order, correcting
+            // the first cut of this fix which took the widest case. The size is set by the
+            // longest TITLE ("Missed voice call", the one string that cannot shorten); the long
+            // subtitle shortened to fit ("Tap to call back" → "Call back"). 204 + 28 padding =
+            // 232 total, the tidy small bubble from his photo, worn by every call row.
+            .frame(width: 204, alignment: .leading)
             .padding(.vertical, 11).padding(.horizontal, 14)
             .background(mine ? myBubbleFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
