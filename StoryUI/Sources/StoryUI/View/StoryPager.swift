@@ -52,6 +52,14 @@ struct StoryPager: UIViewControllerRepresentable {
     /// own — see the note at the `CATransition` in `syncIfNeeded`.
     static let personTurnDuration: CFTimeInterval = 0.10
 
+    /// HOW MUCH FASTER THE CUBE'S TAP TURN PLAYS THAN `UIPageViewController` would play it.
+    ///
+    /// A multiplier and not a duration, because the duration it is scaling is private to UIKit. 3x
+    /// puts a turn that reads as roughly a third of a second near the 0.10s the flat turn uses,
+    /// which is the number he gave for that one. See the note at the call site for why the cube
+    /// cannot simply name its own duration the way the flat turn does.
+    static let cubeTurnSpeedup: Float = 3.0
+
     /// WHICH PERSON-TO-PERSON TRANSITION IS RUNNING — both are kept, on the owner's instruction
     /// (2026-08-11: "do not delete the current Flat Animation… I want both implementations available
     /// so I can test").
@@ -177,21 +185,63 @@ struct StoryPager: UIViewControllerRepresentable {
         StoryCardMorph.shared.detach(coordinator.internalScroll)
     }
 
-    // The cube transform (sideAngle = 0): perspective m34 = -1/500, Y-rotation up to 90°, plus the
-    // cube-distance depth so the two faces meet at the shared edge, and a face push (+w/2 z) so the centred
-    // page sits flat at full size (cancels the -w/2). t in [-1, 1]: 0 = flat centre, ±1 = edge-on.
+    /// Telegram's perspective depth, their constant.
+    static let cubePerspective: CGFloat = 500.0
+
+    /// ⚠️ THE TERM OURS WAS MISSING, AND THE REASON THE PAGES CAME OUT THE WRONG SIZE.
+    ///
+    /// Telegram reads `environment.metrics.widthClass` and uses **40 on compact (every iPhone)**, 0
+    /// only on regular (iPad). Ours had no such term at all, and the note that used to sit here said
+    /// "sideAngle = 0" as though that were a simplification. It is not a simplification, it is the
+    /// iPad branch: put `sideDistance = 0` into their formula and `sideAngle` collapses to zero,
+    /// `backDistance` collapses to zero, and what is left reduces algebraically to exactly the
+    /// transform we shipped. The cube on his phone was Telegram's iPad cube.
+    ///
+    /// What the term buys is where the two faces meet. At `sideAngle = 0` they meet at a right angle
+    /// on the screen edge, so a turning face is projected larger than its page and the incoming one
+    /// arrives undersized — his "incorrect sizing". At 40 the join stands 40pt inside the screen and
+    /// both faces are drawn at the size the page actually is.
+    /// 40, flat: Telegram's compact-width value, and this app is an iPhone app. Their regular-width
+    /// (iPad) value is 0 — which is the branch we were accidentally running. Kept as a named constant
+    /// rather than read from `UIDevice` so this stays callable from anywhere without an actor hop.
+    static let cubeSideDistance: CGFloat = 40
+
+    /// The closed form for that angle, theirs verbatim. It answers "how far must a face be turned so
+    /// its edge lands `sideDistance` inside the screen under a 500pt perspective", and it is not
+    /// something to tidy up by eye — every term carries.
+    static func cubeSideAngle(width w: CGFloat, sideDistance s: CGFloat) -> CGFloat {
+        let p = cubePerspective
+        let c = sqrt(-pow(p, 2) * pow(s, 2) + pow(p, 2) * pow(w, 2) + pow(s, 2) * pow(w, 2)
+                     + s * pow(w, 3) + 0.25 * pow(w, 4))
+        let a = 2.0 * p * w - 2.0 * c
+        let b = -2.0 * p * s + 2.0 * s * w + pow(w, 2)
+        guard b != 0 else { return 0 }
+        return 2.0 * atan(a / b)
+    }
+
+    /// `StoryContainerScreen.calculateCubeTransform`, ported whole. t in [-1, 1]: 0 = flat centre,
+    /// ±1 = edge-on. The face push (+w/2 in z) is Telegram's `faceTransform`, which they set on the
+    /// CONTENT view while the cube goes on its parent; concatenating it first here is the same
+    /// composition on one layer, and it is what makes the centred page sit at exactly full size.
     static func cubeTransform(_ t: CGFloat, width w: CGFloat) -> CATransform3D {
         let tc = max(-1, min(1, t))
         let absT = abs(tc)
-        let angle = tc * (.pi / 2)
-        let cubeDistance = 0.5 * w * (1.4142135623731 * sin((.pi / 2) * absT + .pi / 4) - 1.0)
+        let sideAngle = cubeSideAngle(width: w, sideDistance: cubeSideDistance)
+        // ⚠️ THE TURN IS WIDER THAN A RIGHT ANGLE. A cube whose faces stand off the screen edge has
+        // to rotate past 90° to bring the next one square to the camera.
+        let currentAngle = tc * (.pi / 2 + sideAngle)
+        let cubeDistance_a = -1.4142135623731 * absT * cos(sideAngle + 0.785398163397448)
+        let cubeDistance_b = sin(sideAngle * absT + 1.5707963267949 * absT + 0.785398163397448)
+        let cubeDistance = 0.5 * w * (cubeDistance_a + absT + 1.4142135623731 * cubeDistance_b - 1.0)
+        let backDistance = w / 2.0 + w * (tan(sideAngle) / 2.0) - w / (2.0 * cos(sideAngle))
         var perspective = CATransform3DIdentity
-        perspective.m34 = -1.0 / 500.0
-        var t3d = CATransform3DTranslate(perspective, 0, 0, -w * 0.5)
-        t3d = CATransform3DTranslate(t3d, 0, 0, -cubeDistance)
-        t3d = CATransform3DConcat(CATransform3DMakeRotation(angle, 0, 1, 0), t3d)
+        perspective.m34 = -1.0 / cubePerspective
+        var target = CATransform3DTranslate(perspective, 0, 0, -w * 0.5)
+        target = CATransform3DTranslate(target, 0, 0, -cubeDistance + backDistance)
+        target = CATransform3DConcat(CATransform3DMakeRotation(currentAngle, 0, 1, 0), target)
+        target = CATransform3DTranslate(target, 0, 0, -backDistance)
         let face = CATransform3DMakeTranslation(0, 0, w * 0.5)
-        return CATransform3DConcat(face, t3d)
+        return CATransform3DConcat(face, target)
     }
 
     final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate, UIGestureRecognizerDelegate {
@@ -428,11 +478,34 @@ struct StoryPager: UIViewControllerRepresentable {
             // closes it, so an interrupted turn cannot strand the pages mid-rotation.
             if StoryPager.personTransition == .cube {
                 StoryPager.cubeTurnActive = true
+                // ⚠️ THE LAYER'S CLOCK, BECAUSE APPLE'S DURATION IS PRIVATE — his "it works but it is
+                // too slow". The flat turn simply names its own duration on a `CATransition`, and
+                // that trick is not available here: the fold is derived from where the pages ARE, so
+                // they have to genuinely travel, which means `UIPageViewController`'s own animated
+                // move. There is no API for how long that takes.
+                //
+                // `layer.speed` is the time base every animation on that layer is played through, so
+                // running the scroll view at 3x plays UIKit's turn at a third of its length without
+                // touching the turn itself. Nothing about the movement changes except how long it
+                // lasts, which is exactly what he asked for.
+                //
+                // ⚠️ IT MUST BE PUT BACK, and not only in the completion. A speed left at 3 belongs
+                // to the layer, not to this turn, and would quietly accelerate every later animation
+                // on the pager's scroll view — including the dismiss spring. The belt below runs on
+                // our own clock so a completion that never arrives cannot strand it.
+                let scroll = internalScroll
+                scroll?.layer.speed = StoryPager.cubeTurnSpeedup
+                let restoreSpeed = { scroll?.layer.speed = 1.0 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { restoreSpeed() }
                 pager.setViewControllers([target], direction: to > from ? .forward : .reverse,
                                          animated: true) { [weak self] _ in
+                    restoreSpeed()
                     StoryPager.cubeTurnActive = false
                     StoryPager.personTurnActive = false
                     guard let self else { return }
+                    // ⚠️ `isTurning` COMES DOWN HERE AND NOWHERE EARLIER. It is the crash guard (see
+                    // its note: a second turn over the top of a live one is a UIKit assertion), so
+                    // it is tied to the real end of the transition, never to a duration we guessed.
                     self.isTurning = false
                     self.prewarmNeighbours(of: next)
                     self.replayPendingSync()
@@ -730,14 +803,26 @@ struct StoryPager: UIViewControllerRepresentable {
             cubeApplied = true
             let w = scroll.bounds.width
             guard w > 1 else { return }
+            // ⚠️ THE PRESENTATION LAYER, NOT THE MODEL, AND ON A TAP IT IS THE WHOLE DIFFERENCE.
+            //
+            // `contentOffset` and `layer.position` are MODEL values: the instant
+            // `setViewControllers(animated: true)` is called they already hold where the turn is
+            // going to END, while the pixels are still at the beginning. Reading them, this loop
+            // computed the same finished `t` on every frame of the animation and then snapped when
+            // the model and the render server finally agreed — a fold that jumps rather than turns,
+            // which is the jitter he reported on the tap. A finger drag has no animation, so the two
+            // are equal there and the swipe path is unaffected.
+            //
+            // `presentation()` is nil when nothing is animating, hence the fallbacks.
+            let offsetX = (scroll.layer.presentation() ?? scroll.layer).bounds.origin.x
             for sub in scroll.subviews {
                 guard abs(sub.bounds.width - w) < 1.0 else { continue }   // page-sized views only
                 // Read the UNTRANSFORMED position (layer.position is the layout anchor, unaffected by our
                 // transform), NOT sub.frame.minX — once a 3D transform is set, `frame` becomes the transformed
                 // bounding box, so reading it back fed our own rotation into the next frame's math. That
                 // feedback loop was the SHAKE, and its drift pushed pages off-screen → the BLACK flash.
-                let pageMinX = sub.layer.position.x - sub.bounds.width / 2
-                let relX = pageMinX - scroll.contentOffset.x              // page's screen-x (0 = centred, ±w = neighbour)
+                let pageMinX = (sub.layer.presentation() ?? sub.layer).position.x - sub.bounds.width / 2
+                let relX = pageMinX - offsetX                             // page's screen-x (0 = centred, ±w = neighbour)
                 let t = relX / w
                 sub.layer.isDoubleSided = false                            // hide the back face
                 if abs(t) < 0.001 {
