@@ -263,8 +263,14 @@ struct StoryImage: View {
     }
 
     @MainActor private func load() async {
-        if let cached = await DiskImageCache.shared.image(for: url) { await apply(cached); return }
+        // ⚠️ THE EMPTINESS TEST COMES FIRST. It used to sit AFTER the cache read, so a story whose
+        // thumb has not finished uploading — `previewUrl` is "" until both uploads land — asked the
+        // disk cache for the key `""`. That is ONE shared key for every thumbless video in the app,
+        // which is a wrong-picture bug waiting for the first thing that ever writes under it. Nothing
+        // does today, so this is a latent hazard rather than his report; it costs one line to close
+        // and it sits in the same code path, so closing it here is cheaper than remembering it.
         guard let u = URL(string: url), !url.isEmpty else { return }
+        if let cached = await DiskImageCache.shared.image(for: url) { await apply(cached); return }
         // Retry with backoff so a card never gets stuck on a black placeholder. The two reported
         // failures — "sometimes a black image" and "after updating the app I can't see my story" —
         // are both a single failed fetch (a network blip, or a cold disk cache after a fresh
