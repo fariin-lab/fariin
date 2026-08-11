@@ -114,6 +114,12 @@ struct ThreadView: View {
     @State private var previewPlayer: AVAudioPlayer?
     @State private var previewPlaying = false
     @State private var previewURL: URL?
+    // The finished note's own bars, and how far through it you are. `finalizeForReview` already returned
+    // the waveform and it was being thrown away; drawing it is what makes the review step feel like
+    // listening rather than staring at a number.
+    @State private var previewWaveform: [Int] = []
+    @State private var previewProgress: Double = 0
+    @State private var previewTimer: Timer?
     @State private var holdHint = false             // "hold to record" flash after an accidental tap
     @State private var pinIndex = 0                  // which of the (≤5) pinned messages the bar shows
     @State private var showPinnedSheet = false       // "See All" → full sheet of pinned messages
@@ -4719,6 +4725,16 @@ struct ThreadView: View {
                     .buttonStyle(.plain)
                     Text(timeString(recorder.elapsed)).font(.system(size: 15).monospacedDigit())
                         .foregroundStyle(.secondary)
+                    // The note you just made, drawn. Without it the review step is a play button and a
+                    // number, which reads as a dead bar rather than as a thing you are listening to.
+                    // Same component the sent bubble uses, so what you check is what they will see.
+                    WaveformBars(bars: previewWaveform.isEmpty ? Array(repeating: 30, count: 28) : previewWaveform,
+                                 progress: previewProgress,
+                                 played: Theme.accent(dark),
+                                 unplayed: Theme.accent(dark).opacity(0.35),
+                                 onSeek: { _ in })
+                        .frame(height: 22)
+                        .allowsHitTesting(false)   // checking it is not editing it
                 } else {
                     // RECORDING or PAUSED: pause holds the note, and it can still be continued.
                     Button { recorder.isPaused ? recorder.resume() : recorder.pause() } label: {
@@ -4730,17 +4746,25 @@ struct ThreadView: View {
                     .buttonStyle(.plain)
                     RecordTimerText(recorder: recorder)
                     RecordWaveform(recorder: recorder, color: Theme.accent(dark))
-                    // Only once it is standing still: offering "listen" mid-sentence would close the
-                    // note under the person's own voice.
-                    if recorder.isPaused {
-                        Button { beginPreview() } label: {
-                            Image(systemName: "play.circle")
-                                .font(.system(size: 19)).foregroundStyle(Theme.accent(dark))
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Listen back")
+                    // STOP, AND THEN YOU HEAR IT. This is the step WhatsApp has and we did not: stop,
+                    // play it back, then send or bin, with nothing leaving until you say so.
+                    //
+                    // ⚠️ IT USED TO BE HIDDEN BEHIND PAUSE — a `play.circle` that only appeared once
+                    // `recorder.isPaused`. Two taps and a guess, on the one step whose whole purpose is
+                    // to stop a note going out before you have heard it. A stop square is what the
+                    // reference app puts here and it is always available.
+                    //
+                    // Stopping is still what closes the note, and that has not changed: an m4a is only
+                    // playable once stopped and cannot be appended to afterwards, so listening is the
+                    // last step and Resume is not offered past it. Pause is still there, beside it, for
+                    // when you only want to gather your thoughts.
+                    Button { beginPreview() } label: {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 20)).foregroundStyle(Theme.accent(dark))
+                            .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Stop and listen back")
                 }
             }
             .padding(.leading, 14).padding(.trailing, 18).frame(minHeight: 40)
@@ -4762,7 +4786,7 @@ struct ThreadView: View {
 
     /// Close the note and start playing it. One-way — see lockedRecordingBar.
     private func beginPreview() {
-        guard let (url, _, _) = recorder.finalizeForReview() else {
+        guard let (url, _, wf) = recorder.finalizeForReview() else {
             // Under a second: there is nothing worth hearing, and finalizeForReview has already
             // cleaned up after itself. Treat it as a cancel rather than leaving an empty bar.
             cancelRecording()
@@ -4770,13 +4794,40 @@ struct ThreadView: View {
         }
         reviewingNote = true
         previewURL = url
+        previewWaveform = wf
+        previewProgress = 0
         impact(.light)
         startPreviewPlayback()
     }
 
     private func togglePreview() {
-        if previewPlaying { previewPlayer?.pause(); previewPlaying = false }
+        if previewPlaying { previewPlayer?.pause(); previewPlaying = false; stopPreviewTicker() }
         else { startPreviewPlayback() }
+    }
+
+    /// Drives the review waveform. 20Hz, and only while the preview is actually running — the same rate
+    /// the playback engine uses, so the two look identical in motion.
+    private func startPreviewTicker() {
+        previewTimer?.invalidate()
+        previewTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
+            MainActor.assumeIsolated {
+                guard let p = previewPlayer else { return }
+                if p.isPlaying {
+                    previewProgress = p.duration > 0 ? p.currentTime / p.duration : 0
+                } else {
+                    // Ran to the end. Park it back at the start so pressing play hears it again from
+                    // the top, which is what a person checking their own note wants.
+                    previewPlaying = false
+                    previewProgress = 0
+                    p.currentTime = 0
+                    stopPreviewTicker()
+                }
+            }
+        }
+    }
+
+    private func stopPreviewTicker() {
+        previewTimer?.invalidate(); previewTimer = nil
     }
 
     private func startPreviewPlayback() {
@@ -4792,13 +4843,17 @@ struct ThreadView: View {
         try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .duckOthers])
         try? session.setActive(true)
         previewPlaying = previewPlayer?.play() ?? false
+        if previewPlaying { startPreviewTicker() }
     }
 
     private func stopPreviewPlayback() {
+        stopPreviewTicker()
         previewPlayer?.stop()
         previewPlayer = nil
         previewPlaying = false
         previewURL = nil
+        previewWaveform = []
+        previewProgress = 0
         reviewingNote = false
     }
 
