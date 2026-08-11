@@ -1455,6 +1455,12 @@ final class CallService: NSObject {
                     self.pendingOffer = d["offer"] as? [String: String]    // cache → answer with no server round-trip
                     if let cams = d["cams"] as? [String: Bool], let on = cams[caller] { self.remoteCameraOn = on }
                     self.state = .incoming
+                    // TURN starts fetching AT RING TIME on this path too — the push path has done
+                    // this since the awaitIceServers fix, but the foreground listener path never
+                    // did, so answering a call that rang while the app was OPEN could pay the whole
+                    // TURN fetch (up to its 2s cap) inside "Connecting…". Fetched during the ring,
+                    // it is warm by pickup and the await is a no-op.
+                    Task { await self.refreshIceServers() }
                     CallKitManager.shared.reportIncoming(callId: doc.documentID, name: self.otherName,
                                                         video: isVideoCall, callerUid: caller)
                     self.markRinging()
@@ -1590,16 +1596,11 @@ final class CallService: NSObject {
             if let offer = self.pendingOffer, let sdp = offer["sdp"] {
                 self.completeAnswer(ref: ref, offerSdp: sdp)
             } else {
-                // Push path (app was killed, no cached offer): fetch it once.
-                ref.getDocument(source: .server) { [weak self] snap, _ in
-                    guard let self else { return }
-                    guard let d = snap?.data(),
-                          let offer = d["offer"] as? [String: String], let sdp = offer["sdp"] else { self.hangUp(); return }
-                    self.startedAsVideo = (d["type"] as? String == "video")
-                    self.cameraOn = self.startedAsVideo   // accepting a video call opens the camera
-                    if let cams = d["cams"] as? [String: Bool], let on = cams[self.otherUid] { self.remoteCameraOn = on }
-                    self.completeAnswer(ref: ref, offerSdp: sdp)
-                }
+                // Push path (app was killed, no cached offer): fetch it — WITH RETRIES. A single
+                // failed read used to hang up on the spot, and a phone cold-launching in the night
+                // answers over a radio that is still waking up: that one attempt is the "failed"
+                // his 1:40 AM call died as. Three tries over ~3 seconds, then give up honestly.
+                self.fetchOfferWithRetry(ref: ref, attempt: 1)
             }
         }
     }
@@ -1607,6 +1608,26 @@ final class CallService: NSObject {
     // Build the answering peer connection from the caller's offer, publish the answer + my camera state.
     // The TURN wait sits HERE rather than in answer(), because this is the one place that builds the
     // peer connection and so the last point at which `config` can still pick up real relay servers.
+    /// The cold-launch offer fetch, allowed to try three times. The guard on `state` matters: the
+    /// caller can cancel while we retry, and a late success must not answer a call that is over.
+    private func fetchOfferWithRetry(ref: DocumentReference, attempt: Int) {
+        ref.getDocument(source: .server) { [weak self] snap, _ in
+            guard let self else { return }
+            guard self.state == .active else { return }   // cancelled / ended while retrying
+            if let d = snap?.data(), let offer = d["offer"] as? [String: String], let sdp = offer["sdp"] {
+                self.startedAsVideo = (d["type"] as? String == "video")
+                self.cameraOn = self.startedAsVideo   // accepting a video call opens the camera
+                if let cams = d["cams"] as? [String: Bool], let on = cams[self.otherUid] { self.remoteCameraOn = on }
+                self.completeAnswer(ref: ref, offerSdp: sdp)
+                return
+            }
+            guard attempt < 3 else { self.hangUp(); return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.fetchOfferWithRetry(ref: ref, attempt: attempt + 1)
+            }
+        }
+    }
+
     private func completeAnswer(ref: DocumentReference, offerSdp: String) {
         Task { @MainActor in
             await self.awaitIceServers()
