@@ -901,7 +901,22 @@ struct StoryCameraView: View {
                 // gesture that CLAIMS the touch eats both (kulan-scroll-gesture-rules; this exact
                 // mistake has cost us a build before).
                 .simultaneousGesture(
-                    DragGesture(minimumDistance: 24)
+                    // ⚠️ `.global`, AND THAT ONE ARGUMENT IS HIS SHAKE (2026-08-12: "the camera
+                    // shakes/jitters during the gesture").
+                    //
+                    // A `DragGesture` measures in its own view's LOCAL space by default — and this
+                    // gesture's view is inside the very `VStack` that `.offset(y: dismissY)` moves.
+                    // So the drag moved the ruler it was being measured with: finger goes down 100,
+                    // the card goes down 100, the local translation now reads less than 100, so
+                    // `dismissY` shrinks, so the card comes back up, so the translation grows again.
+                    // That is a feedback loop running at screen refresh rate, and what it looks like
+                    // is the camera vibrating under the finger.
+                    //
+                    // Window space cannot move, so the reported translation is the finger's real
+                    // travel and the card follows it exactly once. Same reason
+                    // `StoryPager.applyCube` reads `layer.position` instead of `frame` — a value you
+                    // are writing must never be read back through the thing you wrote it to.
+                    DragGesture(minimumDistance: 24, coordinateSpace: .global)
                         // ⚠️ THE CARD FOLLOWS THE FINGER GOING DOWN (owner 2026-08-11: "is working
                         // but is not following my finger"). It was judged only in `onEnded`, so a
                         // downward swipe was a FLICK: nothing moved until it was already over, and
