@@ -373,7 +373,15 @@ struct WaveformBars: View {
     static func display(_ stored: Int) -> CGFloat {
         let v = CGFloat(max(0, min(100, stored))) / 100
         guard v > 0 else { return 0 }
-        let boosted = pow(v, 1 / 0.85) * (50.0 / 30.0)
+        var boosted = pow(v, 1 / 0.85) * (50.0 / 30.0)
+        // QUIET IS ALLOWED TO BE SMALL — his side-by-side of the same note in both apps: the
+        // reference's silences are DOTS and the speech grows out of them, while ours handed room
+        // tone and breath a visible bar, so the whole wave sat "a bit bigger". Below this knee the
+        // value drops quadratically toward zero: near-silence lands on the 2pt dot floor the
+        // canvas already draws, real speech sits far above the knee and is untouched, and the
+        // curve is continuous at the knee so nothing pops between the two.
+        let quiet: CGFloat = 0.30
+        if boosted < quiet { boosted = boosted * (boosted / quiet) }
         // ⚠️ A SOFT CEILING, NOT `min(1, …)` — his "ours looks boxy" report. The hard clamp cut
         // every loud-ish syllable to the identical full height, and a run of identical full-height
         // bars is a rectangle, not a voice. Below the knee nothing changes; above it the curve
