@@ -7222,16 +7222,12 @@ private struct RecordWaveform: View {
     var recorder: AudioRecorder
     var color: Color
     var body: some View {
-        // THE WHOLE NOTE SO FAR, not a trailing window — his reference screenshot: at 0:21 the
-        // strip holds both speech bursts and the silences between them, the note's whole story
-        // compressed to fit the width. `liveBars` is the same reduction the finished bubble gets
-        // (and WaveformBars applies the same dot-for-silence physics), so what you watch while
-        // talking is exactly what the other person will receive. The old scrolling window
-        // (LiveWaveform) went with this; so did its trailing fade — a whole-note strip has a
-        // beginning and an end, not an edge that bars slide off.
-        WaveformBars(bars: recorder.liveBars(64), progress: 0,
-                     played: color, unplayed: color, onSeek: { _ in })
-            .allowsHitTesting(false)
+        // The SCROLLING live view — bars enter right, travel left, die at the edge (his report on
+        // the whole-note compressed strip: it re-bucketed every tick, shimmered in place, "laggy",
+        // and carried a playback knob that means nothing while recording). The 10Hz liveWindow
+        // sets a pace the eye can follow, and display()'s physics makes silence enter as dots.
+        // The full note is still shown where it belongs: the review strip, after pause.
+        LiveWaveform(levels: recorder.liveWindow, color: color)
             .frame(maxWidth: .infinity, maxHeight: 22)
     }
 }

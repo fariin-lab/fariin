@@ -16,7 +16,13 @@ final class AudioRecorder {
     var isRecording = false
     var elapsed: TimeInterval = 0
     var currentTime: TimeInterval { recorder?.currentTime ?? 0 }   // live (not the 0.05s-throttled `elapsed`)
-    var levels: [Float] = []          // recent normalized levels (0…1) for the live waveform
+    var levels: [Float] = []          // recent normalized levels (0…1), 30Hz — feeds the mic halo
+    /// The live strip's scrolling window, sampled at 10Hz (every 3rd meter tick): bars enter on
+    /// the right at a pace a person can follow and travel left — the reference's live view. 30Hz
+    /// made the flow frantic; the whole-note compressed strip (tried 2026-08-11) re-bucketed on
+    /// every tick and read as lag. This is the middle that looks alive.
+    var liveWindow: [Float] = []
+    private var liveTick = 0
     private var allLevels: [Float] = []
 
     // ── Metering DSP state ──────────────────────────────────────────────────────────────────
@@ -24,7 +30,11 @@ final class AudioRecorder {
     private let meterHz: Double = 30            // 30 Hz sampling → smooth bars, low CPU
     private let tauAttack: Float = 0.050        // 50 ms rise  — fast attack (PPM-like), catches transients
     private let tauDecay:  Float = 0.300        // 300 ms fall — slow decay, the natural VU "settle"
-    private let noiseFloorDB: Float = -50       // below this = silence (0)
+    // −42, NOT −50 — his fresh-note test on build 530: silence still drew visible bars. At −50
+    // ordinary room tone (−45…−38dB) landed at 10–25% and cleared every draw-time gate; with the
+    // floor at −42 the quiet parts of a NEW recording store near zero and draw as the reference's
+    // dots, while speech (−30dB and up) keeps the whole range above. Old notes keep their old data.
+    private let noiseFloorDB: Float = -42       // below this = silence (0)
     private let waveWindow = 80                 // recent-levels window. The strip draws the WHOLE
                                                 // note via liveBars() now; this window's remaining
                                                 // customer is the mic halo (levels.last).
@@ -136,7 +146,7 @@ final class AudioRecorder {
         // `resuming` = restarting the timer after an interruption ends: skip the state reset so the
         // pre-interruption waveform/levels are kept (a full reset would wipe the captured envelope).
         if !resuming {
-            isRecording = true; elapsed = 0; completedElapsed = 0; levels = []; allLevels = []; smoothed = 0
+            isRecording = true; elapsed = 0; completedElapsed = 0; levels = []; liveWindow = []; allLevels = []; smoothed = 0
             Task { @MainActor in SleepBlocker.shared.add("voice-record") }   // no auto-lock mid-recording (sleep block)
         }
         timer?.invalidate()
@@ -162,6 +172,13 @@ final class AudioRecorder {
             self.levels.append(level)
             if self.levels.count > self.waveWindow {
                 self.levels.removeFirst(self.levels.count - self.waveWindow)
+            }
+            self.liveTick += 1
+            if self.liveTick % 3 == 0 {   // 10Hz into the visible strip
+                self.liveWindow.append(level)
+                if self.liveWindow.count > self.waveWindow {
+                    self.liveWindow.removeFirst(self.liveWindow.count - self.waveWindow)
+                }
             }
             self.appendWaveSample(level)
         }
@@ -201,12 +218,6 @@ final class AudioRecorder {
         }
         allLevels = reduced
     }
-
-    /// The WHOLE note so far, reduced to `count` bars — the locked bar's live strip draws this
-    /// (his reference screenshot: at 0:21 the strip holds both speech bursts AND the silences
-    /// between them, the note's whole story compressed to fit, not a trailing window). Same
-    /// reduction the finished bubble gets, so what you watch is what you send.
-    func liveBars(_ count: Int) -> [Int] { waveform(count) }
 
     // Reduce all captured levels to `count` bars via RMS per bucket (preserves perceived energy far
     // better than a plain mean, which washes out peaks), quantized to 0…100 for compact storage.
@@ -502,6 +513,7 @@ final class AudioRecorder {
         segments = []
         completedElapsed = 0
         levels = []
+        liveWindow = []
         allLevels = []
         // Do NOT setActive(false) here: prepare() below immediately setActive(true)s again, so the
         // deactivate→reactivate churn only made the next hold-to-record re-activate the session from

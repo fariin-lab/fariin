@@ -495,9 +495,33 @@ struct WaveformBars: View {
     }
 }
 
-// (LiveWaveform, the scrolling trailing-window strip, was deleted 2026-08-11: the locked bar
-// draws the WHOLE note so far through WaveformBars + AudioRecorder.liveBars now — his reference
-// screenshot — and this view's only caller went with it.)
+// The live recording strip: bars ENTER on the right and TRAVEL LEFT, dying off the far edge —
+// the reference's live view, on his order. (This view was deleted for a whole-note compressed
+// strip earlier the same day; that version re-bucketed on every tick, so bars shimmered in place
+// and he read it as lag. The scroll is the honest motion: sound arrives, sound passes.) Fed by
+// the recorder's 10Hz `liveWindow`, not the 30Hz meter — thirty bars a second was a stampede.
+// Heights go through WaveformBars.display, so silence enters as the same dots the bubble draws.
+struct LiveWaveform: View {
+    let levels: [Float]      // 0…1
+    var color: Color
+
+    var body: some View {
+        GeometryReader { geo in
+            HStack(alignment: .center, spacing: 2) {
+                ForEach(Array(levels.enumerated()), id: \.offset) { _, lvl in
+                    Capsule().fill(color)
+                        .frame(width: 2.5,
+                               height: max(2, WaveformBars.display(Int(lvl * 100)) * geo.size.height))
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+            // Light interpolating spring on top of the recorder's meter ballistics: each new bar
+            // eases in and the row's leftward step reads as travel rather than teleport.
+            .animation(.interpolatingSpring(stiffness: 260, damping: 26), value: levels)
+        }
+        .clipped()   // the oldest bar dies AT the strip's edge, not outside the pill
+    }
+}
 
 // MARK: - Waveform gestures (UIKit)
 
