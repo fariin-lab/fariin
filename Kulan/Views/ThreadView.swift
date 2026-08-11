@@ -5807,12 +5807,23 @@ struct MessageBubble: View, Equatable {
             // left to re-resolve, so the bubble is provably 212 before/during/after playback. metaRow
             // right-aligns via the VStack's .trailing alignment; the fixed frame also clamps replyQuote's
             // fill so nothing can bloom.
-            VStack(alignment: .trailing, spacing: 4) {
+            // THE WIDTH IS STILL A CONSTANT, IT IS JUST NO LONGER THE SAME CONSTANT FOR EVERY NOTE.
+            // `contentWidth` is worked out from the message's own `duration` and nothing else, so it is
+            // identical at pre-measure and at render and in every playback state — which is the property
+            // the bloom fix actually needed. 212 was only ever the width of the widest case; it is still
+            // the ceiling (a 45s note and up), and a short note is now allowed to be narrow instead of
+            // padding itself out to match. Nothing can get wider than it does today.
+            //
+            // metaRow is no longer a row of its own here. It is handed INTO the voice view and laid over
+            // the trailing edge of the duration line, so the clock and the duration share one line the
+            // way both reference apps do. An overlay adds no size, which is the shape this very comment
+            // says is safe.
+            VStack(alignment: .leading, spacing: 4) {
                 replyQuoteBox(fillWidth: true)
-                VoiceMessageView(message: message, cid: cid, isMe: isMe, dark: dark)   // waveform scrub sets VoiceScrubState → the reply pan yields
-                metaRow   // time+tick, right-aligned; NO greedy Spacer (that was the bloom vector)
+                VoiceMessageView(message: message, cid: cid, isMe: isMe, dark: dark,   // waveform scrub sets VoiceScrubState → the reply pan yields
+                                 trailingMeta: { AnyView(metaRow) })
             }
-            .frame(width: 212, alignment: .leading)
+            .frame(width: VoiceMessageView.contentWidth(for: message), alignment: .leading)
             .padding(.horizontal, 13)
             .padding(.vertical, 9)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))

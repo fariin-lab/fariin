@@ -54,6 +54,33 @@ struct VoiceMessageView: View {
     // background we use the page-neutral tint instead so my sent notes are visible.
     var plainBackground: Bool = false
     var onScrub: (Bool) -> Void = { _ in }   // forwarded to the bubble so it blocks reply-swipe while scrubbing
+    /// The chat's own time-and-tick row, handed in so it can sit on the SAME line as the duration
+    /// instead of on a line of its own below. Nil off the chat screen (the All Media audio list), where
+    /// there is no clock to show. `AnyView` rather than a generic parameter on purpose: it is one row of
+    /// 10pt text, the cost is nothing, and making the whole view generic would touch every call site.
+    var trailingMeta: (() -> AnyView)? = nil
+
+    /// THE BUBBLE'S WIDTH, WORKED OUT FROM THE NOTE ITSELF.
+    ///
+    /// It used to be a flat 158pt of waveform for every note, so seven seconds and seven minutes drew
+    /// the identical bar and a short note was mostly empty space. WhatsApp's grows with the note, and so
+    /// does this.
+    ///
+    /// ⚠️ IT READS `duration` AND NOTHING ELSE, AND THAT IS NOT A STYLE CHOICE. Read the bloom note
+    /// above the audio branch in ThreadView: the bubble is pinned to a known width because a child whose
+    /// size could be re-resolved made one bubble swell on the first play and eat the gap to its
+    /// neighbours. `duration` travels in the message and is the same before, during and after playback,
+    /// so the pre-measure and the render can never disagree. A width that consulted the player would
+    /// bring that straight back.
+    static func waveWidth(for message: Message) -> CGFloat {
+        let secs = min(max(message.duration ?? 0, 0), 45)
+        return 110 + CGFloat(secs / 45) * 48        // 110 at 0s, up to 158 at 45s and beyond
+    }
+    /// play button + HStack spacing + waveform. 164 at the short end, 212 at the long end — the long end
+    /// is deliberately the old fixed width, so nothing can get WIDER than it does today.
+    static func contentWidth(for message: Message) -> CGFloat {
+        42 + 12 + waveWidth(for: message)
+    }
 
     /// ⚠️ THE PLAYER IS NOT IN HERE ANY MORE, AND THAT IS THE WHOLE POINT.
     ///
@@ -83,40 +110,14 @@ struct VoiceMessageView: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            // NOT a Button, for the reason the file bubble already documents (ThreadView "NOT a Button:
-            // inside the hosted cell a Button's press gesture claimed the touch"). A 42x42 Button on every
-            // voice bubble meant a drag starting on the play disc was swallowed and the chat would not
-            // scroll. A plain tap gesture reads identically and claims nothing.
-            Group {
-                if loading { ProgressView().tint(tint) }
-                else {
-                    Image(systemName: playing ? "pause.fill" : "play.fill")
-                        .font(.system(size: 17))
-                        // THE ICON MOVES BETWEEN THE TWO SHAPES INSTEAD OF BEING REPLACED — his
-                        // "play fast, play and pause" report, where rapid tapping felt heavy.
-                        //
-                        // Nothing here was slow: the tap toggles immediately. What was missing is
-                        // any motion, so a fast double tap swapped one glyph for another with no
-                        // travel and read as a stutter. Signal spends real effort on exactly this
-                        // beat — their button is a Lottie scrub between the play and pause states
-                        // with a guard so a second tap mid-animation does not restart it
-                        // (`AudioMessageView`, "Do nothing if we're already there") — and a
-                        // symbol-effect replace is the same idea with none of the machinery.
-                        //
-                        // `.byLayer` keeps it a bounce rather than a cross-fade, and because the
-                        // animation is driven by the VALUE it is interruptible: tap again halfway
-                        // and it retargets from where it is instead of queueing.
-                        .contentTransition(.symbolEffect(.replace.byLayer))
-                }
-            }
-            .foregroundStyle(tint)
-            .frame(width: 42, height: 42)
-            .background(tint.opacity(0.18), in: Circle())   // big round play button (reference)
-            .contentShape(Circle())
-            .onTapGesture { toggle() }
-
-            VStack(alignment: .leading, spacing: 4) {
+        // TWO ROWS, NOT A COLUMN BESIDE THE BUTTON — and that is what fixes the alignment he asked
+        // about. The play button used to be boxed with the waveform AND the little text row together, so
+        // it centred on both and ended up sitting roughly 10pt BELOW the middle of the wave. Nothing in
+        // the bubble lined up with anything. Now the button is boxed with the wave alone, so the two are
+        // on one line, which is what both references do.
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                playButton
                 WaveformBars(bars: displayBars, progress: progress, played: tint,
                              // 0.45, not 0.3. The unplayed half is most of the bar for most of a
                              // note's life, and at 30% of the tint on a saturated bubble it read as
@@ -129,37 +130,12 @@ struct VoiceMessageView: View {
                              onScrub: { s in
                                  engine.setScrubbing(s); VoiceScrubState.active = s; onScrub(s)
                              })
-                    .frame(width: 158, height: 26)
-                HStack(spacing: 8) {
-                    Text(durationText).font(.caption2).foregroundStyle(tint.opacity(0.8))
-                    // "Not heard yet" dot (a blue mic indicator, our way) — fades once played.
-                    if unheard {
-                        Circle().fill(Theme.accent(dark)).frame(width: 7, height: 7)
-                            .transition(.opacity)
-                    }
-                    // Speed toggle (1× / 1.5× / 2×) shown ALWAYS — not gated on `player != nil`.
-                    // ROOT CAUSE of "the bubble changes size once played / spacing between notes disappears"
-                    // (user clue: "happens when the x1 tab appears"): the cell is PRE-MEASURED by the
-                    // collection view while player == nil (no toggle), but the toggle capsule is TALLER than
-                    // the plain duration text, so when it appeared on first play the content grew past the
-                    // measured cell height and overflowed into the next bubble (the "spacing disappears").
-                    // Rendering it unconditionally makes the pre-measure and the played render IDENTICAL, so
-                    // nothing shifts. Before load it simply pre-selects the rate cycleRate() applies on play.
-                    // Tap gesture, not a Button — same reason as the play disc above.
-                    Text(rateLabel).font(.system(size: 11, weight: .bold)).foregroundStyle(tint)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(tint.opacity(0.16), in: Capsule())
-                        .contentShape(Capsule())
-                        .onTapGesture { cycleRate() }
-                }
-                // Pin the meta row to the waveform's fixed width. Height needs NO hard-coding now: the toggle
-                // renders unconditionally (above), so the row's tallest element (the 11pt bold capsule) is
-                // ALWAYS present → the row height is constant, measure == render, and it stays correct under
-                // Dynamic Type (a fixed height would clip large text). The unheard dot is shorter than the
-                // text, so its fade in/out never changes the height either.
-                .frame(width: 158, alignment: .leading)
+                    .frame(width: Self.waveWidth(for: message), height: 26)
             }
+            bottomLine
         }
+        .frame(width: Self.contentWidth(for: message), alignment: .leading)
+        .animation(.easeOut(duration: 0.2), value: unheard)
         .onAppear {
             // Speed and paused position are the engine's now, so there is nothing to restore here:
             // this bubble reads them live. What is still needed is the auto-advance handoff for a
@@ -196,6 +172,102 @@ struct VoiceMessageView: View {
         }
         // Raise-to-ear also moved into the engine, for the same reason as the player: it was pointless
         // on a view that stops existing the moment you leave the chat.
+    }
+
+    /// A SOLID DISC WITH THE TRIANGLE CUT OUT OF IT.
+    ///
+    /// It used to be a disc at 0.18 of the tint, which on a saturated bubble is barely there — it took
+    /// up the room of a button without reading as one, and that washed-out look is what he called ugly.
+    /// The green reference does it the other way: a solid disc, high contrast, the one thing you press.
+    ///
+    /// ⚠️ THE TRIANGLE IS KNOCKED OUT RATHER THAN COLOURED IN, because nothing here knows what colour
+    /// the bubble is. `myFill` is a ShapeStyle chosen in ThreadView and can be a gradient, so there is no
+    /// colour to hand down. `destinationOut` inside a `compositingGroup` removes the disc where the
+    /// glyph is, so whatever the bubble happens to be shows through — right on every chat colour, on the
+    /// received grey, and in both light and dark, without passing anything in.
+    ///
+    /// NOT a Button, for the reason the file bubble already documents (ThreadView "NOT a Button: inside
+    /// the hosted cell a Button's press gesture claimed the touch"). A 42x42 Button on every voice
+    /// bubble meant a drag starting on the play disc was swallowed and the chat would not scroll. A
+    /// plain tap gesture reads identically and claims nothing.
+    private var playButton: some View {
+        Group {
+            if loading {
+                ProgressView().tint(tint)
+                    .frame(width: 42, height: 42)
+                    .background(tint.opacity(0.22), in: Circle())
+            } else {
+                Circle().fill(tint)
+                    .frame(width: 42, height: 42)
+                    .overlay {
+                        Image(systemName: playing ? "pause.fill" : "play.fill")
+                            .font(.system(size: 16))
+                            // Colour is irrelevant under destinationOut — only the alpha is read, and
+                            // this has to be fully opaque to cut a clean hole.
+                            .foregroundStyle(.black)
+                            // THE ICON MOVES BETWEEN THE TWO SHAPES INSTEAD OF BEING REPLACED — his
+                            // "play fast, play and pause" report, where rapid tapping felt heavy.
+                            //
+                            // Nothing there was slow: the tap toggles immediately. What was missing is
+                            // any motion, so a fast double tap swapped one glyph for another with no
+                            // travel and read as a stutter. Signal spends real effort on exactly this
+                            // beat — their button is a Lottie scrub between the play and pause states
+                            // with a guard so a second tap mid-animation does not restart it
+                            // (`AudioMessageView`, "Do nothing if we're already there") — and a
+                            // symbol-effect replace is the same idea with none of the machinery.
+                            //
+                            // `.byLayer` keeps it a bounce rather than a cross-fade, and because the
+                            // animation is driven by the VALUE it is interruptible: tap again halfway
+                            // and it retargets from where it is instead of queueing.
+                            .contentTransition(.symbolEffect(.replace.byLayer))
+                            .blendMode(.destinationOut)
+                    }
+                    .compositingGroup()
+            }
+        }
+        .frame(width: 42, height: 42)
+        .contentShape(Circle())
+        .onTapGesture { toggle() }
+    }
+
+    /// ONE LINE ALONG THE BOTTOM: duration and speed on the left, the chat's clock and ticks on the
+    /// right. They used to be on two different lines at two different heights — duration under the
+    /// waveform, clock lower down and further right — which is most of why the bubble read as tall and
+    /// unarranged. Both references put them on one line.
+    ///
+    /// ⚠️ THE CLOCK IS AN `.overlay`, NOT A SECOND ITEM IN THE ROW, AND THAT IS DELIBERATE. The bloom
+    /// note above the audio branch in ThreadView records what happened last time the timestamp went in
+    /// here: an `HStack { Spacer(minLength: 0); metaRow }` gave the row a flexible child, which
+    /// re-resolved on the reconfigure that fires at the first play, and that bubble swelled and ate the
+    /// gap to its neighbours. That same note points at the shape that is safe — "media bubbles never
+    /// bloom because their metaRow is an .overlay, which doesn't affect size". So: no Spacer, no
+    /// flexible child, the row is pinned to the known content width and the clock is laid over its
+    /// trailing edge.
+    private var bottomLine: some View {
+        HStack(spacing: 8) {
+            Text(durationText).font(.caption2).foregroundStyle(tint.opacity(0.8))
+            // "Not heard yet" dot (a blue mic indicator, our way) — fades once played.
+            if unheard {
+                Circle().fill(Theme.accent(dark)).frame(width: 7, height: 7)
+                    .transition(.opacity)
+            }
+            // Speed toggle (1× / 1.5× / 2×) shown ALWAYS — not gated on `player != nil`.
+            // ROOT CAUSE of "the bubble changes size once played / spacing between notes disappears"
+            // (user clue: "happens when the x1 tab appears"): the cell is PRE-MEASURED by the
+            // collection view while player == nil (no toggle), but the toggle capsule is TALLER than
+            // the plain duration text, so when it appeared on first play the content grew past the
+            // measured cell height and overflowed into the next bubble (the "spacing disappears").
+            // Rendering it unconditionally makes the pre-measure and the played render IDENTICAL, so
+            // nothing shifts. Before load it simply pre-selects the rate cycleRate() applies on play.
+            // Tap gesture, not a Button — same reason as the play disc above.
+            Text(rateLabel).font(.system(size: 11, weight: .bold)).foregroundStyle(tint)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(tint.opacity(0.16), in: Capsule())
+                .contentShape(Capsule())
+                .onTapGesture { cycleRate() }
+        }
+        .frame(width: Self.contentWidth(for: message), alignment: .leading)
+        .overlay(alignment: .trailing) { trailingMeta?() }
     }
 
     // Real captured waveform, or a neutral flat one for older messages that lack it.
