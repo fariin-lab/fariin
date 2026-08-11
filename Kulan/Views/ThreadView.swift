@@ -108,14 +108,14 @@ struct ThreadView: View {
     @State private var showWallpaper = false      // "Change Wallpaper" from the profile menu opens the picker here
     // Hold-to-record voice gesture state (standard hold-to-record).
     @State private var recordLocked = false        // recording continues after finger lifts
-    // Listening back to a locked note before sending it. `reviewingNote` is the one-way step: the
-    // note has been closed so it can be played, and Resume is no longer offered. See lockedRecordingBar.
+    // Listening back to a paused note before sending it. Not one-way: the review bar's red mic
+    // records the next stretch and the recorder stitches them at send. See lockedRecordingBar.
     @State private var reviewingNote = false
     @State private var previewPlayer: AVAudioPlayer?
     @State private var previewPlaying = false
     @State private var previewURL: URL?
-    // The finished note's own bars, and how far through it you are. `finalizeForReview` already returned
-    // the waveform and it was being thrown away; drawing it is what makes the review step feel like
+    // The finished note's own bars, and how far through it you are. `pauseForReview` returns the
+    // waveform of everything recorded so far; drawing it is what makes the review step feel like
     // listening rather than staring at a number.
     @State private var previewWaveform: [Int] = []
     @State private var previewProgress: Double = 0
@@ -4760,14 +4760,12 @@ struct ThreadView: View {
                 } else {
                     // RECORDING: ONE control, and PAUSE IS IT — his 2026-08-11 screenshots of the
                     // reference bar: tapping pause lands you straight on the review pill, with the
-                    // bin and send waiting either side. The separate stop square (and the old
-                    // pause-that-holds) are gone, and that is honesty rather than simplification:
-                    // an m4a closes the moment it becomes playable and cannot be appended to after,
-                    // so a pause you could LISTEN during and then resume — what the reference's red
-                    // mic does — needs a file per stretch and stitching we do not have. One red
-                    // pause that opens the review is the whole truth. RED, like the reference's,
-                    // not the accent: it is the recording-side control, and red is the recording
-                    // signal everywhere else in this bar.
+                    // bin and send waiting either side and the red mic there to carry on recording.
+                    // Under it sits the segment machinery in AudioRecorder: every pause closes a
+                    // playable stretch, resume opens the next, send stitches them into one m4a —
+                    // because a single m4a can never be both playable and appendable. RED, like the
+                    // reference's, not the accent: it is the recording-side control, and red is the
+                    // recording signal everywhere else in this bar.
                     Button { beginPreview() } label: {
                         Image(systemName: "pause.fill")
                             .font(.system(size: 15)).foregroundStyle(.red)
@@ -4784,6 +4782,18 @@ struct ThreadView: View {
             .liquidGlass(Capsule(), interactive: true)
             .clipShape(Capsule())   // keep the dotted waveform fully inside the pill's rounded edges
 
+            // CONTINUE RECORDING, reviewing only — the reference's red mic beside the pill. Tapping
+            // it opens the next stretch; the stitcher joins them at send.
+            if reviewingNote {
+                Button { resumeRecording() } label: {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 18)).foregroundStyle(.red)
+                        .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true)
+                        .contentShape(Circle())
+                }
+                .accessibilityLabel("Continue recording")
+            }
+
             Button { sendRecording() } label: {
                 // BLUE send button (white arrow on blue Liquid Glass), matching the normal composer send.
                 Image(systemName: "arrow.up").font(.system(size: 18, weight: .bold))
@@ -4796,20 +4806,31 @@ struct ThreadView: View {
         .animation(.spring(response: 0.28, dampingFraction: 0.85), value: reviewingNote)
     }
 
-    /// Close the note and start playing it. One-way — see lockedRecordingBar.
+    /// Pause: close the current stretch and show the review. NOT one-way any more — the red mic on
+    /// the review bar records the next stretch, and send stitches them into one note.
     private func beginPreview() {
-        guard let (url, _, wf) = recorder.finalizeForReview() else {
-            // Under a second: there is nothing worth hearing, and finalizeForReview has already
-            // cleaned up after itself. Treat it as a cancel rather than leaving an empty bar.
-            cancelRecording()
-            return
+        Task {
+            guard let (url, _, wf) = await recorder.pauseForReview() else {
+                // Nothing recorded at all (or the stitch failed and the recorder cleaned up):
+                // a cancel rather than an empty bar.
+                cancelRecording()
+                return
+            }
+            reviewingNote = true
+            previewURL = url
+            previewWaveform = wf
+            previewProgress = 0
+            impact(.light)
+            // ⚠️ NO autoplay. The reference parks the pill with a play triangle waiting; hearing it
+            // is a choice, and with Resume on the bar an unasked-for playback would talk over the
+            // person deciding whether to keep going.
         }
-        reviewingNote = true
-        previewURL = url
-        previewWaveform = wf
-        previewProgress = 0
-        impact(.light)
-        startPreviewPlayback()
+    }
+
+    /// The review bar's red mic: carry on recording where the pause left off (a new stretch).
+    private func resumeRecording() {
+        stopPreviewPlayback()   // clears reviewingNote + the preview player; segment files stay with the recorder
+        recorder.resume()
     }
 
     private func togglePreview() {
@@ -4916,7 +4937,7 @@ struct ThreadView: View {
         // If finish() returns nil at the boundary (elapsed vs live currentTime can differ ~0.05s),
         // still tear down cleanly so the recording UI never gets stuck. Keep replyingTo though:
         // a dropped too-short note must not destroy the reply target — the user just retries.
-        guard let (data, dur, wf) = recorder.finish() else { return }
+        guard let (data, dur, wf) = await recorder.finish() else { return }
         // Optimistic: show the voice bubble INSTANTLY (springs in, playable from the local
         // recording), then reconcile when the upload echoes back — no dead lag on release.
         let clientId = UUID().uuidString

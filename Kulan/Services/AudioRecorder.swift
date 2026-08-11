@@ -134,7 +134,7 @@ final class AudioRecorder {
         // `resuming` = restarting the timer after an interruption ends: skip the state reset so the
         // pre-interruption waveform/levels are kept (a full reset would wipe the captured envelope).
         if !resuming {
-            isRecording = true; elapsed = 0; levels = []; allLevels = []; smoothed = 0
+            isRecording = true; elapsed = 0; completedElapsed = 0; levels = []; allLevels = []; smoothed = 0
             Task { @MainActor in SleepBlocker.shared.add("voice-record") }   // no auto-lock mid-recording (sleep block)
         }
         timer?.invalidate()
@@ -146,7 +146,9 @@ final class AudioRecorder {
         // .common run-loop mode so elapsed/levels keep updating during gesture/scroll tracking.
         let t = Timer(timeInterval: 1.0 / meterHz, repeats: true) { [weak self] _ in
             guard let self, let r = self.recorder else { return }
-            self.elapsed = r.currentTime
+            // Finished stretches + the live one: the clock a person watches never restarts at zero
+            // just because they paused to listen and carried on.
+            self.elapsed = self.completedElapsed + r.currentTime
             r.updateMeters()
             let target = self.perceptualLevel(rmsDB: r.averagePower(forChannel: 0),
                                               peakDB: r.peakPower(forChannel: 0))
@@ -214,74 +216,145 @@ final class AudioRecorder {
         return bars
     }
 
-    // MARK: - Listen back
+    // MARK: - Pause = listen back, resume = a NEW stretch (segment stitching)
     //
-    // ⚠️ THERE IS NO USER-FACING PAUSE-AND-RESUME ANY MORE, AND THE FORMAT IS WHY. An m4a's header is
-    // only written by `stop()`, so a paused-but-unstopped file is NOT playable — and `AVAudioRecorder`
-    // cannot append after `stop()`. The reference app's pause therefore does something we cannot copy
-    // in one file: it lets you LISTEN and then continue recording, which needs a file per stretch and
-    // stitching at send time. His 2026-08-11 order made pause open the review directly, so the old
-    // hold-open pause()/resume() pair lost its only caller and was deleted rather than left as a trap.
-    // (The interruption handler pauses the AVAudioRecorder directly — that one never needs playback.)
-    // If stitching is ever built, that is its own piece of work; do not resurrect the half-measure.
+    // ⚠️ THE NOTE IS A LIST OF FILES NOW, AND THE FORMAT IS WHY. An m4a's header is only written by
+    // `stop()`, so a paused-but-unstopped file is NOT playable — and `AVAudioRecorder` cannot append
+    // after `stop()`. The reference's pause offers BOTH listening and continuing, and one file can
+    // never do both. So: every pause STOPS the current file (a finished, playable stretch), listening
+    // plays the stretches stitched together, resuming records the next stretch to a fresh file, and
+    // send stitches all of them into the one m4a that leaves the phone. A single-stretch note (the
+    // common hold-release case) skips the stitch entirely — its file IS the note, same speed as ever.
+    //
+    // The stitch is `AVMutableComposition` + passthrough export: every stretch is recorded with the
+    // identical AAC settings, so the bytes are copied, not re-encoded. A re-encode preset is the
+    // fallback if the muxer ever refuses, because a slower send beats a lost note.
 
-    /// Set once the note has been closed for playback. Present = reviewing.
+    /// The finished stretches so far, in order. The live recorder (if any) is the stretch in progress.
+    private var segments: [(url: URL, duration: Double)] = []
+    /// Sum of the finished stretches. The metering tick adds the live recorder's own clock on top,
+    /// so `elapsed` keeps counting across a pause-and-resume instead of restarting at zero.
+    private var completedElapsed: Double = 0
+    /// The stitched preview, set by `pauseForReview`. ⚠️ Cleared by `resume()` — one more stretch and
+    /// it no longer covers the whole note, and `finish()` trusts it only when it exists.
     private(set) var reviewURL: URL?
     private var reviewDuration: Double = 0
     private var reviewWaveform: [Int] = []
 
-    /// Close the note so it can be PLAYED. One-way, by the nature of the format.
-    /// Returns nil for a note too short to send, having cleaned up after itself.
-    @discardableResult
-    func finalizeForReview() -> (URL, Double, [Int])? {
-        if let existing = reviewURL { return (existing, reviewDuration, reviewWaveform) }
-        timer?.invalidate(); timer = nil
-        guard let r = recorder, let url = fileURL else { return nil }
-        // ⚠️ NOT `r.currentTime` ALONE. AVAudioRecorder's currentTime is only valid WHILE RECORDING —
-        // on a PAUSED recorder it reads 0, so a person who tapped pause and then stop watched the
-        // `>= 1.0` guard below bin their whole note (his report: after pause, cannot listen, cannot
-        // send). `elapsed` is this class's own clock, frozen by the metering timer at the moment of
-        // the pause, so the max of the two is right in both states: live recorder → currentTime is
-        // ahead of the throttled tick; paused recorder → elapsed is the only truthful one.
-        let duration = max(r.currentTime, elapsed)
+    /// Close the stretch in progress and file it. `max(currentTime, ...)` and not `currentTime`
+    /// alone: AVAudioRecorder's currentTime is only valid WHILE RECORDING — on a recorder paused by
+    /// an interruption it reads 0, and the old code binned whole notes on exactly that (his "after
+    /// pause I cannot listen, cannot send" report). `elapsed - completedElapsed` is this class's own
+    /// clock for the live stretch, frozen by the tick at the moment recording stopped.
+    private func closeCurrentSegment() {
+        guard let r = recorder, let url = fileURL else { return }
+        let d = max(r.currentTime, elapsed - completedElapsed)
         r.stop()
-        let wf = waveform()
-        isRecording = false
         recorder = nil
-        Task { @MainActor in SleepBlocker.shared.remove("voice-record") }
-        guard duration >= 1.0 else {
-            try? FileManager.default.removeItem(at: url)
-            reset()
-            return nil
+        fileURL = nil
+        if d > 0.05 {
+            segments.append((url, d))
+            completedElapsed += d
+        } else {
+            try? FileManager.default.removeItem(at: url)   // a stretch with nothing in it
         }
-        reviewURL = url; reviewDuration = duration; reviewWaveform = wf
-        elapsed = duration
-        return (url, duration, wf)
     }
 
-    /// Stop and return (data, duration, waveform). nil if too short or failed.
-    func finish() -> (Data, Double, [Int])? {
-        // Already closed by a listen-back: read the file we kept rather than stopping a recorder
-        // that is gone. Without this, sending after previewing returned nil and silently dropped
-        // the note.
-        if let url = reviewURL {
-            let out = (try? Data(contentsOf: url)).map { ($0, reviewDuration, reviewWaveform) }
-            try? FileManager.default.removeItem(at: url)
-            reset()
-            return out
-        }
+    /// Pause: close the stretch, stitch what exists, hand back (previewURL, totalDuration, waveform).
+    /// Returns nil only when there is nothing recorded at all (then it has cleaned up after itself).
+    /// ⚠️ NO 1-second floor here, on purpose: a half-second stretch may be about to grow — the person
+    /// can resume. The floor belongs to `finish()`, where the note actually leaves.
+    func pauseForReview() async -> (URL, Double, [Int])? {
         timer?.invalidate(); timer = nil
-        guard let recorder, let url = fileURL else { reset(); return nil }
-        let duration = recorder.currentTime
-        recorder.stop()
+        closeCurrentSegment()
+        isRecording = false
+        Task { @MainActor in SleepBlocker.shared.remove("voice-record") }
+        guard !segments.isEmpty else { reset(); return nil }
         let wf = waveform()
-        reset()
-        // Floor at 1.0s: anything shorter displays as "0:00" (Int-floored) — never send a 0:00 note.
-        // The smallest sendable note is ~1s, which shows 0:01.
-        guard duration >= 1.0, let data = try? Data(contentsOf: url) else {
-            try? FileManager.default.removeItem(at: url)   // don't leak temp files for tap-too-short clips
-            return nil
+        guard let url = await stitched() else { cancel(); return nil }
+        reviewURL = url
+        reviewDuration = completedElapsed
+        reviewWaveform = wf
+        elapsed = completedElapsed
+        return (url, completedElapsed, wf)
+    }
+
+    /// Continue recording after a pause-review: the next stretch goes to a fresh file. The audio
+    /// session is still warm, so this starts as fast as the first touch did.
+    func resume() {
+        guard recorder == nil, !segments.isEmpty else { return }
+        // The preview no longer covers the note. A multi-stretch preview is its own stitched file
+        // and would leak here; a single-stretch preview IS the stretch, so it must survive.
+        if let r = reviewURL, !segments.contains(where: { $0.url == r }) {
+            try? FileManager.default.removeItem(at: r)
         }
+        reviewURL = nil; reviewDuration = 0; reviewWaveform = []
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voice-\(UUID().uuidString).m4a")
+        guard let r = try? AVAudioRecorder(url: url, settings: settings) else { return }
+        r.isMeteringEnabled = true
+        r.record()
+        recorder = r; fileURL = url
+        isRecording = true
+        Task { @MainActor in SleepBlocker.shared.add("voice-record") }
+        // `resuming: true` keeps the captured envelope and `completedElapsed`, so the waveform and
+        // the clock carry on from where the pause left them.
+        beginMetering(resuming: true)
+    }
+
+    /// One playable file for the whole note so far. A single stretch needs no work at all.
+    private func stitched() async -> URL? {
+        if segments.count == 1 { return segments[0].url }
+        let comp = AVMutableComposition()
+        guard let track = comp.addMutableTrack(withMediaType: .audio,
+                                               preferredTrackID: kCMPersistentTrackID_Invalid) else { return nil }
+        var cursor = CMTime.zero
+        for seg in segments {
+            let asset = AVURLAsset(url: seg.url)
+            guard let aTrack = try? await asset.loadTracks(withMediaType: .audio).first,
+                  let dur = try? await asset.load(.duration),
+                  (try? track.insertTimeRange(CMTimeRange(start: .zero, duration: dur), of: aTrack, at: cursor)) != nil
+            else { return nil }
+            cursor = CMTimeAdd(cursor, dur)
+        }
+        let out = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voice-stitched-\(UUID().uuidString).m4a")
+        for preset in [AVAssetExportPresetPassthrough, AVAssetExportPresetAppleM4A] {
+            guard let ex = AVAssetExportSession(asset: comp, presetName: preset) else { continue }
+            ex.outputURL = out
+            ex.outputFileType = .m4a
+            await ex.export()
+            if ex.status == .completed { return out }
+            try? FileManager.default.removeItem(at: out)
+        }
+        return nil
+    }
+
+    private func cleanupSegmentFiles() {
+        for s in segments { try? FileManager.default.removeItem(at: s.url) }
+        if let r = reviewURL, !segments.contains(where: { $0.url == r }) {
+            try? FileManager.default.removeItem(at: r)
+        }
+        segments = []
+    }
+
+    /// Stop and return (data, duration, waveform) for the WHOLE note, every stretch included.
+    /// nil if too short or failed. Async because a multi-stretch note has to stitch first — the
+    /// single-stretch case (every plain hold-release) touches no exporter and is as fast as ever.
+    func finish() async -> (Data, Double, [Int])? {
+        timer?.invalidate(); timer = nil
+        // Send tapped straight off the recording bar: the live stretch joins the list first.
+        closeCurrentSegment()
+        let duration = completedElapsed
+        let wf = reviewWaveform.isEmpty ? waveform() : reviewWaveform
+        // The review preview IS the stitched note whenever it exists — `resume()` clears it the
+        // moment one more stretch makes it stale, so trusting it here is safe, and it saves
+        // stitching the same audio twice for the pause-listen-send flow.
+        var url = reviewURL
+        if url == nil { url = await stitched() }
+        defer { cleanupSegmentFiles(); reset() }
+        // Floor at 1.0s: anything shorter displays as "0:00" (Int-floored) — never send a 0:00 note.
+        guard duration >= 1.0, let u = url, let data = try? Data(contentsOf: u) else { return nil }
         return (data, duration, wf)
     }
 
@@ -289,9 +362,7 @@ final class AudioRecorder {
         timer?.invalidate(); timer = nil
         recorder?.stop()
         if let u = fileURL { try? FileManager.default.removeItem(at: u) }
-        // A note binned from the review bar has already had its recorder torn down, so `fileURL` is
-        // the only handle left to the bytes on disk — and it is the same file `reviewURL` names.
-        if let r = reviewURL, r != fileURL { try? FileManager.default.removeItem(at: r) }
+        cleanupSegmentFiles()   // every finished stretch, and the stitched preview if one exists
         reset()
     }
 
@@ -299,12 +370,15 @@ final class AudioRecorder {
         isRecording = false
         Task { @MainActor in SleepBlocker.shared.remove("voice-record") }
         recorder = nil
+        fileURL = nil
         // ⚠️ CLEARED HERE OR THE NEXT NOTE IS THE LAST ONE. `finish()` reads `reviewURL` first, so
         // leaving it set after a send or a cancel would make the following recording return the
         // PREVIOUS note's audio — and it would look like a send bug, not a state bug.
         reviewURL = nil
         reviewDuration = 0
         reviewWaveform = []
+        segments = []
+        completedElapsed = 0
         levels = []
         allLevels = []
         // Do NOT setActive(false) here: prepare() below immediately setActive(true)s again, so the
