@@ -122,7 +122,7 @@ struct VoiceMessageView: View {
                              // note's life, and at 30% of the tint on a saturated bubble it read as
                              // washed rather than as a waveform waiting to be played. Still clearly
                              // quieter than the played side, which is the only job this has.
-                             unplayed: tint.opacity(0.45), playing: playing,
+                             unplayed: tint.opacity(0.45),
                              onSeek: { pct in seek(pct) },
                              // The engine holds the scrub flag now, because the 20Hz tick it has to
                              // stand out of the way of lives there too.
@@ -264,7 +264,8 @@ struct WaveformBars: View {
     var progress: Double     // 0…1
     var played: Color
     var unplayed: Color
-    var playing: Bool = false
+    // `playing` used to live here. It drove the wobble and the TimelineView's pause, and both are gone,
+    // so it was a parameter every caller had to pass that changed nothing on screen.
     var onSeek: (Double) -> Void
     var onScrub: (Bool) -> Void = { _ in }   // true while dragging the waveform → parent blocks reply-swipe
     // Scrub state now lives in the UIKit recogniser (WaveformGestureArea), which is the only place that
@@ -272,35 +273,32 @@ struct WaveformBars: View {
 
     var body: some View {
         GeometryReader { geo in
-            // TimelineView drives a gentle equalizer wobble while playing; paused when idle
-            // so there's zero redraw cost when the note isn't playing.
-            TimelineView(.animation(minimumInterval: 0.05, paused: !playing)) { tl in
-                let phase = tl.date.timeIntervalSinceReferenceDate
-                Canvas { ctx, size in
-                    let count = max(bars.count, 1)
-                    let slot = size.width / CGFloat(count)
-                    let barW = max(2, slot * 0.5)
-                    let playedTo = Int(Double(count) * progress)
-                    for (i, v) in bars.enumerated() {
-                        let norm = Self.display(v)
-                        var h = max(2, norm * size.height)
-                        // Subtle live wobble on already-played bars during playback.
-                        if playing && i <= playedTo {
-                            let wob = sin(phase * 6 + Double(i) * 0.5)
-                            h = max(3, h * CGFloat(1 + 0.14 * wob))
-                        }
-                        let x = CGFloat(i) * slot + (slot - barW) / 2
-                        let rect = CGRect(x: x, y: (size.height - h) / 2, width: barW, height: h)
-                        ctx.fill(Path(roundedRect: rect, cornerRadius: barW / 2),
-                                 with: .color(i <= playedTo ? played : unplayed))
-                    }
-                    // White scrubber line at the current playback position (reference look).
-                    let sx = max(1, size.width * CGFloat(max(0, min(1, progress))))
-                    var line = Path()
-                    line.move(to: CGPoint(x: sx, y: 0))
-                    line.addLine(to: CGPoint(x: sx, y: size.height))
-                    ctx.stroke(line, with: .color(played), lineWidth: 2)
+            // THE BARS STAND STILL. They used to be pumped up and down by a sine wave — every already
+            // played bar breathing ±14% for as long as the note ran — and that is what made the bubble
+            // feel busy and heavy. WhatsApp does not move its bars at all. The only thing that travels
+            // is the colour boundary and the knob, and that is enough to say where you are.
+            //
+            // ⚠️ THE `TimelineView` WENT WITH IT, AND THAT WAS THE POINT. Its whole job was to redraw
+            // this canvas 20 times a second so the wobble had frames to move in. With the wobble gone it
+            // would have been 20 redraws a second to draw the identical picture. The canvas now redraws
+            // when `progress` changes, which is the only thing that can change what it looks like.
+            Canvas { ctx, size in
+                let count = max(bars.count, 1)
+                let slot = size.width / CGFloat(count)
+                let barW = max(2, slot * 0.5)
+                let playedTo = Int(Double(count) * progress)
+                for (i, v) in bars.enumerated() {
+                    let h = max(2, Self.display(v) * size.height)
+                    let x = CGFloat(i) * slot + (slot - barW) / 2
+                    let rect = CGRect(x: x, y: (size.height - h) / 2, width: barW, height: h)
+                    ctx.fill(Path(roundedRect: rect, cornerRadius: barW / 2),
+                             with: .color(i <= playedTo ? played : unplayed))
                 }
+                // ⚠️ NO SCRUBBER LINE HERE ANY MORE. There were TWO markers sitting on the same spot:
+                // this 2pt vertical stroke, and the round knob in the overlay below. One position, two
+                // things pointing at it, and on a short note they overlapped into a smudge. WhatsApp
+                // marks the spot with a dot and nothing else. The knob is the one that survives, because
+                // it is also the thing you can grab.
             }
             .contentShape(Rectangle())
             // Tap to seek, drag sideways to scrub — in UIKit, because SwiftUI cannot express the one
