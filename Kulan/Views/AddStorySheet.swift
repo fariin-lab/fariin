@@ -138,13 +138,15 @@ struct AddStorySheet: View {
         // editor reveals the picker still sitting there with its scroll position intact.
         .sheet(isPresented: $showLibrary) {
             StoryLibraryPicker(
-                onImage: { ui in libraryEditorImage = EditorImage(ui) },
-                onVideo: { url in libraryEditorVideo = EditorVideo(url) })
+                onImage: { ui, id in libraryEditorImage = EditorImage(ui, assetID: id) },
+                onVideo: { url, id in libraryEditorVideo = EditorVideo(url, assetID: id) })
             .fullScreenCover(item: $libraryEditorImage) { item in
-                StoryEditorView(source: item.image, onPosted: { onPosted(); dismiss() })
+                StoryEditorView(source: item.image, onPosted: { onPosted(); dismiss() },
+                                sourceAssetID: item.assetID)
             }
             .fullScreenCover(item: $libraryEditorVideo) { item in
-                StoryVideoEditorView(url: item.url, onPosted: { onPosted(); dismiss() })
+                StoryVideoEditorView(url: item.url, onPosted: { onPosted(); dismiss() },
+                                     sourceAssetID: item.assetID)
             }
         }
         // Text story → audience sheet (was posting straight to "everyone", ignoring audience — M4).
@@ -153,8 +155,16 @@ struct AddStorySheet: View {
         }
     }
 
-    struct EditorImage: Identifiable { let id = UUID(); let image: UIImage; init(_ i: UIImage) { image = i } }
-    struct EditorVideo: Identifiable { let id = UUID(); let url: URL; init(_ u: URL) { url = u } }
+    // The asset id rides along so the editor's first item counts against the story's five and shows
+    // as a tick the next time the + opens the picker. Nil for a camera capture, which has no asset.
+    struct EditorImage: Identifiable {
+        let id = UUID(); let image: UIImage; let assetID: String?
+        init(_ i: UIImage, assetID: String? = nil) { image = i; self.assetID = assetID }
+    }
+    struct EditorVideo: Identifiable {
+        let id = UUID(); let url: URL; let assetID: String?
+        init(_ u: URL, assetID: String? = nil) { url = u; self.assetID = assetID }
+    }
 
 }
 
@@ -167,21 +177,51 @@ struct AddStorySheet: View {
 /// the X is the only thing that closes it.
 /// One resolved thing the picker hands back. The batch path returns these in the order they were
 /// TAPPED, which is the order they will appear in the editor's strip.
-enum StoryPick {
-    case image(UIImage)
-    case video(URL)
+struct StoryPick {
+    enum Kind {
+        case image(UIImage)
+        case video(URL)
+    }
+    let kind: Kind
+    /// WHICH LIBRARY ASSET THIS CAME FROM, and it is what lets the picker and the post stay in step.
+    ///
+    /// The five-item ceiling is the POST's, not one picker session's, so on the next + the picker has
+    /// to show what the post already holds as ticks — and to do that it needs a name for each item
+    /// that survives being turned into a `UIImage` or an exported file. The asset's local identifier
+    /// is that name. Nil for anything with no asset behind it (a camera capture), which still spends
+    /// budget but cannot be ticked.
+    let assetID: String?
+
+    static func image(_ i: UIImage, assetID: String? = nil) -> StoryPick { .init(kind: .image(i), assetID: assetID) }
+    static func video(_ u: URL, assetID: String? = nil) -> StoryPick { .init(kind: .video(u), assetID: assetID) }
 }
 
 struct StoryLibraryPicker: View {
-    var onImage: (UIImage) -> Void
-    var onVideo: (URL) -> Void
+    var onImage: (UIImage, String?) -> Void
+    var onVideo: (URL, String?) -> Void
     /// TICK SEVERAL, THEN ADD THEM ALL AT ONCE (owner 2026-08-07: "i cant add one by one that soo
     /// hard… make selete only when i click that button, after selete photo picker show preview
     /// images i seleted and add button, when i add go direct"). Off by default so the CREATE flow in
     /// `AddStorySheet` is untouched — there the first tap raises the editor, which is a different
     /// intent. The two editors' + button turns it on.
     var allowsMultiple: Bool = false
-    var onBatch: (([StoryPick]) -> Void)? = nil
+    /// WHAT THE POST ALREADY HOLDS, as asset identifiers in strip order — ticked the moment this
+    /// opens, and the reason the ceiling cannot reset.
+    ///
+    /// His 2026-08-11 report: pick five, Add, tap + again, and the picker offered five MORE, for
+    /// ever. The limit was a property of one picker session because `picked` is this view's own
+    /// state and a sheet is built fresh every time it is presented. Seeding it from the post makes
+    /// the ceiling the POST's, which is what it was always meant to be, and it also answers the
+    /// second half of his spec: at the limit the + must still open and SHOW what is already chosen,
+    /// so something can be taken off to make room rather than the button doing nothing.
+    var preselected: [String] = []
+    /// Items in the post that did NOT come from this picker — a camera capture. They spend budget
+    /// and cannot be shown as ticks, because there is no asset to tick.
+    var reservedCount: Int = 0
+    /// Add/Done: what the person took OFF (asset ids the host removes) and what they added, in tap
+    /// order. One callback for both halves so the host applies the whole change as one move — the
+    /// picker's selection IS the post's selection, which is his "must always stay synchronized".
+    var onApply: ((_ removed: [String], _ added: [StoryPick]) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @StateObject private var store = PhotoGridStore()
     @State private var tab = 0                 // 0 = Photos, 1 = Albums
@@ -191,15 +231,31 @@ struct StoryLibraryPicker: View {
     /// Chosen assets, in tap order. Identifiers rather than PHAssets so the same asset reached from
     /// the Photos tab and from inside an Album is one selection, not two.
     @State private var picked: [PHAsset] = []
+    /// What was already in the post when this opened, so Add can tell a NEW pick from one that is
+    /// merely still ticked — and so a tick turned OFF is reported as a removal.
+    @State private var initialIDs: Set<String> = []
+    @State private var seeded = false
     @State private var resolving = false      // Add tapped: fetching the full images / video files
-    /// A ceiling on one batch. Nothing in the editor enforces a count, but each image is held at
-    /// full resolution and this is the one place that can add a whole handful in a single tap.
+    /// THE WHOLE POST'S CEILING, not one batch's. Each image is held at full resolution, and this is
+    /// the one place that can add a handful in a single tap.
     ///
     /// FIVE, on the owner's word (2026-08-10): "story limit when you chose select now 10 plz make it
     /// 5 only". It was ten. The memory argument gets better rather than worse with the smaller
     /// number, so there is nothing to weigh here — halving the worst case halves the peak the editor
     /// has to hold at full resolution.
-    private static let batchLimit = 5
+    private static let storyLimit = 5
+    /// How many ticks this session may hold: the ceiling less whatever is in the post that cannot be
+    /// shown here (a camera capture). Everything else in the post is already ticked, so it counts
+    /// itself.
+    private var limit: Int { max(0, Self.storyLimit - reservedCount - unresolvedCount) }
+    /// Ids the post holds that the library will no longer resolve — the photo was deleted since it
+    /// was picked. They cannot be ticked, and they are still in the post, so they spend budget the
+    /// same way a camera capture does. Without this the ceiling would quietly hand back a free slot
+    /// for every one of them.
+    @State private var unresolvedCount = 0
+    /// The ticks that were not there when this opened — what Add actually has to fetch, and the
+    /// number on the button.
+    private var freshPicks: [PHAsset] { picked.filter { !initialIDs.contains($0.localIdentifier) } }
     @State private var tooMany = false
     /// A batch where some, or all, of the ticks would not resolve: an iCloud original that will not
     /// come down, or a video whose file cannot be exported. The count so the notice can say how many
@@ -209,6 +265,9 @@ struct StoryLibraryPicker: View {
     @State private var someFailed = false
     @State private var failedCount = 0
     @State private var resolvedBatch: [StoryPick] = []
+    /// The removals waiting on that same notice, so taking something off and adding something else
+    /// stays one move even when part of the batch would not open.
+    @State private var resolvedRemoved: [String] = []
 
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
 
@@ -245,21 +304,31 @@ struct StoryLibraryPicker: View {
             .navigationDestination(item: $openAlbum) { album in albumGrid(album) }
             .overlay { if loadingVideo { ProgressView().controlSize(.large).tint(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity).background(.black.opacity(0.35)) } }
-            .alert("That's a lot at once", isPresented: $tooMany) {
+            .alert("That's the limit", isPresented: $tooMany) {
                 Button("OK", role: .cancel) {}
             } message: {
-                Text("You can add up to \(Self.batchLimit) at a time. Add these first, then tap + again for more.")
+                // The old wording — "add these first, then tap + again for more" — described the bug
+                // it was written under: the ceiling reset on every +, so it really was per batch.
+                // It is the post's ceiling now, and the way past it is to take something off.
+                Text("A story can hold \(Self.storyLimit) photos and videos. Take one off to add another.")
             }
             .alert("Couldn't add everything", isPresented: $someFailed) {
                 Button("OK", role: .cancel) {
                     let batch = resolvedBatch
+                    let removed = resolvedRemoved
                     resolvedBatch = []
+                    resolvedRemoved = []
                     failedCount = 0
                     // Only close on the way out if something is actually being taken along. When
                     // nothing resolved, the picker stays open with the ticks still on, so trying
                     // again is one tap rather than finding everything from scratch.
+                    //
+                    // ⚠️ AND THE REMOVALS GO WITH IT, ALL OR NOTHING. Applying them on their own
+                    // here would take items OUT of the post while the replacements he picked failed
+                    // to arrive — a net loss he never asked for. Staying open keeps the post exactly
+                    // as it was and his ticks exactly where he left them.
                     guard !batch.isEmpty else { return }
-                    onBatch?(batch)
+                    onApply?(removed, batch)
                     dismiss()
                 }
             } message: {
@@ -274,7 +343,7 @@ struct StoryLibraryPicker: View {
             }
             // Asked for HERE, not on the camera: opening the camera should not raise a photo-library
             // permission prompt for a screen that is not showing the library yet.
-            .task { store.load(); store.loadAlbums() }
+            .task { store.load(); store.loadAlbums(); seedFromPost() }
         }
         // ALWAYS DARK, like every story surface (owner's standing rule). On the picker itself so
         // every presentation — the camera's library button and both editors' + — is dark without
@@ -354,7 +423,11 @@ struct StoryLibraryPicker: View {
                     // A filled pill in a monochrome app takes the BACKGROUND colour as its label,
                     // never a hardcoded white. That is what every other filled control in the app
                     // does, and it stays legible whichever way the sheet is themed.
-                    Text("Add \(picked.count)")
+                    // ⚠️ IT COUNTS WHAT IS BEING ADDED, NOT WHAT IS TICKED. With the post's items
+                    // ticked from the start, "Add 5" over five pictures that are already in the
+                    // story would be a lie — and the same button is now also the way OUT of a
+                    // change that only took something off, which is what "Done" says.
+                    Text(freshPicks.isEmpty ? "Done" : "Add \(freshPicks.count)")
                         .font(.callout.weight(.semibold))
                         .foregroundStyle(Color(.systemBackground))
                         .padding(.horizontal, 18).padding(.vertical, 10)
@@ -366,6 +439,26 @@ struct StoryLibraryPicker: View {
             .padding(.bottom, 6)
         }
         .background(Color(.systemBackground))
+    }
+
+    /// TICK WHAT THE POST ALREADY HOLDS, once, before anything is drawn.
+    ///
+    /// ⚠️ THE FETCH DOES NOT PROMISE THE ORDER YOU ASKED IN. `fetchAssets(withLocalIdentifiers:)`
+    /// returns them in its own order, and the tick numbers are the order they will appear in the
+    /// story — so the result is indexed and then read back in `preselected`'s order. An id that no
+    /// longer resolves (the photo was deleted from the library since it was picked) simply drops
+    /// out: it stays in the post, and `reservedCount` is not adjusted for it, so at worst the person
+    /// is offered one slot fewer than the ceiling. Refusing to open over it would be much worse.
+    private func seedFromPost() {
+        guard allowsMultiple, !seeded else { return }
+        seeded = true
+        guard !preselected.isEmpty else { return }
+        let result = PHAsset.fetchAssets(withLocalIdentifiers: preselected, options: nil)
+        var byID: [String: PHAsset] = [:]
+        result.enumerateObjects { asset, _, _ in byID[asset.localIdentifier] = asset }
+        picked = preselected.compactMap { byID[$0] }
+        initialIDs = Set(picked.map(\.localIdentifier))
+        unresolvedCount = max(0, preselected.count - picked.count)
     }
 
     private func toggle(_ asset: PHAsset) {
@@ -380,7 +473,7 @@ struct StoryLibraryPicker: View {
             tooLongVideo = true
             return
         }
-        guard picked.count < Self.batchLimit else { tooMany = true; return }
+        guard picked.count < limit else { tooMany = true; return }
         picked.append(asset)
     }
 
@@ -392,15 +485,27 @@ struct StoryLibraryPicker: View {
     /// COUNTED and said out loud: see the notice below.
     private func addPicked() {
         guard !resolving else { return }
+        // WHAT CAME OFF is as much a part of this as what went on: a tick that was on when this
+        // opened and is off now means that item leaves the post. His spec in as many words — "if
+        // they want to replace something, they must first deselect an existing item".
+        let stillPicked = Set(picked.map(\.localIdentifier))
+        let removed = initialIDs.filter { !stillPicked.contains($0) }
+        let chosen = freshPicks
+        // Nothing new to fetch, so there is nothing to wait for: this is the Done case, where the
+        // only change is what was taken off (or nothing at all, and the post is left as it is).
+        guard !chosen.isEmpty else {
+            onApply?(Array(removed), [])
+            dismiss()
+            return
+        }
         resolving = true
-        let chosen = picked
         Task {
             var out: [StoryPick] = []
             for asset in chosen {
                 if asset.mediaType == .video {
-                    if let url = await store.videoURL(asset) { out.append(.video(url)) }
+                    if let url = await store.videoURL(asset) { out.append(.video(url, assetID: asset.localIdentifier)) }
                 } else if let ui = await store.fullImage(asset) {
-                    out.append(.image(ui))
+                    out.append(.image(ui, assetID: asset.localIdentifier))
                 }
             }
             await MainActor.run {
@@ -413,11 +518,12 @@ struct StoryLibraryPicker: View {
                 let missing = chosen.count - out.count
                 if missing > 0 {
                     resolvedBatch = out
+                    resolvedRemoved = Array(removed)
                     failedCount = missing
                     someFailed = true
                     return
                 }
-                onBatch?(out)
+                onApply?(Array(removed), out)
                 dismiss()
             }
         }
@@ -496,6 +602,14 @@ struct StoryLibraryPicker: View {
                         .padding(4)
                 }
             }
+            // Dim what is already chosen, so the grid reads at a glance from across the screen.
+            //
+            // ⚠️ THE PICTURE ONLY, AND THAT IS THE WHOLE OF HIS "SELECTED COLOR LOOKS GREY" REPORT.
+            // This sat BELOW the tick overlay, so it faded the tick along with the photograph: a
+            // white disc at 55% over a dark grid is grey, and the number on it went with it. The
+            // badge is the one thing on a dimmed tile that must stay at full strength, so the dim
+            // is applied here — under the tick, over the picture — instead of over everything.
+            .opacity(allowsMultiple && picked.contains(where: { $0.localIdentifier == asset.localIdentifier }) ? 0.55 : 1)
             // The pick is handed to the HOST, and the grid stays where it is. In the create flow the
             // host raises an editor over this sheet; in the editors' add-more flow the host appends
             // the item and you can keep tapping. The resolve happens HERE with its spinner, because
@@ -521,8 +635,6 @@ struct StoryLibraryPicker: View {
                     .padding(5)
                 }
             }
-            // Dim what is already chosen, so the grid reads at a glance from across the screen.
-            .opacity(allowsMultiple && picked.contains(where: { $0.localIdentifier == asset.localIdentifier }) ? 0.55 : 1)
             .onTapGesture {
                 // In multi mode a tap only ticks. Nothing is resolved, nothing is handed over and
                 // the sheet does not move until Add.
@@ -540,11 +652,11 @@ struct StoryLibraryPicker: View {
                     Task {
                         let url = await store.videoURL(asset)
                         loadingVideo = false
-                        if let url { onVideo(url) }
+                        if let url { onVideo(url, asset.localIdentifier) }
                     }
                 } else {
                     Task {
-                        if let ui = await store.fullImage(asset) { onImage(ui) }
+                        if let ui = await store.fullImage(asset) { onImage(ui, asset.localIdentifier) }
                     }
                 }
             }

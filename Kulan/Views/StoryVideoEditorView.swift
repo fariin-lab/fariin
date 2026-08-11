@@ -13,6 +13,9 @@ import PencilKit
 struct StoryVideoEditorView: View {
     let url: URL
     var onPosted: () -> Void = {}
+    /// The library asset `url` came from, if it came from one — see `Clip.assetID`. It makes the
+    /// first clip count against the story's five and show as a tick when the + reopens the picker.
+    var sourceAssetID: String? = nil
     @Environment(\.dismiss) private var dismiss
 
     @State private var caption = ""
@@ -59,6 +62,11 @@ struct StoryVideoEditorView: View {
     struct Clip: Identifiable {
         let id = UUID()
         let url: URL
+        /// THE LIBRARY ASSET THIS CAME FROM — the same seam as `StoryEditorView.DraftItem.assetID`,
+        /// and for the same reason: the five-item ceiling belongs to the POST, so the + has to
+        /// reopen the picker with what is already here ticked. Nil for a camera capture, which is
+        /// counted but cannot be ticked.
+        var assetID: String? = nil
         var duration: Double = 0
         var poster: UIImage? = nil
         var posterData: Data? = nil
@@ -113,10 +121,23 @@ struct StoryVideoEditorView: View {
 
     private var currentURL: URL { clips.indices.contains(index) ? clips[index].url : url }
 
+    /// What the post holds, for the picker's ceiling — see `StoryLibraryPicker.preselected`.
+    ///
+    /// ⚠️ `clips` IS EMPTY UNTIL `load()` HAS RUN, and the clip this editor was opened with is real
+    /// the whole time. Reading the array alone would report an empty post to a picker opened in that
+    /// window and hand out all five slots on top of a clip that is already here. Same "the live
+    /// top-level state IS the one clip" rule `beginHandOff` follows.
+    private var postAssetIDs: [String] {
+        clips.isEmpty ? [sourceAssetID].compactMap { $0 } : clips.compactMap(\.assetID)
+    }
+    private var postReservedCount: Int {
+        clips.isEmpty ? (sourceAssetID == nil ? 1 : 0) : clips.filter { $0.assetID == nil }.count
+    }
+
     /// One more video from OUR picker joins the strip — the same work the old PhotosPicker handler
     /// did, minus the transferable dance (the grid resolves the asset and hands a file URL).
-    private func appendClip(_ url: URL) async {
-        var c = Clip(url: url)
+    private func appendClip(_ url: URL, assetID: String? = nil) async {
+        var c = Clip(url: url, assetID: assetID)
         let asset = AVURLAsset(url: url)
         c.duration = (try? await asset.load(.duration))?.seconds ?? 0
         c.trimEnd = c.duration
@@ -154,12 +175,13 @@ struct StoryVideoEditorView: View {
     /// was, clips intact, under the picker.
     /// Takes a LIST, because the + button is multi-pick here now too (his 2026-08-07 report: the
     /// picker offers ticking after a photo but not after a video). One image is a list of one.
-    @MainActor private func beginHandOff(adding images: [UIImage]) {
+    @MainActor private func beginHandOff(adding images: [(image: UIImage, assetID: String?)]) {
         stashCurrent()
         player.pause(); playing = false
         var seed: [StoryEditorView.DraftItem] = clips.map { c in
             var d = StoryEditorView.DraftItem(image: c.poster ?? UIImage(),
-                                              videoURL: c.url, duration: c.duration)
+                                              videoURL: c.url, duration: c.duration,
+                                              assetID: c.assetID)
             d.muted = c.muted
             d.trimStart = c.trimStart
             d.trimEnd = c.trimEnd
@@ -172,7 +194,8 @@ struct StoryVideoEditorView: View {
         // the live top-level state IS the one clip. Pack it the same way.
         if seed.isEmpty {
             var d = StoryEditorView.DraftItem(image: thumbnail ?? UIImage(),
-                                              videoURL: url, duration: duration)
+                                              videoURL: url, duration: duration,
+                                              assetID: sourceAssetID)
             d.muted = muted
             d.trimStart = trimStart
             d.trimEnd = trimEnd
@@ -181,7 +204,9 @@ struct StoryVideoEditorView: View {
             d.zoom = zoom
             seed.append(d)
         }
-        for ui in images { seed.append(StoryEditorView.DraftItem(image: ui)) }
+        // The asset id travels with each picture, so the composer the post lands in can keep the
+        // same five-item ceiling ticking against the same items — see `DraftItem.assetID`.
+        for p in images { seed.append(StoryEditorView.DraftItem(image: p.image, assetID: p.assetID)) }
         handOff = HandOffPost(items: seed, caption: caption)
     }
 
@@ -237,6 +262,22 @@ struct StoryVideoEditorView: View {
         clips.remove(at: i)
         if index >= clips.count { index = clips.count - 1 }
         else if i < index { index -= 1 }
+        restoreCurrent()
+    }
+
+    /// The picker's ticks came off: those clips leave the post. The mirror of the photo editor's
+    /// `dropItems` — see its note. A post cannot be emptied, so an all-off with nothing arriving is
+    /// left alone; the picker cannot reach that state through Add anyway.
+    @MainActor private func dropClips(withAssetIDs removed: [String], expectingMore: Bool) {
+        let ids = Set(removed)
+        guard !ids.isEmpty else { return }
+        stashCurrent()
+        let onScreen = clips.indices.contains(index) ? clips[index].id : nil
+        let kept = clips.filter { !($0.assetID.map(ids.contains) ?? false) }
+        guard !kept.isEmpty || expectingMore else { return }
+        clips = kept
+        if let onScreen, let i = clips.firstIndex(where: { $0.id == onScreen }) { index = i }
+        else { index = max(0, min(index, clips.count - 1)) }
         restoreCurrent()
     }
 
@@ -411,14 +452,14 @@ struct StoryVideoEditorView: View {
         // clip's trim, mute, drawing and text, plus the caption, plus the new picture.
         .sheet(isPresented: $showAddPicker) {
             StoryLibraryPicker(
-                onImage: { ui in beginHandOff(adding: [ui]) },
+                onImage: { ui, id in beginHandOff(adding: [(ui, id)]) },
                 // A VIDEO pick closes the picker and lands back HERE with the new clip selected
                 // and playing (owner 2026-08-05: "the app should return directly to the Story
                 // Editor... not back to the Photo Picker"). It used to stay open — picking an
                 // image visibly opened the composer over it, picking a video visibly did nothing.
-                onVideo: { url in
+                onVideo: { url, id in
                     showAddPicker = false
-                    Task { await appendClip(url) }
+                    Task { await appendClip(url, assetID: id) }
                 },
                 // TICKING WORKS HERE TOO NOW. His report: after a photo the + offers multi-select,
                 // after a video it does not. That was mine — I turned it on for the photo editor
@@ -430,14 +471,21 @@ struct StoryVideoEditorView: View {
                 // runs ONCE with every clip and every picture in it, rather than once per item —
                 // which would have rebuilt the editor n times and kept only the last.
                 allowsMultiple: true,
-                onBatch: { picks in
+                // THE POST'S FIVE, NOT THIS SHEET'S — the same fix as the photo editor's +, because
+                // it is the same picker and it had the same reset. See `preselected` there.
+                preselected: postAssetIDs,
+                reservedCount: postReservedCount,
+                onApply: { removed, picks in
                     showAddPicker = false
                     Task {
-                        var images: [UIImage] = []
+                        await MainActor.run { dropClips(withAssetIDs: removed, expectingMore: !picks.isEmpty) }
+                        // Labelled to match `beginHandOff`: an array of unlabelled tuples does NOT
+                        // implicitly convert to one of labelled tuples.
+                        var images: [(image: UIImage, assetID: String?)] = []
                         for p in picks {
-                            switch p {
-                            case .video(let url): await appendClip(url)
-                            case .image(let ui): images.append(ui)
+                            switch p.kind {
+                            case .video(let url): await appendClip(url, assetID: p.assetID)
+                            case .image(let ui): images.append((ui, p.assetID))
                             }
                         }
                         if !images.isEmpty { await MainActor.run { beginHandOff(adding: images) } }
@@ -1234,8 +1282,8 @@ struct StoryVideoEditorView: View {
         // The clip this editor was opened with becomes item ONE. Everything after it arrives through
         // the +, so there is only ever one list and the single-clip case is just a list of length 1.
         if clips.isEmpty {
-            clips = [Clip(url: url, duration: dur, poster: thumbnail, posterData: thumbnailData,
-                          trimStart: 0, trimEnd: dur, muted: muted)]
+            clips = [Clip(url: url, assetID: sourceAssetID, duration: dur, poster: thumbnail,
+                          posterData: thumbnailData, trimStart: 0, trimEnd: dur, muted: muted)]
             index = 0
         }
         // Editor preview plays with sound (stories are sound-on media, like every big app).

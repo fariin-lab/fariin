@@ -39,6 +39,10 @@ struct StoryEditorView: View {
     /// Empty means the normal single-photo start via `source`.
     var seedItems: [DraftItem] = []
     var seedCaption: String = ""
+    /// The library asset `source` came from, if it came from one. It makes the first item count
+    /// against the story's five and show as a tick when the + reopens the picker — see
+    /// `DraftItem.assetID`. Nil for a camera capture, which is counted but cannot be ticked.
+    var sourceAssetID: String? = nil
     @Environment(\.dismiss) private var dismiss
 
     @State private var caption = ""
@@ -181,6 +185,14 @@ struct StoryEditorView: View {
         var image: UIImage
         var videoURL: URL? = nil
         var duration: Double = 0
+        /// THE LIBRARY ASSET THIS CAME FROM, which is how the picker and this post stay in step.
+        ///
+        /// The five-item ceiling belongs to the post, so the + has to reopen the picker with what is
+        /// already here ticked (his 2026-08-11 spec). A `UIImage` cannot be recognised again once it
+        /// has been decoded and edited; the asset's local identifier can. Nil for anything with no
+        /// asset behind it — a camera capture, or a clip handed over from the video editor — which
+        /// still counts towards the five but cannot be shown as a tick.
+        var assetID: String? = nil
         var isVideo: Bool { videoURL != nil }
 
         // The edits, held BESIDE the picture rather than burnt into it, so switching away and back
@@ -240,14 +252,14 @@ struct StoryEditorView: View {
     /// `recomputeEdited` reads `croppedSource ?? current` — meaning if the item before it had been
     /// cropped, the editor recomputed from that old cropped bitmap and drew the OLD PHOTO on the new
     /// item. He picked a second image and the screen did not change.
-    @MainActor private func appendPicked(image ui: UIImage) {
+    @MainActor private func appendPicked(image ui: UIImage, assetID: String? = nil) {
         stashCurrent()
-        items.append(DraftItem(image: ui))
+        items.append(DraftItem(image: ui, assetID: assetID))
         index = max(0, items.count - 1)
         restoreCurrent()   // a fresh item has clean tools; this ends in recomputeEdited()
     }
 
-    private func appendPicked(video url: URL) async {
+    private func appendPicked(video url: URL, assetID: String? = nil) async {
         let asset = AVURLAsset(url: url)
         let dur = (try? await asset.load(.duration).seconds) ?? 0
         let gen = AVAssetImageGenerator(asset: asset)
@@ -269,14 +281,63 @@ struct StoryEditorView: View {
         }
         await MainActor.run {
             stashCurrent()
-            items.append(DraftItem(image: poster, videoURL: url, duration: dur))
+            items.append(DraftItem(image: poster, videoURL: url, duration: dur, assetID: assetID))
             index = max(0, items.count - 1)
             restoreCurrent()   // same fix as the image path above — see its note
         }
     }
 
+    /// THE PICKER'S SELECTION IS THIS POST'S SELECTION — his 2026-08-11 spec, applied as one move.
+    ///
+    /// What came off the ticks leaves; what went on arrives. Removals run FIRST so the ceiling is
+    /// honoured in the order he did the work in: taking one off to make room for another has to free
+    /// the slot before the new item claims it.
+    ///
+    /// ⚠️ A POST CANNOT BE EMPTIED. `remove(_:)` has always refused the last item, and the same rule
+    /// applies here: if the ticks were all cleared and nothing is arriving, the post keeps what it
+    /// has. The picker cannot reach that state through Add — the bar hides with no ticks — so this
+    /// is the belt, not the mechanism.
+    private func applyPickerChange(removed: [String], added: [StoryPick]) async {
+        await MainActor.run { dropItems(withAssetIDs: removed, expectingMore: !added.isEmpty) }
+        // SEQUENTIALLY, so the strip ends up in the order he ticked them — a video has to resolve
+        // its poster before the next item may join, and firing these off in parallel would land
+        // them in whatever order the decodes happened to finish.
+        for pick in added {
+            switch pick.kind {
+            case .image(let ui): await MainActor.run { appendPicked(image: ui, assetID: pick.assetID) }
+            case .video(let url): await appendPicked(video: url, assetID: pick.assetID)
+            }
+        }
+    }
+
+    @MainActor private func dropItems(withAssetIDs removed: [String], expectingMore: Bool) {
+        let ids = Set(removed)
+        guard !ids.isEmpty else { return }
+        stopPreview()
+        // The item on screen keeps its edits whether or not it survives: stash BEFORE the array
+        // moves, then follow it by identity rather than by index.
+        stashCurrent()
+        let onScreen = items.indices.contains(index) ? items[index].id : nil
+        let kept = items.filter { !($0.assetID.map(ids.contains) ?? false) }
+        guard !kept.isEmpty || expectingMore else { return }
+        items = kept
+        if let onScreen, let i = items.firstIndex(where: { $0.id == onScreen }) { index = i }
+        else { index = max(0, min(index, items.count - 1)) }
+        restoreCurrent()   // ends in recomputeEdited(); a no-op while items is empty
+    }
+
     private var current: UIImage { items.indices.contains(index) ? items[index].image : source }
     private var currentIsVideo: Bool { items.indices.contains(index) && items[index].isVideo }
+
+    /// What the post holds, for the picker's ceiling — see `StoryLibraryPicker.preselected`.
+    /// `items` is empty until `onAppear` builds it, and `source` is a real item that whole time, so
+    /// the empty case answers for it rather than reporting an empty post.
+    private var postAssetIDs: [String] {
+        items.isEmpty ? [sourceAssetID].compactMap { $0 } : items.compactMap(\.assetID)
+    }
+    private var postReservedCount: Int {
+        items.isEmpty ? (sourceAssetID == nil ? 1 : 0) : items.filter { $0.assetID == nil }.count
+    }
 
     private var edited: UIImage { editedCache ?? current }
     private func recomputeEdited() {
@@ -475,7 +536,7 @@ struct StoryEditorView: View {
                 cardBottomGap = max(Self.toolZoneHeight, geo.size.height - cardTop - card.height)
                 if items.isEmpty {
                     if seedItems.isEmpty {
-                        items = [DraftItem(image: source)]
+                        items = [DraftItem(image: source, assetID: sourceAssetID)]
                     } else {
                         // A hand-off from the video editor: the whole post arrives, the just-picked
                         // picture last — that is the one you continue on. restoreCurrent puts the
@@ -524,29 +585,28 @@ struct StoryEditorView: View {
                 // this since 2026-08-05; images were deliberately left open for multi-pick, which he
                 // had called working at the time. He has changed that — a pick takes you back to the
                 // picture you are about to edit, whichever kind it was.
-                onImage: { ui in
+                onImage: { ui, id in
                     showAddPicker = false
-                    appendPicked(image: ui)
+                    appendPicked(image: ui, assetID: id)
                 },
-                onVideo: { url in
+                onVideo: { url, id in
                     showAddPicker = false
-                    Task { await appendPicked(video: url) }
+                    Task { await appendPicked(video: url, assetID: id) }
                 },
                 // TICK SEVERAL, ADD ONCE. His 2026-08-07 report: adding one at a time is "soo hard".
                 // The batch lands in tap order, and each item goes through the SAME append the single
                 // path uses — so every one of them gets `restoreCurrent`'s clean tools rather than
                 // the previous picture's crop, which is the trap `759546c` was written for.
                 allowsMultiple: true,
-                onBatch: { picks in
+                // WHAT THIS POST ALREADY HOLDS, so the five is the STORY's and not this sheet's.
+                // His 2026-08-11 report: five, Add, + again, five more, for ever. Everything with an
+                // asset behind it comes back ticked; a camera capture has none, so it is counted
+                // instead — either way it spends one of the five.
+                preselected: postAssetIDs,
+                reservedCount: postReservedCount,
+                onApply: { removed, added in
                     showAddPicker = false
-                    Task {
-                        for p in picks {
-                            switch p {
-                            case .image(let ui): await MainActor.run { appendPicked(image: ui) }
-                            case .video(let url): await appendPicked(video: url)
-                            }
-                        }
-                    }
+                    Task { await applyPickerChange(removed: removed, added: added) }
                 })
         }
         .sheet(item: $pendingShare) { s in
