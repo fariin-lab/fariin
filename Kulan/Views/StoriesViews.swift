@@ -2173,12 +2173,30 @@ struct StoryViewer: View {
         // ⚠️ TWO READERS DEPEND ON THIS AGREEING: `driveMorph`, which puts the live card at
         // `slot.centerY`, and the carousel, which draws the row of cards around it. Answer this
         // differently from `storyLayer` and the live story lands somewhere the carousel is not.
-        let contentH = scr.height - (currentIsMine ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
+        // ⚠️ MEASURED, NOT PREDICTED — and that is the fix for the black band under the story.
+        //
+        // This used to be `scr.height - (currentIsMine ? ownerFooter + bottomInset : 0)`: a guess at
+        // the height the morph would crop against. The morph does not guess — `contentRect` builds
+        // it from the metrics the library reports — so two numbers had to agree about one rectangle,
+        // and `currentIsMine` is known to arrive a beat late on a fresh open.
+        //
+        // Guess high and the card is TALLER IN ASPECT than the content it is cropping. The crop then
+        // asks for more height than the scaled content renders, and the surplus is empty: a black
+        // band across the bottom of the card. With the footer mispredicted the card wants
+        // 0.88 × 852 = 750pt of a content only 734pt tall — a 2% error, which is exactly why it
+        // appeared "sometimes" rather than always.
+        //
+        // Reading the morph's own rectangle removes the second copy rather than correcting it. The
+        // fallback is the old estimate and covers only the frames before a card is registered.
+        let content = StoryCardMorph.shared.contentSize
+        let contentW = content?.width ?? scr.width
+        let contentH = content?.height
+            ?? (scr.height - (currentIsMine ? Self.ownerFooterHeight + max(10, bottomInset) : 0))
         // BUILD 249 card size (user: "make it exactly like 249, 250 is too long"). `slotHRef` is the
         // aspect-true reference and it DEFINES the width, so the card keeps its width and only loses
         // height; the story is centre-cropped into what is left.
         let slotHRef = (avail - countArea) * 0.94
-        let w = slotHRef * (scr.width / max(contentH, 1))
+        let w = slotHRef * (contentW / max(contentH, 1))
         let h = slotHRef * 0.88
         return CardSlot(w: w, h: h, top: topInset + (avail - countArea - h) / 2)
     }

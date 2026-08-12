@@ -331,6 +331,26 @@ public final class StoryCardMorph {
     /// crash if one was never registered.
     public var isAvailable: Bool { card != nil }
 
+    /// THE STORY CONTENT'S REAL RECTANGLE — the exact one `applyCore` will crop against.
+    ///
+    /// ⚠️ IT EXISTS SO THE HOST STOPS PREDICTING THIS NUMBER. `cardSlot` used to derive the content
+    /// height itself, as `screen.height - (currentIsMine ? ownerFooter + bottomInset : 0)`, and size
+    /// the card against that. Two things then had to agree about one rectangle: this, which is
+    /// measured from the metrics the library reports, and that, which is a guess about whether an
+    /// owner footer is drawn — and `currentIsMine` is known to arrive a beat late on a fresh open.
+    ///
+    /// When the guess runs high the card ends up TALLER IN ASPECT THAN THE CONTENT, and the crop
+    /// then asks for more height than the scaled content actually renders. What fills the surplus is
+    /// nothing: a black band across the bottom of the card, which is his report. The margin is small
+    /// — with the footer mispredicted the card wants 0.88 × 852 = 750pt of a content that is only
+    /// 734pt tall — which is why it was intermittent rather than constant.
+    ///
+    /// Nil until a card is registered; the host keeps its old estimate for that window only.
+    public var contentSize: CGSize? {
+        guard let card, card.bounds.width > 1 else { return nil }
+        return contentRect(in: card).size
+    }
+
     public func attach(_ view: UIView?) {
         card = view
     }
