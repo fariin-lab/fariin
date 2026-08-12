@@ -165,7 +165,7 @@ struct UserView: View {
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    NotificationCenter.default.post(name: .replaceCurrentItem, object: nil)
+                    NotificationCenter.default.post(name: .pauseStory, object: nil)
                     isPresented = false
                 }
         }

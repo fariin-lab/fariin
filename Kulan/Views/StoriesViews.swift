@@ -2627,7 +2627,7 @@ struct StoryViewer: View {
         // String-named on purpose: the library's `Notification.Name` extension is internal to the
         // package, so the app has always posted these by name. Every other post in this file does
         // the same.
-        NotificationCenter.default.post(name: .init("stopVideo"), object: nil)
+        NotificationCenter.default.post(name: .init("pauseStory"), object: nil)
         let anchorCentre = CGPoint(x: hero.anchor.midX, y: hero.anchor.midY)
         // THE CARD FILLS THE EMPTY SLOT IT LEFT, his spec in his own words: "the card
         // goes [to] the empty place it comes from... waiting to fill it back". The slot has been
@@ -3631,6 +3631,12 @@ struct MyStoriesCarousel: View {
     /// invalidated the host's whole body — the pager, the sheet, every overlay — to move this row.
     /// See `pageDragBox` on the host.
     @ObservedObject var pageDrag: StorySheetPageDrag
+    /// ⚠️ A REDRAW NUDGE, NOT DATA. `cardMedia` asks for a clip's frame synchronously and gets nil
+    /// the first time, because generating it is a decode off the main thread. Without something to
+    /// observe, the better picture would sit in the cache until an unrelated change happened to
+    /// redraw the row. This counter is bumped once per generated frame and carries nothing — the
+    /// card re-asks, which is the only thing that knows the answer.
+    @ObservedObject private var frameTick = StoryFrameTick.shared
 
     @State private var byStory: [String: [StoryViewerInfo]] = [:]   // per-story viewers (counts)
     // Native paged scroll position: the id of the card snapped to centre. Seeded to the opened-on story
@@ -3851,8 +3857,10 @@ struct MyStoriesCarousel: View {
     /// file does: a bare `scaledToFill` reports its own oversized layout and the ZStack adopts it.
     @ViewBuilder private func cardMedia(_ s: Story) -> some View {
         // ⚠️ ASKED FOR BY STORY, AT DRAW TIME. There is no capture here, no timing and no moment to
-        // get right — this card asks the frame bank for a picture of ITS OWN clip, and the bank was
-        // written when that clip was frozen (see `StoryCardMorph.bankCurrentState`).
+        // get right — this card asks for a picture of ITS OWN clip, and the answer is generated from
+        // that clip's own file at the second its own player is paused on. The player is still alive
+        // (the viewers sheet keeps it), so the second is a fact rather than something that had to be
+        // caught before a pause took it away.
         //
         // What this replaces is the whole reason this area kept breaking: a dictionary the host
         // filled by PHOTOGRAPHING the live card through one global pointer at one player, at an
@@ -3864,7 +3872,7 @@ struct MyStoriesCarousel: View {
         // IS the photo) and for a video nobody has watched this session. Both fall through to the
         // poster below, which is exactly what they had before.
         if s.isVideo, let u = URL(string: s.mediaUrl),
-           let shot = StoryPlaybackResume.cardFrame(u, width: slotW) {
+           let shot = StoryVideoFrames.card(u, width: slotW) {
             // ⚠️ PINNED TO THE SLOT, exactly like the branch below. `Color.clear` is size-NEUTRAL: it
             // accepts whatever size it is proposed, and inside the cover-flow `ZStack` that proposal
             // is not the card, it is the container. The poster branch cannot drift that way because

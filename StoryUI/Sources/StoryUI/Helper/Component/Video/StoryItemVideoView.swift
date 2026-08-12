@@ -1,0 +1,685 @@
+//
+//  StoryItemVideoView.swift
+//  StoryUI
+//
+//  ONE STORY ITEM'S VIDEO, WITH ITS OWN PLAYER.
+//
+//  ⚠️ THIS VIEW IS BUILT FOR ONE CLIP AND IS NEVER RE-POINTED AT ANOTHER. That is the whole of the
+//  architecture change, and every guard the file it replaces needed came from the opposite rule.
+//  There is no `startVideo(url:)` here, no stale-answer check, no "is the player still on my clip",
+//  because there is no moment at which this view's player holds anybody else's item. If you find
+//  yourself adding a url parameter to something in this file, the thing to do instead is build a new
+//  view.
+//
+//  The reference app's shape, read from its source and followed line for line:
+//
+//    1. A still image is added FIRST and is never hidden and never removed. The video layer goes in
+//       ABOVE it, born hidden, and the only thing that ever unhides it is its own first frame.
+//       There is no veil to raise and lower, which deletes the entire family of bugs where a cover
+//       was rebuilt over a picture that was already on screen.
+//    2. A player is CREATED only when this item's mode is `.play` (`initializeVideoIfReady` opens
+//       `if case .pause = self.progressMode.mode { return }`). An item that is merely visible — a
+//       card in the collapsed sheet that was never watched — never builds one at all.
+//    3. A player is RELEASED only when the item's media changes, which for us means when this view
+//       goes. Pausing never tears it down, which is why a paused item keeps its position and its
+//       last frame with nothing stored anywhere.
+//    4. Pause is `pause()` and resume is `play()`, with NO SEEK. The only `seek(0)` is on a freshly
+//       attached player, which is what makes a revisited story restart at zero — the owner's rule —
+//       without anything having to remember or forget a position.
+//
+
+import UIKit
+import AVFoundation
+
+@MainActor
+final class StoryItemVideoView: UIView {
+
+    // MARK: - Identity
+
+    /// The clip. Assigned once, at init, and there is deliberately no setter.
+    let storyURL: URL
+    var storyKey: String { storyURL.absoluteString }
+
+    // MARK: - The picture underneath
+
+    /// ⚠️ ADDED FIRST, NEVER HIDDEN, NEVER REMOVED — the reference app's `imageView`, which its video
+    /// node is inserted above (`insertSubview(videoNode.view, aboveSubview: self.imageView)`) and
+    /// which nothing in its story code ever takes down for a video story.
+    ///
+    /// This is what makes the hand-over invisible and what makes it impossible to show black: there
+    /// is no instant at which the still is gone and the clip is not yet there, because the still
+    /// never goes. The old design added a "veil" subview on every load and removed it on reveal, and
+    /// three separate shipped bugs were a veil being rebuilt over a picture that was already
+    /// correct.
+    private let coverView = UIImageView()
+
+    /// The gradient behind a clip that does not fill the card. Same sampler as the exporter, so a
+    /// story cannot change appearance depending on which half of the app drew its background.
+    private let canvasLayer = StoryCanvas.makeLayer()
+    private var canvasSourced = false
+
+    /// The loading indicator, as an OVERLAY on whatever is showing. Never a replacement — the
+    /// reference app's stall indicator is drawn over the running picture and it excludes initial
+    /// buffering outright.
+    private let spinner = UIActivityIndicatorView(style: .large)
+    private var spinnerShown = false
+
+    // MARK: - The player
+
+    /// Nil until this item is asked to play. See `initializeVideoIfReady`.
+    private var player: AVPlayer?
+    private var playerLayer: AVPlayerLayer?
+
+    private var mode: StoryProgressMode = .pause
+    private weak var session: StoryVideoSession?
+
+    /// The bytes are on disk. The reference app keys its loading shimmer on this and never on player
+    /// readiness, so a cached story never shows a loading state.
+    private var contentLoaded = false
+    private var localFile: URL?
+    /// One retry per view, or a dead url becomes an endless download loop.
+    private var didRetryRemote = false
+
+    private var readyObservation: NSKeyValueObservation?
+    private var sizeObservation: NSKeyValueObservation?
+    private var statusObservation: NSKeyValueObservation?
+    private var rateObservation: NSKeyValueObservation?
+    private var timeObserver: Any?
+    private var endToken: NSObjectProtocol?
+
+    /// The clip's own pixel size once the item reports it, so fit-vs-fill can be re-taken when the
+    /// VIEW's size changes and not only when the video's does.
+    private var presentedSize: CGSize = .zero
+
+    /// TRUE once the first frame of THIS clip is on screen. One-shot, like the reference app's
+    /// `didProcessFramesToDisplay` — the readiness callback there fires per frame otherwise.
+    private var didShowFirstFrame = false
+
+    /// Whether playback has ever actually started. Initial buffering is not a stall, and reporting
+    /// it as one is what froze the progress bar before a clip had begun.
+    private var didBeginPlayback = false
+
+    private let poster: String?
+    private let blurThumb: String
+    private var posterImage: UIImage?
+    private var blurThumbImage: UIImage?
+    /// The picture the still is built FROM, and whether it is a real frame of this clip. Kept apart
+    /// from `coverView.image` because the blurred variant is composited at the card's size — see
+    /// `renderCover`.
+    private var coverSource: UIImage?
+    private var coverIsFrame = false
+    /// The card size the blurred variant was composited for, so `layoutSubviews` does not re-run a
+    /// render pass on every frame of a sheet pull. `.zero` for a real frame, which needs no compositing.
+    private var coverRenderedSize: CGSize = .zero
+
+    // MARK: - Init
+
+    init(storyURL: URL, poster: String?, blurThumb: String) {
+        self.storyURL = storyURL
+        self.poster = poster
+        self.blurThumb = blurThumb
+        super.init(frame: .zero)
+
+        backgroundColor = .black
+        layer.cornerRadius = 12
+        clipsToBounds = true
+
+        canvasLayer.isHidden = true          // shown only once a clip is known not to fill the card
+        layer.addSublayer(canvasLayer)
+
+        coverView.contentMode = .scaleAspectFill
+        coverView.clipsToBounds = true
+        coverView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(coverView)
+
+        spinner.color = UIColor.lightGray.withAlphaComponent(0.7)
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        spinner.alpha = 0
+        addSubview(spinner)
+        NSLayoutConstraint.activate([
+            spinner.centerXAnchor.constraint(equalTo: centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+
+        StoryItemViewStore.register(self)
+        resolveCover()
+        // The fetch starts as soon as the item is mounted, whatever the mode — the reference app
+        // fetches the current item's media on `update()` and builds the node separately. A story
+        // being paused under a sheet should still be arriving.
+        ensureContent()
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    deinit {
+        readyObservation?.invalidate()
+        sizeObservation?.invalidate()
+        statusObservation?.invalidate()
+        rateObservation?.invalidate()
+        if let endToken { NotificationCenter.default.removeObserver(endToken) }
+    }
+
+    // MARK: - The session this view reports into
+
+    /// Join this page's session: take the claim, take the mode it should already be in, and publish
+    /// what is already true.
+    ///
+    /// ⚠️ THE LAST PART MATTERS WHEN A VIEW COMES BACK OUT OF THE STORE. Its player is part-way
+    /// through a clip and its numbers are real, so pushing them here is what stops the progress bar
+    /// jumping to zero for the frame between the bind and the first periodic tick.
+    func attach(to s: StoryVideoSession) {
+        session = s
+        s.bind(self)
+        s.update(storyKey,
+                 timestamp: currentSecond,
+                 duration: knownDuration,
+                 isPlaying: player?.timeControlStatus == .playing,
+                 isBuffering: false,
+                 contentLoaded: contentLoaded,
+                 failed: player?.currentItem?.status == .failed)
+    }
+
+    /// Leave the session, if it is still ours to leave.
+    func detach() {
+        session?.unbind(self)
+        session = nil
+    }
+
+    // MARK: - Mode
+
+    /// THE REFERENCE APP'S `updateProgressMode`, IN ORDER: settle the existing player first, then
+    /// give a player to an item that has just been allowed to play.
+    ///
+    /// That order is load-bearing and is easy to get backwards. Unpausing is also the CREATION
+    /// trigger — an item whose media finished loading while it was paused has no player at all, and
+    /// nothing else would ever come along to build one for it.
+    func apply(mode newMode: StoryProgressMode) {
+        mode = newMode
+        if let player {
+            // Playing needs more than permission: the bytes have to be here and the view has to be
+            // in the hierarchy. The reference app gates on exactly these two
+            // (`contentLoaded && hierarchyTrackingLayer.isInHierarchy`), because an off-screen item
+            // that keeps decoding is a story you can hear but not see.
+            let canPlay = newMode == .play && contentLoaded && window != nil
+            if canPlay {
+                player.play()
+            } else {
+                player.pause()
+            }
+        }
+        initializeVideoIfReady()
+        publishStatus()
+    }
+
+    /// ⚠️ THE ONLY SEEK IN THIS FILE THAT IS NOT ON A FRESH PLAYER, and it is an explicit thing the
+    /// person did — tapping back past the first story of the first person restarts what is playing.
+    /// Do not add a second one: every other "go back to the beginning" in this viewer is a new item,
+    /// and a new item is a new player, which begins at zero because it has never been anywhere else.
+    func restart() {
+        player?.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+        apply(mode: mode)
+    }
+
+    /// Where this clip is. Answers 0 rather than guessing when there is no player.
+    var currentSecond: Double {
+        guard let player, player.currentItem != nil else { return 0 }
+        let t = player.currentTime().seconds
+        return t.isFinite && t >= 0 ? t : 0
+    }
+
+    private var knownDuration: Double {
+        guard let d = player?.currentItem?.duration.seconds, d.isFinite, d > 0 else { return 0 }
+        return d
+    }
+
+    // MARK: - Creating the player
+
+    /// ⚠️ THE FOUR PRECONDITIONS, AND THE SECOND ONE IS THE ARCHITECTURE.
+    ///
+    /// The reference app's `initializeVideoIfReady` opens with exactly this pair — return if a node
+    /// already exists, return `if case .pause = self.progressMode.mode` — and the second line is why
+    /// its side cards cost nothing and why ours can now be alive at all. A card that is merely
+    /// visible never builds a player; only the item actually playing does.
+    ///
+    /// It deliberately does NOT check whether the item is on screen: a story opened while the sheet
+    /// is already up is legitimately built before it is looked at. `apply(mode:)` holds `play()`
+    /// back until the window is real.
+    private func initializeVideoIfReady() {
+        guard player == nil else { return }
+        guard mode == .play else { return }
+        guard contentLoaded, let file = localFile else { return }
+
+        // Stories are sound-on media: `.playback` plays through the ringer switch. The default
+        // muted every story video on a silenced phone.
+        try? AVAudioSession.sharedInstance().setCategory(.playback)
+
+        let item = StoryItemPreloader.take(file) ?? AVPlayerItem(url: file)
+        let p = AVPlayer(playerItem: item)
+        // LET AVFOUNDATION WAIT. Forcing this false tells the player to start the instant it is
+        // asked whether or not a frame is buffered, so on anything less than a good connection a
+        // story began by stuttering. Holding a moment longer on a picture beats starting on one.
+        p.automaticallyWaitsToMinimizeStalling = true
+        player = p
+
+        let pl = AVPlayerLayer(player: p)
+        // CLEAR, not black: the canvas lives behind this layer and a black fill would cover it.
+        pl.backgroundColor = UIColor.clear.cgColor
+        pl.videoGravity = .resizeAspectFill
+        // ⚠️ BORN HIDDEN. A layer with no decoded frame draws its background, and behind it is a
+        // canvas that starts black over a black view — that is the blink. The reference app's node
+        // is created `isHidden = true` over its thumbnail and only its own first frame unhides it.
+        pl.isHidden = true
+        pl.frame = bounds
+        playerLayer = pl
+        // ABOVE THE STILL, NEVER INSTEAD OF IT.
+        layer.insertSublayer(pl, above: coverView.layer)
+
+        // ⚠️ EVERY OBSERVER IS INSTALLED BEFORE THE FIRST `play()`. The reference app installs
+        // `playbackCompleted` and `ownsContentNodeUpdated` before `canAttachContent = true`, because
+        // attaching can synchronously deliver content and fire the callback that starts playback —
+        // install them afterwards and the first play is lost.
+        installObservers(on: p, item: item)
+
+        // ⚠️ THE ONLY SEEK IN THIS FILE, AND IT IS ON A FRESH PLAYER. The reference app seeks to 0
+        // from `ownsContentNodeUpdated`, which fires when a NEW node acquires its content — not on
+        // any pause or resume path. A brand-new `AVPlayerItem` is already at zero, so this is belt
+        // for a preloaded item that has been prerolled: it costs nothing and it makes the rule
+        // explicit rather than implied.
+        p.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
+
+        applyGravity()
+        refreshBackdrop()
+
+        if mode == .play, window != nil { p.play() }
+        publishStatus()
+    }
+
+    private func installObservers(on p: AVPlayer, item: AVPlayerItem) {
+        // THE END OF A CLIP IS THE PLAYER'S TO REPORT, and it is the only thing that may complete a
+        // video segment. The reference app advances a story from `playbackCompleted` alone; its
+        // ordinary progress updates carry `canSwitch = false`, so a bar reaching 1.0 can never move
+        // the story on. Scoped to this exact item, and re-checked when it fires.
+        endToken = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+        ) { [weak self, weak item] _ in
+            guard let self, let item, self.player?.currentItem === item else { return }
+            self.session?.noteFinished(self.storyKey)
+        }
+
+        // The one thing that ever takes the video layer off `isHidden`. Observed on the LAYER, which
+        // owns the answer, and once for the life of this view.
+        readyObservation = playerLayer?.observe(\.isReadyForDisplay, options: [.new]) { [weak self] _, _ in
+            guard let self else { return }
+            if Thread.isMainThread { self.revealIfReady() }
+            else { DispatchQueue.main.async { self.revealIfReady() } }
+        }
+
+        sizeObservation = item.observe(\.presentationSize, options: [.new, .initial]) { [weak self] i, _ in
+            let s = i.presentationSize
+            guard let self, s.width > 0, s.height > 0 else { return }
+            if Thread.isMainThread { self.notePresentationSize(s) }
+            else { DispatchQueue.main.async { self.notePresentationSize(s) } }
+        }
+
+        statusObservation = item.observe(\.status, options: [.new, .initial]) { [weak self] i, _ in
+            guard let self else { return }
+            if Thread.isMainThread { self.noteItemStatus(i) }
+            else { DispatchQueue.main.async { self.noteItemStatus(i) } }
+        }
+
+        rateObservation = p.observe(\.timeControlStatus, options: [.new, .initial]) { [weak self] pl, _ in
+            guard let self else { return }
+            let s = pl.timeControlStatus
+            if Thread.isMainThread { self.noteTimeControl(s) }
+            else { DispatchQueue.main.async { self.noteTimeControl(s) } }
+        }
+
+        // ⚠️ THE BAR READS THE PLAYER, so the player has to publish. Twenty times a second, which is
+        // the rate the viewer's own tick already runs at — the reference app polls its player at 60
+        // and interpolates between them, and a bar drawn at 20Hz cannot show the difference.
+        timeObserver = p.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main
+        ) { [weak self] _ in
+            self?.publishStatus()
+        }
+    }
+
+    // MARK: - Status out
+
+    private func publishStatus() {
+        guard let session else { return }
+        session.update(storyKey,
+                      timestamp: currentSecond,
+                      duration: knownDuration,
+                      isPlaying: player?.timeControlStatus == .playing,
+                      contentLoaded: contentLoaded)
+    }
+
+    private func noteItemStatus(_ item: AVPlayerItem) {
+        guard item === player?.currentItem else { return }
+        switch item.status {
+        case .failed:
+            // ⚠️ HOPPED OUT OF THE OBSERVER'S OWN CALLBACK. The recovery below tears the player down,
+            // which invalidates the very `NSKeyValueObservation` this is running inside. Doing that
+            // one runloop turn later keeps the teardown out of its own notification.
+            DispatchQueue.main.async { [weak self] in self?.handleFailedItem() }
+        case .readyToPlay:
+            session?.update(storyKey, duration: knownDuration, failed: false)
+            // PREROLL DECODES; IT DOES NOT DISPLAY, and it is called HERE and nowhere earlier.
+            // `preroll(atRate:)` raises an Objective-C exception if the item is not ready, and an
+            // Objective-C exception in Swift is not catchable — it goes straight to abort(). That
+            // was a shipped crash. `.readyToPlay` is the state the documentation requires.
+            player?.preroll(atRate: 1) { _ in }
+        default:
+            break
+        }
+    }
+
+    private func noteTimeControl(_ s: AVPlayer.TimeControlStatus) {
+        switch s {
+        case .playing:
+            didBeginPlayback = true
+            setBuffering(false)
+        case .waitingToPlayAtSpecifiedRate:
+            // ⚠️ INITIAL BUFFERING IS NOT A STALL. The reference app counts only
+            // `.buffering(initial: false, whilePlaying: true, ...)` as something to show, and
+            // suppresses even that for the first 0.3s of a clip. A story that has not started yet is
+            // LOADING, which the spinner already says; calling it a stall froze the progress bar
+            // before there was anything for it to measure.
+            setBuffering(didBeginPlayback && currentSecond > 0.3)
+        default:
+            setBuffering(false)
+        }
+        publishStatus()
+        updateSpinner()
+    }
+
+    private func setBuffering(_ on: Bool) {
+        session?.update(storyKey, isBuffering: on)
+    }
+
+    /// A clip that can never play says so, instead of leaving the wheel turning for ever.
+    private func handleFailedItem() {
+        // A half-written cache file is the worst case because it is PERMANENT: it exists, so every
+        // later open finds it and never downloads again. Throw it away and stream instead.
+        if let bad = localFile, !didRetryRemote {
+            didRetryRemote = true
+            localFile = nil
+            try? FileManager.default.removeItem(at: bad)
+            teardownPlayer()
+            localFile = storyURL          // stream the remote url directly
+            contentLoaded = true
+            initializeVideoIfReady()
+            return
+        }
+        session?.update(storyKey, failed: true, isBuffering: false)
+        updateSpinner()
+    }
+
+    // MARK: - Reveal
+
+    /// BOTH ANSWERS HAVE TO BE IN: a frame exists, and we know the shape to frame it at. Whichever
+    /// lands second does the reveal, and `didShowFirstFrame` is the latch that makes it once.
+    ///
+    /// ⚠️ THERE IS NO "WHICH CLIP" QUESTION HERE ANY MORE. The file this replaces needed `awaitedItem`
+    /// and a swap-settling flag because one player was handed clip after clip and `isReadyForDisplay`
+    /// could still be answering about the one just flushed. This layer's player has held exactly one
+    /// item since it was created, so a true answer can only be about this clip.
+    private func revealIfReady() {
+        guard !didShowFirstFrame, let pl = playerLayer, pl.isHidden else { return }
+        guard pl.isReadyForDisplay else { return }
+        if presentedSize.width <= 0 || presentedSize.height <= 0,
+           let live = player?.currentItem?.presentationSize, live.width > 0, live.height > 0 {
+            presentedSize = live
+        }
+        guard presentedSize.width > 0, presentedSize.height > 0 else { return }
+        // A CARD WITH NO SIZE CANNOT DECIDE FIT VERSUS FILL, so revealing into one would show the
+        // clip at whatever gravity it was born with. `layoutSubviews` calls back here, so this is a
+        // wait rather than a refusal.
+        guard bounds.width > 1, bounds.height > 1 else { return }
+        // ORDER MATTERS: gravity and canvas colours are settled while the layer is still hidden, so
+        // the first frame anybody sees is already at its final scale on a coloured backdrop.
+        applyGravity()
+        refreshBackdrop()
+        didShowFirstFrame = true
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)   // an appearance must not fade in
+        pl.isHidden = false
+        CATransaction.commit()
+        updateSpinner()
+    }
+
+    private func notePresentationSize(_ s: CGSize) {
+        presentedSize = s
+        applyGravity()
+        refreshBackdrop()
+        revealIfReady()
+    }
+
+    // MARK: - Geometry
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        coverView.frame = bounds
+        playerLayer?.frame = bounds
+        StoryCanvas.frame(canvasLayer, to: bounds)
+        CATransaction.commit()
+        applyGravity()
+        refreshBackdrop()
+        // A blurred thumbnail is composited at the card's size, so it is built here — but ONLY when
+        // the size it was built for has actually changed. `loadingVeil` runs a real render pass, and
+        // `layoutSubviews` fires on every frame of the sheet pull.
+        if !coverIsFrame, coverRenderedSize != bounds.size { renderCover() }
+        applyCoverGravity()
+        revealIfReady()
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        // The reference app re-runs its progress mode whenever the item enters or leaves the
+        // hierarchy, and gates both playback and its progress timer on being in it. An off-screen
+        // item neither plays nor ticks.
+        apply(mode: mode)
+    }
+
+    private func applyGravity() {
+        guard let pl = playerLayer,
+              presentedSize.width > 0, presentedSize.height > 0,
+              bounds.width > 0, bounds.height > 0 else { return }
+        let want: AVLayerVideoGravity = StoryCanvas.fills(media: presentedSize, in: bounds.size)
+            ? .resizeAspectFill : .resizeAspect
+        guard pl.videoGravity != want else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        pl.videoGravity = want
+        CATransaction.commit()
+    }
+
+    /// The still is framed by the same question through the same function, so it and the clip that
+    /// appears over it cannot be framed two different ways.
+    private func applyCoverGravity() {
+        guard let img = coverView.image, bounds.width > 1, bounds.height > 1 else { return }
+        coverView.contentMode = StoryCanvas.fills(media: img.size, in: bounds.size)
+            ? .scaleAspectFill : .scaleAspectFit
+    }
+
+    private func refreshBackdrop() {
+        guard bounds.width > 1, bounds.height > 1 else { return }
+        // Undecided counts as "might have bars": a canvas behind a video that turns out to fill the
+        // frame is invisible, black behind one that does not is the bug.
+        let known = presentedSize.width > 0 && presentedSize.height > 0
+        let fills = known && StoryCanvas.fills(media: presentedSize, in: bounds.size)
+        canvasLayer.isHidden = fills
+        guard !fills, !canvasSourced else { return }
+        // The SOURCE picture, never the composited veil: sampling the blurred variant would read the
+        // gradient this is about to draw and give the bars a colour taken from themselves.
+        guard let source = posterImage ?? coverSource ?? blurThumbImage else { return }
+        canvasSourced = true
+        StoryCanvas.apply(StoryCanvas.colours(of: source), to: canvasLayer)
+    }
+
+    // MARK: - The still
+
+    /// ⚠️ ONE PICTURE, TWO TREATMENTS, AND THE DIFFERENCE IS NOT COSMETIC. A real frame of this clip
+    /// — its `thumb.jpg`, which is a full-size photograph of its own opening — goes up AS IT IS, so
+    /// the hand-over to the live layer is invisible: same picture, same size, same place. Only the
+    /// ~30px embedded thumbnail is blurred, because at card size that is the only honest thing to do
+    /// with it. Blurring the real one is what the owner photographed and called "full blur screen".
+    private func resolveCover() {
+        if !blurThumb.isEmpty, let data = Data(base64Encoded: blurThumb), let img = UIImage(data: data) {
+            blurThumbImage = img
+            setCover(img, isFrame: false)
+        }
+        guard let poster, let u = URL(string: poster) else { openingFrameFallback(); return }
+        // A POSTER IS A PICTURE. A video url arriving here (the window before `thumb.jpg` exists
+        // hands the mp4 through `previewUrl`) read megabytes off disk on the main thread and then
+        // downloaded the whole clip a second time to decode nothing.
+        guard !["mp4", "mov", "m4v"].contains(u.pathExtension.lowercased()) else {
+            openingFrameFallback(); return
+        }
+        // THE APP'S OWN CACHE FIRST. The two below are StoryUI's; the app draws its row through a
+        // different one and warms that, so for a story just posted both of these miss and the cover
+        // becomes a network fetch — leaving the hide-until-ready rule with nothing to hide behind.
+        if let img = StoryPosterSource.provider?(poster) { posterImage = img; setCover(img, isFrame: true); return }
+        if let cached = URLCache.shared.cachedResponse(for: .init(url: u)), let img = UIImage(data: cached.data) {
+            posterImage = img; setCover(img, isFrame: true); return
+        }
+        if let disk = StoryDiskCache.image(u) { posterImage = disk; setCover(disk, isFrame: true); return }
+        URLSession.shared.dataTask(with: u) { [weak self] data, _, _ in
+            guard let data, let img = UIImage(data: data) else { return }
+            StoryDiskCache.store(data, for: u)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.posterImage = img
+                // A poster landing late cannot be drawn over a clip that is playing — the still
+                // lives UNDERNEATH the video layer, so this can only ever improve what is behind it.
+                self.setCover(img, isFrame: true)
+            }
+        }.resume()
+        openingFrameFallback()
+    }
+
+    /// A CACHED CLIP CAN BE ITS OWN POSTER. A video with no thumbnail reaches here with nothing to
+    /// cover with — the spinner over a bare gradient. Second zero is exactly the honest cover,
+    /// because playback always begins there.
+    private func openingFrameFallback() {
+        guard posterImage == nil else { return }
+        if let frame = StoryVideoFrames.opening(storyURL) {
+            setCover(frame, isFrame: true)
+        }
+    }
+
+    /// ⚠️ THE BLURRED THUMBNAIL IS COMPOSITED AT A SIZE, SO IT CANNOT BE BUILT BEFORE THERE IS ONE.
+    ///
+    /// `resolveCover` runs in `init`, where `bounds` is still zero — `loadingVeil(of:covering: .zero)`
+    /// would draw nothing and the story would open on black with a perfectly good thumbnail in hand.
+    /// So the source is remembered and the composite is (re)built from `layoutSubviews`, which is
+    /// also where it belongs when the card changes shape.
+    private func setCover(_ image: UIImage, isFrame: Bool) {
+        // A real frame beats the blurred thumbnail; the thumbnail must never replace one.
+        if !isFrame, coverIsFrame { return }
+        coverSource = image
+        coverIsFrame = isFrame
+        renderCover()
+    }
+
+    private func renderCover() {
+        guard let src = coverSource else { return }
+        if coverIsFrame {
+            coverView.image = src
+            coverRenderedSize = .zero          // a real frame is size-independent
+        } else {
+            guard bounds.width > 1, bounds.height > 1 else { return }   // rebuilt from layoutSubviews
+            coverView.image = StoryCanvas.loadingVeil(of: src, covering: bounds.size)
+            coverRenderedSize = bounds.size
+        }
+        applyCoverGravity()
+        refreshBackdrop()
+    }
+
+    // MARK: - Content
+
+    private func ensureContent() {
+        if let file = CacheManager.cachedFileIfUsable(for: storyURL) {
+            localFile = file
+            contentLoaded = true
+            session?.update(storyKey, contentLoaded: true)
+            openingFrameFallback()
+            initializeVideoIfReady()
+            updateSpinner()
+            return
+        }
+        updateSpinner()
+        // `loadVideo` already answers on the main thread — a hit on the main thread answers in the
+        // same turn, and everything else is hopped for it.
+        CacheManager().loadVideo(from: storyURL) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let file):
+                self.localFile = file
+            case .failure:
+                // Never leave the viewer on an eternal spinner: a cache failure falls back to
+                // streaming the remote url, which AVPlayer does perfectly well for an https mp4.
+                self.didRetryRemote = true
+                self.localFile = self.storyURL
+            }
+            self.contentLoaded = true
+            self.session?.update(self.storyKey, contentLoaded: true)
+            self.openingFrameFallback()
+            self.initializeVideoIfReady()
+            self.updateSpinner()
+        }
+    }
+
+    /// THE SPINNER IS FOR FETCHING, NOT FOR EXISTING, and it is an overlay on the cover rather than
+    /// a thing that replaces it. It appears 0.2s late, so a cached or preloaded story never flashes
+    /// one.
+    private func updateSpinner() {
+        let want = !contentLoaded && !(session?.failed ?? false)
+        guard want != spinnerShown else { return }
+        spinnerShown = want
+        guard want else {
+            spinner.stopAnimating()
+            spinner.alpha = 0
+            return
+        }
+        spinner.startAnimating()
+        spinner.alpha = 0
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self, self.spinnerShown else { return }
+            self.spinner.alpha = 1
+        }
+    }
+
+    // MARK: - Teardown
+
+    private func teardownPlayer() {
+        readyObservation?.invalidate(); readyObservation = nil
+        sizeObservation?.invalidate(); sizeObservation = nil
+        statusObservation?.invalidate(); statusObservation = nil
+        rateObservation?.invalidate(); rateObservation = nil
+        if let timeObserver, let player { player.removeTimeObserver(timeObserver) }
+        timeObserver = nil
+        if let endToken { NotificationCenter.default.removeObserver(endToken); endToken = nil }
+        player?.pause()
+        // ⚠️ `replaceCurrentItem(with: nil)` AND NOT JUST DROPPING THE REFERENCE. Releasing an
+        // AVPlayer does not hand its decoder back promptly, and iOS caps simultaneous decoders and
+        // fails SILENTLY over the cap — a player that never produces a frame, which reads as a black
+        // card rather than as an error.
+        player?.replaceCurrentItem(with: nil)
+        playerLayer?.removeFromSuperlayer()
+        playerLayer = nil
+        player = nil
+        didShowFirstFrame = false
+    }
+
+    /// The end of this view. Called by the store when it decides not to keep it, and by the
+    /// representable when the viewer is closing.
+    func teardown() {
+        detach()
+        teardownPlayer()
+        removeFromSuperview()
+    }
+}

@@ -7,11 +7,22 @@
 
 import Foundation
 
+// ⚠️ SIX VIDEO NOTIFICATIONS ARE GONE FROM HERE, AND NONE OF THEM SHOULD COME BACK.
+//
+// `stopVideo`, `restartVideo`, `replaceCurrentItem`, `stopAndRestartVideo`, `storyBuffering` and
+// `storyVideoFinished` all existed because a player was shared and nothing could be addressed to one
+// item. Every one of them was posted with `object: nil`, so it reached EVERY mounted page, and every
+// receiver had to work out whether it was the one meant — usually by comparing a clip url carried in
+// `userInfo`. Two shipped bugs came from getting that comparison wrong and one from
+// `replaceCurrentItem` nil-ing the player in pages that were about to be reused.
+//
+// An item owns its player now and each page owns a `StoryVideoSession`: the mode goes down that seam
+// and the clock, the stall and the end come back up it. There is nobody left to broadcast to.
+//
+// `pauseStory` / `resumeStory` stay, because they are the HOST's voice — the app telling the viewer
+// that a sheet went up — and the host legitimately does not know which page is current.
+
 extension NSNotification.Name {
-    static let stopVideo = Notification.Name("stopVideo")
-    static let restartVideo = Notification.Name("restartVideo")
-    static let replaceCurrentItem = Notification.Name("replaceCurrentItem")
-    static let stopAndRestartVideo = Notification.Name("stopAndRestartVideo")
     // Host (app) can freeze/resume the running story+progress while it shows a sheet over the viewer.
     static let pauseStory = Notification.Name("pauseStory")
     static let resumeStory = Notification.Name("resumeStory")
@@ -22,13 +33,4 @@ extension NSNotification.Name {
     // remove it from the database.
     static let deleteCurrentStoryItem = Notification.Name("deleteCurrentStoryItem")
     static let storyItemDeleted = Notification.Name("storyItemDeleted")
-    /// The video is waiting on bytes (`object: Bool`). The progress bar holds while this is true, so
-    /// a stalled clip cannot have its segment counted out from under it — the desynchronisation where
-    /// a story moved on while the video was still trying to start.
-    static let storyBuffering = Notification.Name("storyBuffering")
-    /// The current clip played to its end (`userInfo["url"]` names it). The reference app's rule, and now
-    /// ours: a VIDEO story segment is completed ONLY by the player's own end-of-clip report — the
-    /// bar reads the player's clock and is capped under the boundary (`syncBarToPlayer`), so
-    /// arithmetic can neither cut a clip off early nor keep the bar running after it finished.
-    static let storyVideoFinished = Notification.Name("storyVideoFinished")
 }

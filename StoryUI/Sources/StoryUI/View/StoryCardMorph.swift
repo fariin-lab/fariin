@@ -10,32 +10,24 @@ import UIKit
 /// the host, because the host is the only thing that knows what the story was opened from.
 public enum StoryHeroPhase { case began, changed, ended, cancelled }
 
-/// Something that can hand over the video frame it is showing RIGHT NOW.
-///
-/// Implemented by the story's player. It exists because the alternative — photographing the screen
-/// with `drawHierarchy` — cannot see a video layer reliably: it returns the frame sometimes and a
-/// black rectangle other times, with no error and nothing for the caller to check.
-public protocol StoryVideoFrameSource: AnyObject {
-    /// Nil is a normal answer, not a failure to hide. Callers fall back.
-    func currentVideoFrame() -> UIImage?
-    /// ⚠️ WHICH CLIP THAT FRAME BELONGS TO, and it is the reason a cover can no longer be filed
-    /// under the wrong story.
-    ///
-    /// `frameSource` is one global slot written by whichever player set up last, and the viewer keeps
-    /// three pages alive. So "give me the frame on screen" was a question with no subject: the answer
-    /// could be about a story the user is not looking at, and the caller had no way to tell. Every
-    /// wrong-cover report in this area traces back to that.
-    var currentVideoURL: String? { get }
-    /// ⚠️ AND WHERE IN THE CLIP IT IS, which is the difference between a frame worth keeping and a
-    /// frame that will overwrite one. See `bankCurrentState`. NaN or a negative is a normal answer
-    /// from a player that has no item yet, and it fails the caller's test like any other.
-    var currentVideoSeconds: Double { get }
-    /// WRITE THE FRAME DOWN, under the player's own guards. The frame ONLY — playback positions are
-    /// no longer stored anywhere (a story always restarts at zero on a revisit; see
-    /// `StoryPlaybackResume`'s header). The player owns the guards (over a second in, not in the
-    /// last second) because it is the only thing that knows the clip's real duration.
-    func rememberPlaybackState()
-}
+// ⚠️ DELETED HERE: `StoryVideoFrameSource`, and with it `StoryCardMorph.frameSource`,
+// `bankCurrentState()` and `rememberPlaybackState()`.
+//
+// The protocol asked a live player to hand over the frame it was showing RIGHT NOW, so a card could
+// be given a picture of a clip that was about to be paused or thrown away. It could not work, for
+// two reasons that took five shipped builds to separate:
+//
+//   * the SUBJECT was a single global slot written by whichever player set up last, while three
+//     pages were alive — so "the frame on screen" was a question with no reliable answer, and a
+//     neighbour page's idle prewarm routinely owned the slot;
+//   * the SOURCE refuses. A paused item's `AVPlayerItemVideoOutput` hands its buffer over exactly
+//     once, so the second reader of the same instant gets nil and falls back to the poster, which is
+//     second zero, which is the complaint.
+//
+// A clip's player is alive and paused for as long as the sheet is up now (`StoryItemViewStore`), so
+// a card asks for the picture when it wants one and `StoryVideoFrames` generates it from the file at
+// the second that player is actually on. There is no instant to catch and no subject to get wrong,
+// which is why nothing here has to know about video any more.
 
 /// One handle on the story card that is actually on screen.
 ///
@@ -262,10 +254,6 @@ public final class StoryCardMorph {
     /// NOT called when a close commits: the card is on its way out, and repainting the page black
     /// behind it puts a black rectangle where the chat list should already be showing through.
     public var restoreAfterHero: (() -> Void)?
-
-    /// The story's current player, while there is one. Weak: a player that has gone away must not be
-    /// asked for frames, and must not be kept alive by having been asked once.
-    public weak var frameSource: StoryVideoFrameSource?
 
     /// Make the page see-through for a hero flight: what pulls away has to be the story, over the
     /// chat list, not a black page with a story in it. Registered by whichever pager installed the
@@ -801,84 +789,20 @@ public final class StoryCardMorph {
         CATransaction.commit()
     }
 
-    // ⚠️ `snapshotCard` IS DELETED, AND ITS WHOLE REASON FOR EXISTING WENT WITH IT.
+    // ⚠️ DELETED HERE: `snapshotCard`, `bankCurrentState()` and `rememberPlaybackState()`.
     //
-    // It answered "what is the live card showing right now", so the host could file that picture
-    // under a story id and the row could draw it. That is a question with a subject that changes
-    // under you: one global `frameSource`, three pages alive, and one instant to ask. Every
-    // wrong-cover report in this area traced back to it, and moving the instant three times never
-    // fixed it.
+    // All three answered the same question — "what picture is this clip showing right now" — and all
+    // three were wrong in the same way. The subject was a single global pointer at whichever player
+    // set up last while three pages were alive, the instant had to be caught before a pause took the
+    // buffer away, and the source (`AVPlayerItemVideoOutput` on a paused item) hands its buffer over
+    // exactly once and answers nil to everyone after. Five shipped builds moved which player was
+    // asked, which slot the answer landed in and which instant it was caught at, and none of them
+    // could work, because the picture was never there to catch.
     //
-    // Cards fetch their own picture from the frame bank now, keyed by their own clip
-    // (`StoryPlaybackResume.cardFrame`), and `bankCurrentState` below fills that bank at the pause.
-    // Nobody has to ask at the right moment, so nobody can ask at the wrong one.
-
-    /// ⚠️ THE FRAME IS BANKED WHEN THE STORY IS FROZEN, NOT WHEN A CARD HAPPENS TO ASK FOR IT.
-    ///
-    /// `StoryPlaybackResume` already keeps one picture per clip, and its own note argues that asking
-    /// BY STORY is what removes the timing window `snapshotCard` has never quite closed. But it was
-    /// only ever written on a clip CHANGE or a `stopVideo` (`rememberPlaybackFrame`), and the
-    /// viewers sheet does neither — it PAUSES. So at the one moment the carousel needs a real frame
-    /// for the story it is coming up over, the bank was empty, every card fell back to `previewUrl`,
-    /// and for a video that url is the poster made at post time: second zero. **That gap is the whole
-    /// reason the capture-at-an-instant system exists**, and filling it here is what lets that system
-    /// be deleted rather than re-timed a fourth time.
-    ///
-    /// Called from the host pause and BEFORE the player is actually paused, because a paused item's
-    /// video output hands its buffer over exactly once — see `currentVideoFrame`.
-    ///
-    /// Cheap to call and safe to call often: a clip with no decoded frame answers nil and writes
-    /// nothing, and the bank is an `NSCache` keyed by the clip's own url, so re-banking the same
-    /// story just replaces one entry.
-    /// ⚠️ AND IT REFUSES TO BANK SECOND ZERO OVER SOMETHING BETTER.
-    ///
-    /// His 2026-08-10 report: a video paused at 20s, pull the sheet up and the mini card correctly
-    /// shows the 20s frame; swipe the carousel away and back and it is second zero again.
-    ///
-    /// The bank has TWO writers and they did not agree. `rememberPlaybackFrame` has always been
-    /// fenced at `t > 1` — a position under a second is not worth resuming to, and it banks the
-    /// picture "in the same breath and under the same guard". This one had no fence at all. So the
-    /// sequence is: the sheet pauses, 20s is banked, the card is right. Swiping away moves the
-    /// player to another clip; swiping BACK builds a fresh player for this one, and the sheet is
-    /// still up so the story is paused again the moment it arrives — with `.pauseStory` calling
-    /// straight into here while that fresh player is still at the beginning and has not finished
-    /// seeking to the position it remembered. A frame of second zero went into the bank, and
-    /// `rememberFrame` also drops the card-sized copies, so the good 20s picture was gone twice
-    /// over.
-    ///
-    /// Same fence as the other writer now, from the same number. A clip genuinely near its start has
-    /// nothing to lose: the bank keeps whatever it had, and an empty bank still falls through to the
-    /// poster, which is second zero anyway. There is no case where refusing this write is worse.
-    ///
-    /// ⚠️ THE POSITION HALF IS GONE, ON PURPOSE (2026-08-11). This used to write the playhead too,
-    /// so a live story rebuilt behind the sheet could resume where it paused. The owner's rule now
-    /// is the reference app's: leaving a story item and coming back RESTARTS it from zero, always — see
-    /// `StoryPlaybackResume`'s header. The only continuation left is a live player that was paused
-    /// and never torn down, which needs no memory. What still travels is the PICTURE, because the
-    /// carousel cards draw "the last frame this clip showed" and that stays true either way.
-    @MainActor
-    public func bankCurrentState() {
-        guard let source = frameSource,
-              let mediaURL = source.currentVideoURL,
-              let url = URL(string: mediaURL) else { return }
-        let t = source.currentVideoSeconds
-        guard t.isFinite, t > 1 else { return }
-        // The player's own writer first — its guards also refuse the clip's last second, where the
-        // buffer is often already gone. A paused item gives its buffer up exactly once, so the
-        // explicit bank below is the belt for the moment the writer had nothing to copy.
-        source.rememberPlaybackState()
-        guard let frame = source.currentVideoFrame() else { return }
-        StoryPlaybackResume.rememberFrame(url, image: frame, at: t)
-    }
-
-    /// THE LAST FRAME, for a caller that is about to take the player away rather than freeze it.
-    ///
-    /// `StoryDetailView.resetAVPlayer` replaces the whole `AVPlayer` when a photo story arrives, and
-    /// nothing else on that path banks anything — see the note there. The picture is all that is
-    /// kept: the position deliberately dies with the player, because a story navigated away from
-    /// restarts at zero on its next visit (the owner's 2026-08-11 rule).
-    @MainActor
-    public func rememberPlaybackState() { frameSource?.rememberPlaybackState() }
+    // A clip's player now stays alive and paused for as long as the viewers sheet is up
+    // (`StoryItemViewStore`), so a card asks for a picture when it wants one and `StoryVideoFrames`
+    // generates it from the clip's own file at the second that player is actually on. No instant, no
+    // subject, no capture — which is why this file no longer knows that video exists.
 
     /// Step the live card aside while the carousel row is being swiped.
     ///

@@ -951,7 +951,7 @@ struct StoryPager: UIViewControllerRepresentable {
                 let vy = g.velocity(in: pager.view).y
                 watchDragPastThreshold = false
                 if ty > 20, vy > 800 {
-                    NotificationCenter.default.post(name: .stopVideo, object: nil)
+                    NotificationCenter.default.post(name: .pauseStory, object: nil)
                     NotificationCenter.default.post(name: Notification.Name("storyForceClose"), object: nil)
                 } else {
                     // Released gently: the system gesture decides commit/cancel on its own;
@@ -1027,7 +1027,7 @@ struct StoryPager: UIViewControllerRepresentable {
                 if ty > 200 || (ty > 5 && vy > 200) {
                     // Dismiss → STOP playback/timer for good (don't resume). The story was already paused on
                     // .began; killing the video here means no audio/frame keeps running behind the dismissal.
-                    NotificationCenter.default.post(name: .stopVideo, object: nil)
+                    NotificationCenter.default.post(name: .pauseStory, object: nil)
                     // Reference video (user's chosen close): the card SHRINKS AND MELTS AWAY in
                     // place over the visible chat list. It must NOT slide off the bottom — the
                     // slide-off exit was the rejected look. Same exit at every drag depth/speed.

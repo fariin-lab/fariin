@@ -35,13 +35,10 @@ enum StoryDirectionEnum {
     case next
 }
 
- // MARK: - MediaState
-enum MediaState {
-    case started
-    case notStarted
-    case restart
-    case ready
-    case stopped
-}
+// DELETED HERE: `MediaState`. It was the shared player's readiness, mirrored into the story page as
+// `@State` so `playVideo()` could ask whether there was anything to play — and its `.onChange` was
+// one of the callers that meant nothing and called `play()` anyway, which is the ~1s in the
+// "it pauses under my finger and then starts again" report. Readiness belongs to the item that owns
+// the player and is read off `StoryVideoSession`.
 
 

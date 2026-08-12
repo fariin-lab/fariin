@@ -188,8 +188,16 @@ public struct StoryView: View {
         }
     }
 
+    /// ⚠️ AND EVERY RETAINED ITEM VIEW GOES WITH THE VIEWER, WHICHEVER WAY IT CLOSED.
+    ///
+    /// A retained view holds a live `AVPlayer`. The store only retains while the viewers sheet is
+    /// engaged, so a viewer torn down with the sheet still up would leave one or two players alive
+    /// behind a chat list — paused, but holding a decoder. The door and the presenter both call this
+    /// on their own close paths; this is the belt for a teardown neither of them saw, and it is
+    /// idempotent.
     private func stopVideo() {
-        NotificationCenter.default.post(name: .stopVideo, object: nil)
+        NotificationCenter.default.post(name: .pauseStory, object: nil)
+        StoryVideoHost.viewerClosed()
         NotificationCenter.default.removeObserver(self)
     }
 }

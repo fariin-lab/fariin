@@ -267,7 +267,7 @@ struct StorySoloPager: UIViewControllerRepresentable {
                 let vy = g.velocity(in: host.view).y
                 watchDragPastThreshold = false
                 if ty > 20, vy > 800 {
-                    NotificationCenter.default.post(name: .stopVideo, object: nil)
+                    NotificationCenter.default.post(name: .pauseStory, object: nil)
                     NotificationCenter.default.post(name: Notification.Name("storyForceClose"), object: nil)
                 } else {
                     host.view.backgroundColor = .black
@@ -315,7 +315,7 @@ struct StorySoloPager: UIViewControllerRepresentable {
             case .ended:
                 let ty = t.y, vy = g.velocity(in: host.view).y
                 if ty > 200 || (ty > 5 && vy > 200) {
-                    NotificationCenter.default.post(name: .stopVideo, object: nil)
+                    NotificationCenter.default.post(name: .pauseStory, object: nil)
                     // The card SHRINKS AND MELTS AWAY in place (the owner's chosen close), it does
                     // not slide off the bottom.
                     let exitScale: CGFloat = 0.12

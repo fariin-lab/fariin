@@ -169,8 +169,21 @@ struct StoryDetailView: View {
 
     // MARK: Private Properties
     @StateObject private var keyboardManager = KeyboardManager()   // own it once (was re-created each re-init)
-    @State private var state: MediaState = .notStarted
-    @State private var player = AVPlayer()
+    // (DELETED: `@State private var state: MediaState`. It mirrored the shared player's readiness so
+    //  `playVideo` could ask whether there was anything to play, and its `.onChange` was one of the
+    //  four callers that meant nothing and called `play()` anyway. Readiness belongs to the item and
+    //  is read off the session.)
+    /// ⚠️ THIS PAGE'S VIDEO ITEM — the mode going down, the clock and the end coming back. It
+    /// replaces `@State private var player = AVPlayer()`, which was ONE player shared by every item
+    /// in this person's bucket and borrowed weakly by one reused view.
+    ///
+    /// Every story-video bug of the last two months came from that sharing, and none of the guards
+    /// it needed exist any more: an item owns its player, so the player can never be holding
+    /// somebody else's clip. See `StoryVideoSession` and `StoryItemVideoView`.
+    ///
+    /// A reference type held in `@State` on purpose, exactly like `hostPause`: the same instance
+    /// survives every re-render, and writing to it does not cause one.
+    @State private var video = StoryVideoSession()
     @State private var animate = false
     @State private var selectedEmoji = ""
     @State private var startAnimate = false
@@ -208,15 +221,14 @@ struct StoryDetailView: View {
     @State private var hostPause = HostPauseBox()  // @State keeps the SAME box across re-renders
     @State private var isAdvancing: Bool = false   // guard the segment-end double-advance
     @State private var isFolding: Bool = false   // true while this page is mid-cube-fold (pause timer)
-    /// The video is waiting on bytes. Holds the progress bar; cleared automatically when the player
-    /// reports it is playing again. See `.storyBuffering`.
+    /// The video is waiting on bytes MID-CLIP, so the progress bar holds. Mirrored from the session
+    /// on the tick — see `startProgress`. It is a mirror rather than the truth because the bar's
+    /// gate reads it inside a view body and the session is deliberately not observable.
+    ///
+    /// (`bufferingURL` is gone with it. It existed because a stall arrived as a broadcast EDGE and
+    /// the matching "no longer stalled" could be delivered to a page that had stopped listening,
+    /// stranding the hold for the rest of the bucket. A value that is read every tick cannot strand.)
     @State private var isBuffering: Bool = false
-    /// The clip that put the bar on hold. `isBuffering` used to be cleared only by `resetProgress`,
-    /// which runs on a PERSON change — so a video that stalled and was then tapped past to a PHOTO in
-    /// the same person left the bar frozen for the rest of that bucket, with no auto-advance and no
-    /// way back except swiping to somebody else. Knowing whose hold it is means it can be released
-    /// the moment that clip stops being the one on screen, and never a moment earlier.
-    @State private var bufferingURL: String = ""
     @State private var captionExpanded: Bool = false   // tap the caption to expand past 3 lines
     /// WHERE THE FINGER IS, and the only answer in this file that cannot be missed. See `holdGesture`.
     ///
@@ -541,6 +553,18 @@ struct StoryDetailView: View {
         .onReceive(NotificationCenter.default.publisher(for: .init("storyChromeHidden"))) { note in
             let hidden = (note.object as? Bool) ?? false
             if hidden != chromeHidden { chromeHidden = hidden }
+            // ⚠️ THIS IS THE COLLAPSED STATE, AND IT IS THE ONLY THING THAT DECIDES WHETHER A STORY
+            // RETURNED TO RESUMES OR RESTARTS.
+            //
+            // The reference app keeps every visible item's view alive while its sheet is collapsed
+            // over the story and merely pauses the ones that are not central, so the item you came
+            // from keeps its player, its position and its last frame — for free. At full screen it
+            // drops every item view but the central one, so a revisit builds a new player and a new
+            // player begins at zero.
+            //
+            // Those are exactly the owner's two rules ("normal viewing restarts, the sheet
+            // preserves"), and this line is the whole of the mechanism. See `StoryItemViewStore`.
+            StoryItemViewStore.retainDismounted = hidden
         }
         // A hero open or close is in the air: the reply bar and its black footer step aside, the
         // card's own chrome stays on the card. See `flightActive`.
@@ -569,37 +593,27 @@ struct StoryDetailView: View {
                 NotificationCenter.default.post(name: .init("storyFlightMaskAck"), object: nil)
             }
         }
-        // The player says whether it is waiting on bytes; the progress bar holds while it is. Only
-        // the page that is actually current listens, or a neighbour's stall would freeze the story
-        // you are watching.
-        .onReceive(NotificationCenter.default.publisher(for: .storyBuffering)) { note in
-            guard viewModel.currentStoryUser == model.id else { return }
-            // ⚠️ AND ABOUT THE CLIP THIS PAGE IS ACTUALLY SHOWING. Being the current PAGE was the
-            // only test, so a neighbour page's stall froze the bar of the story on screen. The
-            // sender names its url now; a report about anything else is not ours to act on.
-            // A post with no url at all is refused rather than trusted — the only writers are
-            // `PlayerView`s, and one that cannot say which clip it means is one we cannot place.
-            guard let sender = note.userInfo?["url"] as? String,
-                  sender == getStory(with: getCurrentIndex()).mediaURL else { return }
-            let buffering = (note.object as? Bool) ?? false
-            if buffering != isBuffering { isBuffering = buffering }
-            bufferingURL = buffering ? sender : ""
-        }
-        // THE CLIP SAYS IT ENDED; ONLY THEN DOES A VIDEO SEGMENT COMPLETE. The reference app's
-        // own completion callback is the single thing that advances a video story there —
-        // position updates carry `canSwitch = false` — and this is our half of that rule: the bar
-        // is capped under the boundary (`syncBarToPlayer`) and this report crosses it. Guarded to
-        // the sender being the clip actually on screen, so a stale end (a clip finishing during a
-        // fast swipe, or on a page being left) can never advance a story it does not belong to.
-        .onReceive(NotificationCenter.default.publisher(for: .storyVideoFinished)) { note in
-            guard viewModel.currentStoryUser == model.id,
-                  !model.stories.isEmpty, !isDismissing,
-                  let sender = note.userInfo?["url"] as? String,
-                  sender == getStory(with: getCurrentIndex()).mediaURL else { return }
-            advanceFromVideoEnd()
-        }
+        // ⚠️ THE `.storyBuffering` AND `.storyVideoFinished` RECEIVERS THAT LIVED HERE ARE GONE, AND
+        // SO IS THE WHOLE "WAS THAT ABOUT ME" PROBLEM THEY EXISTED TO SOLVE.
+        //
+        // Both were broadcasts carrying a clip url in `userInfo`, and both receivers had to compare
+        // it against the story they believed was current. Two chances per notification to compare
+        // the wrong pair, and two shipped bugs from exactly that — a neighbour page's stall freezing
+        // the bar of the story on screen, and a stale clip's end completing somebody else's segment.
+        // Being an EDGE made the first one worse: a `false` posted while its page was being swiped
+        // away had no listener left, so the hold never came down.
+        //
+        // Both answers are now READ off this page's own session on the 0.05s tick, in
+        // `startProgress`, where a missed edge is impossible and the numbers cannot belong to
+        // anybody else.
         .onChange(of: viewModel.currentStoryUser) { newValue in
-            NotificationCenter.default.post(name: .stopVideo, object: nil)
+            // ⚠️ THE `.stopVideo` BROADCAST THAT USED TO OPEN THIS IS GONE, AND NOTHING REPLACES IT.
+            // It was posted with `object: nil`, so it reached every mounted page's player and each
+            // one had to work out whether it was the one being left. `videoMode`'s first line
+            // answers that by construction — a page that is not the current bucket is `.pause` —
+            // and `syncVideoMode()` at the bottom of this handler runs on every mounted page, so
+            // the page being left stops itself and the page arriving starts itself, from the same
+            // line, with no broadcast and nobody to mistake for somebody else.
             // ON THE WAY OUT, BEFORE `resetProgress` WIPES IT. This fires on every mounted page, so
             // the one being left is the one whose id no longer matches — and its `timerProgress`
             // still holds where the finger got to.
@@ -631,7 +645,7 @@ struct StoryDetailView: View {
                 // mid-transition can arrive AFTER it — see the note in `startProgress`.
                 isFolding = false
             }
-            playVideo()
+            syncVideoMode()
         }
         .onAppear {
             // First open of the viewer (onChange(currentStoryUser) doesn't fire for the initial bucket):
@@ -650,11 +664,11 @@ struct StoryDetailView: View {
             startProgress()
         }
         .onChange(of: isAnimationStarted ? isAnimationStarted : false) { state in
-            configureProgress(with: state)
+            syncVideoMode()
             isTimerRunning = state
         }
         .onChange(of: keyboardManager.isKeyboardOpen) { open in
-            open ? pauseVideo() : playVideo()   // composing a reply pauses; resumes on dismiss
+            syncVideoMode()   // composing a reply pauses; resumes on dismiss
         }
         .onChange(of: scenePhase) { phase in
             // Pause when the app leaves the foreground; resume on return (the timer also
@@ -662,7 +676,7 @@ struct StoryDetailView: View {
             // pause WE created: a Control Center peek fires .inactive→.active mid-hold, and
             // blindly clearing isPaused resumed the story under the user's finger.
             if phase == .active {
-                if scenePaused { scenePaused = false; isPaused = false; playVideo() }
+                if scenePaused { scenePaused = false; isPaused = false; syncVideoMode() }
             } else {
                 // ⚠️ RECORDED EVEN WHEN A FINGER ALREADY PAUSED IT. This was `if !isPaused`, so a
                 // scene pause arriving DURING a hold was anonymous — nothing remembered that the app
@@ -674,29 +688,32 @@ struct StoryDetailView: View {
                 // Recording it unconditionally is safe precisely because `.active` is the only thing
                 // that clears it, and the release now refuses while it stands.
                 scenePaused = true
-                isPaused = true; pauseVideo()
+                isPaused = true; syncVideoMode()
             }
         }
         // Host shows/hides a sheet over the viewer (viewers list, share, menu) → freeze/resume.
         .onReceive(NotificationCenter.default.publisher(for: .pauseStory)) { _ in
-            // ⚠️ THE FRAME GOES INTO THE BANK BEFORE THE PLAYER STOPS, and the order is the whole
-            // point. A paused item's video output hands its buffer over ONCE; ask a beat later and
-            // there is no new buffer to copy. This is the moment the viewers sheet freezes the story
-            // it is coming up over, so it is the moment that decides whether the carousel has a real
-            // picture of this clip or falls back to its second-zero poster.
+            // ⚠️ NOTHING IS PHOTOGRAPHED HERE ANY MORE. This used to call `bankCurrentState()`
+            // FIRST, because a paused item's video output hands its buffer over exactly once and
+            // this was the last instant it could be caught — the sheet coming up over a story was
+            // the one moment that decided whether the carousel got a real picture of the clip or
+            // fell back to its second-zero poster. Five shipped attempts moved which player was
+            // asked, which slot it landed in and which instant it was caught at.
             //
-            // It writes by CLIP URL into the same bank `StoryPlaybackResume` already keeps, so the
-            // cards can ask for a story's picture at draw time instead of a global pointer being
-            // photographed at exactly the right instant. See `bankCurrentState`.
-            //
-            // ⚠️ AND THE PLAYHEAD GOES WITH IT, which is what makes coming back symmetric. The
-            // picture alone was enough for the CARD (the row draws the bank) and not for the story
-            // (it needs the position), and only one of those two is on screen once the row settles.
-            StoryCardMorph.shared.bankCurrentState()
-            hostPause.paused = true; pauseVideo()
+            // The clip's player is still alive and still on that frame now (the store keeps it for
+            // as long as the sheet is up), so the card asks for the picture when it wants one and
+            // gets it from the file at the second the player is actually paused on. There is no
+            // instant to catch, so there is nothing to do here but stop.
+            hostPause.paused = true; syncVideoMode()
         }
         .onReceive(NotificationCenter.default.publisher(for: .resumeStory)) { _ in
             hostPause.paused = false
+            // The host's axis has changed, so the answer is re-taken here as well as after the flag
+            // clear below — the `pressPhase` guard can return early, and a mode that is only ever
+            // re-derived past a guard is a mode that can be left stale. Re-deriving cannot start a
+            // story that should not be running: a finger still down keeps `isHolding` up, and
+            // `videoMode` reads it.
+            syncVideoMode()
             // ⚠️ THE FLAGS COME DOWN BEFORE THE PLAY, NOT AFTER. `playVideo` now refuses while
             // `isPaused`/`isHolding` stand (see its note), so calling it first — as this line did —
             // would refuse, and then the clear below would leave a story whose bar runs and whose
@@ -729,7 +746,7 @@ struct StoryDetailView: View {
             // `hostPause` is cleared either way — that is the host's axis, not the finger's.
             guard pressPhase == .idle else { return }
             if !scenePaused, isPaused || isHolding { isPaused = false; isHolding = false }
-            if !keyboardManager.isKeyboardOpen { playVideo() }
+            if !keyboardManager.isKeyboardOpen { syncVideoMode() }
         }
         // Host's viewers carousel centred a different one of MY stories → jump the (frozen) viewer to
         // that item, so when the sheet collapses the story underneath matches the carousel/morph (no
@@ -814,50 +831,32 @@ private extension StoryDetailView {
                       bottomCornerRadius: (story.config.storyType != .plain() || model.isMine) ? 24 : 0) {
                 start(index: index)
             }
-            .onAppear {
-                // ⚠️ THE CLIP BEING THROWN AWAY BANKS ITS LAST PICTURE FIRST. A photo story
-                // appearing means the `VideoView` is being unmounted: `startVideo` will not run
-                // (there is no next url for that view), `stopVideo` will not run, and `deinit` is
-                // not a place that can safely touch MainActor state — so every path that banks the
-                // frame is skipped while `resetAVPlayer` below drops the `AVPlayer` still holding
-                // it. The frame is what the carousel cards draw. The POSITION is deliberately not
-                // kept by anyone any more: a video returned to restarts from zero — the owner's
-                // 2026-08-11 rule.
-                //
-                // Here rather than inside `resetAVPlayer` because these extension methods are NOT
-                // main-actor isolated (see the note in `playVideo`) and this call is; a body
-                // closure is.
-                StoryCardMorph.shared.rememberPlaybackState()
-                resetAVPlayer()
-            }
+            // ⚠️ NOTHING HAPPENS HERE ANY MORE, AND THAT IS THE POINT. This branch used to carry an
+            // `.onAppear` that photographed the outgoing clip's frame and then threw the whole
+            // `AVPlayer` away (`rememberPlaybackState()` + `resetAVPlayer()`), because the player
+            // belonged to this PAGE and so outlived the view that was using it — a photo arriving
+            // meant a live clip was left holding the audio with nobody to stop it.
+            //
+            // An item owns its player now. A photo replacing a video dismantles the video's view,
+            // which releases its player (or hands it to the store, paused, while the sheet is up).
+            // There is nothing for this page to clean up and no frame for it to catch in flight.
         case .video:
-            VideoView(
-                videoURL: story.mediaURL,
+            // ⚠️ `.id` IS LOAD-BEARING AND IS THE WHOLE CHANGE. Without it SwiftUI reuses the
+            // representable's view across items and we are back to one player being handed clip
+            // after clip. With it, a different clip is a different view: a new player, born at zero,
+            // that has never held anybody else's item.
+            StoryVideoContent(
+                storyURL: story.mediaURL,
                 posterURL: story.previewURL,
                 blurThumb: story.blurThumb,
-                state: $state,
-                player: player
-            ) { media, duration in
-                // ONLY A REAL LENGTH REPLACES THE ONE WE HAVE. Making `getVideoLength` asynchronous
-                // meant this callback now fires at `.ready` with duration still 0, and writing that
-                // zero here is what set up the divide-by-zero that killed build 463. The story
-                // already carries a sensible length from the host; the player refines it when it
-                // knows, and until then the existing one stands.
-                //
-                // ⚠️ HOPPED for the same reason as `start(index:)`: a CACHED clip's setup can now
-                // run synchronously (CacheManager answers a main-thread hit in the same turn), so
-                // this closure can fire inside `updateUIView` — where these Binding/@State writes
-                // would be silently discarded, the video twin of his reopen-freeze repro.
-                DispatchQueue.main.async {
-                    if duration.isFinite, duration > 0, model.stories.indices.contains(index) {
-                        model.stories[index].duration = duration
-                    }
-                    start(index: index)
-                    state = media
-                }
-            }
-            .onChange(of: state) { _ in
-                playVideo()
+                session: video
+            )
+            .id(story.mediaURL)
+            .onAppear {
+                // The item's own duration refines the declared one through the session, read on the
+                // tick. Nothing to plumb: `start` only marks the item ready so the bar may move.
+                start(index: index)
+                syncVideoMode()
             }
         }
     }
@@ -1155,7 +1154,7 @@ private extension StoryDetailView {
                     // story must not take it over. ⚠️ ON THE PAUSE SIDE ONLY — guarding the release
                     // as well would strand a hold whose finger left while the keyboard came up.
                     guard !keyboardManager.isKeyboardOpen else { return }
-                    if !isPaused { isPaused = true; pauseVideo() }
+                    if !isPaused { isPaused = true; syncVideoMode() }
                     // The chrome fade waits for the HOLD, never the touch — his other report ("when
                     // i click story normal story pause": every tap would blink the header). The
                     // pause is instant, the fade is not. Two clocks on purpose.
@@ -1167,7 +1166,7 @@ private extension StoryDetailView {
                     // comes down, because the hold is genuinely over and it must not cross stories.
                     isHolding = false
                     guard !scenePaused else { return }
-                    if isPaused { isPaused = false; playVideo() }
+                    if isPaused { isPaused = false; syncVideoMode() }
                 }
             }
         }
@@ -1320,7 +1319,11 @@ private extension StoryDetailView {
             let index = getCurrentIndex()
             let story = getStory(with: index)
             if story.config.mediaType == .video {
-                NotificationCenter.default.post(name: .stopAndRestartVideo, object: nil)
+                // Tapping back past the first story of the first person restarts what is playing.
+                // Addressed to THIS page's item instead of broadcast to every mounted player, which
+                // is what `.stopAndRestartVideo` did — a bare `seek(to: .zero)` on whichever players
+                // happened to be alive.
+                video.restart()
             }
             resetProgress()   // restart the current segment (image OR video) — was a no-op for images
         }
@@ -1380,12 +1383,25 @@ private extension StoryDetailView {
         // they will be watched, across people, so the last item of one warms the first of the next.
         if viewModel.currentStoryUser == model.id {
             let cur = getStory(with: getCurrentIndex())
-            // A HOLD BELONGS TO ONE CLIP. See `bufferingURL`: the item has changed, so a hold left
-            // by the one we came from is stale and the bar must be released. Matched by url rather
-            // than cleared blindly, so a NEW clip that has already reported its own stall keeps it.
-            if isBuffering, bufferingURL != cur.mediaURL {
-                isBuffering = false
-                bufferingURL = ""
+            // ⚠️ THE BUFFERING HOLD IS READ, NOT RECEIVED, AND THE STALE-HOLD BOOKKEEPING IS GONE.
+            //
+            // It used to arrive as a `.storyBuffering` notification carrying a url, which the
+            // receiver compared against the story it believed was current — and because a report is
+            // an EDGE, a `false` posted while its page was being swiped away was dropped by a
+            // receiver that no longer recognised the sender, leaving the bar held for good. That is
+            // what `bufferingURL` and this stale-hold release existed to repair.
+            //
+            // The session belongs to the item on screen, so its answer is never somebody else's and
+            // never a missed edge: an item with no claim is not buffering, which is the truth.
+            let nowBuffering = video.claim == cur.mediaURL && video.isBuffering
+            if nowBuffering != isBuffering { isBuffering = nowBuffering }
+            // THE CLIP SAYS IT ENDED; ONLY THEN DOES A VIDEO SEGMENT COMPLETE. The reference app
+            // advances a video story from its playback-completed callback alone — ordinary progress
+            // updates carry `canSwitch = false` — and `consumeFinished` is our half of that. It is a
+            // one-shot: a second read of the same end finds nothing, which is their `requestedNext`
+            // latch.
+            if !isDismissing, video.claim == cur.mediaURL, video.consumeFinished() {
+                advanceFromVideoEnd()
             }
             // ⚠️ AND THE HOST IS TOLD WHICH ITEM IS ON SCREEN, HERE, WHERE NOTHING GATES IT.
             //
@@ -1529,28 +1545,32 @@ private extension StoryDetailView {
     /// rest of the segment — his 2026-08-11 report: come back to a video and it plays from 0:14
     /// under a bar that starts at zero and outlives the clip.
     ///
-    /// Held still while the player is not yet on this story's clip (the `startVideo`→`setupPlayer`
-    /// gap, a return to a story whose player is still being rebuilt — see `StoryPlaybackClock`): a
-    /// bar that cannot read its own clip does not guess. Capped just under the segment boundary so
-    /// the segment can only be COMPLETED by the player's own end-of-clip report
-    /// (`.storyVideoFinished`), never by bar arithmetic — the reference app's `canSwitch` rule exactly.
+    /// ⚠️ THE "IS THIS MY CLIP" QUESTION IS GONE. It used to be
+    /// `StoryPlaybackClock.story(for: player) == story.mediaURL`, a weak map from a SHARED player to
+    /// whichever story last claimed it, because across the load gap that player still held the
+    /// previous clip and a bar that read it would draw the old clip's seconds under the new story's
+    /// segment. The session is claimed by the item view itself, so its numbers are this item's or
+    /// they are nothing — and `claim` is the whole of the check.
+    ///
+    /// Held still while there is no claim (the beat between an item mounting and its player being
+    /// built): a bar that cannot read its own clip does not guess. Capped just under the segment
+    /// boundary so a segment can only be COMPLETED by the player's own end-of-clip report — the
+    /// reference app's `canSwitch` rule, where ordinary progress updates carry `false` and only its
+    /// playback-completed callback carries `true`.
     func syncBarToPlayer(index: Int, story: Story) {
-        // An item that can never play again keeps the old wall clock, so a broken clip still hands
-        // the screen on after its declared duration instead of freezing the story for good.
-        if player.currentItem?.status == .failed {
+        guard video.claim == story.mediaURL else { return }
+        // An item that can never play again keeps the wall clock, so a broken clip still hands the
+        // screen on after its declared duration instead of freezing the story for good.
+        if video.failed {
             getProgressBarFrame(duration: story.duration)
             return
         }
-        guard StoryPlaybackClock.story(for: player)?.absoluteString == story.mediaURL else { return }
-        let t = player.currentTime().seconds
-        guard t.isFinite, t >= 0 else { return }
         // The player's real duration once it knows it, the declared one until then — the same
-        // preference the reference app applies (`effectiveDuration`), so the fraction and the clip end
-        // together even when the host's declared length is a little off.
-        var duration = story.duration
-        if let real = player.currentItem?.duration.seconds, real.isFinite, real > 0 { duration = real }
+        // preference the reference app applies (`effectiveDuration`), so the fraction and the clip
+        // end together even when the host's declared length is a little off.
+        let duration = video.duration > 0 ? video.duration : story.duration
         guard duration > 0 else { return }
-        timerProgress = CGFloat(index) + min(0.999, max(0, CGFloat(t / duration)))
+        timerProgress = CGFloat(index) + min(0.999, max(0, CGFloat(video.timestamp / duration)))
     }
 
     /// The video's own end, arriving as a completed segment: exactly what the tick's integer
@@ -1602,7 +1622,7 @@ private extension StoryDetailView {
         if keyboardManager.isKeyboardOpen { keyboardManager.dismiss(); return }   // tap closes keyboard, resumes
         // A TAP IS PROOF THE FINGER LEFT. The third belt on the stuck hold: whatever the gesture
         // system did or did not report, a completed tap means nothing is being held right now.
-        if isPaused || isHolding { isPaused = false; isHolding = false; playVideo() }
+        if isPaused || isHolding { isPaused = false; isHolding = false; syncVideoMode() }
         configureTapScreen()
         guard !isTapDisabled else { return }
         // A POISONED PROGRESS IS RECOVERED HERE, not trapped on. Same reason as `getCurrentIndex`:
@@ -1624,7 +1644,7 @@ private extension StoryDetailView {
     
     func tapPreviousStory() {
         if keyboardManager.isKeyboardOpen { keyboardManager.dismiss(); return }   // tap closes keyboard, resumes
-        if isPaused || isHolding { isPaused = false; isHolding = false; playVideo() }   // see tapNextStory
+        if isPaused || isHolding { isPaused = false; isHolding = false; syncVideoMode() }   // see tapNextStory
         configureTapScreen()
         guard !isTapDisabled else { return }
         if !timerProgress.isFinite { timerProgress = 0 }   // see tapNextStory
@@ -1680,7 +1700,14 @@ private extension StoryDetailView {
     
     func dissmis() {
         isPresented = false
-        NotificationCenter.default.post(name: .replaceCurrentItem, object: nil)
+        // ⚠️ THE `.replaceCurrentItem` BROADCAST IS GONE AND MUST NOT COME BACK. It was posted with
+        // `object: nil`, so it nil'd the player reference inside EVERY mounted page — including
+        // pages that were about to be reused — and the resulting chain of no-ops left a story sitting
+        // under a loading cover for its whole declared length. The old representable had to
+        // re-assert its weak player on every single update purely to survive it.
+        //
+        // Closing the viewer tears its pages down, and a torn-down page releases its own item's
+        // player. Nothing has to be told.
     }
     
     func getCurrentIndex() -> Int {
@@ -1736,72 +1763,39 @@ private extension StoryDetailView {
         viewModel.lastIndex[model.id] = min(max(0, raw), max(0, model.stories.count - 1))
     }
     
-    /// ⚠️ THE CLIP'S PLACE IS WRITTEN DOWN BY THE CALLER, ONE LINE ABOVE THIS ONE, and it has to be:
-    /// this function drops the `AVPlayer` that knows it. See the note at the `.onAppear` that calls
-    /// this — it is the reason the reset-to-zero bug had a side to it.
-    func resetAVPlayer() {
-        // THE OLD PLAYER IS THE ONE TO PAUSE, so the pause happens BEFORE the swap. This was
-        // `Task { player.pause() }` ABOVE the swap — but the task body reads `player` when it RUNS,
-        // which is after the line below has already replaced it, so it paused the brand-new silent
-        // player and the outgoing one was never told to stop. Tapping from a video onto a text or
-        // photo story left the old clip's audio running until deallocation got around to it.
-        player.pause()
-        // Its clock entry goes with it — the bar must never read a dropped player's time. (The map
-        // is weak-keyed so this is belt: the dead player would take its entry anyway.)
-        StoryPlaybackClock.detach(player)
-        player = AVPlayer()
+    /// ⚠️ ONE ANSWER TO "IS THIS ITEM PLAYING", DERIVED FROM EVERY FLAG THAT HAS A VOTE.
+    ///
+    /// This replaces `playVideo()` and `pauseVideo()`, which were two half-answers that could
+    /// disagree. `playVideo` carried its own guard list, `pauseVideo` carried none, and between them
+    /// six callers meant "resume" while four only happened to arrive while a story was up — which is
+    /// the shape of the 2026-08-09 report where a held story started playing again under the finger
+    /// about a second later, because `.onChange(of: state)` called `play()` on whatever was loaded.
+    ///
+    /// A derived mode cannot have that bug: there is no caller that means "play", only callers that
+    /// change a flag and then ask for the answer to be re-taken. If a finger is down, the answer is
+    /// pause, however it is asked and whoever asks.
+    ///
+    /// The reference app's equivalent is a per-item mode computed by its container and pushed down;
+    /// its non-central items are forced to pause the same way the first line here does.
+    var videoMode: StoryProgressMode {
+        // A page that is not the one being looked at never plays, whatever its own flags say. This
+        // is what stops a story you have swiped away from playing on off-screen.
+        guard viewModel.currentStoryUser == model.id else { return .pause }
+        guard !model.stories.isEmpty else { return .pause }
+        // The finger, the host (sheet, dismiss drag, hero flight), the scene, the keyboard.
+        if isPaused || isHolding || hostPause.paused || scenePaused { return .pause }
+        if keyboardManager.isKeyboardOpen { return .pause }
+        // Mid-cube-fold and mid-dismiss are both "not really on screen yet".
+        if isFolding || isDismissing { return .pause }
+        // An emoji reaction animation pauses the story, which is what `configureProgress` did.
+        if isAnimationStarted { return .pause }
+        return .play
     }
-    
-    func pauseVideo() {
-        player.pause()
-    }
-    
-    func playVideo() {
-        // Never resume under a sheet or the reply keyboard, and never index an empty bucket.
-        guard !model.stories.isEmpty, !hostPause.paused, !keyboardManager.isKeyboardOpen else { return }
-        // ⚠️ AND NEVER UNDER A FINGER. THE PAUSE IS THE AUTHORITY; THIS FUNCTION IS NOT.
-        //
-        // His 2026-08-09 report: hold a story, it pauses, and about a second later it starts playing
-        // again with the finger still down. Nothing was unpausing it — `isPaused` and `isHolding`
-        // both stayed true and the progress bar stayed frozen, which is why it reads as the video
-        // alone disobeying. This function simply never asked.
-        //
-        // It is called from six places and only two of them mean "the person wants this playing".
-        // The other four are events that happen to arrive while a story is up — a keyboard closing,
-        // an emoji animation ending, the scene returning, and above all `.onChange(of: state)`,
-        // which fires when the PLAYER reports `.started` or when the async duration load lands a
-        // beat after opening. That last one is the ~1s in his report: it has nothing to do with the
-        // hold, it just calls `play()` on whatever is loaded.
-        //
-        // Every caller that legitimately resumes already clears these two flags on the line before
-        // it calls here (the release branch, the loan collector, the scene's own resume), so this
-        // guard costs those nothing and refuses exactly the callers that were never asked for.
-        guard !isPaused, !isHolding else { return }
-        let index = getCurrentIndex()
-        let currentUser = viewModel.currentStoryUser == model.id
-        let video = model.stories[index].config.mediaType == .video
-        let isReady = state == .ready || state == .started
-        
-        if isReady, currentUser, video {
-            // The `automaticallyWaitsToMinimizeStalling = false` that lived here silently defeated
-            // `setupPlayer`'s deliberate `true` on every single play call — the player was told to
-            // let AVFoundation wait, and then told the opposite before any clip ever started. With
-            // the override gone, a streamed clip holds on its cover until it can play through
-            // instead of starting on a stutter, which is what the setting was chosen for.
-            // ⚠️ NO `Task` HERE, AND THE HOP WAS A HOLE IN THE GUARD ABOVE.
-            //
-            // This function is on a plain extension, so a `Task` created in it does NOT inherit the
-            // main actor: `player.play()` ran on the global executor at an arbitrary later moment.
-            // By then the guard's answer could be stale — press and hold at the instant the player
-            // reports ready (every `state` change calls in here) and the pause would take effect,
-            // the bar would freeze and the chrome would fade, and then the escaped `play()` would
-            // land and the clip would keep moving under the finger. Exactly the report the guard was
-            // added for, reduced from certain to intermittent rather than closed.
-            //
-            // `play()` also has no business being called off the main thread. Calling it inline
-            // means the guard three lines up and the play are one indivisible decision.
-            player.play()
-        }
+
+    /// Re-take the decision and hand it to the item. Cheap and safe to call from anywhere, and every
+    /// former `playVideo()` / `pauseVideo()` call site now calls this instead.
+    func syncVideoMode() {
+        video.setMode(videoMode)
     }
     
     func configureTapScreen() {
@@ -1815,18 +1809,10 @@ private extension StoryDetailView {
         }
     }
     
-    func configureProgress(with state: Bool) {
-        guard !model.stories.isEmpty else { return }   // last item deleted mid-animation → don't index [0]
-        let index = getCurrentIndex()
-        let story = model.stories[index]
-        let mediaType = story.config.mediaType
-        if state, mediaType == .video {
-            pauseVideo()
-        } else if !state, mediaType == .video {
-            guard viewModel.currentStoryUser == model.id else { return }
-            playVideo()
-        }
-    }
+    // DELETED HERE: `configureProgress(with:)`. It was the emoji-animation pause, and it was a third
+    // place that decided whether a video should be running — with its own media-type test, its own
+    // current-page test, and no knowledge of the finger or the sheet. `isAnimationStarted` is one of
+    // `videoMode`'s inputs now, so the same event reaches the same single answer as everything else.
 }
 
 // reports a page's horizontal offset from centre so the timer can pause mid-fold.
