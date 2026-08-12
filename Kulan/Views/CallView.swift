@@ -20,7 +20,14 @@ struct CallView: View {
     private var pipOffset: CGSize { get { call.pipOffset } nonmutating set { call.pipOffset = newValue } }
     private var pipBase: CGSize { get { call.pipBase } nonmutating set { call.pipBase = newValue } }
     @State private var ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-    @State private var flippingCamera = false   // brief blur mask over the front/back capture restart
+    // Front↔back switch, rebuilt on the reference implementation's mechanics (owner's order: no
+    // blur, and never both feeds visible mid-switch). The OLD camera rotates the tile edge-on (or
+    // dips fullscreen to black), HOLDS there through the capture restart — that hold is what hides
+    // the gap — and swings back only when CallService.cameraSwitchFlip says the NEW camera is
+    // delivering. Mirror and content swap while nothing is visible.
+    @State private var flippingCamera = false   // a switch is in flight (double-tap guard + fallback reset)
+    @State private var flipAngle: Double = 0    // tile: rotates OUT to ±90°, returns from the far side
+    @State private var flipDim = false          // fullscreen local video: the crossfade reads as a dip to black
     // The ACCEPT hand-off (user report: "you feel your face left on big screen, [then] a moment when
     // it drops [to the] small one" — a hard cut). While true, the corner tile renders FULL SCREEN over
     // everything, holding the same local feed the big view just gave up; releasing it with a spring
@@ -72,15 +79,26 @@ struct CallView: View {
         }
     }
 
-    // Smooth camera flip: blur the local feed, restart the capturer (mirror already flipped), clear the
-    // blur after the new camera is running — so the ~200ms restart reads as a transition, not a freeze.
+    // The switch's OUT half. The return half lives in .onChange(of: call.cameraSwitchFlip): it runs
+    // when the new camera is genuinely delivering, and the hold in between is what hides the
+    // capture restart. Direction rule matched to the reference: to the back camera turns forward,
+    // back to the front turns the other way.
     private func flipCamera() {
         guard !flippingCamera else { return }
         showControls()
-        withAnimation(.easeOut(duration: 0.12)) { flippingCamera = true }
+        flippingCamera = true
+        if showLocalFull {
+            withAnimation(.easeIn(duration: 0.1)) { flipDim = true }
+        } else {
+            withAnimation(.easeIn(duration: 0.1)) { flipAngle = call.usingFrontCamera ? 90 : -90 }
+        }
         call.switchCamera()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
-            withAnimation(.easeIn(duration: 0.22)) { flippingCamera = false }
+        // Fallback: a camera that never comes back (hardware refusal) must not leave the tile
+        // edge-on forever. The real return path lands first on every normal switch.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            guard flippingCamera else { return }
+            withAnimation(.easeOut(duration: 0.15)) { flipAngle = 0; flipDim = false }
+            flippingCamera = false
         }
     }
 
@@ -179,6 +197,15 @@ struct CallView: View {
             // controls for the moment something changes, then get out of the way again.
             .onChange(of: call.state) { _, _ in showControls() }
             .onChange(of: call.isVideo) { _, _ in showControls() }
+            // The switch's RETURN half: the new camera is live, mirror already changed while the
+            // view was edge-on/black. Come back from the FAR side — the jump across is invisible.
+            .onChange(of: call.cameraSwitchFlip) { _, _ in
+                guard flippingCamera else { return }
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { flipAngle = -flipAngle }
+                withAnimation(.easeOut(duration: 0.1)) { flipAngle = 0; flipDim = false }
+                flippingCamera = false
+            }
             .animation(.easeInOut(duration: 0.25), value: call.state)
             .animation(.easeInOut(duration: 0.2), value: call.cameraOn)
             .animation(.easeInOut(duration: 0.2), value: call.isMuted)
@@ -248,7 +275,7 @@ struct CallView: View {
             Color.black
             if call.isVideo {
                 VideoRendererView(track: full, mirror: showLocalFull && call.usingFrontCamera)
-                    .blur(radius: (showLocalFull && flippingCamera) ? 18 : 0)   // mask the flip restart
+                    .overlay(Color.black.opacity((showLocalFull && flipDim) ? 1 : 0))   // fullscreen switch = dip through black
                     // Pin to the screen size: RTCMTLVideoView reports an intrinsic size (the video's
                     // natural dimensions) that can exceed the screen and oversize the ZStack, which
                     // GeometryReader then top-leading-aligns — pushing the centered avatar/controls
@@ -367,9 +394,11 @@ struct CallView: View {
                         // every property below interpolates: size, corner radius, offset, padding.
                         .frame(width: tileEntering ? geo.size.width : tileW,
                                height: tileEntering ? geo.size.height : tileH)
-                        // Blur the local feed briefly during a camera flip so the ~200ms capture restart
-                        // (a frozen last frame) is masked into a smooth transition instead of a hard cut.
-                        .blur(radius: (pipIsLocal && flippingCamera) ? 14 : 0)
+                        // The camera switch is a real edge-on turn of the tile (no blur): the old
+                        // frame rotates away, holds hidden through the capture restart, and the new
+                        // camera swings in from the far side. See flipCamera + cameraSwitchFlip.
+                        .rotation3DEffect(.degrees(pipIsLocal ? flipAngle : 0),
+                                          axis: (x: 0, y: 1, z: 0), perspective: 0.3)
                         .clipShape(RoundedRectangle(cornerRadius: tileEntering ? 0 : 18, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: tileEntering ? 0 : 18, style: .continuous)
                             .stroke(.white.opacity(tileEntering ? 0 : 0.25), lineWidth: 1))

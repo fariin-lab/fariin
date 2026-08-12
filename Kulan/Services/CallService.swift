@@ -86,7 +86,7 @@ final class CallService: NSObject {
                 pendingRemoteCandidates = []; localCandidateBuffer = []; callDocCreated = false
                 stopRingback(); stopTone(); cancelTimers()
                 cameraOn = false; remoteCameraOn = false; remoteMuted = false; isHeld = false
-                usingFrontCamera = true; startedAsVideo = false; everVideo = false
+                usingFrontCamera = true; startedAsVideo = false; everVideo = false; pendingSwitchTarget = nil
                 isLocalExpanded = false; pipOffset = .zero; pipBase = .zero
                 videoCapturer?.stopCapture(); videoCapturer = nil
                 localVideoTrack = nil; remoteVideoTrack = nil
@@ -415,7 +415,7 @@ final class CallService: NSObject {
 
     // MARK: - Video tracks / capture
 
-    // TELEGRAM'S WARM-UP (read from their source 2026-08-12): the capturer and track need no peer
+    // THE REFERENCE APP'S WARM-UP (read from their source 2026-08-12): the capturer and track need no peer
     // connection, so a video-call ACCEPT can spin the camera up while TURN and the SDP answer are
     // still in flight, and the face shows the instant the call connects instead of a beat later.
     // Idempotent — the later attach reuses whatever is already warm. Torn down by the idle reset.
@@ -501,6 +501,13 @@ final class CallService: NSObject {
         capturer.startCapture(with: device, format: format, fps: fps) { [weak self] _ in
             guard let self else { return }
             DispatchQueue.main.async {
+                // A front↔back switch resolves HERE: the new camera is delivering (or has failed —
+                // either way the flipped-away view must come back). The mirror already changed
+                // while the view was edge-on/black (the write below this closure).
+                if self.pendingSwitchTarget != nil {
+                    self.pendingSwitchTarget = nil
+                    self.cameraSwitchFlip += 1
+                }
                 // Only claim video once the session is REALLY running. `cams` was published purely from
                 // intent, so a start that never succeeded (most visibly a video call answered from the
                 // lock screen, where the camera cannot start and no interruption is posted either) left
@@ -539,10 +546,21 @@ final class CallService: NSObject {
 
     func toggleCamera() { setMyCamera(on: !cameraOn) }
 
+    /// Bumped ON MAIN the moment a front↔back switch's NEW camera is genuinely delivering — the
+    /// UI's cue to swing the flipped tile back in (see CallView.flipCamera). The mirror
+    /// (`usingFrontCamera`) changes in the same breath, while the view is edge-on or black, so the
+    /// frozen old frame is never seen re-mirrored. This is the reference behaviour: the switch
+    /// animation is driven by the ARRIVAL of the new camera, not by the tap.
+    var cameraSwitchFlip = 0
+    private var pendingSwitchTarget: Bool?
+
     func switchCamera() {
         guard cameraOn, let capturer = videoCapturer else { return }
         let next = !usingFrontCamera
-        usingFrontCamera = next   // flip the mirror IMMEDIATELY; the UI masks the ~200ms restart with a blur
+        // Deliberately NOT flipping the mirror here (it used to): the frozen last frame keeps its
+        // own mirroring through the restart gap; mirror and content swap together at the flip's
+        // hidden midpoint, when startCapture's completion reports the new camera live.
+        pendingSwitchTarget = next
         // Stop the running capture BEFORE starting the other camera — restarting a live
         // capturer in place can freeze/black the local feed on flip.
         capturer.stopCapture { [weak self] in
