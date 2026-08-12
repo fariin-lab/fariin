@@ -295,6 +295,10 @@ struct StoryPager: UIViewControllerRepresentable {
         /// Whether any page currently carries a cube transform. Lets the resting frames cost one
         /// comparison instead of a write to every page's layer — see `applyCube`.
         private var cubeApplied = false
+        /// Last committed fold position per page, and how many frames in a row were refused — the
+        /// landing-blink guard's state. See the LANDING BLINK note in `applyCube`.
+        private var lastCubeT: [ObjectIdentifier: CGFloat] = [:]
+        private var cubeSkipStreak = 0
         // Baseline translation captured the instant the swipe-UP pan engages. The recognizer only
         // begins after the finger has already travelled ~its 8pt threshold plus whatever it moved
         // while the competing pans were failing — so translation(in:) is already ~30-40pt at the
@@ -771,6 +775,8 @@ struct StoryPager: UIViewControllerRepresentable {
         /// cube mode — or coming to rest — must put them back or a page stays folded on screen.
         private func resetCubeTransforms() {
             cubeApplied = false
+            lastCubeT.removeAll()
+            cubeSkipStreak = 0
             guard let scroll = internalScroll else { return }
             let w = scroll.bounds.width
             for sub in scroll.subviews where abs(sub.bounds.width - w) < 1.0 {
@@ -815,6 +821,24 @@ struct StoryPager: UIViewControllerRepresentable {
             //
             // `presentation()` is nil when nothing is animating, hence the fallbacks.
             let offsetX = (scroll.layer.presentation() ?? scroll.layer).bounds.origin.x
+            // THE LANDING BLINK (his slowed-video screenshots, build 542): for ONE frame at the end
+            // of a turn the geometry reads a full page-width wrong — the landed story edge-on (a
+            // near-black frame) or the story just LEFT drawn flat again (the "photo 1" blink) —
+            // then everything is correct. The offset above is a PRESENTATION value and the page
+            // positions are MODEL values; they describe the same instant all through the turn,
+            // except at the teardown boundary, where UIKit removes its animation and re-centres the
+            // queuing scroll view's pages in one transaction. If this link fires between the
+            // re-centre and the presentation catching up, the pair disagrees by exactly one page
+            // width, and the fold faithfully draws that lie.
+            //
+            // The guard: a page cannot MOVE half a screen in one frame. The fastest legal motion —
+            // the sped-up tap turn on a display link degraded to 30Hz — is ~0.34 page/frame, and
+            // the glitch is ~1.0. So compute every page's fold first, and refuse the whole frame if
+            // any already-tracked page jumped further than half a width; the previous frame's
+            // transforms hold for one tick, which no eye can see. Capped at two refusals in a row
+            // so a genuine re-base (pages re-centred mid-multi-swipe) can never freeze the cube.
+            var folds: [(sub: UIView, relX: CGFloat, t: CGFloat)] = []
+            var jumped = false
             for sub in scroll.subviews {
                 guard abs(sub.bounds.width - w) < 1.0 else { continue }   // page-sized views only
                 // Read the UNTRANSFORMED position (layer.position is the layout anchor, unaffected by our
@@ -824,6 +848,16 @@ struct StoryPager: UIViewControllerRepresentable {
                 let pageMinX = (sub.layer.presentation() ?? sub.layer).position.x - sub.bounds.width / 2
                 let relX = pageMinX - offsetX                             // page's screen-x (0 = centred, ±w = neighbour)
                 let t = relX / w
+                if let last = lastCubeT[ObjectIdentifier(sub)], abs(t - last) > 0.5 { jumped = true }
+                folds.append((sub, relX, t))
+            }
+            if jumped, cubeSkipStreak < 2 {
+                cubeSkipStreak += 1
+                return
+            }
+            cubeSkipStreak = 0
+            for (sub, relX, t) in folds {
+                lastCubeT[ObjectIdentifier(sub)] = t
                 sub.layer.isDoubleSided = false                            // hide the back face
                 if abs(t) < 0.001 {
                     sub.layer.transform = CATransform3DIdentity            // resting page is pixel-perfect
