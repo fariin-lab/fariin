@@ -316,16 +316,30 @@ struct StoryEditorView: View {
     /// Duration still resolves before the append, because `DraftItem` carries it and the export and
     /// the trim both read it. Only the bitmap is deferred, and it is only ever the strip's thumbnail.
     private func appendPicked(video url: URL, assetID: String? = nil) async {
-        let asset = AVURLAsset(url: url)
-        let dur = (try? await asset.load(.duration).seconds) ?? 0
+        let dur = await Self.duration(of: url)
         await MainActor.run {
             stashCurrent()
             items.append(DraftItem(image: Self.blackPoster, videoURL: url, duration: dur, assetID: assetID))
             index = max(0, items.count - 1)
             restoreCurrent()   // same fix as the image path above — see its note
         }
+        await decodePoster(url, duration: dur)
+    }
 
-        let gen = AVAssetImageGenerator(asset: asset)
+    /// How long a clip is. Split out because the batch path loads every clip's duration at once and
+    /// then appends them together — see `applyPickerChange`.
+    private static func duration(of url: URL) async -> Double {
+        (try? await AVURLAsset(url: url).load(.duration).seconds) ?? 0
+    }
+
+    /// The strip's thumbnail for a clip, decoded and patched in.
+    ///
+    /// ⚠️ SEPARATE FROM THE APPEND ON PURPOSE, AND THE BATCH PATH DEPENDS ON IT BEING SEPARATE. This
+    /// is a 1200px `AVAssetImageGenerator` decode and it is the slow part of adding a clip by a wide
+    /// margin. While it sat inside `appendPicked(video:)`, a caller adding several items in a loop
+    /// awaited each decode before the NEXT item could join — see the note there.
+    private func decodePoster(_ url: URL, duration dur: Double) async {
+        let gen = AVAssetImageGenerator(asset: AVURLAsset(url: url))
         gen.appliesPreferredTrackTransform = true
         gen.maximumSize = CGSize(width: 1200, height: 1200)
         let t = CMTime(seconds: min(0.1, max(0.01, dur / 2)), preferredTimescale: 600)
@@ -409,17 +423,84 @@ struct StoryEditorView: View {
     /// applies here: if the ticks were all cleared and nothing is arriving, the post keeps what it
     /// has. The picker cannot reach that state through Add — the bar hides with no ticks — so this
     /// is the belt, not the mechanism.
+    /// ⚠️ THE WHOLE BATCH LANDS AT ONCE. IT USED TO ARRIVE ONE ITEM AT A TIME OVER SEVERAL SECONDS,
+    /// AND THAT IS HIS "TWO STORY VIDEO EDITORS STACKED ON TOP OF EACH OTHER".
+    ///
+    /// Nothing was ever presented twice. This was a loop that `await`ed `appendPicked(video:)` per
+    /// pick, and that function did not return until it had decoded a 1200px poster — so the next
+    /// pick could not join until the previous clip's decode finished. Every arrival also ran
+    /// `stashCurrent` → `index = last` → `restoreCurrent`, which moves the editor onto the item that
+    /// has just landed. So the screen changed under him two or three times, seconds apart, each time
+    /// showing a different set of media. That reads exactly like a second editor opening over the
+    /// first, and his own description of the two states is the proof of the mechanism: the videos
+    /// arrived first (they were ticked first and each one blocked the queue) and the images, ticked
+    /// after them, could not appear until every clip ahead of them had been decoded.
+    ///
+    /// The image-only flow never showed it, which is why it "works": `store.fullImage` has already
+    /// decoded those in the picker, so every image pick lands in the same run-loop turn and the
+    /// batch looks instantaneous. This gives the video path the same property rather than a
+    /// different one.
+    ///
+    /// Three steps, and the order of them is the fix:
+    ///
+    /// 1. **Durations first, all at once.** `DraftItem` carries the duration and both the export and
+    ///    the trim read it, so it must be right at append time — it cannot be patched in later the
+    ///    way a thumbnail can. These are concurrent because they are independent, and a duration load
+    ///    off a local file is quick; the batch waits for the slowest one, not for the sum.
+    /// 2. **One append, one transaction.** `stashCurrent` once, every item in tap order, `index` to
+    ///    the last of them, `restoreCurrent` once. The editor moves exactly once, to the last thing
+    ///    he ticked, and everything he ticked is already there when it does.
+    /// 3. **Posters afterwards, concurrently.** The slow decode no longer gates anything, and each
+    ///    one patches its own clip BY FILE, so they may finish in any order.
     private func applyPickerChange(removed: [String], added: [StoryPick]) async {
         await MainActor.run { dropItems(withAssetIDs: removed, expectingMore: !added.isEmpty) }
-        // SEQUENTIALLY, so the strip ends up in the order he ticked them — a video has to resolve
-        // its poster before the next item may join, and firing these off in parallel would land
-        // them in whatever order the decodes happened to finish.
-        for pick in added {
-            switch pick.kind {
-            case .image(let ui): await MainActor.run { appendPicked(image: ui, assetID: pick.assetID) }
-            case .video(let url): await appendPicked(video: url, assetID: pick.assetID)
+        guard !added.isEmpty else { return }
+
+        // STEP 1 — every clip's length, concurrently, keyed by its own file.
+        var durations: [URL: Double] = [:]
+        let urls = added.compactMap { pick -> URL? in
+            if case .video(let u) = pick.kind { return u }
+            return nil
+        }
+        if !urls.isEmpty {
+            await withTaskGroup(of: (URL, Double).self) { group in
+                for u in urls {
+                    group.addTask {
+                        let d = await Self.duration(of: u)
+                        return (u, d)
+                    }
+                }
+                for await (u, d) in group { durations[u] = d }
             }
         }
+
+        // STEP 2 — the whole batch, in tap order, in one transaction.
+        await MainActor.run {
+            stashCurrent()
+            for pick in added {
+                switch pick.kind {
+                case .image(let ui):
+                    items.append(DraftItem(image: ui, assetID: pick.assetID))
+                case .video(let url):
+                    items.append(DraftItem(image: Self.blackPoster, videoURL: url,
+                                           duration: durations[url] ?? 0, assetID: pick.assetID))
+                }
+            }
+            index = max(0, items.count - 1)
+            // A fresh item has clean tools, and this ends in `recomputeEdited()`. Same reason as the
+            // single-pick paths above: stash, move, RESTORE — never stash, move, recompute.
+            restoreCurrent()
+        }
+
+        // STEP 3 — thumbnails fill in behind the finished batch.
+        //
+        // Plainly sequential, and that is not a compromise: every item is already on screen by the
+        // time this starts, so what is left is a black strip thumbnail becoming a picture. Nothing
+        // waits on it and nothing moves when it lands. (A task group here would have to capture
+        // `self` — a SwiftUI `View` struct — which is the kind of thing that costs a 40-minute CI
+        // round trip to discover. `Self.duration` in step 1 is static, so that group captures
+        // nothing.)
+        for u in urls { await decodePoster(u, duration: durations[u] ?? 0) }
     }
 
     @MainActor private func dropItems(withAssetIDs removed: [String], expectingMore: Bool) {
