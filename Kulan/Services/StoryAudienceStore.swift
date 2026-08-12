@@ -14,6 +14,14 @@ import FirebaseFirestore
 /// it outright cannot reach a story that has already gone out. The reference app works the same way
 /// and for the same reason.
 struct StoryAudience: Identifiable, Codable, Equatable {
+    /// The longest a custom story name may be — his 2026-08-12 limit.
+    ///
+    /// It lives on the model rather than on either screen because there are two ways in: the create
+    /// sheet, which clamps as you type, and the rename alert, which cannot (an alert's builder has
+    /// no `onChange`) and so trims on save. One number, two enforcement points, no way for them to
+    /// drift apart.
+    static let nameLimit = 25
+
     enum Kind: String, Codable {
         /// Everyone on Fariin. Not a feed: people you have interacted with get it in their tray like
         /// any other story, and anybody else can watch it only by reaching your profile. Fixed, not

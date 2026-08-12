@@ -1308,6 +1308,16 @@ struct StoryCameraView: View {
                                 Image(systemName: cam.flashOn ? "bolt.fill" : "bolt.slash.fill")
                                     .font(.system(size: 17, weight: .semibold))
                                     .foregroundStyle(cam.flashOn ? .yellow : .white)
+                                    // ⚠️ THE ONE GLYPH ON THIS SCREEN THAT NEVER TURNED, and the
+                                    // reason is that it is the one that does not go through
+                                    // `chromeIcon`. That helper rotates its glyph and the X beside
+                                    // this button gets it for free; the bolt is built by hand here
+                                    // because it needs a capsule rather than a circle, and the
+                                    // rotation was simply not copied across. So on a phone held
+                                    // sideways the flash was the single control lying on its side.
+                                    // The label turns, not the 46×44 hit area: what you press is
+                                    // exactly what you pressed before.
+                                    .rotationEffect(deviceTilt)
                                     .frame(width: 46, height: 44)
                                     .contentShape(Rectangle())   // the whole 46×44, not just the bolt
                             }
@@ -1351,7 +1361,14 @@ struct StoryCameraView: View {
         .padding(5)
         .background(.ultraThinMaterial, in: Capsule())
         .environment(\.colorScheme, .dark)
-        .rotationEffect(deviceTilt)   // the numbers read upright whichever way the phone is held
+        // ⚠️ THE PILL DOES NOT ROTATE. ONLY THE NUMBERS INSIDE IT DO — his 2026-08-12 landscape
+        // report, and his screenshot is the whole of it: `.rotationEffect(deviceTilt)` used to sit
+        // HERE, on the capsule, so a quarter turn of the phone stood the whole control on its end.
+        // A horizontal pill became a vertical stack rooted at the same centre, and its bottom
+        // number came down on top of the shutter.
+        //
+        // Apple's own camera keeps the pill horizontal and turns only the glyphs, which is what the
+        // comment on that line always claimed it was doing. The rotation moved into `zoomButton`.
         .animation(.easeInOut(duration: 0.2), value: zoom)
     }
 
@@ -1739,6 +1756,10 @@ struct StoryCameraView: View {
             Text(on ? "\(label)×" : label)
                 .font(.system(size: on ? 14 : 13, weight: .semibold))
                 .foregroundStyle(on ? .yellow : .white)
+                // The GLYPH turns, inside a frame that does not — so the number reads upright with
+                // the phone on its side while the pill keeps its shape and its place. See the note
+                // on `zoomPill`.
+                .rotationEffect(deviceTilt)
                 .frame(minWidth: on ? 44 : 34, minHeight: 34)
                 .background(.black.opacity(on ? 0.35 : 0.22), in: Capsule())
                 .contentShape(Capsule())

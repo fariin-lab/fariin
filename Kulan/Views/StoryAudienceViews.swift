@@ -256,8 +256,21 @@ struct NameStoryView: View {
                 TextField("Story Name (Required)", text: $name)
                     .focused($nameFocused)
                     .submitLabel(.done)
+                    // ⚠️ CLAMPED AS IT IS TYPED, NOT REFUSED ON SAVE. His 2026-08-12 limit. A
+                    // validator that only complains at the end lets somebody write a sentence and
+                    // then takes it away; this simply stops accepting characters, which is what
+                    // every native field with a ceiling does.
+                    .onChange(of: name) { _, new in
+                        if new.count > StoryAudience.nameLimit {
+                            name = String(new.prefix(StoryAudience.nameLimit))
+                        }
+                    }
             } footer: {
-                Text("Only you can see the name of this story.")
+                // The count appears only once it is nearly spent — the same rule the username
+                // screen uses, and for the same reason: a counter on an empty field is noise.
+                Text(name.count >= StoryAudience.nameLimit - 5
+                     ? "Only you can see the name of this story. \(StoryAudience.nameLimit - name.count) left."
+                     : "Only you can see the name of this story.")
             }
 
             Section {
@@ -503,9 +516,12 @@ struct CustomStoryDetailView: View {
             TextField("Story Name", text: $draftName)
             Button("Cancel", role: .cancel) {}
             Button("Save") {
-                let t = draftName.trimmingCharacters(in: .whitespaces)
+                // The same ceiling as the create screen. An alert's TextField cannot be clamped as
+                // it is typed (there is no `onChange` inside an alert builder), so it is trimmed
+                // here — the one place a rename can be committed.
+                let t = draftName.trimmingCharacters(in: .whitespaces).prefix(StoryAudience.nameLimit)
                 guard !t.isEmpty else { return }
-                var n = a; n.name = t; store.update(n)
+                var n = a; n.name = String(t); store.update(n)
             }
         } message: {
             Text("Only you can see the name of this story.")
