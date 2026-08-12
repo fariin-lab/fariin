@@ -234,9 +234,27 @@ public enum StoryPrefetcher {
     /// `allowsCellular`: only the viewer's own next-clip window sets this. `window`: whether this
     /// download belongs to that window, and may therefore be cancelled when the window moves past it.
     private static func warmVideo(_ urlString: String?, allowsCellular: Bool = false,
-                                  window: Bool = false) {
+                                  window: Bool = false, prefixBytes: Int64? = nil) {
         guard let urlString, !urlString.isEmpty, let url = URL(string: urlString) else { return }
         guard claim(urlString) else { return }
+        // ⚠️ A PREFIX, NOT THE WHOLE CLIP — and this is the largest single saving available in the
+        // app. A story video is capped at 23MB and this warms up to three of them ahead, for stories
+        // nobody has asked to watch; the reference app fetches a few hundred KB per neighbour and
+        // streams the rest when you arrive. Half a file was no use to us until there was a reader
+        // that could play from one, which is what `StoryVideoStream` is.
+        //
+        // Off by default with the reader, so the full-file path below is what runs until it is on.
+        if StoryVideoStream.enabled {
+            StoryVideoStream.warmPrefix(url,
+                                        bytes: prefixBytes ?? StoryVideoStream.defaultPrefix,
+                                        allowsCellular: allowsCellular) { task in
+                lock.lock(); running[urlString] = (task, window); lock.unlock()
+            }
+            // The claim is released straight away: a prefix is small, it is fire-and-forget, and
+            // holding the claim would stop the LIVE player joining the same url a moment later.
+            release(urlString)
+            return
+        }
         videoCache.loadVideo(from: url, speculative: true, allowsCellular: allowsCellular,
                              onTask: { task in
             lock.lock(); running[urlString] = (task, window); lock.unlock()

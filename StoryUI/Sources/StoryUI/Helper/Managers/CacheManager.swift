@@ -89,6 +89,21 @@ final class CacheManager: NSObject {
     /// whole lookahead, 15 to 25MB, with the app back in a chat list.
     static func cancelAllDownloads() { VideoDownloads.cancelAll() }
 
+    /// ⚠️ A `.part` FILE IS NOT A CACHED CLIP AND MUST NEVER BE HANDED TO A PLAYER.
+    ///
+    /// `StoryVideoStream` fills `<name>.part` beside the finished `<name>`, and promotes it by
+    /// MOVING it once every byte is there — so a completed stream is indistinguishable from a
+    /// completed download and `cachedFileIfUsable` finds it with no special case. The partial itself
+    /// is only ever read through the reader, which knows which ranges are real; an mp4 with holes
+    /// handed to `AVPlayerItem` decodes garbage or refuses outright.
+    ///
+    /// `cacheFileName` has no `.part` in it, so the two can never be confused by name. This exists
+    /// to say so, because "the cache directory holds files that are not cache entries" is the kind
+    /// of thing the next reader of `purgeExpired` needs to know.
+    static func partialFileURL(for url: URL) -> URL {
+        StoryStorage.directory("VideoCache").appendingPathComponent(cacheFileName(for: url) + ".part")
+    }
+
     static func cachedFileIfUsable(for url: URL) -> URL? {
         let file = StoryStorage.directory("VideoCache").appendingPathComponent(cacheFileName(for: url))
         guard FileManager.default.fileExists(atPath: file.path), isUsableCacheFile(file) else { return nil }

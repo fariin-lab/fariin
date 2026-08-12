@@ -92,6 +92,10 @@ final class StoryItemVideoView: UIView {
     /// Nil until this item is asked to play. See `initializeVideoIfReady`.
     private var player: AVPlayer?
     private var playerLayer: AVPlayerLayer?
+    /// The asset this item is streaming through, when it is. AVFoundation holds a resource loader's
+    /// delegate WEAKLY, so the reader is kept alive against the asset and has to be let go with it —
+    /// see `StoryVideoStream.release`. Nil on the ordinary local-file path.
+    private var streamedAsset: AVURLAsset?
 
     private var mode: StoryProgressMode = .pause
     private weak var session: StoryVideoSession?
@@ -304,7 +308,15 @@ final class StoryItemVideoView: UIView {
         // muted every story video on a silenced phone.
         try? AVAudioSession.sharedInstance().setCategory(.playback)
 
-        let item = StoryItemPreloader.take(file) ?? AVPlayerItem(url: file)
+        // ⚠️ THE STREAM IS TRIED FIRST AND ONLY WHEN THE WHOLE FILE IS NOT ALREADY HERE. A clip that
+        // is fully cached has nothing to gain from a reader and everything to lose — a local file is
+        // one open and no state machine at all. `StoryVideoStream.asset` answers nil when streaming
+        // is off (it is, by default — see its header), so this line is a no-op until it is turned on.
+        let streamed: AVURLAsset? = localFile == storyURL ? StoryVideoStream.asset(for: file) : nil
+        let item = streamed.map { AVPlayerItem(asset: $0) }
+            ?? StoryItemPreloader.take(file)
+            ?? AVPlayerItem(url: file)
+        streamedAsset = streamed
         let p = AVPlayer(playerItem: item)
         // LET AVFOUNDATION WAIT. Forcing this false tells the player to start the instant it is
         // asked whether or not a frame is buffered, so on anything less than a good connection a
@@ -699,6 +711,23 @@ final class StoryItemVideoView: UIView {
             updateSpinner()
             return
         }
+        // ⚠️ WITH STREAMING ON, THERE IS NOTHING TO WAIT FOR. The clip is not on disk, and the whole
+        // point of the reader is that it does not need to be: the player asks for the ranges it
+        // wants and they arrive behind it, starting from whatever prefix the lookahead already put
+        // in the partial file. So content is "here" the moment the item mounts, which is the
+        // difference between a story that starts now and one that starts after a full download.
+        //
+        // Off by default, so the branch below is what runs until it is turned on — see
+        // `StoryVideoStream.enabled`.
+        if StoryVideoStream.enabled {
+            localFile = storyURL
+            contentLoaded = true
+            session?.update(storyKey, contentLoaded: true)
+            openingFrameFallback()
+            initializeVideoIfReady()
+            updateSpinner()
+            return
+        }
         updateSpinner()
         // `loadVideo` already answers on the main thread — a hit on the main thread answers in the
         // same turn, and everything else is hopped for it.
@@ -770,6 +799,9 @@ final class StoryItemVideoView: UIView {
         playerLayer?.removeFromSuperlayer()
         playerLayer = nil
         player = nil
+        // The reader is retained against its asset, so it only goes when the asset does.
+        StoryVideoStream.release(streamedAsset)
+        streamedAsset = nil
         didShowFirstFrame = false
     }
 

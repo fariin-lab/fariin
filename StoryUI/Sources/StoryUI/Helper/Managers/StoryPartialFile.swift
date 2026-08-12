@@ -167,7 +167,7 @@ final class StoryPartialFile {
     }
 
     private func closeHandle() {
-        try? handle?.close()
+        if let handle { try? handle.close() }
         handle = nil
     }
 
