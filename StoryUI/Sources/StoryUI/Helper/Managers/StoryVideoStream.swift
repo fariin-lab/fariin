@@ -93,10 +93,30 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
     }
 
     /// Let go of the reader when its asset does. Called from the item view's teardown.
+    ///
+    /// ⚠️ DROPPING THE REFERENCE IS NOT ENOUGH, AND THIS IS A LEAK THAT KEEPS SPENDING DATA.
+    /// `URLSession(configuration:delegate:delegateQueue:)` RETAINS its delegate until the session is
+    /// invalidated. This class is its own delegate, so a stream that is merely forgotten keeps
+    /// itself alive through its session, and its transfers keep running — for a story nobody is
+    /// watching any more, which is precisely the waste this file exists to end. One per clip
+    /// watched, for the life of the process.
     @MainActor
     static func release(_ asset: AVAsset?) {
-        guard let asset else { return }
-        retain.removeValue(forKey: ObjectIdentifier(asset))
+        guard let asset, let stream = retain.removeValue(forKey: ObjectIdentifier(asset)) else { return }
+        stream.teardown()
+    }
+
+    private func teardown() {
+        queue.async { [self] in
+            pending.values.forEach { $0.task.cancel() }
+            pending.removeAll()
+            let stranded = live
+            live.removeAll()
+            stranded.forEach { $0.finishLoading(with: URLError(.cancelled)) }
+            // Breaks the delegate retain, cancels anything still in flight, and is the only thing
+            // that lets this object deallocate.
+            session.invalidateAndCancel()
+        }
     }
 
     /// FETCH ONLY THE FIRST `bytes` OF A CLIP, for the lookahead. Nothing plays from this directly;
