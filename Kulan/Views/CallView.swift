@@ -446,6 +446,10 @@ struct CallView: View {
                     // camera went off, taking the only way back with it. The tile never hides now, so
                     // any swap can always be undone by tapping it again.
                     guard feeds.showsTile else { toggleControls(); return }
+                    // TWO STAGES, NEVER ONE (owner's 2026-08-12 spec): a tap on the SMALL tile
+                    // (chrome hidden) only grows it — same result as tapping the screen. Only a tap
+                    // on the already-grown tile swaps fullscreen. Small → bigger → fullscreen.
+                    guard controlsVisible else { showControls(); return }
                     showControls()
                     // The swap's curve, matched to the reference: a quick ease, not a bouncy spring.
                     withAnimation(.easeInOut(duration: 0.25)) { isLocalExpanded.toggle() }
