@@ -56,6 +56,39 @@ struct StoryEditorView: View {
     /// against the story's five and show as a tick when the + reopens the picker — see
     /// `DraftItem.assetID`. Nil for a camera capture, which is counted but cannot be ticked.
     var sourceAssetID: String? = nil
+    /// ⚠️ THE POST STARTS ON A VIDEO, AND THIS IS WHAT ENDS THE TWO-EDITOR BUG.
+    ///
+    /// A video used to open a screen of its own whose model is a list of CLIPS, so the moment a
+    /// picture joined the post it could not hold it and handed the whole thing to this composer —
+    /// presented on top of itself, and never dismissed, because nothing told it to be. Two real
+    /// screens, which is what he photographed three times. Timing fixes could only ever change how
+    /// long the first one was visible for.
+    ///
+    /// So there is no hand-off any more: a video-first post opens HERE, where a clip and a picture
+    /// are both just a `DraftItem`, and the second screen never exists to be seen.
+    ///
+    /// ⚠️ IT IS SEEDED SYNCHRONOUSLY AND FILLED IN AFTERWARDS. `appendPicked(video:)` awaits the
+    /// duration before it appends, which is right for a clip joining a post already on screen and
+    /// wrong for the FIRST item: every part of this view reads `items[index]`, so an empty `items`
+    /// for the length of that load is a composer drawn on nothing. See `resolveSourceVideo`.
+    var sourceVideo: SourceVideo? = nil
+
+    /// The clip a video-first post opens on. A struct rather than a tuple so it can be `Equatable`
+    /// and carried in a `@State`-driven presentation without the compiler having to infer it.
+    struct SourceVideo: Equatable {
+        let url: URL
+        let assetID: String?
+        init(url: URL, assetID: String? = nil) { self.url = url; self.assetID = assetID }
+    }
+
+    /// Open the composer on a video. The `source` picture is the placeholder every clip wears until
+    /// its own frame decodes — it is never shown as an item, because `onAppear` seeds the clip
+    /// instead of building a photo from it.
+    static func forVideo(url: URL, assetID: String? = nil,
+                         onPosted: @escaping () -> Void = {}) -> StoryEditorView {
+        StoryEditorView(source: blackPoster, onPosted: onPosted,
+                        sourceVideo: SourceVideo(url: url, assetID: assetID))
+    }
     @Environment(\.dismiss) private var dismiss
 
     @State private var caption = ""
@@ -272,8 +305,7 @@ struct StoryEditorView: View {
         restoreCurrent()   // a fresh item has clean tools; this ends in recomputeEdited()
     }
 
-    /// ⚠️ THE ITEM ARRIVES FIRST AND ITS THUMBNAIL CATCHES UP — see the same note on
-    /// `StoryVideoEditorView.appendClip`, which is the other half of his 2026-08-12 report.
+    /// ⚠️ THE ITEM ARRIVES FIRST AND ITS THUMBNAIL CATCHES UP — half of his 2026-08-12 report.
     ///
     /// A picked IMAGE is already decoded, so it lands the instant it is chosen. A picked VIDEO used
     /// to wait here for a 1200px `AVAssetImageGenerator` decode before it joined `items` at all, and
@@ -310,6 +342,50 @@ struct StoryEditorView: View {
             // The canvas draws from the edited copy of the CURRENT item, so a poster landing on the
             // one being looked at has to re-run that or the black placeholder stays on screen until
             // the next edit touches it.
+            if i == index { recomputeEdited() }
+        }
+    }
+
+    /// FILL IN THE CLIP THE COMPOSER OPENED ON — see `sourceVideo`.
+    ///
+    /// Deliberately not `appendPicked(video:)`: that one appends, and this item is already there. It
+    /// has to be, because the whole screen reads `items[index]` and a composer with an empty `items`
+    /// for the length of an `AVAsset` load is the blank first frame this fix exists to avoid. So the
+    /// item is seeded with a black poster and a zero duration, and both are patched here.
+    ///
+    /// BY FILE, NOT BY INDEX, like every other patch on this screen: the strip can be reordered or
+    /// thinned while these two loads are in flight, and a position would paint one clip's frame onto
+    /// another.
+    private func resolveSourceVideo(_ url: URL) async {
+        let asset = AVURLAsset(url: url)
+        let dur = (try? await asset.load(.duration).seconds) ?? 0
+        await MainActor.run {
+            guard let i = items.firstIndex(where: { $0.videoURL == url }) else { return }
+            items[i].duration = dur
+            // ⚠️ NOT `trimEnd = dur`. Zero means "untrimmed" on a DraftItem (see its note), and
+            // writing the full length in would make every clip look trimmed to `isTrimmed`, which
+            // decides whether the export re-encodes and whether closing asks about discarding work.
+            //
+            // The clip plays the moment the screen is up, which is what the old video-only editor
+            // did on open. Only here, and only for the item the post opened on: pressing play is
+            // how you start any OTHER clip, and building a decoder for one nobody has asked to
+            // watch is what `ensurePreviewPlayer`'s note is about.
+            guard i == index, previewPlayer == nil else { return }
+            ensurePreviewPlayer()?.play()
+            previewPlaying = true
+        }
+
+        let gen = AVAssetImageGenerator(asset: asset)
+        gen.appliesPreferredTrackTransform = true
+        gen.maximumSize = CGSize(width: 1200, height: 1200)
+        let t = CMTime(seconds: min(0.1, max(0.01, dur / 2)), preferredTimescale: 600)
+        // A poster that will not decode keeps the black placeholder, same as the append path: the
+        // clip itself is fine and the export never reads this bitmap.
+        guard let cg = try? await gen.image(at: t).image else { return }
+        let poster = UIImage(cgImage: cg)
+        await MainActor.run {
+            guard let i = items.firstIndex(where: { $0.videoURL == url }) else { return }
+            items[i].image = poster
             if i == index { recomputeEdited() }
         }
     }
@@ -571,7 +647,15 @@ struct StoryEditorView: View {
                 canvasSize = card
                 cardBottomGap = max(Self.toolZoneHeight, geo.size.height - cardTop - card.height)
                 if items.isEmpty {
-                    if seedItems.isEmpty {
+                    if let v = sourceVideo, seedItems.isEmpty {
+                        // A VIDEO-FIRST POST. The clip is the first item, wearing the black
+                        // placeholder until its own frame decodes — exactly what a clip picked with
+                        // the + wears. Its length and its poster arrive in `resolveSourceVideo`.
+                        items = [DraftItem(image: Self.blackPoster, videoURL: v.url,
+                                           duration: 0, assetID: v.assetID)]
+                        index = 0
+                        Task { await resolveSourceVideo(v.url) }
+                    } else if seedItems.isEmpty {
                         items = [DraftItem(image: source, assetID: sourceAssetID)]
                     } else {
                         // A hand-off from the video editor: the whole post arrives, the just-picked

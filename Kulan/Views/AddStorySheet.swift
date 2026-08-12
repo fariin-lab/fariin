@@ -202,8 +202,10 @@ struct AddStorySheet: View {
         .fullScreenCover(item: $editorImage) { item in
             StoryEditorView(source: item.image, onPosted: { onPosted(); dismiss() })
         }
+        // ⚠️ A RECORDED CLIP OPENS THE COMPOSER, NOT A SCREEN OF ITS OWN — his three reports of two
+        // story editors on the video path end here. See `StoryEditorView.sourceVideo`.
         .fullScreenCover(item: $editorVideo) { item in
-            StoryVideoEditorView(url: item.url, onPosted: { onPosted(); dismiss() })
+            StoryEditorView.forVideo(url: item.url, onPosted: { onPosted(); dismiss() })
         }
         // THE PICKER DOES NOT CLOSE WHEN YOU PICK (owner 2026-08-04: "the media picker should not
         // close automatically after I select a photo… only close it when I tap the close button").
@@ -226,8 +228,8 @@ struct AddStorySheet: View {
                                 sourceAssetID: item.assetID)
             }
             .fullScreenCover(item: $libraryEditorVideo) { item in
-                StoryVideoEditorView(url: item.url, onPosted: { onPosted(); dismiss() },
-                                     sourceAssetID: item.assetID)
+                StoryEditorView.forVideo(url: item.url, assetID: item.assetID,
+                                         onPosted: { onPosted(); dismiss() })
             }
         }
         // Text story → audience sheet (was posting straight to "everyone", ignoring audience — M4).
