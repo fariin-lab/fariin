@@ -83,12 +83,12 @@ final class DirectionalPanGestureRecognizer: UIPanGestureRecognizer {
 struct ImageViewerView: View {
     let gallery: [Message]              // all images in this context (chat / media grid), oldest→newest
     let cid: String
-    // REMOVED: `telegramSourceRect` + `TGOpenState`, a SECOND open animation that lived alongside
+    // REMOVED: a second source-rect open state, a SECOND open animation that lived alongside
     // MediaOpen.fly. Every call site passed nil, so it never ran — but it was a whole parallel
     // pipeline with a different spring (0.38 vs the reference app's 0.25), a hardcoded 16pt radius, and
     // `UIScreen.main.bounds` instead of the transition container. Exactly the duplicated-view and
     // frame-mismatch hazard the media transition is supposed to be free of. One pipeline now: the
-    // UIKit animator pair in SignalMediaDismiss.swift owns both directions.
+    // UIKit animator pair in MediaDismiss.swift owns both directions.
     @State private var current: String  // id of the page being shown
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase   // re-warm `loaded` on return, see the overlay

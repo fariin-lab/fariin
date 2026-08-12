@@ -326,12 +326,12 @@ struct AuthMethodView: View {
                     // had.
                     //
                     // 13 is the owner's call and it matches two things: the number already written
-                    // in our own privacy policy, and WhatsApp, who moved Europe DOWN from 16 to 13
-                    // this year. Telegram says 16 and still carries a 17+ App Store rating, so the
+                    // in our own privacy policy, and one mainstream messenger, which moved Europe DOWN from 16 to 13
+                    // this year. Another mainstream messenger says 16 and still carries a 17+ App Store rating, so the
                     // higher number does not buy the thing people assume it buys.
                     //
                     // ⚠️ THIS IS THE FLOOR, NOT THE FEATURE. A child can tap past it, exactly as
-                    // they can on WhatsApp and Telegram, neither of which verifies anything either.
+                    // they can on either of those apps, neither of which verifies anything either.
                     // What it buys is the record that we asked. The real protection is Apple's
                     // Declared Age Range API (iOS 26, which is our floor anyway, so every user has
                     // it) plus what actually CHANGES for a minor: not findable by username search,
@@ -535,7 +535,7 @@ struct EmailAuthView: View {
                     // one, and the pair of them made a person choose between two doors that both
                     // ended in the same place. The owner's call (2026-08-08): the code stops being
                     // its own advertised way in and becomes the machinery UNDER Forgot Password,
-                    // which is what people actually go looking for. Snapchat's model, and his words
+                    // which is what people actually go looking for. The reference app's model, and his words
                     // for the old one were "users hate alot steps".
                     //
                     // It no longer mails a reset link either. Six digits, typed here, and you are

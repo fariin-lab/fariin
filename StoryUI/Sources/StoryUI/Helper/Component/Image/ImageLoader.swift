@@ -138,7 +138,7 @@ final class ImageLoader: UIView {
     var bottomCornerRadius: CGFloat = 0 { didSet { applyCornerMask() } }
     // Foreground: the photo at its TRUE aspect ratio — never stretched/cropped.
     var imageView = UIImageView()
-    /// TELEGRAM'S CANVAS behind a photo that does not fill the card. See `StoryCanvas` for what this
+    /// THE REFERENCE APP'S CANVAS behind a photo that does not fill the card. See `StoryCanvas` for what this
     /// replaced and why: a live `UIVisualEffectView` over an aspect-filled copy of the photo, which
     /// re-sampled every frame and composited outside this view's transform, so every gesture that
     /// scaled the card tore it away from the picture it belonged to.
@@ -236,7 +236,7 @@ final class ImageLoader: UIView {
 
     /// THE LOADING STATE IS THE PICTURE, BLURRED, not a grey block.
     ///
-    /// Owner: "Whatsapp and Telegram and Other apps story never use grey skeleton loading, they use
+    /// Owner: "the standard messengers and other apps never use grey skeleton loading, they use
     /// image blur or video blur." He is right about all three, and the reason is that a grey block
     /// says nothing while a blurred frame says "this is what is coming, it is nearly here". Ours is
     /// the story's own poster, which is a few KB and is normally already on disk because the story
@@ -426,7 +426,7 @@ final class ImageLoader: UIView {
 private extension ImageLoader {
    func setupImageView() {
        backgroundColor = .black
-       // TELEGRAM'S CANVAS, at the very back: for media that does not fill the card, a vertical
+       // THE REFERENCE APP'S CANVAS, at the very back: for media that does not fill the card, a vertical
        // gradient between the colours at the top and bottom of the picture itself. A layer, not a
        // view, and deliberately so — it is the one backdrop primitive that survives being scaled by
        // a gesture, which is the entire history of this file.

@@ -285,7 +285,7 @@ struct StoryLibraryPicker: View {
                 // real thing. See `ComposerTypeSwitch` in StoryCameraView.
                 //
                 // Deliberately its OWN representable rather than sharing the camera's: that one is
-                // Signal's control down to the uppercase titles and the 14pt rounded font, it took
+                // the reference app's control down to the uppercase titles and the 14pt rounded font, it took
                 // five attempts to get right, and it ships on a screen this one has no business
                 // changing. Same rule, different words.
                 // ⚠️ `.fixedSize(vertical:)`, NOT `.frame(height:)`, AND THAT IS THE WHOLE OF HIS

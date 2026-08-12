@@ -70,7 +70,7 @@ struct StoryCardClip: Shape {
 
 // `StoryDarkBlur` (a live `UIVisualEffectView(.systemThickMaterialDark)`) and `StoryBlurBake` (a
 // hand-calibrated 4x4 imitation of it, for the crossfades where a real material collapses) stood
-// here. Both are gone. What replaced them is `StoryCanvas` in StoryUI — Telegram's two-colour
+// here. Both are gone. What replaced them is `StoryCanvas` in StoryUI — the reference app's two-colour
 // gradient — and the reason the imitation existed at all is the reason the whole system had to go:
 // a material cannot be composited at fractional opacity, cannot be scaled by a gesture, and cannot
 // be snapshotted, so every surface that did one of those needed its own copy of the look. A gradient
@@ -79,7 +79,7 @@ struct StoryCardClip: Shape {
 
 struct StoryImage: View {
     let url: String
-    // fitCanvas = show the WHOLE image (aspect-fit) over Telegram's canvas — the same treatment the
+    // fitCanvas = show the WHOLE image (aspect-fit) over the reference app's canvas — the same treatment the
     // story viewer gives it, so a wide/tall photo isn't cropped/zoomed. Used for the swipe-up morph
     // card + the viewers carousel; the small story-row covers stay plain fill (crop).
     //
@@ -132,7 +132,7 @@ struct StoryImage: View {
                     // Match the story viewer's ImageLoader EXACTLY, both rules:
                     //  • an image at least as TALL as the card fills edge-to-edge with NO canvas —
                     //    don't add bars the story never had;
-                    //  • shorter images aspect-FIT over Telegram's canvas, the same gradient the
+                    //  • shorter images aspect-FIT over the reference app's canvas, the same gradient the
                     //    viewer draws behind the same photo.
                     // The fill lives INSIDE an overlay of Color.clear so it can never report an
                     // oversized layout (a bare scaledToFill blew a wide panorama into a huge zoomed
@@ -550,7 +550,7 @@ struct StoryViewer: View {
         private var completion: (() -> Void)?
         /// PER ANIMATOR, because the sheet and the hero want different answers and used to share one.
         ///
-        /// The sheet keeps 340 and its tight finish: it was tuned against Telegram's and he signed it
+        /// The sheet keeps 340 and its tight finish: it was tuned against the reference app's and he signed it
         /// off. The HERO does not — he timed the open at 0.51s and the maths agrees exactly
         /// (`t = 9.2 / sqrt(340) = 0.50s`), because a critically damped spring spends its last quarter
         /// second delivering the final one percent. The eye is done at 0.25s and the rest reads as the
@@ -567,7 +567,7 @@ struct StoryViewer: View {
 
         /// `velocity` is the finger's release velocity in progress-units/sec (+ = opening), handed
         /// straight to the spring so a flick continues at the speed it was thrown instead of
-        /// restarting from rest. (Telegram animates with a fixed 0.4s ease-out and hides the
+        /// restarting from rest. (The reference app animates with a fixed 0.4s ease-out and hides the
         /// discontinuity with additive animations; a spring fed the real velocity is the same feel
         /// with a scalar we own.)
         /// Per-RUN overrides on top of the per-animator numbers: the hero's open wants a softer,
@@ -591,8 +591,8 @@ struct StoryViewer: View {
         @objc private func tick(_ l: CADisplayLink) {
             let dt = CGFloat(min(l.targetTimestamp - l.timestamp, 1.0 / 30.0))
             // Critically damped, so it arrives without overshooting. `k` is per animator now — see
-            // the property. 340 is interactiveSpring(response: ~0.34); 631 is Signal's own story
-            // transition spring, `response: 0.25, damping: 1`, which expands to stiffness (2π/0.25)².
+            // the property. 340 is interactiveSpring(response: ~0.34); 631 is another mainstream
+            // messenger's own story transition spring, `response: 0.25, damping: 1`, which expands to stiffness (2π/0.25)².
             let k = runK, settleEpsilon = runEpsilon
             velocity += (k * (target - current) - 2 * sqrt(k) * velocity) * dt
             current += velocity * dt
@@ -641,7 +641,7 @@ struct StoryViewer: View {
     /// representables each time. The row was the visible casualty because it is the thing that is
     /// supposed to be moving.
     ///
-    /// Telegram does not have this seam to fall down: `StoryItemSetContainerComponent` repositions
+    /// The reference app does not have this seam to fall down: its own container repositions
     /// its cards and its view list in ONE layout pass driven straight from `scrollViewDidScroll`,
     /// all in UIKit. Ours crosses into SwiftUI, so the fix is to make the crossing narrow: the box
     /// is an `ObservableObject` that ONLY `MyStoriesCarousel` observes, and this view holds it with
@@ -704,7 +704,7 @@ struct StoryViewer: View {
     /// Asking the two ids has no guard to fail, nothing to clear and nothing to go stale. Both sides
     /// are anchored on the SAME expression the open used (`targetStoryId`), so they agree by
     /// construction on the first pull and can only diverge when the row has genuinely moved. It is
-    /// the shape Telegram uses: one authoritative current-item id, everything else derived from it.
+    /// the shape the reference app uses: one authoritative current-item id, everything else derived from it.
     /// ⚠️ `showViewers` FIRST, AND IT IS NOT DECORATION. THIS SHIPPED WITHOUT IT AND BLACKED THE
     /// STORY OUT — my regression in `b87fcfe1`, his report in as many words: "screen story is going
     /// black".
@@ -776,7 +776,7 @@ struct StoryViewer: View {
         /// HOW MUCH OF THE DIM'S FLOOR IS IN EFFECT, 0…1.
         ///
         /// The backdrop has a floor now (`heroDimFloor`) so it cannot wash out to nothing under a
-        /// long pull — his Snapchat note, and the reason ours read lighter than Telegram's. But a
+        /// long pull — his note, and the reason ours read lighter than the reference app's. But a
         /// floor that is simply clamped on would still be painted at the two moments the dim MUST be
         /// zero: the first frame of an open, when the card is sitting on the row and nothing should
         /// be darkened yet, and the last frame of a landing, when the screen is removed and a wall
@@ -824,9 +824,9 @@ struct StoryViewer: View {
     /// `HeroBox` for the reason written on it.
     @State private var heroFlying = false
     /// One scalar, 0 → 1, driving the hero's open, its landing and its spring-back. Same display-link
-    /// spring the sheet uses, on SIGNAL'S numbers rather than the sheet's: `response 0.25, damping 1`
+    /// spring the sheet uses, on ANOTHER MAINSTREAM MESSENGER'S numbers rather than the sheet's: `response 0.25, damping 1`
     /// is stiffness (2π/0.25)² = 631, and it stops at a distance nobody can see. Together those take
-    /// the flight from the 0.51s he measured to about 0.3s, which is what Signal's own story
+    /// the flight from the 0.51s he measured to about 0.3s, which is what another mainstream messenger's own story
     /// transition costs (0.2s grow + 0.1s cross fade).
     @State private var heroAnimator = SheetProgressAnimator(stiffness: 631, settleEpsilon: 0.004)
     /// How far the finger has to travel for the card to be fully seated in the row card. Generous on
@@ -836,7 +836,7 @@ struct StoryViewer: View {
     /// THE SMALLEST THE STORY IS ALLOWED TO GET WHILE THE FINGER IS STILL DOWN, as a fraction of its
     /// own full-screen width.
     ///
-    /// 0.34 first, off his Snapchat screenshot. RAISED TO 0.46 on 2026-08-08 against a pair of his
+    /// 0.34 first, off his screenshot. RAISED TO 0.46 on 2026-08-08 against a pair of his
     /// own frames — "reduce the Story scroll-down limit… it should only allow a small amount of
     /// downward movement and must not go beyond that limit" — measured rather than guessed: the
     /// card he called too far is 22% of the screen's width, the one he wants is 46%.
@@ -854,22 +854,22 @@ struct StoryViewer: View {
     // (`heroFade`, how much the story itself softened as it was pulled away, is GONE — 2026-08-07.
     // It was 0.22 and it is what he saw as the chat list showing through the story like glass. The
     // background giving way is `heroDimMax`'s job; the picture stays opaque.)
-    /// The darkest the chat list gets under a story in flight. Judged against his Snapchat shots,
+    /// The darkest the chat list gets under a story in flight. Judged against his reference shots,
     /// where the list behind is dimmed well past half but never to black — you can still read it.
     /// THE DARKEST THE LIST GETS ONCE A PULL IS PROPERLY UNDER WAY.
     ///
-    /// Set from his 2026-08-07 comparison, with Telegram's own source read for the other end of the
-    /// range. Telegram paints a solid black layer at
+    /// Set from his 2026-08-07 comparison, with the reference app's own source read for the other end of the
+    /// range. The reference app paints a solid black layer at
     /// `max(0.5, 1.0*(1 - dismissFraction) + 0.2*dismissFraction)` — 1.0 at rest, and floored so it
     /// never gets lighter than half while your finger is down. Ours peaked at 0.45 and then decayed
     /// all the way to zero, so our CEILING was below their FLOOR and the gap widened the further he
     /// pulled: at half way we were 0.27 against their 0.60.
     ///
-    /// His call: Telegram too dark, ours too light, aim between them and nearer Snapchat. So 0.58
-    /// here and a 0.36 floor — the list stays clearly readable, which is the Snapchat look this file
+    /// His call: the reference app too dark, ours too light, aim between them and nearer the other app.
+    /// So 0.58 here and a 0.36 floor — the list stays clearly readable, which is the look this file
     /// has been judged against from the start, and it never washes out.
     ///
-    ///        drag     ours (was)   now    Telegram
+    ///        drag     ours (was)   now    reference
     ///          0%        1.00      1.00     1.00
     ///         25%        0.40      0.55     0.80
     ///         50%        0.27      0.48     0.60
@@ -1378,10 +1378,10 @@ struct StoryViewer: View {
         // is a 100pt thumbnail nobody is watching. A had a real paused frame; B has nothing until it
         // downloads. That is the disappear, and the second or two is the download.
         //
-        // Telegram does not do this, and reading their source is what settled it.
-        // `initializeVideoIfReady` refuses to build a player at all while the progress mode is
+        // The reference app does not do this, and reading its source is what settled it.
+        // Its player-readiness guard refuses to build a player at all while the progress mode is
         // `.pause`, and opening the views list forces `.pause` on the whole set
-        // (`StoryItemSetContainerComponent`). So paging with the list open creates NO player: the
+        // (the reference implementation's list container). So paging with the list open creates NO player: the
         // story you arrive at shows its still, the story you left keeps its own paused layer and its
         // last decoded frame, and the player for whatever you settled on is built the moment the
         // list is dismissed.
@@ -1412,7 +1412,7 @@ struct StoryViewer: View {
         // when it would not have been then.
         //
         // What is NOT yet answered is the invisible half: an immediate jump still starts a download
-        // under the sheet. Telegram's answer is `initializeVideoIfReady` refusing to build a player
+        // under the sheet. The reference app's answer is its player-readiness guard refusing to build a player
         // at all while the mode is `.pause`. That is the right fix and it belongs on the LOADING, not
         // on the navigation — a separate change, and deliberately not bundled here.
         .onChange(of: sheetStoryId) { _, id in
@@ -1630,7 +1630,7 @@ struct StoryViewer: View {
             // the same id.
             //
             // `onItemChanged` fires on the item changing with no gate at all, within one 20fps tick.
-            // Same split Telegram draws: `markAsSeen` waits for real playback, the current item is
+            // Same split the reference app draws: `markAsSeen` waits for real playback, the current item is
             // published immediately.
             onItemChanged: { id in
                 currentStoryId = id
@@ -1693,7 +1693,7 @@ struct StoryViewer: View {
                     return
                 }
                 let sheetH = UIScreen.main.bounds.height * StoryViewersSheetView.heightFraction
-                // Telegram's open rule, in points (viewListDismissPanGesture .ended): commit past
+                // The reference app's open rule, in points (from the reference implementation's dismiss-pan handling): commit past
                 // 200pt of pull, or past 100pt with 100pt/s of speed behind it. The finger's
                 // velocity rides into the spring, so a flick's sheet arrives at flick speed.
                 if translation > 200 || (translation > 100 && velocity > 100) {
@@ -1926,7 +1926,7 @@ struct StoryViewer: View {
     /// machinery has been there since the chat media transition, where a flat 14 made bubbles change
     /// shape at the hand-over — and the story flight was the one caller ignoring it.
     ///
-    /// ⚠️ THIS IS WHAT MAKES SNAPCHAT'S CIRCLE WORK, and it is why the circle needed almost no new
+    /// ⚠️ THIS IS WHAT MAKES THE CIRCLE MORPH WORK, and it is why the circle needed almost no new
     /// code. A chat-row ring or a profile avatar reports its radius as half its width; the flight
     /// then interpolates to a full circle on its own, and the crop that already converges the card to
     /// the target's ASPECT (square, for an avatar) is what crops the story to fill as it rounds. Card
@@ -2039,7 +2039,7 @@ struct StoryViewer: View {
         // was tapped, and for a circular door that thing is a 49pt avatar — by the point a card's
         // crossfade is still half on, the circle has already grown past 250pt and the cover is a
         // four-times enlargement of a thumbnail lying over a story that is sharp underneath it. His
-        // Snapchat reference shows the picture inside the circle almost from the first frame.
+        // reference screenshot shows the picture inside the circle almost from the first frame.
         let start: CGFloat = heroLandingIsCircle ? 0.05 : 0.2
         let span: CGFloat = heroLandingIsCircle ? 0.25 : 0.35
         return 1 - max(0, min(1, (t - start) / span))
@@ -2066,11 +2066,11 @@ struct StoryViewer: View {
     /// last stretch of every open to a transparent wall and then snapped to black at completion —
     /// his first build-487 report, with the white strips circled top and bottom: "the black bottom
     /// and top draws late… shows as the story fully opens". Ramping to opaque over the last 15%
-    /// also makes `resetFlight`'s black a visual no-op, and gives the close drag Telegram's look:
+    /// also makes `resetFlight`'s black a visual no-op, and gives the close drag the reference app's look:
     /// the letterbox black GIVES WAY progressively as the card leaves, instead of vanishing on the
     /// first frame of the drag.
     ///
-    /// In the middle: Snapchat's grey, from his screenshots — the list behind is clearly dimmed but
+    /// In the middle: the other app's grey, from his screenshots — the list behind is clearly dimmed but
     /// still readable, which is what makes the story read as lifting off it.
     /// ⚠️ NO PLATEAU. It used to hold a flat `heroDimMax` from f 0.15 all the way to 0.75 and only
     /// let go over the last quarter, which is 60% of the journey during which the backdrop did not
@@ -2176,7 +2176,7 @@ struct StoryViewer: View {
     /// edge, which reads as the story being thrown away rather than put back.
     private func onScreenRect(for key: String) -> CGRect? {
         // `liveRect`, not `rect`: it asks the card's own view where it is at this instant, the way
-        // Telegram's TransitionIn carries a `sourceView` rather than a remembered rectangle. A
+        // the reference app's own transition logic carries a `sourceView` rather than a remembered rectangle. A
         // written-down rect is only as true as the last layout pass that wrote it.
         // ⚠️ `liveViewRect`, NOT `liveRect`. The difference is the written-down fallback, and for a
         // door that lives in the chat that fallback is a rectangle where the source USED to be —
@@ -2300,7 +2300,7 @@ struct StoryViewer: View {
             // one. A hard-alpha seat swapped the card's preview (newest story) for the story the
             // viewer opens on (first unwatched) in one frame — his B-pops-to-A report. Then an
             // alpha-0 fade-in fixed the pop but flew as a half-transparent ghost over a row card
-            // that never moved — his frame-grab, against Snapchat where "the thumbnail itself
+            // that never moved — his frame-grab, against another mainstream messenger where "the thumbnail itself
             // expands". The shared-element answer keeps both promises: the presenter photographed
             // the tapped card at tap time, that snapshot (`flightCover`) sits on top of the flying
             // card, the seat is fully opaque and pixel-identical to the slot it covers, and the
@@ -2320,7 +2320,7 @@ struct StoryViewer: View {
             // this code already supports and calls correct.
             //
             // The CLOSE is untouched and still becomes a circle — see `circleRushSpan`. That half
-            // he likes, and it is Snapchat's and WhatsApp's behaviour: out as a card, home as a
+            // he likes, and it is the standard messengers' behaviour: out as a card, home as a
             // circle.
             let fromCircle = heroLandingIsCircle
             hero.cover = !fromCircle
@@ -2346,16 +2346,16 @@ struct StoryViewer: View {
             // this one call, in one transaction — the seat must never paint the fitted mini-layout
             // bare, and it cannot, because the cover's alpha is part of the same apply.
             applyHero()
-            // THE SLOT EMPTIES, Snapchat's way, on his frame-grabs (2026-08-07): "the card goes
+            // THE SLOT EMPTIES, the same way, on his frame-grabs (2026-08-07): "the card goes
             // [to] the empty place it comes from... [the] place is empty and waiting to fill it
             // back". The card that lifted off IS the slot's picture (the cover above), so hiding
             // the real one costs nothing and the row shows a waiting hole for as long as the story
             // is open. Revealed by the teardown (`storyPresenterClosed`), not by the open.
             MediaSourceVisibility.shared.hide(MediaOpenRects.key(.storyRow, heroKeyNow()))
             StoryCardMorph.shared.revealAfterHeroOpen?()
-            // THE OPEN'S OWN SPRING — softer than the close's, on his Snapchat frame-scrub
+            // THE OPEN'S OWN SPRING — softer than the close's, on his frame-scrub
             // (2026-08-07): what reads as "smoother" there is not the total time, it is the long
-            // gentle glide into full screen, where Signal's 631 arrives and stops. Still softer than
+            // gentle glide into full screen, where another mainstream messenger's 631 arrives and stops. Still softer than
             // the close, so the glide he asked for is intact.
             //
             // TIGHTENED ON HIS WORD, 2026-08-07 ("when i click story opening add slightly speed"):
@@ -2367,7 +2367,7 @@ struct StoryViewer: View {
             // Read with the dip beat in `afterStoryDip`, trimmed in the same breath.
             // The floor fades IN as the story grows, so the open's first frame — the card still
             // sitting on the row — darkens nothing, and the list is already dim by the time the card
-            // is out in the room. Matching his Snapchat reference, where the page behind the growing
+            // is out in the room. Matching his reference screenshot, where the page behind the growing
             // circle is clearly dimmed.
             runHero(to: 0, center: rest, alpha: 1, velocity: 0,
                     stiffness: 530, settle: 0.0015,
@@ -2386,7 +2386,7 @@ struct StoryViewer: View {
                 // `resetFlight`: identity, unmasked, cover off, and the presenter's wall opaque
                 // again. The sheet's own `reset` has no business here — the flight never touched
                 // its view. NO `MediaSourceVisibility.reveal()` any more: the slot stays EMPTY for
-                // the whole viewing, waiting for the close to fill it back (his Snapchat spec);
+                // the whole viewing, waiting for the close to fill it back (his spec);
                 // the teardown reveals it.
                 StoryCardMorph.shared.resetFlight()
                 StoryCardMorph.shared.restoreAfterHero?()   // the page is opaque black again at rest
@@ -2552,7 +2552,7 @@ struct StoryViewer: View {
             // THE REPLY BAR STEPS ASIDE ON THE FRACTION, THE CARD'S OWN CHROME STAYS ON THE CARD.
             //
             // This used to post `storyChromeHidden`, which took the progress bars and the name with
-            // it and left a bare photo sliding around. Snapchat keeps them: they are drawn inside the
+            // it and left a bare photo sliding around. Another mainstream messenger keeps them: they are drawn inside the
             // card, so they shrink with it and the thing in your hand still looks like a story. What
             // has to go is the reply bar, which is drawn BELOW the card, does not move, and carries a
             // solid black footer that would lie across the chat list — and it now goes gradually, as
@@ -2566,7 +2566,7 @@ struct StoryViewer: View {
             // test below reads the raw translation rather than this clamped one.
             let ty = max(0, t.y)
             // ⚠️ THE PULL HAS A FLOOR NOW, and his 2026-08-07 pair of screenshots is where it comes
-            // from. Snapchat's card bottoms out at just under a third of the screen and will not go
+            // from. Another mainstream messenger's card bottoms out at just under a third of the screen and will not go
             // further however long you keep pulling. Ours had no floor at all: `f` ran to 1, which is
             // the ANCHOR'S own size — a 49pt ring — and once there the card simply kept sliding down
             // at that size until it was sitting under the tab bar. That is his "theres no limit", and
@@ -2629,13 +2629,13 @@ struct StoryViewer: View {
         // the same.
         NotificationCenter.default.post(name: .init("stopVideo"), object: nil)
         let anchorCentre = CGPoint(x: hero.anchor.midX, y: hero.anchor.midY)
-        // THE CARD FILLS THE EMPTY SLOT IT LEFT, his Snapchat spec in his own words: "the card
+        // THE CARD FILLS THE EMPTY SLOT IT LEFT, his spec in his own words: "the card
         // goes [to] the empty place it comes from... waiting to fill it back". The slot has been
         // hidden since the open. On the way home the flying card puts the COVER back on (the
         // landing tick below: in from just before half-way, fully worn by four-fifths), so what
         // touches down is pixel-identical to the row card the teardown then reveals — the swap at
         // the landing exchanges two identical pictures and cannot pop. This replaces the previous
-        // fade-into-a-visible-card landing: he watched Snapchat frame by frame and asked for the
+        // fade-into-a-visible-card landing: he watched it frame by frame and asked for the
         // hole. (The first design here blanked the slot AND landed the live story on it — the
         // one-frame "still picture pop" he caught in slow motion. The cover is what squares that
         // circle: the slot can be empty AND the landing seamless, because the flying card itself
@@ -2834,7 +2834,7 @@ struct StoryViewer: View {
     /// through `settleViewers`, the one spring — see StoryViewersSheetUIKit's header for the
     /// routing map.
     private var viewersSheetLayer: some View {
-        // Neighbour flags for the sheet's horizontal page-swipe (Telegram's sheet-to-sheet slide),
+        // Neighbour flags for the sheet's horizontal page-swipe (the reference app's sheet-to-sheet slide),
         // in the SAME live order the carousel lays its cards out in, so "next" is the card to the
         // right and never a stale snapshot's idea of it.
         let arr = StoriesRepository.shared.mine?.stories ?? myStories
@@ -2951,8 +2951,8 @@ struct StoryViewer: View {
     }
 
     /// THE ONE RELEASE RULE, for every finger that lets go of the sheet — the panel drag, the
-    /// story-card drag, and the list hand-off all end here. Telegram's thresholds, read from
-    /// `viewListDismissPanGesture` in StoryItemSetContainerComponent and converted to our progress
+    /// story-card drag, and the list hand-off all end here. The reference app's thresholds, read from
+    /// the reference implementation's dismiss-pan handling and converted to our progress
     /// units (their rule is on translation in points, screen-height fractions): close on a
     /// deliberate pull OR a modest flick; anything less springs back open. Their old counterpart
     /// here demanded 80% of the sheet's travel, which is why "scroll down to close is soo hard".
@@ -2960,7 +2960,7 @@ struct StoryViewer: View {
         let sheetH = UIScreen.main.bounds.height * StoryViewersSheetView.heightFraction
         let droppedPts = (dragStart - p) * sheetH          // + = dragged toward closed
         let vDownPts = -velocityUp * sheetH                // + = moving toward closed, pt/s
-        // Telegram: close if the drag covered ≥30% of the screen, or ≥5% with ≥150pt/s of speed.
+        // The reference app: close if the drag covered ≥30% of the screen, or ≥5% with ≥150pt/s of speed.
         let screenH = UIScreen.main.bounds.height
         if droppedPts >= screenH * 0.30 || (droppedPts >= screenH * 0.05 && vDownPts >= 150) {
             closeViewers(velocity: velocityUp)
@@ -3017,11 +3017,11 @@ struct StoryViewer: View {
 
     /// Collapse the sheet: the story grows back to full screen and the viewer STAYS OPEN. This is
     /// the only close path there is — every way out of the sheet (drag, tap, centre-card tap,
-    /// self-heal) funnels here, and none of them may dismiss the whole viewer. (Telegram's
-    /// closePressed does the same check in as many words: list open → hide the list only.)
+    /// self-heal) funnels here, and none of them may dismiss the whole viewer. (The reference app's
+    /// own close handling does the same check in as many words: list open → hide the list only.)
     private func closeViewers(velocity: CGFloat = 0) {
         // ⚠️ THE DEFERRED JUMP IS SPENT HERE, at the START of the collapse, which is the same beat
-        // Telegram builds the player it refused to build while the list was up. The clip loads
+        // the reference app builds the player it refused to build while the list was up. The clip loads
         // behind a card that is already flying back to full screen, so the load is covered by the
         // motion instead of happening under a 100pt thumbnail. Posted before the animator so the
         // library has the whole collapse to get its first frame up.
@@ -3276,7 +3276,7 @@ struct StoryViewer: View {
     /// Once per session: `myStories` is stable for a viewing and a second sweep would buy nothing.
     ///
     /// ⚠️ THIS SHORTENS THE WAIT, IT DOES NOT REMOVE IT, and the difference matters because he asked
-    /// for Telegram's behaviour. Telegram does not fetch a count at all: `StoryListContext.Item`
+    /// for the reference app's behaviour. The reference app does not fetch a count at all: its own story-list item type
     /// carries `views` (seenCount, reactedCount, a few recent peers) DOWN WITH THE STORY, and the
     /// full list is only requested when you open the list. Ours reads the whole `views` subcollection
     /// — every viewer document, names resolved — to display one number. Matching them properly means
@@ -3490,7 +3490,7 @@ struct UploadingStoryHandoff: View {
                     // post landed, whatever story he was watching (his 2026-08-09 report: watching A
                     // while C uploads, C finishes, A closes/reopens). The viewer now stays alive and
                     // the placeholder→real swap flows through `reconcileSignature` in StoryViewer —
-                    // Telegram's behaviour: a background post is a data update, never a transition.
+                    // the reference app's behaviour: a background post is a data update, never a transition.
             } else {
                 // Nothing to show (no stories and no upload) → just close.
                 Color.clear.onAppear { onClose() }
@@ -3782,7 +3782,7 @@ struct MyStoriesCarousel: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: slotH)
-            // TELEGRAM'S ENGINE, not a SwiftUI gesture (owner 2026-08-05: "make it exactly telegram
+            // THE REFERENCE APP'S ENGINE, not a SwiftUI gesture (owner 2026-08-05: "make it exactly like the reference app
             // no lag and clear... deep read first"). The overlay owns the row's touches; a hidden
             // UIScrollView's re-homed pan does the physics, willEndDragging snaps to a whole card,
             // and `scroll` is fed continuously from its contentOffset — the same number the cards

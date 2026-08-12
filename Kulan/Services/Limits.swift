@@ -40,7 +40,7 @@ enum Limits {
     static let storiesPer24h = 50
     static let storyExpiryHours = 24
     static let storyUploadBytes = 25 * 1024 * 1024               // 25 MB — storage.rules stories/
-    /// How long ONE story can be. 90s is WhatsApp Status's number and the owner's spec (2026-08-04).
+    /// How long ONE story can be. 90s is the reference app's status-feature number and the owner's spec (2026-08-04).
     /// A longer pick is no longer truncated to this — it is SPLIT into consecutive segments, each its
     /// own story, so nothing the user chose is thrown away.
     static let storyVideoSeconds = 90
@@ -60,7 +60,7 @@ enum Limits {
     /// copy only decides when the Done button lights up, so a disagreement shows as a button you can
     /// press that then fails.
     ///
-    /// FOUR, not three (raised 2026-08-10) and deliberately not Telegram's five: Somali given names
+    /// FOUR, not three (raised 2026-08-10) and deliberately not another mainstream messenger's five: Somali given names
     /// are very often exactly four letters — Ubah, Amal, Deeq, Muna, Asha, Iqra, Nimo, Hani, Suad —
     /// and a five-character floor would refuse a large share of this app's users their own first
     /// name. The reasoning in full sits beside the server constant.

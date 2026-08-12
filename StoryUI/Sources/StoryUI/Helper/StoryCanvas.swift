@@ -4,8 +4,8 @@
 //
 //  THE ONE ANSWER TO "WHAT IS BEHIND A STORY THAT DOES NOT FILL THE FRAME".
 //
-//  It is Telegram's answer, read from their source (`MediaEditorComposer.swift`,
-//  `VideoFinishPass.swift`) on the owner's order, 2026-08-08:
+//  It is the reference app's answer, read from its source (the reference implementation's media
+//  export pass) on the owner's order, 2026-08-08:
 //
 //      public func mediaEditorGetGradientColors(from image: UIImage) -> GradientColors {
 //          ... draw the image into a 5x5 context ...
@@ -14,7 +14,7 @@
 //      }
 //
 //  Two colours taken off the media itself, a vertical gradient between them, the media laid on top.
-//  There is NO BLUR anywhere in Telegram's story pipeline — not in the editor, not in the export, not
+//  There is NO BLUR anywhere in the reference app's story pipeline — not in the editor, not in the export, not
 //  in the viewer. `VideoFinishPass` draws the gradient with a two-colour fragment shader as the
 //  bottom layer and encodes the result into the exported file, so by the time a story is watched the
 //  canvas is part of the picture and the viewer computes nothing at all.
@@ -33,7 +33,7 @@
 //  A `CAGradientLayer` has none of that surface. It is two colours interpolated by the GPU inside
 //  its own layer: it transforms with its parent, it holds still under any scale, it cannot re-sample
 //  the wrong thing because it never samples anything, and there is no state to freeze because
-//  nothing about it is recomputed. Which is why Telegram's stories do not do this and ours did.
+//  nothing about it is recomputed. Which is why the reference app's stories do not do this and ours did.
 //
 //  BOTH HALVES OF THE APP READ THEIR COLOURS THROUGH `colours(of:)` — the export that bakes the
 //  canvas into a posted file, and the viewer that draws it live behind a file posted before the bake
@@ -47,7 +47,7 @@ import UIKit
 public enum StoryCanvas {
 
     /// A story frame is 9:16, the same number the composer card and the viewer card are both built
-    /// from, and the same shape Telegram exports every story at.
+    /// from, and the same shape the reference app exports every story at.
     public static let aspect: CGFloat = 9.0 / 16.0
 
     /// Does media of this pixel size fill a card of this size, or does it need a canvas behind it?
@@ -68,7 +68,7 @@ public enum StoryCanvas {
 
     /// The top and bottom colours of the canvas, read off the media itself.
     ///
-    /// Telegram samples a 5x5 reduction and takes the single pixel at (2,0) and (2,4). This averages
+    /// The reference app samples a 5x5 reduction and takes the single pixel at (2,0) and (2,4). This averages
     /// the top eighth and the bottom eighth of the frame instead, which is the same idea — the
     /// colour the picture ends on, at each end — with two differences that were paid for in bugs
     /// already and are kept on purpose:
@@ -147,8 +147,8 @@ public enum StoryCanvas {
 
     /// The canvas as a layer. THIS IS THE DISPLAY PRIMITIVE and there is no other one.
     ///
-    /// `.axial` from the top edge to the bottom edge, which is Telegram's `drawLinearGradient` from
-    /// (0,0) to (0,height) and their shader's single vertical interpolation. Actions are disabled
+    /// `.axial` from the top edge to the bottom edge, which mirrors the reference implementation's own
+    /// gradient draw from (0,0) to (0,height) and its shader's single vertical interpolation. Actions are disabled
     /// because a colour change inside a layout pass would otherwise animate over the default 0.25s,
     /// and a canvas that fades between two greys while a card is moving is the flicker this file
     /// exists to remove.
@@ -213,9 +213,9 @@ public enum StoryCanvas {
     // MARK: - The loading placeholder
 
     /// THE ONE PLACE A STORY IS STILL ALLOWED TO BLUR, and it is not the canvas — it is the LOADING
-    /// STATE, which is a different thing and is Telegram's too: they show the story's thumbnail
-    /// blurred while the full-size file comes down. The owner asked for this directly ("Whatsapp and
-    /// Telegram and Other apps story never use grey skeleton loading, they use image blur or video
+    /// STATE, which is a different thing and is the reference app's too: it shows the story's thumbnail
+    /// blurred while the full-size file comes down. The owner asked for this directly ("the standard
+    /// messengers and other apps never use grey skeleton loading, they use image blur or video
     /// blur") and it stays.
     ///
     /// STATIC PIXELS, NEVER A `UIVisualEffectView`. The poster is drawn into a canvas an eighth of

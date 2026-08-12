@@ -40,8 +40,8 @@ public struct Story: Identifiable, Hashable {
     /// The small poster the story row and the card strip already show, which for a video is its
     /// cover. Optional because the library must keep working without one.
     ///
-    /// It is here so the viewer has SOMETHING TRUE to draw while the real media downloads. WhatsApp,
-    /// Telegram and Instagram all show a blurred version of the picture you are waiting for; none of
+    /// It is here so the viewer has SOMETHING TRUE to draw while the real media downloads. The
+    /// standard messengers all show a blurred version of the picture you are waiting for; none of
     /// them show a grey block, because a grey block tells you nothing and reads as broken. This is a
     /// few KB and is usually already on disk from the story row, so it lands more or less at once.
     public var previewURL: String?
@@ -65,7 +65,7 @@ public struct Story: Identifiable, Hashable {
     /// "tap left/right and the video is full blur or black, then in seconds it works", reported over
     /// and over because every fix so far has been to the loading, never to what is UNDERNEATH it.
     ///
-    /// This is what Telegram does and the reason they never show it. `StoryItemContentComponent`
+    /// This is what the reference app does and the reason it never shows it. The reference implementation
     /// draws the cached first frame when it has one and otherwise
     /// `decodeTinyThumbnail(file.immediateThumbnailData)` blurred — thumbnail bytes that travel in
     /// the story's own data, so a cover exists on the first frame of the first visit with no cache

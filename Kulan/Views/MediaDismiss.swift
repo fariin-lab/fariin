@@ -70,7 +70,7 @@ struct MediaDismissHost: UIViewRepresentable {
         private var active = false
         private static let distanceToCompletion: CGFloat = 88    // visual scrub (scale/alpha) reference
         // Commit thresholds. Were 160pt / 800 — that much travel made closing feel like work (user:
-        // "too hard"). the reference app and the reference app commit around a short drag or any real flick, so a normal
+        // "too hard"). the standard messengers commit around a short drag or any real flick, so a normal
         // downward swipe should already mean "close". Changing your mind still works: the decision uses
         // the NET downward offset, so dragging back up above the threshold cancels.
         // the reference app's own rule is `percentComplete > 0` — ANY movement commits and cancel is effectively
@@ -225,7 +225,7 @@ struct MediaDismissHost: UIViewRepresentable {
                 // the commit test used o.y alone, so a diagonal drag could scrub the photo most of the way
                 // out and then snap all the way back. The 40pt / 320 thresholds themselves are the user's
                 // deliberate choice (the reference app commits on ANY movement) and are unchanged.
-                // SIGNAL'S RULE, ADOPTED. Their `.ended` is `percentComplete > 0` — any real movement
+                // THE REFERENCE APP'S RULE, ADOPTED. Their `.ended` is `percentComplete > 0` — any real movement
                 // commits. Ours demanded 40pt of travel OR a 320pt/s flick, and that gap is the "still
                 // doesn't feel like the reference app" the user has reported for days: a short, deliberate drag
                 // scrubbed the photo partway out and then snapped all the way back, which reads as the
@@ -426,7 +426,7 @@ func mediaFitRect(_ media: CGSize, in bounds: CGRect) -> CGRect {
 @MainActor
 enum MediaOpen {
 
-    /// the reference app's spring, from SignalUI/UIKitExtensions/UIKit+Animations.swift:
+    /// the reference app's spring, from the reference implementation:
     /// `springDamping: 1, springResponse: 0.25` is NOT `usingSpringWithDamping` — it expands to
     /// `stiffness = (2π / response)²` and `damping = 4π · damping / response` at mass 1, i.e. a
     /// critically damped spring. Reaching for `usingSpringWithDamping:` here is the usual way to get

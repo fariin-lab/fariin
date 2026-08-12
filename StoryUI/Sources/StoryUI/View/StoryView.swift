@@ -85,7 +85,7 @@ public struct StoryView: View {
     
     /// My own story is always a SINGLE bucket, and it is the only place the viewers-sheet morph
     /// runs — so it gets the solo host, which has no UIPageViewController and no UIScrollView for
-    /// the morph to fight (Telegram's shape: one plain container, transformed live). Friends keep
+    /// the morph to fight (the reference app's shape: one plain container, transformed live). Friends keep
     /// the pager for user-to-user cube paging.
     private var isSoloMine: Bool { stories.count == 1 && (stories.first?.isMine ?? false) }
 

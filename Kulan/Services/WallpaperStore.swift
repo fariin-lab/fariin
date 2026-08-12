@@ -53,7 +53,7 @@ struct WallpaperPreset: Identifiable, Equatable {
 
 enum WallpaperPresets {
     /// ONE PATTERN, SIX GROUNDS, AND A LIGHT AND A DARK OF EACH — his instruction, and it is how
-    /// WhatsApp actually ships this. Their picker is not a row of different drawings; it is the same
+    /// the reference app actually ships this. Their picker is not a row of different drawings; it is the same
     /// doodle sheet over a row of colours, which is exactly why it reads as one set rather than a
     /// collection somebody accumulated.
     ///

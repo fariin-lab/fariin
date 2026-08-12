@@ -1,4 +1,4 @@
-﻿import SwiftUI
+import SwiftUI
 import UIKit
 
 // UIKit-backed conversation list. A UICollectionView hosts our existing SwiftUI rows (MessageBubble etc.)
@@ -24,7 +24,7 @@ import UIKit
 //     and its own guard. There were roughly twenty-five contentOffset/contentInset writers in this file,
 //     each guarded by whoever wrote it, and each one was a chance to get it wrong.
 //
-// So the list is now INVERTED, which is what the reference app, the reference app and the reference app all do:
+// So the list is now INVERTED, which is what the standard messengers all do:
 //
 //   * The collection view carries a scaleY(-1) transform and so does every cell, so the two flips cancel
 //     and content renders upright. Only the VIEWPORT is mirrored.
@@ -1595,9 +1595,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         // Only a reader who is AT the newest message follows the keyboard. This is the exact test, not the
         // 44pt affordance: moving someone is a decision, and a decision takes the strict answer.
-        // SIGNAL'S MODEL, replacing everything that used to be below this line.
+        // THE REFERENCE APP'S MODEL, replacing everything that used to be below this line.
         //
-        // Read from ConversationViewController+OWS.swift `updateContentInsets()`. They never touch the
+        // Read from the reference implementation's content-inset update. They never touch the
         // keyboard notification's geometry. The inset comes from the bottom bar's own frame height minus
         // the safe area â€” the bar rides the keyboard, so its height already contains it, and the
         // subtraction is there so the home-indicator strip is not counted twice. Then, for position:

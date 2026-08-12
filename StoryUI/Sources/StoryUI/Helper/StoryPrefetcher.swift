@@ -6,13 +6,13 @@ import Foundation
 import UIKit
 import Network   // NWPathMonitor, for "is this connection the expensive one"
 
-/// WHY STORIES FEEL SLOW, AND WHAT SIGNAL DOES ABOUT IT.
+/// WHY STORIES FEEL SLOW, AND WHAT THE REFERENCE APP DOES ABOUT IT.
 ///
 /// Nothing was downloaded until you arrived at it, so every single story began with a wait. The owner
 /// put it exactly right: the good apps download the next one in the background while you are still
 /// watching this one, so you never meet a loading state at all.
 ///
-/// Signal's rule, read from `StoryContextViewController.swift`:
+/// The reference app's rule, read from its source:
 ///
 ///   :737  private static let subsequentItemsToLoad = 3
 ///   :738  ensureSubsequentItemsDownloaded()
@@ -30,11 +30,11 @@ import Network   // NWPathMonitor, for "is this connection the expensive one"
 /// is playing and a video is decoding.
 public enum StoryPrefetcher {
 
-    /// Signal's number.
+    /// The reference app's number.
     public static let lookahead = 3
 
     /// HOW MANY VIDEOS AHEAD ON MOBILE DATA. Owner's decision, 2026-08-09: pre-download on cellular
-    /// too, so tapping onto a video is smooth the way Telegram is, but keep it tight. Two is the
+    /// too, so tapping onto a video is smooth the way another mainstream messenger is, but keep it tight. Two is the
     /// smallest number that survives a normal tap-tap — the one you are about to reach and the one
     /// after it — while a third is a clip most people never get to.
     ///
@@ -158,7 +158,7 @@ public enum StoryPrefetcher {
     ///
     /// `prefetch(from:in:)` runs inside the viewer, so it can only ever warm what comes AFTER
     /// something you already opened. That leaves the very first tap cold every single time, which is
-    /// the tap people judge the app on. Instagram and WhatsApp both warm the front of each ring
+    /// the tap people judge the app on. The standard messengers both warm the front of each ring
     /// while you are still looking at the list.
     ///
     /// Two depths on purpose, because this is speculation and speculation costs somebody's data:

@@ -62,7 +62,7 @@ enum StoryZoomPresenter {
 
     /// `coverFrom`: the tapped row card's live view. It is photographed HERE, at tap time while it
     /// is definitely on screen, and the snapshot rides the flight as the cover the open wears —
-    /// the shared-element look he named from Snapchat: the thumbnail itself expands, opaque from
+    /// the shared-element look he named from the reference app: the thumbnail itself expands, opaque from
     /// the first pixel, and dissolves into the live story mid-flight. Nil (card scrolled away, or
     /// capture failed) degrades to the open without a cover, which is the pre-cover behaviour.
     /// - Parameter coverRadius: the radius `source` is drawn with. The shot is cut to it, so the
@@ -240,7 +240,7 @@ final class StoryZoomContainerVC: UIViewController {
         // opaque wall on frame one would snap the whole display to black before the flight has even
         // found its geometry — the tap must keep showing the chat list until the card lifts off the
         // row. Who paints it after that: `applyFlight`'s dim writes this alpha every frame of a
-        // flight (up to 0.45, Snapchat-judged, letting go before the landing), and `resetFlight`
+        // flight (up to 0.45, judged against the reference app, letting go before the landing), and `resetFlight`
         // makes it opaque at every arrival at rest — the open landing, a cancelled drag springing
         // home, and the no-flight fallback alike.
         view.backgroundColor = UIColor.black.withAlphaComponent(0)

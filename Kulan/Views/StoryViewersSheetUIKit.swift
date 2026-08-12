@@ -16,7 +16,7 @@ import UIKit.UIGestureRecognizerSubclass   // DirectionalSheetPan sets `state = 
 // sheet's pan and the table's own pan run together, and the handler decides which of them owns the
 // movement on each event by asking one question: is the list at its top and is the finger going down.
 //
-// TOUCH ROUTING (the 2026-08-05 rebuild — Telegram's model, read from their source):
+// TOUCH ROUTING (the 2026-08-05 rebuild — the reference app's model, read from its source):
 //
 // This view is full-screen, and `hitTest` partitions the screen into exactly three territories so
 // every touch has ONE owner:
@@ -27,7 +27,7 @@ import UIKit.UIGestureRecognizerSubclass   // DirectionalSheetPan sets `state = 
 //   3. EVERYTHING ELSE ABOVE THE PANEL — ours: a tap collapses the sheet, and a pan on the WINDOW
 //      drags the story card + sheet as one connected surface (on the window because the carousel
 //      band hit-tests through this view, and a vertical drag on the shrunken card must collapse
-//      the sheet exactly like Telegram's; only the band's horizontal drags are refused, so the
+//      the sheet exactly like the reference app's; only the band's horizontal drags are refused, so the
 //      cover-flow keeps them).
 //
 // WHY THE WINDOW PANS EXIST AT ALL: Apple's zoom transition installs its own interactive-dismiss pan
@@ -35,9 +35,9 @@ import UIKit.UIGestureRecognizerSubclass   // DirectionalSheetPan sets `state = 
 // pan tracking a sheet drag is why dragging the sheet down used to close the WHOLE story viewer.
 // `require(toFail:)` on it was tried and DID NOT HOLD on the device (build 466) — so while the
 // sheet is in a window the foreign pans up the chain are DISABLED outright and restored on unmount:
-// see `suspendForeignPans`. Telegram does the same thing by policy: their outer gestures are
-// refused entirely while the view list is open (`allowsInteractiveGestures() == false` in
-// StoryItemSetContainerComponent).
+// see `suspendForeignPans`. The reference app does the same thing by policy: its outer gestures are
+// refused entirely while the view list is open (its own interactive-gestures flag going false in
+// its list container).
 //
 // RELEASE: no internal animator any more. Every finger-up reports (progress, where the drag started,
 // velocity) to the host, which owns the ONE spring that settles sheet + story morph + carousel on the
@@ -47,7 +47,7 @@ import UIKit.UIGestureRecognizerSubclass   // DirectionalSheetPan sets `state = 
 //
 // WHAT IS STILL SWIFTUI, DELIBERATELY: the row's contents, through `UIHostingConfiguration`.
 // The search field's keyboard and clear button. Return = keyboard down, query and tall sheet stay
-// (Telegram). The X is HIS exit: "when i click x button go back to small sheet" — and it is the
+// (the reference app). The X is HIS exit: "when i click x button go back to small sheet" — and it is the
 // only path that collapses, so backspacing a query to nothing never yanks the keyboard mid-thought
 // (`textFieldShouldClear` fires for the clear BUTTON alone, never for typing).
 extension StoryViewersSheetView: UITextFieldDelegate {
@@ -79,15 +79,15 @@ final class StoryViewersSheetView: UIView {
     var onOpenProfile: ((StoryViewerInfo) -> Void)?
     var onBlock: ((StoryViewerInfo) -> Void)?
     /// Finger lifted: (progress now, progress when the drag began, velocity in progress-units/sec,
-    /// + = opening). The host decides open/close (Telegram's thresholds) and runs the one spring.
+    /// + = opening). The host decides open/close (the reference app's thresholds) and runs the one spring.
     var onRelease: ((CGFloat, CGFloat, CGFloat) -> Void)?
     /// A finger owns progress right now (any of our pans is live). The host cancels its spring on
     /// true and holds its parked-sheet watchdog while it is true.
     var onDragActive: ((Bool) -> Void)?
     /// Tap on the dark area above the panel → collapse (NOT dismiss the viewer).
     var onCollapseTap: (() -> Void)?
-    /// Swipe the sheet sideways → the NEIGHBOUR story's sheet (+1 next, -1 previous), Telegram's
-    /// viewListPanGesture: their sheet at .half slides horizontally into the next item's own list.
+    /// Swipe the sheet sideways → the NEIGHBOUR story's sheet (+1 next, -1 previous), the reference app's
+    /// own page-swipe gesture: its sheet at .half slides horizontally into the next item's own list.
     /// The host switches `sheetStoryId`; everything else (list reload, carousel recentre, the
     /// frozen story jumping underneath) already follows that one value.
     var onPage: ((Int) -> Void)?
@@ -233,9 +233,9 @@ final class StoryViewersSheetView: UIView {
     /// done that, and cannot go on to take the sheet and dismiss it. See `handlePan`.
     private var dragSpentOnSearch = false
 
-    /// SEARCH GROWS THE SHEET TO (almost) THE WHOLE SCREEN — Telegram's rule, read from their
+    /// SEARCH GROWS THE SHEET TO (almost) THE WHOLE SCREEN — the reference app's rule, read from its
     /// source on his order (2026-08-09: "there is not enough space when the keyboard appears…
-    /// first go read telegram"). Their viewers panel has two resting states, half and full, and
+    /// first go read the reference app"). Its viewers panel has two resting states, half and full, and
     /// focusing search jumps it to full = screen height minus 60 on a 0.5s spring; leaving search
     /// steps it back to half. Ours maps their "half" to the resting `heightFraction` sheet and their "full"
     /// to this flag — same layout path, one number changes, so every child lays out through the
@@ -315,7 +315,7 @@ final class StoryViewersSheetView: UIView {
     /// The window pans install when the sheet enters a window and leave with it. They live on the
     /// window because the carousel band hit-tests through this view: a pan attached HERE would never
     /// see a vertical drag that starts on the shrunken story card, and that drag is the single most
-    /// natural collapse gesture there is (it is how Telegram closes theirs).
+    /// natural collapse gesture there is (it is how the reference app closes theirs).
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if let old = installedWindow, old !== window {
@@ -428,7 +428,7 @@ final class StoryViewersSheetView: UIView {
         search.textColor = .white
         search.addTarget(self, action: #selector(searchChanged), for: .editingChanged)
         // The keyboard says SEARCH (his ask — the default return key said nothing useful), and
-        // return only lowers the keyboard: the query and the expanded sheet stay, Telegram's shape.
+        // return only lowers the keyboard: the query and the expanded sheet stay, the reference app's shape.
         search.returnKeyType = .search
         search.delegate = self
         // Focus grows the sheet, leaving with an empty query shrinks it — see `searchExpanded`.
@@ -508,7 +508,7 @@ final class StoryViewersSheetView: UIView {
     /// with search focused the keyboard simply covered the last rows, which could then be neither
     /// read nor tapped. The one thing that changes here is the table's own bottom inset, which is
     /// what a scroll view is supposed to answer a keyboard with. The SHEET's height is left alone on
-    /// purpose: its two resting heights are Telegram's and the host's settle maths is written
+    /// purpose: its two resting heights are the reference app's and the host's settle maths is written
     /// against them, so making the keyboard a third one would put two height models on one drag.
     @objc private func keyboardWillChange(_ note: Notification) {
         guard let info = note.userInfo,
@@ -558,7 +558,7 @@ final class StoryViewersSheetView: UIView {
         switch g.state {
         case .began:
             dragSpentOnSearch = false
-            // A DRAG ON THE EXPANDED SHEET STEPS BACK ONE LEVEL, Telegram's rule: full+search →
+            // A DRAG ON THE EXPANDED SHEET STEPS BACK ONE LEVEL, the reference app's rule: full+search →
             // half, and only the NEXT drag can dismiss. The host's settle math is written against
             // the half height, so letting a drag run while expanded would fight two height models.
             if searchExpanded {
@@ -641,14 +641,14 @@ final class StoryViewersSheetView: UIView {
         onCollapseTap?()
     }
 
-    /// The sheet slides sideways under the finger and commits to the neighbour's sheet — Telegram's
+    /// The sheet slides sideways under the finger and commits to the neighbour's sheet — the reference app's
     /// thresholds (30% of the width, or 5% with 200pt/s behind it).
     ///
     /// BOTH SHEETS MOVE TOGETHER, WHICH IS THE WHOLE OF HIS REPORT. It used to be a relay: the one
     /// panel slid out over 0.16s, the host flipped the story, and only THEN did the panel come back
     /// from the far edge as the new sheet. So for the entire drag there was nothing behind the panel
     /// but black, and the sheet he was swiping to did not exist until after he let go — "the next
-    /// sheet is coming late". Telegram's does not: the neighbour is on screen, moving, from the
+    /// sheet is coming late". The reference app's does not: the neighbour is on screen, moving, from the
     /// first millimetre.
     ///
     /// The trick that makes it cheap is `beginPagePreview`: the departing sheet becomes a snapshot
@@ -843,7 +843,7 @@ final class StoryViewersSheetView: UIView {
             return tapAbove.location(in: self).y < panelTop
         }
         if gestureRecognizer === pagePan {
-            // Only a settled-open sheet pages (Telegram gates theirs to the .half state too), and
+            // Only a settled-open sheet pages (the reference app gates theirs to the .half state too), and
             // only from the panel — the carousel band above has its own horizontal owner.
             guard progress > 0.95 else { return false }
             return pagePan.location(in: self).y >= panelTop
@@ -874,7 +874,7 @@ final class StoryViewersSheetView: UIView {
 
     @objc private func searchChanged() { applyFilter() }
 
-    // MARK: Search expansion (Telegram's two resting heights — see `searchExpanded`)
+    // MARK: Search expansion (the reference app's two resting heights — see `searchExpanded`)
 
     @objc private func searchBegan() { setSearchExpanded(true) }
     @objc private func searchEnded() {
@@ -886,7 +886,7 @@ final class StoryViewersSheetView: UIView {
     private func setSearchExpanded(_ on: Bool) {
         guard searchExpanded != on else { return }
         searchExpanded = on
-        // Telegram's 0.5s spring for exactly this jump. `.allowUserInteraction` for the same
+        // The reference app's 0.5s spring for exactly this jump. `.allowUserInteraction` for the same
         // reason the page settles carry it: a finger must be able to interrupt.
         UIView.animate(withDuration: 0.5, delay: 0, usingSpringWithDamping: 0.85,
                        initialSpringVelocity: 0, options: [.allowUserInteraction]) {
@@ -945,8 +945,8 @@ final class StoryViewersSheetView: UIView {
 
 /// Axis-locked pan for the sheet's window-level gestures. Judges the CUMULATIVE movement since
 /// touch-down and fails fast on the wrong axis, so a horizontal cover-flow swipe never loses its
-/// first frames to a vertical recognizer and vice versa. (Telegram's InteractiveTransitionGesture-
-/// Recognizer decides the same way: 2:1 dominance wins immediately, a distance deadline settles
+/// first frames to a vertical recognizer and vice versa. (The reference app's own directional gesture
+/// recognizer decides the same way: 2:1 dominance wins immediately, a distance deadline settles
 /// ambiguous diagonals.)
 final class DirectionalSheetPan: UIPanGestureRecognizer {
     enum Axis { case vertical, horizontal }

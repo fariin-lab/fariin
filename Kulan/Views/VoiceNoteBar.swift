@@ -4,7 +4,7 @@ import SwiftUI
 ///
 /// The engine (`VoiceNotePlayer`) is what keeps a voice note alive after you leave a conversation.
 /// Without this, that work is invisible and unusable: the audio carries on with nothing on screen to
-/// say what it is, no way to stop it, and no way back to it. WhatsApp shows exactly this, and it is
+/// say what it is, no way to stop it, and no way back to it. The reference app shows exactly this, and it is
 /// the half of the feature a person actually touches.
 ///
 /// It appears ONLY when a note is OPEN — started, not yet finished or closed — and its chat is not the

@@ -100,7 +100,7 @@ struct OfficialChatView: View {
                 ).padding(.horizontal, 12))
             },
             // Nothing to page: the channel holds the most recent hundred announcements and that is the
-            // whole history there is. Signal trims the same way.
+            // whole history there is. The reference app trims the same way.
             onReachedTop: {},
             loadingOlder: false,
             composerBarHeight: barHeight,
@@ -147,7 +147,7 @@ struct OfficialChatView: View {
     /// differently on a bad day.
     @ToolbarContentBuilder private var officialToolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
-            // The bell IS the state, the way Signal's screenshot shows it: a struck-through bell means
+            // The bell IS the state, the way the reference app's screenshot shows it: a struck-through bell means
             // this chat is quiet. It starts struck through for everybody and stays that way unless
             // somebody deliberately turns it on.
             Button { store.setMuted(!store.state.muted) } label: {
@@ -169,8 +169,8 @@ struct OfficialChatView: View {
 
     // MARK: The bar where the composer would be
 
-    /// Signal replaces the composer with a `BlockingErrorBottomPanelView` reading "The only official
-    /// chat from Signal"; WhatsApp's says "Only WhatsApp can send messages". Ours says the same thing
+    /// The reference app replaces the composer with a blocking panel reading a line to the effect of
+    /// "this is the only official chat"; another mainstream messenger's equivalent panel says only it can send messages here. Ours says the same thing
     /// in our own words. It is NOT a disabled text field — a greyed-out box invites tapping, and the
     /// point is that there is nothing to tap.
     private var cannotReplyBar: some View {
@@ -255,12 +255,12 @@ struct OfficialChatInfoView: View {
             // thought: here is what this chat is, and here is why you can believe it. Split apart,
             // the trust half looked like an afterthought rather than the point.
             //
-            // NOT WhatsApp's shape though (he asked for that explicitly). Theirs is one grey card of
+            // NOT that same messenger's shape though (he asked for that explicitly). Theirs is one grey card of
             // plain paragraphs with a link at the bottom. Ours keeps a header and keeps the seal on
             // the line it belongs to, so the card has structure theirs does not.
             Section {
                 Text("This is where we tell you about new things, fixes and updates.")
-                // THE LINE THAT ACTUALLY PROTECTS SOMEBODY. Read from WhatsApp's official chat, which
+                // THE LINE THAT ACTUALLY PROTECTS SOMEBODY. Read from that same messenger's official chat, which
                 // spends its welcome teaching you how to spot a fake rather than greeting you: "we'll
                 // never ask for your personal information".
                 //
@@ -314,7 +314,7 @@ struct OfficialChatInfoView: View {
 
 // MARK: - The channel's face
 
-/// The app's own icon on a circle. Signal renders `ic_signal_logo_large` into the release channel's
+/// The app's own icon on a circle. The reference app renders its own release-channel logo asset into the release channel's
 /// avatar for the same reason: the one identity nobody else can wear is the app's own.
 struct OfficialAvatar: View {
     var size: CGFloat = 48
@@ -440,7 +440,7 @@ struct AnnouncementRow: View {
         }
     }
 
-    /// Buttons live INSIDE the bubble under a hairline, which is what WhatsApp's official account
+    /// Buttons live INSIDE the bubble under a hairline, which is what that same messenger's official account
     /// does and what an iOS alert does. A row of pills floating under the bubble was the other option
     /// and it reads as a web page.
     private var buttonStack: some View {

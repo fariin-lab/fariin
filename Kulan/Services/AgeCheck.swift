@@ -9,15 +9,15 @@ import DeclaredAgeRange
 /// Fariin knew nothing about anybody's age. The privacy policy promises "not intended for children
 /// under 13... we do not knowingly hold data about them", and the Terms say 13 or older, and until
 /// today the app asked nothing at all, so both promises rested on never finding out. The sign-up
-/// line added in 95cf506 is the floor: a child taps past it, exactly as they do on WhatsApp,
-/// Telegram and Signal, none of which verify anything either.
+/// line added in 95cf506 is the floor: a child taps past it, exactly as they do on the standard
+/// messengers, none of which verify anything either.
 ///
 /// This is the part that is not a checkbox. Apple holds a real age on the Apple ID, and for children
 /// in a Family Sharing group a parent set it. `AgeRangeService` returns a BAND, never a birthday, so
 /// nothing sensitive is collected or stored.
 ///
-/// ⚠️ THE THING THE OTHERS CANNOT DO. WhatsApp and Signal must support ten-year-old Android phones,
-/// so this API can never be their answer. Fariin's deployment target is iOS 26, which is exactly the
+/// ⚠️ THE THING THE OTHERS CANNOT DO. The standard messengers must support ten-year-old Android
+/// phones, so this API can never be their answer. Fariin's deployment target is iOS 26, which is exactly the
 /// version this shipped in, so EVERY user has it. The constraint the owner already accepted, cutting
 /// off old phones, is what makes this available.
 ///

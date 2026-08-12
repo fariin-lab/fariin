@@ -4,7 +4,7 @@ import UIKit
 // THE CUSTOM LONG-PRESS MENU — the reference app's architecture, our code. EXPERIMENT BRANCH ONLY until the
 // owner's device verdict (his deal 2026-07-30: ships alone, two TestFlights or we give up).
 //
-// Read 2026-07-30 from the reference app-iOS CustomContextMenus/* (see kulan-signal-custom-menu-study memory).
+// Read 2026-07-30 from the reference implementation's CustomContextMenus/* (see kulan-context-menu-study memory).
 // The whole idea in one line: Apple's menu is never involved. We SNAPSHOT the pressed bubble, hide
 // the real one, blur the whole screen in our own overlay, and place bar · message · menu ourselves,
 // shrinking the snapshot when a tall message would not fit. Every recognizer involved lives on THIS
@@ -92,13 +92,13 @@ final class CMOverlay: UIView {
 
     /// WHOSE ANIMATION THIS MENU OPENS AND CLOSES WITH.
     ///
-    /// The chat's long-press menu is Signal's, numbers and all, and he has judged it already — it does
-    /// not change. The STORY ROW's is Telegram's, on his 2026-08-08 order ("make it like telegram…
+    /// The chat's long-press menu runs the .signal case's numbers and all, and he has judged it already — it does
+    /// not change. The STORY ROW's runs the .telegram case's, on his 2026-08-08 order ("make it like the reference app…
     /// dont chnage my design just Long pres how to work long press and Close both"). The design is
     /// untouched either way; this is only what moves and how long it takes.
     ///
-    /// **Read out of Telegram's own source, not guessed** —
-    /// `submodules/TelegramUI/Components/ContextControllerImpl/Sources/ContextControllerExtractedPresentationNode.swift`:
+    /// **Read out of the reference app's own source, not guessed** — the reference implementation
+    /// (the context-menu presentation node backing the .telegram motion):
     ///
     /// - **IN** `duration 0.42`, `CASpringAnimation(mass 5, stiffness 900, damping 104)`, from REST.
     ///   Critical damping there is `2·√(900·5) = 134.16`, so their ratio is `104/134.16 = 0.775` —
@@ -137,9 +137,9 @@ final class CMOverlay: UIView {
     // way IN only needed the menu's own numbers moved. The way OUT is a different animation entirely.
     private var openDuration: TimeInterval { motion == .telegram ? 0.42 : springDuration }
     private var openDamping: CGFloat { motion == .telegram ? 0.775 : springDamping }
-    /// Telegram's springs start from rest; Signal's are launched with velocity.
+    /// The .telegram case's springs start from rest; the .signal case's are launched with velocity.
     private var openVelocity: CGFloat { motion == .telegram ? 0 : 1.0 }
-    /// Telegram grows the menu out of nothing, Signal out of a fifth of itself.
+    /// The .telegram case grows the menu out of nothing, the .signal case out of a fifth of itself.
     private var cardMinScale: CGFloat { motion == .telegram ? 0.01 : 0.2 }
 
     private var fingerExitedDeadZone = false
@@ -224,10 +224,10 @@ final class CMOverlay: UIView {
         let frames = computeFrames(in: bounds)
         // Everything starts where the real bubble is; the spring carries it to the computed place.
         previewView.frame = sourceFrame
-        // TELEGRAM'S LIFT DOES NOT SCALE. Their extracted content animates `position` and nothing
+        // THE .TELEGRAM CASE'S LIFT DOES NOT SCALE. Its extracted content animates `position` and nothing
         // else; the squeeze belongs to the press gesture, before the menu exists. Releasing a 0.95
         // squeeze here with no squeeze before it is a card that pops BIGGER under the finger, which
-        // is not what their story row does.
+        // is not what its story row does.
         if startAtSqueeze, motion == .signal {
             previewView.transform = CGAffineTransform(scaleX: 0.95, y: 0.95)
         }
@@ -280,9 +280,9 @@ final class CMOverlay: UIView {
             }
         }
 
-        // TELEGRAM TAKES THE MENU'S ALPHA OUT OF THE SPRING. Theirs is opaque in 0.05 and its whole
+        // THE .TELEGRAM CASE TAKES THE MENU'S ALPHA OUT OF THE SPRING. It is opaque in 0.05 and its whole
         // entrance is the growth from 0.01; ours faded across the full spring, so the menu arrived by
-        // materialising rather than by opening. Signal's keeps its fade, inside the spring below.
+        // materialising rather than by opening. The .signal case keeps its fade, inside the spring below.
         if motion == .telegram {
             UIView.animate(withDuration: 0.05) { self.card.alpha = 1 }
         }
@@ -353,15 +353,15 @@ final class CMOverlay: UIView {
         bar?.playDismissal(duration: 0.2)
         let home = liveSourceFrame?() ?? sourceFrame
 
-        // TELEGRAM'S CLOSE, WHOLE. One animation, 0.2s, plain ease-in-out, nothing springing: the
+        // THE .TELEGRAM CASE'S CLOSE, WHOLE. One animation, 0.2s, plain ease-in-out, nothing springing: the
         // card slides home, the menu shrinks to nothing and fades, the blur goes, and they all land
-        // together. Their `animateOut` is `duration = 0.2` with `easeInEaseOut` and every layer
+        // together. The reference implementation's close runs at `duration = 0.2` with `easeInEaseOut` and every layer
         // driven by `layer.animate(...)`, not `animateSpring`.
         //
         // ⚠️ THE ABSENCE OF THE SPRING IS THE POINT, not the shorter clock. A spring returning home
         // overshoots the slot and settles back into it, and on a card landing in a row of other
         // cards that reads as the thing bouncing — his report. Do not "improve" this by giving it a
-        // gentle damping; there is no spring in Telegram's close at all.
+        // gentle damping; there is no spring in the .telegram case's close at all.
         if motion == .telegram {
             UIView.animate(withDuration: 0.2, delay: 0,
                            options: [.curveEaseInOut, .beginFromCurrentState]) {
@@ -550,7 +550,7 @@ final class CMActionsCard: UIView {
     private let scroll = UIScrollView()
     private var rows: [CMActionRow] = []
 
-    // SIGNAL'S OWN CARD NUMBERS, read from ContextMenuActionsAccessory.swift — no measurements,
+    // THE REFERENCE APP'S OWN CARD NUMBERS, read from the reference implementation — no measurements,
     // no rounding of our own. Row = body line (~22) + their verticalPadding 23. maxWidth 250,
     // corner 33 / vMargin 10 under the iOS 26 glass, 12 / 0 on the frosted fallback.
     // The ONE deliberate divergence stays ours: NO hairline separators (owner rejected them).

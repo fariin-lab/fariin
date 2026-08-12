@@ -21,7 +21,7 @@ final class StoryViewModel: ObservableObject {
 
     /// WHERE EACH PERSON WAS LEFT, FOR THIS VIEWING SESSION ONLY. Keyed by bucket id.
     ///
-    /// Instagram's and Snapchat's rule, and the owner's report: swiping back to somebody you were
+    /// The standard messengers' rule, and the owner's report: swiping back to somebody you were
     /// watching two seconds ago restarted them at item 1, because the only answer the viewer had for
     /// "where does this person open" was `firstUnseenIndex()` — which falls back to 0 the moment
     /// everything of theirs is watched, and it was asked again on every bucket change rather than
@@ -51,8 +51,8 @@ final class StoryViewModel: ObservableObject {
     
     /// WHERE A FULLY-WATCHED PERSON OPENS, when nothing is remembered about them.
     ///
-    /// Signal's rule, read from their source rather than guessed
-    /// (StoryContextViewController.didTapLeft / didTapRight):
+    /// The reference app's rule, read from its source rather than guessed
+    /// (the reference implementation's left/right tap handlers):
     ///
     ///     didTapLeft():  transitionToPreviousItem(previousContextLoadPositionIfRead: .newest)
     ///     didTapRight(): transitionToNextItem(nextContextLoadPositionIfRead: .oldest)

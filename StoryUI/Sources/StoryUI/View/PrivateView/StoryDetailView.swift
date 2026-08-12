@@ -56,7 +56,7 @@ private struct SheetCaptionFade: ViewModifier {
     /// caption").
     ///
     /// The caption is drawn inside the card, so unlike the reply bar it shrinks with it and had no
-    /// reason to leave — the card's own chrome staying put is Snapchat's look and it is deliberate.
+    /// reason to leave — the card's own chrome staying put is another mainstream messenger's look and it is deliberate.
     /// But a caption is a paragraph of text, and a paragraph rendered at a third of its size over a
     /// picture the size of a row card is a smudge, not a caption. `storyFlightActive` is already
     /// the app's answer to "is the card in the air", posted on the FIRST frame of a pull (an exit
@@ -74,7 +74,7 @@ private struct SheetCaptionFade: ViewModifier {
     ///
     /// So the fade takes the LARGER of the two. The notification still drives the redraw and still
     /// gives the smooth per-frame curve under a finger; the fraction guarantees the end state by
-    /// construction. This is Telegram's `captionAlpha *= (1.0 - contentScaleFraction)` translated
+    /// construction. This is the reference app's `captionAlpha *= (1.0 - contentScaleFraction)` translated
     /// into a view that cannot be handed its alpha directly — same guarantee, same number, same
     /// reason it cannot be told a lie.
     private var opacity: Double {
@@ -152,8 +152,8 @@ struct StoryDetailView: View {
     /// "Uploading…" bar, and the view count arriving late.
     ///
     /// This fires on the item CHANGING and nothing else, which is the same edge the lookahead
-    /// already uses (see `startProgress`) and the same separation Telegram draws: `markAsSeen` waits
-    /// for real playback, while `StoryContentContextImpl.updateState` reports the current item
+    /// already uses (see `startProgress`) and the same separation the reference app draws: `markAsSeen` waits
+    /// for real playback, while the reference implementation reports the current item
     /// immediately. Two questions, two answers.
     var onItemChanged: ((String) -> Void)?
     var showMore: Bool = false   // show the header "…" dropdown menu (buttons post notifications to the host)
@@ -184,7 +184,7 @@ struct StoryDetailView: View {
     /// A hero open or close is in the air (host posts `storyFlightActive`).
     ///
     /// SEPARATE FROM `chromeHidden` ON PURPOSE, and the difference is the whole point. The bars and
-    /// the name live INSIDE the card, so they shrink with it — Snapchat keeps them there for the
+    /// the name live INSIDE the card, so they shrink with it — another mainstream messenger keeps them there for the
     /// whole pull, and it is what makes a story card read as a card rather than a photo sliding
     /// about. The REPLY BAR does not: it is drawn below the card, it does not move, and it carries
     /// its own solid black footer, so it has to leave. One flag for the sheet, one for the flight.
@@ -267,9 +267,9 @@ struct StoryDetailView: View {
     }
 
     /// Should the picture be dimmed behind the reply keyboard? See the overlay in `body` for the
-    /// Telegram numbers this copies.
+    /// reference app's numbers this copies.
     ///
-    /// `chromeHidden` is the second half, and it is theirs too: they clear the dim when the view
+    /// `chromeHidden` is the second half, and it is the reference app's too: it clears the dim when the view
     /// list is showing (`if component.hideUI || self.viewListDisplayState != .hidden`). Ours is the
     /// viewers sheet, and the reason is the same — the sheet's own scale and scrim already own the
     /// picture's brightness at that point, and a second dim underneath is a step nobody asked for.
@@ -291,8 +291,8 @@ struct StoryDetailView: View {
             ?? UIEdgeInsets(top: 47, left: 0, bottom: 34, right: 0)
     }
 
-    /// THE STORY CARD'S HEIGHT, and this is Telegram's rule read out of their source rather than
-    /// guessed from a screenshot. `StoryItemSetContainerComponent.swift`:
+    /// THE STORY CARD'S HEIGHT, and this is the reference app's rule read out of its source rather than
+    /// guessed from a screenshot. The reference implementation:
     ///
     ///   :3942  itemSize   = (width, ceil(width * 1.77778))    // 9:16, always
     ///   :3955  height     = min(itemSize.height, screenH - safeTop - bottomInset)
@@ -318,7 +318,7 @@ struct StoryDetailView: View {
         return max(1, min(nineBySixteen, available))
     }
 
-    /// Telegram's own card radius (`:4031`). Ours was 24 on the bottom corners only, and 0 on top,
+    /// The reference app's own card radius. Ours was 24 on the bottom corners only, and 0 on top,
     /// because the card used to run off the top of the screen and there was no top corner to round.
     private let cardRadius: CGFloat = 12
 
@@ -349,7 +349,7 @@ struct StoryDetailView: View {
                     // how much room the bar underneath needs.
                     let isReplyBar = story.config.storyType != .plain()
                     let footerH: CGFloat = isReplyBar ? Constant.MessageView.height + 32 + winInsets.bottom : 0
-                    // THE CARD. Sized and placed by Telegram's rule (see `cardHeight`), pinned to the
+                    // THE CARD. Sized and placed by the reference app's rule (see `cardHeight`), pinned to the
                     // safe-area top by the VStack below rather than centred in the screen.
                     VStack(spacing: 0) {
                         getStoryView(with: index, story: story)
@@ -357,13 +357,13 @@ struct StoryDetailView: View {
                                    height: cardHeight(width: proxy.size.width,
                                                       containerH: proxy.size.height,
                                                       footerH: footerH))
-                            // THE STORY STEPS BACK WHILE YOU TYPE. His report, with a Telegram
+                            // THE STORY STEPS BACK WHILE YOU TYPE. His report, with a reference
                             // screenshot beside ours: opening the reply keyboard left our picture at
                             // full brightness, so the thing you are reading and the thing you are
                             // writing competed, and on a bright photo the reply bar was hard to see
                             // at all.
                             //
-                            // Telegram's own numbers, read from `StoryItemSetContainerComponent`:
+                            // The reference app's own numbers, read from the reference implementation:
                             // `contentDimView.backgroundColor = UIColor(white: 0.0, alpha: 0.8)`,
                             // and `dimAlpha` goes to 1 exactly when `inputPanelIsOverlay`, which is
                             // true when and only when the keyboard has height. So: black at 0.8, on
@@ -432,7 +432,7 @@ struct StoryDetailView: View {
                             // Putting the black here instead means there IS no black outside the
                             // card for a clip to fail to remove: the card is opaque by construction,
                             // and everything around it can be transparent at every moment of the
-                            // drag. Snapchat's dismissal looks the way it does for the same reason —
+                            // drag. Another mainstream messenger's dismissal looks the way it does for the same reason —
                             // what pulls away is the picture and nothing else.
                             .background(Color.black)
                             // ⚠️ THE REASON THIS WAS ADDED IS GONE, AND IT IS STILL HERE ON PURPOSE.
@@ -488,7 +488,7 @@ struct StoryDetailView: View {
                                                                     style: .continuous)),
                                      alignment: .top)
                             // THE BARS AND THE HEADER LIVE INSIDE THE CARD, over the picture, which is
-                            // where Telegram puts them (`contentInsets.top = 54`). They used to be
+                            // where the reference app puts them (`contentInsets.top = 54`). They used to be
                             // overlaid on the SCREEN, so they sat on black above the story and read as
                             // part of the phone rather than part of the story. This is what he circled.
                             .overlay(
@@ -585,8 +585,8 @@ struct StoryDetailView: View {
             if buffering != isBuffering { isBuffering = buffering }
             bufferingURL = buffering ? sender : ""
         }
-        // THE CLIP SAYS IT ENDED; ONLY THEN DOES A VIDEO SEGMENT COMPLETE. Telegram's
-        // `videoNode.playbackCompleted` is the single thing that advances a video story there —
+        // THE CLIP SAYS IT ENDED; ONLY THEN DOES A VIDEO SEGMENT COMPLETE. The reference app's
+        // own completion callback is the single thing that advances a video story there —
         // position updates carry `canSwitch = false` — and this is our half of that rule: the bar
         // is capped under the boundary (`syncBarToPlayer`) and this report crosses it. Guarded to
         // the sender being the clip actually on screen, so a stale end (a clip finishing during a
@@ -620,7 +620,7 @@ struct StoryDetailView: View {
             // Asking `firstUnseenIndex` here unconditionally is what restarted a fully-watched
             // person at item 1 every single time you swiped back to them.
             // The ITEM is remembered, the position inside it is not: a video returned to restarts
-            // from zero (the owner's 2026-08-11 rule, and Telegram's behaviour — a revisited item
+            // from zero (the owner's 2026-08-11 rule, and the reference app's behaviour — a revisited item
             // is a fresh player seeked to 0), so the bar starts the segment exactly where the
             // player will: at its beginning.
             if newValue == model.id {
@@ -932,7 +932,7 @@ private extension StoryDetailView {
             // 8 FROM THE CARD'S TOP, not from the screen's. This used to add `winInsets.top` because
             // the chrome was overlaid on the whole screen and had to clear the notch itself. The card
             // already begins below the notch, so keeping that here would push the bars 67pt down
-            // INSIDE the story. Telegram's sit about 7 below their card's top edge.
+            // INSIDE the story. The reference app's sit about 7 below its card's top edge.
             .padding(.top, 8)
             .padding(.bottom, 8)
             UserView(
@@ -969,7 +969,7 @@ private extension StoryDetailView {
         .background(showBlackFooter ? AnyView(Color.black.ignoresSafeArea(edges: .bottom)) : AnyView(Color.clear))
         // GONE FOR THE WHOLE FLIGHT. It sits below the card and does not move with it, and that black
         // footer would be a bar of black across the bottom of the chat list while the story flew home.
-        // Snapchat's does the same: at rest there is a reply bar, and the instant the pull starts it
+        // Another mainstream messenger does the same: at rest there is a reply bar, and the instant the pull starts it
         // is not there. See `flightActive`.
         .opacity(flightActive ? 0 : 1)
         .animation(.easeOut(duration: 0.15), value: flightActive)
@@ -982,10 +982,10 @@ private extension StoryDetailView {
     }
 
     /// ⚠️ A STRAIGHT FADE IS A HEAVY FADE, and that is his 2026-08-09 "caption shadow is too much,
-    /// use the shadow telegram is using".
+    /// use the shadow the reference app is using".
     ///
     /// Both of ours were `LinearGradient(colors:)`, which puts a stop at each end and interpolates
-    /// evenly between them. Telegram's are not straight. They generate EIGHT stops and run the alpha
+    /// evenly between them. The reference app's are not straight. It generates EIGHT stops and runs the alpha
     /// through `bezierPoint(0.42, 0.0, 0.58, 1.0, step)` — CSS ease-in-out — so the fade leaves the
     /// picture almost untouched for its first third and does its darkening low down, near the text
     /// that needs it (`StoryContentCaptionComponent`, `StoryItemSetContainerComponent`).
@@ -1006,8 +1006,8 @@ private extension StoryDetailView {
     }
 
     // Top dark scrim so the header (username, avatar, X) stays readable on white/bright stories.
-    // Telegram's numbers: black, 40% at the very top, eased away to nothing 90pt down
-    // (`topGradientHeight: CGFloat = 90.0`, and their PanelGradient asset peaks at 102/255).
+    // The reference app's numbers: black, 40% at the very top, eased away to nothing 90pt down
+    // (`topGradientHeight: CGFloat = 90.0`, and its own gradient asset peaks at 102/255).
     // Ours was 50% over 130pt and straight, so it was heavier in every part of the band at once.
     var topScrim: some View {
         LinearGradient(stops: Self.scrimStops(peak: 0.4), startPoint: .bottom, endPoint: .top)
@@ -1025,9 +1025,9 @@ private extension StoryDetailView {
                 // Backs the CAPTION only. It used to be 210 because the reply bar floated over the
                 // media and needed darkening too; the bar sits below the card now, so a fade that
                 // tall just dimmed a third of the picture for nothing.
-                // Telegram's caption scrim exactly: black, 0.8 at the bottom, 128pt tall, and eased
+                // The reference app's caption scrim exactly: black, 0.8 at the bottom, 128pt tall, and eased
                 // rather than straight — see `scrimStops`. The peak and the height were already
-                // theirs; the straight ramp between them is what he photographed.
+                // its; the straight ramp between them is what he photographed.
                 LinearGradient(stops: Self.scrimStops(peak: 0.8), startPoint: .top, endPoint: .bottom)
                     .frame(height: 128)
                     .allowsHitTesting(false)
@@ -1054,9 +1054,9 @@ private extension StoryDetailView {
                     // exactly that footer — so the old lift pushed the caption a further ~130pt up
                     // and left it stranded in the middle of the picture, which is what he circled.
                     //
-                    // 14 IN BOTH CASES (owner 2026-08-06: "slightly too high… make it like telegram").
+                    // 14 IN BOTH CASES (owner 2026-08-06: "slightly too high… make it like the reference app").
                     // It was 28 on my own story and 16 on a friend's — two numbers for one thing, and
-                    // the bigger one is the one he photographed sitting too far up. Telegram puts its
+                    // the bigger one is the one he photographed sitting too far up. The reference app puts its
                     // caption the same short distance off the bottom edge whatever the story is, and
                     // the reply bar cannot be the reason for a difference any more: it sits BELOW the
                     // card now, not over the picture.
@@ -1259,7 +1259,7 @@ private extension StoryDetailView {
     
     // DELETED HERE: `resumeFraction(at:)`. It topped the bar up to a REMEMBERED playback position
     // so bar and player could resume together. There is no remembered position any more — a video
-    // returned to restarts from zero (the owner's 2026-08-11 rule, Telegram's behaviour) — so its
+    // returned to restarts from zero (the owner's 2026-08-11 rule, the reference app's behaviour) — so its
     // two call sites hand the bar a bare index and the player starts the clip at its beginning.
     // Left as a note because a function that used to exist is a function somebody will reinvent.
 
@@ -1285,9 +1285,9 @@ private extension StoryDetailView {
         isHolding = false
         // ⚠️ AND THE BUFFERING LATCH, which was the one that could never come back down.
         //
-        // Telegram does not store this at all: `isBuffering` is recomputed as a LOCAL on every
-        // progress tick and handed straight to the bar (StoryItemContentComponent, in
-        // `updateVideoPlaybackProgress`), so it cannot survive anything. Ours is a flag written only
+        // The reference app does not store this at all: `isBuffering` is recomputed as a LOCAL on every
+        // progress tick and handed straight to the bar (in the reference implementation's
+        // progress update), so it cannot survive anything. Ours is a flag written only
         // by a notification, and the notification had a one-way door in it: the receiver drops any
         // message addressed to a page that is no longer current, while `VideoLoader.setBuffering` is
         // edge-deduped per view and so never sends `false` twice. Swipe away from a stalled video
@@ -1313,7 +1313,7 @@ private extension StoryDetailView {
             // about a 0.55s response. Nothing it could animate was on screen: the page move belongs
             // to `UIPageViewController`, which reads its own duration and ignores SwiftUI entirely.
             // So the spring drove no visible motion and only held the state change, and everything
-            // waiting behind it, in a slow transaction. Measured against Telegram's ~0.3s
+            // waiting behind it, in a slow transaction. Measured against the reference app's ~0.3s
             // peer-to-peer move, this was the largest single piece of our ~0.9s.
             viewModel.currentStoryUser = viewModel.stories[bundleIndex - 1].id
         } else {
@@ -1347,7 +1347,7 @@ private extension StoryDetailView {
                 // about a 0.55s response. Nothing it could animate was on screen: the page move belongs
                 // to `UIPageViewController`, which reads its own duration and ignores SwiftUI entirely.
                 // So the spring drove no visible motion and only held the state change, and everything
-                // waiting behind it, in a slow transaction. Measured against Telegram's ~0.3s
+                // waiting behind it, in a slow transaction. Measured against the reference app's ~0.3s
                 // peer-to-peer move, this was the largest single piece of our ~0.9s.
                 viewModel.currentStoryUser = viewModel.stories[bundleIndex + 1].id
             }
@@ -1373,9 +1373,9 @@ private extension StoryDetailView {
         // download, every time, because the guess that was supposed to have removed it had not been
         // allowed to start.
         //
-        // Telegram separates the two outright. `markAsSeen` waits for real playback
-        // (`StoryItemContentComponent`), while the preload of the next three items is driven from
-        // `StoryContentContextImpl.updateState` — the item CHANGING, nothing else. This is that,
+        // The reference app separates the two outright. `markAsSeen` waits for real playback
+        // (the reference implementation), while the preload of the next three items is driven from
+        // its own state-change hook — the item CHANGING, nothing else. This is that,
         // on the same list the host used to flatten for us: every story in the viewer in the order
         // they will be watched, across people, so the last item of one warms the first of the next.
         if viewModel.currentStoryUser == model.id {
@@ -1435,8 +1435,8 @@ private extension StoryDetailView {
         // item, or opening the viewer and immediately swiping down, spends the single view on a
         // story that was never actually watched. It then vanishes and cannot be reopened.
         //
-        // Telegram's rule, from `StoryItemContentComponent.updateVideoPlaybackProgress`: `markAsSeen`
-        // is called only once playback reports `.playing` with a real timestamp, and their comment
+        // The reference app's rule, from the reference implementation: `markAsSeen`
+        // is called only once playback reports `.playing` with a real timestamp, and its comment
         // is explicit that a story which never plays is never marked seen. Ours has no player for a
         // photo, so the equivalent is "the clock for this item is actually running": not paused, not
         // held, not frozen behind a sheet or the keyboard, not mid-fold. Every one of those is a
@@ -1521,8 +1521,8 @@ private extension StoryDetailView {
         }
     }
 
-    /// THE BAR READS THE PLAYER, FOR A VIDEO — Telegram's rule, and the reason their bar cannot
-    /// disagree with the picture (`StoryItemContentComponent.updateVideoPlaybackProgress`: the
+    /// THE BAR READS THE PLAYER, FOR A VIDEO — the reference app's rule, and the reason its bar cannot
+    /// disagree with the picture (the reference implementation: the
     /// bar's fraction is the player's own reported timestamp over its duration, sixty times a
     /// second). Ours accumulated wall time against the declared duration and never asked the player
     /// once, so every seek, stall, slow start and rebuilt player put the two clocks apart for the
@@ -1533,7 +1533,7 @@ private extension StoryDetailView {
     /// gap, a return to a story whose player is still being rebuilt — see `StoryPlaybackClock`): a
     /// bar that cannot read its own clip does not guess. Capped just under the segment boundary so
     /// the segment can only be COMPLETED by the player's own end-of-clip report
-    /// (`.storyVideoFinished`), never by bar arithmetic — Telegram's `canSwitch` rule exactly.
+    /// (`.storyVideoFinished`), never by bar arithmetic — the reference app's `canSwitch` rule exactly.
     func syncBarToPlayer(index: Int, story: Story) {
         // An item that can never play again keeps the old wall clock, so a broken clip still hands
         // the screen on after its declared duration instead of freezing the story for good.
@@ -1545,7 +1545,7 @@ private extension StoryDetailView {
         let t = player.currentTime().seconds
         guard t.isFinite, t >= 0 else { return }
         // The player's real duration once it knows it, the declared one until then — the same
-        // preference Telegram applies (`effectiveDuration`), so the fraction and the clip end
+        // preference the reference app applies (`effectiveDuration`), so the fraction and the clip end
         // together even when the host's declared length is a little off.
         var duration = story.duration
         if let real = player.currentItem?.duration.seconds, real.isFinite, real > 0 { duration = real }
@@ -1711,7 +1711,7 @@ private extension StoryDetailView {
 
     /// WHERE THIS PERSON OPENS, in the order the answer is looked for:
     ///
-    ///   1. where they were left in this viewing session (Signal keeps the item on a context it has
+    ///   1. where they were left in this viewing session (another mainstream messenger keeps the item on a context it has
     ///      already built — `resetForPresentation`'s `if let currentItemMediaView` branch),
     ///   2. their first unwatched item,
     ///   3. everything watched: their NEWEST if we arrived going backwards, their oldest going

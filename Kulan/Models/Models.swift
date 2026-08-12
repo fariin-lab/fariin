@@ -122,7 +122,7 @@ struct Message: Identifiable, Equatable {
     var callDuration: Int? = nil            // seconds (0 if not answered)
     var edited: Bool = false                // text was edited after sending
     /// Deleted for everyone. The document SURVIVES as a tombstone so both sides see that something
-    /// was here and removed, the way the reference app and the reference app do it, instead of a message silently
+    /// was here and removed, the way the standard messengers do it, instead of a message silently
     /// vanishing and leaving the other person wondering what they missed. The content is stripped
     /// server-side and the media is deleted from Storage, so what remains is a few bytes of marker.
     var deleted: Bool = false
@@ -680,7 +680,7 @@ struct Conversation: Identifiable, Equatable, Hashable {
         if isGroup { return others(me).allSatisfy { (unreadCount[$0] ?? 0) <= 0 } }
         return (unreadCount[otherUid(me)] ?? 0) <= 0
     }
-    /// HAS SOMEBODY ELSE PLAYED MY VOICE NOTE? WhatsApp turns the sender's mic icon blue for exactly
+    /// HAS SOMEBODY ELSE PLAYED MY VOICE NOTE? The reference app turns the sender's mic icon blue for exactly
     /// this, and it is the one voice-note signal we had nothing for: you could send a two-minute note
     /// and never learn whether it was heard.
     ///

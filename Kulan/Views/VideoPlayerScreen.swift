@@ -70,7 +70,7 @@ struct VideoPlayerScreen: View {
                 }
         )
         // The interactive dismiss — the SAME code path as the image viewer
-        // (SignalMediaDismiss.swift): one UIKit vertical pan, lightweight poster copy locked 1:1 to
+        // (MediaDismiss.swift): one UIKit vertical pan, lightweight poster copy locked 1:1 to
         // the finger, constant 0.8 scale, root-alpha scrub, 0.25s spring.
         .overlay {
             // Unconditional: the system .zoom this used to be suppressed for is gone from chat media.

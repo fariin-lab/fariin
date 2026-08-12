@@ -56,7 +56,7 @@ enum VideoTranscoder {
     }
 
     /// `storyBackdrop`: THIS IS A STORY, so a clip that does not fill the story canvas must carry
-    /// its own canvas IN THE FILE, and since 2026-08-07 that canvas is Telegram's two-colour
+    /// its own canvas IN THE FILE, and since 2026-08-07 that canvas is the reference app's two-colour
     /// GRADIENT rather than a blur — his decision after four reports of black bars; the reasoning is
     /// on `gradientComposition`. Baked at post time like the photo path (`flattenBackdrop`), because
     /// THREE viewer-side attempts shipped and failed on his phone — see the kulan-square-video-blur
@@ -116,7 +116,7 @@ enum VideoTranscoder {
         let out = FileManager.default.temporaryDirectory.appendingPathComponent("send-\(UUID().uuidString).mp4")
         try? FileManager.default.removeItem(at: out)
         // HD = 1080p (bigger file, sharper); standard = 720p (smaller, the default).
-        // 540p BY DEFAULT, down from 720p. Read Signal's pipeline for this: they export everything at
+        // 540p BY DEFAULT, down from 720p. Read another mainstream messenger's pipeline for this: they export everything at
         // AVAssetExportPreset640x480 and that single line is why an 18 second clip leaves their app
         // in about three seconds while ours took nearly four just to compress, before a byte moved.
         // Three times the pixels costs twice — the encode is ~3x longer AND the file is ~3x bigger,
@@ -129,7 +129,7 @@ enum VideoTranscoder {
         // on a 2026 phone is visibly rough, and a video of a wedding that arrives soft has lost the
         // thing it was sent for.
         //
-        // 540p is half the pixels of 720p (twice as fast, half the data) and still 1.7x Signal's. HD
+        // 540p is half the pixels of 720p (twice as fast, half the data) and still 1.7x that app's. HD
         // stays 1080p because that is an explicit choice somebody made for a reason.
         let preset = hd ? AVAssetExportPreset1920x1080 : AVAssetExportPreset960x540
         // A composition of our own needs a preset that will not impose a size as well — the render
@@ -163,7 +163,7 @@ enum VideoTranscoder {
         // The clip is end-to-end encrypted so the server never sees any of it — but the person
         // receiving it gets the sender's exact location embedded in the file, permanently, and can
         // read it out with any photo app. In an app that sells itself on privacy that is not a
-        // trade-off, it is an oversight. Signal has always set this filter; we never did.
+        // trade-off, it is an oversight. That same app has always set this filter; we never did.
         session.metadataItemFilter = AVMetadataItemFilter.forSharing()
         if composing {
             session.videoComposition = await burnIn(asset: exportAsset, overlay: overlay,
@@ -400,16 +400,16 @@ enum VideoTranscoder {
         return comp
     }
 
-    /// THE STORY'S CANVAS, FILLED THE WAY TELEGRAM FILLS IT: a two-colour gradient sampled from the
+    /// THE STORY'S CANVAS, FILLED THE WAY THE REFERENCE APP FILLS IT: a two-colour gradient sampled from the
     /// clip, baked into the exported file. Core Image per frame rather than the CoreAnimation tool,
     /// because a composition instruction paints its empty areas OPAQUE black (documented: background
     /// colours must be opaque), so a layer behind the video can never show through it.
     ///
     /// ⚠️ WHY THIS IS NOT A BLUR ANY MORE — his call, 2026-08-07, after four reports of black bars.
-    /// He asked me to read Telegram; I read `VideoFinishPass.swift` and `mediaEditorGetGradientColors`
-    /// in their MediaEditor, and they do not blur at all. They take two colours off the first frame
-    /// and run a gradient behind the video. Rebuilt here from that idea, NOT copied: Telegram is
-    /// GPL and that licence is exactly why we never take their code ([[kulan-telegram-conversation-mode]]).
+    /// He asked me to read the reference implementation; I read through its finishing pass and its
+    /// gradient-colour code, and they do not blur at all. They take two colours off the first frame
+    /// and run a gradient behind the video. Rebuilt here from that idea, NOT copied: the reference app is
+    /// GPL and that licence is exactly why we never take their code.
     ///
     /// The blur had FOUR separate ways to return nil — a poster frame that would not decode, a
     /// degenerate canvas, a CIContext that would not produce a bitmap, and a throwing composition
@@ -519,7 +519,7 @@ enum VideoTranscoder {
     /// THE CANVAS ALONE, with no clip drawn on it, for the EDITOR to show behind its live preview.
     ///
     /// The editor used to wash its card with a blurred, desaturated, darkened copy of the poster,
-    /// which is what the export used to bake too. The export bakes Telegram's gradient now, so the
+    /// which is what the export used to bake too. The export bakes the reference app's gradient now, so the
     /// two stopped agreeing: he framed a clip against a blur and got back a gradient. This screen's
     /// whole contract is that what you see is what is posted.
     ///

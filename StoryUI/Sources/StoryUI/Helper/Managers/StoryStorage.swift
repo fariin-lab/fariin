@@ -25,8 +25,8 @@ import Foundation
 /// is what buys the right to leave `Caches` at all.
 public enum StoryStorage {
 
-    /// TWO DAYS, WHICH IS TELEGRAM'S OWN NUMBER FOR STORIES — read from their source on his
-    /// instruction ("pls read telegram do what tg doit"). `CacheStorageSettings` gives stories a
+    /// TWO DAYS, WHICH IS THE REFERENCE APP'S OWN NUMBER FOR STORIES — read from its source on his
+    /// instruction ("pls read the reference app do what it doit"). `CacheStorageSettings` gives stories a
     /// storage category of their own, separate from everything else, and its default timeout is
     /// `2 * 24 * 60 * 60`. For contrast, in the same table: private chats never expire, groups are
     /// 31 days, channels are 7. Stories are the shortest-lived media they keep, and they delete by

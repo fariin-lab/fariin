@@ -120,10 +120,10 @@ struct UserView: View {
                     // OFF this app permanently, and a story is a promise that it is gone in 24
                     // hours. Save puts it in their camera roll, Forward puts it in another chat,
                     // and Share is the worst of the three because it hands the picture straight to
-                    // Instagram or Messages. The author is never told any of it happened.
+                    // another app or Messages. The author is never told any of it happened.
                     //
-                    // Instagram, Snapchat and WhatsApp do not offer any of the three on another
-                    // person's story. Telegram does, but only when the author switched it on for
+                    // The standard messengers do not offer any of the three on another
+                    // person's story. The reference app does, but only when the author switched it on for
                     // that story. Nobody sells it as a paid feature (owner asked, 2026-08-05).
                     //
                     // Forward used to be `!isMyStory`, which was exactly backwards. Screenshots

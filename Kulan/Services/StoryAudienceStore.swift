@@ -4,22 +4,22 @@ import FirebaseFirestore
 
 // MARK: - The audience
 
-/// ONE NAMED AUDIENCE a story can be posted to — Signal calls these distribution lists, and the
+/// ONE NAMED AUDIENCE a story can be posted to — the reference app calls these distribution lists, and the
 /// reason they exist is that a story's audience is a decision you make once and reuse, not a form
 /// you fill in every time you post.
 ///
 /// THE AUDIENCE IS RESOLVED AT POST TIME AND THEN FORGOTTEN. A story carries the `recipientUids` it
 /// was posted with; nothing about it points back at the list it came from. That is what makes the
 /// owner's rule true by construction rather than by care: editing a list, renaming it, or deleting
-/// it outright cannot reach a story that has already gone out. Signal works the same way and for the
-/// same reason.
+/// it outright cannot reach a story that has already gone out. The reference app works the same way
+/// and for the same reason.
 struct StoryAudience: Identifiable, Codable, Equatable {
     enum Kind: String, Codable {
         /// Everyone on Fariin. Not a feed: people you have interacted with get it in their tray like
         /// any other story, and anybody else can watch it only by reaching your profile. Fixed, not
         /// editable — the owner's rule.
         case everyone
-        /// The people you share an accepted chat with, optionally narrowed. Signal's "My Story".
+        /// The people you share an accepted chat with, optionally narrowed. The reference app's equivalent audience.
         case myFriends
         /// A named list of specific people.
         case custom

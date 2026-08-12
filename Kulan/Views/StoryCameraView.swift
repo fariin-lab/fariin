@@ -67,7 +67,7 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     @Published var framedCode: URL?
 
     /// The blurred last frame of the previous session, drawn while the camera boots so the screen is
-    /// never black. Telegram keeps exactly this (a blurred JPEG of the last frame, written to tmp and
+    /// never black. Another mainstream messenger keeps exactly this (a blurred JPEG of the last frame, written to tmp and
     /// shown as the boot placeholder); ours lives for the app's lifetime rather than on disk, which
     /// covers the case that actually looks broken — leaving the camera and coming straight back.
     @Published var bootPlaceholder: UIImage?
@@ -76,14 +76,14 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     private let frameOutput = AVCaptureVideoDataOutput()
     private let frameQueue = DispatchQueue(label: "story.camera.frames")
     /// The most recent frame, kept small and blurred, refreshed at most every 2 seconds — the same
-    /// throttle Telegram uses, for the same reason: this exists to paper over a black screen, not to
+    /// throttle another mainstream messenger uses, for the same reason: this exists to paper over a black screen, not to
     /// be a viewfinder, and decoding every frame to do it would cost more than it saves.
     private var lastFrameAt: CFTimeInterval = 0
     private let frameContext = CIContext(options: [.useSoftwareRenderer: false])
 
     /// FOCUS AND EXPOSURE AT A POINT, which is the gesture every camera has and ours had none of.
     ///
-    /// Both at once and from one tap, which is what Signal and Telegram both do
+    /// Both at once and from one tap, which is what the reference app and another mainstream messenger both do
     /// (`focus(with: .autoFocus, exposureMode: .autoExpose, monitorSubjectAreaChange: true)`), rather
     /// than offering two controls for what a person thinks of as "look here".
     ///
@@ -140,7 +140,7 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     /// ⚠️ ONE VIRTUAL DEVICE FIRST, AND THAT IS WHAT REMOVES THE LENS POP.
     ///
     /// His report: tapping .5 / 1 / 3 "feels like a sudden pop… no popping, flashing, or sudden
-    /// camera/lens switching, like Signal". Two separate causes, and this is the first.
+    /// camera/lens switching, like the reference app". Two separate causes, and this is the first.
     ///
     /// Asking for `.builtInUltraWideCamera` and `.builtInWideAngleCamera` separately means .5 is a
     /// DIFFERENT PIECE OF HARDWARE from 1, so going between them tore the input out of a running
@@ -148,7 +148,7 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     ///
     /// `.builtInTripleCamera` / `.builtInDualWideCamera` are Apple's VIRTUAL devices: all the lenses
     /// behind one `AVCaptureDevice`, where the switchover is the system's own and is cross-faded in
-    /// hardware. It is the same device Apple's Camera app and Signal use, and it is why theirs does
+    /// hardware. It is the same device Apple's Camera app and the reference app use, and it is why theirs does
     /// not flash. Nothing switches inputs any more — .5, 1 and 3 are all zoom factors on one device
     /// (see `deviceZoom`).
     ///
@@ -370,7 +370,7 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
 
     // MARK: - QR in the frame
 
-    /// ⚠️ ONLY LINKS THIS APP CAN OPEN, which is Telegram's rule (they filter to `t.me/…` and ignore
+    /// ⚠️ ONLY LINKS THIS APP CAN OPEN, which is another mainstream messenger's rule (it filters to `t.me/…` and ignores
     /// everything else) and it is the difference between a feature and a nuisance. A general QR
     /// reader on a story camera would offer to open a stranger's website every time a poster drifts
     /// through the frame; this offers a Fariin profile and nothing else.
@@ -484,8 +484,8 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     /// instant cut: 1× to 3× was one frame wide and one frame tight with nothing between them, and
     /// no amount of smoothing on the SwiftUI side can help because the pop is in the video itself.
     ///
-    /// `ramp(toVideoZoomFactor:withRate:)` is AVFoundation's animated zoom and it is what Signal
-    /// uses (`didChangeZoomFactor` → `ramp`). The rate is in STOPS PER SECOND, so it is geometric:
+    /// `ramp(toVideoZoomFactor:withRate:)` is AVFoundation's animated zoom and it is what the reference app
+    /// uses (their zoom-change handler calling `ramp`). The rate is in STOPS PER SECOND, so it is geometric:
     /// the same rate covers .5→1 and 1→3 in proportionate time, which is why a single number feels
     /// right in both directions rather than fast one way and slow the other. 4.0 lands a lens change
     /// in about a quarter of a second.
@@ -523,13 +523,13 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     }
 
     /// TRUE for the moment a lens change is in flight, so the view can hold something over the
-    /// preview instead of letting the picture cut. Telegram covers the same window with a snapshot
+    /// preview instead of letting the picture cut. Another mainstream messenger covers the same window with a snapshot
     /// and a blur; ours is the blur, over the frame the preview layer is still showing.
     @Published var switching = false
 
     /// Does THIS lens need the screen to light the shot? The front camera has no flash on any phone
     /// we ship to, so with the flash switched on the only light available is the display itself —
-    /// which is exactly what Telegram does (`CameraFrontFlashOverlayController` plus a brightness
+    /// which is exactly what another mainstream messenger does (the reference implementation's front-flash overlay plus a brightness
     /// ramp). The view owns the overlay and the brightness; this is the question it asks.
     var needsScreenFlash: Bool { flashOn && position == .front && input?.device.hasFlash != true }
 
@@ -689,8 +689,8 @@ struct CameraPreview: UIViewRepresentable {
         double.numberOfTapsRequired = 2
         let single = UITapGestureRecognizer(target: context.coordinator,
                                             action: #selector(Coordinator.handleSingle(_:)))
-        // ⚠️ THE FOCUS TAP MUST LOSE TO THE FLIP, and this is the only way to say it properly. Signal
-        // wires exactly this pair (`didTapFocusExpose` requiring `didDoubleTapToSwitchCamera` to
+        // ⚠️ THE FOCUS TAP MUST LOSE TO THE FLIP, and this is the only way to say it properly. The reference app
+        // wires exactly this pair (their focus-tap gesture requiring their camera-flip gesture to
         // fail). Without it a double-tap-to-flip also drops a focus reticle on the way past — and
         // doing it with a timer instead lands the focus AFTER the flip, on the other camera.
         single.require(toFail: double)
@@ -782,8 +782,8 @@ struct StoryCameraView: View {
     /// How far the camera has been pulled down, in points. The card FOLLOWS the finger — see the
     /// vertical branch of the mode swipe.
     @State private var dismissY: CGFloat = 0
-    // The drag has DECIDED it is a dismissal. Signal decides the axis once, at the first movement
-    // (their DirectionalPanGestureRecognizer), and from then on the screen follows the finger BOTH
+    // The drag has DECIDED it is a dismissal. The reference app decides the axis once, at the first movement
+    // (their own directional pan recognizer), and from then on the screen follows the finger BOTH
     // ways — the old live axis test here re-judged every event, so a finger that came back up or
     // drifted sideways stopped being written and the card froze mid-screen (his 535 report).
     @State private var dismissActive = false
@@ -801,7 +801,7 @@ struct StoryCameraView: View {
     /// That slide is not ours: `.fullScreenCover` is a UIKit modal and `.coverVertical` is what a
     /// modal does. Nothing in this file asked for it and nothing here could style it.
     ///
-    /// What he asked for is Telegram's: the camera's buttons go, the picture stays where it is, the
+    /// What he asked for is another mainstream messenger's: the camera's buttons go, the picture stays where it is, the
     /// editor's buttons arrive. Three steps that are all about CHROME, and the picture never moves —
     /// so the fix is to stop moving anything and animate only the things that actually change.
     ///
@@ -835,9 +835,9 @@ struct StoryCameraView: View {
             // modal REMOVES the presenting screen from the window once it is up. There was nothing
             // behind the wall but the hosting controller's flat systemBackground, so a thinned black
             // over it rendered as a featureless GREY wall — his 2026-08-11 screenshot exactly.
-            // Signal's own story camera (`presentFullScreen` → .fullScreen from
-            // StoriesViewController) drags over plain black for the same structural reason; only
-            // their chat-list camera, presented .overFullScreen, reveals the real screen. Black is
+            // The reference app's own story camera (presented full-screen from
+            // its own story controller) drags over plain black for the same structural reason; only
+            // their chat-list camera, presented over the existing screen, reveals the real screen. Black is
             // the honest floor here, and it is also their look.
             Color.black.ignoresSafeArea()
             VStack(spacing: 0) {
@@ -848,8 +848,8 @@ struct StoryCameraView: View {
                 // both pages are on screen at once over black. That is his "both page", and the
                 // rebuild of an AVCaptureVideoPreviewLayer is the part that does not feel smooth.
                 //
-                // Signal moves the screen the same way the pill reads, left word on the left
-                // (`didSwipeToTextComposer` / `didSwipeToCamera`), and the comment on the swipe
+                // The reference app moves the screen the same way the pill reads, left word on the left
+                // (their text-composer / camera swipe handlers), and the comment on the swipe
                 // below already says so — the swipe was honest about the direction and the view was
                 // not. Now the two pages sit side by side and translate, clipped by the card's own
                 // shape, so nothing is created or destroyed by a mode change and the motion matches
@@ -886,12 +886,12 @@ struct StoryCameraView: View {
                 // SWIPE BETWEEN THE TWO, which is the half that was missing — tapping worked, so the
                 // switch looked like a tab strip and did not behave like one.
                 //
-                // Signal's rule, from PhotoCaptureViewController (`didSwipeToTextComposer` /
-                // `didSwipeToCamera`): swipe LEFT off the camera to reach TEXT, swipe RIGHT off the
+                // The reference app's rule, from its own capture view controller (its text-composer /
+                // camera swipe handlers): swipe LEFT off the camera to reach TEXT, swipe RIGHT off the
                 // text composer to come back. The screen therefore moves the same way the pill reads,
-                // left word on the left. Signal refuses the swipe mid-recording; so does this.
+                // left word on the left. The reference app refuses the swipe mid-recording; so does this.
                 //
-                // A FLICK, NOT A DRAG. Signal uses UISwipeGestureRecognizer, which fires once on a
+                // A FLICK, NOT A DRAG. The reference app uses UISwipeGestureRecognizer, which fires once on a
                 // quick directional swipe and never tracks the finger. SwiftUI has no equivalent, so
                 // this is a DragGesture judged ONLY in onEnded, with a distance floor and a
                 // mostly-horizontal test — otherwise a pinch or a vertical drag reads as a mode change.
@@ -920,8 +920,8 @@ struct StoryCameraView: View {
                         // ⚠️ THE CARD FOLLOWS THE FINGER GOING DOWN (owner 2026-08-11: "is working
                         // but is not following my finger"). It was judged only in `onEnded`, so a
                         // downward swipe was a FLICK: nothing moved until it was already over, and
-                        // the camera simply vanished. Signal's close is interactive — their
-                        // `PhotoCaptureInteractiveDismiss` is a real vertical pan that carries the
+                        // the camera simply vanished. The reference app's close is interactive — its
+                        // own interactive dismiss pan is a real vertical pan that carries the
                         // screen — and this is that, in the gesture that already owns this axis.
                         //
                         // Only downward, only in camera mode, never mid-recording, and only once the
@@ -937,13 +937,13 @@ struct StoryCameraView: View {
                             }
                             let dy = v.translation.height
                             if !dismissActive {
-                                // The axis is judged ONCE, at entry — Signal's directional pan. A
+                                // The axis is judged ONCE, at entry — the reference app's directional pan. A
                                 // sideways CAMERA/TEXT swipe never becomes a dismissal, and a
                                 // dismissal never freezes for turning diagonal later.
                                 guard dy > 0, dy > abs(v.translation.width) * 1.5 else { return }
                                 dismissActive = true
                             }
-                            // 1:1 with the finger, clamped at the origin (Signal: `max(0, offset.y)`
+                            // 1:1 with the finger, clamped at the origin (the reference app: `max(0, offset.y)`
                             // — the card never rides above its resting place). The 24pt the gesture
                             // spent proving itself is subtracted so tracking starts from ZERO under
                             // the finger instead of arriving with a jump.
@@ -955,8 +955,8 @@ struct StoryCameraView: View {
                             guard !typing, !cam.recording else { dismissY = 0; return }
                             let dx = v.translation.width, dy = v.translation.height
                             if wasDismissing {
-                                // Signal's commit rule is DISTANCE ONLY: 200pt of travel, judged
-                                // where the finger let go (their `distanceToTriggerDismiss`), no
+                                // The reference app's commit rule is DISTANCE ONLY: 200pt of travel, judged
+                                // where the finger let go (their own dismiss-distance threshold), no
                                 // velocity clause — a short flick snaps back, and a drag brought
                                 // back under the line un-arms itself by simply being under it.
                                 if dismissY >= 200 {
@@ -993,7 +993,7 @@ struct StoryCameraView: View {
                         .opacity(handingOver ? 0 : 1)
                 }
             }
-            // THE WHOLE CAMERA RIDES THE FINGER — translation ONLY. Signal's camera dismiss never
+            // THE WHOLE CAMERA RIDES THE FINGER — translation ONLY. The reference app's camera dismiss never
             // scales (that transition belongs to their media VIEWER, not the camera); the token
             // shrink this carried (3.8% at a real drag) read as nothing anyway. No animation
             // modifier here on purpose: while the finger is down the FINGER is the animation, and
@@ -1039,7 +1039,7 @@ struct StoryCameraView: View {
                 Color.white.ignoresSafeArea().allowsHitTesting(false).transition(.opacity)
             }
         }
-        // A QR IN THE FRAME, OFFERED RATHER THAN OBEYED. Telegram shows a chip you may tap; nothing
+        // A QR IN THE FRAME, OFFERED RATHER THAN OBEYED. Another mainstream messenger shows a chip you may tap; nothing
         // opens itself, because a camera that navigates away on its own is a camera you cannot point
         // at a poster. Only Fariin profile links ever reach here — see `openableLink`.
         .overlay(alignment: .top) {
@@ -1083,7 +1083,7 @@ struct StoryCameraView: View {
                 withAnimation(.easeInOut(duration: 0.3)) { deviceTilt = next }
             }
         .onAppear {
-            // A camera left framing a shot must not dim and lock — Signal blocks the idle timer for
+            // A camera left framing a shot must not dim and lock — the reference app blocks the idle timer for
             // exactly the time the camera is up. Released in `onDisappear`, which is the only place
             // it can be, or the whole app stops sleeping.
             UIApplication.shared.isIdleTimerDisabled = true
@@ -1177,7 +1177,7 @@ struct StoryCameraView: View {
 
     /// A PHOTO ON THE FRONT CAMERA IN THE DARK, lit by the only lamp that phone has: its screen.
     ///
-    /// Telegram's shape exactly — a white overlay, the display pushed to full brightness, a beat for
+    /// Another mainstream messenger's shape exactly — a white overlay, the display pushed to full brightness, a beat for
     /// the exposure to settle, then the shot, then the brightness put back. The 0.12s wait is not
     /// decoration: auto-exposure needs a moment to see the new light, and without it the picture is
     /// taken in the dark it was trying to fix.
@@ -1202,7 +1202,7 @@ struct StoryCameraView: View {
     private var preview: some View {
         ZStack {
             Color.black
-            // A PICTURE INSTEAD OF BLACK WHILE THE SESSION STARTS. Telegram keeps a blurred last
+            // A PICTURE INSTEAD OF BLACK WHILE THE SESSION STARTS. Another mainstream messenger keeps a blurred last
             // frame for exactly this; ours is the same idea, held in memory. Under the live preview,
             // so it is simply covered the moment there is a real frame — no timing, no fade to get
             // wrong. Also what the flip cover blurs over.
@@ -1230,7 +1230,7 @@ struct StoryCameraView: View {
                 // (The double tap that flips lives in `CameraPreview` now, beside the focus tap, so
                 // the two can be arbitrated with `require(toFail:)`. See `flipCamera`.)
                 //
-                // THE FLIP'S COVER. Telegram pins a snapshot over the preview and fades a dark blur
+                // THE FLIP'S COVER. Another mainstream messenger pins a snapshot over the preview and fades a dark blur
                 // across it while the session swaps inputs; ours is the blur over the frame the
                 // preview layer is still holding, which comes to the same picture without asking
                 // `drawHierarchy` for a snapshot it cannot reliably take of a video layer.
@@ -1245,7 +1245,7 @@ struct StoryCameraView: View {
                 }
                 .animation(.easeOut(duration: 0.16), value: cam.switching)
                 // THE FOCUS RETICLE — Apple's own shape: a square that lands slightly large and
-                // settles, then fades. Signal animates a Lottie file here; this is the same gesture
+                // settles, then fades. The reference app animates a Lottie file here; this is the same gesture
                 // read in one view, and it disappears on its own so there is no state to clear.
                 .overlay(alignment: .topLeading) {
                     if let p = focusPoint {
@@ -1414,7 +1414,7 @@ struct StoryCameraView: View {
                     // moved for 59 points and then it silently latched — so the only way to learn
                     // whether it had worked was to lift your finger and find out.
                     //
-                    // Signal drives their `LockView` from a continuous `sliderTrackingProgress` with
+                    // The reference app drives its own lock control from a continuous tracking-progress value with
                     // an unlocked/locking/locked state; this is the same idea on our control: the
                     // lock grows and brightens as the thumb approaches it, so the gesture reports on
                     // itself the whole way. See `lockButton`.
@@ -1430,13 +1430,13 @@ struct StoryCameraView: View {
                     // DRAG UP FROM THE SHUTTER TO ZOOM WHILE RECORDING — both reference cameras have
                     // it, and it is the only way to zoom one-handed with the shutter already held.
                     //
-                    // The two axes are kept apart the way Signal keeps them: sideways is the LOCK and
+                    // The two axes are kept apart the way the reference app keeps them: sideways is the LOCK and
                     // upward is the ZOOM, and neither is read while the other is winning. Without
                     // that, sliding diagonally to lock also racks the lens to 8×.
                     guard cam.recording else { return }
                     let up = -v.translation.height
                     guard up > 10, abs(v.translation.width) < 40 else { return }
-                    // A 60pt-per-step ramp, Telegram's number, from where the recording started up to
+                    // A 60pt-per-step ramp, another mainstream messenger's number, from where the recording started up to
                     // whatever this lens can actually do.
                     let steps = (up - 10) / 60
                     let target = min(cam.maxDisplayedZoom, zoomAtRecordStart + steps)
@@ -1659,14 +1659,14 @@ struct StoryCameraView: View {
     /// resolves to flat grey no matter which modifier paints it. That is the moulded plastic he has
     /// now photographed three times.
     ///
-    /// ⚠️ FIFTH REPORT. READ SIGNAL'S SOURCE BEFORE TOUCHING THIS AGAIN — I did, and it is short.
+    /// ⚠️ FIFTH REPORT. READ THE REFERENCE APP'S SOURCE BEFORE TOUCHING THIS AGAIN — I did, and it is short.
     ///
-    /// `Signal/src/ViewControllers/Photos/MediaControls.swift`, `ComposerTypeSelectionControl`. It is
+    /// The reference implementation's composer type-selection control. It is
     /// the same control on the same screen for the same two words, so there is no interpretation
     /// left to do:
     ///
     /// ```swift
-    /// final class ComposerTypeSelectionControl: UISegmentedControl {
+    /// final class ReferenceTypeSelectionControl: UISegmentedControl {
     ///     init() {
     ///         super.init(frame: .zero)
     ///         insertSegment(withTitle: titleText.uppercased(), at: 0, animated: false)
@@ -1695,7 +1695,7 @@ struct StoryCameraView: View {
     /// claimed "there is nothing left of ours", and his screenshot says otherwise. UIKit is native
     /// too, and [[kulan-prefer-native-not-custom]] says to reach for it and decide rather than ask.
     ///
-    /// The uppercase comes BACK, because it is Signal's, not ours: they uppercase both titles. The
+    /// The uppercase comes BACK, because it is the reference app's, not ours: they uppercase both titles. The
     /// previous note removed it as a hand-built flourish, which was the wrong call for the same
     /// reason the rest of this was.
     private var modePicker: some View {
@@ -1704,7 +1704,7 @@ struct StoryCameraView: View {
                                            set: { v in
             withAnimation(Self.modeCurve) { mode = v ? .text : .camera }
         }))
-            // Its own intrinsic size, Signal's: the padding and the 40pt height come from the
+            // Its own intrinsic size, the reference app's: the padding and the 40pt height come from the
             // control, not from a frame we impose. A width we choose is a width that has to be
             // re-chosen every time the font metric changes.
             .fixedSize()
@@ -1768,10 +1768,10 @@ struct StoryCameraView: View {
     }
 }
 
-/// CAMERA | TEXT, built the way Signal builds it, because five attempts at building it ourselves
+/// CAMERA | TEXT, built the way the reference app builds it, because five attempts at building it ourselves
 /// all came out as grey plastic.
 ///
-/// `ComposerTypeSelectionControl` in `Signal/src/ViewControllers/Photos/MediaControls.swift` is the
+/// The reference implementation's composer type-selection control is the
 /// same control on the same screen for the same two words. What it does on iOS 26 is nothing: every
 /// line that touches the track is fenced behind `#unavailable(iOS 26)`, so on 26 a bare
 /// `UISegmentedControl` draws its own Liquid Glass and the only things set are the font and the two
@@ -1783,7 +1783,7 @@ struct StoryCameraView: View {
 private struct ComposerTypeSwitch: UIViewRepresentable {
     @Binding var isText: Bool
 
-    /// Signal's intrinsic size, the half of their control we had not copied yet: 40pt tall and
+    /// The reference app's intrinsic size, the half of their control we had not copied yet: 40pt tall and
     /// 8pt of extra width either side of each segment. The default ~32pt track is what made ours
     /// read smaller than the Photos album bar he referenced (2026-08-09, "make it 40px") — the
     /// GLASS itself was already right, because nothing below touches the track.
@@ -1797,7 +1797,7 @@ private struct ComposerTypeSwitch: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> UISegmentedControl {
-        // Titles UPPERCASED, which is Signal's, not a flourish of ours.
+        // Titles UPPERCASED, which is the reference app's, not a flourish of ours.
         let control = GlassSegmentedControl(items: ["CAMERA", "TEXT"])
         control.selectedSegmentIndex = isText ? 1 : 0
         // ⚠️ NOTHING IS SET ON THE TRACK. No backgroundColor, no background image, no divider image,

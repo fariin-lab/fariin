@@ -5,11 +5,11 @@ import FirebaseAuth
 import FirebaseFirestore
 import FirebaseStorage
 
-// THE SENDING HALF of the official channel. Signal has no equivalent of this file: their release
-// notes are a JSON file somebody edits by hand and uploads to a CDN, and there is no admin screen,
-// no roles and no permissions anywhere in the app. This is the part we are adding, and everything it
-// writes is shaped so the reading half stays exactly Signal's: one document, read by every phone,
-// with the targeting decided on the phone.
+// THE SENDING HALF of the official channel. The reference app has no equivalent of this file: their
+// release notes are a JSON file somebody edits by hand and uploads to a CDN, and there is no admin
+// screen, no roles and no permissions anywhere in the app. This is the part we are adding, and
+// everything it writes is shaped so the reading half stays exactly the reference app's: one
+// document, read by every phone, with the targeting decided on the phone.
 //
 // There are no Cloud Functions here on purpose. Permission is enforced by Firestore rules reading the
 // `admins` collection, which is a server-side check with nothing to deploy — and this project's

@@ -87,7 +87,7 @@ struct StoryEditorView: View {
     /// my finger show again") — you cannot draw across a corner your own toolbar is sitting on.
     @State private var strokeInFlight = false
     @State private var editedCache: UIImage?         // filtered+cropped; recomputed only on tool change
-    /// Telegram's two canvas colours for the picture as it stands. Held rather than derived on each
+    /// The reference app's two canvas colours for the picture as it stands. Held rather than derived on each
     /// layout pass, and rewritten by `recomputeEdited` — a filter changes the picture, so it changes
     /// the canvas made from it.
     @State private var canvasCache: (top: UIColor, bottom: UIColor)?
@@ -1537,7 +1537,7 @@ struct StoryEditorView: View {
         //
         // A photo that does NOT fill can no longer take that path, and that is the whole change on
         // this side: it goes through the composition below so the CANVAS IS BAKED INTO THE POSTED
-        // FILE. Telegram exports every story as a full 1080x1920 frame with the gradient already in
+        // FILE. The reference app exports every story as a full 1080x1920 frame with the gradient already in
         // it, which is why their viewer never has to invent a background and never gets it wrong.
         // Ours posted the bare photo and left the viewer to letterbox it live at watch time — that
         // live backdrop is the thing that tore while he scrolled, and a file that fills the frame
@@ -1595,7 +1595,7 @@ struct StoryEditorView: View {
     // for anything except a pinched-out photo: the canvas was rendered, then cut back to the
     // photo's own rectangle, so the posted file was the bare picture again and the viewer had to
     // invent a background for it at watch time. Every story now lands as a full frame, which is
-    // Telegram's model and the reason their viewer has no backdrop code to go wrong.
+    // the reference app's model and the reason their viewer has no backdrop code to go wrong.
 
     // The picture's aspect-fit size within the canvas — the photo frame's real footprint.
     private func photoFitSize(in canvas: CGSize) -> CGSize {
@@ -1909,7 +1909,7 @@ struct ZoomableImageView: UIViewRepresentable {
         let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
         pan.maximumNumberOfTouches = 2
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
-        // Left and right flicks, the same recogniser Signal's camera uses to change mode. A discrete
+        // Left and right flicks, the same recogniser another mainstream messenger's camera uses to change mode. A discrete
         // swipe, so it can never fight the pinch or the pan for the picture itself.
         let swipeLeft = UISwipeGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleSwipe(_:)))
         swipeLeft.direction = .left

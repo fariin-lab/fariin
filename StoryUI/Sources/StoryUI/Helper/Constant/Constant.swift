@@ -10,8 +10,8 @@ import UIKit
 import SwiftUI
 
 enum Constant {
-    /// SIGNAL'S OWN NUMBERS, read out of StoryPlaybackProgressView.swift rather than matched by
-    /// eye — `itemHeight: CGFloat = 2` (:96) and `idealSpacing: CGFloat = 2` (:90).
+    /// THE REFERENCE APP'S OWN NUMBERS, read out of the reference implementation rather than
+    /// matched by eye — an item height of 2 and an ideal spacing of 2.
     ///
     /// Ours were 3 and 5. The height was half again as tall and the gaps were two and a half times
     /// wider, and the gaps were the louder of the two: at five or ten stories they eat a real slice

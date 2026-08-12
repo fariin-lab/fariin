@@ -30,7 +30,7 @@ struct MainShell: View {
         callsRepo.calls.filter { $0.missedIncoming && $0.date.timeIntervalSince1970 > callsSeenAt }.count
     }
 
-    // CONVERSATIONS WAITING, NOT MESSAGES WAITING — how the reference app and the reference app both badge it. One person
+    // CONVERSATIONS WAITING, NOT MESSAGES WAITING — how the standard messengers badge it. One person
     // sending five messages moves this by ONE, not five: the badge answers "how many chats do I need to
     // open", which is the question a chat list badge is actually for.
     //
@@ -700,7 +700,7 @@ struct ChatsView: View {
 
     /// THE CHAT LIST'S RINGED AVATAR. Same door, same flight, and because the ring reports its
     /// radius as half its width the story grows out of it and lands back into it as a CIRCLE —
-    /// Snapchat's shape, the owner's reference. See StoryCardMorph's circular branch.
+    /// The reference app's shape, the owner's reference. See StoryCardMorph's circular branch.
     ///
     /// `pinned` (the door's default), unlike the row: the ring is the only anchor this list has for
     /// the person who was tapped, and paging on to somebody else does not produce a second one.
@@ -745,7 +745,7 @@ struct ChatsView: View {
             }
             // NOTHING ELSE. A fresh account used to get a "Find People" button plus "My QR" and
             // "Invite" links stacked under the message, which read as a landing page rather than an
-            // empty inbox. X, the reference app and the reference app all show only a glyph, a title and one line here -
+            // empty inbox. The standard apps all show only a glyph, a title and one line here -
             // the actions already live in the compose button in the nav bar, so repeating them cluttered
             // the first thing a new user ever sees.
         }
@@ -952,8 +952,8 @@ struct ChatsView: View {
     private var visible: [Conversation] {
         // The official channel joins the list as an ordinary Conversation value, so every filter,
         // sort, badge and swipe below treats it like any other chat and none of them had to learn
-        // what an announcement is. It is nil until it has something to say — Signal keeps its release
-        // channel hidden the same way (`shouldThreadBeVisible = false`) so a brand-new account never
+        // what an announcement is. It is nil until it has something to say — another mainstream messenger
+        // keeps its release channel hidden the same way (an internal visibility flag) so a brand-new account never
         // opens onto an empty official chat.
         (repo.conversations + [officialChannel.listEntry].compactMap { $0 })
             .filter { !$0.isCleared(me) && !$0.isArchived(me) }
@@ -1169,7 +1169,7 @@ struct ChatsView: View {
         Task { await withTaskGroup(of: Void.self) { g in for id in ids { g.addTask { await ChatService.setArchived(id, true) } } } }
         exitSelect()
     }
-    // SELECT MODE'S READ BUTTON, Signal's rule (ChatListViewController+Multiselect.swift).
+    // SELECT MODE'S READ BUTTON, that same messenger's rule (the reference implementation).
     //
     // With NOTHING selected it reads "Read All" and clears every unread chat in the list you are
     // looking at — you do not have to select anything first. The moment one chat is selected it
@@ -1187,7 +1187,7 @@ struct ChatsView: View {
     /// and reveals the activity the block is hiding. Their rows show 0 unread, so nothing on
     /// screen even hints they were included.
     private var readTargets: [String] {
-        // Nothing selected -> the whole list as it is currently filtered, which is Signal scoping
+        // Nothing selected -> the whole list as it is currently filtered, which is that same messenger scoping
         // Read All to the rendered list. Selected -> resolve out of the repo, so a chat that the
         // filter stopped showing while you were selecting is still honoured.
         let pool = selection.isEmpty ? visible : repo.conversations.filter { selection.contains($0.id) }
@@ -1807,7 +1807,7 @@ struct ArchivedChatsView: View {
     }
     // Identical rule to the main chat list's Read button — see the long note on `readTargets`
     // there. "Read All" here means every unread chat in the ARCHIVE, which is the list this
-    // screen renders; Signal scopes Read All the same way, to the rendered list.
+    // screen renders; that same messenger scopes Read All the same way, to the rendered list.
     private var readTitle: String { selection.isEmpty ? "Read All" : "Read" }
 
     private var readTargets: [String] {
@@ -2146,7 +2146,7 @@ struct ChatRow: View, Equatable {
                 // The radius is HALF THE SIDE, which is the whole trick: `StoryCardMorph` reads what
                 // its source reports, and a source reporting half its short side gets a CIRCULAR
                 // flight — square crop, round mask, all the way rather than only at the landing.
-                // Snapchat's shape, no per-site branch.
+                // The reference app's shape, no per-site branch.
                 //
                 // Reported on the PHOTO, not the ring: with the ring inside the anchor the transition
                 // stretched the grey ring segments, which the owner screenshotted.

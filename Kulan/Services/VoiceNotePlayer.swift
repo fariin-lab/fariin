@@ -7,7 +7,7 @@ import UIKit
 ///
 /// His 2026-08-10 report, and the research behind it: for a user who communicates mostly by voice,
 /// playback stopping the moment you leave the chat does not read as a missing feature, it reads as
-/// the app being broken. WhatsApp keeps the note playing and shows a bar; ours died.
+/// the app being broken. The reference app keeps the note playing and shows a bar; ours died.
 ///
 /// ⚠️ IT DIED BY CONSTRUCTION, NOT BY A BUG. `VoiceMessageView` held its `AVAudioPlayer` in `@State`,
 /// so the player's lifetime was the *view's* lifetime: leave the chat, SwiftUI tears the view down,

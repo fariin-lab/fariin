@@ -642,7 +642,7 @@ struct StoryVideoEditorView: View {
             // ⚠️ THE CANVAS THE EXPORT WILL BAKE, not a blur of the poster.
             //
             // This wash used to be a heavily blurred, desaturated, darkened copy of the poster, which
-            // matched what the export baked at the time. The export bakes Telegram's gradient now
+            // matched what the export baked at the time. The export bakes the reference app's gradient now
             // (see VideoTranscoder.gradientComposition, his call after four black-bar reports), and
             // this screen was never changed with it — so he framed a clip against a blur and got a
             // gradient back. WYSIWYG is the whole contract of this editor.

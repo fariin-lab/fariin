@@ -19,7 +19,7 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     var mediaState: ((MediaState, Double) -> ())?
 
     let contentView = UIView()
-    /// WHAT FILLS THE BARS WHEN A CLIP DOES NOT FIT THE CARD: Telegram's canvas, the same one the
+    /// WHAT FILLS THE BARS WHEN A CLIP DOES NOT FIT THE CARD: the reference app's canvas, the same one the
     /// photo half draws and the same one `VideoTranscoder` bakes into every exported story.
     ///
     /// A clip posted from a recent build already carries the canvas in its own pixels and this is
@@ -69,8 +69,8 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// own opening — is worth showing AS IT IS. Only the 30px embedded thumbnail has to be blurred,
     /// because at card size that is all it can honestly be.
     ///
-    /// Telegram draws exactly this distinction and it is the whole reason their stories never look
-    /// blurred: `StoryItemImageView` shows the cached first frame or the downloaded preview
+    /// The reference app draws exactly this distinction and it is the whole reason its stories never look
+    /// blurred: the reference implementation shows the cached first frame or the downloaded preview
     /// representation SHARP (`preparingForDisplay()`, `.scaleAspectFill`), and reaches for
     /// `blurredImage(_:radius: 10, iterations: 3)` only on `decodeTinyThumbnail(immediateThumbnailData)`
     /// — the inline bytes that are all it has when there is nothing else at all.
@@ -226,7 +226,7 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         StoryCanvas.apply(StoryCanvas.colours(of: source), to: canvasLayer)
     }
 
-    // MARK: - HIDDEN UNTIL THERE IS A FRAME (Telegram's rule)
+    // MARK: - HIDDEN UNTIL THERE IS A FRAME (the reference app's rule)
 
     /// ⚠️ THE PLAYER LAYER IS HIDDEN FROM BIRTH AND SHOWN ONCE, WHEN IT HAS A PICTURE.
     ///
@@ -240,10 +240,10 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// arrives, so the first frame it does paint is at the wrong scale and then corrects itself. That
     /// is the second screenshot.
     ///
-    /// Telegram, read from source before this was written
-    /// (`StoryItemContentComponent`, `MediaPlayerNode`): the video node is created `isHidden = true`
+    /// The reference app, read from source before this was written
+    /// (the reference implementation): the video node is created `isHidden = true`
     /// over a thumbnail view, and the ONLY thing that ever unhides it is `hasSentFramesToDisplay` —
-    /// which they raise from the first `enqueue` of a sample buffer, and on iOS 17.4+ from
+    /// which it raises from the first `enqueue` of a sample buffer, and on iOS 17.4+ from
     /// `AVSampleBufferDisplayLayerReadyForDisplayDidChange`. There is no timer and no fallback. Our
     /// exact equivalent on an `AVPlayerLayer` is `isReadyForDisplay`, which Apple documents as "the
     /// first video frame has been made ready for display for the current item".
@@ -253,7 +253,7 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// or opened paused — in which case playback never starts and the veil never lifts. Its 0.4s
     /// backstop did not save it, because that was itself gated on playback having started.
     /// `isReadyForDisplay` has no such problem: a paused player still decodes and still becomes
-    /// ready, which is precisely why it is the signal Telegram uses and the reason there is no timer
+    /// ready, which is precisely why it is the signal the reference app uses and the reason there is no timer
     /// here to go wrong.
     private var readyObservation: NSKeyValueObservation?
 
@@ -379,8 +379,8 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     private var itemSwapSettling = false
 
     /// The end-of-clip report for the CURRENT item, recreated per item and scoped to the item
-    /// object — Telegram advances a video only from the player's own completion
-    /// (`videoNode.playbackCompleted` → `presentationProgressUpdated(1.0, canSwitch: true)`), never
+    /// object — the reference app advances a video only from the player's own completion
+    /// (its own completion callback fires only once, with a flag permitting the switch), never
     /// from progress arithmetic, and this is our half of that rule. The bar is capped just under
     /// the segment boundary (`syncBarToPlayer`), so this report is the ONLY thing that can complete
     /// a video segment: the clip can neither be cut off early nor outlived by its own bar.
@@ -488,7 +488,7 @@ final class PlayerView: UIView, StoryVideoFrameSource {
     /// WRITE THE FRAME DOWN NOW, because whoever is asking is about to freeze this player or take
     /// it away — see `StoryVideoFrameSource.rememberPlaybackState`. The frame ONLY: there is no
     /// stored playback position any more (a story always restarts at zero — the owner's 2026-08-11
-    /// rule and Telegram's behaviour), so what travels across a teardown is the picture the cards
+    /// rule and the reference app's behaviour), so what travels across a teardown is the picture the cards
     /// draw, never a seek target.
     ///
     /// Two callers, and neither of them can reach the guards or should have to know them:
@@ -563,7 +563,7 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         // The story this view is LEAVING banks its last picture for the cards — and ONLY the
         // picture. Its position deliberately dies with this navigation: a story moved away from is
         // PASSED, and a passed story restarts from zero on its next visit (the owner's 2026-08-11
-        // rule; Telegram removes the item's whole player on navigation and a revisit seeks to 0).
+        // rule; the reference app removes the item's whole player on navigation and a revisit seeks to 0).
         // Here as well as in `stopVideo`, because a paused player (the sheet pauses, it does not
         // stop) reaches this point with its frame unbanked and `stopVideo`'s guard never fires.
         rememberPlaybackFrame()
@@ -615,8 +615,8 @@ final class PlayerView: UIView, StoryVideoFrameSource {
         addActivityIndicatory(spinning: cachedFile == nil)
         // A CACHED CLIP CAN BE ITS OWN POSTER. A video with no thumbnail (the empty-thumb upload
         // window, older stories) reaches here with nothing to cover with — the spinner over a bare
-        // gradient in his screenshot. Telegram decodes the cached file's first frame and shows THAT
-        // (`CachedVideoFirstFrameRepresentation`); ours lands in the remembered-frame slot, which
+        // gradient in his screenshot. The reference app decodes the cached file's first frame and shows THAT
+        // (its own cached-frame representation); ours lands in the remembered-frame slot, which
         // the veil already draws SHARP at the clip's own gravity — it is pixel-for-pixel the frame
         // the reveal will hand over to, the same promise that slot has always kept.
         if posterImage == nil, StoryPlaybackResume.usableCoverFrame(validatedUrl) == nil, let file = cachedFile {
@@ -743,10 +743,10 @@ private extension PlayerView {
         attachFrameOutput()
         // NO RESUME SEEK, ON PURPOSE. A block here used to seek to the story's remembered position,
         // which is how a returned-to clip played from 0:14 under a bar that had just started at
-        // zero. The owner's 2026-08-11 rule is Telegram's: a story navigated back to RESTARTS from
-        // its beginning, always. Their revisit builds a fresh player and seeks it straight to 0
-        // (`ownsContentNodeUpdated` in StoryItemContentComponent), and no per-item position is
-        // stored anywhere in their story code. A fresh item starts at zero by construction, so
+        // zero. The owner's 2026-08-11 rule is the reference app's: a story navigated back to RESTARTS from
+        // its beginning, always. Its revisit builds a fresh player and seeks it straight to 0
+        // (`ownsContentNodeUpdated` in the reference implementation), and no per-item position is
+        // stored anywhere in its story code. A fresh item starts at zero by construction, so
         // there is nothing to do here — and the veil above is already a second-zero picture
         // (`usableCoverFrame`), so the hand-over matches.
         //
@@ -756,7 +756,7 @@ private extension PlayerView {
         if let story = self.url, let p = self.player {
             StoryPlaybackClock.attach(story, to: p)
         }
-        // THE END OF A CLIP IS THE PLAYER'S TO REPORT — Telegram's `videoNode.playbackCompleted` is
+        // THE END OF A CLIP IS THE PLAYER'S TO REPORT — the reference app's own completion callback is
         // the only thing that advances a video story there, never progress arithmetic, and
         // `.storyVideoFinished` is ours. Scoped to this exact item and re-checked against the
         // current item when it fires, so a stale clip finishing mid-swap can never complete
@@ -809,8 +809,8 @@ private extension PlayerView {
                 // seconds, and never if he long-pressed to pause first**, which is his report word
                 // for word.
                 //
-                // Telegram's stall indicator is an OVERLAY on the running picture, never a
-                // replacement, and they exclude initial buffering from it outright. The bar hold
+                // The reference app's stall indicator is an OVERLAY on the running picture, never a
+                // replacement, and it excludes initial buffering from it outright. The bar hold
                 // below is the honest part of this and it stays: waiting on bytes is waiting.
                 self.setBuffering(true)
             case .paused:
@@ -969,7 +969,7 @@ private extension PlayerView {
     /// The last picture this clip showed, banked for the cards — and NOTHING else. The playback
     /// position used to be written here too, so the next player built for this url could resume it;
     /// that is gone, deliberately: a story always restarts at zero now (the owner's 2026-08-11
-    /// rule, and Telegram's behaviour), so a stored position had exactly one power left — to
+    /// rule, and the reference app's behaviour), so a stored position had exactly one power left — to
     /// disagree with the progress bar. The middle-of-the-clip guard stays: the first second is
     /// second zero in all but name (the poster already shows it), and the last second is the
     /// natural end the auto-advance already owns.
@@ -1064,11 +1064,11 @@ private extension PlayerView {
     /// numbers, in the one file that owns everything drawn behind or over a story, so the photo half
     /// and the video half cannot drift apart in how a loading story looks.
     /// `spinning`: whether the wheel itself goes up. THE SPINNER IS FOR FETCHING, NOT FOR EXISTING.
-    /// Telegram's loading shimmer is keyed on whether the bytes are on disk ("contentLoaded"), never
+    /// The reference app's loading shimmer is keyed on whether the bytes are on disk ("contentLoaded"), never
     /// on player readiness, so a cached story there never shows a loading state — his "already i
     /// downloaded but still is loading". The veil goes up either way: it is the cover the
     /// born-hidden layer reveals out of. Only the claim of loading is now reserved for actual
-    /// loading. And the wheel appears 0.2s late (Telegram's appearance timer), so a fast network
+    /// loading. And the wheel appears 0.2s late (the reference app's appearance timer), so a fast network
     /// never flashes one for a story that arrives immediately.
     func addActivityIndicatory(spinning: Bool = true) {
         removeActivityIndicatory()
@@ -1137,7 +1137,7 @@ private extension PlayerView {
     func setupPlayer() {
         backgroundColor = .black
         canvasLayer.isHidden = true        // shown only once a clip is known not to fill the card
-        // HIDDEN UNTIL IT HAS A PICTURE — Telegram's `videoNode.isHidden = true` at construction.
+        // HIDDEN UNTIL IT HAS A PICTURE — the reference app's video node starts `isHidden = true` at construction.
         // A layer with no decoded frame paints its background, and that is the black he photographed.
         playerLayer.isHidden = true
         // The one thing that ever takes it back off. Observed on the LAYER, which owns the answer,

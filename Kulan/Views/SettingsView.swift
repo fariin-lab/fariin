@@ -218,7 +218,7 @@ struct SettingsView: View {
         VStack(spacing: 8) {
             // 120, up from 96 on his 2026-08-08 report that it reads small. This is the first thing
             // on the screen and the only picture on it, and at 96 it was smaller than the app icon
-            // in the tab bar below it. Telegram's own settings avatar is 100; the extra goes to the
+            // in the tab bar below it. The reference app's own settings avatar is 100; the extra goes to the
             // same place his screenshot points, which is the gap between the circle and the name.
             AvatarView(name: profile.me?.name ?? "", photoUrl: profile.me?.photoUrl, size: 120)
                 // The morph's source rect, and the hidden-while-open swap, same as ContactInfoView's
@@ -385,9 +385,9 @@ struct AccountSettingsView: View {
             // Edit Profile, reached from the Settings header). Account is ONLY data + session
             // actions — a settings page, not profile management (user direction 2026-07-22).
             // ⚠️ EXPORT MY DATA USED TO BE THE FIRST THING ON THIS PAGE. It is now below Sign-in
-            // Methods, because both references put it there and they are right: Signal's
-            // `AccountSettingsFragment` lists "Request account data" second from LAST, immediately
-            // before Delete, and WhatsApp files "Request account info" in the same low position. It is
+            // Methods, because both references put it there and they are right: one mainstream messenger's
+            // account settings screen lists "Request account data" second from LAST, immediately
+            // before Delete, and another mainstream messenger files "Request account info" in the same low position. It is
             // a button most people press once in their life or never, and it was standing in front of
             // everything they actually opened this page for.
 
@@ -464,7 +464,7 @@ struct AccountSettingsView: View {
             // routine action teaches people to stop reading red, which is the last habit anyone should
             // have directly above a button that ends their account.
             //
-            // Signal does not even put sign out on this screen, and in both references Delete sits
+            // One of those two does not even put sign out on this screen, and in both references Delete sits
             // ALONE at the bottom of its own group. Two sections now, so there is real space between
             // the reversible thing and the permanent one.
             Section {
@@ -1856,7 +1856,7 @@ struct UsernameEditView: View {
 
     /// Letters still available. Never negative: `sanitizeHandle` truncates at the maximum.
     private var remaining: Int { max(0, Limits.usernameMaxChars - clean.count) }
-    /// The counter stays hidden until this many or fewer are left. WhatsApp's threshold: theirs
+    /// The counter stays hidden until this many or fewer are left. The reference app's threshold: theirs
     /// appears at 21 of 30, which is 9 remaining.
     private static let counterAppearsAt = 9
 
@@ -1874,7 +1874,7 @@ struct UsernameEditView: View {
                         }
                     // HOW MANY LETTERS ARE LEFT, and only once that is a real question.
                     //
-                    // WhatsApp's counter, from the owner's screenshot: nothing at all until you are
+                    // The reference app's counter, from the owner's screenshot: nothing at all until you are
                     // near the ceiling, then a number that counts DOWN as you type. Theirs appears
                     // at 21 of 30, which is the same rule as "show it when 9 or fewer remain", so
                     // that is what this is — expressed as the remainder rather than the length, or
@@ -1963,11 +1963,11 @@ struct UsernameEditView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
 
-            // THE LINK, BUILT AS YOU TYPE. Telegram's "This link opens a chat with you:
-            // https://t.me/<name>", which is the thing that makes a username feel like it is worth
+            // THE LINK, BUILT AS YOU TYPE. The reference app shows a similar line — "This link opens
+            // a chat with you:" followed by its own address — which is the thing that makes a username feel like it is worth
             // choosing: it stops being a setting and becomes an address you can hand to somebody.
             //
-            // Shown at EVERY state, including while the name is invalid or taken — Telegram does the
+            // Shown at EVERY state, including while the name is invalid or taken — the reference app does the
             // same, because the line's job is to show what the link WOULD be, not to be a second
             // verdict. The status line directly above is the verdict, and two of them disagreeing on
             // one screen is worse than none.
@@ -1990,8 +1990,8 @@ struct UsernameEditView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// The public address for a handle. Empty draft shows the bare domain, the way Telegram shows a
-    /// bare `https://t.me/` before you have typed anything — the shape of the thing you are about to
+    /// The public address for a handle. Empty draft shows the bare domain, the way the reference app shows a
+    /// bare address before you have typed anything — the shape of the thing you are about to
     /// own, rather than a blank.
     static func profileLink(for handle: String) -> String {
         "https://fariin.com/u/\(handle)"

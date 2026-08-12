@@ -917,8 +917,8 @@ final class StoryCardUIView: UIControl {
                 return
             }
         }
-        // The tap dips the card and the story flies out of the dip (owner 2026-08-07, Snapchat
-        // named). The dip is the control's own pressed state, so a held finger keeps the card
+        // The tap dips the card and the story flies out of the dip (owner 2026-08-07, citing
+        // another mainstream messenger). The dip is the control's own pressed state, so a held finger keeps the card
         // pressed and the release lets it spring back.
         afterStoryDip { [weak self] in self?.onTap?() }
     }
@@ -1422,7 +1422,7 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
                                     meName: meName, mePhoto: mePhoto,
                                     // "Preparing…" is the honest word for the half that is actually
                                     // holding them up. "Uploading…" is his word (2026-08-06); it said
-                                    // "Adding…", borrowed from WhatsApp, and he does not want it.
+                                    // "Adding…", borrowed from another mainstream messenger, and he does not want it.
                                     phaseText: service.uploadPhase == .preparing ? "Preparing…" : "Uploading…",
                                     animatedPhase: animated) { [weak self] in
                 // Tapping the still-uploading card ALWAYS opens the live upload viewer.
@@ -1580,8 +1580,8 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
         scrollToAuthor(uid)
     }
 
-    /// ENSURE VISIBLE, NEVER CENTRE — his 2026-08-10 instruction, and Telegram's rule read from
-    /// their source before it.
+    /// ENSURE VISIBLE, NEVER CENTRE — his 2026-08-10 instruction, and the reference app's rule read from
+    /// its source before it.
     ///
     /// This used to be `proxy.scrollTo(uid, anchor: .center)` translated literally: work out the
     /// card's x, subtract half the viewport, set the offset. It moved the row on EVERY change of
@@ -1613,13 +1613,13 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
         let card = CGRect(x: x, y: visible.minY, width: w, height: visible.height)
         // RULE 1: already all the way inside → the row does not move. This is the report.
         guard !visible.contains(card) else { return }
-        // RULE 2: off screen or cut off → the minimum that brings it in, with Telegram's 40pt of
+        // RULE 2: off screen or cut off → the minimum that brings it in, with the reference app's 40pt of
         // breathing room, so a card does not arrive flush against the edge reading as still cut off.
         scrollView.scrollRectToVisible(card.insetBy(dx: -Self.ensureVisibleMargin, dy: 0),
                                        animated: false)
     }
 
-    /// Telegram's `-40` in `scrollRectToVisible(itemFrame.insetBy(dx: -40))`.
+    /// The reference app's `-40` in `scrollRectToVisible(itemFrame.insetBy(dx: -40))`.
     private static let ensureVisibleMargin: CGFloat = 40
 
     // MARK: Prefetch

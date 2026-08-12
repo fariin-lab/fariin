@@ -880,8 +880,8 @@ enum ChatService {
         // EVERY TILE AT ONCE, AND THIS IS THE PATH THAT MATTERS. ThreadView sends a photos-only
         // album through here and only reaches sendMixedAlbum when a video is in the selection, so
         // this serial loop was the actual cause of "one photo is instant, a group of them you can
-        // watch" (owner). Signal's own ceiling is twelve concurrent uploads and our album caps at
-        // ten, so releasing them together sits inside their number.
+        // watch" (owner). The reference app's own ceiling is twelve concurrent uploads and our album
+        // caps at ten, so releasing them together sits inside their number.
         //
         // Re-sorted by index afterwards: a task group finishes in whatever order the network feels
         // like, and an album that arrives shuffled is worse than a slow one.
@@ -1890,7 +1890,7 @@ enum ChatService {
             // TOMBSTONE, not a hole. The document survives carrying `deleted`, with every content
             // field stripped, so both sides see that something was here and was removed instead of a
             // message silently vanishing and leaving the other person wondering what they missed.
-            // This is what the reference app and the reference app both do.
+            // This is what the standard messengers do.
             //
             // Costs nothing to keep: the MEDIA is still deleted from Storage below, and Storage is
             // where the money is. What remains is a few bytes of marker in a document that already
@@ -2160,10 +2160,10 @@ enum ChatService {
 
     // MARK: - Voice-note played receipts
 
-    /// Tell the sender their voice note was actually heard. WhatsApp turns the mic icon blue for this,
-    /// and it was the one voice signal we sent nothing for.
+    /// Tell the sender their voice note was actually heard. Another mainstream messenger turns the mic
+    /// icon blue for this, and it was the one voice signal we sent nothing for.
     ///
-    /// ⚠️ GATED ON `readReceipts`, WHICH IS DELIBERATELY *UNLIKE* WHATSAPP. Theirs fires even with read
+    /// ⚠️ GATED ON `readReceipts`, WHICH IS DELIBERATELY *UNLIKE* THAT APP. Theirs fires even with read
     /// receipts switched off — there is no setting that hides a voice-note play receipt over there. Ours
     /// is a receipt like any other, and somebody who has told us not to send receipts has told us not to
     /// send this one. Privacy lives on the WRITE here, exactly as it does in `markRead`.
@@ -2364,8 +2364,8 @@ enum ChatService {
     /// letters, which is a directory you can walk alphabetically.
     ///
     /// Now it reads ONE document, `usernames/{name}`, whose rule allows `get` and never `list`. You
-    /// must already know the whole name; there is no way to ask what names exist. That is WhatsApp's
-    /// model, in their words: "strangers must type your exact, full username."
+    /// must already know the whole name; there is no way to ask what names exist. That is another
+    /// mainstream messenger's model, in their words: "strangers must type your exact, full username."
     ///
     /// Two reads instead of one query, and the second one is a plain document fetch the app makes
     /// everywhere else, so it is cached like any other profile.
@@ -2400,8 +2400,8 @@ enum ChatService {
     ///
     /// This used to take two letters and return twenty accounts ordered by username. That is a public
     /// directory: type `ab`, get twenty people, walk the alphabet, and you have everybody. It is the
-    /// exact thing WhatsApp describes when they say spammers cannot "search random words or scrape a
-    /// public directory to find you" — and we had it switched on.
+    /// exact thing another mainstream messenger describes when they say spammers cannot "search random
+    /// words or scrape a public directory to find you" — and we had it switched on.
     ///
     /// It is now an exact lookup that returns at most one person, so the search screen still works
     /// for somebody who was given a full username. Kept as a list-returning function rather than

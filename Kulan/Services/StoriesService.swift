@@ -76,7 +76,7 @@ struct Story: Identifiable, Hashable, Codable {
 extension StoriesService {
     /// A COVER SMALL ENOUGH TO PUT IN THE DOCUMENT, which is what makes it impossible to be missing.
     ///
-    /// Telegram's `immediateThumbnailData`: every story carries thumbnail bytes inside its own data,
+    /// The reference implementation's approach: every story carries thumbnail bytes inside its own data,
     /// so the viewer draws a blurred cover on the first frame of the first visit with no cache and no
     /// network. Ours had only a URL — and for a video that URL is a separately uploaded `thumb.jpg`
     /// which may not have landed, or may never land at all. When it was missing the viewer had
@@ -87,7 +87,7 @@ extension StoriesService {
     /// Firestore's 1 MB document limit, and it is written with the document rather than after it, so
     /// there is no window where the story exists without a cover. It is never drawn sharp: the veil
     /// puts it through `StoryCanvas.loadingVeil`, the same blur the real poster gets, which is
-    /// exactly how Telegram uses theirs.
+    /// exactly how the reference app uses theirs.
     /// Takes the ENCODED bytes, never a `UIImage`, and that is deliberate on both call sites: the
     /// photo path holds the picked file's data and the video path holds its poster's data, so a
     /// `UIImage` here would mean decoding a full-size picture at post time to throw all but 30
@@ -153,10 +153,10 @@ final class StoriesService {
     ///
     /// `.preparing` is work on THIS phone: squeezing the picture or transcoding the video. It has to
     /// block, because until it finishes there is no story — nothing to send and nothing to watch.
-    /// This is WhatsApp's "Preparing…" box.
+    /// This is another mainstream messenger's "Preparing…" box.
     ///
     /// `.sending` is the upload. It does NOT need the person, because their own copy is already
-    /// finished and already playable from local bytes. WhatsApp shows a quiet "Adding status…" line
+    /// finished and already playable from local bytes. That app shows a quiet "Adding status…" line
     /// here, with no spinner, and lets you open and watch it immediately.
     ///
     /// We used to run one spinning ring across BOTH, so a photo whose local work took ~0.3s still
@@ -572,7 +572,7 @@ final class StoriesService {
     }
 
     /// A long video becomes SEVERAL stories, in order, instead of being cut down to the first 90
-    /// seconds (owner's spec, 2026-08-04, WhatsApp Status' model). 45s is one story; two minutes is
+    /// seconds (owner's spec, 2026-08-04, modelled on another mainstream messenger's status feature). 45s is one story; two minutes is
     /// 90 + 30; five minutes is four. Nothing the user picked is thrown away and they do nothing
     /// extra to get it.
     ///
@@ -812,7 +812,7 @@ final class StoriesService {
     ///
     /// THE COST HE SHOULD KNOW: the author can tell who has opened a one-time story, because their
     /// uid leaves `recipientUids` and the author can read their own story. That is inherent to
-    /// enforcing it at the audience — Snapchat behaves the same way — and it is not affected by the
+    /// enforcing it at the audience — another mainstream app behaves the same way — and it is not affected by the
     /// viewer's receipt setting.
     func consumeOneTime(_ story: Story) async {
         let me = uid
@@ -1220,7 +1220,7 @@ final class StoriesRepository {
             // ⚠️ THE OTHER HALF OF KEEPING STORY MEDIA PERMANENTLY. Its files moved out of `Caches`
             // so the OS stops deleting them (his "when i update the app story chache i loss"), and a
             // permanent directory with no lifetime rule is a leak. This is his "after Expired
-            // delete": anything past two days goes, which is the retention Telegram gives its own
+            // delete": anything past two days goes, which is the retention the reference app gives its own
             // story category. Once per sign-in rather than per refresh — it walks two directories,
             // and doing that on every pull-to-refresh would be work nobody asked for.
             StoryStorage.purgeExpired()

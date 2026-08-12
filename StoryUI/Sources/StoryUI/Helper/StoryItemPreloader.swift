@@ -17,8 +17,8 @@ import AVFoundation
 /// duration and tracks are loaded, and its first frames are decoded, so `replaceCurrentItem` is
 /// followed by a frame rather than by a beat of black.
 ///
-/// Signal prepares its next items the same way (`StoryItemMediaView` builds its player ahead of the
-/// item being shown); Telegram keeps a small pool of prepared players around the current index. The
+/// One reference app prepares its next items the same way (building its player ahead of the
+/// item being shown); the other keeps a small pool of prepared players around the current index. The
 /// principle both share is that arriving at a story should be the moment it APPEARS, not the moment
 /// the work starts.
 enum StoryItemPreloader {

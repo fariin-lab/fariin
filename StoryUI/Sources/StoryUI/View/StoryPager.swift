@@ -102,7 +102,7 @@ struct StoryPager: UIViewControllerRepresentable {
     /// destination from ITS OWN position, so a late tap on the departing page writes "the person
     /// after ME", which is the person you have already gone past. That is the bounce.
     ///
-    /// So a tap during a turn is DROPPED, not queued: his rule, and Telegram's shape too — their
+    /// So a tap during a turn is DROPPED, not queued: his rule, and the reference app's shape too — its
     /// peer move runs through one commit whose settle owns the screen until it lands.
     ///
     /// ⚠️ IT MUST NEVER STRAND TRUE or tapping stops working for the rest of the viewer's life. It
@@ -185,24 +185,25 @@ struct StoryPager: UIViewControllerRepresentable {
         StoryCardMorph.shared.detach(coordinator.internalScroll)
     }
 
-    /// Telegram's perspective depth, their constant.
+    /// The reference app's perspective depth, its constant.
     static let cubePerspective: CGFloat = 500.0
 
     /// ⚠️ THE TERM OURS WAS MISSING, AND THE REASON THE PAGES CAME OUT THE WRONG SIZE.
     ///
-    /// Telegram reads `environment.metrics.widthClass` and uses **40 on compact (every iPhone)**, 0
-    /// only on regular (iPad). Ours had no such term at all, and the note that used to sit here said
-    /// "sideAngle = 0" as though that were a simplification. It is not a simplification, it is the
-    /// iPad branch: put `sideDistance = 0` into their formula and `sideAngle` collapses to zero,
-    /// `backDistance` collapses to zero, and what is left reduces algebraically to exactly the
-    /// transform we shipped. The cube on his phone was Telegram's iPad cube.
+    /// The reference implementation reads its width-class metric and uses **40 on compact (every
+    /// iPhone)**, 0 only on regular (iPad). Ours had no such term at all, and the note that used to
+    /// sit here said "sideAngle = 0" as though that were a simplification. It is not a
+    /// simplification, it is the iPad branch: put `sideDistance = 0` into its formula and
+    /// `sideAngle` collapses to zero, `backDistance` collapses to zero, and what is left reduces
+    /// algebraically to exactly the transform we shipped. The cube on his phone was the reference
+    /// app's iPad cube.
     ///
     /// What the term buys is where the two faces meet. At `sideAngle = 0` they meet at a right angle
     /// on the screen edge, so a turning face is projected larger than its page and the incoming one
     /// arrives undersized — his "incorrect sizing". At 40 the join stands 40pt inside the screen and
     /// both faces are drawn at the size the page actually is.
-    /// 40, flat: Telegram's compact-width value, and this app is an iPhone app. Their regular-width
-    /// (iPad) value is 0 — which is the branch we were accidentally running. Kept as a named constant
+    /// 40, flat: the reference app's compact-width value, and this app is an iPhone app. Its
+    /// regular-width (iPad) value is 0 — which is the branch we were accidentally running. Kept as a named constant
     /// rather than read from `UIDevice` so this stays callable from anywhere without an actor hop.
     static let cubeSideDistance: CGFloat = 40
 
@@ -219,9 +220,9 @@ struct StoryPager: UIViewControllerRepresentable {
         return 2.0 * atan(a / b)
     }
 
-    /// `StoryContainerScreen.calculateCubeTransform`, ported whole. t in [-1, 1]: 0 = flat centre,
-    /// ±1 = edge-on. The face push (+w/2 in z) is Telegram's `faceTransform`, which they set on the
-    /// CONTENT view while the cube goes on its parent; concatenating it first here is the same
+    /// The reference implementation's cube-transform function, ported whole. t in [-1, 1]: 0 = flat
+    /// centre, ±1 = edge-on. The face push (+w/2 in z) is the reference implementation's
+    /// face-transform value, set on the CONTENT view while the cube goes on its parent; concatenating it first here is the same
     /// composition on one layer, and it is what makes the centred page sit at exactly full size.
     static func cubeTransform(_ t: CGFloat, width w: CGFloat) -> CATransform3D {
         let tc = max(-1, min(1, t))
@@ -987,7 +988,7 @@ struct StoryPager: UIViewControllerRepresentable {
                 //
                 // The card paints its own black inside its own rounded rect now (StoryDetailView),
                 // so there is no black out here to leak. What pulls away is the picture and nothing
-                // else, which is what Snapchat's dismissal actually is.
+                // else, which is what another mainstream messenger's dismissal actually is.
                 card.backgroundColor = .clear
                 pager.view.backgroundColor = .clear
                 NotificationCenter.default.post(name: .pauseStory, object: nil)   // freeze for the whole drag
@@ -1170,7 +1171,7 @@ struct StoryPager: UIViewControllerRepresentable {
 /// `isBeingDismissed`). A cancelled drag runs `viewWillAppear` again, which restores the black.
 /// The card itself stays opaque throughout — it paints its own black inside its own rounded rect
 /// (StoryDetailView) — so what pulls away is the picture and nothing else, which is what the
-/// Snapchat reference he sent actually is.
+/// reference screenshot he sent actually is.
 final class StoryPagerVC: UIPageViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)

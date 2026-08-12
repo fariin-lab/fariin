@@ -11,7 +11,7 @@ import Foundation
 /// This is the one decision worth taking early. Verification keyed to `uid` reads fine right up to
 /// the day a group needs a badge, and then it needs a second collection, a second index, a second
 /// badge view and a second admin screen — two systems that have to agree forever and slowly stop
-/// agreeing. Telegram does not have that problem because their flag lives on a PEER: the same
+/// agreeing. The reference app does not have that problem because their flag lives on a PEER: the same
 /// `isVerified` bit is read off a user, a group and a channel by the same drawing code.
 ///
 /// The wire format is `"user:abc123"` / `"group:xyz789"`. A prefix rather than two collections,
@@ -62,8 +62,8 @@ struct PeerRef: Hashable, Identifiable {
 
 /// A verified peer, as it is stored and as the app reads it.
 ///
-/// WHAT THIS IS MODELLED ON. Telegram carries verification as a FLAG ON THE PEER ITSELF, delivered
-/// with the peer object — `TelegramUser.isVerified`, and the same bit on a chat. There is no separate
+/// WHAT THIS IS MODELLED ON. The reference app carries verification as a FLAG ON THE PEER ITSELF, delivered
+/// with the peer object itself, and the same bit is read on a chat. There is no separate
 /// endpoint and no second round trip: if you have the peer, you have the badge. That single decision
 /// is what makes their badge appear everywhere at once and never flicker in late, and it is the one
 /// worth copying.

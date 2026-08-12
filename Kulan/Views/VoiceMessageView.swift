@@ -64,7 +64,7 @@ struct VoiceMessageView: View {
     /// THE BUBBLE'S WIDTH, WORKED OUT FROM THE NOTE ITSELF.
     ///
     /// It used to be a flat 158pt of waveform for every note, so seven seconds and seven minutes drew
-    /// the identical bar and a short note was mostly empty space. WhatsApp's grows with the note, and so
+    /// the identical bar and a short note was mostly empty space. The reference app's grows with the note, and so
     /// does this.
     ///
     /// ⚠️ IT READS `duration` AND NOTHING ELSE, AND THAT IS NOT A STYLE CHOICE. Read the bloom note
@@ -74,7 +74,7 @@ struct VoiceMessageView: View {
     /// so the pre-measure and the render can never disagree. A width that consulted the player would
     /// bring that straight back.
     /// ONE FIXED WIDTH FOR EVERY NOTE — his 2026-08-11 night order, reversing the grow-with-
-    /// duration experiment from earlier the same day: "people are adopted to WhatsApp's note
+    /// duration experiment from earlier the same day: "people are adopted to the reference app's note
     /// size". The reference draws every voice bubble the same wide familiar shape regardless of
     /// length, and that sameness is itself the thing people recognise. A constant is trivially
     /// duration-deterministic, so the bloom rule (pre-measure == render, always) holds for free.
@@ -257,7 +257,7 @@ struct VoiceMessageView: View {
                             // ⚠️ NO transition on the glyph swap. A symbol-effect bounce was tried here
                             // (the icon travelled between play and pause) and he reported it as LAG:
                             // the audio toggles instantly but the button looked like it answered late.
-                            // WhatsApp swaps the glyph with no motion at all. Keep it instant.
+                            // The reference app swaps the glyph with no motion at all. Keep it instant.
                             .blendMode(.destinationOut)
                     }
                     .compositingGroup()
@@ -303,10 +303,10 @@ struct VoiceMessageView: View {
                 .background(tint.opacity(0.16), in: Capsule())
                 .contentShape(Capsule())
                 .onTapGesture { cycleRate() }
-            // THEY HEARD IT. On my own notes only, and only in a chat — this is the thing WhatsApp says
+            // THEY HEARD IT. On my own notes only, and only in a chat — this is the thing the reference app says
             // with a blue microphone, and the one voice signal we sent nothing for at all.
             //
-            // ⚠️ IT DIMS, IT DOES NOT TURN BLUE, and that is forced rather than chosen. WhatsApp can use
+            // ⚠️ IT DIMS, IT DOES NOT TURN BLUE, and that is forced rather than chosen. The reference app can use
             // a colour because their bubble is a pale green; ours is whatever chat colour the person
             // picked, and the only ink guaranteed to read on it is `tint`. A blue would vanish on a blue
             // bubble. Faint-to-solid is the one contrast that survives every colour and both appearances.
@@ -356,7 +356,7 @@ extension FileManager {
 struct WaveformBars: View {
     /// ⚠️ WHY EVERY BAR USED TO BE THE SAME HEIGHT, AND WHY THE FIX IS HERE AND NOT IN THE RECORDER.
     ///
-    /// His 2026-08-10 report, with our bubble beside WhatsApp's and Signal's: ours reads as a fence,
+    /// His 2026-08-10 report, with our bubble beside the reference app's and another mainstream messenger's: ours reads as a fence,
     /// theirs read as a voice. Measured rather than judged, and the cause is the top of the scale.
     ///
     /// `AudioRecorder.perceptualLevel` maps the microphone's dB onto 0…1 with SILENCE at −50 dB and
@@ -365,21 +365,21 @@ struct WaveformBars: View {
     /// so every bar of every note landed between roughly 12 and 18 points of the 26 available. Never
     /// the top, never the bottom, and a picket fence is exactly what that arithmetic draws.
     ///
-    /// Signal's own numbers (`AudioWaveform.swift`, read from source): silence is also −50, but full
+    /// That other messenger's own numbers (the reference implementation, read from source): silence is also −50, but full
     /// height is **−20 dB**, `clippingThreshold`, and the mapping is a plain clamped `inverseLerp`
     /// between the two. A 30 dB window instead of our 50, with the top set where a person actually
     /// speaks. That is the whole difference. Their loud syllables reach the ceiling and clamp; ours
     /// were still in the middle of the range.
     ///
     /// ⚠️ AND IT IS DELIBERATELY **NOT** PER-CLIP NORMALISATION. Scaling each note to its own
-    /// loudest moment would make a whisper draw identically to a shout — Signal's comment is explicit
+    /// loudest moment would make a whisper draw identically to a shout — that other messenger's comment is explicit
     /// that a quiet note is meant to render visibly short. An absolute window keeps the real
     /// difference between notes, which is information, not decoration.
     ///
     /// Done at DRAW time, on the stored 0…100, so it re-shapes every voice note ever sent as well as
     /// every new one, with no migration, no re-record and no server change. Exact rather than
     /// approximate: undoing the recorder's `pow(norm, 0.85)` recovers its `norm`, which is
-    /// `(dB + 50) / 50`, and multiplying by 50/30 rebases that onto Signal's −50…−20 window.
+    /// `(dB + 50) / 50`, and multiplying by 50/30 rebases that onto that other messenger's −50…−20 window.
     static func display(_ stored: Int) -> CGFloat {
         let v = CGFloat(max(0, min(100, stored))) / 100
         guard v > 0 else { return 0 }
@@ -416,7 +416,7 @@ struct WaveformBars: View {
         GeometryReader { geo in
             // THE BARS STAND STILL. They used to be pumped up and down by a sine wave — every already
             // played bar breathing ±14% for as long as the note ran — and that is what made the bubble
-            // feel busy and heavy. WhatsApp does not move its bars at all. The only thing that travels
+            // feel busy and heavy. The reference app does not move its bars at all. The only thing that travels
             // is the colour boundary and the knob, and that is enough to say where you are.
             //
             // ⚠️ THE `TimelineView` WENT WITH IT, AND THAT WAS THE POINT. Its whole job was to redraw
@@ -452,7 +452,7 @@ struct WaveformBars: View {
                 }
                 // ⚠️ NO SCRUBBER LINE HERE ANY MORE. There were TWO markers sitting on the same spot:
                 // this 2pt vertical stroke, and the round knob in the overlay below. One position, two
-                // things pointing at it, and on a short note they overlapped into a smudge. WhatsApp
+                // things pointing at it, and on a short note they overlapped into a smudge. The reference app
                 // marks the spot with a dot and nothing else. The knob is the one that survives, because
                 // it is also the thing you can grab.
             }

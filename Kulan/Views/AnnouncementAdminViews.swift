@@ -2,7 +2,7 @@ import SwiftUI
 import PhotosUI
 import FirebaseFirestore   // Timestamp, for building the live preview out of the draft
 
-// THE SENDING SCREENS. Signal has no equivalent — their release notes are a JSON file somebody
+// THE SENDING SCREENS. The reference app has no equivalent — its release notes are a JSON file somebody
 // uploads to a CDN by hand — so none of this is a copy of anything. What it must not do is invent a
 // second design language: every screen here is a plain grouped List with the same rows, the same
 // section footers and the same confirmation style as Settings, because that is what it is a part of.
@@ -387,7 +387,7 @@ struct AnnouncementComposeView: View {
                 } footer: {
                     if scheduleOn {
                         // Say it plainly. Scheduling here is convenience, not secrecy — the words are
-                        // on the server the moment Send is tapped, exactly as Signal's release-notes
+                        // on the server the moment Send is tapped, exactly as the reference app's release-notes
                         // file is public the moment it is uploaded.
                         Text("The announcement is written to the server now and appears on phones at the time you pick. Do not schedule anything that must stay secret until then.")
                     }
@@ -467,7 +467,7 @@ struct AnnouncementComposeView: View {
         } header: {
             Text("Buttons")
         } footer: {
-            // Signal allows exactly one. Three is where a row of buttons stops fitting a phone, and
+            // The reference app allows exactly one. Three is where a row of buttons stops fitting a phone, and
             // the owner asked for "Update Now / Learn More / View Features", which is three.
             Text(config.hasAppStoreUrl
                  ? "Up to three. They appear under the message."
@@ -751,7 +751,7 @@ private struct AnnouncementAudienceView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    /// Signal's unit, kept because it is the right one: a percentage of PEOPLE, decided by hashing
+    /// The reference app's unit, kept because it is the right one: a percentage of PEOPLE, decided by hashing
     /// each person's id with the announcement's, so the same people stay in the rollout every launch
     /// and the server never has to remember who was picked.
     @ViewBuilder private var rolloutSection: some View {

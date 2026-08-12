@@ -1,8 +1,8 @@
 import SwiftUI
 import UIKit
 
-// The my-stories carousel's ENGINE, built the way Telegram builds theirs — read from
-// StoryItemSetContainerComponent, not guessed: a hidden UIScrollView ("Scroller" in their source)
+// The my-stories carousel's ENGINE, built the way the reference app builds theirs — read from
+// the reference implementation, not guessed: a hidden UIScrollView ("Scroller" in their source)
 // whose pan gesture is attached to the row, native deceleration, and a scrollViewWillEndDragging
 // snap to whole cards. The cards themselves keep being drawn by SwiftUI from ONE continuous
 // position; this only replaces the finger half.
@@ -10,7 +10,7 @@ import UIKit
 // WHY: the row used to run on a SwiftUI DragGesture plus a hand-rolled momentum formula (predicted
 // translation → card steps → withAnimation spring). Every frame of both the drag and the glide was
 // a SwiftUI re-render through @State, the release physics were an imitation, and the owner called
-// the result laggy and unclear ("make it exactly telegram"). A UIScrollView's pan and deceleration
+// the result laggy and unclear ("make it exactly like the reference app"). A UIScrollView's pan and deceleration
 // ARE the native physics — the same curve every list in iOS glides on — and driving the row from
 // its contentOffset makes the drag and the glide one continuous number with no imitation anywhere.
 struct CarouselScroller: UIViewRepresentable {
@@ -64,7 +64,7 @@ struct CarouselScroller: UIViewRepresentable {
             parent.onInteracting(true)
         }
 
-        /// TELEGRAM'S SNAP: the deceleration target is rounded to a whole card, so the native glide
+        /// THE REFERENCE APP'S SNAP: the deceleration target is rounded to a whole card, so the native glide
         /// lands centred — their scrollViewWillEndDragging + snapScrolling, in one line.
         func scrollViewWillEndDragging(_ s: UIScrollView, withVelocity velocity: CGPoint,
                                        targetContentOffset: UnsafeMutablePointer<CGPoint>) {
@@ -99,7 +99,7 @@ struct CarouselScroller: UIViewRepresentable {
 }
 
 /// The row's touch surface. The hidden scroller is a subview only so UIKit runs its machinery; its
-/// PAN GESTURE is attached to THIS view (Telegram's exact trick), so fingers land here and the
+/// PAN GESTURE is attached to THIS view (the reference app's exact trick), so fingers land here and the
 /// scroller does the physics. Taps are ours too — the SwiftUI cards underneath draw and nothing else.
 final class CarouselScrollerView: UIView {
     let scroller = UIScrollView()
@@ -112,7 +112,7 @@ final class CarouselScrollerView: UIView {
         backgroundColor = .clear
         scroller.isHidden = true
         scroller.showsHorizontalScrollIndicator = false
-        scroller.decelerationRate = .normal          // Telegram's; .fast overshoots the snap feel
+        scroller.decelerationRate = .normal          // the reference app's; .fast overshoots the snap feel
         scroller.alwaysBounceVertical = false
         scroller.alwaysBounceHorizontal = true
         scroller.contentInsetAdjustmentBehavior = .never

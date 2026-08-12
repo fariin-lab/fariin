@@ -546,8 +546,8 @@ struct StoryRowLongPress: UIViewRepresentable {
                                   alignRight: frame.midX > window.bounds.midX,
                                   actions: t.actions,
                                   react: nil,
-                                  // TELEGRAM'S OPEN AND CLOSE, on his order. The chat's menu keeps
-                                  // Signal's, which he has already judged — see `CMOverlay.Motion`.
+                                  // THE REFERENCE APP'S OPEN AND CLOSE, on his order. The chat's menu keeps
+                                  // the other app's, which he has already judged — see `CMOverlay.Motion`.
                                   motion: .telegram) { [weak self] in
                     self?.overlay = nil
                 }

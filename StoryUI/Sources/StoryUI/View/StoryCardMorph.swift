@@ -47,13 +47,13 @@ public protocol StoryVideoFrameSource: AnyObject {
 /// on stays on screen because it is still the same layer drawing it. It cannot flash, jump or reset
 /// to the beginning, because nothing is ever swapped for anything.
 ///
-/// This is what Telegram does. `StoryItemSetContainerComponent` scales its live items container
-/// with `CATransform3DMakeScale` and pauses playback while the view list is open; it has no
-/// snapshot of any kind. Their frozen-frame behaviour is not a feature they built, it is a bug they
-/// cannot have.
+/// This is what the reference app does. The reference implementation scales its live items
+/// container with `CATransform3DMakeScale` and pauses playback while the view list is open; it has
+/// no snapshot of any kind. That frozen-frame behaviour is not a feature they built, it is a bug
+/// they cannot have.
 ///
 /// WHY IT IS UIKIT, which is the part that matters. Scaling the live story was tried twice before
-/// and reverted twice: `c938ad8` ported Telegram's centre-anchored scale, then `da0bc72` tore it
+/// and reverted twice: `c938ad8` ported the reference app's centre-anchored scale, then `da0bc72` tore it
 /// out again with the note "every version scaled the LIVE story with scaleEffect ... = the top
 /// break-out". Both attempts used a SwiftUI `.scaleEffect` on the hosted representable, which
 /// re-lays-out the view it wraps and re-insets it against the safe area, and that is where the top
@@ -95,7 +95,7 @@ public final class StoryCardMorph {
 
     /// THE COVER THE OPEN WEARS. His frame-grab of the open showed the problem exactly: the flying
     /// card faded in as a half-transparent ghost of the full-screen layout over a row card that
-    /// never moved — where Snapchat's growing thing is the cover picture itself, opaque from the
+    /// never moved — where another mainstream messenger's growing thing is the cover picture itself, opaque from the
     /// first pixel, dissolving into the live story mid-flight. So the presenter hangs a snapshot of
     /// the tapped row card here (inside the flight container, above the content), the open seats
     /// the card OPAQUE wearing it — pixel-matched to the row card it covers, so nothing can pop —
@@ -197,10 +197,10 @@ public final class StoryCardMorph {
     ///
     /// The open no longer has a window of its own to be confused with this one — a circular door
     /// opens as a card now (see `circleMorph`), which is the whole of his second report.
-    /// ⚠️ 0.03 SINCE 2026-08-09, down from 0.06, and the reason is his WhatsApp reference shot.
+    /// ⚠️ 0.03 SINCE 2026-08-09, down from 0.06, and the reason is his screenshot of another mainstream messenger.
     ///
     /// The shape journey was already right — at `circleMorph = 0` the crop is a SQUARE at the
-    /// card's width, i.e. a centre-crop, which is exactly WhatsApp's filled circle rather than a
+    /// card's width, i.e. a centre-crop, which is exactly another mainstream messenger's filled circle rather than a
     /// whole story shrunk to fit. What he photographed and disliked ("I don't like how the circle
     /// starts") is the INTERMEDIATE: a big rounded rectangle for the first tenth of the travel,
     /// which reads as a blob because it is neither the card nor the circle.
@@ -222,7 +222,7 @@ public final class StoryCardMorph {
 
     /// Where the STORY CARD sits inside the registered view: how far down it starts, and how tall it
     /// is. The view is a page-wide strip; the card is 9:16 and pinned to the safe-area top inside it
-    /// (Telegram's rule, see `StoryDetailView.cardHeight`). Shrinking the whole VIEW would carry the
+    /// (the reference app's rule, see `StoryDetailView.cardHeight`). Shrinking the whole VIEW would carry the
     /// black above and below the card into the slot and centre on the wrong point.
     ///
     /// TOP AND HEIGHT, NOT A RECTANGLE, because the view is the pager's own scroll view: its
@@ -450,8 +450,8 @@ public final class StoryCardMorph {
     ///     is what the viewers sheet still uses.
     ///   - alpha: the card's own opacity. 1 for the sheet; the hero close softens it slightly as it
     ///     is pulled away.
-    ///   - dim: how dark the surface BEHIND the card should be, 0…1. Snapchat darkens the list while
-    ///     the story is pulled away from it, and that darkening is most of why theirs reads as the
+    ///   - dim: how dark the surface BEHIND the card should be, 0…1. Another mainstream messenger darkens the list while
+    ///     the story is pulled away from it, and that darkening is most of why it reads as the
     ///     story lifting off rather than a card sliding about on a bright white page. It is written
     ///     onto the card's superview rather than a new view because that view is already the thing
     ///     `prepareForHero` makes see-through, so there is exactly one answer to "what is behind the
@@ -476,14 +476,14 @@ public final class StoryCardMorph {
     /// the one call that shrinks it, so it is a description of what is ON SCREEN rather than a
     /// message about what was requested.
     ///
-    /// ⚠️ THIS IS TELEGRAM'S ANSWER TO "WHY IS THE CAPTION STILL THERE", and he has now asked four
-    /// times. `StoryItemSetContainerComponent` sets its caption's alpha like this, in the same
+    /// ⚠️ THIS IS THE REFERENCE APP'S ANSWER TO "WHY IS THE CAPTION STILL THERE", and he has now asked four
+    /// times. The reference implementation sets its caption's alpha like this, in the same
     /// layout pass that scales the card:
     ///
     ///     var captionAlpha: CGFloat = (component.hideUI || ...) ? 0.0 : 1.0
     ///     captionAlpha *= (1.0 - itemLayout.contentScaleFraction)
     ///
-    /// `contentScaleFraction` is the SAME number that shrinks their card. That multiplication is the
+    /// `contentScaleFraction` is the SAME number that shrinks its card. That multiplication is the
     /// whole mechanism: there is no notification, no timer, no snapshot, and no way for the caption
     /// to disagree with the card, because it is a pure function of the card's own state computed in
     /// the same pass.
@@ -568,7 +568,7 @@ public final class StoryCardMorph {
         // 2026-08-07 report: "as the view moves downward its content bounds clip and crop… the media
         // is distorted". So the shave is a value the flight owns, exactly like the cover: the finger
         // gets `crop: 0`, a pure uniform scale-down of the whole 9:16 picture with nothing removed
-        // (Snapchat's zoom-out), and the snap that follows the release converges it to 1 over the
+        // (another mainstream messenger's zoom-out), and the snap that follows the release converges it to 1 over the
         // same window the cover fades in on. At the landing it is 1, so the card is the slot's shape
         // and the pixel identity the hand-over depends on is untouched.
         // ⚠️ A CIRCULAR DOOR NEVER OUTGROWS THE CARD; IT BECOMES THE CARD.
@@ -602,7 +602,7 @@ public final class StoryCardMorph {
             // The width-locked journey below (width pinned to `restW`, only the height and radius
             // travelling) was the THIRD shape this door has worn, built so nothing could clip the
             // mask sideways — and its intermediate frames are a flat-sided pill taller than it is
-            // wide, which is his 2026-08-10 screenshot next to Snapchat's. The requirement, in his
+            // wide, which is his 2026-08-10 screenshot next to another mainstream messenger's. The requirement, in his
             // words: width == height, cornerRadius = width / 2, at every moment, with the diameter
             // allowed to pass the screen width and the excess simply running off the edges.
             //
@@ -617,7 +617,7 @@ public final class StoryCardMorph {
             //
             // ⚠️ ACCEPTED COST, on purpose: at the very start of a drag the containing circle does
             // not reach the card's 12pt corners, so they render square for the first frames of the
-            // rush. Snapchat's card is edge-to-edge square at rest, so this is exactly their look;
+            // rush. Another mainstream messenger's card is edge-to-edge square at rest, so this is exactly its look;
             // capping the circle to preserve a 12pt curve is how the pill got built.
             let diagonal = (restW * restW + restH * restH).squareRoot()
             let side = restW + (diagonal - restW) * circleMorph
@@ -627,7 +627,7 @@ public final class StoryCardMorph {
             // OPENING: NOT A CIRCLE AT ALL ANY MORE. His 2026-08-08 order in as many words —
             // "when opening the story it should open normally like the other stories, not as a
             // circle. Only when I close should it transition back into the circular avatar."
-            // That is Snapchat's and WhatsApp's asymmetry: out as a card, home as a circle.
+            // That is the standard messengers' asymmetry: out as a card, home as a circle.
             //
             // `circleMorph = 1` IS the card, so an opening circular door now takes exactly the
             // same shape journey as a story-row card: a small rounded rectangle at the ring's
@@ -775,7 +775,7 @@ public final class StoryCardMorph {
                   // avatar ring underneath the mismatch is a visible seam at the hand-over.
                   circularHole: circular && exiting,
                   // ⚠️ NOTHING OUTSIDE A CIRCLE, EVER — the first half of his 2026-08-08 report:
-                  // "plz dont show transition images or mirror, just make like snapchat".
+                  // "plz dont show transition images or mirror, just make like the reference app".
                   //
                   // `chrome` lets the viewer's surround — the header's own strip, the reply bar, the
                   // page's black — show through beyond the mask as the card arrives home. On a card
@@ -852,7 +852,7 @@ public final class StoryCardMorph {
     ///
     /// ⚠️ THE POSITION HALF IS GONE, ON PURPOSE (2026-08-11). This used to write the playhead too,
     /// so a live story rebuilt behind the sheet could resume where it paused. The owner's rule now
-    /// is Telegram's: leaving a story item and coming back RESTARTS it from zero, always — see
+    /// is the reference app's: leaving a story item and coming back RESTARTS it from zero, always — see
     /// `StoryPlaybackResume`'s header. The only continuation left is a live player that was paused
     /// and never torn down, which needs no memory. What still travels is the PICTURE, because the
     /// carousel cards draw "the last frame this clip showed" and that stays true either way.
@@ -900,8 +900,8 @@ public final class StoryCardMorph {
     /// The page is TALLER THAN THE STORY. The card starts at the safe-area top and is 9:16, so the
     /// strip above it is the page's own black background — invisible normally, because it sits behind
     /// the status bar. The dismiss scales the whole page, which shrank that strip along with
-    /// everything else and brought it into view as a black header inside the rounded card. Snapchat
-    /// and Telegram have no such band because what shrinks for them is the story, not a page with a
+    /// everything else and brought it into view as a black header inside the rounded card. The
+    /// standard messengers have no such band because what shrinks for them is the story, not a page with a
     /// story in it.
     ///
     /// `cornerRadius` is the radius wanted ON SCREEN; it is divided by the scale here, because the

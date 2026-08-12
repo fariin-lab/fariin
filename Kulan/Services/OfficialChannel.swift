@@ -4,20 +4,21 @@ import CryptoKit
 import FirebaseAuth
 import FirebaseFirestore
 
-// THE OFFICIAL CHANNEL — read from Signal's source, then built our way.
+// THE OFFICIAL CHANNEL — read from the reference app's source, then built our way.
 //
 // The one thing worth understanding before changing anything here: THERE IS NO ACCOUNT BEHIND THIS
-// CHAT. Signal's `CreateReleaseChannelJob` makes a local contact with no service id and no phone
-// number, names it "Signal", mutes it forever and paints the app's own logo on it; iOS does the same
-// with `TSReleaseNotesThread` and a hardcoded unique id. Nobody can impersonate it because there is
-// nothing to impersonate — the app itself decides what is official, and the id below is the whole
-// decision. A real @fariin account could be copied as @fariinn, @fariin1, @far1in; this cannot.
+// CHAT. The reference implementation makes a local contact with no service id and no phone
+// number, names it after itself, mutes it forever and paints the app's own logo on it; iOS does the
+// same with a hardcoded release-notes thread and a hardcoded unique id. Nobody can impersonate it
+// because there is nothing to impersonate — the app itself decides what is official, and the id below
+// is the whole decision. A real @fariin account could be copied as @fariinn, @fariin1, @far1in; this
+// cannot.
 //
 // The second thing: announcements are PULLED, not pushed. One document is written once and every
 // phone in the world reads the same one. Nothing is copied per user, so sending to a million people
 // costs exactly one write. Who an announcement is FOR is decided here, on the phone, out of fields
-// the announcement carries (app build, country, rollout bucket) — the same trick Signal uses to run
-// a worldwide release channel off one static file with no server state at all.
+// the announcement carries (app build, country, rollout bucket) — the same trick the reference app
+// uses to run a worldwide release channel off one static file with no server state at all.
 //
 // The only exception is a send to CHOSEN people, which cannot work that way because the phone would
 // have to be told the list. Those get a real copy under `users/{uid}/announcements/{id}`, which is
@@ -32,8 +33,8 @@ enum OfficialChannel {
     /// reservation exists purely to burn the name.
     static let handle = "fariin"
     static let subtitle = "Official Chat"
-    /// Bottom bar where the composer would be. WhatsApp says "Only WhatsApp can send messages";
-    /// Signal says "The only official chat from Signal". Ours says what it is and who it is from.
+    /// Bottom bar where the composer would be. Another mainstream messenger says only it can send
+    /// messages; the reference app names the contact after itself. Ours says what it is and who it is from.
     static let cannotReply = "Only Fariin can send messages"
 
     static func isOfficial(_ cid: String) -> Bool { cid == OfficialChannel.cid }
@@ -105,7 +106,7 @@ enum AnnouncementKind: String, CaseIterable, Identifiable {
     var isUrgent: Bool { self == .security }
 }
 
-/// A tappable button under an announcement. Signal allows exactly ONE (a `ctaId` string mapped to an
+/// A tappable button under an announcement. The reference app allows exactly ONE (a `ctaId` string mapped to an
 /// in-app action); we allow up to three, because the owner asked for "Update Now / Learn More / View
 /// Features" and three is where a row of buttons stops fitting a phone.
 struct AnnouncementButton: Equatable, Identifiable {
@@ -210,9 +211,9 @@ struct AnnouncementAudience: Equatable {
     var scope: Scope = .everyone
     /// ISO region codes ("SO", "GB"). Matched against the region the PHONE is set to, which is the
     /// only country we honestly know: not every account has a phone number, and we deliberately do
-    /// not collect location. Signal matches on the phone number's calling code for the same purpose.
+    /// not collect location. The reference app matches on the phone number's calling code for the same purpose.
     var countries: [String] = []
-    /// Rollout size in parts per million, Signal's unit. 1_000_000 = everybody who passes the other
+    /// Rollout size in parts per million, the reference app's unit. 1_000_000 = everybody who passes the other
     /// filters. Below that, each phone hashes its own id with the announcement id to decide, so the
     /// same people stay in the rollout on every launch and the server never has to remember anyone.
     var ppm: Int = 1_000_000
@@ -313,7 +314,7 @@ struct Announcement: Identifiable, Equatable {
 // MARK: - Who gets what, decided here
 
 extension Announcement {
-    /// Signal's `BucketingUtil.bucket`: hash a stable key with the user id into 0..<1_000_000. The
+    /// The reference implementation's bucketing method: hash a stable key with the user id into 0..<1_000_000. The
     /// same person always lands in the same bucket for the same announcement, so a 5% rollout is 5%
     /// of people rather than 5% of app launches, and no server has to remember who was picked.
     static func bucket(_ salt: String, _ uid: String) -> Int {
@@ -353,8 +354,8 @@ extension Announcement {
 
 /// What THIS person has done with the channel. One document, written only by its owner.
 ///
-/// Muted is the default and costs no write: Signal mutes the release channel forever at creation
-/// (`setMuted(Long.MAX_VALUE)` on Android, `alwaysMutedTimestamp` on iOS) and the promise in the
+/// Muted is the default and costs no write: the reference app mutes the release channel forever at
+/// creation (a max-value mute timestamp on each platform) and the promise in the
 /// welcome message — "we are here to share important updates, not spam your notifications" — is only
 /// true if the mute is real before anybody touches anything.
 /// Document shape, for reference when reading the writers below:
@@ -407,8 +408,8 @@ final class OfficialChannelStore {
 
     // MARK: What the rest of the app asks
 
-    /// The channel shows itself only once it has something to say. Signal does the same
-    /// (`shouldThreadBeVisible = false` until the first note lands) and it is why a brand-new account
+    /// The channel shows itself only once it has something to say. The reference app does the same
+    /// (a visibility flag that stays false until the first note lands) and it is why a brand-new account
     /// does not open onto an empty official chat.
     ///
     /// `visible` already accounts for a block — see `recompute`, where a blocked channel keeps only
@@ -458,7 +459,7 @@ final class OfficialChannelStore {
         // due check lives in `reaches` instead, and the timer below re-runs it.
         //
         // The cost of that: a scheduled announcement sits on the server, readable, from the moment it
-        // is written. That is exactly Signal's exposure (their release-notes file is public on a CDN
+        // is written. That is exactly the reference app's exposure (their release-notes file is public on a CDN
         // the moment it is uploaded), and it is why scheduling is a convenience and not a secret.
         broadcastListener = db.collection("announcements")
             .order(by: "publishAt", descending: true)
@@ -557,7 +558,7 @@ final class OfficialChannelStore {
         let next = byId.values
             .filter { $0.reaches(uid: uid, build: build, region: region) }
             .filter { $0.sortAt.timeIntervalSince1970 * 1000 > cleared }   // delete-for-me
-            // BLOCKING STOPS THE NEWS, NOT THE ALARM. Read from WhatsApp's own block sheet, which
+            // BLOCKING STOPS THE NEWS, NOT THE ALARM. Read from another mainstream messenger's own block sheet, which
             // says so out loud: "You may still receive messages with important information about your
             // account". Somebody who blocks this chat is saying they do not want to hear about new
             // features. They are not saying they would rather not be told that their account was

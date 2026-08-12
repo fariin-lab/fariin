@@ -335,7 +335,7 @@ struct ContactInfoView: View {
         .profileSurface(plain: cardColor)
     }
 
-    /// Section title above a card, with SIGNAL'S OWN numbers (OWSTableViewController2, fetched and
+    /// Section title above a card, with the reference app's own numbers (from the reference implementation, fetched and
     /// read — not measured off a screenshot): `defaultHeaderFont` = dynamicTypeHeadlineClamped, i.e.
     /// headline (17pt semibold), in the primary label colour; and a section WITH a card background
     /// gets `cellHInnerMargin * 0.5` = 8pt of extra leading on top of the 16pt page margin, so the
@@ -1012,7 +1012,7 @@ struct ContactInfoView: View {
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { avatarFrame = $0 }
             }
             .contentShape(Circle())
-            // ⚠️ THE FLIGHT'S SOURCE, AND THE REASON THIS PROFILE GETS SNAPCHAT'S CIRCLE.
+            // ⚠️ THE FLIGHT'S SOURCE, AND THE REASON THIS PROFILE GETS ANOTHER MAINSTREAM MESSENGER'S CIRCLE.
             //
             // The radius is HALF THE SIDE, which is the whole shape system: `StoryCardMorph` reads
             // the number its source reports and runs a circular flight when it is half the short
@@ -1338,7 +1338,7 @@ struct ContactInfoView: View {
             mutedUntil = muteUntil
             blocked = (d["blockedBy"] as? [String: Any])?[me] as? Bool ?? false
         }
-        // LOCAL FIRST, THE WAY SIGNAL DOES IT. the reference app's media gallery is a query over its own message
+        // LOCAL FIRST, THE WAY THE REFERENCE APP DOES IT: its media gallery is a query over its own message
         // database, so it renders offline and instantly; it never asks the network for something it has
         // already received. Fariin has no SQLite store, but it does keep this chat's decrypted messages
         // in memory — that cache is what lets the conversation paint before the push transition

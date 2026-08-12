@@ -847,7 +847,7 @@ struct ThreadView: View {
                 // SOLID system background (white in light / dark in dark mode) — the default iOS 26 glass
                 // sheet showed the chat blurring through, which read as a broken half-empty panel.
                 .presentationBackground(Color(.systemBackground))
-                // TELEGRAM MODEL (user request 2026-07-14, replacing the brief zoom-from-+ experiment):
+                // THE REFERENCE APP MODEL (user request 2026-07-14, replacing the brief zoom-from-+ experiment):
                 // the reference app's attachment menu is a spring bottom sheet — it slides up from the bottom
                 // edge with a quick spring, drags between part/full height, and a downward drag or flick
                 // dismisses it. That is EXACTLY the native sheet-with-detents behavior, so the system
@@ -1627,13 +1627,13 @@ struct ThreadView: View {
                     AppRouter.shared.pendingChatPhoto = photo   // not the "Chat" placeholder
                     AppRouter.shared.pendingChatId = ChatService.convId(me, uid)
                 },
-                // OPEN LIKE SIGNAL: fly only the MEDIA out of its bubble, then reveal the viewer.
+                // OPEN LIKE THE REFERENCE APP: fly only the MEDIA out of its bubble, then reveal the viewer.
                 // `.navigationTransition(.zoom)` scaled the ENTIRE cover - black backdrop, header, thumb
                 // strip, toolbar - out of the bubble, which is the one thing that never matched the reference app
                 // no matter how the timing was tuned. Falls straight through to the plain presentation
                 // when there is no live rect or no decoded image to fly, so opening can never be blocked.
                 // THE OPEN AND THE CLOSE MUST READ THE SAME GEOMETRY. The close already lands on the
-                // bubble's REAL corner radius (SignalMediaDismiss reads MediaOpenRects.cornerRadius);
+                // bubble's REAL corner radius (MediaDismiss reads MediaOpenRects.cornerRadius);
                 // the open was leaving `sourceCornerRadius` at its 14pt default, so media whose bubble
                 // has a different radius started the flight at one shape and finished at another. Two
                 // directions, two radii, from one registry that already had the right number in it.
@@ -1797,7 +1797,7 @@ struct ThreadView: View {
             // system against the real bar, so it cannot land anywhere but under it.
             //
             // It also means the conversation is pushed down by the card rather than running beneath
-            // it, which is what Signal gets for free by making its version a real row.
+            // it, which is what the reference app gets for free by making its version a real row.
             .safeAreaInset(edge: .top) {
                 if requestStance == .incoming { requestIntroCard }
             }
@@ -1812,8 +1812,8 @@ struct ThreadView: View {
             showContactInfo = true
         } label: {
             VStack(spacing: 8) {
-                // A STRANGER'S PHOTO IS BLURRED UNTIL YOU LET THEM IN. Signal does this
-                // (`CVComponentThreadDetails.isAvatarBlurred`) and the reason is worth writing down:
+                // A STRANGER'S PHOTO IS BLURRED UNTIL YOU LET THEM IN. The reference app does this
+                // (the reference implementation) and the reason is worth writing down:
                 // without it, anybody who can reach you can put a picture in front of you that you
                 // never asked to see, just by setting it as their profile photo. Tapping opens the
                 // profile, where it is shown properly, so nothing is hidden — it just is not pushed
@@ -1836,7 +1836,7 @@ struct ThreadView: View {
                         .foregroundStyle(.secondary)
                 }
                 // WHO THEY ARE, not a reassurance. This said "This conversation is private", which
-                // tells you nothing about the person you are being asked to decide about. Signal
+                // tells you nothing about the person you are being asked to decide about. The reference app
                 // fills this line with identifying detail and mutual groups; groups are switched off
                 // here, so our equivalent is the username somebody would actually recognise.
                 if !requestHandle.isEmpty {
@@ -2121,7 +2121,7 @@ struct ThreadView: View {
             return out
         }
 
-        // SIGNAL'S ORDER (owner's circled reference): Reply · Forward · Copy · Select · Info · Pin,
+        // THE REFERENCE APP'S ORDER (owner's circled reference): Reply · Forward · Copy · Select · Info · Pin,
         // Delete last. Our extra items slot in where they belong: Edit and Save Image after Copy.
         // NOT-YET-DELIVERED messages carry a local clientId, not a server doc id, so anything that
         // stores a reference to them breaks permanently (audit): Pin wrote a phantom pin that never
@@ -2476,8 +2476,8 @@ struct ThreadView: View {
     /// It is one function because it used to be three copies and they had already drifted. The
     /// long-press copy excluded view-once photos; the multi-select copy did not, so ticking a
     /// view-once photo in selection mode forwarded it to somebody else and the whole point of
-    /// view-once was gone. Signal keeps a single `isForwardable` on the selection item for exactly
-    /// this reason (ConversationViewController+Selection.swift), and checks `wasRemotelyDeleted`,
+    /// view-once was gone. The reference app keeps a single `isForwardable` on the selection item for exactly
+    /// this reason (the reference implementation), and checks `wasRemotelyDeleted`,
     /// `isViewOnceMessage` and renderable content in that one place.
     ///
     /// - `sendState == nil`: still-sending messages have no id the other device has ever seen. Same
@@ -2495,7 +2495,7 @@ struct ThreadView: View {
     /// it, because they never find out. A tombstone stays SELECTABLE on purpose — the trash button is
     /// how you clear the placeholder off your own list — it just can't be part of a forward.
     ///
-    /// Signal's `selectionCanBeForwarded` is the same shape: empty is false, then one `guard
+    /// The reference app's equivalent check is the same shape: empty is false, then one `guard
     /// item.isForwardable else { return false }` over every item.
     private var selectionIsForwardable: Bool {
         let picked = repo.items.filter { selectedIds.contains($0.id) }
@@ -2589,7 +2589,7 @@ struct ThreadView: View {
             await repo.ensureLoaded(id)   // page older history in until the match is in the window
             await MainActor.run {
                 guard seq == searchJumpSeq else { return }   // a newer jump superseded this one
-                // SIGNAL'S RESULT NAVIGATION (user spec): jump to the match AND mark the found bubble —
+                // THE REFERENCE APP'S RESULT NAVIGATION (user spec): jump to the match AND mark the found bubble —
                 // the emphasis stays ~2s so the eye can land on which result was found, then fades
                 // smoothly. flashAndScroll also translates id → rowId (the native list keys by rowId;
                 // a deleted match resolves to no row and gracefully no-ops).
@@ -4743,8 +4743,8 @@ struct ThreadView: View {
             // With permission granted the recording IS coming, a beat behind the finger, and the
             // locked bar picks it up. A first-ever tap that lands on the permission prompt still
             // falls through to the hint: not granted yet, nothing to lock.
-            // TAP TO RECORD HANDS-FREE — his order, and deliberately OUR OWN invention: WhatsApp,
-            // Telegram and Messenger all flash a "hold to record" hint here (checked against their
+            // TAP TO RECORD HANDS-FREE — his order, and deliberately OUR OWN invention: the standard
+            // messengers all flash a "hold to record" hint here (checked against their
             // apps 2026-08-11, in the voice research pass). Recording already started at touch-down,
             // so a quick clean tap simply keeps it running and jumps straight to the locked bar —
             // same destination as slide-to-lock, with no finger held. Measured by WALL CLOCK from
@@ -5929,7 +5929,7 @@ struct MessageBubble: View, Equatable {
                     )
                     // REACTIONS HANG OFF THE BUBBLE'S EDGE, not in the gap below it (user: a badge
                     // floating between two bubbles belongs to neither, so you cannot tell WHICH
-                    // message was reacted to — his circled screenshots). the reference app and the reference app both
+                    // message was reacted to — his circled screenshots). The standard messengers both
                     // attach it to the bubble, overlapping the corner it belongs to: trailing for my
                     // messages, leading for theirs. The overlay MUST come BEFORE .offset(dragX) or it
                     // is aligned to the un-moved layout frame and the swipe leaves it parked (the
@@ -6120,7 +6120,7 @@ struct MessageBubble: View, Equatable {
             // `contentWidth` is worked out from the message's own `duration` and nothing else, so it is
             // identical at pre-measure and at render and in every playback state — which is the property
             // the bloom fix actually needed. (History: 212 fixed → grow-with-duration 154…202 →
-            // back to FIXED at 238 on 2026-08-11 night, "people are adopted to WhatsApp's size" —
+            // back to FIXED at 238 on 2026-08-11 night, "people are adopted to the reference app's size" —
             // a constant satisfies the determinism rule trivially.)
             //
             // metaRow is no longer a row of its own here. It is handed INTO the voice view and laid over
@@ -6134,8 +6134,8 @@ struct MessageBubble: View, Equatable {
             }
             .frame(width: VoiceMessageView.contentWidth(for: message), alignment: .leading)
             .padding(.horizontal, 13)
-            // 8: the middle of tonight's two orders — first "slim like WhatsApp" (7), then, after
-            // living with it, "people are adopted to WhatsApp's size" (the fixed-wide, slightly
+            // 8: the middle of tonight's two orders — first "slim like the reference app" (7), then, after
+            // living with it, "people are adopted to the reference app's size" (the fixed-wide, slightly
             // taller shape in VoiceMessageView).
             .padding(.vertical, 8)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
@@ -6532,16 +6532,16 @@ struct MessageBubble: View, Equatable {
                   firstLinkURL == nil {
             // JUMBOMOJI — the reference app's behaviour, read from their source (2026-07-28) rather than eyeballed.
             //
-            //   DisplayableText.swift:
+            //   From the reference implementation (display-text sizing):
             //     public static let kMaxJumbomojiCount: Int = 5
             //     guard string.containsOnlyEmojiIgnoringWhitespace else { return 0 }
             //     let emojiCount = string.removeCharacters(characterSet: .whitespacesAndNewlines).count
             //     if emojiCount > kMaxJumbomojiCount { return 0 }
             //
-            //   CVComponentBodyText.swift, textMessageFont — multipliers on the body point size:
+            //   From the reference implementation (body-text font sizing) — multipliers on the body point size:
             //     1 → 3.5   2 → 3.0   3 → 2.75   4 → 2.5   5 → 2.25
             //
-            //   CVComponentState.swift:
+            //   From the reference implementation (message state):
             //     var isBorderlessJumbomojiMessage: Bool {
             //         isTextOnlyMessage && (bodyText?.isJumbomojiMessage == true)
             //     }
@@ -6575,7 +6575,7 @@ struct MessageBubble: View, Equatable {
             // quote still widens the bubble. This replaces the measured quoteFillWidth preference, which
             // broke inside the hosted cells (state reset on reconfigure + the pre-measured first pass
             // rendered before the measurement existed → the tiny box came back).
-            // SIGNAL'S QUOTE/BUBBLE SIZING MODEL (verified from CVComponentMessage + ManualStackView
+            // THE REFERENCE APP'S QUOTE/BUBBLE SIZING MODEL (verified from the reference implementation
             // source): MEASURE every part at its NATURAL width (quote truncates when long), the bubble
             // hugs the WIDEST part; RENDER with fill — the quote stretches to that hugged width.
             // In SwiftUI: an invisible natural-width TEMPLATE defines the hug (it wraps normally at the
@@ -6835,7 +6835,7 @@ struct MessageBubble: View, Equatable {
                     ZStack {
                         Color.black.opacity(0.18)
                         // The X lives INSIDE the ring now (owner 2026-08-05: "the X should be
-                        // placed inside the upload loading indicator"), WhatsApp's arrangement:
+                        // placed inside the upload loading indicator"), the reference app's arrangement:
                         // one centred control that is both the progress and the cancel. The disc
                         // is the tap target. NOT a Button — a Button's press gesture claims
                         // touches inside a hosted cell and has locked chat scrolling before.

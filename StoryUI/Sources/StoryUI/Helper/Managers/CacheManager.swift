@@ -79,7 +79,7 @@ final class CacheManager: NSObject {
 
     /// The usable cache file for this url, or nil. The synchronous question `startVideo` asks to
     /// decide whether the veil carries a spinner (bytes are actually missing) or only a cover (the
-    /// clip is on disk). Telegram keys its loading shimmer on exactly this — whether the media is
+    /// clip is on disk). The reference app keys its loading shimmer on exactly this — whether the media is
     /// fetched — never on player readiness, which is why a cached story there never shows a loading
     /// state at all. Same name, same directory, same size floor as `loadVideo`: two answers that
     /// could drift apart would put the wheel back on cached clips.

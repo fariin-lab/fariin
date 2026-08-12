@@ -35,12 +35,12 @@ import UIKit
     }
     static func rect(_ key: String) -> CGRect? { rects[key] }
 
-    // MARK: - The live view behind the rectangle (Telegram's shape)
+    // MARK: - The live view behind the rectangle (the reference app's shape)
 
     /// THE VIEW, NOT A NUMBER SOMEBODY WROTE DOWN EARLIER.
     ///
-    /// Telegram hands its story screen a `sourceView` alongside the rect
-    /// (`StoryContainerScreen.TransitionIn`: `weak var sourceView: UIView?`, `sourceRect`,
+    /// The reference app hands its story screen a `sourceView` alongside the rect
+    /// (the reference implementation's transition-in type: `weak var sourceView: UIView?`, `sourceRect`,
     /// `sourceCornerRadius`) and converts at the moment it flies. We stored only the rectangle, in
     /// window coordinates, worked out by a SwiftUI GeometryReader at some earlier layout pass — and a
     /// written-down rectangle can be stale (the row scrolled, the row re-sorted, the list moved under
@@ -61,7 +61,7 @@ import UIKit
     }
 
     /// The registered view itself, while it is on screen. The story hero snapshots it at tap time:
-    /// the flying card lifts off WEARING the tapped card's own pixels (Snapchat's shared-element
+    /// the flying card lifts off WEARING the tapped card's own pixels (another mainstream app's shared-element
     /// look — the thumbnail expands, not a screen materialising over it), and the snapshot is what
     /// it wears. Weak-backed, so a scrolled-away card honestly answers nil.
     static func liveView(_ key: String) -> UIView? {
@@ -276,8 +276,8 @@ struct MediaRectReporter: ViewModifier {
     }
 }
 
-// DELETED HERE: `TGMediaZoomLayer` and `TGOpenState` — a complete second open/close animation, in
-// SwiftUI, that ran alongside the UIKit pair in SignalMediaDismiss.swift. Every call site passed nil so
+// DELETED HERE: a duplicate media-zoom layer and a second open state — a complete second open/close animation, in
+// SwiftUI, that ran alongside the UIKit pair in MediaDismiss.swift. Every call site passed nil so
 // it never fired, but it disagreed with the real pipeline on every number that matters: spring response
 // 0.38 with 0.86 damping against the reference app's 0.25 critically damped, a hardcoded 16pt corner radius against
 // the bubble's real one, `UIScreen.main.bounds` against the transition container's geometry, and

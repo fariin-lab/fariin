@@ -26,7 +26,7 @@ extension NSNotification.Name {
     /// a stalled clip cannot have its segment counted out from under it — the desynchronisation where
     /// a story moved on while the video was still trying to start.
     static let storyBuffering = Notification.Name("storyBuffering")
-    /// The current clip played to its end (`userInfo["url"]` names it). Telegram's rule, and now
+    /// The current clip played to its end (`userInfo["url"]` names it). The reference app's rule, and now
     /// ours: a VIDEO story segment is completed ONLY by the player's own end-of-clip report — the
     /// bar reads the player's clock and is capped under the boundary (`syncBarToPlayer`), so
     /// arithmetic can neither cut a clip off early nor keep the bar running after it finished.

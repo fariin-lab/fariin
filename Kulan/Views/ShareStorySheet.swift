@@ -67,7 +67,7 @@ struct StoryBurnIn {
 /// WHAT MAKES "changes won't affect stories you've already sent" TRUE is not care here, it is the
 /// shape: `recipients(contacts:)` is resolved at this moment and written onto the story, and nothing
 /// on a posted story points back at the list it came from. Edit the list tomorrow, rename it, delete
-/// it — yesterday's story cannot notice. Signal is built the same way for the same reason.
+/// it — yesterday's story cannot notice. The reference app is built the same way for the same reason.
 ///
 /// Posting kicks off a BACKGROUND upload (StoriesService.postStoryBackground) and pops to chat.
 struct ShareStorySheet: View {
@@ -226,7 +226,7 @@ struct ShareStorySheet: View {
         }
         .onAppear { if contacts.isEmpty { contacts = StoryContact.all() } }
         // A new list is SELECTED the moment it is made: he built it in the middle of posting, so it
-        // is obviously the one he means. Signal does the same.
+        // is obviously the one he means. The reference app does the same.
         .sheet(isPresented: $creating) {
             CreateCustomStoryFlow(
                 onCreated: { a in

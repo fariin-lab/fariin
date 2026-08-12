@@ -5,7 +5,7 @@ import UIKit
 // draw from these, because "who can see my story" is one question and the owner asked for one answer
 // to it wherever it is asked.
 //
-// STRUCTURE COPIED FROM SIGNAL, LOOK FROM US (his standing rule). Signal's shape is: a list of named
+// STRUCTURE COPIED FROM THE REFERENCE APP, LOOK FROM US (his standing rule). The reference app's shape is: a list of named
 // distribution lists with a + New, a two-step create (pick people → name it), and a page per list.
 // That shape is right and it is what he drew. The chrome is ours: our capsule buttons, our grouped
 // list, our avatars.
@@ -80,7 +80,7 @@ struct StoryAudienceRow<Trailing: View>: View {
     @ViewBuilder private var badge: some View {
         // EVERYONE WEARS YOUR OWN FACE (owner 2026-08-06: "on the Everyone tab, please set my profile
         // picture not icon"). It is the audience that reaches your profile, so your profile is the
-        // truest picture of it — and it is what Signal draws there. AvatarView falls back to the
+        // truest picture of it — and it is what the reference app draws there. AvatarView falls back to the
         // coloured letter on its own when there is no photo, so there is no empty-circle case.
         if audience.kind == .everyone {
             AvatarView(name: ProfileStore.shared.me?.name ?? "You",
@@ -297,7 +297,7 @@ struct NameStoryView: View {
 
 /// The built-in list's own page: all your accepted chats, or that set narrowed either way.
 ///
-/// This is Signal's "My Story" privacy page and it is the ONLY built-in that can be edited — the
+/// This is the reference app's own story-privacy page and it is the ONLY built-in that can be edited — the
 /// owner's rule is that Everyone is fixed.
 struct MyFriendsPrivacyView: View {
     @State private var store = StoryAudienceStore.shared
@@ -665,8 +665,8 @@ struct NewAudienceButton: UIViewRepresentable {
         // about the word's cap height, which is the proportion iOS uses for a header accessory.
         // Two points, not four: he asked for smaller, not for a hairline.
         //
-        // (Said plainly: these are matched by eye and by iOS convention. I could not read Signal's
-        // source to copy their constants, and inventing numbers and calling them Signal's would be
+        // (Said plainly: these are matched by eye and by iOS convention. I could not read the reference app's
+        // source to copy their constants, and inventing numbers and calling them the reference app's would be
         // worse than saying so.)
         var cfg = UIButton.Configuration.gray()
         let metrics = UIFontMetrics(forTextStyle: .subheadline)

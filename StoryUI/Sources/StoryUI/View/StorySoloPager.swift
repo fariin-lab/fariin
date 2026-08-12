@@ -3,9 +3,9 @@
 // bucket), so it does not need UIPageViewController — and the viewers-sheet morph is the reason it
 // must not have one. The morph used to transform the page controller's INTERNAL UIScrollView, a
 // view whose `bounds.origin` is the content offset and whose gesture plumbing had to be disabled,
-// masked around and generally argued with (see StoryCardMorph's history). Telegram's story viewer
-// has no page controller and no scroll view anywhere in this interaction: their vertical pan
-// scales a plain container they own (`StoryItemSetContainerComponent`, `contentContainerView`,
+// masked around and generally argued with (see StoryCardMorph's history). The reference app's
+// story viewer has no page controller and no scroll view anywhere in this interaction: its
+// vertical pan scales a plain container it owns (the reference implementation's content container,
 // CATransform3DMakeScale on the LIVE hierarchy). This host gives us the same thing: one plain
 // `cardContainer` that every gesture transforms, with nothing of Apple's fighting underneath.
 //

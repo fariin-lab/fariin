@@ -20,7 +20,7 @@ struct KulanApp: App {
                 // STORYUI CAN SEE THE APP'S DECODED-IMAGE CACHE, through one closure.
                 //
                 // A story video is hidden until its first frame is ready for display, the way
-                // Telegram's is, and what shows in the meantime is the clip's cover. The player only
+                // the reference app's is, and what shows in the meantime is the clip's cover. The player only
                 // ever asked StoryUI's own two caches for that cover, and those are cold for a story
                 // whose cover came down for the ROW rather than for the viewer — so there was nothing
                 // to hold the frame and you saw black. See `StoryPosterSource`.

@@ -5,11 +5,11 @@
 //  The last PICTURE each video story showed, for the length of ONE viewer session. Pictures only:
 //  there is deliberately NO playback position in here any more.
 //
-//  His rule (2026-08-11), which is also Telegram's behaviour read from their source: leaving a
+//  His rule (2026-08-11), which is also the reference app's behaviour read from its source: leaving a
 //  story item and coming back RESTARTS it from the beginning — the position is never restored.
-//  Telegram tears the item's player down the moment the focused item changes
-//  (`StoryItemSetContainerComponent` removes the `VisibleItem`) and a revisit builds a fresh player
-//  whose `ownsContentNodeUpdated` seeks straight to zero; nothing in their story code stores a
+//  The reference app tears the item's player down the moment the focused item changes
+//  (the reference implementation removes the visible item) and a revisit builds a fresh player
+//  whose `ownsContentNodeUpdated` seeks straight to zero; nothing in its story code stores a
 //  per-item position. This store used to keep one and `setupPlayer` seeked to it, which is exactly
 //  how a returned-to clip played from 0:14 under a progress bar that had just started at zero —
 //  the two clocks disagreed because only one of them was told. The only continuation that exists
@@ -178,9 +178,9 @@ public enum StoryPlaybackResume {
 /// WHICH STORY A PLAYER'S CLOCK BELONGS TO — the seam that lets the progress bar read the player.
 ///
 /// The bar used to count wall time against the declared duration and never once asked the player.
-/// Telegram does the opposite (`StoryItemContentComponent.updateVideoPlaybackProgress`: the bar's
+/// The reference app does the opposite (in the reference implementation, the bar's
 /// fraction is the player's own reported timestamp over its duration, sixty times a second), which
-/// is why their bar physically cannot disagree with the picture — a stall, a seek, a pause or a
+/// is why its bar physically cannot disagree with the picture — a stall, a seek, a pause or a
 /// slow start stops the clock and the bar stops with it.
 ///
 /// To read the player safely the bar must know WHOSE clip is attached: across the
@@ -211,8 +211,8 @@ enum StoryPlaybackClock {
 
 /// A WAY FOR STORYUI TO ASK THE APP FOR A POSTER IT HAS ALREADY DECODED.
 ///
-/// Telegram's story video is hidden until its first frame exists, and what you look at until then is
-/// the thumbnail — which they always have, because it travels inside the message. We have no such
+/// The reference app's story video is hidden until its first frame exists, and what you look at until then is
+/// the thumbnail — which it always has, because it travels inside the message. We have no such
 /// guarantee: `PlayerView.setPoster` asks `URLCache.shared` and `StoryDiskCache`, both of which are
 /// StoryUI's own caches, while the app draws the stories row and the carousel through its OWN
 /// `DiskImageCache` and warms that one. For a story just posted, or one whose cover came down for the

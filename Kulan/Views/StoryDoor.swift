@@ -17,7 +17,7 @@
 // WHAT A CALLER OWES IT. One `MediaRectReporter(id:scope:.storyRow, cornerRadius:)` on the view that
 // was tapped, reporting its REAL corner radius. That radius is the whole shape system: a card reports
 // 24 and the story lands as a card; an avatar reports half its width and the story lands as a circle,
-// Snapchat's way, with no branch here or in the morph. See `StoryCardMorph.applyCore`.
+// the reference app's way, with no branch here or in the morph. See `StoryCardMorph.applyCore`.
 //
 
 import SwiftUI
