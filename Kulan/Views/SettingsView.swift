@@ -1224,10 +1224,11 @@ struct AboutView: View {
 struct StorySettingsView: View {
     @AppStorage("storyViewReceipts") private var viewReceipts = true
     @AppStorage("storiesOptedOut") private var optedOut = false
-    #if DEBUG
-    /// Debug-only demo people in the story row. Read by `StoriesRepository.injectDemoStories`.
+    /// Demo people in the story row. Read by `StoriesRepository.injectDemoStories`. The row that
+    /// shows this switch is gated on `DemoStoryMedia.isAvailable` (debug or TestFlight, never the
+    /// App Store) — it cannot be `#if DEBUG`, because TestFlight is a Release build and that is the
+    /// only kind of build he can run.
     @AppStorage("demoStoryUsers") private var demoStoryUsers = false
-    #endif
     // DELETED HERE: the "3D Cube Transition" toggle and the `story.personTransition` defaults key it
     // wrote. Both transitions were kept switchable on his 2026-08-11 instruction so he could compare
     // them; on 2026-08-12 he compared them and ruled — the cube is the only one, and the flat slide
@@ -1271,22 +1272,22 @@ struct StorySettingsView: View {
                     Text("Story updates automatically disappear after 24 hours. Choose who can view your story, or make a new one with specific viewers.")
                 }
             }
-            #if DEBUG
-            // DEBUG BUILDS ONLY — never compiled into TestFlight or the App Store.
+            // TESTFLIGHT AND DEBUG, NEVER THE APP STORE — see `DemoStoryMedia.isAvailable`.
             //
             // Four people whose stories are drawn and encoded on this phone (see `demoGroups`).
             // Nothing about them touches Firebase and nobody else can ever see them. They exist
             // because the story bugs worth testing are video bugs, and testing those needs a friend
             // with video stories, which a real account does not reliably have.
-            Section {
-                Toggle("Demo story people", isOn: $demoStoryUsers).tint(.orange)
-                    .onChange(of: demoStoryUsers) { _, _ in
-                        StoriesRepository.shared.refreshForDemo()
-                    }
-            } footer: {
-                Text("Debug builds only. Adds four local people with video and photo stories to the story row. They are drawn on this device, never uploaded, and nobody else can see them.")
+            if DemoStoryMedia.isAvailable {
+                Section {
+                    Toggle("Demo story people", isOn: $demoStoryUsers).tint(.orange)
+                        .onChange(of: demoStoryUsers) { _, _ in
+                            StoriesRepository.shared.refreshForDemo()
+                        }
+                } footer: {
+                    Text("Testers only. Adds four local people with video and photo stories to the story row, for checking the story viewer. They are drawn on this device, never uploaded, and nobody else can see them.")
+                }
             }
-            #endif
             if !optedOut {
                 Section {
                     Toggle("View Receipts", isOn: $viewReceipts).tint(.green)

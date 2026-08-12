@@ -1501,26 +1501,23 @@ final class StoriesRepository {
     // clip ends instead of advancing", and several people so the cube has somewhere to turn.
     //
     // Toggle at runtime with the switch in Settings (debug builds only) — no rebuild needed.
+    /// ⚠️ NOT `#if DEBUG`. That gate shipped in build 550 and put the demo people in no build he can
+    /// run: the TestFlight lane builds Release, and with no Mac in the picture every build that
+    /// reaches his phone is a TestFlight build. `DemoStoryMedia.isAvailable` is debug OR TestFlight,
+    /// never the App Store, which is the distinction that was actually wanted.
     static var injectDemoStories: Bool {
-        #if DEBUG
-        return UserDefaults.standard.bool(forKey: "demoStoryUsers")
-        #else
-        return false
-        #endif
+        DemoStoryMedia.isAvailable && UserDefaults.standard.bool(forKey: "demoStoryUsers")
     }
 
     /// True for a person who only exists on this device, so nothing tries to write a view receipt,
     /// a watermark or a reply for them.
     static func isDemoAuthor(_ uid: String) -> Bool { uid.hasPrefix("demo_") }
 
-    #if DEBUG
     /// Re-publish the row after the demo switch is flipped, so it takes effect without a relaunch.
     /// The first flip ON is also the encode, which is why it runs off the main actor.
     func refreshForDemo() { Task { await rebuild() } }
-    #endif
 
     static func demoGroups(now: Date) -> [StoryGroup] {
-        #if DEBUG
         // Ages, so the rings sort the way a real row would.
         func made(_ hoursAgo: Double) -> Date { now.addingTimeInterval(-3600 * hoursAgo) }
         func expires() -> Date { now.addingTimeInterval(3600 * 20) }
@@ -1596,8 +1593,5 @@ final class StoriesRepository {
                                                        bottom: .systemTeal, initial: "S"),
                        stories: sagal, lastViewedAt: nil, isMine: false),
         ].filter { !$0.stories.isEmpty }
-        #else
-        return []
-        #endif
     }
 }
