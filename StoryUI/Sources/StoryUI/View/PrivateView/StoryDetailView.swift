@@ -1584,15 +1584,25 @@ private extension StoryDetailView {
                 model.isSeen = true
             }
             if timerProgress < CGFloat(model.stories.count) {
-                if story.isReady {
-                    // TWO KINDS OF SEGMENT, TWO CLOCKS. A photo has no player, so wall time against
-                    // its declared duration is the only clock there is. A video HAS a clock — the
-                    // player's — and the bar reads that one, so the two can never disagree again.
-                    if story.config.mediaType == .video {
-                        syncBarToPlayer(index: index, story: story)
-                    } else {
-                        getProgressBarFrame(duration: story.duration)
-                    }
+                // TWO KINDS OF SEGMENT, TWO CLOCKS. A photo has no player, so wall time against its
+                // declared duration is the only clock there is. A video HAS a clock — the player's —
+                // and the bar reads that one, so the two can never disagree.
+                //
+                // ⚠️ `isReady` NO LONGER GATES A VIDEO, and that gate is half of his 2026-08-12
+                // report: "the new story appears immediately, but the progress bar remains on the
+                // previous story for a few seconds".
+                //
+                // It was written to stop a bar counting down over media that had not arrived, which
+                // is a real protection FOR A PHOTO — wall time does not care whether there is a
+                // picture. A video's bar cannot have that bug by construction: it reads the player's
+                // own timestamp, and a player that has not started reports zero. So for a video the
+                // flag added nothing except a second thing that had to become true before the
+                // segment could move, and it becomes true late — it is written from a media
+                // callback, one runloop hop after the fact.
+                if story.config.mediaType == .video {
+                    syncBarToPlayer(index: index, story: story)
+                } else if story.isReady {
+                    getProgressBarFrame(duration: story.duration)
                 }
             } else if !isAdvancing {
                 isAdvancing = true   // fire the user-advance once, not every 0.1s tick
@@ -1622,7 +1632,23 @@ private extension StoryDetailView {
     /// reference app's `canSwitch` rule, where ordinary progress updates carry `false` and only its
     /// playback-completed callback carries `true`.
     func syncBarToPlayer(index: Int, story: Story) {
-        guard video.claim == story.id else { return }
+        // ⚠️ AN UNCLAIMED SEGMENT IS PLANTED AT ITS OWN START, NOT LEFT WHERE IT WAS.
+        //
+        // This used to `return`, which is the other half of his 2026-08-12 report. Returning leaves
+        // `timerProgress` holding whatever the last computation put there — and in the beat between
+        // an item mounting and its player claiming the session, that value belongs to the story he
+        // just left. The bar therefore kept drawing the PREVIOUS story's fraction while the new
+        // picture was already on screen, which is exactly "stale progress state from the previous
+        // story" in his words.
+        //
+        // Planting the integer costs nothing when the claim is about to arrive (the segment is meant
+        // to start at zero anyway) and guarantees the bar and the picture can never be describing
+        // two different items, even for one frame.
+        guard video.claim == story.id else {
+            let start = CGFloat(index)
+            if timerProgress != start { timerProgress = start }
+            return
+        }
         // An item that can never play again keeps the wall clock, so a broken clip still hands the
         // screen on after its declared duration instead of freezing the story for good.
         if video.failed {

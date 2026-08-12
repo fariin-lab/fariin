@@ -971,10 +971,21 @@ final class StoryCardUIView: UIControl {
         corner.frame = CGRect(x: 8, y: h - 8 - StoryCornerCircle.avatar,
                               width: StoryCornerCircle.avatar, height: StoryCornerCircle.avatar)
         if let smallBadge, !smallBadge.isHidden {
-            // `.overlay(alignment: .bottomTrailing) { … .offset(x: 4, y: 4) }`, measured off the
-            // circle it hangs from rather than off the card.
+            // ⚠️ BOTTOMS FLUSH, AND HALF THE BADGE OUTSIDE THE CIRCLE — his 2026-08-12 screenshots,
+            // one of the current position and one of the wanted one.
+            //
+            // It used to be `offset(x: 4, y: 4)` from the circle's bottom-trailing corner, and the
+            // `y: 4` is what he photographed: the badge hung four points BELOW the avatar, so it
+            // read as dropping off the circle rather than sitting on it. `maxY - s` puts the two
+            // bottom edges on the same line, which is what he asked for and what the reference
+            // screenshot shows.
+            //
+            // Horizontally it is now centred ON the circle's edge — `maxX - s/2` leaves exactly half
+            // the badge over the avatar and half outside it, his words. The old number left it about
+            // three quarters inside, which is why it looked tucked under the face rather than
+            // clipped to the rim. Sizes are untouched; only the origin moved.
             let s = StorySmallPlusBadge.size
-            smallBadge.frame = CGRect(x: corner.frame.maxX - s + 4, y: corner.frame.maxY - s + 4,
+            smallBadge.frame = CGRect(x: corner.frame.maxX - s / 2, y: corner.frame.maxY - s,
                                       width: s, height: s)
         }
 

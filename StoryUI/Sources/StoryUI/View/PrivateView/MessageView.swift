@@ -64,7 +64,11 @@ private extension MessageView {
             userClosure?(story, text, nil, likeButtonTapped)
         } label: {
             Image(systemName: likeButtonTapped ? Constant.MessageView.likeImageTapped : Constant.MessageView.likeImage)
-                .font(.title3)                                   // smaller heart
+                // A step up from `.title3` on his 2026-08-12 screenshot: beside a full-width reply
+                // pill the heart was reading as an afterthought rather than the other half of the
+                // bar. `.title2` is the next size up, which is the same weight the send arrow beside
+                // it already uses — so the two swap places without the row changing height.
+                .font(.title2)
                 .foregroundColor(likeButtonTapped ? .red : .white)
                 .shadow(color: .black.opacity(0.35), radius: 4, y: 1)   // soft shadow so it reads on any photo
                 .scaleEffect(likeButtonTapped ? 1.18 : 1.0)      // pop when you give love

@@ -57,6 +57,87 @@ extension View {
         environment(\.colorScheme, .dark)
             .background(DarkPresentation().frame(width: 0, height: 0).allowsHitTesting(false))
     }
+
+    /// A two-button confirmation that is dark on a light-mode phone. See `DarkConfirm`.
+    func darkConfirm(_ title: String,
+                     isPresented: Binding<Bool>,
+                     destructive: String,
+                     cancel: String = "Keep Editing",
+                     onDestructive: @escaping () -> Void,
+                     onCancel: @escaping () -> Void = {}) -> some View {
+        background(
+            DarkConfirm(title: title, isPresented: isPresented,
+                        destructive: destructive, cancel: cancel,
+                        onDestructive: onDestructive, onCancel: onCancel)
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        )
+    }
+}
+
+/// ⚠️ A CONFIRMATION THAT IS ACTUALLY DARK, BECAUSE `storyAlwaysDark` CANNOT REACH ONE.
+///
+/// His 2026-08-12 screenshot: "Discard this story?" comes up as a pale grey panel with black text,
+/// over an editor that is entirely black, on a light-mode phone. The editor already carries
+/// `storyAlwaysDark()`, and the note there claims it covers "this screen's alerts" — that claim is
+/// what the screenshot disproves.
+///
+/// The reason is that pinning `overrideUserInterfaceStyle` on the presented controller only reaches
+/// what is UNDER that controller. A SwiftUI `.alert` is not: it is presented into a presentation
+/// context of its own, so the trait we set on the editor never gets a vote and the alert falls back
+/// to the phone's setting. Nothing that can be written on the editor's side fixes that.
+///
+/// So the alert is presented as UIKit, and the style is set on the ALERT ITSELF, which is the one
+/// place that cannot be overruled. Everything else about it is stock: same two buttons, same
+/// destructive red, same cancel role — this replaces where it is presented from, not what it is.
+///
+/// ⚠️ `presented` IS A LATCH AND IT HAS TO BE. `updateUIViewController` runs many times for one
+/// state change, and presenting an alert that is already up either throws or stacks two of them.
+private struct DarkConfirm: UIViewControllerRepresentable {
+    let title: String
+    @Binding var isPresented: Bool
+    let destructive: String
+    let cancel: String
+    let onDestructive: () -> Void
+    let onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    final class Coordinator { var presented = false }
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        let vc = UIViewController()
+        vc.view.backgroundColor = .clear
+        vc.view.isUserInteractionEnabled = false
+        return vc
+    }
+
+    func updateUIViewController(_ host: UIViewController, context: Context) {
+        guard isPresented, !context.coordinator.presented, host.view.window != nil else {
+            // The alert dismisses itself on either button, so there is nothing to take down here —
+            // only the latch to re-arm once the binding comes back down.
+            if !isPresented { context.coordinator.presented = false }
+            return
+        }
+        context.coordinator.presented = true
+        let alert = UIAlertController(title: title, message: nil, preferredStyle: .alert)
+        // THE LINE THE WHOLE TYPE EXISTS FOR.
+        alert.overrideUserInterfaceStyle = .dark
+        alert.addAction(UIAlertAction(title: destructive, style: .destructive) { _ in
+            isPresented = false
+            context.coordinator.presented = false
+            onDestructive()
+        })
+        alert.addAction(UIAlertAction(title: cancel, style: .cancel) { _ in
+            isPresented = false
+            context.coordinator.presented = false
+            onCancel()
+        })
+        // From whatever is actually on screen: this host sits at zero size inside the editor, so it
+        // is the editor's own presentation that puts the alert up, exactly as the SwiftUI one did.
+        var presenter: UIViewController = host
+        while let up = presenter.presentedViewController { presenter = up }
+        presenter.present(alert, animated: true)
+    }
 }
 
 // ADD STORY IS THE CAMERA (owner, 2026-08-03, with his reference shot: "when i click add story show

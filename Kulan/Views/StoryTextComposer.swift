@@ -179,10 +179,12 @@ struct StoryTextCard: View {
         // A native ALERT, not confirmationDialog: over a full-screen presentation the dialog renders
         // as a centered popover, and popovers HIDE role-cancel buttons — the user saw only "Discard"
         // with no way out.
-        .alert("Discard this status?", isPresented: $showDiscard) {
-            Button("Discard", role: .destructive) { onClose() }
-            Button("Keep Editing", role: .cancel) { focused = true }
-        }
+        // Ours rather than SwiftUI's, so it is dark on a light-mode phone — the same dialog on the
+        // same flow as the two editors. See `darkConfirm`.
+        .darkConfirm("Discard this status?", isPresented: $showDiscard,
+                     destructive: "Discard",
+                     onDestructive: { onClose() },
+                     onCancel: { focused = true })
     }
 
     private func close() {
