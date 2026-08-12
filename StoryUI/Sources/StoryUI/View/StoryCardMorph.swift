@@ -814,20 +814,22 @@ public final class StoryCardMorph {
     // generates it from the clip's own file at the second that player is actually on. No instant, no
     // subject, no capture — which is why this file no longer knows that video exists.
 
-    /// Step the live card aside while the carousel row is being swiped.
-    ///
-    /// The story cannot follow a card that is mid-flight: it sits at the slot centre while the row
-    /// slides past it, so for the length of the swipe the carousel draws its own centre card and the
-    /// real one hides underneath. Both are the same size in the same place at the moment of the
-    /// exchange, so it is not visible. `jumpToStoryItem` has already moved the story to whichever
-    /// card the row settles on by the time it comes back.
-    public func setHidden(_ hidden: Bool) {
-        guard let card else { return }
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        card.alpha = hidden ? 0 : 1
-        CATransaction.commit()
-    }
+    // ⚠️ DELETED HERE: `setHidden`, and with it the last of the copy-swap.
+    //
+    // It stepped the live card aside — alpha 0 — while the row was being swiped, because the story
+    // sat pinned at the slot centre and could not follow a card that was mid-flight. The row drew
+    // its own copy of the centre card for the length of the swipe and the real one waited
+    // underneath, the two being the same size in the same place at the moment of the exchange.
+    //
+    // The premise was the bug, not the swap. Two renderers for one story means somebody has to
+    // decide WHEN to exchange them, and that decision was wrong on device twice after being fixed
+    // twice — the flash, the overlapping cards, the story that stayed on A, the black window when a
+    // flag was left standing. The live card is laid out by the row's own geometry now
+    // (`StoryRowGeometry.placeLiveStory`), so it slides where its card would slide. There is nothing
+    // to stand in for it and no instant to get right.
+    //
+    // The alpha it wrote is the cover-flow dim now, and that arrives through `apply(alpha:)` as a
+    // pure function of the card's own position — the same place its size and its corner come from.
 
     /// Clip the moving card to the STORY during a swipe-down dismiss.
     ///
