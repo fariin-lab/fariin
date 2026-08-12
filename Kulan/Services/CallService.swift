@@ -80,7 +80,7 @@ final class CallService: NSObject {
                 wantsSpeaker = false        // stale intent made the NEXT voice call blast on loudspeaker
                 cameraPausedByBackground = false; stopPausedCameraRetry()
                 stopLinkMonitor()
-                calleeRinging = false; recordWritten = false; minimized = false; liveRingRowId = nil
+                calleeRinging = false; calleeAccepted = false; recordWritten = false; minimized = false; liveRingRowId = nil
                 endReason = .none; negotiationVersion = 0; appliedRemoteRestart = 0
                 pendingOffer = nil
                 pendingRemoteCandidates = []; localCandidateBuffer = []; callDocCreated = false
@@ -106,6 +106,11 @@ final class CallService: NSObject {
     var isSpeaker = false
     var minimized = false            // call screen minimized -> show the floating pill instead
     var calleeRinging = false        // caller: the other phone is actually ringing now
+    /// Caller: the other person TAPPED ACCEPT (the instant `acceptedAt` signal — his two-phone
+    /// report: the caller sat on "Ringing…" for the whole answer setup, and on the 12:27 call the
+    /// answer write died silently and the caller rang out on a call that was picked up). The label
+    /// flips to "Connecting…" and the ringback stops on this, not on the SDP answer.
+    var calleeAccepted = false
     var connectedDate: Date?
     var endReason: EndReason = .none // last/in-progress end reason (UI reads it for the label)
     private var recordWritten = false
@@ -203,6 +208,7 @@ final class CallService: NSObject {
 
     // Reconnection / lifecycle timers.
     private var noAnswerWork: DispatchWorkItem?      // outgoing: nobody answered -> Missed
+    private var acceptedConnectWork: DispatchWorkItem? // outgoing: they ACCEPTED but the answer never landed -> Failed fast
     private var iceRestartWork: DispatchWorkItem?    // delayed ICE restart after a drop
     private var reconnectGiveUpWork: DispatchWorkItem? // hard cap: can't recover -> Failed
     private var negotiationVersion = 0               // bumps each ICE restart / media renegotiation (caller)
@@ -1105,6 +1111,20 @@ final class CallService: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 45, execute: w)   // ~45s, like big apps
     }
 
+    /// Accepted, but the SDP answer never arrived: give the answering phone 15 seconds to finish
+    /// its setup and land the write, then fail HONESTLY on both sides ("Call failed") instead of
+    /// ringing into the 45s no-answer timeout on a call that was picked up.
+    private func startAcceptedConnectTimeout() {
+        acceptedConnectWork?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            guard let self, self.state == .outgoing else { return }   // answer arrived → .active
+            self.endReason = .failed
+            self.hangUp()
+        }
+        acceptedConnectWork = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: w)
+    }
+
     // The CALLEE's own ring-out. The caller cancels an unanswered call after its timeout, but a
     // caller whose app DIES mid-ring cancels nothing, and this phone rang forever. Sixty seconds,
     // then the call ends as MISSED — written explicitly, so the end-reason inference never has to
@@ -1125,6 +1145,7 @@ final class CallService: NSObject {
     private func cancelTimers() {
         calleeRingWork?.cancel(); calleeRingWork = nil
         noAnswerWork?.cancel(); noAnswerWork = nil
+        acceptedConnectWork?.cancel(); acceptedConnectWork = nil
         iceRestartWork?.cancel(); iceRestartWork = nil
         reconnectGiveUpWork?.cancel(); reconnectGiveUpWork = nil
         // A pending ringback fallback must die with the call, or a call that ends inside its 1.2s
@@ -1621,6 +1642,12 @@ final class CallService: NSObject {
         ringingWatcher?.remove(); ringingWatcher = nil   // observeCallDoc (attached below) takes over
         callDocCreated = true   // callee: the caller already created the doc, so candidates can write now
         state = .active   // present the call screen immediately; SDP fills in below
+        // THE INSTANT ACCEPT SIGNAL (WhatsApp's order, his side-by-side report): tell the caller
+        // the call was picked up NOW, before permissions, TURN, or the peer connection. A plain
+        // update queues and retries on its own, unlike the answer transaction below — so even when
+        // the heavy chain stalls, the caller stops ringing and shows "Connecting…" instead of
+        // ringing out on a call that was answered.
+        db.collection("calls").document(id).updateData(["acceptedAt": FieldValue.serverTimestamp()])
         ensureMicPermission { [weak self] granted in
             guard let self else { return }
             guard granted else { self.hangUp(); return }
@@ -1680,7 +1707,13 @@ final class CallService: NSObject {
             self.flushPendingCandidates()   // caller's candidates were buffered until now (C1)
             let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
             pc.answer(for: constraints) { answerSdp, _ in
-                guard let answerSdp else { return }
+                // NO SILENT DEATHS past this point (the 12:27 call: he accepted, this chain died
+                // quietly, and both phones sat frozen until the timeout). A failure here ends the
+                // call promptly on both sides instead of stranding two people mid-answer.
+                guard let answerSdp else {
+                    DispatchQueue.main.async { self.endReason = .failed; self.hangUp() }
+                    return
+                }
                 let local = self.withOpusDtxAndRed(answerSdp)
                 pc.setLocalDescription(local) { _ in
                     var data: [String: Any] = ["answer": ["sdp": local.sdp, "type": "answer"], "status": "active"]
@@ -1696,17 +1729,37 @@ final class CallService: NSObject {
                     // must genuinely refuse an answer is "ended" (the caller cancelled — the case
                     // this transaction exists for, and it still holds); anything else is a live
                     // call being answered.
-                    ref.firestore.runTransaction({ txn, _ -> Any? in
-                        guard let snap = try? txn.getDocument(ref),
-                              (snap.data()?["status"] as? String) != "ended" else { return nil }
-                        txn.updateData(data, forDocument: ref)
-                        return nil
-                    }, completion: { _, _ in })
+                    self.writeAnswerWithRetry(ref: ref, data: data, attempt: 1)
                 }
             }
         }
         observeCallDoc(ref)
         observeRemoteCandidates(ref.collection("callerCandidates"))
+    }
+
+    /// The "I answered" write, no longer allowed to die silently (the 12:27 call: it never landed,
+    /// the caller rang out on an answered call, and nothing anywhere noticed). Still a transaction —
+    /// answering an ENDED call must stay refused (the caller-cancelled race this has always
+    /// guarded). On error: three attempts over ~3s, then end the call honestly on both sides. A
+    /// transaction that HANGS outright (dead socket, no completion at all) is bounded by the
+    /// caller's accepted-connect timeout, which fails the call from the other side.
+    private func writeAnswerWithRetry(ref: DocumentReference, data: [String: Any], attempt: Int) {
+        ref.firestore.runTransaction({ txn, _ -> Any? in
+            guard let snap = try? txn.getDocument(ref),
+                  (snap.data()?["status"] as? String) != "ended" else { return "ended" }
+            txn.updateData(data, forDocument: ref)
+            return nil
+        }, completion: { [weak self] result, error in
+            guard let self else { return }
+            if (result as? String) == "ended" { return }   // caller cancelled — the end path owns this
+            guard error != nil else { return }             // landed
+            guard self.state == .active else { return }    // call already over — nothing to save
+            guard attempt < 3 else { self.endReason = .failed; self.hangUp(); return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                guard let self, self.state == .active else { return }
+                self.writeAnswerWithRetry(ref: ref, data: data, attempt: attempt + 1)
+            }
+        })
     }
 
     // MARK: - Signalling observers
@@ -1729,10 +1782,21 @@ final class CallService: NSObject {
                 self.calleeRinging = true
                 self.startRingback()   // no-op if already playing (guard); safety for CallKit restarts
             }
+            // Caller: they TAPPED ACCEPT — flip to "Connecting…" and stop the ring immediately,
+            // seconds before the SDP answer can arrive. The no-answer timeout is replaced by a
+            // SHORT one: an accepted call whose answer never lands must fail fast (his 12:27 call
+            // rang the full timeout on a call that was picked up), not sit "Ringing" for 45s.
+            if self.isCaller, d["acceptedAt"] != nil, !self.calleeAccepted, self.state == .outgoing {
+                self.calleeAccepted = true
+                self.stopRingback()
+                self.noAnswerWork?.cancel()
+                self.startAcceptedConnectTimeout()
+            }
             // Caller applies the answer once it arrives → connected.
             if self.isCaller, let answer = d["answer"] as? [String: String], let sdp = answer["sdp"],
                self.pc?.remoteDescription == nil {
                 self.noAnswerWork?.cancel()
+                self.acceptedConnectWork?.cancel()
                 self.stopRingback()
                 self.pc?.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: sdp)) { _ in
                     self.flushPendingCandidates()

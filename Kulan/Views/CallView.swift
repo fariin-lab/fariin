@@ -86,7 +86,9 @@ struct CallView: View {
 
     private var statusText: String {
         switch call.state {
-        case .outgoing:     return call.calleeRinging ? "Ringing…" : "Calling…"
+        // Accepted beats ringing: the instant they tap Accept the label goes "Connecting…" —
+        // WhatsApp's order — while the SDP answer is still being built on their phone.
+        case .outgoing:     return call.calleeAccepted ? "Connecting…" : (call.calleeRinging ? "Ringing…" : "Calling…")
         case .incoming:     return "Incoming…"
         // The weak-signal notice displaces the duration deliberately: while the camera is down, WHY it
         // is down is the only thing the user actually wants, and without it a paused camera reads as
@@ -820,7 +822,7 @@ struct MiniCallBar: View {
                 return String(format: "%d:%02d", s / 60, s % 60)
             }
             return "Connected"
-        case .outgoing:     return call.calleeRinging ? "Ringing…" : "Calling…"
+        case .outgoing:     return call.calleeAccepted ? "Connecting…" : (call.calleeRinging ? "Ringing…" : "Calling…")
         case .reconnecting: return "Reconnecting…"
         case .ended:        return "Call ended"
         default:            return ""
