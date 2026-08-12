@@ -135,18 +135,22 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
     /// it fills the same partial file the reader serves from, so arriving at the story finds the
     /// opening already here and starts on it while the rest streams in behind.
     static func warmPrefix(_ remote: URL, bytes: Int64, allowsCellular: Bool,
-                           onTask: ((URLSessionTask) -> Void)? = nil) {
-        guard enabled, bytes > 0 else { return }
+                           onTask: ((URLSessionTask) -> Void)? = nil,
+                           onFinish: (() -> Void)? = nil) {
+        guard enabled, bytes > 0 else { onFinish?(); return }
         let partial = StoryPartialFile(remote: remote)
-        // Already here, or the whole clip already is — nothing to do either way.
-        if partial.holds(0 ..< bytes) { return }
-        if CacheManager.cachedFileIfUsable(for: remote) != nil { return }
+        // Already here, or the whole clip already is — nothing to do either way. `onFinish` still
+        // runs: the caller books the url in as running before this is called, and an early return
+        // that skipped it would leave that entry behind for the life of the process.
+        if partial.holds(0 ..< bytes) { onFinish?(); return }
+        if CacheManager.cachedFileIfUsable(for: remote) != nil { onFinish?(); return }
         var request = URLRequest(url: remote)
         request.setValue("bytes=0-\(bytes - 1)", forHTTPHeaderField: "Range")
         request.allowsConstrainedNetworkAccess = false
         request.allowsExpensiveNetworkAccess = allowsCellular
         request.networkServiceType = .background
         let task = URLSession.shared.dataTask(with: request) { data, response, _ in
+            defer { onFinish?() }
             guard let data, !data.isEmpty,
                   let http = response as? HTTPURLResponse,
                   http.statusCode == 200 || http.statusCode == 206 else { return }

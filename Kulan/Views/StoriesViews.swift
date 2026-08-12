@@ -1003,6 +1003,10 @@ struct StoryViewer: View {
                         // AND THE ONE THAT CANNOT BE MISSING. `previewUrl` is a promise the viewer
                         // has to go and collect; this is the picture itself. See `Story.blurThumb`.
                         blurThumb: s.blurThumb,
+                        // What the uploader worked out is worth fetching before this clip is
+                        // watched. Zero for anything posted before the field existed, which the
+                        // lookahead reads as "use your own default". See `Story.preloadPrefix`.
+                        preloadPrefix: s.preloadPrefix,
                         date: timeAgo(s.createdAt),
                         isLiked: StoryPrefs.isStoryLiked(s.id),   // heart stays red on reopen
                         // This flag decides WHERE THE VIEWER OPENS. The rule that reads it lives in

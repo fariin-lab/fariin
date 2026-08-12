@@ -123,7 +123,10 @@ public enum StoryPrefetcher {
                     // The clip you are about to reach is worth mobile data; the third one along is
                     // not. See `cellularVideoLookahead`.
                     guard offset < videoDepth else { continue }
-                    warmVideo(story.mediaURL, allowsCellular: true, window: true)
+                    // The clip's OWN prefix when the uploader recorded one, this file's default when
+                    // it did not. Only read when range streaming is on — see `warmVideo`.
+                    warmVideo(story.mediaURL, allowsCellular: true, window: true,
+                              prefixBytes: story.preloadPrefix > 0 ? story.preloadPrefix : nil)
                 default:     warmImage(story.mediaURL, poster: false)
                 }
             }
@@ -245,14 +248,21 @@ public enum StoryPrefetcher {
         //
         // Off by default with the reader, so the full-file path below is what runs until it is on.
         if StoryVideoStream.enabled {
-            StoryVideoStream.warmPrefix(url,
-                                        bytes: prefixBytes ?? StoryVideoStream.defaultPrefix,
-                                        allowsCellular: allowsCellular) { task in
-                lock.lock(); running[urlString] = (task, window); lock.unlock()
-            }
-            // The claim is released straight away: a prefix is small, it is fire-and-forget, and
-            // holding the claim would stop the LIVE player joining the same url a moment later.
-            release(urlString)
+            StoryVideoStream.warmPrefix(
+                url,
+                bytes: prefixBytes ?? StoryVideoStream.defaultPrefix,
+                allowsCellular: allowsCellular,
+                onTask: { task in
+                    lock.lock(); running[urlString] = (task, window); lock.unlock()
+                },
+                // ⚠️ AND IT IS TAKEN OUT AGAIN. The full-download path below removes its entry in its
+                // completion; the prefix path had no completion, so every warmed neighbour left a
+                // row in `running` for the life of the process — and a later window-cancel would
+                // call `cancel()` on a task that finished minutes ago.
+                onFinish: {
+                    lock.lock(); running.removeValue(forKey: urlString); lock.unlock()
+                    release(urlString)
+                })
             return
         }
         videoCache.loadVideo(from: url, speculative: true, allowsCellular: allowsCellular,

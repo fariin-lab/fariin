@@ -72,10 +72,20 @@ public struct Story: Identifiable, Hashable {
     /// and no network at all. A few hundred bytes buys that outright.
     public var blurThumb: String = ""
 
+    /// HOW MANY BYTES OF THIS CLIP ARE WORTH FETCHING BEFORE IT IS WATCHED, written onto the story
+    /// document at post time. Zero means "not recorded" — anything posted before the field existed —
+    /// and the lookahead falls back to its own default.
+    ///
+    /// The reference app takes exactly this per file from the server (`preload_prefix_size`) and it
+    /// is what lets a neighbour cost a few hundred KB instead of a whole clip. Only read when range
+    /// streaming is on; see `StoryVideoStream`.
+    public var preloadPrefix: Int64 = 0
+
     public init(id: String = UUID().uuidString,
                 mediaURL: String,
                 previewURL: String? = nil,
                 blurThumb: String = "",
+                preloadPrefix: Int64 = 0,
                 date: String,
                 isLiked: Bool = false,
                 isSeen: Bool = false,
@@ -88,6 +98,7 @@ public struct Story: Identifiable, Hashable {
         self.mediaURL = mediaURL
         self.previewURL = previewURL
         self.blurThumb = blurThumb
+        self.preloadPrefix = preloadPrefix
         self.date = date
         self.duration = duration
         self.config = config

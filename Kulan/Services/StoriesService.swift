@@ -47,6 +47,9 @@ struct Story: Identifiable, Hashable, Codable {
     /// A base64 JPEG about 30px wide, carried in the story document itself. See `blurThumbBase64`
     /// and `StoryUI.Story.blurThumb` — this is the cover that cannot be missing.
     var blurThumb: String = ""
+    /// Bytes of this clip worth fetching before it is watched, written at post time. Zero for
+    /// anything posted before the field existed. See `StoryUI.Story.preloadPrefix`.
+    var preloadPrefix: Int64 = 0
     /// The audience LABEL this story was posted with. See `StoryAudienceTag`.
     var audienceLabel: String = "friends"
     /// Each recipient may open it exactly once. Enforced on the server by removing them from
@@ -1177,6 +1180,9 @@ final class StoriesRepository {
                          duration: data["duration"] as? Double ?? 0,
                          thumbUrl: data["thumbUrl"] as? String ?? "",
                          blurThumb: data["blurThumb"] as? String ?? "",
+                         // Written by the uploader since 2026-08-12; absent on everything older,
+                         // which reads as zero and lets the lookahead use its own default.
+                         preloadPrefix: (data["preloadPrefix"] as? NSNumber)?.int64Value ?? 0,
                          // Stories posted before this field existed fall back to "friends", which is
                          // what they were: the audience list is newer than the story collection, and
                          // a public story is caught by the `public` flag below it.
