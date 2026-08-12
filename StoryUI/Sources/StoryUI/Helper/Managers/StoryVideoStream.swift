@@ -154,7 +154,11 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
                 partial.note(total: total, contentType: http.mimeType)
             }
             partial.write(offset: 0, data: data)
-            partial.promoteIfComplete()
+            // ⚠️ NO PROMOTION FROM HERE. A clip smaller than the prefix arrives whole, and moving it
+            // onto the plain cache path is exactly the thing that must not happen while somebody may
+            // be reading the partial — see `teardown`. A neighbour is usually nobody's yet, but
+            // "usually" is not a reason to move a file out from under a reader. Losing the promotion
+            // costs one more pass through the reader on the next open and nothing else.
         }
         onTask?(task)
         task.resume()
