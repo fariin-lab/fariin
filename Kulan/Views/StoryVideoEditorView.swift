@@ -134,6 +134,9 @@ struct StoryVideoEditorView: View {
         let id = UUID()
         let items: [StoryEditorView.DraftItem]
         let caption: String
+        /// Clips picked in the SAME batch that have not been resolved yet. They cross unresolved on
+        /// purpose — see `StoryEditorView.seedVideos` and the note in `onApply`.
+        var pendingVideos: [(url: URL, assetID: String?)] = []
     }
 
     private var currentURL: URL { clips.indices.contains(index) ? clips[index].url : url }
@@ -192,7 +195,8 @@ struct StoryVideoEditorView: View {
     /// was, clips intact, under the picker.
     /// Takes a LIST, because the + button is multi-pick here now too (his 2026-08-07 report: the
     /// picker offers ticking after a photo but not after a video). One image is a list of one.
-    @MainActor private func beginHandOff(adding images: [(image: UIImage, assetID: String?)]) {
+    @MainActor private func beginHandOff(adding images: [(image: UIImage, assetID: String?)],
+                                         pendingVideos: [(url: URL, assetID: String?)] = []) {
         stashCurrent()
         player.pause(); playing = false
         var seed: [StoryEditorView.DraftItem] = clips.map { c in
@@ -226,7 +230,7 @@ struct StoryVideoEditorView: View {
         for p in images { seed.append(StoryEditorView.DraftItem(image: p.image, assetID: p.assetID)) }
         // STAGED, NOT PRESENTED — see `stagedHandOff`. Packing and presenting are two moments now,
         // and which one closes the picker depends on who got there first.
-        stagedHandOff = HandOffPost(items: seed, caption: caption)
+        stagedHandOff = HandOffPost(items: seed, caption: caption, pendingVideos: pendingVideos)
         if showAddPicker {
             // The sheet is still up (a single tapped picture): close it and let `onDismiss` present.
             showAddPicker = false
@@ -460,10 +464,10 @@ struct StoryVideoEditorView: View {
         // A native ALERT, not a confirmationDialog, for the reason StoryTextComposer records: over a
         // full-screen presentation the dialog renders as a centred popover, and popovers HIDE
         // role-cancel buttons, which leaves "Discard" as the only way out of a discard prompt.
-        .alert("Discard this story?", isPresented: $showDiscard) {
-            Button("Discard", role: .destructive) { dismiss() }
-            Button("Keep Editing", role: .cancel) {}
-        }
+        // Ours rather than SwiftUI's, so it is dark on a light-mode phone — see `darkConfirm` and
+        // the matching note in `StoryEditorView`.
+        .darkConfirm("Discard this story?", isPresented: $showDiscard,
+                     destructive: "Discard", onDestructive: { dismiss() })
         .sheet(item: $pendingShare) { s in
             ShareStorySheet(image: s.payload.thumbnail, caption: s.caption, video: s.payload,
                             extras: pendingExtras,
@@ -532,20 +536,45 @@ struct StoryVideoEditorView: View {
                 // it is the same picker and it had the same reset. See `preselected` there.
                 preselected: postAssetIDs,
                 reservedCount: postReservedCount,
+                // ⚠️ A MIXED BATCH PACKS AND PRESENTS IN THIS TURN, WITH NOTHING AWAITED FIRST.
+                //
+                // His 2026-08-12 report: pick a video, tap +, add more, tap Add — and a video editor
+                // appears WITHOUT the new media, then seconds later a second editor appears WITH it,
+                // stacked on the first. The photo path is correct and does not do this.
+                //
+                // There was never a second cover. What he saw was this screen, unchanged, becoming
+                // frontmost the instant the picker dismissed itself, and the composer arriving later.
+                // The gap was ours: this handler used to `await appendClip` for every picked video
+                // FIRST — a duration load and a poster generation each, which is seconds for several
+                // large files — and only then packed the hand-off. The picker does not wait for any
+                // of that; `StoryLibraryPicker` calls `dismiss()` the moment it hands the batch over.
+                //
+                // Nothing has to be resolved before packing. The picker has already given us file
+                // URLs, so the batch is split here, synchronously, and a mixed one is handed straight
+                // to the composer with its clips still raw — they resolve on the screen that is
+                // already up (`StoryEditorView.seedVideos`), which is exactly what the photo editor
+                // has always done with a picked video.
+                //
+                // A VIDEO-ONLY batch is untouched: it legitimately stays on this screen, so it keeps
+                // the append loop and there is no hand-off to be early or late for.
                 onApply: { removed, picks in
                     showAddPicker = false
-                    Task {
-                        await MainActor.run { dropClips(withAssetIDs: removed, expectingMore: !picks.isEmpty) }
-                        // Labelled to match `beginHandOff`: an array of unlabelled tuples does NOT
-                        // implicitly convert to one of labelled tuples.
-                        var images: [(image: UIImage, assetID: String?)] = []
-                        for p in picks {
-                            switch p.kind {
-                            case .video(let url): await appendClip(url, assetID: p.assetID)
-                            case .image(let ui): images.append((ui, p.assetID))
-                            }
+                    var images: [(image: UIImage, assetID: String?)] = []
+                    var videos: [(url: URL, assetID: String?)] = []
+                    for p in picks {
+                        switch p.kind {
+                        case .image(let ui): images.append((ui, p.assetID))
+                        case .video(let url): videos.append((url, p.assetID))
                         }
-                        if !images.isEmpty { await MainActor.run { beginHandOff(adding: images) } }
+                    }
+                    if images.isEmpty {
+                        Task {
+                            await MainActor.run { dropClips(withAssetIDs: removed, expectingMore: !picks.isEmpty) }
+                            for v in videos { await appendClip(v.url, assetID: v.assetID) }
+                        }
+                    } else {
+                        dropClips(withAssetIDs: removed, expectingMore: true)
+                        beginHandOff(adding: images, pendingVideos: videos)
                     }
                 })
         }
@@ -556,7 +585,8 @@ struct StoryVideoEditorView: View {
             StoryEditorView(source: post.items.first?.image ?? UIImage(),
                             onPosted: { onPosted(); dismiss() },
                             seedItems: post.items,
-                            seedCaption: post.caption)
+                            seedCaption: post.caption,
+                            seedVideos: post.pendingVideos)
         }
         .toolbar(.hidden, for: .navigationBar)
         .task { await load() }

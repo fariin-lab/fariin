@@ -39,6 +39,19 @@ struct StoryEditorView: View {
     /// Empty means the normal single-photo start via `source`.
     var seedItems: [DraftItem] = []
     var seedCaption: String = ""
+    /// ⚠️ VIDEOS THAT ARRIVE WITH THE HAND-OFF BUT ARE NOT RESOLVED YET, and this is what stopped
+    /// the video editor showing twice.
+    ///
+    /// Packing a clip means loading its duration and generating a poster, which is seconds for
+    /// several large files. The video editor used to do that work BEFORE it handed over — while the
+    /// picker had already dismissed itself — so the old, unchanged video editor sat there as the
+    /// frontmost screen for the whole wait and this composer then slid up on top of it. Two editors,
+    /// which is exactly what he photographed.
+    ///
+    /// They come across raw now and resolve HERE, on the screen that is already up, through the same
+    /// `appendPicked(video:)` the + button has always used. The strip fills in as each one lands,
+    /// which is the behaviour the photo path already had.
+    var seedVideos: [(url: URL, assetID: String?)] = []
     /// The library asset `source` came from, if it came from one. It makes the first item count
     /// against the story's five and show as a tick when the + reopens the picker — see
     /// `DraftItem.assetID`. Nil for a camera capture, which is counted but cannot be ticked.
@@ -545,6 +558,16 @@ struct StoryEditorView: View {
                         index = max(0, items.count - 1)
                         caption = seedCaption
                         restoreCurrent()
+                        // The clips that came across unresolved join in tap order, each one on this
+                        // screen rather than in front of it. See `seedVideos`. Sequential for the
+                        // same reason `applyPickerChange` is: parallel decodes land in whatever
+                        // order they happen to finish, and the strip's order is the tap order.
+                        if !seedVideos.isEmpty {
+                            let pending = seedVideos
+                            Task {
+                                for v in pending { await appendPicked(video: v.url, assetID: v.assetID) }
+                            }
+                        }
                     }
                 }
                 recomputeEdited()
@@ -571,10 +594,13 @@ struct StoryEditorView: View {
         // A native ALERT, not a confirmationDialog, for the reason StoryTextComposer records: over a
         // full-screen presentation the dialog renders as a centred popover, and popovers HIDE
         // role-cancel buttons, which leaves "Discard" as the only way out of a discard prompt.
-        .alert("Discard this story?", isPresented: $showDiscard) {
-            Button("Discard", role: .destructive) { dismiss() }
-            Button("Keep Editing", role: .cancel) {}
-        }
+        // ⚠️ AND IT IS OURS, NOT SwiftUI'S, SO IT IS ACTUALLY DARK. This screen carries
+        // `storyAlwaysDark()`, whose note used to claim it covered this alert — his 2026-08-12
+        // screenshot is a pale grey panel with black text over a black editor, which disproves it.
+        // A SwiftUI alert is presented into its own context, so the trait pinned on this screen
+        // never reaches it. See `darkConfirm`.
+        .darkConfirm("Discard this story?", isPresented: $showDiscard,
+                     destructive: "Discard", onDestructive: { dismiss() })
         // OUR OWN PICKER, images AND videos, always (owner 2026-08-05: "The + button should always
         // open our custom media picker… Never fall back to Apple's Photo Picker"). It stays open
         // while you tap — each pick lands in the strip behind it — and the X brings you back.
