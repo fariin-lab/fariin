@@ -201,8 +201,14 @@ public enum StoryPrefetcher {
     /// Videos go through the same `CacheManager` the player uses, so a prefetched clip and a clip you
     /// waited for are the same file in the same place. It already skips a download when the file is
     /// there and already throws away a truncated one, so there is nothing to re-implement.
-    /// ONE instance, held for the life of the app. A `CacheManager()` made on the spot would go out
-    /// of scope the moment `loadVideo` returned, and it is the one holding the download.
+    /// ONE instance, held for the life of the app, because this one hands out its task for
+    /// `cancelStaleWindow` to cancel later.
+    ///
+    /// ⚠️ THIS IS NO LONGER A PROHIBITION ON `CacheManager()` MADE ON THE SPOT, and the comment that
+    /// said it was outlived the reason. The download used to belong to the instance, so one going
+    /// out of scope took the transfer with it. It belongs to `VideoDownloads` now — a process-wide
+    /// registry with no `self` anywhere in the completion — so a throwaway instance is perfectly
+    /// safe, which is what `StoryItemVideoView.ensureContent` relies on.
     private static let videoCache = CacheManager()
 
     /// ⚠️ THE ROW'S FIRST CARDS STAY ON WI-FI FOR VIDEO, and that is the line between the two bets.

@@ -340,10 +340,10 @@ final class ImageLoader: UIView {
         // frame with the audio gone while the progress bar kept counting and the story advanced on
         // schedule.
         //
-        // Nothing is lost by removing it. A page that shows a photo has no `VideoView` mounted at
-        // all, and the one case where a page switches from a video item to a photo item is already
-        // handled locally by `resetAVPlayer()` in the image branch of `getStoryView`. This post
-        // could only ever hit somebody else's player.
+        // Nothing is lost by removing it, and less than ever now that a story ITEM owns its player.
+        // A page showing a photo has no video view mounted at all, and a page switching from a video
+        // item to a photo item dismantles the video item's own view, which releases that view's own
+        // player. Nothing has to be told and there is nobody else's player to reach.
 
         // 1) ALREADY DECODED AND READY. A dictionary lookup and a pointer — no file read, no decode,
         //    and crucially no dispatch: the picture is on screen in this same turn, which is what

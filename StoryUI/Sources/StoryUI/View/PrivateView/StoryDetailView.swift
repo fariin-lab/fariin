@@ -863,12 +863,21 @@ private extension StoryDetailView {
             // after clip. With it, a different clip is a different view: a new player, born at zero,
             // that has never held anybody else's item.
             StoryVideoContent(
+                storyId: story.id,
                 storyURL: story.mediaURL,
                 posterURL: story.previewURL,
                 blurThumb: story.blurThumb,
                 session: video
             )
-            .id(story.mediaURL)
+            // ⚠️ KEYED ON THE STORY'S ID, NOT ITS URL. Four places have to agree about what "this
+            // clip" means — this identity, the view store, the session's claim and the carousel
+            // card — and while they keyed on the media url they derived it three different ways
+            // (the raw string here, `URL(string:)?.absoluteString` inside the view, the model's
+            // string again in the progress bar). Any normalisation `URL` performs breaks all of
+            // them at once, and two items that somehow shared a url would share one view and one
+            // claim: the second would open with the player parked at the end of the first, on a
+            // full bar, with the end already consumed and no way forward.
+            .id(story.id)
             .onAppear {
                 // The item's own duration refines the declared one through the session, read on the
                 // tick. Nothing to plumb: `start` only marks the item ready so the bar may move.
@@ -1400,6 +1409,19 @@ private extension StoryDetailView {
         // they will be watched, across people, so the last item of one warms the first of the next.
         if viewModel.currentStoryUser == model.id {
             let cur = getStory(with: getCurrentIndex())
+            // ⚠️ THE MODE IS RE-ASSERTED HERE, AND THAT CLOSES A WHOLE CLASS OF DEAD STORY.
+            //
+            // `mode` has exactly one writer — `session.setMode` — and for the FIRST video item on a
+            // page the only thing that ever calls it is an `.onAppear`. A SwiftUI appearance
+            // callback is a single point of failure for "does this story play at all": miss it once,
+            // to identity churn or a re-render that reuses the modifier node, and the item mounts
+            // with no player, the bar sits frozen, no end ever arrives and nothing recovers. There
+            // is no spinner either, because the bytes are loaded.
+            //
+            // `setMode` → `apply` is fully idempotent (`play()` on a playing player is a no-op), so
+            // re-deriving the answer twenty times a second costs nothing and means the mode cannot
+            // be lost, only briefly late.
+            syncVideoMode()
             // ⚠️ THE BUFFERING HOLD IS READ, NOT RECEIVED, AND THE STALE-HOLD BOOKKEEPING IS GONE.
             //
             // It used to arrive as a `.storyBuffering` notification carrying a url, which the
@@ -1410,15 +1432,33 @@ private extension StoryDetailView {
             //
             // The session belongs to the item on screen, so its answer is never somebody else's and
             // never a missed edge: an item with no claim is not buffering, which is the truth.
-            let nowBuffering = video.claim == cur.mediaURL && video.isBuffering
+            let mine = video.claim == cur.id
+            let nowBuffering = mine && video.isBuffering
             if nowBuffering != isBuffering { isBuffering = nowBuffering }
             // THE CLIP SAYS IT ENDED; ONLY THEN DOES A VIDEO SEGMENT COMPLETE. The reference app
             // advances a video story from its playback-completed callback alone — ordinary progress
-            // updates carry `canSwitch = false` — and `consumeFinished` is our half of that. It is a
-            // one-shot: a second read of the same end finds nothing, which is their `requestedNext`
-            // latch.
-            if !isDismissing, video.claim == cur.mediaURL, video.consumeFinished() {
-                advanceFromVideoEnd()
+            // updates carry `canSwitch = false` — and this is our half of that, with their
+            // `requestedNext` one-shot as `consumeFinished`.
+            //
+            // ⚠️ AND THE LATCH GOES BACK IF THE ADVANCE IS REFUSED. `updateStory` can decline — a
+            // person-turn is animating, or an advance is already in flight — and the end of a clip
+            // fires exactly once. Spending the latch on a refused advance meant the player sat at
+            // its last frame with nothing left to report, and `syncBarToPlayer` caps the bar at
+            // `index + 0.999`, so the arithmetic fallback that used to rescue this can never run
+            // either. The story freezes on its final frame under a nearly-full bar, for good.
+            if !isDismissing, mine, video.consumeFinished() {
+                if !advanceFromVideoEnd() { video.rearmFinished() }
+            }
+            // ⚠️ AND A CLIP THAT REACHED ITS END WITHOUT SAYING SO IS ADVANCED ANYWAY. Capping the
+            // bar under the boundary means the player's own report is the ONLY way out of a video
+            // segment, which is the reference app's rule — but it also means a truncated or corrupt
+            // clip that plays to its last sample and never emits `AVPlayerItemDidPlayToEndTime`
+            // would hold the viewer for ever. This is the floor under that: the content is here,
+            // the item is meant to be playing, the clock has reached the end, and it has stopped
+            // moving. Nothing legitimate looks like that.
+            if !isDismissing, mine, video.contentLoaded, !video.isPlaying, videoMode == .play,
+               video.duration > 0, video.timestamp >= video.duration - 0.05 {
+                if !advanceFromVideoEnd() { /* a refusal here retries on the next tick */ }
             }
             // ⚠️ AND THE HOST IS TOLD WHICH ITEM IS ON SCREEN, HERE, WHERE NOTHING GATES IT.
             //
@@ -1434,6 +1474,13 @@ private extension StoryDetailView {
             if cur.id != lastChangedItem {
                 lastChangedItem = cur.id
                 onItemChanged?(cur.id)
+                // ⚠️ AND THE EMOJI-ANIMATION PAUSE IS RELEASED WITH THE ITEM. `isAnimationStarted`
+                // is raised in the reaction overlay's `onAppear` and lowered in its `onDisappear`,
+                // and it is one of `videoMode`'s inputs — so an overlay torn down without its
+                // disappear firing would silence every later item of that person, permanently.
+                // Nothing in this file is allowed to be able to do that. It was otherwise cleared
+                // only by `resetProgress`, which runs on a PERSON change, not an item one.
+                if isAnimationStarted { isAnimationStarted = false }
             }
             if cur.id != lastPrefetchItem {
                 lastPrefetchItem = cur.id
@@ -1575,7 +1622,7 @@ private extension StoryDetailView {
     /// reference app's `canSwitch` rule, where ordinary progress updates carry `false` and only its
     /// playback-completed callback carries `true`.
     func syncBarToPlayer(index: Int, story: Story) {
-        guard video.claim == story.mediaURL else { return }
+        guard video.claim == story.id else { return }
         // An item that can never play again keeps the wall clock, so a broken clip still hands the
         // screen on after its declared duration instead of freezing the story for good.
         if video.failed {
@@ -1593,14 +1640,23 @@ private extension StoryDetailView {
     /// The video's own end, arriving as a completed segment: exactly what the tick's integer
     /// crossing used to do by arithmetic, done once, on the player's word. The end of the LAST
     /// item advances to the next person through the same `updateStory` the arithmetic used.
-    func advanceFromVideoEnd() {
+    /// TRUE when the advance was actually taken. The caller puts the end-of-clip latch back when it
+    /// was not — see the note at the call site. A refusal here is normal (a person turn is running,
+    /// or an advance is already in flight), and it must not cost the clip its only report.
+    @discardableResult
+    func advanceFromVideoEnd() -> Bool {
         if !timerProgress.isFinite { timerProgress = 0 }
         if Int(timerProgress) + 1 >= model.stories.count {
-            guard !isAdvancing else { return }
+            guard !isAdvancing else { return false }
             isAdvancing = true
+            let before = viewModel.currentStoryUser
             updateStory()
+            // `updateStory` clears `isAdvancing` itself on both of its refusals, so that flag being
+            // back down with the person unchanged is exactly what a refusal looks like.
+            return !(isAdvancing == false && viewModel.currentStoryUser == before)
         } else {
             timerProgress = CGFloat(Int(timerProgress) + 1)
+            return true
         }
     }
     

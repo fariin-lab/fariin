@@ -193,6 +193,10 @@ final class StoryVideoSession {
         finishedPending = false
         return true
     }
+
+    /// Put it back, because the advance it was spent on was refused. A clip reports its end exactly
+    /// once; losing that report to a refusal is a story frozen on its last frame for good.
+    func rearmFinished() { finishedPending = true }
 }
 
 // MARK: - Which item views stay alive
@@ -259,8 +263,22 @@ enum StoryItemViewStore {
     }
 
     /// Keep this view for a return visit, or tear it down if we are not retaining.
+    ///
+    /// ⚠️ ONLY A VIEW THAT HAS A PLAYER IS WORTH KEEPING, AND THAT IS WHAT MAKES THE CAP HARMLESS.
+    ///
+    /// Retention exists for exactly one thing: a playback position that would otherwise be lost.
+    /// A view with no player has no position — while the sheet is collapsed every item is `.pause`,
+    /// so a story you merely swipe PAST never builds one — and rebuilding it produces a view
+    /// identical to the one thrown away, from the same poster.
+    ///
+    /// Keeping those was actively harmful. The cap is three, so swiping the carousel through four
+    /// stories evicted the ONE view that mattered — the story the sheet came up over, the only one
+    /// holding a player — and swiping back then found nothing, built a fresh player at zero, and the
+    /// card fell back to its poster. That is the "reverts to the upload cover" report, reproduced by
+    /// the store doing exactly what it was told. Now only players compete for the three places, and
+    /// in practice there is one.
     static func keep(_ view: StoryItemVideoView) {
-        guard retainDismounted else { view.teardown(); return }
+        guard retainDismounted, view.hasPlayer else { view.teardown(); return }
         let key = view.storyKey
         if let i = kept.firstIndex(where: { $0.key == key }) {
             kept[i].view.teardown()
@@ -279,9 +297,17 @@ enum StoryItemViewStore {
     /// picture needs answered, and the object that answers it is the same one holding the frame —
     /// so there is no instant to catch and no subject to get wrong.
     static func pausedSecond(of key: String) -> Double? {
+        // ⚠️ `continue`, NOT `return nil`, AND THAT ONE WORD IS A WHOLE CLASS OF THE OLD BUG.
+        //
+        // `live` is an unordered weak table and it can briefly hold TWO views for one clip: a
+        // torn-down one that has not deallocated yet and the replacement that just mounted. The
+        // torn-down one answers 0 because `teardownPlayer` nils its player. Returning on the first
+        // match meant whichever the table happened to yield first decided the answer — and a nil
+        // here sends the card back to its poster, which is second zero, which is the exact
+        // complaint this mechanism exists to end.
         for view in live.allObjects where view.storyKey == key {
             let t = view.currentSecond
-            return t > 0 ? t : nil
+            if t > 0 { return t }
         }
         return nil
     }
@@ -339,6 +365,24 @@ public enum StoryVideoFrames {
     /// In-flight generations, so a card asking on every frame of a scroll starts one decode.
     private static var running = Set<String>()
 
+    /// ⚠️ KEYS THAT CANNOT BE ANSWERED, REMEMBERED SO THEY ARE NOT ASKED AGAIN. Two things make a
+    /// generation fail permanently: the clip is not on disk (which is the state `handleFailedItem`
+    /// deliberately creates when it throws away a half-written cache file and streams instead), and
+    /// a decoder that will not vend that frame. Neither improves by being retried — and `card` is
+    /// called from a view body for every visible card on every frame of a scroll, so without this a
+    /// swipe builds an `AVURLAsset` and an `AVAssetImageGenerator` sixty times a second, for ever.
+    private static var refused = Set<String>()
+
+    /// ⚠️ AND A CEILING ON HOW MANY RUN AT ONCE. The store caps PLAYERS at three for the decoder
+    /// budget, and then this path opened an unbounded number of image generators beside them — one
+    /// per distinct key, and a carousel can ask for every visible card in a single pass. Two is
+    /// enough to keep the card you are looking at and the one you are swiping towards warm.
+    private static let maxConcurrentGenerations = 2
+
+    /// Landings for a key that is still being generated. The opening-frame cover needs one: nothing
+    /// else calls back into the item view, and its first ask always answers nil.
+    private static var pending: [String: [(UIImage) -> Void]] = [:]
+
     private static func key(_ url: URL, _ second: Double) -> String {
         "\(url.absoluteString)|\(Int((second * 10).rounded()))"
     }
@@ -349,11 +393,12 @@ public enum StoryVideoFrames {
     /// has watched in this session. Both fall through to the poster at the call site, exactly as
     /// before.
     ///
-    /// The second comes from the clip's own live node (`StoryItemViewStore.pausedSecond`), so this
-    /// cannot be handed the wrong story's time. With no live node there is nothing to draw that the
-    /// poster does not already say, and this answers nil without generating anything.
-    public static func card(_ url: URL, width: CGFloat) -> UIImage? {
-        guard let second = StoryItemViewStore.pausedSecond(of: url.absoluteString), second > 0.2 else { return nil }
+    /// ⚠️ `storyId` IS THE SUBJECT AND `url` IS ONLY THE FILE. The live view is found by the story's
+    /// own id — the one key the store, the session and SwiftUI's `.id()` all agree on — while the
+    /// url is what the generator opens. Asking by url meant three places deriving the same string
+    /// three different ways, and any normalisation `URL(string:)` performed broke all of them.
+    public static func card(_ url: URL, storyId: String, width: CGFloat) -> UIImage? {
+        guard let second = StoryItemViewStore.pausedSecond(of: storyId), second > 0.2 else { return nil }
         let base = key(url, second)
         let sized = "\(base)|\(Int(width.rounded()))"
         if let memo = cards[sized] { return memo }
@@ -387,17 +432,29 @@ public enum StoryVideoFrames {
     /// Deliberately a separate entry point rather than a second meaning for `card`: an opening frame
     /// and a mid-clip frame are two different pictures answering two different questions, and the
     /// last time they shared a slot one overwrote the other on his screen.
-    public static func opening(_ url: URL) -> UIImage? {
+    ///
+    /// `then` is called on the main thread if the frame has to be generated. Without it the first
+    /// ask — which is always the one that matters, at `init`, before anything is cached — would
+    /// answer nil and nothing would ever come back.
+    public static func opening(_ url: URL, then: ((UIImage) -> Void)? = nil) -> UIImage? {
         let k = key(url, 0)
         if let hit = full.object(forKey: k as NSString) { return hit }
+        if let then { pending[k, default: []].append(then) }
         generate(url, at: 0, key: k)
         return nil
     }
 
     private static func generate(_ url: URL, at second: Double, key k: String) {
-        guard !running.contains(k), let file = CacheManager.cachedFileIfUsable(for: url) else { return }
+        guard !running.contains(k), !refused.contains(k),
+              running.count < maxConcurrentGenerations,
+              let file = CacheManager.cachedFileIfUsable(for: url) else { return }
         running.insert(k)
         let time = CMTime(seconds: second, preferredTimescale: 600)
+        // ⚠️ A CARD FRAME IS DRAWN ABOUT A HUNDRED POINTS WIDE. Generating it at 1080 costs eight
+        // megabytes a frame, and the cache above holds thirty-two — so five watched clips in one
+        // carousel evicted each other and regenerated for ever. Only the OPENING frame, which is
+        // drawn full-card behind the video, needs the full size.
+        let maxSize = second <= 0 ? CGSize(width: 1080, height: 1920) : CGSize(width: 640, height: 1138)
         DispatchQueue.global(qos: .userInitiated).async {
             let generator = AVAssetImageGenerator(asset: AVURLAsset(url: file))
             // TURNED THE WAY THE CLIP IS MEANT TO BE SEEN. A phone does not rotate the pixels it
@@ -405,7 +462,7 @@ public enum StoryVideoFrames {
             // of our exports bake it. The layer applies it for playback, so without this the card
             // would lie on its side for exactly the clips the player draws upright.
             generator.appliesPreferredTrackTransform = true
-            generator.maximumSize = CGSize(width: 1080, height: 1920)
+            generator.maximumSize = maxSize
             // ⚠️ BOTH TOLERANCES ZERO. The default lets the generator snap to the nearest keyframe,
             // which on a story clip can be seconds away — a picture of a different moment, which is
             // the original complaint with extra steps.
@@ -414,10 +471,16 @@ public enum StoryVideoFrames {
             let cg = try? generator.copyCGImage(at: time, actualTime: nil)
             DispatchQueue.main.async {
                 running.remove(k)
-                guard let cg else { return }
+                guard let cg else {
+                    // It will not answer for this key. Do not ask it sixty times a second.
+                    refused.insert(k)
+                    pending.removeValue(forKey: k)
+                    return
+                }
                 let image = UIImage(cgImage: cg)
                 let cost = Int(image.size.width * image.size.height * 4)
                 full.setObject(image, forKey: k as NSString, cost: cost)
+                pending.removeValue(forKey: k)?.forEach { $0(image) }
                 // The card that asked for this drew a poster; tell the row it may ask again.
                 StoryFrameTick.shared.bump()
             }
@@ -442,6 +505,8 @@ public enum StoryVideoFrames {
         full.removeAllObjects()
         cards = [:]
         running.removeAll()
+        refused.removeAll()
+        pending.removeAll()
     }
 }
 

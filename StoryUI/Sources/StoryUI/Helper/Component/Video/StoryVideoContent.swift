@@ -22,6 +22,9 @@ import AVKit
 /// imperative pause and a re-render cannot disagree. See `StoryVideoSession`.
 struct StoryVideoContent: UIViewRepresentable {
 
+    /// ⚠️ THE STORY'S ID IS THE KEY EVERYWHERE — the store, the session's claim and `.id()`. See
+    /// `StoryItemVideoView.storyId` for why it is not the media url.
+    let storyId: String
     let storyURL: String
     let posterURL: String?
     let blurThumb: String
@@ -29,13 +32,23 @@ struct StoryVideoContent: UIViewRepresentable {
     let session: StoryVideoSession
 
     func makeUIView(context: Context) -> StoryItemVideoView {
-        let url = URL(string: storyURL) ?? URL(fileURLWithPath: "/dev/null")
         // A STORED VIEW COMES BACK WITH ITS PLAYER AND ITS POSITION. This is the collapsed-sheet
         // case and nothing else: `StoryItemViewStore` only keeps anything while the viewers sheet is
         // engaged, so ordinary navigation always lands on the `else` and gets a fresh player, which
         // starts at zero. See the store's own note — that switch IS the restart-at-zero rule.
-        let view = StoryItemViewStore.take(storyURL)
-            ?? StoryItemVideoView(storyURL: url, poster: posterURL, blurThumb: blurThumb)
+        if let kept = StoryItemViewStore.take(storyId) {
+            kept.attach(to: session)
+            return kept
+        }
+        // ⚠️ AN UNPARSEABLE URL GETS NO PLAYER AND SAYS SO. This used to substitute
+        // `URL(fileURLWithPath: "/dev/null")`, which builds a view that plays nothing, reports
+        // nothing and never fails — a story frozen on its cover with no spinner and no way out. A
+        // view told its clip is unreachable at least marks itself failed, and the progress bar falls
+        // back to the wall clock, so the story hands the screen on.
+        let view = StoryItemVideoView(storyId: storyId,
+                                      storyURL: URL(string: storyURL),
+                                      poster: posterURL,
+                                      blurThumb: blurThumb)
         view.attach(to: session)
         return view
     }

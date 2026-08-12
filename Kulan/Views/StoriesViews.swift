@@ -1316,7 +1316,7 @@ struct StoryViewer: View {
             //
             // (The per-session cover dictionary that used to be emptied here went with the frame
             // bank itself — there is no bank any more, only frames generated on demand from the
-            // clip's own file, cleared with the viewer.)
+            // clip's own file, and `StoryVideoHost.viewerClosed()` clears those with the viewer.)
             // The sheet state belongs to one session too, and it does NOT die with this overlay
             // (host @State). A viewer torn down mid-pull — the last story deleted under an open
             // sheet, a system-cancelled drag that parked it at a few percent — left `showViewers`
@@ -3852,7 +3852,7 @@ struct MyStoriesCarousel: View {
         // IS the photo) and for a video nobody has watched this session. Both fall through to the
         // poster below, which is exactly what they had before.
         if s.isVideo, let u = URL(string: s.mediaUrl),
-           let shot = StoryVideoFrames.card(u, width: slotW) {
+           let shot = StoryVideoFrames.card(u, storyId: s.id, width: slotW) {
             // ⚠️ PINNED TO THE SLOT, exactly like the branch below. `Color.clear` is size-NEUTRAL: it
             // accepts whatever size it is proposed, and inside the cover-flow `ZStack` that proposal
             // is not the card, it is the container. The poster branch cannot drift that way because

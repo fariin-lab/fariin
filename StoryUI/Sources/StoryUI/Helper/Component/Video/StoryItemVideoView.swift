@@ -31,14 +31,37 @@
 import UIKit
 import AVFoundation
 
-@MainActor
+/// ⚠️ NO EXPLICIT `@MainActor` HERE, AND THAT IS NOT AN OVERSIGHT.
+///
+/// `UIView` is already main-actor isolated by the SDK, so this class is too — but it inherits that
+/// isolation through a `@preconcurrency` import, which in Swift 5 language mode downgrades a
+/// violation to a warning. An explicit annotation written in this module would not: it makes every
+/// call from a non-isolated context (a KVO block, a `URLSession` completion, a plain forwarding
+/// object) a hard error. The player this replaces was a bare `UIView` subclass called from exactly
+/// those places for forty-five commits, and it compiled. There is no Swift compiler on this machine,
+/// so matching the shape that is known to build is worth more than the annotation.
 final class StoryItemVideoView: UIView {
 
     // MARK: - Identity
 
-    /// The clip. Assigned once, at init, and there is deliberately no setter.
-    let storyURL: URL
-    var storyKey: String { storyURL.absoluteString }
+    /// ⚠️ THE STORY'S OWN ID, NOT ITS URL, AND THE DIFFERENCE IS LOAD-BEARING.
+    ///
+    /// Three things key on this — the store, the session's claim, and SwiftUI's `.id()` — and while
+    /// they used the media url they could disagree about what that url was: the store looked it up
+    /// as the RAW string, this derived it through `URL(string:)?.absoluteString`, and the progress
+    /// bar compared it against the model's string again. Any normalisation `URL` performs breaks all
+    /// three at once, and an unparseable url collapsed every item onto one fallback key.
+    ///
+    /// A story id is a document id. It is unique, it needs no parsing, and it cannot normalise.
+    let storyId: String
+    /// The clip. Assigned once, at init, and there is deliberately no setter. Nil when the story's
+    /// media url could not be parsed at all — a story that cannot be fetched, which this view
+    /// reports as failed rather than sitting on for ever.
+    let storyURL: URL?
+    var storyKey: String { storyId }
+
+    /// Whether this view is holding a decoder. The store keeps only views that are — see `keep`.
+    var hasPlayer: Bool { player != nil }
 
     // MARK: - The picture underneath
 
@@ -114,7 +137,8 @@ final class StoryItemVideoView: UIView {
 
     // MARK: - Init
 
-    init(storyURL: URL, poster: String?, blurThumb: String) {
+    init(storyId: String, storyURL: URL?, poster: String?, blurThumb: String) {
+        self.storyId = storyId
         self.storyURL = storyURL
         self.poster = poster
         self.blurThumb = blurThumb
@@ -231,14 +255,14 @@ final class StoryItemVideoView: UIView {
                 // Pausing IS the moment the sheet comes up over a story, so the frame is in hand
                 // before the first swipe can ask for it. Idempotent and cheap: a second call for the
                 // same second finds it cached and starts nothing.
-                StoryVideoFrames.warm(storyURL, at: currentSecond)
+                if let storyURL { StoryVideoFrames.warm(storyURL, at: currentSecond) }
             }
         }
         initializeVideoIfReady()
         publishStatus()
     }
 
-    /// ⚠️ THE ONLY SEEK IN THIS FILE THAT IS NOT ON A FRESH PLAYER, and it is an explicit thing the
+    /// ⚠️ THE OTHER SEEK, AND THE ONLY ONE THAT IS NOT ON A FRESH PLAYER. It is an explicit thing the
     /// person did — tapping back past the first story of the first person restarts what is playing.
     /// Do not add a second one: every other "go back to the beginning" in this viewer is a new item,
     /// and a new item is a new player, which begins at zero because it has never been anywhere else.
@@ -307,7 +331,7 @@ final class StoryItemVideoView: UIView {
         // install them afterwards and the first play is lost.
         installObservers(on: p, item: item)
 
-        // ⚠️ THE ONLY SEEK IN THIS FILE, AND IT IS ON A FRESH PLAYER. The reference app seeks to 0
+        // ⚠️ ONE OF THE ONLY TWO SEEKS IN THIS FILE, AND IT IS ON A FRESH PLAYER. The reference app seeks to 0
         // from `ownsContentNodeUpdated`, which fires when a NEW node acquires its content — not on
         // any pause or resume path. A brand-new `AVPlayerItem` is already at zero, so this is belt
         // for a preloaded item that has been prerolled: it costs nothing and it makes the rule
@@ -427,19 +451,27 @@ final class StoryItemVideoView: UIView {
 
     /// A clip that can never play says so, instead of leaving the wheel turning for ever.
     private func handleFailedItem() {
+        // ⚠️ NOT ON A VIEW THAT HAS ALREADY BEEN TORN DOWN. This runs one runloop turn after the
+        // failure was noticed, and a teardown can happen inside that gap — the recovery below would
+        // then build a BRAND NEW `AVPlayer` on a detached, unparented view that nothing will ever
+        // tear down again, holding a decoder for the life of the process. A view that has left its
+        // session has left the viewer.
+        guard session != nil else { return }
         // A half-written cache file is the worst case because it is PERMANENT: it exists, so every
         // later open finds it and never downloads again. Throw it away and stream instead.
-        if let bad = localFile, !didRetryRemote {
+        if let bad = localFile, !didRetryRemote, let remote = storyURL {
             didRetryRemote = true
             localFile = nil
-            try? FileManager.default.removeItem(at: bad)
+            // Only a real cache file is worth deleting; the "bad" url may already BE the remote one.
+            if bad.isFileURL { try? FileManager.default.removeItem(at: bad) }
             teardownPlayer()
-            localFile = storyURL          // stream the remote url directly
+            localFile = remote            // stream the remote url directly
             contentLoaded = true
             initializeVideoIfReady()
             return
         }
-        session?.update(storyKey, failed: true, isBuffering: false)
+        // Argument order follows the declaration — Swift enforces it even for defaulted parameters.
+        session?.update(storyKey, isBuffering: false, failed: true)
         updateSpinner()
     }
 
@@ -499,6 +531,13 @@ final class StoryItemVideoView: UIView {
         // the size it was built for has actually changed. `loadingVeil` runs a real render pass, and
         // `layoutSubviews` fires on every frame of the sheet pull.
         if !coverIsFrame, coverRenderedSize != bounds.size { renderCover() }
+        // ⚠️ AND A STILL THAT WAS NOT READY THE FIRST TIME IS ASKED FOR AGAIN. A clip with no
+        // `thumb.jpg` and no embedded thumbnail — one posted before either existed, or one whose
+        // second upload failed — has only its own opening frame to show, and that is a decode: the
+        // first ask returns nil because it is still running. Nothing calls back into this view when
+        // it lands, so without a retry the card would sit black until the player itself revealed.
+        // `layoutSubviews` runs often enough to be that retry and costs nothing when a cover exists.
+        if coverView.image == nil { openingFrameFallback() }
         applyCoverGravity()
         revealIfReady()
     }
@@ -543,7 +582,12 @@ final class StoryItemVideoView: UIView {
         // The SOURCE picture, never the composited veil: sampling the blurred variant would read the
         // gradient this is about to draw and give the bars a colour taken from themselves.
         guard let source = posterImage ?? coverSource ?? blurThumbImage else { return }
-        canvasSourced = true
+        // ⚠️ THE 30px THUMBNAIL COLOURS THE BARS BUT DOES NOT SETTLE THEM. It is the only picture in
+        // hand on the first frame of a cold open, and it is a legitimate colour source — but the
+        // real poster is usually a moment behind it, and latching on the blur meant the letterbox
+        // bars kept colours sampled from thirty pixels of smear for the whole story. Anything better
+        // is allowed to re-take the decision exactly once.
+        canvasSourced = (source !== blurThumbImage)
         StoryCanvas.apply(StoryCanvas.colours(of: source), to: canvasLayer)
     }
 
@@ -592,8 +636,17 @@ final class StoryItemVideoView: UIView {
     /// cover with — the spinner over a bare gradient. Second zero is exactly the honest cover,
     /// because playback always begins there.
     private func openingFrameFallback() {
-        guard posterImage == nil else { return }
-        if let frame = StoryVideoFrames.opening(storyURL) {
+        guard posterImage == nil, let storyURL else { return }
+        // ⚠️ WITH A LANDING, BECAUSE THE FIRST ASK ALWAYS ANSWERS NIL. Generating this is a decode
+        // off the main thread, and nothing used to call back into this view when it finished — the
+        // only listener was the carousel's redraw counter. So the one case this fallback exists for
+        // (a clip whose `thumb.jpg` has not uploaded yet, and which has no embedded thumbnail
+        // either) showed BLACK for the whole load, with a perfectly good opening frame arriving into
+        // a cache nobody re-read.
+        if let frame = StoryVideoFrames.opening(storyURL, then: { [weak self] image in
+            guard let self, self.posterImage == nil else { return }
+            self.setCover(image, isFrame: true)
+        }) {
             setCover(frame, isFrame: true)
         }
     }
@@ -629,6 +682,14 @@ final class StoryItemVideoView: UIView {
     // MARK: - Content
 
     private func ensureContent() {
+        // A story whose media url will not parse can never be fetched. Say so straight away: the
+        // progress bar falls back to the wall clock on a failed item, so the story hands the screen
+        // on after its declared length instead of freezing the viewer on a cover.
+        guard let storyURL else {
+            session?.update(storyKey, isBuffering: false, failed: true)
+            updateSpinner()
+            return
+        }
         if let file = CacheManager.cachedFileIfUsable(for: storyURL) {
             localFile = file
             contentLoaded = true
@@ -650,7 +711,7 @@ final class StoryItemVideoView: UIView {
                 // Never leave the viewer on an eternal spinner: a cache failure falls back to
                 // streaming the remote url, which AVPlayer does perfectly well for an https mp4.
                 self.didRetryRemote = true
-                self.localFile = self.storyURL
+                self.localFile = storyURL
             }
             self.contentLoaded = true
             self.session?.update(self.storyKey, contentLoaded: true)
@@ -664,7 +725,12 @@ final class StoryItemVideoView: UIView {
     /// a thing that replaces it. It appears 0.2s late, so a cached or preloaded story never flashes
     /// one.
     private func updateSpinner() {
-        let want = !contentLoaded && !(session?.failed ?? false)
+        // ⚠️ A MID-CLIP STALL SHOWS IT TOO, and that is not decoration. The progress bar HOLDS while
+        // a clip is stalled, so without an indicator the story simply stops with nothing on screen
+        // saying why — a frozen picture under a frozen bar, which reads as the app being broken
+        // rather than as the network being slow. Initial buffering is excluded by `isStalled`
+        // itself, so a clip that has not started yet still shows only the fetch wheel.
+        let want = (!contentLoaded || isStalled) && !(session?.failed ?? false)
         guard want != spinnerShown else { return }
         spinnerShown = want
         guard want else {
