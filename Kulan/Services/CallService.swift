@@ -1077,9 +1077,12 @@ final class CallService: NSObject {
         switch reason {
         // TWO full busy cycles (2s), which is what the 1.8s stop in finishCall actually allows.
         // `loops: 3` claimed "~4s" and was cut off less than halfway through, so the comment and the
-        // code disagreed about the one thing a caller hears when they are declined (audit).
-        case .declined, .busy: playTone(RingbackTone.busyData(), loops: 1)
-        case .failed, .hangup, .missed: playTone(RingbackTone.endedData(), loops: 0)
+        // code disagreed about the one thing a caller hears (audit).
+        case .busy: playTone(RingbackTone.busyData(), loops: 1)
+        // A DECLINE sounds like a ring-out on purpose (HIS ORDER 2026-08-12, WhatsApp parity): the
+        // busy tone after one ring told the caller they were rejected. Declines are hidden
+        // everywhere now — tone, end screen, record — so the tone must not leak what the label hides.
+        case .failed, .hangup, .missed, .declined: playTone(RingbackTone.endedData(), loops: 0)
         case .none: break
         }
     }
@@ -1850,10 +1853,13 @@ final class CallService: NSObject {
             let connected = connectedDate != nil
             let dur = connected ? Int(Date().timeIntervalSince(connectedDate!)) : 0
             let callerUidVal = isCaller ? me : otherUid
-            // A DECLINE is not a miss. endReason was already known here and simply never reached the
-            // record, so deliberately rejecting a call wrote "missed" — which the chat row then renders
-            // red as "Missed call · Tap to call back" on the phone of the person who chose to decline it.
-            let outcome = connected ? "answered" : (endReason == .declined ? "declined" : "missed")
+            // ⚠️ DECLINES ARE DELIBERATELY NOT RECORDED — HIS ORDER 2026-08-12, reversing the earlier
+            // "a decline is not a miss" rule with WhatsApp's screenshots in hand: WhatsApp removed
+            // declines from the log entirely so a rejection is never exposed. The caller sees
+            // "No answer", the decliner sees the same red "Missed call · Call back" as an ignored
+            // ring. `EndReason.declined` still exists internally (teardown paths), it just never
+            // reaches the record. Do not bring the "declined" outcome back without his word.
+            let outcome = connected ? "answered" : "missed"
             let cid = [me, otherUid].sorted().joined(separator: "_")
             let cidCallId = callId ?? UUID().uuidString
             // The record says what the call WAS, not how it was placed (his report: voice call,
@@ -1892,7 +1898,7 @@ final class CallService: NSObject {
         let reason = endReason
         if !localUser, reason != .none {
             playEndTone(reason)
-            let toneDur = (reason == .declined || reason == .busy) ? 2.0 : 0.6   // matches loops: 1
+            let toneDur = (reason == .busy) ? 2.0 : 0.6   // matches loops: 1 (declined plays the short ended tone now)
             DispatchQueue.main.asyncAfter(deadline: .now() + toneDur) {
                 self.stopTone()
                 if clearCallKit { CallKitManager.shared.reportEnded() }
@@ -1903,7 +1909,7 @@ final class CallService: NSObject {
 
         state = .ended
         // Keep the final state visible briefly (longer for the busy tone) before idle.
-        let idleDelay = (!localUser && (reason == .declined || reason == .busy)) ? 2.0 : 1.0
+        let idleDelay = (!localUser && reason == .busy) ? 2.0 : 1.0
         DispatchQueue.main.asyncAfter(deadline: .now() + idleDelay) {
             if self.state == .ended { self.state = .idle }
         }

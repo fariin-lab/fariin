@@ -1942,10 +1942,12 @@ struct ChatRow: View, Equatable {
         case "GIF":                  return ("sparkles", "GIF")
         case "📞 Missed call":         return ("phone.down.fill", "Missed call")
         case "📞 Call":                return ("phone.fill", "Call")
-        case "📞 Declined call":       return ("phone.down.fill", "Declined call")
+        // Legacy markers from before declines were removed from the log (2026-08-12): old
+        // conversations may still hold the string, but it must not SAY declined to anyone.
+        case "📞 Declined call":       return ("phone.down.fill", "Missed call")
         case "📹 Missed video call":   return ("video.slash.fill", "Missed video call")
         case "📹 Video call":          return ("video.fill", "Video call")
-        case "📹 Declined video call": return ("video.slash.fill", "Declined video call")
+        case "📹 Declined video call": return ("video.slash.fill", "Missed video call")
         default: return nil
         }
     }

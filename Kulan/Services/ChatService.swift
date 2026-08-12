@@ -1782,10 +1782,10 @@ enum ChatService {
         ]
         if uid == callerUid { fields["callDuration"] = durationSec }
         try? await msgRef.setData(fields, merge: true)
-        // "declined" is its own outcome now, so it must not fall through to the plain "Call" label.
+        // Declines write NO marker of their own (his 2026-08-12 order, WhatsApp parity): a rejected
+        // call records as missed everywhere, so callers can never tell a decline from a ring-out.
         let marker: String = {
-            if outcome == "declined" { return video ? "📹 Declined video call" : "📞 Declined call" }
-            if outcome == "missed"   { return video ? "📹 Missed video call"   : "📞 Missed call" }
+            if outcome == "missed" { return video ? "📹 Missed video call" : "📞 Missed call" }
             return video ? "📹 Video call" : "📞 Call"
         }()
         try? await convRef.setData([

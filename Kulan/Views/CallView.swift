@@ -100,7 +100,8 @@ struct CallView: View {
     private var endedText: String {
         switch call.endReason {
         case .busy:     return "Busy"
-        case .declined: return "Declined"
+        // A decline reads as a ring-out (WhatsApp parity, his order): rejections are never exposed.
+        case .declined: return "No answer"
         case .failed:   return "Call failed"
         case .missed:   return "No answer"
         default:        return "Call ended"

@@ -11,13 +11,13 @@ struct CallEntry: Identifiable, Hashable {
     let photoUrl: String?
     let otherUid: String
     let callerUid: String
-    let outcome: String     // answered | missed
+    let outcome: String     // answered | missed ("declined" exists only in legacy records and counts as missed)
     let video: Bool         // placed as a video call (old records default to voice)
     let durationSec: Int
     let date: Date
 
     var mine: Bool { callerUid == (Auth.auth().currentUser?.uid ?? "") }
-    var missed: Bool { outcome == "missed" }
+    var missed: Bool { outcome == "missed" || outcome == "declined" }
     /// Red/badge-worthy only when THEY called and I didn't pick up — my own
     /// unanswered outgoing call is just "Outgoing" (standard call-history rule).
     var missedIncoming: Bool { missed && !mine }

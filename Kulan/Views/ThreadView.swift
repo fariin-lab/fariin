@@ -3491,16 +3491,15 @@ struct ThreadView: View {
     // timestamp bottom-right. Tap anywhere to call back.
     private func callRow(_ m: Message) -> some View {
         let mine = m.callerUid == me
-        let missed = m.callOutcome == "missed"
+        // Legacy "declined" records (written before declines were removed from the log — his
+        // 2026-08-12 WhatsApp-parity order) render exactly as missed: the caller reads "No answer",
+        // the decliner reads the same red "Missed call" as an ignored ring.
+        let missed = m.callOutcome == "missed" || m.callOutcome == "declined"
         let video = m.callVideo
         // Call semantics (user spec): "Missed call" (red) is ONLY for calls I RECEIVED and didn't
         // answer. When I was the CALLER and nobody picked up, it's an outgoing call with "No answer" —
         // neutral colors, outgoing arrow — never red, never "tap to call back" (I was the one calling).
         let incomingMissed = missed && !mine
-        // A decline is its own outcome, never red and never "tap to call back": the person reading that
-        // row is the one who chose to reject it. Previously it was written as "missed", so declining a
-        // call put "Missed call · Tap to call back" in the decliner's own chat.
-        let declined = m.callOutcome == "declined"
         let statusText: String = {
             if video { return incomingMissed ? "Missed video call" : "Video call" }
             return incomingMissed ? "Missed voice call" : "Voice call"
@@ -3508,7 +3507,6 @@ struct ThreadView: View {
         let time = m.createdAt.formatted(date: .omitted, time: .shortened)
         // Second line: status + time, kept short so the bubble stays compact.
         let detail: String = {
-            if declined { return "Declined · \(time)" }
             if incomingMissed { return "Call back · \(time)" }   // short: the bubble wears the COMPACT width now
             if missed { return "No answer · \(time)" }            // MY unanswered outgoing call
             if let d = m.callDuration, d > 0 { return "\(callLogDuration(d)) · \(time)" }
