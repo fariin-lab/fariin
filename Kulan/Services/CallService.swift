@@ -1782,9 +1782,20 @@ final class CallService: NSObject {
     /// transaction that HANGS outright (dead socket, no completion at all) is bounded by the
     /// caller's accepted-connect timeout, which fails the call from the other side.
     private func writeAnswerWithRetry(ref: DocumentReference, data: [String: Any], attempt: Int) {
-        ref.firestore.runTransaction({ txn, _ -> Any? in
-            guard let snap = try? txn.getDocument(ref),
-                  (snap.data()?["status"] as? String) != "ended" else { return "ended" }
+        ref.firestore.runTransaction({ txn, errPtr -> Any? in
+            // ⚠️ A FAILED READ IS NOT "THE CALLER CANCELLED". The old `try?` collapsed the two, so
+            // one transient read hiccup returned success-with-no-writes, the retry path (which
+            // keys on `error`) never fired, and the answer was silently never written — the 2:47
+            // two-phone failure, proven from the live doc: offer, acceptedAt and 26 callee
+            // candidates all present (plain writes flowing), answer absent. Only a genuinely READ
+            // "ended" status may stand down; a read error must surface as an error and retry.
+            do {
+                let snap = try txn.getDocument(ref)
+                if (snap.data()?["status"] as? String) == "ended" { return "ended" }
+            } catch {
+                errPtr?.pointee = error as NSError
+                return nil
+            }
             txn.updateData(data, forDocument: ref)
             return nil
         }, completion: { [weak self] result, error in
@@ -1792,7 +1803,26 @@ final class CallService: NSObject {
             if (result as? String) == "ended" { return }   // caller cancelled — the end path owns this
             guard error != nil else { return }             // landed
             guard self.state == .active else { return }    // call already over — nothing to save
-            guard attempt < 3 else { self.endReason = .failed; self.hangUp(); return }
+            guard attempt < 3 else {
+                // LAST RESORT, evidence-driven: tonight's failures had plain writes working while
+                // the transaction path did not. Read once outside a transaction, then write plain.
+                // The race this reopens (caller cancels in the same instant) is milliseconds wide
+                // and its cost is a stale doc; the cost of NOT trying is a dead answered call.
+                ref.getDocument(source: .server) { [weak self] snap, _ in
+                    guard let self, self.state == .active else { return }
+                    if let d = snap?.data(), (d["status"] as? String) != "ended" {
+                        ref.updateData(data) { [weak self] err in
+                            guard let self, err != nil, self.state == .active else { return }
+                            self.endReason = .failed; self.hangUp()
+                        }
+                    } else if snap != nil {
+                        return   // genuinely ended — the end path owns it
+                    } else {
+                        self.endReason = .failed; self.hangUp()
+                    }
+                }
+                return
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 guard let self, self.state == .active else { return }
                 self.writeAnswerWithRetry(ref: ref, data: data, attempt: attempt + 1)
