@@ -346,8 +346,20 @@ public final class StoryCardMorph {
     /// — which is why it appeared intermittently rather than always.
     ///
     /// Nil until a card is registered; the host keeps its old estimate for that window only.
+    /// ⚠️ NIL UNTIL THE METRICS ARE REAL, AND THAT GUARD IS THE WHOLE VALUE OF THIS PROPERTY.
+    ///
+    /// `contentRect` falls back to `view.bounds` when the library has not reported `cardHeight` yet.
+    /// That fallback is right for the transform — it is better to crop nothing than to crop wrongly
+    /// — but it is POISON for a caller sizing a slot, because it is a full-screen height that later
+    /// becomes a content height. A slot derived from it changes width in the middle of the pull, and
+    /// the card visibly grows or shrinks as it flies: his report, and my own regression from the
+    /// black-band fix earlier the same day.
+    ///
+    /// So this answers only when it knows. A caller that gets nil keeps its own estimate, which is
+    /// stable, rather than being handed a number that is about to change.
     public var contentSize: CGSize? {
-        guard let card, card.bounds.width > 1 else { return nil }
+        guard let card, card.bounds.width > 1,
+              cardHeight > 1, cardTop + 1 < card.bounds.height else { return nil }
         return contentRect(in: card).size
     }
 

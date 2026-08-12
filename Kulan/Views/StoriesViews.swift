@@ -741,6 +741,22 @@ struct StoryViewer: View {
     /// the story fade rather than sit there at full size under the sheet. See `driveMorph`.
     @State private var morphUnavailable = false
 
+    /// THE STORY'S CONTENT RECTANGLE, CAPTURED ONCE PER PULL AND HELD FOR IT.
+    ///
+    /// ⚠️ IT IS LATCHED BECAUSE A SLOT MUST NOT MOVE WHILE SOMETHING IS SHRINKING INTO IT.
+    ///
+    /// `cardSlot` sizes the card against this. Read live from the morph it is not a constant: the
+    /// library reports its metrics part way through the pull, so the first frames were measured
+    /// against a full-screen height and the rest against the real content height. The card therefore
+    /// changed size in mid-flight, which is his "sometimes too tall, sometimes too short" — and it
+    /// was my own regression from the black-band fix, which replaced a stable wrong number with an
+    /// accurate moving one. It needs to be accurate AND stable, which is what a latch buys.
+    ///
+    /// Nil means "not known yet"; `cardSlot` then uses its screen-derived estimate, which is stable
+    /// for the same reason. Cleared when the sheet goes, so the next sitting measures afresh rather
+    /// than inheriting a rectangle from a story with a different footer.
+    @State private var latchedContent: CGSize?
+
     // MARK: - The hero transition's live state
     //
     /// A CLASS, not `@State` scalars, and this is the whole reason the card can keep up with a
@@ -1271,6 +1287,10 @@ struct StoryViewer: View {
             carouselInteracting = false
             sheetPaging = false
             pageDragBox.value = 0
+            // The measured rectangle belongs to the sitting that just ended. A story with an owner
+            // footer and one without do not share a content height, so carrying it into the next
+            // open would size the card against the wrong story.
+            latchedContent = nil
             // Same rule as driveMorph: a hero flight owns the card and this teardown must not
             // reset it out from under one.
             guard !hero.live else { return }
@@ -1887,7 +1907,18 @@ struct StoryViewer: View {
         //
         // Reading the morph's own rectangle removes the second copy instead of correcting it. The
         // old estimate stays as the fallback for the frames before a card is registered.
-        let content = StoryCardMorph.shared.contentSize
+        // ⚠️ LATCHED, NOT READ LIVE — and this is the second half of the fix.
+        //
+        // Reading the morph directly here made the slot a moving target: the metrics arrive part way
+        // through the pull, so the card was sized against a full-screen height for the first frames
+        // and against the real content height afterwards. The card grew or shrank as it flew, which
+        // is his "sometimes too tall, sometimes too short". A slot has to be ONE rectangle for the
+        // whole of a pull or the thing shrinking into it cannot be still.
+        //
+        // `latchedContent` is captured once at the start of each pull (see `driveMorph`) and held
+        // for that sitting. Nil falls back to the old estimate, which is stable for the same reason
+        // — it is a pure function of the screen.
+        let content = latchedContent
         let contentW = content?.width ?? scr.width
         let contentH = content?.height
             ?? (scr.height - (currentIsMine ? Self.ownerFooterHeight + max(10, bottomInset) : 0))
@@ -2809,6 +2840,18 @@ struct StoryViewer: View {
             return
         }
         if morphUnavailable { morphUnavailable = false }
+        // ⚠️ CAPTURE THE CONTENT RECTANGLE ONCE, AT THE TOP OF THE PULL, AND NOT AGAIN.
+        //
+        // The morph answers nil until the library's metrics are real, so the first frames of a pull
+        // may find nothing and keep the screen-derived estimate. The moment a real answer exists it
+        // is latched for the rest of this sitting — `cardSlot` must not be re-measured under a card
+        // that is already flying, or the slot moves and the card changes size in the air.
+        //
+        // Written only while the pull is still near the bottom. Past that the card is committed to a
+        // shape and a late arrival would be exactly the jump this exists to prevent.
+        if latchedContent == nil, p < 0.25, let real = StoryCardMorph.shared.contentSize {
+            latchedContent = real
+        }
         // BELOW THE CAROUSEL'S PLATEAU THE LIVE CARD MUST BE VISIBLE, whatever the row's scroller
         // thinks. The hide (`setHidden(true)`) belongs to the copy-swap, and the copy fades out
         // WITH the carousel under p≈0.9 — so a collapse drag that had also tickled the row's pan,
