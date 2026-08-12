@@ -99,7 +99,7 @@ final class StoryVideoSession {
     /// a player part-way through a clip.
     func bind(_ v: StoryItemVideoView) {
         view = v
-        claim(v.storyKey)
+        takeClaim(v.storyKey)
         v.apply(mode: mode)
     }
 
@@ -143,7 +143,10 @@ final class StoryVideoSession {
     /// finds nothing.
     private var finishedPending = false
 
-    private func claim(_ url: String) {
+    /// ⚠️ NOT NAMED `claim`, DELIBERATELY. There is a stored property called `claim` on this type, and
+    /// a method sharing its base name is the kind of thing that reads fine and then costs a
+    /// forty-minute build round trip to a resolution error. There is no local compiler here.
+    private func takeClaim(_ url: String) {
         guard claim != url else { return }
         claim = url
         timestamp = 0
