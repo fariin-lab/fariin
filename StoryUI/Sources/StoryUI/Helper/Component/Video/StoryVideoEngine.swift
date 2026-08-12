@@ -433,14 +433,46 @@ enum StoryItemViewStore {
         // complaint this mechanism exists to end.
         for view in live.allObjects where view.storyKey == key {
             let t = view.currentSecond
-            if t > 0 { return t }
+            if t > 0 {
+                // Remembered on the way past, so the answer outlives the view that gave it.
+                lastSecond[key] = t
+                return t
+            }
         }
-        return nil
+        // ⚠️ AND WHEN NO VIEW IS LEFT, THE SECOND STILL IS. THIS IS HIS "AT 3 IT RESETS".
+        //
+        // `capacity` is 3. Swipe the row far enough and this clip's view is evicted or falls out of
+        // the window, so the loop above finds nothing, the card gets nil, and it falls back to the
+        // poster — which for a video is the upload cover at second zero. That is the reset he
+        // photographed, and the number in his report is the number on that constant.
+        //
+        // The reference app never shows it because it has nothing to lose: a non-central item there
+        // builds no video node and draws a static cover, the same picture at every distance. Ours
+        // draws the frame at the second the clip was paused on, which he has had fixed twice and
+        // will not give up — so the SECOND has to survive what the VIEW does not.
+        //
+        // That is exactly what `StoryContentItem.SharedState` is for in their architecture: state
+        // deliberately held outside the item so it survives the item's destruction. This is that,
+        // for the one value we need it for. It is a `Double` per story, so keeping every clip in the
+        // session costs nothing, and a frame regenerated from the file at a remembered second is
+        // identical to one generated while the player was alive — the generator reads the FILE, not
+        // the player (see `StoryVideoFrames`).
+        return lastSecond[key]
     }
+
+    /// WHERE A CLIP WAS PAUSED, KEPT ALIVE ACROSS THE VIEW THAT KNEW IT.
+    ///
+    /// Cleared with the rest of the session in `releaseAll`, so it can never answer about a sitting
+    /// that has ended — which would be the frozen-cover family arriving from a new direction.
+    private static var lastSecond: [String: Double] = [:]
 
     static func releaseAll() {
         let all = kept
         kept.removeAll()
+        // The remembered seconds die with the sitting they describe. Left standing they would send
+        // a card back to where a clip was paused in a session that is over, which is the frozen
+        // cover arriving from a new direction — see `lastSecond`.
+        lastSecond.removeAll()
         all.forEach { $0.view.teardown() }
     }
 }
