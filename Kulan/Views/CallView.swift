@@ -383,6 +383,13 @@ struct CallView: View {
         let bottomPad = safeBottom + (controlsVisible ? 132 : 12)
         let maxLeft = -(geo.size.width - tileW - 24)
         let maxUp = -max(0, geo.size.height - tileH - (winInsets.top + 60) - bottomPad)
+        // A dragged offset was stored against ONE set of bounds, and the bounds move when the
+        // chrome toggles — the tile grows and its home rises. Clamp at DISPLAY time (his 544
+        // report: park the card at the top by hand, tap the screen, and the grown card slid off
+        // the top edge). The STORED offset survives untouched, so hiding the chrome returns the
+        // card to exactly where he parked it.
+        let shownOffset = CGSize(width: max(maxLeft, min(0, pipOffset.width)),
+                                 height: max(maxUp, min(0, pipOffset.height)))
         // THE TILE BELONGS TO THE CALL, NOT TO A LIVE CAMERA. It used to vanish the moment that camera
         // went off, which left an empty corner and — because the tile is also the tap target for the
         // swap — took the only way back with it. Now it stays, holding that person's photo instead of
@@ -417,7 +424,7 @@ struct CallView: View {
                     }
                 }
                 .shadow(color: .black.opacity(tileEntering ? 0 : 0.45), radius: 14, y: 5)
-                .offset(tileEntering ? .zero : pipOffset)
+                .offset(tileEntering ? .zero : shownOffset)
                 // Drag (min 10pt) repositions the window; a tap (no move) swaps the feeds.
                 .highPriorityGesture(
                     DragGesture(minimumDistance: 10)
