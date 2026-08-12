@@ -700,16 +700,16 @@ struct FloatingCallWindow: View {
                 .gesture(
                     DragGesture(minimumDistance: 8)
                         .onChanged { v in
-                            let (maxLeft, maxDown) = limits(geo.size)
+                            let (maxLeft, maxUp) = limits(geo.size)
                             offset = CGSize(
                                 width: min(0, max(maxLeft, base.width + v.translation.width)),
-                                height: min(maxDown, max(0, base.height + v.translation.height))
+                                height: max(maxUp, min(0, base.height + v.translation.height))
                             )
                         }
                         .onEnded { _ in
-                            let (maxLeft, maxDown) = limits(geo.size)
+                            let (maxLeft, maxUp) = limits(geo.size)
                             let x: CGFloat = offset.width < maxLeft / 2 ? maxLeft : 0
-                            let y: CGFloat = offset.height > maxDown / 2 ? maxDown : 0
+                            let y: CGFloat = offset.height < maxUp / 2 ? maxUp : 0
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
                                 offset = CGSize(width: x, height: y)
                             }
@@ -719,23 +719,27 @@ struct FloatingCallWindow: View {
                 .onTapGesture {
                     withAnimation(.easeInOut(duration: 0.25)) { call.minimized = false }
                 }
-                .padding(.top, insets.top + 8)
+                // BOTTOM corner home (owner's 2026-08-12 rule, same as the call-screen tile and the
+                // system PiP): the floating card rests bottom-trailing, above the tab pill.
+                .padding(.bottom, insets.bottom + 76)
                 .padding(.trailing, 12)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         }
         .ignoresSafeArea()
     }
 
-    // How far the window may travel from its top-right resting place.
+    // How far the window may travel from its bottom-right resting place (left, and UP as negative).
     private func limits(_ size: CGSize) -> (CGFloat, CGFloat) {
         let maxLeft = -(size.width - w - 24)
-        let maxDown = max(0, size.height - h - (insets.top + 8) - insets.bottom - 8)
-        return (maxLeft, maxDown)
+        let maxUp = -max(0, size.height - h - (insets.top + 8) - (insets.bottom + 76))
+        return (maxLeft, maxUp)
     }
 
     private var window: some View {
         let feeds = call.pipFeeds
-        return ZStack(alignment: .topTrailing) {
+        // bottomTrailing: the self-tile inside this card sits in the BOTTOM corner, matching the
+        // call screen and the system PiP (owner's 2026-08-12 rule — the tile's home is the bottom).
+        return ZStack(alignment: .bottomTrailing) {
             Color.black
             if let big = feeds.big {
                 VideoRendererView(track: big, mirror: feeds.mirrorBig)
