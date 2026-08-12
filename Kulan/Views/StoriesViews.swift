@@ -1536,6 +1536,51 @@ struct StoryViewer: View {
             // already shrunken.
             StoryCardMorph.shared.reset()
         }
+        // ⚠️ NAVIGATE THE MOMENT THE CENTRED CARD CHANGES. THE JUMP IS NOT DEFERRED ANY MORE.
+        //
+        // Read from their `scrollViewDidScroll` (`:1372-1387`), which is the rule this viewer never
+        // had:
+        //
+        //     if contentScaleFraction >= 1.0 - 0.0001 {
+        //         var index = Int(round(contentOffset.x / fullItemScrollDistance))
+        //         if index != currentIndex { component.navigate(.id(nextId)) }
+        //     }
+        //
+        // They move the story WHILE the row scrolls, as soon as the rounded index changes. The
+        // consequence is the invariant this area has been missing: the centred card and the story
+        // the viewer is on are never different things, so nothing ever has to be positioned as
+        // though they were. Their `:5236-5240` closes the other side of it — with the sheet down the
+        // scroller is FORCED onto the central item rather than left wherever it was.
+        //
+        // Ours deferred the jump to the sheet's close (`rowIsOnAnotherStory`, spent in
+        // `settleViewers`). That was survivable while the live card was pinned to the centre and
+        // hidden behind a copy during a swipe; it stopped being survivable when the live card
+        // started being laid out by the row, because a deliberate disagreement between the row and
+        // the central item becomes a card sitting one or two whole slots off centre. That is his
+        // report, and this is its cause rather than its symptom.
+        //
+        // ⚠️ THIS CANNOT MAKE THE LIVE LAYER TELEPORT, and the arithmetic is worth stating. At full
+        // pull `rowPosition` is `scroll - pageDrag` and the central index drops out of it entirely
+        // (their `effectiveScrollingOffsetX` reduces to the scroller's own offset at fraction 1). So
+        // when the live story flips from index 1 to index 2 half way through a swipe, story 1 keeps
+        // the place it already had — drawn by the row now instead of by the live layer — and story 2
+        // appears where it already was, drawn by the live layer instead of by the row. Identical
+        // geometry on both sides of the swap, which is the whole one-picture-per-story property.
+        //
+        // The row only reports a change on a ROUNDED index (`onChange(of: index)`), so this fires
+        // once per card crossed rather than once per frame, exactly as theirs does. And the story is
+        // paused for the whole life of the sheet, so moving through items here spends no views —
+        // see the note on `onItemChanged` versus the seen receipt.
+        .onChange(of: sheetStoryId) { _, id in
+            guard showViewers, !id.isEmpty, id != currentStoryId else { return }
+            NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: id)
+            // The anchor moves in the same breath, for the reason spelled out at the close's own
+            // jump: `currentStoryId` is written by a receipt the library WITHHOLDS while a story is
+            // paused, and the story is paused for the whole life of this sheet. Waiting for it would
+            // leave `targetStoryId` naming the story we just left — which is the id the row blanks
+            // and the id the live card is positioned by.
+            currentStoryId = id
+        }
         // SELF-HEALING for a PARKED sheet (user video: sheet resting at ~73% open — story stuck
         // as a giant half-morphed card, carousel never faded in). Two ways to get parked: a
         // system-CANCELLED drag skips onEnded so no snap ever fires, and a stray touch during
