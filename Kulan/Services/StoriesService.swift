@@ -140,6 +140,27 @@ struct StoryViewerInfo: Identifiable {
     let reaction: String?
 }
 
+/// WHAT THE OWNER'S FOOTER ACTUALLY NEEDS: a number, a number of hearts, and three faces.
+///
+/// The reference app's story object carries exactly this down with the story (`seenCount`,
+/// `reactedCount`, a few recent peers) and asks for the LIST only when the list is opened. Ours had
+/// no such thing, so every appearance of that one number read every viewer receipt on the story.
+/// See `StoriesService.fetchViewSummary` and the `onStoryViewWritten` trigger that maintains it.
+struct StoryViewSummary {
+    var count: Int
+    var reactionCount: Int
+    /// Up to three, newest first. Faces only — the sheet is where a viewer becomes a row with a
+    /// time and a reaction on it.
+    var recent: [StoryViewerInfo]
+
+    /// The same summary worked out the old way, for a story whose counter does not exist yet.
+    static func counted(from viewers: [StoryViewerInfo]) -> StoryViewSummary {
+        StoryViewSummary(count: viewers.count,
+                         reactionCount: viewers.filter { !($0.reaction ?? "").isEmpty }.count,
+                         recent: Array(viewers.prefix(3)))
+    }
+}
+
 @Observable
 final class StoriesService {
     static let shared = StoriesService()
@@ -868,6 +889,38 @@ final class StoriesService {
         try? await db.collection("stories").document(story.id)
             .collection("views").document(me)
             .updateData(["reaction": FieldValue.delete()])
+    }
+
+    /// THE COUNT WITHOUT THE LIST — one small document instead of every viewer receipt.
+    ///
+    /// The footer needs three things: how many, how many reacted, and three faces. Reading the whole
+    /// `views` subcollection to work them out is what this replaces; `onStoryViewWritten` keeps this
+    /// document, and `stories/{id}/meta` is readable by the author alone (see firestore.rules).
+    ///
+    /// Nil means "no counter for this story", which is a normal answer rather than an error: every
+    /// story posted before the trigger existed has none, and the caller falls back to counting the
+    /// receipts as it always did.
+    func fetchViewSummary(storyId: String) async -> StoryViewSummary? {
+        guard !uid.isEmpty else { return nil }
+        // Reciprocal, exactly as `fetchViewers` is: with receipts off you do not see who watched
+        // yours, and a count is who watched yours with the names taken off.
+        guard UserDefaults.standard.object(forKey: "storyViewReceipts") as? Bool ?? true else { return nil }
+        let snap = try? await db.collection("stories").document(storyId)
+            .collection("meta").document("views").getDocument()
+        guard let data = snap?.data(), let count = data["count"] as? Int else { return nil }
+        let recentUids = (data["recent"] as? [String] ?? []).prefix(3)
+        let (convs, me) = await MainActor.run { (ConversationsRepository.shared.conversations, uid) }
+        // Same resolution as `fetchViewers`, so a face in the footer and the same face in the sheet
+        // cannot come out differently named. `viewedAt` is not carried: the footer never shows a
+        // time, and inventing one here would put a wrong time on the sheet if these ever merged.
+        let recent = recentUids.map { u -> StoryViewerInfo in
+            let c = convs.first { $0.otherUid(me) == u }
+            return StoryViewerInfo(id: u, name: c?.name(for: me) ?? "Someone",
+                                   photoUrl: c?.photoUrl(for: me), viewedAt: Date(), reaction: nil)
+        }
+        return StoryViewSummary(count: count,
+                                reactionCount: data["reactionCount"] as? Int ?? 0,
+                                recent: Array(recent))
     }
 
     // Who viewed a story I posted (author-only per rules) → for the "Seen by" sheet.

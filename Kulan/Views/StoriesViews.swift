@@ -521,7 +521,9 @@ struct StoryViewer: View {
     // Owner controls (my own story): Views/reactions/delete bar instead of the reply bar.
     @State private var currentBucketUid = ""
     @State private var currentStoryId = ""
-    @State private var barViewers: [StoryViewerInfo] = []
+    /// The footer's numbers for the story on screen. Nil until this story's own answer lands — see
+    /// `loadBarViewers`, which is careful never to paint one story's numbers under another.
+    @State private var barViewers: StoryViewSummary?
     @State private var showViewers = false
     @State private var viewersProgress: CGFloat = 0   // 0 sheet closed … 1 open; drives BOTH layers
     @State private var openDragging = false           // kept: read by the storyLayer opacity/hit-test
@@ -663,7 +665,7 @@ struct StoryViewer: View {
     /// back and forth repainted "0 Views" each way — half of his "the count comes late". Keyed by
     /// story id, which is the whole safety argument: an entry can only ever be shown for the story it
     /// was fetched for. Dies with the viewer, so a count is never older than this sitting.
-    @State private var viewersByStory: [String: [StoryViewerInfo]] = [:]
+    @State private var viewersByStory: [String: StoryViewSummary] = [:]
     /// Whether `prefetchMyStoryCounts` has already swept this viewing.
     @State private var prefetchedCounts = false
 
@@ -3206,7 +3208,9 @@ struct StoryViewer: View {
     // Owner bar: overlapping viewer avatars + "N Views" + ❤️ reactions (tap → sheet) + delete.
     // Views/reactions/delete controls, shared by the gradient overlay bar and the solid footer.
     private var ownerControls: some View {
-        let reactions = barViewers.filter { !($0.reaction ?? "").isEmpty }.count
+        let faces = barViewers?.recent ?? []
+        let total = barViewers?.count ?? 0
+        let reactions = barViewers?.reactionCount ?? 0
         // EVERY SELECTED VIEWER HAS USED THEIR ONE VIEW (owner 2026-08-07: "when all selected users
         // have viewed the story once, show Once Viewer Is Full to me").
         //
@@ -3220,9 +3224,9 @@ struct StoryViewer: View {
         return HStack(spacing: 12) {
             Button { openViewers() } label: {
                 HStack(spacing: 8) {
-                    if !barViewers.isEmpty {
+                    if !faces.isEmpty {
                         HStack(spacing: -8) {
-                            ForEach(barViewers.prefix(3)) { v in
+                            ForEach(faces) { v in
                                 AvatarView(name: v.name, photoUrl: v.photoUrl, size: 26)
                                     .overlay(Circle().stroke(.black, lineWidth: 1.5))
                             }
@@ -3235,7 +3239,7 @@ struct StoryViewer: View {
                     // already holds avatars, a count, hearts and the bin, and for a one-time story
                     // "everybody has seen it" and "N views" are the same sentence twice.
                     Text(oneTimeFull ? "Once viewer is full"
-                                     : "\(barViewers.count) View\(barViewers.count == 1 ? "" : "s")")
+                                     : "\(total) View\(total == 1 ? "" : "s")")
                         .font(.subheadline.weight(.medium)).foregroundStyle(.white)
                         .lineLimit(1)
                     if reactions > 0 {
@@ -3323,8 +3327,8 @@ struct StoryViewer: View {
         let mine = myStories
         guard !mine.isEmpty else { return }
         Task {
-            await withTaskGroup(of: (String, [StoryViewerInfo]).self) { group in
-                for s in mine { group.addTask { (s.id, await StoriesService.shared.fetchViewers(storyId: s.id)) } }
+            await withTaskGroup(of: (String, StoryViewSummary).self) { group in
+                for s in mine { group.addTask { (s.id, await Self.viewSummary(storyId: s.id)) } }
                 for await (id, v) in group {
                     viewersByStory[id] = v
                     // The one on screen paints as soon as ITS answer lands, whichever order they
@@ -3343,7 +3347,7 @@ struct StoryViewer: View {
         // and come back, and the footer painted with the old bucket's viewers for the first frames.
         // An empty footer for a moment is honest; somebody else's numbers are not.
         guard currentIsMine, !currentStoryId.isEmpty else {
-            if !barViewers.isEmpty { barViewers = [] }
+            if barViewers != nil { barViewers = nil }
             return
         }
         let id = currentStoryId
@@ -3358,13 +3362,24 @@ struct StoryViewer: View {
             // Tapping back and forth through your own stories, and re-opening the viewer, both used
             // to repaint "0 Views" for a Firestore round trip every single time. Now only a story
             // nobody has asked about yet waits, and the refresh below still lands over the top.
-            barViewers = viewersByStory[id] ?? []
+            barViewers = viewersByStory[id]
         }
         Task {
-            let v = await StoriesService.shared.fetchViewers(storyId: id)
+            let v = await Self.viewSummary(storyId: id)
             viewersByStory[id] = v
             if id == currentStoryId { barViewers = v }
         }
+    }
+
+    /// THE COUNTER FIRST, THE RECEIPTS ONLY IF THERE IS NO COUNTER.
+    ///
+    /// `stories/{id}/meta/views` is one small document the server keeps, and it is what the reference
+    /// app's story object carries down with the story rather than fetching. Every story posted before
+    /// that trigger existed has none, and those still count their receipts the old way — so this
+    /// answers correctly during the whole changeover and there is no migration to run.
+    private static func viewSummary(storyId: String) async -> StoryViewSummary {
+        if let s = await StoriesService.shared.fetchViewSummary(storyId: storyId) { return s }
+        return .counted(from: await StoriesService.shared.fetchViewers(storyId: storyId))
     }
 
 }

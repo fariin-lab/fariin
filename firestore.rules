@@ -1007,6 +1007,25 @@ service cloud.firestore {
       allow delete: if signedIn()
         && (request.auth.uid == resource.data.authorUid || adminCan('moderate'));
 
+      // THE VIEW COUNT, KEPT BY THE SERVER, READ BY THE AUTHOR ALONE.
+      //
+      // The footer used to fetch every document in `views` — full receipts, names resolved — to
+      // draw one number, for every one of your stories, every time the viewer opened. The reference
+      // app never does that: its story object carries the counts down with the story and the LIST is
+      // a separate request made only when you open it. `onStoryViewWritten` maintains this document;
+      // the client only reads it.
+      //
+      // ⚠️ A SUBCOLLECTION DOCUMENT RATHER THAN A FIELD ON THE STORY, AND THAT IS THE PRIVACY HALF.
+      // The story document is readable by every recipient, so a counter living on it would tell each
+      // of them how many other people had watched — which no comparable app shows, and which the
+      // `views` read rule below deliberately refuses today. Here it is the author's alone.
+      //
+      // NO CLIENT WRITE OF ANY KIND. A counter a viewer can write is a counter a viewer can invent,
+      // and the trigger runs with admin credentials, which these rules do not apply to.
+      match /meta/{docId} {
+        allow read: if signedIn() && request.auth.uid == storyData().authorUid;
+      }
+
       // A recipient records they viewed it; the author can read the viewer list.
       match /views/{viewerUid} {
         allow read: if signedIn() && (
