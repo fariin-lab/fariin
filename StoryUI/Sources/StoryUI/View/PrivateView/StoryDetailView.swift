@@ -659,6 +659,11 @@ struct StoryDetailView: View {
                 // open, where `onChange(of: currentStoryUser)` never fires at all.
                 isFolding = false
             }
+            // ⚠️ THE FIRST OPEN IS THE ONE PATH `onChange(of: currentStoryUser)` NEVER COVERS, and
+            // the mode has to reach the item from somewhere or the first story of a session would
+            // sit on its cover. The video content's own `.onAppear` also asks, so this is the belt
+            // for the ordering where the page appears before its media view does.
+            syncVideoMode()
         }
         .onReceive(timer) { _ in
             startProgress()
@@ -756,8 +761,20 @@ struct StoryDetailView: View {
                   let id = note.object as? String,
                   let idx = model.stories.firstIndex(where: { $0.id == id }),
                   idx != getCurrentIndex() else { return }
-            // A video landed on this way restarts from zero like every other return, so the bar
-            // starts the segment exactly where the player will: at its beginning.
+            // ⚠️ THIS IS THE ONE RETURN THAT DOES **NOT** RESTART AT ZERO, AND THE BAR HAS TO AGREE.
+            //
+            // Every other way back to a story builds a new player, which begins at zero. This one
+            // happens while the viewers sheet is collapsed, and while it is collapsed the item views
+            // are RETAINED — so swiping the sheet's cards away and back hands the story its own
+            // player, still paused exactly where it was. That is the owner's rule ("normal viewing
+            // restarts, the sheet preserves") and it is the reference app's collapsed behaviour.
+            //
+            // The integer part is what SELECTS the item, so it is written plainly here and the
+            // fraction is left to `syncBarToPlayer`, which reads the item's own player on the next
+            // tick and draws where that clip actually is. Computing the fraction here would be
+            // arithmetic on a claim the arriving view has not made yet — the session still names the
+            // story being left at this instant — so it could only ever be the wrong number, dressed
+            // up as care.
             timerProgress = CGFloat(idx)
         }
         // Seamless per-item delete (host trash tap). Compute the adjacent index FIRST, then drop the item from
@@ -1785,12 +1802,22 @@ private extension StoryDetailView {
         // The finger, the host (sheet, dismiss drag, hero flight), the scene, the keyboard.
         if isPaused || isHolding || hostPause.paused || scenePaused { return .pause }
         if keyboardManager.isKeyboardOpen { return .pause }
-        // Mid-cube-fold and mid-dismiss are both "not really on screen yet".
-        if isFolding || isDismissing { return .pause }
         // An emoji reaction animation pauses the story, which is what `configureProgress` did.
         if isAnimationStarted { return .pause }
         return .play
     }
+
+    // ⚠️ `isFolding` IS DELIBERATELY NOT AN INPUT HERE, AND ADDING IT WOULD REVIVE A FIXED BUG.
+    //
+    // It comes from a `GeometryReader` position snapshot, and a GeometryReader re-evaluates on SIZE,
+    // not on POSITION — so the snapshot can latch true for a page that is perfectly centred and
+    // never update. That is the "story opens paused" report, and the fix was to make the fold gate
+    // apply only to a page that is NOT current (see `startProgress`). The first line above already
+    // pauses every non-current page, so `isFolding` could add nothing except the old bug back.
+    //
+    // `isDismissing` is out for a milder version of the same reason: it is a plain property fed by
+    // the pager, the dismiss path already posts `pauseStory`, and a flag that strands true would
+    // mean a story that never plays again. Nothing here should be able to silence a story for good.
 
     /// Re-take the decision and hand it to the item. Cheap and safe to call from anywhere, and every
     /// former `playVideo()` / `pauseVideo()` call site now calls this instead.

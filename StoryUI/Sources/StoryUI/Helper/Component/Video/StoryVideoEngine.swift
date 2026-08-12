@@ -363,6 +363,19 @@ public enum StoryVideoFrames {
         return nil
     }
 
+    /// START GENERATING THE FRAME FOR THIS SECOND NOW, because whoever will want it has not asked
+    /// yet and would otherwise wait on a decode. Called from the pause, which is the moment the
+    /// viewers sheet freezes a story — see `StoryItemVideoView.apply(mode:)`.
+    ///
+    /// Idempotent: a second call for the same second finds the frame cached or its decode already
+    /// running, and starts nothing.
+    static func warm(_ url: URL, at second: Double) {
+        guard second > 0.2 else { return }
+        let k = key(url, second)
+        guard full.object(forKey: k as NSString) == nil else { return }
+        generate(url, at: second, key: k)
+    }
+
     /// THE COVER THE CLIP IS ABOUT TO HAND OVER TO — second zero, because playback always begins
     /// there. Used behind the video while it loads, for a clip whose poster is missing (the window
     /// between a story doc being written and its `thumb.jpg` upload finishing, and anything posted

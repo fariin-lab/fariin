@@ -205,6 +205,18 @@ final class StoryItemVideoView: UIView {
                 player.play()
             } else {
                 player.pause()
+                // ⚠️ THE CARD'S PICTURE IS STARTED HERE, AT THE PAUSE, AND NOT WHEN A CARD ASKS.
+                //
+                // Generating it is a decode off the main thread, so a card that asks and waits shows
+                // its poster for the first fifty milliseconds — and a poster for a video is second
+                // zero, which is exactly the "the moment it leaves centre it reverts to the upload
+                // cover" report this whole area has been failing on. Half a solved bug looks
+                // identical to the bug.
+                //
+                // Pausing IS the moment the sheet comes up over a story, so the frame is in hand
+                // before the first swipe can ask for it. Idempotent and cheap: a second call for the
+                // same second finds it cached and starts nothing.
+                StoryVideoFrames.warm(storyURL, at: currentSecond)
             }
         }
         initializeVideoIfReady()
