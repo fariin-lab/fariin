@@ -3542,23 +3542,25 @@ struct ThreadView: View {
         return HStack(spacing: 0) {
             if mine { Spacer(minLength: 60) }
             // No flexible Spacer inside -> the bubble hugs its content (compact, not a banner).
-            // The reference's HEFT, our layout — his side-by-side: ours read as thin next to their
-            // call bubble. Same structure, one size up across the board: title 15→17, detail
-            // 12→14, the icon disc 34→40, and the padding to carry it.
+            // SIZE HISTORY, third calibration (do not relitigate without his word): first cut was
+            // thin (15/12/34), his side-by-side bumped it one size up (17/14/40, ~62pt tall), and
+            // on 2026-08-12 he called that "long" against his 544 screenshots — now one notch back
+            // down on the HEIGHT pieces only (title 16, detail 13, disc 34, vertical 8 → ~50pt
+            // tall) while the 232 width stays, which was his separate, explicit choice.
             HStack(alignment: .center, spacing: 11) {
                 ZStack {
-                    Circle().fill(circleBg).frame(width: 40, height: 40)
+                    Circle().fill(circleBg).frame(width: 34, height: 34)
                     Image(systemName: iconName)
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(iconColor)
                 }
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(statusText)
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(mine ? Color.white : .primary)
                         .lineLimit(1)
                     Text(detail)
-                        .font(.system(size: 14))
+                        .font(.system(size: 13))
                         .foregroundStyle(mine ? Color.white.opacity(0.75) : .secondary)
                         .lineLimit(1)
                 }
@@ -3569,7 +3571,7 @@ struct ThreadView: View {
             // subtitle shortened to fit ("Tap to call back" → "Call back"). 204 + 28 padding =
             // 232 total, the tidy small bubble from his photo, worn by every call row.
             .frame(width: 204, alignment: .leading)
-            .padding(.vertical, 11).padding(.horizontal, 14)
+            .padding(.vertical, 8).padding(.horizontal, 14)
             .background(mine ? myBubbleFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             // Tap target is ONLY the bubble — NOT the full-width row. The old .contentShape/
