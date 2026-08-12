@@ -249,46 +249,59 @@ final class ThreadRepository {
         }
     }
 
-    /// WHERE A MESSAGE SITS. Every message, from every person, expressed on ONE clock.
+    /// WHERE A MESSAGE SITS — one key per message, assigned ONCE and kept for the repo's lifetime.
     ///
-    /// ⚠️ THIS IS THE FIX FOR HIS "MY MESSAGE WENT ABOVE HIS" REPORT. The old rule sorted by the
-    /// sender's own tap time, which meant a two-person conversation was ordered by comparing HIS phone's
-    /// clock against his friend's. Two handsets a few seconds apart is all it takes to swap two messages
-    /// sent at the same moment, and the server's timestamp — the one clock both people actually share —
-    /// was written on every message and then ignored.
+    /// ⚠️ THIS REPLACES THE CLOCK-OFFSET PROJECTION (his build-542 screenshots: an incoming message
+    /// landing in the MIDDLE of a pair he had already sent). The projection corrected each person's
+    /// tap time by an ESTIMATE of their clock error, and that estimate is off by the network jitter
+    /// of the very messages it is measured from — a second or two. Two phones chatting fast live
+    /// inside that jitter, so an incoming message could still sort between two messages the server
+    /// had stamped in order. The server's stamp is the one clock both phones share; between two
+    /// people it decides, with no arithmetic on top. (Telegram orders by server sequence, full stop.)
     ///
-    /// Signal does not have this bug because they never compare two devices: their conversation queries
-    /// all order by `date_received`, which is `System.currentTimeMillis()` on the phone you are holding,
-    /// for outgoing messages as well as incoming. One clock, theirs. We cannot copy that literally —
-    /// they own a local database and write a row the moment a message lands, while we are handed a
-    /// server timestamp and no arrival time, and a reinstall would have no arrival times at all.
-    ///
-    /// So the one clock here is the SERVER'S, and every message is projected onto it. The projection
-    /// costs nothing to send: a message already carries its sender's tap time AND the server's, so the
-    /// gap between them IS that sender's clock error, sitting in the data. Add it back and everyone
-    /// lands on the same timeline.
-    ///
-    /// ⚠️ AND THE TAP TIME MUST STAY IN THE ANSWER — do not "simplify" this to plain `createdAt`. Tap
-    /// time is what keeps a photo that took thirty seconds to upload ABOVE a text sent five seconds
-    /// after it, instead of dropping below when the upload lands. Correcting the tap time preserves that
-    /// within each person while fixing the comparison between people. Plain server order throws it away.
-    func orderKey(_ m: Message) -> Date {
-        let offset = clockOffset[m.authorId]
-        if let tap = m.clientTs {
-            if let offset { return tap.addingTimeInterval(offset) }
-            // No sample for this author yet. A stamped message can speak for itself; an unstamped one
-            // only has its own clock, which for MY messages is the right clock anyway.
-            return m.hasServerTime ? m.createdAt : tap
+    /// The rules, in order:
+    /// 1. A message that HAS a server stamp when first seen takes the stamp as its key.
+    /// 2. Within one author the keys are forced monotonic in TAP order (the `runningMax` clamp): a
+    ///    photo that uploads slowly keeps its place above a text typed after it, even though the
+    ///    text's stamp is earlier. ⚠️ Do not "simplify" the clamp away — it IS the photo rule.
+    /// 3. A message still in flight gets its tap time projected by its author's measured offset —
+    ///    the only place the estimate survives, because an unstamped row has nothing better.
+    /// 4. A key is STICKY: once a rowId has one it never changes while this repo lives, so a bubble
+    ///    never moves on screen when its ack lands (`rowId` is `clientId ?? id`, so the server echo
+    ///    inherits the pending row's key). A fresh open recomputes from stamps — true server order.
+    private var stickyOrderKey: [String: Date] = [:]
+
+    private func assignOrderKeys<C: Collection>(_ msgs: C) where C.Element == Message {
+        for (author, list) in Dictionary(grouping: msgs, by: { $0.authorId }) {
+            let offset = clockOffset[author] ?? 0
+            let tapOrdered = list.sorted { a, b in
+                let ta = a.clientTs ?? a.createdAt, tb = b.clientTs ?? b.createdAt
+                return ta == tb ? a.rowId < b.rowId : ta < tb
+            }
+            var runningMax = Date.distantPast
+            for m in tapOrdered {
+                if let k = stickyOrderKey[m.rowId] { runningMax = max(runningMax, k); continue }
+                let raw = m.hasServerTime
+                    ? m.createdAt
+                    : (m.clientTs ?? m.createdAt).addingTimeInterval(offset)
+                let k = max(raw, runningMax.addingTimeInterval(0.001))
+                stickyOrderKey[m.rowId] = k
+                runningMax = k
+            }
         }
-        if m.hasServerTime { return m.createdAt }
-        // An optimistic row built locally: no tap time on it, and `createdAt` is this phone's clock at
-        // the moment it was made. Same correction applies.
-        return m.createdAt.addingTimeInterval(offset ?? 0)
     }
 
-    private func inOrder(_ a: Message, _ b: Message) -> Bool {
-        let ka = orderKey(a), kb = orderKey(b)
-        return ka == kb ? a.rowId < b.rowId : ka < kb
+    /// The one sort everybody uses. A single precomputed key per message keeps the comparator a
+    /// strict weak ordering — a per-pair "compare server times only when both are stamped" branch
+    /// looks equivalent and is not (it can go intransitive, and `sort` is allowed to do anything
+    /// with an inconsistent comparator, including trap).
+    private func sortedOneTimeline(_ msgs: [Message]) -> [Message] {
+        assignOrderKeys(msgs)
+        return msgs.sorted { a, b in
+            let ka = stickyOrderKey[a.rowId] ?? a.createdAt
+            let kb = stickyOrderKey[b.rowId] ?? b.createdAt
+            return ka == kb ? a.rowId < b.rowId : ka < kb
+        }
     }
 
     /// Display list = confirmed server messages + any optimistic ones not yet echoed.
@@ -303,11 +316,10 @@ final class ThreadRepository {
     private(set) var itemsVersion = 0
     private func refreshItems() {
         let echoed = Set(messages.compactMap { $0.clientId })
-        // Pending sends are MERGED by send time, not appended: an uploading photo stays exactly where
+        // Pending sends are MERGED by key, not appended: an uploading photo stays exactly where
         // it was sent even when later texts confirm first (order never shuffles on upload finish).
-        var merged = (messages + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) })
-            .sorted(by: inOrder)
-            .filter { !HiddenMessages.isHidden($0.id) }   // drop messages the user deleted "for me"
+        var merged = sortedOneTimeline(messages + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) })
+        merged.removeAll { HiddenMessages.isHidden($0.id) }   // drop messages the user deleted "for me"
 
         // ROW IDS MUST BE UNIQUE. `rowId` is `clientId ?? id`, and the list feeds it straight into a
         // diffable snapshot — `appendItemsWithIdentifiers:` throws an NSInternalInconsistencyException on
@@ -815,11 +827,16 @@ final class ThreadRepository {
                 var c = m; c.reactions.removeValue(forKey: otherUid); return c
             }
         }
-        // Sort on ONE clock — see the long note above `orderKey`. Each person's tap time is corrected by
-        // their own measured clock error, so a slow-uploading photo still keeps its place above a fast
-        // text sent after it, while two people typing at once are no longer ordered by whose handset
-        // happens to run fast. rowId tie-break keeps equal-time order deterministic.
-        var sorted = msgs.sorted(by: inOrder)
+        // Sort on ONE timeline — see the long note above `assignOrderKeys`. Server stamps decide
+        // between people; tap order holds within a person; keys are sticky so nothing moves on ack.
+        var sorted = sortedOneTimeline(msgs)
+        // Keys for rows that left the window (trim, delete-for-everyone) are dropped so a long session
+        // cannot grow the map without bound. A re-paged row simply takes its server stamp again.
+        if stickyOrderKey.count > byId.count + pending.count + 64 {
+            var keep = Set(byId.values.map(\.rowId))
+            pending.forEach { keep.insert($0.rowId) }
+            stickyOrderKey = stickyOrderKey.filter { keep.contains($0.key) }
+        }
         // Double-echo dedupe: a retry racing a slow-but-successful original can produce TWO server docs
         // with the same clientId. Show only the FIRST (earlier) one — the duplicate is invisible to the
         // user even before any server-side cleanup.

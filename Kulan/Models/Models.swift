@@ -194,7 +194,7 @@ struct Message: Identifiable, Equatable {
     /// Firestore hands back an unresolved `serverTimestamp()` as nil while a write is still in flight,
     /// and the initialiser below falls back to `Date()` so nothing is ever undated. Which means
     /// `createdAt` is sometimes the server's clock and sometimes this phone's, with nothing to tell them
-    /// apart — and the clock-offset measurement in `ThreadRepository.orderKey` would be poisoned by rows
+    /// apart — and the clock-offset measurement in `ThreadRepository.assignOrderKeys` would be poisoned by rows
     /// whose "server time" is really local. This flag is that difference, and it is why the measurement
     /// can be trusted.
     var hasServerTime = false
@@ -207,7 +207,7 @@ struct Message: Identifiable, Equatable {
     ///
     /// Ordering now belongs to `ThreadRepository`, because it cannot be decided by one message on its
     /// own: it needs every message by that author to work out that author's clock error first. Read the
-    /// note above `ThreadRepository.orderKey`.
+    /// note above `ThreadRepository.assignOrderKeys`.
 
     /// Local optimistic IMAGE message — shows the picked photo instantly before upload.
     init(localImageData: Data, width: Double, height: Double, authorId: String, clientId: String, sendState: MessageSendState) {
