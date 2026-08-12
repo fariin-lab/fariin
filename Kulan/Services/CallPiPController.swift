@@ -188,14 +188,16 @@ final class PiPVideoView: UIView {
         photoView.clipsToBounds = true
         initialLabel.textAlignment = .center
         initialLabel.textColor = .white
+        initialLabel.clipsToBounds = true
         placeholderView.addSubview(initialLabel)
         placeholderView.addSubview(photoView)
         addSubview(placeholderView)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// Camera off: show that person instead of an empty black box. Their cached photo if we have it,
-    /// their initial on the same colour the avatars use everywhere else if we do not.
+    /// Camera off: a plain dark window with that person's small ROUND avatar in the middle (owner's
+    /// 2026-08-12 side-by-side reference) — never their photo blown up to fill the window, which is
+    /// what ours did. No photo cached → their initial on the avatar palette colour, same circle.
     func setPlaceholder(name: String, photoUrl: String?, visible: Bool) {
         placeholderView.isHidden = !visible
         sampleView.isHidden = visible
@@ -203,8 +205,10 @@ final class PiPVideoView: UIView {
         let image = photoUrl.flatMap { $0.isEmpty ? nil : DiskImageCache.shared.memoryImage($0) }
         photoView.image = image
         photoView.isHidden = image == nil
+        initialLabel.isHidden = image != nil
         initialLabel.text = String(name.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased()
-        placeholderView.backgroundColor = UIColor(AvatarPalette.gradient(for: name).first ?? .gray)
+        initialLabel.backgroundColor = UIColor(AvatarPalette.gradient(for: name).first ?? .gray)
+        placeholderView.backgroundColor = UIColor(white: 0.10, alpha: 1)
         setNeedsLayout()
     }
 
@@ -218,9 +222,14 @@ final class PiPVideoView: UIView {
         super.layoutSubviews()
         let b = bounds
         placeholderView.frame = b
-        photoView.frame = b
-        initialLabel.frame = b
-        initialLabel.font = .systemFont(ofSize: max(12, b.height * 0.28), weight: .semibold)
+        // The round avatar, centered — ~42% of the window's short side, measured off the reference.
+        let d = min(b.width, b.height) * 0.42
+        let circle = CGRect(x: b.midX - d / 2, y: b.midY - d / 2, width: d, height: d)
+        photoView.frame = circle
+        photoView.layer.cornerRadius = d / 2
+        initialLabel.frame = circle
+        initialLabel.layer.cornerRadius = d / 2
+        initialLabel.font = .systemFont(ofSize: max(12, d * 0.42), weight: .semibold)
         // At 90/270 the decoded buffer is landscape but must be shown portrait, so the child is sized
         // with its axes swapped and then rotated into place — the layer keeps filling its own bounds,
         // which still match the buffer's shape, so aspect-fill stays correct.
