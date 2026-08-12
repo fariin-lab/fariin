@@ -2058,6 +2058,12 @@ final class CallService: NSObject {
         // The "sharing video" note must never outlive its call.
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["call-video-sharing"])
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["call-video-sharing"])
+        // The system PiP must never outlive its call either (his Facebook screenshot: call over,
+        // Apple's floating window still riding on top of every app showing the frozen avatar).
+        // The only teardown lived in CallView.onDisappear, and a BACKGROUNDED end never fires it —
+        // the cover is still "presented" while another app is frontmost. This funnel is the one
+        // place every end passes through, foreground or background; teardown() is idempotent.
+        CallPiPController.shared.teardown()
         // The route observer was installed on the first .active call and NEVER removed, so it lived for
         // the app's lifetime and kept running updateAudioRoute() — mutating isSpeaker and re-running
         // screen behaviour — with no call in progress at all.
