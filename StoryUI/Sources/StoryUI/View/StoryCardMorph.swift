@@ -60,8 +60,18 @@ public final class StoryCardMorph {
     public static let shared = StoryCardMorph()
     private init() {}
 
-    /// The pager's own horizontal scroll view, which is the moving card. Registered by StoryPager
-    /// when it installs its pans, cleared when SwiftUI dismantles the pager.
+    /// THE MOVING CARD — a plain container view, and "plain" is a requirement rather than a
+    /// description.
+    ///
+    /// `StorySoloHostVC.cardContainer` for my own story and `StoryPagerHostVC.cardContainer` for a
+    /// friend's, registered by each host in its own `viewDidLoad` and cleared when SwiftUI dismantles
+    /// it. The friends route used to register UIKit's private `_UIQueuingScrollView` instead, and
+    /// that is why the viewers sheet did not shrink the story when my bucket was first routed through
+    /// the pager (build 512): a view whose `bounds.origin` is a moving page width, which UIKit lays
+    /// out under the drag and animates itself. Build 481 crashed on it for the same reason.
+    ///
+    /// So: `bounds.origin` always zero, no gesture plumbing of its own, nothing laying it out
+    /// mid-drag. Nothing of Apple's under the transform.
     private weak var card: UIView?
     private var maskLayer: CALayer?
 

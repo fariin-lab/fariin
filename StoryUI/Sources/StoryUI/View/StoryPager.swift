@@ -109,7 +109,7 @@ struct StoryPager: UIViewControllerRepresentable {
     /// built — the same belt `dismissActive` has.
     static var personTurnActive = false
 
-    func makeUIViewController(context: Context) -> UIPageViewController {
+    func makeUIViewController(context: Context) -> StoryPagerHostVC {
         StoryPager.dismissActive = false   // fresh viewer never inherits a stale flag
         StoryPager.personTurnActive = false
         StoryPager.cubeTurnActive = false
@@ -160,10 +160,10 @@ struct StoryPager: UIViewControllerRepresentable {
         // a trapdoor — but the call bought exactly one runloop turn, and that is not worth a second
         // unknown in a gesture that has now had to be reported three times.
         DispatchQueue.main.async { context.coordinator.installDismissPan() }
-        return pager
+        return StoryPagerHostVC(pager: pager)
     }
 
-    func updateUIViewController(_ pager: UIPageViewController, context: Context) {
+    func updateUIViewController(_ host: StoryPagerHostVC, context: Context) {
         context.coordinator.syncIfNeeded()
     }
 
@@ -172,7 +172,7 @@ struct StoryPager: UIViewControllerRepresentable {
     // CADisplayLink retains its target (the coordinator), and the run loop retains the link, so deinit
     // never runs on its own -> leak + a per-frame wakeup that lives forever. Tear it down explicitly when
     // SwiftUI dismantles the representable (story closed).
-    static func dismantleUIViewController(_ uiViewController: UIPageViewController, coordinator: Coordinator) {
+    static func dismantleUIViewController(_ host: StoryPagerHostVC, coordinator: Coordinator) {
         coordinator.cubeLink?.invalidate()
         coordinator.cubeLink = nil
         // ⚠️ AND EVERY TURN FLAG COMES DOWN WITH THE VIEWER, WHICH IS THE ONE PLACE THEY COULD NEVER
@@ -202,10 +202,10 @@ struct StoryPager: UIViewControllerRepresentable {
         // The card is going away. Leaving a stale transform on a recycled view would open the next
         // story already shrunken, and the reference is weak but the MASK is not: detach clears both.
         //
-        // ITS OWN scroll view is passed, not a bare call: SwiftUI dismantles this one AFTER building
+        // ITS OWN container is passed, not a bare call: SwiftUI dismantles this one AFTER building
         // its replacement, so an unconditional detach here cleared the NEW viewer's binding. See
-        // StoryCardMorph.detach.
-        StoryCardMorph.shared.detach(coordinator.internalScroll)
+        // StoryCardMorph.detach. (The container, not the scroll view — see the note at the attach.)
+        StoryCardMorph.shared.detach(host.cardContainer)
     }
 
     /// The reference app's perspective depth, its constant.
@@ -453,10 +453,24 @@ struct StoryPager: UIViewControllerRepresentable {
             // With buckets present it sets enabled to true, which is the default it already had, so
             // this changes nothing on the working path.
             guard let scroll = internalScroll else { return }
+            // ⚠️ AND WHILE THE VIEWERS SHEET IS UP, NOBODY MAY TURN A PAGE. This is the build-481
+            // guard, not tidiness.
+            //
+            // The sheet shrinks the story by holding a transform on the card, and the card now wraps
+            // this pager. A page turn started under a shrunken card is UIKit animating its own
+            // private scroll view inside a view we are transforming — which is the exact shape that
+            // crashed build 481 in `queuingScrollView:didEndManualScroll:toRevealView:`. It could not
+            // happen before, because my own story was the only thing the sheet ran over and it had no
+            // pager at all; it becomes reachable the moment my bucket is one page among several.
+            //
+            // `sheetFraction` is the sheet's own number and is zero at rest, so this costs the normal
+            // path nothing, and `syncIfNeeded` re-asserts on every update so it comes back by itself.
+            let sheetUp = StoryCardMorph.shared.sheetFraction > 0.001
             let single = parent.viewModel.stories.count <= 1
-            scroll.isScrollEnabled = !single
-            scroll.panGestureRecognizer.isEnabled = !single
-            scroll.bounces = !single
+            let live = !single && !sheetUp
+            scroll.isScrollEnabled = live
+            scroll.panGestureRecognizer.isEnabled = live
+            scroll.bounces = live
             scroll.alwaysBounceHorizontal = false
         }
 
@@ -674,9 +688,30 @@ struct StoryPager: UIViewControllerRepresentable {
             }
             didInstallPan = true
             internalScroll = scroll
-            // The SAME view the dismiss pan transforms is the one the viewers sheet shrinks. There is
-            // no second card and no picture of the story anywhere: see StoryCardMorph.
-            StoryCardMorph.shared.attach(scroll)
+            // ⚠️ THE MORPH IS NOT ATTACHED HERE ANY MORE, AND THAT MOVE IS THE WHOLE OF A REVERT.
+            //
+            // It used to be `attach(scroll)` — UIKit's private `_UIQueuingScrollView`. Build 512
+            // routed my own story through this pager for the sideways swipe he asked for and shipped
+            // with the viewers sheet not shrinking the story behind it; the note left in `MainShell`
+            // blamed the transform not surviving that view's layout and prescribed re-asserting it.
+            // Both halves were wrong, and were inferred from a screenshot rather than measured:
+            // nothing in this repo resets a transform on that view, and the sheet's driver is a
+            // display link that already re-writes it every single frame.
+            //
+            // The real difference is what the transform is written TO. `StorySoloHostVC.cardContainer`
+            // — the host my own story used, where the sheet has always worked — states the
+            // requirement in its own doc: a plain view whose `bounds.origin` is always zero, with no
+            // gesture plumbing of its own and nothing laying it out mid-drag. "Nothing of Apple's
+            // under the transform." This pager had the opposite of all three.
+            //
+            // ⚠️ AND THERE IS A CRASH ON RECORD FOR THE OLD TARGET, which is the stronger reason:
+            // build 481 died inside `queuingScrollView:didEndManualScroll:toRevealView:` while UIKit
+            // cleaned up a transition we had a transform on. The flight was moved off this view then;
+            // the sheet was simply left behind on it.
+            //
+            // `StoryPagerHostVC` wraps this pager in exactly that plain container and attaches in its
+            // own `viewDidLoad`. `internalScroll` is still needed and still correct for the cube, for
+            // `require(toFail:)` and for the neutralise — it is only the MORPH that moved.
             // When the host owns the swipe (own story: app-level SwiftUI dismiss), the pager's internal
             // scroll pan has nothing to navigate to (single bucket) and only CONTENDS with the host drag
             // for the same touch — that horizontal scroll/bounce fighting the vertical drag is the
@@ -1292,6 +1327,62 @@ final class StoryPagerVC: UIPageViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         view.backgroundColor = .black
+    }
+}
+
+/// ⚠️ ONE PLAIN VIEW FOR THE MORPH TO MOVE, WRAPPED ROUND THE PAGER. This is `StorySoloHostVC`'s
+/// `cardContainer` for the friends route, and it exists for exactly the reason that one does.
+///
+/// The viewers sheet shrinks the story by writing a `transform` to a view. On my own story that view
+/// has always been a plain container and the sheet has always worked; on this route it was UIKit's
+/// private `_UIQueuingScrollView`, and the sheet did not. Build 512 routed my story through here for
+/// the sideways swipe and shipped broken because of it.
+///
+/// The requirement is written on the solo host and it is three things this pager's scroll view fails
+/// all of: `bounds.origin` always zero (a queuing scroll view's is one page wide and moving), no
+/// gesture plumbing of its own, and nothing laying it out mid-drag. "Nothing of Apple's under the
+/// transform." There is also a crash on record for the old target — build 481, inside
+/// `queuingScrollView:didEndManualScroll:toRevealView:`, while UIKit tore down a transition we had a
+/// transform on.
+///
+/// ⚠️ IT IS A CONTAINER AND NOTHING ELSE. It paints nothing: the black stays on `pager.view` exactly
+/// where it was, so every background and alpha behaviour — the hero's `prepareForHero`, the
+/// dismiss's `viewWillDisappear` — is byte-for-byte what it was. The only thing that changed is which
+/// view a transform lands on.
+///
+/// ⚠️ AND NOT `pager.view` ITSELF. SwiftUI writes a representable's root view `frame` on every layout
+/// pass, and writing `frame` to a transformed view corrupts it. That is the one place the old
+/// "survives its layout" reasoning would genuinely have applied.
+final class StoryPagerHostVC: UIViewController {
+    let cardContainer = UIView()
+    let pager: StoryPagerVC
+
+    init(pager: StoryPagerVC) {
+        self.pager = pager
+        super.init(nibName: nil, bundle: nil)
+    }
+    @MainActor required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        // Clear, not black: the card's black belongs to `pager.view` and always has. A second black
+        // here would sit behind the shrinking card and undo the whole point of the dismiss going
+        // clear — the chat list has to show through.
+        view.backgroundColor = .clear
+        cardContainer.backgroundColor = .clear
+        cardContainer.frame = view.bounds
+        cardContainer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(cardContainer)
+
+        addChild(pager)
+        pager.view.frame = cardContainer.bounds
+        pager.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        cardContainer.addSubview(pager.view)
+        pager.didMove(toParent: self)
+
+        // The SAME view every gesture moves is the one the viewers sheet shrinks. No second card, no
+        // picture of the story anywhere — see StoryCardMorph.
+        StoryCardMorph.shared.attach(cardContainer)
     }
 }
 
