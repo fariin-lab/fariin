@@ -299,8 +299,17 @@ final class StoryCubePagerVC: UIViewController {
     private var settleStart: CFTimeInterval = 0
     private var settleDone: (() -> Void)?
 
-    /// 0.4s, their duration, on their spring — see `springProgress`.
-    private static let settleDuration: CFTimeInterval = 0.4
+    /// ⚠️ 0.12s IS HIS, NOT THEIRS. Theirs is 0.4.
+    ///
+    /// He asked for about a tenth of a second on 2026-08-11 and again, having watched the real cube
+    /// on 2026-08-12, for 0.12 exactly. It is his call and it is now genuinely one number: while the
+    /// turn belonged to `UIPageViewController` the only lever was `layer.speed = 3.0` on a private
+    /// scroll view, which also silently accelerated the dismiss spring and kept the page hierarchy
+    /// alive for a second after every turn. Owning the settle is what made this a constant.
+    ///
+    /// The spring is unaffected — `springProgress` is normalised over its own duration, so the same
+    /// sampled curve simply plays faster and still lands exactly on 1.
+    private static let settleDuration: CFTimeInterval = 0.12
 
     private func settle(to target: CGFloat, then done: @escaping () -> Void) {
         stopSettle()
