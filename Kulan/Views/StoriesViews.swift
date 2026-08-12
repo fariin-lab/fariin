@@ -2316,7 +2316,7 @@ struct StoryViewer: View {
             // An ARRIVAL. The surround comes back on the fraction over the last 18%, which is the
             // fix he asked for by number, and it is the only direction that should ever fade.
             hero.exiting = false
-            // The cube must not fold while the card is in flight, in EITHER direction: `getAngle`
+            // The cube must not fold while the card is in flight, in EITHER direction: `applyCube`
             // reads the page's global position and this moves it. Raised for the open as well as
             // the close, which is a difference from the library's own dismiss — that one only ever
             // ran on the way out.

@@ -244,7 +244,7 @@ public final class StoryCardMorph {
     /// means "somebody else is writing `card.transform` directly, so `apply` must stand down". The
     /// hero transition drives the card THROUGH `apply`, so it must not raise that flag or it would
     /// switch itself off. What it does need is the other half of what that flag buys: the cube must
-    /// not fold while the card is moving, because `getAngle` derives its angle from the page's
+    /// not fold while the card is moving, because `StoryPager.applyCube` derives its angle from the page's
     /// global position and this transition moves the page.
     public static var heroDismissActive = false
 

@@ -38,9 +38,19 @@ struct StorySoloPager: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> StorySoloHostVC {
         StoryPager.dismissActive = false   // fresh viewer never inherits a stale flag
-        // No pager here, so no horizontal scroll can ever exist. getAngle treats a nil scroll as
-        // "no live swipe" and keeps the cube flat, which for a single bucket is always correct.
-        StoryPager.horizontalScroll = nil
+        // ⚠️ AND THE TURN LOCK, WHICH THIS VIEWER COULD PREVIOUSLY ONLY INHERIT AND NEVER CLEAR.
+        //
+        // `personTurnActive` is raised for a programmatic person turn and lowered in that turn's
+        // completion — and if a friends viewer is torn down mid-turn, that completion never runs and
+        // the flag strands. It is a static, so it lands here: `StoryDetailView.updateStory` refuses
+        // EVERY tap while it stands, and this viewer has no person turn of its own to ever lower it.
+        // Symptom: open a friend's story, close it mid-turn, open your own — and tapping does
+        // nothing at all. `StoryPager.makeUIViewController` has always cleared it; there is no pager
+        // here, so that line never ran for the own-story route.
+        StoryPager.personTurnActive = false
+        StoryPager.cubeTurnActive = false
+        // No pager here, so there is no horizontal scroll and no person turn: a single bucket has
+        // nobody to turn to, and the cube never runs on this route at all.
         let vc = StorySoloHostVC()
         context.coordinator.host = vc
         context.coordinator.installPans(on: vc)
