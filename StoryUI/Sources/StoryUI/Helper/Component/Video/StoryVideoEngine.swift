@@ -325,6 +325,31 @@ enum StoryItemViewStore {
     /// card fell back to its poster. That is the "reverts to the upload cover" report, reproduced by
     /// the store doing exactly what it was told. Now only players compete for the three places, and
     /// in practice there is one.
+    /// WHERE A STORED ITEM VIEW LIVES: in the window, off to the side of it.
+    ///
+    /// The whole point is that a parked view has NOT left the window, so its `AVPlayerLayer` keeps
+    /// its decoder and its decoded frame and can come back with the picture already on it. Sitting a
+    /// full screen width to the left costs nothing to composite — there is no pixel of it inside the
+    /// screen — and it does not touch the layout of anything real.
+    ///
+    /// ⚠️ NOT hidden, NOT alpha 0, and NOT zero-sized. Every one of those is a reason for the system
+    /// to stop servicing the layer, which is the exact thing being avoided. And user interaction is
+    /// off, so a parked story cannot answer a touch that was meant for the live one.
+    private static weak var parkingLotView: UIView?
+    private static func parkingLot() -> UIView {
+        if let v = parkingLotView, v.window != nil { return v }
+        let scr = UIScreen.main.bounds
+        let v = UIView(frame: CGRect(x: -scr.width * 2, y: 0, width: scr.width, height: scr.height))
+        v.isUserInteractionEnabled = false
+        v.backgroundColor = .clear
+        // Any window will do; it only has to BE in one. The key window is the one that exists.
+        let window = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+        window?.addSubview(v)
+        parkingLotView = v
+        return v
+    }
+
     static func keep(_ view: StoryItemVideoView) {
         guard retainDismounted, view.hasPlayer else { view.teardown(); return }
         let key = view.storyKey
@@ -339,7 +364,22 @@ enum StoryItemViewStore {
         // step after this one is what costs the layer its decoded frame. See
         // `freezeCoverToCurrentFrame` for why only the story the sheet was opened over ever showed it.
         view.freezeCoverToCurrentFrame()
-        view.removeFromSuperview()
+        // ⚠️ PARKED IN THE WINDOW, NOT REMOVED FROM IT — and this is the second attempt at his flash.
+        //
+        // The first attempt made the picture UNDER the player correct, on the theory that the layer
+        // goes empty for a frame and the cover shows through. He shipped it as build 550 and the
+        // flash is still there, so the cover was not the whole story: an `AVPlayerLayer` whose view
+        // has left the window does not merely stop drawing, it gives its decoder back, and coming
+        // back needs a real re-attach and a re-decode before anything appears at all.
+        //
+        // Keeping the view in the window is the only thing that stops that happening, and it is what
+        // he asked for in the first place ("keep its playback position and video state alive while it
+        // remains in that range"). Off screen rather than hidden: `isHidden` and `alpha 0` are both
+        // grounds for the system to stop servicing a layer, while a view that is simply somewhere
+        // nobody is looking is fully live. Full size, so nothing about the layer's geometry changes
+        // between parking and coming back — a resize is its own way to lose a frame.
+        parkingLot().addSubview(view)
+        view.frame = CGRect(origin: .zero, size: UIScreen.main.bounds.size)
         kept.append((key, view))
         // ⚠️ THE CAP EVICTS FROM OUTSIDE THE WINDOW FIRST, and that ordering is the whole point.
         //
