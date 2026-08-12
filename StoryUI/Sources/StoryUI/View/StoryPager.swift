@@ -737,6 +737,12 @@ struct StoryPager: UIViewControllerRepresentable {
                 // The tint belongs to the fold; a page at rest carries none of it.
                 tint(for: sub)?.opacity = 0
             }
+            // ⚠️ AND THE MAP IS PRUNED HERE, at rest, which is the only moment nothing is mid-fold.
+            // It is keyed by page-view identity and a queuing scroll view builds and drops those as
+            // it likes, so without this it grows for the life of the viewer — every entry holding a
+            // `CAGradientLayer` that belongs to nothing. An entry whose gradient has no superlayer
+            // has already been detached with its page.
+            cubeTints = cubeTints.filter { $0.value.superlayer != nil }
         }
 
         /// ⚠️ THE DARKENING ON THE TURNING FACE — the reference app has it and we did not, and it is
@@ -753,7 +759,15 @@ struct StoryPager: UIViewControllerRepresentable {
         /// `isDoubleSided = false` when the face turns away.
         private func tint(for page: UIView) -> CAGradientLayer? {
             let key = ObjectIdentifier(page)
-            if let existing = cubeTints[key], existing.superlayer === page.layer { return existing }
+            if let existing = cubeTints[key], existing.superlayer === page.layer {
+                // ⚠️ AND IT HAS TO STAY ON TOP. A UIView's subviews ARE its layer's sublayers, so
+                // anything UIKit adds to the page afterwards — and a queuing scroll view does re-add
+                // its hosted content — lands ABOVE this gradient and the darkening silently stops
+                // being visible. Re-appending only when it is not already last costs one comparison
+                // a frame and cannot be forgotten the way a one-time insert can.
+                if page.layer.sublayers?.last !== existing { page.layer.addSublayer(existing) }
+                return existing
+            }
             let g = CAGradientLayer()
             g.type = .axial
             g.colors = [UIColor.black.withAlphaComponent(1.0).cgColor,
