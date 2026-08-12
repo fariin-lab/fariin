@@ -59,6 +59,26 @@ struct StoryPager: UIViewControllerRepresentable {
     /// 45° off a `GeometryReader`'s `minX` — and a GeometryReader re-evaluates on SIZE, not POSITION,
     /// so it could not follow a finger at all. Two folds on the same pages is what produced the shake.
 
+    /// HOW MUCH FASTER THE CUBE'S TAP TURN PLAYS THAN `UIPageViewController` would play it.
+    ///
+    /// A multiplier and not a duration, because the duration it is scaling is private to UIKit — the
+    /// fold is derived from where the pages ARE, so they have to genuinely travel, and UIKit's
+    /// animated move is the only thing that moves them.
+    ///
+    /// ⚠️ 1.0 IS TELEGRAM'S NUMBER, AND THE 3.0 THAT WAS HERE ANSWERED A DIFFERENT INSTRUCTION.
+    /// Their peer turn — tap and finger-lift alike, it is literally one code path — settles over
+    /// **0.4s on a spring**: `ComponentTransition(animation: .curve(duration: 0.4, curve: .spring))`
+    /// in `commitHorizontalPan`, where a tap is a synthesized zero-length pan committed with
+    /// velocity ±200. `UIPageViewController`'s own `.scroll` turn runs within a frame or two of that,
+    /// so leaving its clock alone IS the parity he asked for.
+    ///
+    /// The 3.0 came from his 2026-08-11 "approximately 0.10 seconds", which was about the flat slide
+    /// and which his 2026-08-12 instruction supersedes: match Telegram, in speed and in feel. A third
+    /// of their duration is not a match, however responsive it is on its own.
+    ///
+    /// Kept as a constant rather than deleted so the whole question stays one number.
+    static let cubeTurnSpeedup: Float = 1.0
+
     /// TRUE while a PROGRAMMATIC cube turn is in flight — a tap, or an auto-advance.
     ///
     /// ⚠️ THE CUBE'S GATE NEEDS THIS AND CANNOT WORK WITHOUT IT. `applyCube` folds only while the
@@ -279,6 +299,13 @@ struct StoryPager: UIViewControllerRepresentable {
         /// landing-blink guard's state. See the LANDING BLINK note in `applyCube`.
         private var lastCubeT: [ObjectIdentifier: CGFloat] = [:]
         private var cubeSkipStreak = 0
+        /// The darkening gradient on each page's face — see `tint(for:)`.
+        ///
+        /// ⚠️ KEYED BY THE PAGE, AND RE-CHECKED AGAINST ITS SUPERLAYER. A queuing scroll view reuses
+        /// and re-parents its page views, so an entry can outlive the arrangement it was made for;
+        /// `tint(for:)` rebuilds when the layer it remembers is no longer this page's child, which is
+        /// cheaper and safer than trying to observe the reuse.
+        private var cubeTints: [ObjectIdentifier: CAGradientLayer] = [:]
         // Baseline translation captured the instant the swipe-UP pan engages. The recognizer only
         // begins after the finger has already travelled ~its 8pt threshold plus whatever it moved
         // while the competing pans were failing — so translation(in:) is already ~30-40pt at the
@@ -707,7 +734,39 @@ struct StoryPager: UIViewControllerRepresentable {
             let w = scroll.bounds.width
             for sub in scroll.subviews where abs(sub.bounds.width - w) < 1.0 {
                 sub.layer.transform = CATransform3DIdentity
+                // The tint belongs to the fold; a page at rest carries none of it.
+                tint(for: sub)?.opacity = 0
             }
+        }
+
+        /// ⚠️ THE DARKENING ON THE TURNING FACE — the reference app has it and we did not, and it is
+        /// most of why their cube reads as a solid object and ours read as a picture on a hinge.
+        ///
+        /// Theirs is a black axial gradient over each face, `1.0 → 0.8 → 0.5` alpha, whose DIRECTION
+        /// flips with the sign of the rotation and whose whole-layer opacity is `|fraction| × 1.3`
+        /// clamped to 1. Both numbers are theirs, not tuned by eye.
+        ///
+        /// A sublayer of the page rather than a sibling, which is the one difference from their
+        /// arrangement and it is in our favour: their tint is a separate layer in a
+        /// `CATransformLayer` and has to be given the face transform by hand, while a child of the
+        /// page's own layer inherits the fold for free — and is hidden by the same
+        /// `isDoubleSided = false` when the face turns away.
+        private func tint(for page: UIView) -> CAGradientLayer? {
+            let key = ObjectIdentifier(page)
+            if let existing = cubeTints[key], existing.superlayer === page.layer { return existing }
+            let g = CAGradientLayer()
+            g.type = .axial
+            g.colors = [UIColor.black.withAlphaComponent(1.0).cgColor,
+                        UIColor.black.withAlphaComponent(0.8).cgColor,
+                        UIColor.black.withAlphaComponent(0.5).cgColor]
+            g.opacity = 0
+            // Never its own animation: this is driven every frame from the display link, and an
+            // implicit CALayer action would fight it and lag the fold by a frame.
+            g.actions = ["opacity": NSNull(), "position": NSNull(), "bounds": NSNull(),
+                         "startPoint": NSNull(), "endPoint": NSNull()]
+            page.layer.addSublayer(g)
+            cubeTints[key] = g
+            return g
         }
 
         // The cube: rotate each page around the shared vertical edge with perspective depth, driven
@@ -715,9 +774,9 @@ struct StoryPager: UIViewControllerRepresentable {
         @objc func applyCube() {
             guard let scroll = internalScroll else { return }
             // Only do per-frame transform work while the pages are actually in motion; at rest this
-            // is pure churn at 60-120Hz. The two dismissal flags are the same pair `getAngle` refuses
-            // on: during a swipe-down the card is being moved by something that is not a page swipe,
-            // and a fold derived from page position would be derived from a lie.
+            // is pure churn at 60-120Hz. The two dismissal flags are here because during a swipe-down
+            // the card is being moved by something that is not a page swipe, and a fold derived from
+            // page position would then be derived from a lie.
             //
             // ⚠️ `cubeTurnActive` IS IN THE TEST, and without it a TAP folds nothing: a programmatic
             // turn animates the scroll view without ever setting `isDragging`/`isTracking`, and
@@ -785,6 +844,17 @@ struct StoryPager: UIViewControllerRepresentable {
             for (sub, relX, t) in folds {
                 lastCubeT[ObjectIdentifier(sub)] = t
                 sub.layer.isDoubleSided = false                            // hide the back face
+                // THE FACE DARKENS AS IT TURNS — their numbers, see `tint(for:)`. Driven by the same
+                // fraction as the fold, so the shading and the geometry cannot disagree.
+                if let g = tint(for: sub) {
+                    g.frame = sub.bounds
+                    if t < 0 {
+                        g.startPoint = CGPoint(x: 0, y: 0); g.endPoint = CGPoint(x: 1, y: 0)
+                    } else if t > 0 {
+                        g.startPoint = CGPoint(x: 1, y: 0); g.endPoint = CGPoint(x: 0, y: 0)
+                    }
+                    g.opacity = Float(min(1.0, abs(t) * 1.3))
+                }
                 if abs(t) < 0.001 {
                     sub.layer.transform = CATransform3DIdentity            // resting page is pixel-perfect
                 } else if abs(t) <= 1.0 {
