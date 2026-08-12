@@ -48,7 +48,6 @@ struct StorySoloPager: UIViewControllerRepresentable {
         // nothing at all. `StoryPager.makeUIViewController` has always cleared it; there is no pager
         // here, so that line never ran for the own-story route.
         StoryPager.personTurnActive = false
-        StoryPager.cubeTurnActive = false
         // No pager here, so there is no horizontal scroll and no person turn: a single bucket has
         // nobody to turn to, and the cube never runs on this route at all.
         let vc = StorySoloHostVC()
