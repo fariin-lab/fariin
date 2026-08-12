@@ -86,8 +86,8 @@ struct CallView: View {
 
     private var statusText: String {
         switch call.state {
-        // Accepted beats ringing: the instant they tap Accept the label goes "Connecting…" —
-        // WhatsApp's order — while the SDP answer is still being built on their phone.
+        // Accepted beats ringing: the instant they tap Accept the label goes "Connecting…" — the
+        // standard messenger order — while the SDP answer is still being built on their phone.
         case .outgoing:     return call.calleeAccepted ? "Connecting…" : (call.calleeRinging ? "Ringing…" : "Calling…")
         case .incoming:     return "Incoming…"
         // The weak-signal notice displaces the duration deliberately: while the camera is down, WHY it
@@ -102,7 +102,7 @@ struct CallView: View {
     private var endedText: String {
         switch call.endReason {
         case .busy:     return "Busy"
-        // A decline reads as a ring-out (WhatsApp parity, his order): rejections are never exposed.
+        // A decline reads as a ring-out (owner's order): rejections are never exposed.
         case .declined: return "No answer"
         case .failed:   return "Call failed"
         case .missed:   return "No answer"
@@ -337,6 +337,21 @@ struct CallView: View {
         let pipIsLocal = !isLocalExpanded                                   // small window = the OTHER feed
         let feeds = call.pipFeeds
         let pipTrack = feeds.tile
+        // THE TILE BREATHES WITH THE CHROME (owner's 2026-08-12 side-by-side reference, exact
+        // numbers read from the reference implementation): menus up → the tile grows; menus away →
+        // it shrinks toward the corner, so the tap that toggles the controls is FELT on the tile
+        // too. The rule there is a square bounding box — 240pt with chrome, 140pt without — with
+        // the camera's own aspect fitted inside; for our 9:16 portrait feed that is 135×240 and
+        // 79×140 (the old fixed 104×150 was a squashed crop).
+        let tileW: CGFloat = controlsVisible ? 135 : 79
+        let tileH: CGFloat = controlsVisible ? 240 : 140
+        // HOME IS THE BOTTOM CORNER (owner's report: ours landed on TOP after accept; the standard
+        // is the bottom). Gutters are 12pt; with the chrome up the tile clears the control bar,
+        // with it away it drops toward the bottom edge. Drag can park it in any corner; these are
+        // the travel bounds.
+        let bottomPad = safeBottom + (controlsVisible ? 132 : 12)
+        let maxLeft = -(geo.size.width - tileW - 24)
+        let maxUp = -max(0, geo.size.height - tileH - (winInsets.top + 60) - bottomPad)
         // THE TILE BELONGS TO THE CALL, NOT TO A LIVE CAMERA. It used to vanish the moment that camera
         // went off, which left an empty corner and — because the tile is also the tap target for the
         // swap — took the only way back with it. Now it stays, holding that person's photo instead of
@@ -350,8 +365,8 @@ struct CallView: View {
                         // local feed the big view showed during ringing — and the spring release
                         // shrinks it into the corner (see tileEntering). One view, one live renderer,
                         // every property below interpolates: size, corner radius, offset, padding.
-                        .frame(width: tileEntering ? geo.size.width : 104,
-                               height: tileEntering ? geo.size.height : 150)
+                        .frame(width: tileEntering ? geo.size.width : tileW,
+                               height: tileEntering ? geo.size.height : tileH)
                         // Blur the local feed briefly during a camera flip so the ~200ms capture restart
                         // (a frozen last frame) is masked into a smooth transition instead of a hard cut.
                         .blur(radius: (pipIsLocal && flippingCamera) ? 14 : 0)
@@ -374,21 +389,18 @@ struct CallView: View {
                 .highPriorityGesture(
                     DragGesture(minimumDistance: 10)
                         .onChanged { v in
+                            // Home is the BOTTOM-trailing corner now, so travel is left (negative w)
+                            // and UP (negative h) — bounds computed above from the live tile size.
                             let w = pipBase.width + v.translation.width
                             let h = pipBase.height + v.translation.height
-                            let maxLeft = -(geo.size.width - 104 - 28)
-                            // Real geometry (PiP is 150 tall, sits at safeTop+70, control bar ~120) — no magic 300 that inverts on small screens.
-                            let maxDown = max(0, geo.size.height - 150 - (winInsets.top + 70) - safeBottom - 120)
-                            pipOffset = CGSize(width: min(0, max(maxLeft, w)), height: min(maxDown, max(0, h)))
+                            pipOffset = CGSize(width: min(0, max(maxLeft, w)), height: max(maxUp, min(0, h)))
                         }
                         .onEnded { _ in
                             // SNAP TO THE NEAREST CORNER (standard PiP): the tile must never rest
                             // mid-screen. Choose left/right by which half the tile is in, top/bottom the
                             // same, then spring there.
-                            let maxLeft = -(geo.size.width - 104 - 28)
-                            let maxDown = max(0, geo.size.height - 150 - (winInsets.top + 70) - safeBottom - 120)
                             let targetX: CGFloat = pipOffset.width < maxLeft / 2 ? maxLeft : 0
-                            let targetY: CGFloat = pipOffset.height > maxDown / 2 ? maxDown : 0
+                            let targetY: CGFloat = pipOffset.height < maxUp / 2 ? maxUp : 0
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
                                 pipOffset = CGSize(width: targetX, height: targetY)
                             }
@@ -406,11 +418,14 @@ struct CallView: View {
                     // any swap can always be undone by tapping it again.
                     guard feeds.showsTile else { toggleControls(); return }
                     showControls()
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) { isLocalExpanded.toggle() }
+                    // The swap's curve, matched to the reference: a quick ease, not a bouncy spring.
+                    withAnimation(.easeInOut(duration: 0.25)) { isLocalExpanded.toggle() }
                 }
-                .padding(.top, tileEntering ? 0 : winInsets.top + 70)
-                .padding(.trailing, tileEntering ? 0 : 14)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(.bottom, tileEntering ? 0 : bottomPad)
+                .padding(.trailing, tileEntering ? 0 : 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                // Size and home both move when the chrome toggles — one spring for the whole relayout.
+                .animation(.spring(duration: 0.4), value: controlsVisible)
             }
         }
         // The trigger: the tile appearing on a VIDEO call is the accept moment — my preview owned the

@@ -1768,7 +1768,7 @@ enum ChatService {
     /// writes the duration — one authoritative source instead of a race. The callee's row still creates
     /// the record on its own if the caller never manages to write, so nothing is lost.
     /// Stores who the caller was, so each client renders outgoing/incoming for itself.
-    /// The LIVE call row (his WhatsApp screenshots, both sides): written the moment the call doc
+    /// The LIVE call row (owner's 2026-08-12 reference, both sides): written the moment the call doc
     /// exists, so the chat shows a "Ringing" bubble while the phone is still ringing. recordCall
     /// later merges the final outcome onto the SAME doc, so the row transforms in place. Only the
     /// CALLER writes it — one creator; the callee sees it arrive through the normal listener.
@@ -1805,7 +1805,7 @@ enum ChatService {
             "text": "",
         ]
         if uid == callerUid { fields["callDuration"] = durationSec }
-        // The row's time is when the call STARTED RINGING (the live row wrote it — WhatsApp stamps
+        // The row's time is when the call STARTED RINGING (the live row wrote it — the standard apps stamp
         // it that way too). Re-stamping on the final merge shoved the row past messages sent DURING
         // the call once re-sorted from the server. Stamp only when this write is the creator (the
         // other side never wrote the live row, e.g. an old build placed the call).
@@ -1813,7 +1813,7 @@ enum ChatService {
             fields["createdAt"] = FieldValue.serverTimestamp()
         }
         try? await msgRef.setData(fields, merge: true)
-        // Declines write NO marker of their own (his 2026-08-12 order, WhatsApp parity): a rejected
+        // Declines write NO marker of their own (owner's 2026-08-12 order): a rejected
         // call records as missed everywhere, so callers can never tell a decline from a ring-out.
         let marker: String = {
             if outcome == "missed" { return video ? "📹 Missed video call" : "📞 Missed call" }

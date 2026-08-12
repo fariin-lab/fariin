@@ -3494,7 +3494,7 @@ struct ThreadView: View {
     // timestamp bottom-right. Tap anywhere to call back.
     private func callRow(_ m: Message) -> some View {
         let mine = m.callerUid == me
-        // LIVE STATES (his WhatsApp screenshots): the row exists from the first ring — "Ringing",
+        // LIVE STATES (owner's 2026-08-12 reference): the row exists from the first ring — "Ringing",
         // then "Ongoing" at connect — and recordCall finalises the SAME row in place. The age
         // fallbacks are the safety net for a writer that died mid-call: an orphan "ringing" renders
         // as a normal unanswered call, a stale "ongoing" as a plain ended one.
@@ -3502,7 +3502,7 @@ struct ThreadView: View {
         let ringing = m.callOutcome == "ringing" && age < 120
         let ongoing = m.callOutcome == "ongoing" && age < 4 * 3600
         // Legacy "declined" records (written before declines were removed from the log — his
-        // 2026-08-12 WhatsApp-parity order) render exactly as missed: the caller reads "No answer",
+        // 2026-08-12 order) render exactly as missed: the caller reads "No answer",
         // the decliner reads the same red "Missed call" as an ignored ring.
         let missed = m.callOutcome == "missed" || m.callOutcome == "declined"
             || (m.callOutcome == "ringing" && age >= 120)

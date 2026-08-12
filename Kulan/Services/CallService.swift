@@ -114,7 +114,7 @@ final class CallService: NSObject {
     var connectedDate: Date?
     var endReason: EndReason = .none // last/in-progress end reason (UI reads it for the label)
     private var recordWritten = false
-    /// EITHER side accepted this call (callee: the tap; caller: the acceptedAt signal). Telegram's
+    /// EITHER side accepted this call (callee: the tap; caller: the acceptedAt signal). The standard messengers'
     /// record rule, adopted on his order: an accepted call that then FAILS logs as a plain call,
     /// never as "missed" — the person answered, and a red "Missed call · Call back" in the
     /// answerer's own chat reads as a lie.
@@ -1106,7 +1106,7 @@ final class CallService: NSObject {
         // `loops: 3` claimed "~4s" and was cut off less than halfway through, so the comment and the
         // code disagreed about the one thing a caller hears (audit).
         case .busy: playTone(RingbackTone.busyData(), loops: 1)
-        // A DECLINE sounds like a ring-out on purpose (HIS ORDER 2026-08-12, WhatsApp parity): the
+        // A DECLINE sounds like a ring-out on purpose (OWNER'S ORDER 2026-08-12, standard-messenger parity): the
         // busy tone after one ring told the caller they were rejected. Declines are hidden
         // everywhere now — tone, end screen, record — so the tone must not leak what the label hides.
         case .failed, .hangup, .missed, .declined: playTone(RingbackTone.endedData(), loops: 0)
@@ -1359,7 +1359,7 @@ final class CallService: NSObject {
                             return
                         }
                         self.callDocCreated = true
-                        // THE LIVE RING ROW (his WhatsApp screenshots): the chat shows the call
+                        // THE LIVE RING ROW (owner's 2026-08-12 reference): the chat shows the call
                         // while it happens — "Ringing" now, finalised in place by recordCall.
                         self.liveRingRowId = ref.documentID
                         let ringCid = [self.me, uid].sorted().joined(separator: "_")
@@ -1658,14 +1658,14 @@ final class CallService: NSObject {
         ringingWatcher?.remove(); ringingWatcher = nil   // observeCallDoc (attached below) takes over
         callDocCreated = true   // callee: the caller already created the doc, so candidates can write now
         state = .active   // present the call screen immediately; SDP fills in below
-        // THE INSTANT ACCEPT SIGNAL (WhatsApp's order, his side-by-side report): tell the caller
+        // THE INSTANT ACCEPT SIGNAL (the standard messenger order, owner's side-by-side report): tell the caller
         // the call was picked up NOW, before permissions, TURN, or the peer connection. A plain
         // update queues and retries on its own, unlike the answer transaction below — so even when
         // the heavy chain stalls, the caller stops ringing and shows "Connecting…" instead of
         // ringing out on a call that was answered.
         db.collection("calls").document(id).updateData(["acceptedAt": FieldValue.serverTimestamp()])
         wasAccepted = true
-        // Video call: warm the camera NOW, in parallel with permissions/TURN/SDP (Telegram's order),
+        // Video call: warm the camera NOW, in parallel with permissions/TURN/SDP (the reference apps' order),
         // so the local video is live the moment the connection comes up.
         if cameraOn { prepareLocalVideo() }
         ensureMicPermission { [weak self] granted in
@@ -1950,13 +1950,13 @@ final class CallService: NSObject {
             let dur = connected ? Int(Date().timeIntervalSince(connectedDate!)) : 0
             let callerUidVal = isCaller ? me : otherUid
             // ⚠️ DECLINES ARE DELIBERATELY NOT RECORDED — HIS ORDER 2026-08-12, reversing the earlier
-            // "a decline is not a miss" rule with WhatsApp's screenshots in hand: WhatsApp removed
+            // "a decline is not a miss" rule with the owner's reference screenshots in hand: the big messengers removed
             // declines from the log entirely so a rejection is never exposed. The caller sees
             // "No answer", the decliner sees the same red "Missed call · Call back" as an ignored
             // ring. `EndReason.declined` still exists internally (teardown paths), it just never
             // reaches the record. Do not bring the "declined" outcome back without his word.
             //
-            // `wasAccepted` (Telegram's rule): a call somebody ANSWERED can never log as missed,
+            // `wasAccepted`: a call somebody ANSWERED can never log as missed,
             // even when the connection then failed — it renders as a plain call with no duration.
             let outcome = (connected || wasAccepted) ? "answered" : "missed"
             let cid = [me, otherUid].sorted().joined(separator: "_")

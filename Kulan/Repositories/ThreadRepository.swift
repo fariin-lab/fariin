@@ -257,7 +257,7 @@ final class ThreadRepository {
     /// of the very messages it is measured from — a second or two. Two phones chatting fast live
     /// inside that jitter, so an incoming message could still sort between two messages the server
     /// had stamped in order. The server's stamp is the one clock both phones share; between two
-    /// people it decides, with no arithmetic on top. (Telegram orders by server sequence, full stop.)
+    /// people it decides, with no arithmetic on top. (The big messengers order by server sequence, full stop.)
     ///
     /// The rules, in order:
     /// 1. A message that HAS a server stamp when first seen takes the stamp as its key.
