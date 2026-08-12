@@ -3544,9 +3544,10 @@ struct ThreadView: View {
             // No flexible Spacer inside -> the bubble hugs its content (compact, not a banner).
             // SIZE HISTORY, third calibration (do not relitigate without his word): first cut was
             // thin (15/12/34), his side-by-side bumped it one size up (17/14/40, ~62pt tall), and
-            // on 2026-08-12 he called that "long" against his 544 screenshots — now one notch back
-            // down on the HEIGHT pieces only (title 16, detail 13, disc 34, vertical 8 → ~50pt
-            // tall) while the 232 width stays, which was his separate, explicit choice.
+            // on 2026-08-12 he called that "long" against his 544 screenshots — now the height
+            // pieces come down (title 16, detail 13, disc 34) and he named the final number
+            // himself: 58pt tall (34 disc + 12 vertical padding). The 232 width stays, which was
+            // his separate, explicit choice.
             HStack(alignment: .center, spacing: 11) {
                 ZStack {
                     Circle().fill(circleBg).frame(width: 34, height: 34)
@@ -3571,7 +3572,7 @@ struct ThreadView: View {
             // subtitle shortened to fit ("Tap to call back" → "Call back"). 204 + 28 padding =
             // 232 total, the tidy small bubble from his photo, worn by every call row.
             .frame(width: 204, alignment: .leading)
-            .padding(.vertical, 8).padding(.horizontal, 14)
+            .padding(.vertical, 12).padding(.horizontal, 14)
             .background(mine ? myBubbleFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             // Tap target is ONLY the bubble — NOT the full-width row. The old .contentShape/
