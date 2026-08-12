@@ -296,6 +296,26 @@ enum StoryItemViewStore {
     /// Where this clip's live view is, or nil when it has no live view. The one question the card
     /// picture needs answered, and the object that answers it is the same one holding the frame —
     /// so there is no instant to catch and no subject to get wrong.
+    /// ⚠️ AT MOST ONE ITEM VIEW MAY BE PLAYING, AND IT IS THE ONE ON SCREEN. Asserted, not assumed.
+    ///
+    /// Everything else that stops a clip goes through the session, which reaches exactly one view —
+    /// the one currently bound to it. That is fine while the bind is current and useless the moment
+    /// it is not, which is precisely the window his 2026-08-12 report lives in: tap back from a
+    /// video to an image and the video's view has already let go of the session, so the mode has
+    /// nobody left to tell and the clip keeps playing behind the picture. The only other thing that
+    /// would have stopped it is SwiftUI calling `dismantleUIView`, and a story you can still hear is
+    /// proof that did not happen in time.
+    ///
+    /// This asks nobody's permission and needs no reference: every live view whose clip is not the
+    /// one on screen is paused, every time the item changes. Pausing rather than tearing down on
+    /// purpose — a view that is mid-transition may still be visible for a frame, and silence is what
+    /// was asked for, not a blank card.
+    static func pauseAllExcept(_ key: String) {
+        for view in live.allObjects where view.storyKey != key {
+            view.apply(mode: .pause)
+        }
+    }
+
     static func pausedSecond(of key: String) -> Double? {
         // ⚠️ `continue`, NOT `return nil`, AND THAT ONE WORD IS A WHOLE CLASS OF THE OLD BUG.
         //

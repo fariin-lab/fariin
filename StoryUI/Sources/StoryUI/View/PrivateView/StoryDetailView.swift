@@ -1474,6 +1474,13 @@ private extension StoryDetailView {
             if cur.id != lastChangedItem {
                 lastChangedItem = cur.id
                 onItemChanged?(cur.id)
+                // ⚠️ AND EVERY OTHER CLIP GOES QUIET, WHICHEVER WAY THE ITEM CHANGED. The mode above
+                // reaches the one view bound to this page's session, which is the right view only
+                // while the bind is current — and the one case that matters is exactly when it is
+                // not: tapping back from a video to an image, where the video's view has already let
+                // go of the session and has nobody left to tell it to stop. This asserts the rule
+                // instead of trusting the bind or SwiftUI's teardown timing. See `pauseAllExcept`.
+                StoryItemViewStore.pauseAllExcept(cur.id)
                 // ⚠️ AND THE EMOJI-ANIMATION PAUSE IS RELEASED WITH THE ITEM. `isAnimationStarted`
                 // is raised in the reaction overlay's `onAppear` and lowered in its `onDisappear`,
                 // and it is one of `videoMode`'s inputs — so an overlay torn down without its
@@ -1881,6 +1888,17 @@ private extension StoryDetailView {
         // is what stops a story you have swiped away from playing on off-screen.
         guard viewModel.currentStoryUser == model.id else { return .pause }
         guard !model.stories.isEmpty else { return .pause }
+        // ⚠️ AND THE ITEM ON SCREEN HAS TO BE A VIDEO, which this never asked.
+        //
+        // His 2026-08-12 report: an image and a video in one story, open the image, tap right to the
+        // video, tap LEFT back to the image — the image appears and the video is still audible. The
+        // mode stayed `.play` the whole time, because every input here is about the PAGE and none of
+        // them is about which item the page is showing. Nothing was left to tell the clip to stop
+        // except SwiftUI tearing its view down, and a story you can hear is proof that did not
+        // happen in time.
+        let i = getCurrentIndex()
+        guard model.stories.indices.contains(i),
+              model.stories[i].config.mediaType == .video else { return .pause }
         // The finger, the host (sheet, dismiss drag, hero flight), the scene, the keyboard.
         if isPaused || isHolding || hostPause.paused || scenePaused { return .pause }
         if keyboardManager.isKeyboardOpen { return .pause }
