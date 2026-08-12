@@ -795,6 +795,10 @@ final class StoriesService {
     func markViewed(_ story: Story) async {
         let me = uid
         guard !me.isEmpty, story.authorUid != me else { return }
+        // A demo person exists only on this device (see `demoGroups`). Their story ids match no
+        // document, so a receipt or a watermark for one is a write that can only ever fail — and it
+        // would fail against the REAL database, under the real account, for a story that is not there.
+        guard !StoriesRepository.isDemoAuthor(story.authorUid) else { return }
         // Advance my per-author watermark to this story's POST time — never backwards, one write
         // per advance. (Was a wall-clock serverTimestamp, which made watching 1 of 5 stories mark
         // the whole ring seen; the watermark now means "the newest story of theirs I've watched".)
@@ -1483,31 +1487,117 @@ final class StoriesRepository {
         }
     }
 
-    // ===== TEMPORARY demo stories (real images) for testing the viewer/carousel/rings =====
-    // Flip `injectDemoStories` to false (or delete this block) before production.
-    static let injectDemoStories = false
+    // ===== Demo story people, for testing the viewer / carousel / rings / cube =====
+    //
+    // DEBUG ONLY, AND LOCAL ONLY. Every picture and every clip is drawn and encoded on this phone by
+    // `DemoStoryMedia` and planted in the caches the real code reads, so these people work with the
+    // network off and nothing about them ever reaches Firebase. Nobody else can see them because
+    // they do not exist anywhere but this device.
+    //
+    // ⚠️ THE POINT OF THEM IS VIDEO. The previous version of this block pointed at `picsum.photos`
+    // and every demo story was a still, which could not test one bug this app actually has — they
+    // are all video bugs. The mixes below are chosen for the reports that keep coming back:
+    // video→video→video for the preview-card flash, image→video→video for "the viewer closes when a
+    // clip ends instead of advancing", and several people so the cube has somewhere to turn.
+    //
+    // Toggle at runtime with the switch in Settings (debug builds only) — no rebuild needed.
+    static var injectDemoStories: Bool {
+        #if DEBUG
+        return UserDefaults.standard.bool(forKey: "demoStoryUsers")
+        #else
+        return false
+        #endif
+    }
+
+    /// True for a person who only exists on this device, so nothing tries to write a view receipt,
+    /// a watermark or a reply for them.
+    static func isDemoAuthor(_ uid: String) -> Bool { uid.hasPrefix("demo_") }
+
+    #if DEBUG
+    /// Re-publish the row after the demo switch is flipped, so it takes effect without a relaunch.
+    /// The first flip ON is also the encode, which is why it runs off the main actor.
+    func refreshForDemo() { Task { await rebuild() } }
+    #endif
+
     static func demoGroups(now: Date) -> [StoryGroup] {
-        func story(_ uid: String, _ n: Int, _ seed: String) -> Story {
-            Story(id: "demo_\(uid)_\(n)", authorUid: uid,
-                  createdAt: now.addingTimeInterval(Double(-3600 * (5 - n))),   // a few hours apart
-                  expiresAt: now.addingTimeInterval(3600 * 20),
-                  mediaUrl: "https://picsum.photos/seed/\(seed)/1080/1920", allowsReplies: true)
+        #if DEBUG
+        // Ages, so the rings sort the way a real row would.
+        func made(_ hoursAgo: Double) -> Date { now.addingTimeInterval(-3600 * hoursAgo) }
+        func expires() -> Date { now.addingTimeInterval(3600 * 20) }
+
+        func videoStory(_ uid: String, _ n: Int, _ clip: DemoStoryMedia.Clip?, _ hoursAgo: Double) -> Story? {
+            guard let clip else { return nil }
+            return Story(id: "demo_\(uid)_\(n)", authorUid: uid, createdAt: made(hoursAgo),
+                         expiresAt: expires(), mediaUrl: clip.mediaUrl, allowsReplies: true,
+                         caption: "", isVideo: true, duration: clip.seconds, thumbUrl: clip.thumbUrl)
         }
-        func group(_ uid: String, _ name: String, _ avatar: Int, _ seeds: [String]) -> StoryGroup {
-            StoryGroup(authorUid: uid, name: name, photoUrl: "https://i.pravatar.cc/150?img=\(avatar)",
-                       stories: seeds.enumerated().map { story(uid, $0.offset + 1, $0.element) },
-                       lastViewedAt: nil, isMine: false)
+        func imageStory(_ uid: String, _ n: Int, _ url: String, _ hoursAgo: Double) -> Story {
+            Story(id: "demo_\(uid)_\(n)", authorUid: uid, createdAt: made(hoursAgo),
+                  expiresAt: expires(), mediaUrl: url, allowsReplies: true)
         }
-        return [
-            group("demo_alex",  "Alex (demo)",  12, ["alexa", "alexb", "alexc"]),
-            group("demo_maya",  "Maya (demo)",  45, ["mayaa", "mayab"]),
-            group("demo_sam",   "Sam (demo)",   33, ["sama", "samb", "samc", "samd"]),
-            group("demo_lena",  "Lena (demo)",  5,  ["lenaa"]),
-            group("demo_omar",  "Omar (demo)",  68, ["omara", "omarb", "omarc", "omard", "omare"]),
-            group("demo_nina",  "Nina (demo)",  47, ["ninaa", "ninab"]),
-            group("demo_jay",   "Jay (demo)",   15, ["jaya", "jayb", "jayc"]),
-            group("demo_zoe",   "Zoe (demo)",   9,  ["zoea", "zoeb", "zoec", "zoed"]),
-            group("demo_kofi",  "Kofi (demo)",  60, ["kofia", "kofib"]),
+
+        // CABDI — three videos in a row. This is the set for the preview-card flash: open the
+        // middle one, swipe up, then swipe the card row away and back.
+        let cabdi = [
+            videoStory("demo_cabdi", 1, DemoStoryMedia.video("cabdi-1", seconds: 6,
+                                                             top: .systemIndigo, bottom: .systemBlue,
+                                                             title: "Cabdi 1"), 5),
+            videoStory("demo_cabdi", 2, DemoStoryMedia.video("cabdi-2", seconds: 4,
+                                                             top: .systemPink, bottom: .systemRed,
+                                                             title: "Cabdi 2"), 4),
+            videoStory("demo_cabdi", 3, DemoStoryMedia.video("cabdi-3", seconds: 7,
+                                                             top: .systemTeal, bottom: .systemGreen,
+                                                             title: "Cabdi 3"), 3),
+        ].compactMap { $0 }
+
+        // HODAN — image, then two videos. The exact shape of the "B ends and the viewer closes
+        // instead of going to C" report.
+        let hodan = [
+            imageStory("demo_hodan", 1, DemoStoryMedia.image("hodan-1", top: .systemOrange,
+                                                             bottom: .systemYellow, title: "Hodan 1"), 6),
+            videoStory("demo_hodan", 2, DemoStoryMedia.video("hodan-2", seconds: 5,
+                                                             top: .systemPurple, bottom: .systemPink,
+                                                             title: "Hodan 2"), 2),
+            videoStory("demo_hodan", 3, DemoStoryMedia.video("hodan-3", seconds: 5,
+                                                             top: .systemBrown, bottom: .systemOrange,
+                                                             title: "Hodan 3"), 1),
+        ].compactMap { $0 }
+
+        // YASIN — a single long clip, so there is a person whose story does not advance internally.
+        let yasin = [
+            videoStory("demo_yasin", 1, DemoStoryMedia.video("yasin-1", seconds: 8,
+                                                             top: .systemCyan, bottom: .systemIndigo,
+                                                             title: "Yasin"), 7),
+        ].compactMap { $0 }
+
+        // SAGAL — stills only, as a control: whatever breaks on the video people must NOT break here.
+        let sagal = [
+            imageStory("demo_sagal", 1, DemoStoryMedia.image("sagal-1", top: .systemGreen,
+                                                             bottom: .systemTeal, title: "Sagal 1"), 9),
+            imageStory("demo_sagal", 2, DemoStoryMedia.image("sagal-2", top: .systemRed,
+                                                             bottom: .systemPink, title: "Sagal 2"), 8),
         ]
+
+        return [
+            StoryGroup(authorUid: "demo_cabdi", name: "Cabdi (demo)",
+                       photoUrl: DemoStoryMedia.avatar("cabdi", top: .systemIndigo,
+                                                       bottom: .systemBlue, initial: "C"),
+                       stories: cabdi, lastViewedAt: nil, isMine: false),
+            StoryGroup(authorUid: "demo_hodan", name: "Hodan (demo)",
+                       photoUrl: DemoStoryMedia.avatar("hodan", top: .systemPurple,
+                                                       bottom: .systemPink, initial: "H"),
+                       stories: hodan, lastViewedAt: nil, isMine: false),
+            StoryGroup(authorUid: "demo_yasin", name: "Yasin (demo)",
+                       photoUrl: DemoStoryMedia.avatar("yasin", top: .systemCyan,
+                                                       bottom: .systemIndigo, initial: "Y"),
+                       stories: yasin, lastViewedAt: nil, isMine: false),
+            StoryGroup(authorUid: "demo_sagal", name: "Sagal (demo)",
+                       photoUrl: DemoStoryMedia.avatar("sagal", top: .systemGreen,
+                                                       bottom: .systemTeal, initial: "S"),
+                       stories: sagal, lastViewedAt: nil, isMine: false),
+        ].filter { !$0.stories.isEmpty }
+        #else
+        return []
+        #endif
     }
 }

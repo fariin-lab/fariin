@@ -669,6 +669,38 @@ final class StoryItemVideoView: UIView {
     /// would draw nothing and the story would open on black with a perfectly good thumbnail in hand.
     /// So the source is remembered and the composite is (re)built from `layoutSubviews`, which is
     /// also where it belongs when the card changes shape.
+    /// PUT THE FRAME WE ARE PAUSED ON UNDER THE PLAYER BEFORE THIS VIEW LEAVES THE SCREEN.
+    ///
+    /// ⚠️ HIS 2026-08-12 REPORT, AND THE REASON ONLY ONE STORY EVER FLASHED.
+    ///
+    /// While the viewers sheet is up every item is `.pause`, and a paused item never builds a player
+    /// (`initializeVideoIfReady`) — so the story the sheet came up over is the ONLY one holding a
+    /// player, and the only one that can show this. `StoryItemViewStore.keep` takes the view out of
+    /// the hierarchy to store it, iOS reclaims the decoded frame of an `AVPlayerLayer` that is not on
+    /// screen, and `revealIfReady` is a spent latch by then — nothing waits for the picture to come
+    /// back. For those frames the layer is visible with nothing in it and the cover shows through.
+    ///
+    /// The cover was the UPLOAD POSTER, which is second zero. So swiping back to a clip paused at
+    /// four seconds showed its opening frame for a frame and then snapped. Same picture on both sides
+    /// of the hand-over is the rule the carousel already follows for its centre slot; this is that
+    /// rule applied to the one exchange that was still showing two different pictures.
+    ///
+    /// The still is the same one `StoryVideoFrames` already generates for the carousel card — the
+    /// pause warms it (see `apply(mode:)`), so by here it is usually a cache hit, and the landing
+    /// covers the case where it is not. Deliberately does NOT re-hide the player layer: a hidden
+    /// layer that never becomes ready again would strand the still permanently, and with the right
+    /// picture underneath there is nothing left to hide it for.
+    func freezeCoverToCurrentFrame() {
+        guard let storyURL, hasPlayer else { return }
+        let second = currentSecond
+        guard second > 0.2 else { return }
+        if let frame = StoryVideoFrames.frame(storyURL, at: second, then: { [weak self] image in
+            self?.setCover(image, isFrame: true)
+        }) {
+            setCover(frame, isFrame: true)
+        }
+    }
+
     private func setCover(_ image: UIImage, isFrame: Bool) {
         // A real frame beats the blurred thumbnail; the thumbnail must never replace one.
         if !isFrame, coverIsFrame { return }

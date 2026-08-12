@@ -286,6 +286,11 @@ enum StoryItemViewStore {
         }
         // Stored means paused. A view nobody is looking at must not be decoding or making sound.
         view.apply(mode: .pause)
+        // ⚠️ AND IT LEAVES THE RIGHT PICTURE BEHIND IT. The pause above warms exactly this still, and
+        // the line below plants it under the player before the view goes off screen — because the
+        // step after this one is what costs the layer its decoded frame. See
+        // `freezeCoverToCurrentFrame` for why only the story the sheet was opened over ever showed it.
+        view.freezeCoverToCurrentFrame()
         view.removeFromSuperview()
         kept.append((key, view))
         while kept.count > capacity {
@@ -457,10 +462,24 @@ public enum StoryVideoFrames {
     /// ask — which is always the one that matters, at `init`, before anything is cached — would
     /// answer nil and nothing would ever come back.
     public static func opening(_ url: URL, then: ((UIImage) -> Void)? = nil) -> UIImage? {
-        let k = key(url, 0)
+        frame(url, at: 0, then: then)
+    }
+
+    /// THE FRAME AT A GIVEN SECOND, with a landing for the ask that has to wait on the decode.
+    ///
+    /// `opening` is this at second zero and nothing more; it keeps its own name because an opening
+    /// frame and a mid-clip frame answer two different questions at two different call sites, and
+    /// the note there is worth keeping pointed at the one that needs it.
+    ///
+    /// The mid-clip caller is `StoryItemVideoView.freezeCoverToCurrentFrame`, which needs the exact
+    /// picture the player is sitting on before the view leaves the screen. Same cache and same key
+    /// as the carousel card's still (`card`), so the two cannot disagree about what second four of
+    /// a clip looks like — they are literally the same object.
+    public static func frame(_ url: URL, at second: Double, then: ((UIImage) -> Void)? = nil) -> UIImage? {
+        let k = key(url, second)
         if let hit = full.object(forKey: k as NSString) { return hit }
         if let then { pending[k, default: []].append(then) }
-        generate(url, at: 0, key: k)
+        generate(url, at: second, key: k)
         return nil
     }
 
