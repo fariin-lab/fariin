@@ -40,9 +40,15 @@ final class StoryPartialFile {
     private(set) var contentType: String?
 
     private let remote: URL
-    private let dataURL: URL
+    /// Where the bytes are. It MOVES on promotion — see `promoteIfComplete`.
+    private var dataURL: URL
     private let metaURL: URL
     private var handle: FileHandle?
+    /// Bytes written since the range map last went to disk — see `write`.
+    private var unsavedBytes: Int64 = 0
+    /// Half a megabyte between saves. Small enough that a clip killed mid-download loses almost
+    /// nothing, large enough that the map is written tens of times per clip rather than thousands.
+    private static let metaSaveInterval: Int64 = 512 * 1024
 
     init(remote: URL) {
         let dir = StoryStorage.directory("VideoCache")
@@ -104,7 +110,21 @@ final class StoryPartialFile {
             try h.seek(toOffset: UInt64(offset))
             try h.write(contentsOf: data)
             merge(offset ..< (offset + Int64(data.count)))
-            saveMeta()
+            // ⚠️ THE MAP IS NOT WRITTEN PER CHUNK, AND THAT IS CORRECTNESS RATHER THAN TUNING.
+            //
+            // `saveMeta` re-reads the file, decodes it, merges every range on disk one at a time
+            // (each merge sorts the whole list) and writes it back atomically. A URLSession hands
+            // over a few kilobytes at a time, so on a 20MB clip that ran well over a thousand times
+            // — on the SAME serial queue the resource loader answers the player from. The player's
+            // requests queue behind every one of those writes, which on screen is a story that
+            // stutters or does not start, the exact failure this whole file is built to avoid.
+            //
+            // Every byte is still on disk the moment it arrives. Only the RECORD of it is batched,
+            // and losing the tail of that record costs one re-fetch of the unsaved stretch. The
+            // moments that matter — a clip being left, a prefix warm finishing, the length
+            // arriving — flush by hand.
+            unsavedBytes += Int64(data.count)
+            if unsavedBytes >= Self.metaSaveInterval { saveMeta() }
         } catch {
             // A write that fails leaves the range unrecorded, so the reader simply fetches it again.
             // Recording it anyway is the one thing that would be unrecoverable: a hole the reader
@@ -112,20 +132,44 @@ final class StoryPartialFile {
         }
     }
 
+    /// Put the range map on disk now. The batched write in `write` is why this exists: call it at
+    /// the moments a map would otherwise be lost — a clip being left, a one-shot prefix warm ending,
+    /// an instance about to go away.
+    func flush() {
+        guard unsavedBytes > 0 else { return }
+        saveMeta()
+    }
+
     /// Every byte is here. Move it to the plain cache path so the next open needs no reader at all,
     /// and so `StoryStorage`'s existing purge and 300MB ceiling manage it like any other clip.
+    ///
+    /// ⚠️ SAFE WHILE THE CLIP IS STILL BEING WATCHED, AND THE OPEN HANDLE IS WHY.
+    ///
+    /// This used to be called only from `teardown`, because moving a file out from under its own
+    /// reader closed the handle, re-opened a path that no longer existed — creating an EMPTY file —
+    /// and cleared the range map, so the reader decided it held nothing and fetched the whole clip
+    /// again. Every one of those was a consequence of closing and forgetting, not of the move: a
+    /// rename within a volume does not touch the inode, so a descriptor that is already open keeps
+    /// reading exactly the bytes it was opened on whatever the path says.
+    ///
+    /// So the handle stays, the map stays, and `dataURL` follows the file. That is what lets a clip
+    /// be promoted the moment its last byte lands rather than when it is left — which matters
+    /// because everything OUTSIDE the reader asks `CacheManager.cachedFileIfUsable` whether a clip
+    /// is here, and until it can say yes, the card stills and the frozen cover frame (which is what
+    /// `StoryVideoFrames.generate` needs a whole file for) simply do not get made.
     @discardableResult
     func promoteIfComplete() -> URL? {
         guard let total, total > 0, holds(0 ..< total) else { return nil }
-        closeHandle()
         let dest = Self.completedURL(for: remote)
+        guard dest != dataURL else { return dest }   // already promoted
         do {
             if FileManager.default.fileExists(atPath: dest.path) {
                 try FileManager.default.removeItem(at: dest)
             }
             try FileManager.default.moveItem(at: dataURL, to: dest)
             try? FileManager.default.removeItem(at: metaURL)
-            have = []
+            dataURL = dest
+            unsavedBytes = 0   // the map is the file now; there is nothing left to record
             return dest
         } catch {
             return nil
@@ -140,6 +184,7 @@ final class StoryPartialFile {
         try? FileManager.default.removeItem(at: metaURL)
         have = []
         total = nil
+        unsavedBytes = 0
     }
 
     // MARK: - Internals
@@ -160,6 +205,18 @@ final class StoryPartialFile {
         if let handle { return handle }
         let fm = FileManager.default
         if !fm.fileExists(atPath: dataURL.path) {
+            // ⚠️ A MISSING FILE UNDER A MAP THAT CLAIMS RANGES IS THE ONE STATE THAT MUST NOT BE
+            // CREATED INTO. Two instances can exist for one clip — the lookahead warming a
+            // neighbour the viewer then opens, or the same story mounted in the sheet and the pager
+            // at once — and the other one may have promoted the file, or the purge may have taken
+            // it. Creating an empty file here while `have` still says those bytes are on disk makes
+            // the reader answer the player with nothing and call the request satisfied, which
+            // decodes as a broken clip rather than as an error.
+            //
+            // Nothing is held any more, so say so. It costs a re-fetch of what was here, which is
+            // the same price a purged cache file has always cost.
+            have = []
+            unsavedBytes = 0
             fm.createFile(atPath: dataURL.path, contents: nil)
         }
         handle = try? FileHandle(forUpdating: dataURL)
@@ -210,5 +267,6 @@ final class StoryPartialFile {
         let m = Meta(total: total, contentType: contentType, ranges: have.map { [$0.lowerBound, $0.upperBound] })
         guard let data = try? JSONEncoder().encode(m) else { return }
         try? data.write(to: metaURL, options: .atomic)
+        unsavedBytes = 0
     }
 }

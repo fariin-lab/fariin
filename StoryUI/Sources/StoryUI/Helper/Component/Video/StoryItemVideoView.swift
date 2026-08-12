@@ -222,6 +222,19 @@ final class StoryItemVideoView: UIView {
             && didBeginPlayback && currentSecond > 0.3
     }
 
+    /// ⚠️ WAITING ON THE FIRST BYTES, WHICH ONLY THE STREAMING PATH CAN BE IN.
+    ///
+    /// The download path says "still fetching" with `!contentLoaded`, and that is what puts the
+    /// wheel on a story that has not arrived yet. A reader has no such moment: content is "here" the
+    /// instant the item mounts, because the point of it is that the bytes come in behind the player.
+    /// So `contentLoaded` is true immediately, `isStalled` is false until playback has begun — and
+    /// between those two a slow connection had a frozen cover with nothing on screen saying why,
+    /// which is the report this spinner exists to prevent, arriving through the new path.
+    private var isAwaitingFirstBytes: Bool {
+        streamedAsset != nil && !didBeginPlayback
+            && player?.timeControlStatus == .waitingToPlayAtSpecifiedRate
+    }
+
     /// Leave the session, if it is still ours to leave.
     func detach() {
         session?.unbind(self)
@@ -312,7 +325,13 @@ final class StoryItemVideoView: UIView {
         // is fully cached has nothing to gain from a reader and everything to lose — a local file is
         // one open and no state machine at all. `StoryVideoStream.asset` answers nil when streaming
         // is off (it is, by default — see its header), so this line is a no-op until it is turned on.
-        let streamed: AVURLAsset? = localFile == storyURL ? StoryVideoStream.asset(for: file) : nil
+        // ⚠️ `!didRetryRemote` IS THE FALLBACK, NOT A DETAIL. `handleFailedItem` recovers a clip that
+        // will not play by pointing `localFile` at the remote url and rebuilding — and on the
+        // streaming path `localFile` IS the remote url, so without this the recovery built a second
+        // reader over the same broken fetch, failed the same way, and gave up. The retry is a plain
+        // https `AVPlayerItem`, which is what "stream the remote url directly" always meant.
+        let streamed: AVURLAsset? = (localFile == storyURL && !didRetryRemote)
+            ? StoryVideoStream.asset(for: file) : nil
         let item = streamed.map { AVPlayerItem(asset: $0) }
             ?? StoryItemPreloader.take(file)
             ?? AVPlayerItem(url: file)
@@ -476,6 +495,11 @@ final class StoryItemVideoView: UIView {
             localFile = nil
             // Only a real cache file is worth deleting; the "bad" url may already BE the remote one.
             if bad.isFileURL { try? FileManager.default.removeItem(at: bad) }
+            // A STREAMED CLIP'S RUBBISH IS IN THE PARTIAL, NOT IN A CACHE FILE. Same reasoning as
+            // the line above and the same permanence: whatever is on disk here was reached through
+            // a fetch that has just failed, and a partial nobody throws away is found by every
+            // later open and trusted. See `StoryPartialFile.discard`.
+            if streamedAsset != nil { StoryVideoStream.discardPartial(for: remote) }
             teardownPlayer()
             localFile = remote            // stream the remote url directly
             contentLoaded = true
@@ -791,7 +815,7 @@ final class StoryItemVideoView: UIView {
         // saying why — a frozen picture under a frozen bar, which reads as the app being broken
         // rather than as the network being slow. Initial buffering is excluded by `isStalled`
         // itself, so a clip that has not started yet still shows only the fetch wheel.
-        let want = (!contentLoaded || isStalled) && !(session?.failed ?? false)
+        let want = (!contentLoaded || isStalled || isAwaitingFirstBytes) && !(session?.failed ?? false)
         guard want != spinnerShown else { return }
         spinnerShown = want
         guard want else {

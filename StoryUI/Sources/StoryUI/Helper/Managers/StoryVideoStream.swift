@@ -18,11 +18,25 @@
 //  Our exports already carry `shouldOptimizeForNetworkUse`, so the moov atom is at the FRONT of
 //  every file we post and a prefix is genuinely playable. The only thing missing was a reader.
 //
-//  ⚠️ IT IS OFF BY DEFAULT. See `StoryVideoStream.enabled`. This landed in the same branch as a
-//  complete replacement of the story playback engine, on a machine with no Swift compiler and no
-//  device, and a resource loader that misbehaves does not throw — it simply never hands the player
-//  any bytes, which on screen is a story that never starts. That is not a thing to discover together
-//  with an architecture change. Turn it on when the engine has a device verdict, and it ships alone.
+//  ⚠️ IT IS ON AS OF 2026-08-12 AND IT SHIPS ALONE. It was written switched off, in the same branch
+//  as a complete replacement of the story playback engine, because a resource loader that misbehaves
+//  does not throw — it simply never hands the player any bytes, which on screen is a story that
+//  never starts, and that is not a thing to discover together with an architecture change.
+//
+//  Re-read end to end before the switch was flipped. FOUR THINGS CAME OUT OF THAT READ, all of them
+//  silent failures rather than errors, which is this file's whole risk profile:
+//
+//    * a range the server does not honour was written at the offset we ASKED for. A 200 instead of a
+//      206 filed a whole object as though it started where we wanted it to, and a 403 body — an
+//      expired Storage token, which is a normal thing for a story url — was filed as video. Both
+//      produced a corrupt cache file that every later open finds and trusts. Now the status decides:
+//      206 as asked, 200 re-filed from zero, anything else fails its waiters.
+//    * the concurrency ceiling could refuse a fetch that nothing else would ever satisfy — a
+//      backward seek with three transfers already ahead of it. Now the furthest-ahead one gives way.
+//    * the range map was re-read, merged and rewritten on EVERY chunk, on the same serial queue the
+//      player is served from. See `StoryPartialFile.write`.
+//    * a clip whose reader failed rebuilt the same reader instead of falling back to the plain url,
+//      because on this path `localFile` IS the remote url. See `StoryItemVideoView`.
 //
 
 import Foundation
@@ -34,9 +48,12 @@ import AVFoundation
 /// weakly, so `StoryVideoStream.retain` keeps it alive for the asset's life).
 final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
 
-    /// ⚠️ THE SWITCH. False means every caller falls straight through to the full-download path that
-    /// shipped before this file, byte for byte. See the header.
-    static let enabled = false
+    /// ⚠️ THE SWITCH, AND IT IS ON AS OF 2026-08-12, ON HIS ORDER, AFTER THE ENGINE IT WAS HELD BACK
+    /// FOR SHIPPED (build 548 onwards).
+    ///
+    /// False still means every caller falls straight through to the full-download path that shipped
+    /// before this file, byte for byte — one line, and the way back if a device says so.
+    static let enabled = true
 
     /// Our own scheme, so `AVAssetResourceLoader` asks US rather than going to the network itself.
     /// `https` would be served by AVFoundation directly and this delegate would never be called.
@@ -106,6 +123,15 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
         stream.teardown()
     }
 
+    /// Throw away everything on disk for this clip, for a reader whose fetch has failed.
+    ///
+    /// Unlinking a file another instance still has open is safe — an open handle keeps reading the
+    /// bytes it was opened on, and the next open finds nothing and starts clean. That is exactly the
+    /// behaviour wanted: whatever is there was reached through a transfer that has just failed.
+    static func discardPartial(for remote: URL) {
+        StoryPartialFile(remote: remote).discard()
+    }
+
     private func teardown() {
         queue.async { [self] in
             pending.values.forEach { $0.task.cancel() }
@@ -113,17 +139,14 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
             let stranded = live
             live.removeAll()
             stranded.forEach { $0.finishLoading(with: URLError(.cancelled)) }
-            // ⚠️ PROMOTION HAPPENS HERE AND NOWHERE EARLIER. It MOVES the partial onto the plain
-            // cache path, and doing that while requests are still being served pulls the file out
-            // from under the reader: the open handle would be closed, the next read would re-open a
-            // path that no longer exists — creating an empty file — and the range map would have
-            // been cleared, so the reader would decide it holds nothing and fetch the whole clip
-            // again. A story that has just finished downloading is the worst possible moment to
-            // start downloading it.
-            //
-            // Waiting costs nothing. The clip stays a `.part` for as long as it is being watched,
-            // and the next OPEN finds the promoted file through `cachedFileIfUsable` and never
-            // builds a reader at all.
+            // The range map is only written through periodically while bytes are arriving (see
+            // `StoryPartialFile.write`), so the last stretch of a clip is on disk with nothing
+            // saying so until this. Losing it costs a re-fetch of everything since the last save.
+            partial.flush()
+            // The last chance to promote, for a clip whose transfers all finished before this. A
+            // clip that completed while it was being watched has already been promoted from
+            // `didCompleteWithError`; this is a no-op then, and it is the only promotion for one
+            // that was completed by a prefix warm.
             partial.promoteIfComplete()
             // Breaks the delegate retain, cancels anything still in flight, and is the only thing
             // that lets this object deallocate.
@@ -158,11 +181,20 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
                 partial.note(total: total, contentType: http.mimeType)
             }
             partial.write(offset: 0, data: data)
-            // ⚠️ NO PROMOTION FROM HERE. A clip smaller than the prefix arrives whole, and moving it
-            // onto the plain cache path is exactly the thing that must not happen while somebody may
-            // be reading the partial — see `teardown`. A neighbour is usually nobody's yet, but
-            // "usually" is not a reason to move a file out from under a reader. Losing the promotion
-            // costs one more pass through the reader on the next open and nothing else.
+            // This instance dies with this closure, so the map goes down now or not at all — and a
+            // prefix nobody recorded is a prefix that gets fetched again on arrival, which is the
+            // whole saving.
+            partial.flush()
+            // ⚠️ STILL NO PROMOTION FROM HERE, EVEN THOUGH IT IS NOW SAFE FROM THE READER.
+            //
+            // `promoteIfComplete` is safe for the instance that OWNS the file: its own descriptor
+            // survives the rename. It is not safe across instances, and this is the one place where
+            // two exist for the same clip — the lookahead warms a neighbour while the viewer may
+            // open a reader for it a moment later. That reader can be between its `cachedFileIfUsable`
+            // check and its first read when this renames the file out from under it, and then
+            // `openHandle` creates an EMPTY `.part`, the map says bytes are held, and the reader
+            // answers the player with zeros. A truncated response is worse than a lost promotion,
+            // which costs one more pass through the reader on the next open and nothing else.
         }
         onTask?(task)
         task.resume()
@@ -286,7 +318,23 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
     /// constantly, and a request per window is a connection setup per few kilobytes.
     private func fetch(from offset: Int64) {
         if pending.values.contains(where: { $0.offset <= offset }) { return }
-        guard pending.count < Self.maxConcurrentFetches else { return }
+        // ⚠️ REFUSING AT THE CEILING USED TO MEAN WAITING FOR EVER, WHICH IS THE SAME HANG THIS
+        // METHOD'S NOTE IS ABOUT, ARRIVING BY A DIFFERENT DOOR.
+        //
+        // Getting here means every open transfer is AHEAD of the offset somebody is waiting on — the
+        // line above proved it — so not one of them will ever pass through it. That is a backward
+        // seek with the ceiling full: the player has moved to where it is reading now, and the three
+        // transfers still running are all for somewhere it has left. Nothing errors and nothing
+        // times out; the story simply stops.
+        //
+        // The furthest-ahead one is the most speculative, so it makes room for the one that is
+        // actually being waited on. Its own cancellation is handled in `didCompleteWithError` —
+        // which must not read it as a failure, or this rescue would kill the story it is rescuing.
+        if pending.count >= Self.maxConcurrentFetches {
+            guard let furthest = pending.max(by: { $0.value.offset < $1.value.offset }) else { return }
+            furthest.value.task.cancel()
+            pending.removeValue(forKey: furthest.key)
+        }
         var request = URLRequest(url: remote)
         request.setValue("bytes=\(offset)-", forHTTPHeaderField: "Range")
         let task = session.dataTask(with: request)
@@ -312,9 +360,15 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
             // Everything the caller does with this touches serialised state, so hand it back on the
             // one queue rather than on URLSession's.
             self.queue.async {
-                guard let http = response as? HTTPURLResponse else { done(nil, nil); return }
+                guard let http = response as? HTTPURLResponse,
+                      // The same rule as the streaming session's: bytes are only filed when the
+                      // server actually answered with bytes. An error body is not a video.
+                      http.statusCode == 200 || http.statusCode == 206 else { done(nil, nil); return }
                 let total = Self.totalLength(from: http)
-                if let data, !data.isEmpty, total != nil { self.partial.write(offset: 0, data: data) }
+                if let data, !data.isEmpty, total != nil {
+                    self.partial.write(offset: 0, data: data)
+                    self.partial.flush()
+                }
                 done(total, http.mimeType)
             }
         }.resume()
@@ -336,11 +390,43 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
 
 extension StoryVideoStream: URLSessionDataDelegate {
 
+    /// ⚠️ THE STATUS CODE IS CHECKED BEFORE A SINGLE BYTE IS FILED, AND THIS IS THE ONE THAT WOULD
+    /// HAVE BITTEN ON A REAL PHONE.
+    ///
+    /// Every byte that arrives here is written at the offset WE asked for. That is only true if the
+    /// server honoured the range. Two ways it does not, and neither of them is an error anywhere:
+    ///
+    ///   * **200 instead of 206.** A CDN or a redirect that ignores `Range` answers with the whole
+    ///     object from byte zero. Those bytes are real, so they are kept — but filed from zero,
+    ///     where they actually start, instead of at an offset they never came from.
+    ///   * **Anything else.** A story url is a Storage download url with a token on it, and an
+    ///     expired one answers 403 with a JSON body. Without this, that body was written into the
+    ///     cache file as though it were video and the range map recorded it as held — a corrupt
+    ///     clip that every later open finds and never re-fetches, which is precisely what
+    ///     `discard()` exists to prevent.
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
                     didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         queue.async { [weak self] in
-            if let http = response as? HTTPURLResponse, let total = Self.totalLength(from: http) {
-                self?.partial.note(total: total, contentType: http.mimeType)
+            guard let self else { completionHandler(.cancel); return }
+            guard let http = response as? HTTPURLResponse else { completionHandler(.allow); return }
+            switch http.statusCode {
+            case 206:
+                break
+            case 200:
+                self.pending[ObjectIdentifier(dataTask)]?.offset = 0
+            default:
+                self.pending.removeValue(forKey: ObjectIdentifier(dataTask))
+                completionHandler(.cancel)
+                // Fail the waiters rather than let them hang. A silent wait is indistinguishable
+                // from a story that will not start; a failure reaches `handleFailedItem`, which
+                // throws the partial away and plays the url directly.
+                let stranded = self.live
+                self.live.removeAll()
+                stranded.forEach { $0.finishLoading(with: URLError(.badServerResponse)) }
+                return
+            }
+            if let total = Self.totalLength(from: http) {
+                self.partial.note(total: total, contentType: http.mimeType)
             }
             completionHandler(.allow)
         }
@@ -363,8 +449,21 @@ extension StoryVideoStream: URLSessionDataDelegate {
             self.pending.removeValue(forKey: ObjectIdentifier(task))
             // (No promotion here — see `teardown`. Moving the file while it is still being read is
             // how a clip that had just finished downloading started downloading again.)
-            guard error != nil else {
+            //
+            // ⚠️ A TRANSFER WE CANCELLED OURSELVES IS NOT A FAILED ONE. `fetch(from:)` drops the
+            // furthest-ahead transfer to make room for one the player is actually waiting on, and
+            // that cancellation arrives here as an error. Treating it as one would fail every open
+            // request — the story would die at exactly the moment it was being rescued. The waiters
+            // get another go instead, which is what the no-error path does anyway.
+            let cancelled = (error as? URLError)?.code == .cancelled
+            guard let error, !cancelled else {
                 for request in self.live { self.finishIfPossible(request) }
+                // ⚠️ PROMOTION HAPPENS HERE NOW, NOT ONLY AT TEARDOWN, and `promoteIfComplete`'s own
+                // note is why that became safe. It matters because nothing outside this reader can
+                // see a `.part`: the carousel's card stills and the frozen cover frame are made by
+                // `StoryVideoFrames`, which needs a whole file from `cachedFileIfUsable`, and
+                // waiting for the story to be LEFT meant a clip you were watching had none.
+                self.partial.promoteIfComplete()
                 return
             }
             // The transfer died with requests still open. Fail them rather than leave the player
