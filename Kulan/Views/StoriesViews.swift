@@ -730,11 +730,11 @@ struct StoryViewer: View {
     // right. The instant was moved three times (`16ba3c63` on the pull, `13952868` settle-and-verify,
     // `8693f1ee` a sweep beside it) and the picture was still wrong on build 520.
     //
-    // Each card asks the frame bank for a picture of its OWN clip at draw time instead — see
-    // `cardMedia`. There is no capture site, so there is no moment to get wrong; there is no host
-    // state, so it cannot be stale, cannot be cleared at the wrong time and cannot be filed under
-    // the wrong story. The bank is written where the story is actually frozen
-    // (`StoryCardMorph.bankCurrentState`), which is the one place that always knows the answer.
+    // Each card asks for a picture of its OWN clip at draw time instead — see `cardMedia`. There is
+    // no capture site, so there is no moment to get wrong; there is no host state, so it cannot be
+    // stale, cannot be cleared at the wrong time and cannot be filed under the wrong story. The
+    // answer is generated from the clip's own file at the second its own player is paused on
+    // (`StoryVideoFrames`), and that player is still alive because an item owns its player now.
     /// The morph has no card to move. Only ever true when something upstream has gone wrong; it makes
     /// the story fade rather than sit there at full size under the sheet. See `driveMorph`.
     @State private var morphUnavailable = false
@@ -1307,10 +1307,16 @@ struct StoryViewer: View {
             // Same reason the chrome is restored here: a viewer torn down with the sheet still up
             // must not hand the next one a caption that is already faded out.
             NotificationCenter.default.post(name: .init("storySheetProgress"), object: CGFloat(0))
-            // (The per-session cover dictionary that used to be emptied here is gone. The frame bank
-            // it was built from has always been cleared by the door and the presenter's dismissal
-            // belt — `StoryPlaybackResume.clearAll` — which is the same "one viewing session" rule
-            // in the one place that owns it.)
+            // ⚠️ AND `storyChromeHidden: false` IS ALSO WHAT DROPS THE RETAINED ITEM VIEWS. The
+            // library reads that flag as "the sheet is collapsed over the story" and keeps a small
+            // window of item views alive while it is true, each holding a live paused `AVPlayer`
+            // (see `StoryItemViewStore`). Posting it here is what makes a viewer torn down WITH the
+            // sheet still up let go of them; the door and the presenter also call
+            // `StoryVideoHost.viewerClosed()` outright, so this is one of three ways home.
+            //
+            // (The per-session cover dictionary that used to be emptied here went with the frame
+            // bank itself — there is no bank any more, only frames generated on demand from the
+            // clip's own file, cleared with the viewer.)
             // The sheet state belongs to one session too, and it does NOT die with this overlay
             // (host @State). A viewer torn down mid-pull — the last story deleted under an open
             // sheet, a system-cancelled drag that parked it at a few percent — left `showViewers`
@@ -1369,52 +1375,24 @@ struct StoryViewer: View {
                                                 object: StoryItemsReconcile(bucketId: m.id, stories: m.stories))
             }
         }
-        // ⚠️ THE STORY UNDERNEATH DOES NOT MOVE WHILE THE SHEET IS UP. IT MOVES WHEN THE SHEET GOES.
+        // ⚠️ THE STORY UNDERNEATH MOVES THE INSTANT THE ROW DOES, AND BOTH HALVES OF WHY THAT WAS
+        // EVER A PROBLEM ARE NOW GONE.
         //
-        // This used to post `jumpToStoryItem` the instant the carousel centred a different story,
-        // and that single line is his "the real-time cover disappears when I swipe the sheet". The
-        // viewer draws ONE story at a time and reuses one `PlayerView`, so jumping tears clip A out
-        // of the layer that is on screen and starts loading B — under an open sheet, where the card
-        // is a 100pt thumbnail nobody is watching. A had a real paused frame; B has nothing until it
-        // downloads. That is the disappear, and the second or two is the download.
+        // He bisected the first half himself: 516 correct, 517 wrong, and `fc16da9a` is the commit
+        // in 517 that stopped posting this immediately and started remembering the selection to
+        // spend at the close. The deferral WAS the bug, and it was put back to 516's behaviour.
         //
-        // The reference app does not do this, and reading its source is what settled it.
-        // Its player-readiness guard refuses to build a player at all while the progress mode is
-        // `.pause`, and opening the views list forces `.pause` on the whole set
-        // (the reference implementation's list container). So paging with the list open creates NO player: the
-        // story you arrive at shows its still, the story you left keeps its own paused layer and its
-        // last decoded frame, and the player for whatever you settled on is built the moment the
-        // list is dismissed.
+        // It had been added for a real report — "the real-time cover disappears when I swipe the
+        // sheet" — which was true of an architecture where one player served every story: jumping
+        // tore clip A out of the layer on screen and began downloading B under a 100pt thumbnail.
         //
-        // We cannot keep a view per story the way they do — one story at a time is this viewer's
-        // architecture — but we can keep their RULE, which is the part that shows: nothing loads
-        // while the sheet is up. The selection is remembered and spent at the close, so the slot
-        // carries stills the whole time and the live clip arrives with the collapse.
-        // ⚠️ THE STORY UNDERNEATH MOVES THE INSTANT THE ROW DOES. THIS IS BUILD 516's BEHAVIOUR,
-        // PUT BACK, AND IT IS PUT BACK ON HIS BISECTION RATHER THAN ON MY REASONING.
-        //
-        // He tested it down to the build: **516 correct, 517 wrong**. `fc16da9a` is in 517 and not in
-        // 516, and `fc16da9a` is the commit that stopped posting this immediately and started
-        // remembering the selection to spend at the close. Everything I changed today was aimed at
-        // the flag that deferral needed. The deferral itself was the bug, so none of it moved.
-        //
-        // WHY DEFERRING SEEMED RIGHT, AND WHY IT NO LONGER APPLIES. `fc16da9a` was fixing a real
-        // report: this viewer draws one story at a time through one `PlayerView`, so jumping tore
-        // clip A out of the layer on screen and began downloading B under a 100pt thumbnail. A had a
-        // paused frame, B had nothing, and the gap was visible — "the real-time cover disappears
-        // when I swipe the sheet".
-        //
-        // The cards no longer depend on the live player for their picture. Each one fetches its own
-        // frame from the bank at draw time (`cardMedia`), and the bank is filled when the story
-        // freezes (`StoryCardMorph.bankCurrentState`). So tearing the player away no longer empties
-        // anything the row is drawing. The visible half of that report is answered by the frame bank
-        // instead of by the deferral, which is what makes going back to 516's behaviour safe now
-        // when it would not have been then.
-        //
-        // What is NOT yet answered is the invisible half: an immediate jump still starts a download
-        // under the sheet. The reference app's answer is its player-readiness guard refusing to build a player
-        // at all while the mode is `.pause`. That is the right fix and it belongs on the LOADING, not
-        // on the navigation — a separate change, and deliberately not bundled here.
+        // Neither half survives the item-owned player. Clip A is not torn out of anything, because A
+        // has its own view and its own player and the store keeps both alive for as long as this
+        // sheet is up; swiping back hands A's own paused player straight back, still on its own
+        // frame. And B does not start under the sheet either, because a paused item never builds a
+        // player at all — the reference app's `initializeVideoIfReady` rule, which the note that used
+        // to sit here called the right fix and left for a separate change. This is that change,
+        // already made: see `StoryItemVideoView.initializeVideoIfReady` and `StoryItemViewStore`.
         .onChange(of: sheetStoryId) { _, id in
             // ⚠️ `mineOnly` TOO, NOT `currentIsMine` ALONE. `currentIsMine` depends on
             // `currentBucketUid`, which only arrives after the library's `onUserChanged`, so on a
@@ -1856,13 +1834,15 @@ struct StoryViewer: View {
     // Between them they were a 0.35s settle-and-verify timer, a force flag, a url cross-check, a
     // live-card photograph through one global pointer, and a sweep over every other story — all to
     // answer one question: what picture does this card show? A card answers that for itself now, at
-    // draw time, from the frame bank keyed by its own clip (`cardMedia`).
+    // draw time, keyed by its own clip (`cardMedia`).
     //
-    // The reason this could not have been done before today is that the bank was EMPTY at the one
-    // moment it mattered. It was written only when a clip changed or stopped, and the viewers sheet
-    // does neither — it pauses. `StoryCardMorph.bankCurrentState`, called from the pause itself,
-    // is what filled that hole, and filling it is what made every line above unnecessary rather
-    // than merely badly timed.
+    // ⚠️ AND THE ANSWER IS NO LONGER A PHOTOGRAPH OF ANYTHING. Every version of this — the capture
+    // timer, the frame bank that replaced it, the weak registry of players, the paused-player pool —
+    // was trying to catch a picture before a pause took it away, and the source refuses: a paused
+    // item's video output hands its buffer over exactly once. The clip's own player is still alive
+    // and still paused on that second (`StoryItemViewStore`), so the frame is generated from the
+    // clip's own file at that exact time instead. There is no instant to catch, which is why there
+    // is nothing left here to schedule.
 
     /// THE LINE UNDER THE NAME: which audience this story went to.
     ///

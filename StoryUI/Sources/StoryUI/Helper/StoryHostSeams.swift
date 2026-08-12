@@ -68,7 +68,12 @@ public enum StoryPosterSource {
 @MainActor
 public enum StoryVideoHost {
     public static func viewerClosed() {
-        StoryItemViewStore.retainDismounted = false   // also releases everything it is holding
+        StoryItemViewStore.retainDismounted = false
+        // ⚠️ AND EXPLICITLY, NOT ONLY THROUGH THE FLAG. The flag's own `didSet` releases on a
+        // true→false EDGE, and a viewer closed with the sheet already down never crosses that edge.
+        // The store is empty in that case, so this is belt — but a live `AVPlayer` surviving behind
+        // a chat list is not a thing to leave to an edge.
+        StoryItemViewStore.releaseAll()
         StoryVideoFrames.clearAll()
     }
 }
