@@ -335,15 +335,15 @@ public final class StoryCardMorph {
     ///
     /// ⚠️ IT EXISTS SO THE HOST STOPS PREDICTING THIS NUMBER. `cardSlot` used to derive the content
     /// height itself, as `screen.height - (currentIsMine ? ownerFooter + bottomInset : 0)`, and size
-    /// the card against that. Two things then had to agree about one rectangle: this, which is
-    /// measured from the metrics the library reports, and that, which is a guess about whether an
-    /// owner footer is drawn — and `currentIsMine` is known to arrive a beat late on a fresh open.
+    /// the card against that. Two things then had to agree about one rectangle: this, measured from
+    /// the metrics the library reports, and that, a guess about whether an owner footer is drawn —
+    /// and `currentIsMine` is known to arrive a beat late on a fresh open.
     ///
     /// When the guess runs high the card ends up TALLER IN ASPECT THAN THE CONTENT, and the crop
     /// then asks for more height than the scaled content actually renders. What fills the surplus is
     /// nothing: a black band across the bottom of the card, which is his report. The margin is small
-    /// — with the footer mispredicted the card wants 0.88 × 852 = 750pt of a content that is only
-    /// 734pt tall — which is why it was intermittent rather than constant.
+    /// — with the footer mispredicted the card wants 0.88 × 852 = 750pt of a content only 734pt tall
+    /// — which is why it appeared intermittently rather than always.
     ///
     /// Nil until a card is registered; the host keeps its old estimate for that window only.
     public var contentSize: CGSize? {
@@ -834,22 +834,20 @@ public final class StoryCardMorph {
     // generates it from the clip's own file at the second that player is actually on. No instant, no
     // subject, no capture — which is why this file no longer knows that video exists.
 
-    // ⚠️ DELETED HERE: `setHidden`, and with it the last of the copy-swap.
-    //
-    // It stepped the live card aside — alpha 0 — while the row was being swiped, because the story
-    // sat pinned at the slot centre and could not follow a card that was mid-flight. The row drew
-    // its own copy of the centre card for the length of the swipe and the real one waited
-    // underneath, the two being the same size in the same place at the moment of the exchange.
-    //
-    // The premise was the bug, not the swap. Two renderers for one story means somebody has to
-    // decide WHEN to exchange them, and that decision was wrong on device twice after being fixed
-    // twice — the flash, the overlapping cards, the story that stayed on A, the black window when a
-    // flag was left standing. The live card is laid out by the row's own geometry now
-    // (`StoryRowGeometry.placeLiveStory`), so it slides where its card would slide. There is nothing
-    // to stand in for it and no instant to get right.
-    //
-    // The alpha it wrote is the cover-flow dim now, and that arrives through `apply(alpha:)` as a
-    // pure function of the card's own position — the same place its size and its corner come from.
+    /// Step the live card aside while the carousel row is being swiped.
+    ///
+    /// The story cannot follow a card that is mid-flight: it sits at the slot centre while the row
+    /// slides past it, so for the length of the swipe the carousel draws its own centre card and the
+    /// real one hides underneath. Both are the same size in the same place at the moment of the
+    /// exchange, so it is not visible. `jumpToStoryItem` has already moved the story to whichever
+    /// card the row settles on by the time it comes back.
+    public func setHidden(_ hidden: Bool) {
+        guard let card else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        card.alpha = hidden ? 0 : 1
+        CATransaction.commit()
+    }
 
     /// Clip the moving card to the STORY during a swipe-down dismiss.
     ///
