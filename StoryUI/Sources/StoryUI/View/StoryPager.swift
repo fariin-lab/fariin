@@ -457,13 +457,26 @@ struct StoryPager: UIViewControllerRepresentable {
                   let to = index(of: parent.viewModel.currentStoryUser),
                   let target = makePage(for: parent.viewModel.currentStoryUser)
             else {
-                // Keep the person the container is actually showing as the truth, so the viewer is
-                // consistent rather than merely still on screen. If even that is gone, close.
-                if let shown, index(of: shown) != nil {
-                    parent.viewModel.currentStoryUser = shown
-                } else {
-                    parent.isPresented = false
-                }
+                // ⚠️ I PUT A REPAIR HERE AND IT MADE HIS REPORT WORSE. IT IS REMOVED, DELIBERATELY.
+                //
+                // It wrote `currentStoryUser = shown` so the viewer would be consistent rather than
+                // merely still on screen. That does not END the failure, it RE-ARMS it: the story is
+                // sitting on its last item, so the advance fires again, fails again, and resets
+                // again. A one-shot black became a loop at timer speed — his "bouncing and
+                // flickering for several seconds, then my own story comes back".
+                //
+                // Ruled out while looking for the real cause, so nobody spends the time twice:
+                //   · the id namespaces MATCH — `bucketID` is assigned from the same validated
+                //     `viewModel.stories[].id` that `index(of:)` searches (`:385`);
+                //   · `StoryUIModel.id` defaults to `UUID()`, but the host always passes
+                //     `id: g.authorUid` explicitly (`StoriesViews:1018`), so bucket ids are stable
+                //     across a rebuild and a cached page's id cannot go missing that way.
+                //
+                // NEXT CANDIDATE, not yet proven: the early return above this one. A sync that
+                // arrives while `isTurning || pager.isActive` sets `syncPending` and returns, and if
+                // that pending sync is never consumed the container keeps showing the old person
+                // while the model names the new one. That is a TIMING failure rather than a lookup
+                // failure, and it would explain why both the tap and the swipe reach it.
                 return
             }
             // ⚠️ THE WARM WAITS FOR THE TURN TO FINISH. It used to start one runloop after the
@@ -590,18 +603,31 @@ struct StoryPager: UIViewControllerRepresentable {
 
         func cubePager(_ pager: StoryCubePagerVC, didSettleOn vc: UIViewController, committed: Bool) {
                 StoryPager.personTurnActive = false
+            // ⚠️ THE TURN IS OVER BEFORE ANY EARLY RETURN CAN SKIP SAYING SO. THIS ORDER IS THE BUG.
+            //
+            // `isTurning = false` and the replay used to sit BELOW the `pendingLanding` branch, and
+            // that branch returns. So a turn this coordinator asked for — the tap path, and a swipe
+            // it completed — left `isTurning` true for ever. Every `syncIfNeeded` after it then hit
+            // `if isTurning { syncPending = true; return }` and the pager could never turn again:
+            // the view model named the next person, the container went on showing the old one, and
+            // the story sitting on its last item re-fired the advance over and over.
+            //
+            // That is his whole report in one control-flow slip — the black on tap-to-next, the
+            // several seconds of bouncing on swipe-to-next, and his own story coming back after
+            // both, because the container never left it. Both paths end at this settle, which is why
+            // both behaved the same.
+            //
+            // The turn is over whether or not it committed and whether or not a landing is queued,
+            // so it is recorded first and unconditionally. `defer` must be registered before the
+            // early return too, or the pending sync is stranded by exactly the same slip.
+            isTurning = false
+            defer { replayPendingSync() }
             // A turn this coordinator asked for finishes its own bookkeeping first.
             if let landing = pendingLanding {
                 pendingLanding = nil
                 landing()
                 return
             }
-            isTurning = false
-            // ⚠️ THE TURN IS OVER WHETHER OR NOT IT COMMITTED, so the pending replay is released
-            // either way. A swipe somebody changed their mind about still ends a turn, and a sync
-            // refused during it must not be stranded — that is how the pager ends up showing one
-            // person while the view model names another.
-            defer { replayPendingSync() }
             guard let cur = (vc as? StoryPageHostVC)?.bucketID else { return }
             // ⚠️ A CANCELLED SWIPE DROPS THE QUEUED TURN INSTEAD OF SPENDING IT. A tap that landed
             // mid-drag computes "the person after ME" and parks in `syncPending`; releasing below
