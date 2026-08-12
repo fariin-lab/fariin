@@ -5716,7 +5716,13 @@ struct MessageBubble: View, Equatable {
             if isMe {
                 switch message.sendState {
                 case .sending:
-                    Image(systemName: "clock").font(.system(size: 9, weight: .semibold))
+                    // THE CLOCK EARNS ITS PLACE (owner's fast-screenshot test, 2026-08-12): the
+                    // reference app never shows a clock on a healthy send — the tick lands before
+                    // the eye can catch a pending state. So the slot stays EMPTY for the first
+                    // 0.8s; a normal send flips to ✓ inside that window and the clock is never
+                    // seen. Only a send still pending after the window shows it — the honest
+                    // slow-network indicator, which is all the clock was ever for.
+                    PendingClockGlyph(bornAt: message.createdAt)
                 case .failed:
                     Image(systemName: "exclamationmark.circle.fill").font(.system(size: 10)).foregroundStyle(.red)
                 case nil:
@@ -5742,6 +5748,32 @@ struct MessageBubble: View, Equatable {
     // Bubbles cap at 72% of screen width and wrap; the right (sent) / left (received)
     // edge stays a clean, uniform line regardless of length.
     private var maxBubbleWidth: CGFloat { UIScreen.main.bounds.width * 0.72 }
+
+    /// The sending clock with its 0.8s grace window — see the `.sending` case above. The glyph is
+    /// drawn at opacity 0 during the grace so the slot's size never shifts; `bornAt` anchors the
+    /// window to the message (a recycled cell for an already-slow send shows the clock at once).
+    private struct PendingClockGlyph: View {
+        let bornAt: Date
+        @State private var showClock: Bool
+        init(bornAt: Date) {
+            self.bornAt = bornAt
+            _showClock = State(initialValue: Date().timeIntervalSince(bornAt) > 0.8)
+        }
+        var body: some View {
+            Image(systemName: "clock")
+                .font(.system(size: 9, weight: .semibold))
+                .opacity(showClock ? 1 : 0)
+                .task {
+                    guard !showClock else { return }
+                    let remaining = 0.8 - Date().timeIntervalSince(bornAt)
+                    if remaining > 0 {
+                        try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+                    }
+                    guard !Task.isCancelled else { return }
+                    withAnimation(.easeIn(duration: 0.15)) { showClock = true }
+                }
+        }
+    }
 
     // Photo bubble sized to the image's natural aspect (capped), not a forced square.
     private var imageDisplaySize: CGSize {
