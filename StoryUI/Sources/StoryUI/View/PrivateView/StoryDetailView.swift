@@ -1417,19 +1417,36 @@ private extension StoryDetailView {
             // its last frame with nothing left to report, and `syncBarToPlayer` caps the bar at
             // `index + 0.999`, so the arithmetic fallback that used to rescue this can never run
             // either. The story freezes on its final frame under a nearly-full bar, for good.
+            // ⚠️ ONE ADVANCE PER TICK, AND THE `else` IS THE WHOLE OF HIS 2026-08-12 BUG.
+            //
+            // His report: image A hands over to video B correctly, then B ends and the viewer CLOSES
+            // instead of going to C. Both tests below read `cur` and `mine`, computed at the TOP of
+            // this tick — before an advance moves the story on. So on the very tick the clip's own
+            // end report is spent, the second test still sees the departed clip: its claim still
+            // matches `cur`, its clock is still parked at its end, and it fires a SECOND advance.
+            // Two items in one tick, and on the last-but-one story that second one runs off the end
+            // of the bucket, where `updateStory` closes the viewer.
+            //
+            // They are alternatives, not a sequence: an end that was REPORTED does not also need to
+            // be INFERRED. On the next tick `mine` is false — the arriving item has not claimed the
+            // session yet — so the inference cannot re-fire on the stale clip either.
+            //
+            // First: the clip said it ended. ⚠️ The latch goes back if the advance is refused —
+            // `updateStory` can decline while a person turn is animating, and a clip reports its end
+            // exactly once. Spending it on a refusal left the player at its last frame with nothing
+            // to report and the bar capped at `index + 0.999`, so nothing could ever rescue it.
             if !isDismissing, mine, video.consumeFinished() {
                 if !advanceFromVideoEnd() { video.rearmFinished() }
             }
-            // ⚠️ AND A CLIP THAT REACHED ITS END WITHOUT SAYING SO IS ADVANCED ANYWAY. Capping the
-            // bar under the boundary means the player's own report is the ONLY way out of a video
-            // segment, which is the reference app's rule — but it also means a truncated or corrupt
-            // clip that plays to its last sample and never emits `AVPlayerItemDidPlayToEndTime`
-            // would hold the viewer for ever. This is the floor under that: the content is here,
-            // the item is meant to be playing, the clock has reached the end, and it has stopped
-            // moving. Nothing legitimate looks like that.
-            if !isDismissing, mine, video.contentLoaded, !video.isPlaying, videoMode == .play,
-               video.duration > 0, video.timestamp >= video.duration - 0.05 {
-                if !advanceFromVideoEnd() { /* a refusal here retries on the next tick */ }
+            // Second: it reached its end without saying so. Capping the bar under the boundary makes
+            // the player's own report the ONLY way out of a video segment, which is the reference
+            // app's rule — and it also means a truncated or corrupt clip that plays to its last
+            // sample and never emits `AVPlayerItemDidPlayToEndTime` would hold the viewer for ever.
+            // The content is here, the item is meant to be playing, the clock has reached the end,
+            // and it has stopped moving. Nothing legitimate looks like that.
+            else if !isDismissing, mine, video.contentLoaded, !video.isPlaying, videoMode == .play,
+                    video.duration > 0, video.timestamp >= video.duration - 0.05 {
+                advanceFromVideoEnd()   // a refusal retries on the next tick
             }
             // ⚠️ AND THE HOST IS TOLD WHICH ITEM IS ON SCREEN, HERE, WHERE NOTHING GATES IT.
             //

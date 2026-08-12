@@ -189,14 +189,16 @@ struct StoryPager: UIViewControllerRepresentable {
         // the own-story one — `StorySoloPager` builds no pager and so never ran that line. Clearing
         // on the way out covers both, because every viewer goes through some teardown.
         //
-        // ⚠️ `heroDismissActive` IS CLEARED HERE AND NOT ON OPEN, deliberately. The hero OPEN raises
-        // it too, so zeroing it in `makeUIViewController` would unfreeze the cube during the very
-        // flight it exists to freeze. Teardown is unambiguous: nothing is dismissing a viewer that
-        // has gone.
+        // ⚠️ `heroDismissActive` IS **NOT** CLEARED HERE, and that is a deliberate refusal rather
+        // than an omission. The hero OPEN raises it, and SwiftUI dismantles this representable AFTER
+        // building its replacement — the lesson written seven lines below about `detach`. So a
+        // teardown landing after the NEXT viewer's open flight had started would zero the flag
+        // during the very flight it exists to freeze, which is a worse bug than the one it would
+        // fix. The other three are safe on that ordering because nothing raises them at creation:
+        // they are raised by a turn, which cannot have happened yet.
         StoryPager.personTurnActive = false
         StoryPager.cubeTurnActive = false
         StoryPager.dismissActive = false
-        StoryCardMorph.heroDismissActive = false
         // The card is going away. Leaving a stale transform on a recycled view would open the next
         // story already shrunken, and the reference is weak but the MASK is not: detach clears both.
         //
