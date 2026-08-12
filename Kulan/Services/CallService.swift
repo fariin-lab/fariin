@@ -80,7 +80,7 @@ final class CallService: NSObject {
                 wantsSpeaker = false        // stale intent made the NEXT voice call blast on loudspeaker
                 cameraPausedByBackground = false; stopPausedCameraRetry()
                 stopLinkMonitor()
-                calleeRinging = false; calleeAccepted = false; recordWritten = false; minimized = false; liveRingRowId = nil
+                calleeRinging = false; calleeAccepted = false; wasAccepted = false; recordWritten = false; minimized = false; liveRingRowId = nil
                 endReason = .none; negotiationVersion = 0; appliedRemoteRestart = 0
                 pendingOffer = nil
                 pendingRemoteCandidates = []; localCandidateBuffer = []; callDocCreated = false
@@ -114,6 +114,11 @@ final class CallService: NSObject {
     var connectedDate: Date?
     var endReason: EndReason = .none // last/in-progress end reason (UI reads it for the label)
     private var recordWritten = false
+    /// EITHER side accepted this call (callee: the tap; caller: the acceptedAt signal). Telegram's
+    /// record rule, adopted on his order: an accepted call that then FAILS logs as a plain call,
+    /// never as "missed" — the person answered, and a red "Missed call · Call back" in the
+    /// answerer's own chat reads as a lie.
+    private var wasAccepted = false
     /// Set when THIS device (the caller) wrote the live "Ringing" row. Cleared when recordCall
     /// finalises it; if a teardown path suppresses the record (glare loser, blocked, answered
     /// elsewhere), finishCall deletes the row instead, so no chat keeps a call that never became
@@ -410,18 +415,29 @@ final class CallService: NSObject {
 
     // MARK: - Video tracks / capture
 
-    // Adds the local video track (once, at call setup). Only fires the camera + its permission
-    // prompt if my camera is actually on now — a voice call adds a silent, disabled track.
-    private func addLocalVideo(to connection: RTCPeerConnection?) {
-        guard let connection else { return }
+    // TELEGRAM'S WARM-UP (read from their source 2026-08-12): the capturer and track need no peer
+    // connection, so a video-call ACCEPT can spin the camera up while TURN and the SDP answer are
+    // still in flight, and the face shows the instant the call connects instead of a beat later.
+    // Idempotent — the later attach reuses whatever is already warm. Torn down by the idle reset.
+    private func prepareLocalVideo() {
+        guard videoCapturer == nil else { return }
         let source = Self.factory.videoSource()
         let capturer = RTCCameraVideoCapturer(delegate: source)
         let track = Self.factory.videoTrack(with: source, trackId: "video0")
         track.isEnabled = cameraOn
-        connection.add(track, streamIds: ["stream0"])
         videoCapturer = capturer
         localVideoTrack = track
         if cameraOn { startCameraCapture() }
+    }
+
+    // Adds the local video track (once, at call setup). Only fires the camera + its permission
+    // prompt if my camera is actually on now — a voice call adds a silent, disabled track.
+    private func addLocalVideo(to connection: RTCPeerConnection?) {
+        guard let connection else { return }
+        prepareLocalVideo()
+        guard let track = localVideoTrack else { return }
+        track.isEnabled = cameraOn   // the toggle may have moved between warm-up and attach
+        connection.add(track, streamIds: ["stream0"])
     }
 
     // Ask for camera access, then feed frames into the local track (off the main thread). Without
@@ -1648,6 +1664,10 @@ final class CallService: NSObject {
         // the heavy chain stalls, the caller stops ringing and shows "Connecting…" instead of
         // ringing out on a call that was answered.
         db.collection("calls").document(id).updateData(["acceptedAt": FieldValue.serverTimestamp()])
+        wasAccepted = true
+        // Video call: warm the camera NOW, in parallel with permissions/TURN/SDP (Telegram's order),
+        // so the local video is live the moment the connection comes up.
+        if cameraOn { prepareLocalVideo() }
         ensureMicPermission { [weak self] granted in
             guard let self else { return }
             guard granted else { self.hangUp(); return }
@@ -1788,6 +1808,7 @@ final class CallService: NSObject {
             // rang the full timeout on a call that was picked up), not sit "Ringing" for 45s.
             if self.isCaller, d["acceptedAt"] != nil, !self.calleeAccepted, self.state == .outgoing {
                 self.calleeAccepted = true
+                self.wasAccepted = true
                 self.stopRingback()
                 self.noAnswerWork?.cancel()
                 self.startAcceptedConnectTimeout()
@@ -1934,7 +1955,10 @@ final class CallService: NSObject {
             // "No answer", the decliner sees the same red "Missed call · Call back" as an ignored
             // ring. `EndReason.declined` still exists internally (teardown paths), it just never
             // reaches the record. Do not bring the "declined" outcome back without his word.
-            let outcome = connected ? "answered" : "missed"
+            //
+            // `wasAccepted` (Telegram's rule): a call somebody ANSWERED can never log as missed,
+            // even when the connection then failed — it renders as a plain call with no duration.
+            let outcome = (connected || wasAccepted) ? "answered" : "missed"
             let cid = [me, otherUid].sorted().joined(separator: "_")
             let cidCallId = callId ?? UUID().uuidString
             // The record says what the call WAS, not how it was placed (his report: voice call,
