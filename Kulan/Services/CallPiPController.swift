@@ -120,8 +120,9 @@ final class CallPiPController: NSObject {
     }
 }
 
-// The PiP window's content: the big feed filling it, the small tile in the top-right corner —
-// the same arrangement as the call screen.
+// The PiP window's content: the big feed filling it, the small tile in the bottom-right corner —
+// the same arrangement as the call screen (owner's side-by-side reference, 2026-08-12: the
+// self-tile's home is the BOTTOM corner everywhere, in the window as on the call screen).
 final class PiPCallViewController: AVPictureInPictureVideoCallViewController {
     private let bigView: PiPVideoView
     private let tileView: PiPVideoView
@@ -151,7 +152,7 @@ final class PiPCallViewController: AVPictureInPictureVideoCallViewController {
         let w = max(36, b.width * 0.30)
         let h = w * 16.0 / 9.0
         let inset = max(4, b.width * 0.045)
-        tileView.frame = CGRect(x: b.maxX - w - inset, y: b.minY + inset, width: w, height: h)
+        tileView.frame = CGRect(x: b.maxX - w - inset, y: b.maxY - h - inset, width: w, height: h)
         tileView.layer.cornerRadius = min(10, w * 0.16)
         tileView.layer.cornerCurve = .continuous
     }
