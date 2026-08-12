@@ -160,7 +160,11 @@ struct CallView: View {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture { toggleControls() }
-                if call.isVideo { pipLayer(geo) }
+                // zIndex: the video card is the TOP layer, always (owner's side-by-side reference,
+                // 2026-08-12: on a voice call that turns on a camera, ours slid UNDER the avatar
+                // circle; the standard is avatar behind, card in front). The card's drag bounds
+                // keep it clear of the header and control bar, so nothing interactive is covered.
+                if call.isVideo { pipLayer(geo).zIndex(2) }
 
                 VStack(spacing: 0) {
                     topBar(safeTop: winInsets.top)
