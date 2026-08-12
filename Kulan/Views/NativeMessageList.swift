@@ -593,9 +593,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             guard let self else { return UICollectionViewCell() }
             // ROUTER: native UIKit cell when the message is supported (plain 1:1 delivered text), else the
             // SwiftUI hosting cell. Routing reads the FROZEN snapshot dict, never live view state.
-            let isUikit = self.uikitModels[id] != nil
-            self.configuredRoutes[id] = isUikit
-            if isUikit {
+            let desired = self.uikitModels[id] != nil
+            // CRASH GUARD (.ips build 542, SIGABRT mid fast chat). A queued reconfigure can execute
+            // LATER than the code that queued it — UIKit holds a prefetched cell's reconfigure until
+            // the cell scrolls in. If the route flipped in that gap (a send confirming, a re-sort
+            // moving the date pill or the cluster caps), dequeueing the new class here hands the
+            // reconfigure a different cell type than the one it is refreshing, and UIKit aborts the
+            // app. So: serve the class this id's cell was LAST configured with — always legal — and
+            // swap renderers with a real reload one runloop later.
+            let route = self.configuredRoutes[id] ?? desired
+            if route != desired { self.scheduleRouteRepair(id) }
+            self.configuredRoutes[id] = route
+            if route {
                 return cv.dequeueConfiguredReusableCell(using: self.uikitReg, for: ip, item: id)
             }
             return cv.dequeueConfiguredReusableCell(using: self.reg, for: ip, item: id)
@@ -921,6 +930,44 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         return (reconf, reload)
     }
 
+    // Queue a split's reload half. Clearing configuredRoutes FIRST is load-bearing: the provider
+    // serves the last-configured class when an entry exists (the crash guard), and a reload replaces
+    // the cell, so the fresh dequeue must be free to take the new class or the swap never happens.
+    private func queueReload(_ ids: [String], into snapshot: inout NSDiffableDataSourceSnapshot<Int, String>) {
+        guard !ids.isEmpty else { return }
+        ids.forEach { configuredRoutes.removeValue(forKey: $0) }
+        snapshot.reloadItems(ids)
+    }
+
+    // Repair channel for the provider's crash guard: ids that were served their OLD cell class to
+    // satisfy an in-flight reconfigure, and now need a real reload to swap renderers. Async because
+    // the provider runs inside UIKit's update pass — applying a snapshot there would re-enter it.
+    private var routeRepairIds = Set<String>()
+    private func scheduleRouteRepair(_ id: String) {
+        let firstInBatch = routeRepairIds.isEmpty
+        routeRepairIds.insert(id)
+        guard firstInBatch else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let ids = self.routeRepairIds
+            self.routeRepairIds.removeAll()
+            var snap = self.dataSource.snapshot()
+            let present = ids.filter { snap.itemIdentifiers.contains($0) }
+            guard !present.isEmpty else { return }
+            // The other renderer can measure differently — refresh the cache so the reload lands in
+            // a frame of the right size.
+            let width = self.collectionView.bounds.width
+            if width > 0 {
+                for id in present {
+                    let h = self.measure(id, width: width)
+                    if abs((self.heights[id] ?? 0) - h) > 2 { self.heights[id] = h; self.layout.generation += 1 }
+                }
+            }
+            self.queueReload(Array(present), into: &snap)
+            self.dataSource.apply(snap, animatingDifferences: false)
+        }
+    }
+
     // Re-measure + reconfigure on-screen rows whose content changed, then let the layout absorb any height
     // change with the reader held still.
     //
@@ -970,7 +1017,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let present = Set(snapshot.itemIdentifiers)
         let split = splitByRouteFlip(target.filter(present.contains))
         if !split.reconfigure.isEmpty { snapshot.reconfigureItems(split.reconfigure) }
-        if !split.reload.isEmpty { snapshot.reloadItems(split.reload) }
+        queueReload(split.reload, into: &snapshot)
         var delta: CGFloat = 0
         if heightChanged {
             layout.generation += 1
@@ -1162,7 +1209,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if !contentChanged.isEmpty {
             let split = splitByRouteFlip(contentChanged)
             if !split.reconfigure.isEmpty { snapshot.reconfigureItems(split.reconfigure) }
-            if !split.reload.isEmpty { snapshot.reloadItems(split.reload) }
+            queueReload(split.reload, into: &snapshot)
         }
         currentIds = ids
         layout.generation += 1   // ids/heights changed â†’ next prepare() rebuilds frames
@@ -1297,7 +1344,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         var delta: CGFloat = 0
         if let a = anchor, let b = beforeY[a.id], let f = afterY[a.id] { delta = f - b }
         if delta != 0 { layout.pendingContentOffsetAdjustment = delta }
-        snap.reconfigureItems(changed)
+        // Route-flip split, same as every other refresh path (build-542 .ips): this runs one runloop
+        // after the insert, and the just-sent message is EXACTLY the row whose route flips when the
+        // server ack lands inside that gap — reconfiguring it across the flip aborts the app.
+        let split = splitByRouteFlip(changed)
+        if !split.reconfigure.isEmpty { snap.reconfigureItems(split.reconfigure) }
+        queueReload(split.reload, into: &snap)
         dataSource.apply(snap, animatingDifferences: false) { [weak self] in
             guard let self else { return }
             self.layout.pendingContentOffsetAdjustment = 0
@@ -1730,7 +1782,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
             if !visible.isEmpty {
                 var snap = dataSource.snapshot()
-                snap.reconfigureItems(visible)
+                // Route-flip split here too (build-542 .ips): a width change can arrive with stale
+                // routes, and reconfigure cannot cross cell classes.
+                let split = splitByRouteFlip(visible)
+                if !split.reconfigure.isEmpty { snap.reconfigureItems(split.reconfigure) }
+                queueReload(split.reload, into: &snap)
                 dataSource.apply(snap, animatingDifferences: false)
             }
         }
