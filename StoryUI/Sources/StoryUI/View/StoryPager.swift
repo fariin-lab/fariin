@@ -44,52 +44,31 @@ struct StoryPager: UIViewControllerRepresentable {
     // zoom-transition interactive dismiss, layout shifts — must never fold the pages.
     static weak var horizontalScroll: UIScrollView?
 
-    /// HOW LONG A PROGRAMMATIC PERSON-TO-PERSON TURN TAKES — the owner's number (2026-08-11:
-    /// "approximately 0.10 seconds… feels fast and responsive"). It replaces
-    /// `UIPageViewController`'s own slide, whose duration is private and several times this.
+    /// ⚠️ DELETED HERE: `PersonTransition`, `personTransition` and `personTurnDuration`.
     ///
-    /// ⚠️ NOTHING TO DO WITH THE 3D CUBE, which is driven by the finger and has no duration of its
-    /// own — see the note at the `CATransition` in `syncIfNeeded`.
-    static let personTurnDuration: CFTimeInterval = 0.10
-
-    /// HOW MUCH FASTER THE CUBE'S TAP TURN PLAYS THAN `UIPageViewController` would play it.
+    /// The person-to-person turn used to be a SETTING with two implementations behind it — a flat
+    /// 100ms `CATransition` push (the default, and so what everybody actually got) and the 3D cube.
+    /// Both were kept switchable on his 2026-08-11 instruction, to be compared rather than replaced.
     ///
-    /// A multiplier and not a duration, because the duration it is scaling is private to UIKit. 3x
-    /// puts a turn that reads as roughly a third of a second near the 0.10s the flat turn uses,
-    /// which is the number he gave for that one. See the note at the call site for why the cube
-    /// cannot simply name its own duration the way the flat turn does.
-    static let cubeTurnSpeedup: Float = 3.0
-
-    /// WHICH PERSON-TO-PERSON TRANSITION IS RUNNING — both are kept, on the owner's instruction
-    /// (2026-08-11: "do not delete the current Flat Animation… I want both implementations available
-    /// so I can test").
+    /// He compared them on 2026-08-12 and ruled: the cube is the transition, and the flat slide
+    /// "should no longer exist anywhere in the person-to-person story transition". So there is one
+    /// path now, it is the cube, and there is no flag to read — which also removes the class of bug
+    /// where a gate somewhere reads the setting and a gate somewhere else does not.
     ///
-    /// `flat` is the shipped one and is untouched by any of this: the 100ms `CATransition` push in
-    /// `syncIfNeeded`. `cube` reuses the 3D fold this viewer has always had for finger swipes
-    /// (`StoryDetailView.getAngle`) rather than inventing a second animation — his other
-    /// instruction, and the right call anyway: one fold, driven two ways.
-    public enum PersonTransition: String {
-        case flat, cube
-    }
-
-    /// Read at the moment of each turn, so flipping it takes effect on the very next tap without
-    /// reopening the viewer. Defaults to `flat`, which is exactly what shipped.
-    public static var personTransition: PersonTransition {
-        get { PersonTransition(rawValue: UserDefaults.standard.string(forKey: "story.personTransition") ?? "") ?? .flat }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "story.personTransition") }
-    }
+    /// The `getAngle` fold in `StoryDetailView` went with it. That was a SECOND cube, in SwiftUI,
+    /// 45° off a `GeometryReader`'s `minX` — and a GeometryReader re-evaluates on SIZE, not POSITION,
+    /// so it could not follow a finger at all. Two folds on the same pages is what produced the shake.
 
     /// TRUE while a PROGRAMMATIC cube turn is in flight — a tap, or an auto-advance.
     ///
-    /// ⚠️ THE CUBE'S GATE NEEDS THIS AND CANNOT WORK WITHOUT IT. `getAngle` folds only while the
+    /// ⚠️ THE CUBE'S GATE NEEDS THIS AND CANNOT WORK WITHOUT IT. `applyCube` folds only while the
     /// pager's scroll view is live (tracking / dragging / decelerating), because any OTHER movement
     /// of a page's origin — Apple's zoom dismiss, a layout shift — must never fold the pages. A
-    /// programmatic turn moves the pages by FRAME and never touches those flags, so the fold would
-    /// simply not run and a tap would slide flat however the setting was written.
+    /// programmatic turn moves the pages by FRAME and never touches those scroll flags, so without
+    /// this the fold would simply not run and a tap would slide flat.
     ///
-    /// Cleared on the turn's completion, and it is deliberately a plain static rather than state:
-    /// `getAngle` is read from a SwiftUI body during the animation and must not have to wait for a
-    /// publish to see it.
+    /// Cleared on the turn's completion, and deliberately a plain static rather than published
+    /// state: it is read from a display link at up to 120Hz and must not wait on a publish.
     static var cubeTurnActive = false
 
     /// TRUE FOR THE WHOLE OF ANY PROGRAMMATIC PERSON-TO-PERSON TURN — cube or flat — and it is what
@@ -468,92 +447,42 @@ struct StoryPager: UIViewControllerRepresentable {
             isTurning = true
             // The tap's lock, raised with the sync's — see `StoryPager.personTurnActive`.
             StoryPager.personTurnActive = true
-            // ⚠️ THE CUBE PATH IS A SEPARATE BRANCH AND THE FLAT ONE BELOW IS UNTOUCHED — his
-            // instruction, so the two can be compared without one having been rewritten to suit the
-            // other. See `StoryPager.personTransition`.
+            // ⚠️ ONE PATH. THE CUBE IS THE PERSON-TO-PERSON TURN — his 2026-08-12 ruling, after
+            // comparing it against the flat slide that used to be the default here.
             //
-            // It hands the turn back to `UIPageViewController`'s own animated move, which is what
-            // the fold needs: that move slides the pages by FRAME, so every page's global origin
-            // travels and `getAngle` has something real to derive an angle from — exactly the same
-            // input a finger swipe gives it. The flat push cannot be used here because a
-            // `CATransition` animates the CONTAINER's rendered content, so the pages never move
-            // individually and there is nothing to fold.
+            // Deleted with the branch: a `CATransition` push that animated the CONTAINER's rendered
+            // content. That is why it could never be folded — the pages never moved individually, so
+            // there was nothing for a cube to derive an angle from, and the two could not be made
+            // into one thing however the setting was written.
             //
-            // `cubeTurnActive` opens the fold's gate for the length of it, and the completion is what
-            // closes it, so an interrupted turn cannot strand the pages mid-rotation.
-            if StoryPager.personTransition == .cube {
-                StoryPager.cubeTurnActive = true
-                // ⚠️ THE LAYER'S CLOCK, BECAUSE APPLE'S DURATION IS PRIVATE — his "it works but it is
-                // too slow". The flat turn simply names its own duration on a `CATransition`, and
-                // that trick is not available here: the fold is derived from where the pages ARE, so
-                // they have to genuinely travel, which means `UIPageViewController`'s own animated
-                // move. There is no API for how long that takes.
-                //
-                // `layer.speed` is the time base every animation on that layer is played through, so
-                // running the scroll view at 3x plays UIKit's turn at a third of its length without
-                // touching the turn itself. Nothing about the movement changes except how long it
-                // lasts, which is exactly what he asked for.
-                //
-                // ⚠️ IT MUST BE PUT BACK, and not only in the completion. A speed left at 3 belongs
-                // to the layer, not to this turn, and would quietly accelerate every later animation
-                // on the pager's scroll view — including the dismiss spring. The belt below runs on
-                // our own clock so a completion that never arrives cannot strand it.
-                let scroll = internalScroll
-                scroll?.layer.speed = StoryPager.cubeTurnSpeedup
-                let restoreSpeed = { scroll?.layer.speed = 1.0 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { restoreSpeed() }
-                pager.setViewControllers([target], direction: to > from ? .forward : .reverse,
-                                         animated: true) { [weak self] _ in
-                    restoreSpeed()
-                    StoryPager.cubeTurnActive = false
-                    StoryPager.personTurnActive = false
-                    guard let self else { return }
-                    // ⚠️ `isTurning` COMES DOWN HERE AND NOWHERE EARLIER. It is the crash guard (see
-                    // its note: a second turn over the top of a live one is a UIKit assertion), so
-                    // it is tied to the real end of the transition, never to a duration we guessed.
-                    self.isTurning = false
-                    self.prewarmNeighbours(of: next)
-                    self.replayPendingSync()
-                }
-                return
-            }
-            // ⚠️ OUR OWN TURN, NOT APPLE'S — owner 2026-08-11: the flat slide "feels too slow and
-            // heavy", and he asked for roughly 100ms.
+            // This hands the turn to `UIPageViewController`'s own animated move, which is exactly
+            // what the fold needs: the pages travel by FRAME, so every page's origin genuinely
+            // moves and the display link has real positions to read — the same input a finger gives
+            // it. One fold, two drivers, no flag.
+            StoryPager.cubeTurnActive = true
+            // ⚠️ THE LAYER'S CLOCK, BECAUSE APPLE'S DURATION IS PRIVATE. The fold is derived from
+            // where the pages ARE, so they have to genuinely travel, which means UIKit's animated
+            // move — and there is no API for how long that takes. `layer.speed` is the time base
+            // every animation on that layer plays through, so raising it plays UIKit's turn shorter
+            // without touching the turn itself.
             //
-            // This was `animated: true`, which hands the whole thing to `UIPageViewController`: its
-            // duration is private, it is around three to five times this, and the comment that used
-            // to sit here said in as many words that we could not shorten it. That was true of THAT
-            // call and not of the screen. Handing UIKit `animated: false` makes the swap instant, and
-            // a `CATransition` on the pager's own layer draws the movement at whatever duration we
-            // name — a push, which is the same shape the flat slide had, so nothing about the look
-            // changes except how long it takes.
-            //
-            // It also runs on the render server rather than through UIKit's transition machinery, so
-            // it costs the main thread nothing at the moment the next person's page is laying out.
-            //
-            // ⚠️ THIS DOES NOT TOUCH THE 3D CUBE, and that is the owner's explicit instruction. The
-            // cube belongs to the FINGER: `getAngle` folds pages while `StoryPager.horizontalScroll`
-            // is tracking, and an interactive swipe never reaches this code — it lands through
-            // `didFinishAnimating`, by which time `shown` already equals `currentStoryUser` and the
-            // guard above has returned. This path is only ever a PROGRAMMATIC turn: tapping past the
-            // end of a person, or auto-advance.
-            let slide = CATransition()
-            slide.type = .push
-            slide.subtype = to > from ? .fromRight : .fromLeft
-            slide.duration = StoryPager.personTurnDuration
-            // Out fast, settle at the end: at 100ms an ease-in would read as a stutter rather than
-            // as easing, because there is not enough time to feel the acceleration.
-            slide.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            pager.view.layer.add(slide, forKey: "personTurn")
+            // ⚠️ IT MUST BE PUT BACK, and not only in the completion. A raised speed belongs to the
+            // layer, not to this turn, and would quietly accelerate every later animation on the
+            // pager's scroll view — including the dismiss spring. The belt below runs on our own
+            // clock so a completion that never arrives cannot strand it.
+            let scroll = internalScroll
+            scroll?.layer.speed = StoryPager.cubeTurnSpeedup
+            let restoreSpeed = { scroll?.layer.speed = 1.0 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { restoreSpeed() }
             pager.setViewControllers([target], direction: to > from ? .forward : .reverse,
-                                     animated: false)
-            // ⚠️ NOT `setViewControllers`' COMPLETION ANY MORE. With `animated: false` UIKit calls it
-            // immediately, so the warm would start ON TOP of the transition we just began — the very
-            // contention the note above exists to avoid. Our own clock owns the turn now, so the
-            // guard comes down and the warm starts when the movement is actually over.
-            DispatchQueue.main.asyncAfter(deadline: .now() + StoryPager.personTurnDuration) { [weak self] in
+                                     animated: true) { [weak self] _ in
+                restoreSpeed()
+                StoryPager.cubeTurnActive = false
                 StoryPager.personTurnActive = false
                 guard let self else { return }
+                // ⚠️ `isTurning` COMES DOWN HERE AND NOWHERE EARLIER. It is the crash guard (see its
+                // note: a second turn over the top of a live one is a UIKit assertion), so it is tied
+                // to the real end of the transition, never to a duration we guessed.
                 self.isTurning = false
                 self.prewarmNeighbours(of: next)
                 self.replayPendingSync()
@@ -737,7 +666,7 @@ struct StoryPager: UIViewControllerRepresentable {
             updateCubeLink()
         }
 
-        /// ⚠️ ONE OWNER FOR THE FOLD, AND WHICH ONE DEPENDS ON THE SETTING.
+        /// ⚠️ ONE OWNER FOR THE FOLD, AND THERE IS NO LONGER A SETTING TO ASK.
         ///
         /// His 2026-08-12 report: the cube folds on a TAP and does nothing on a finger swipe. The
         /// cause is in this file's own history. `02cc55d1` retired this display link in favour of
@@ -754,22 +683,18 @@ struct StoryPager: UIViewControllerRepresentable {
         /// This link reads `layer.position` and `contentOffset` directly, so position is exactly what
         /// it is made of, and it covers both paths with one mechanism.
         ///
-        /// ⚠️ IT MUST NOT RUN WHILE SWIFTUI IS ALSO FOLDING — that is what produced the shake and the
-        /// black flash `02cc55d1` was fixing. `getAngle` returns zero in cube mode for precisely this
-        /// reason; the two are one switch, and flipping one without the other brings the shake back.
+        /// ⚠️ AND THE SWIFTUI FOLD IT USED TO SHARE THE JOB WITH IS DELETED, NOT DISABLED. Two things
+        /// folding the same pages is what produced the shake and the black flash. `getAngle` used to
+        /// return zero in cube mode to stay out of the way; there is no mode any more, so there is
+        /// nothing for it to stay out of the way OF, and a fold that can only ever return zero is a
+        /// trap for whoever reads it next. This link is the only thing that folds a page.
         func updateCubeLink() {
-            let wantsCube = StoryPager.personTransition == .cube
-            if wantsCube, cubeLink == nil {
-                let link = CADisplayLink(target: self, selector: #selector(applyCube))
-                // `.common` so the fold keeps running while the scroll view is tracking a finger,
-                // which is the entire case this exists for.
-                link.add(to: .main, forMode: .common)
-                cubeLink = link
-            } else if !wantsCube, let link = cubeLink {
-                link.invalidate()
-                cubeLink = nil
-                resetCubeTransforms()
-            }
+            guard cubeLink == nil else { return }
+            let link = CADisplayLink(target: self, selector: #selector(applyCube))
+            // `.common` so the fold keeps running while the scroll view is tracking a finger, which
+            // is the entire case this exists for.
+            link.add(to: .main, forMode: .common)
+            cubeLink = link
         }
 
         /// Every page back to flat. A page keeps whatever transform it was last given, so leaving

@@ -1224,14 +1224,11 @@ struct AboutView: View {
 struct StorySettingsView: View {
     @AppStorage("storyViewReceipts") private var viewReceipts = true
     @AppStorage("storiesOptedOut") private var optedOut = false
-    /// ⚠️ THE SAME DEFAULTS KEY `StoryPager.personTransition` READS, spelled out rather than shared:
-    /// the library owns the enum and the app owns the switch, and a `@AppStorage` cannot bind to a
-    /// computed property across a package boundary. `true` is `.cube`, absent/false is `.flat` —
-    /// which is what shipped, so an untouched install behaves exactly as it did.
-    @AppStorage("story.personTransition") private var transitionRaw = "flat"
-    private var cubeTransition: Binding<Bool> {
-        Binding(get: { transitionRaw == "cube" }, set: { transitionRaw = $0 ? "cube" : "flat" })
-    }
+    // DELETED HERE: the "3D Cube Transition" toggle and the `story.personTransition` defaults key it
+    // wrote. Both transitions were kept switchable on his 2026-08-11 instruction so he could compare
+    // them; on 2026-08-12 he compared them and ruled — the cube is the only one, and the flat slide
+    // "should no longer exist anywhere in the person-to-person story transition". A setting whose
+    // off position no longer exists is not a setting.
     @State private var confirmOff = false
     @State private var audiences = StoryAudienceStore.shared
     @State private var contacts: [StoryContact] = []
@@ -1275,14 +1272,6 @@ struct StorySettingsView: View {
                     Toggle("View Receipts", isOn: $viewReceipts).tint(.green)
                 } footer: {
                     Text("See and share when stories are viewed. If disabled, you won't see when others view your stories.")
-                }
-                // BOTH TRANSITIONS, SWITCHABLE, because he asked to compare them rather than to
-                // replace one with the other. Read at the moment of each turn, so flipping it takes
-                // effect on the very next tap without leaving this screen.
-                Section {
-                    Toggle("3D Cube Transition", isOn: cubeTransition).tint(.green)
-                } footer: {
-                    Text("Turn the page like a cube when moving between people's stories. Off uses the flat slide.")
                 }
             }
             Section {

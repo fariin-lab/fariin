@@ -535,12 +535,20 @@ struct StoryDetailView: View {
             // The chrome overlay that used to be HERE, on the whole screen, is on the card now — see
             // the note beside it. Leaving a copy at this level would draw the bars twice, once inside
             // the story and once on the black above it.
-            .rotation3DEffect(
-                getAngle(proxy: proxy),
-                axis: (x: 0, y: 1, z: 0),
-                anchor: proxy.frame(in: .global).minX > 0 ? .leading : .trailing,
-                perspective: 2.5
-            )
+            // ⚠️ THE `rotation3DEffect` THAT USED TO BE HERE IS DELETED, AND SO IS `getAngle`.
+            //
+            // It was a SECOND cube: 45° off `proxy.frame(in: .global).minX`, in SwiftUI, alongside
+            // the pager's own fold. It could not work on the path that matters — a GeometryReader
+            // re-evaluates on SIZE, not on POSITION, and a finger swipe moves the pages by scroll
+            // offset, so nothing re-sampled the angle and the page stayed flat. A tap only worked by
+            // accident, because the view model is written first and the arriving page re-renders
+            // through the turn.
+            //
+            // Two things folding the same pages is what produced the shake and the black flash, so
+            // it was gated off whenever the real cube was on. That left a fold which could only ever
+            // return zero — dead code that reads like a live mechanism. `StoryPager.applyCube` is
+            // the only thing that folds a page now, it reads layer positions directly, and it covers
+            // the finger and the tap with one mechanism.
             // report how far this page is from centre so the timer can pause mid-fold
             .preference(key: StoryFoldKey.self, value: proxy.frame(in: .global).minX)
         }
@@ -1156,8 +1164,8 @@ private extension StoryDetailView {
             // ⚠️ `.simultaneousGesture`, NEVER `.gesture`, AND THIS COST HIM THE 3D CUBE.
             //
             // `.gesture` CLAIMS the touch. The pager's page turn is a UIScrollView underneath this
-            // overlay, and the cube's fold angle is only computed while that scroll view is actually
-            // tracking (`getAngle` returns flat unless `StoryPager.horizontalScroll` is live). So a
+            // overlay, and the cube's fold is only computed while that scroll view is actually
+            // moving (`StoryPager.applyCube` folds nothing at rest). So a
             // SwiftUI gesture that takes the touch first does not merely compete with the page
             // swipe — it stops the scroll view from ever entering a tracking state, and the fold
             // never runs. His report on the last beta: the 3D cube scroll is not working.
@@ -1240,47 +1248,10 @@ private extension StoryDetailView {
             }
     }
     
-    func getAngle(proxy: GeometryProxy) -> Angle {
-        // ⚠️ IN CUBE MODE THIS FOLD IS OFF, AND THE PAGER'S DISPLAY LINK OWNS IT INSTEAD.
-        //
-        // Two things folding the same pages is what produced the shake and the black flash that
-        // `02cc55d1` removed the UIKit link to fix. The link is back (see `StoryPager.updateCubeLink`)
-        // because THIS fold cannot work on a finger swipe: the angle comes from
-        // `proxy.frame(in: .global)`, and a GeometryReader re-evaluates on SIZE, not POSITION — a
-        // swipe moves the pages by scroll offset, so nothing re-samples it and the page stays flat.
-        // His 2026-08-12 report is exactly that, and the tap only worked by accident.
-        //
-        // ⚠️ THESE TWO LINES ARE ONE SWITCH. Turning this back on without stopping the link brings
-        // the shake back; the `flat` setting below is untouched and still folds under a finger.
-        if StoryPager.personTransition == .cube { return .zero }
-        // Cube is INERT while a swipe-down dismiss moves the card: the fold angle derives from
-        // the page's GLOBAL minX, and the dismiss transform shifts it — a fast flick otherwise
-        // slams the page into a sudden violent 3D fold (flipped/black frames on close).
-        // Both flags mean "the card is being moved by something that is not a page swipe": the
-        // library's own dismiss writes the transform itself, the hero close drives it through
-        // StoryCardMorph. Either way the page's global minX is no longer evidence of anything.
-        if StoryPager.dismissActive || StoryCardMorph.heroDismissActive { return .zero }
-        // And the fold may fire ONLY during a live horizontal page swipe. Apple's zoom-dismiss
-        // (the native close) moves every page's global minX while it shrinks the cover — the
-        // cube folding along with it was the true source of the fast-flick "explosions".
-        // NIL MEANS FLAT TOO: the solo host (my own story) never has a horizontal scroll, and the
-        // friends pager has none for the first beat after mount — in both cases nothing is being
-        // page-swiped, so nothing may fold. The old `if let` fell through on nil and computed an
-        // angle, which let the OPEN hero fold the page before the pager had bound its scroll.
-        // ⚠️ AND A PROGRAMMATIC CUBE TURN COUNTS AS MOVEMENT TOO. A tap moves the pages by frame and
-        // never touches the scroller's flags, so without this the fold would only ever run under a
-        // finger and a tapped turn would slide flat whatever the setting said. Narrow on purpose:
-        // the flag is raised around one `setViewControllers` and lowered in its completion, so
-        // nothing else — the zoom dismiss, a layout shift — can reach it. See
-        // `StoryPager.cubeTurnActive`.
-        let live = StoryPager.horizontalScroll.map { $0.isTracking || $0.isDragging || $0.isDecelerating } ?? false
-        guard live || StoryPager.cubeTurnActive else { return .zero }
-        // StoryUI library's cube (tiskender2/StoryUI): angle = 45° × (minX / width). Combined with the
-        // pager's horizontal slide + the .leading/.trailing anchor + perspective 2.5, this IS the cube —
-        // pure SwiftUI, no UIKit transform feedback (so no shake/black).
-        let progress = proxy.frame(in: .global).minX / proxy.size.width
-        return Angle(degrees: 45 * progress)
-    }
+    // DELETED HERE: `getAngle(proxy:)`, the SwiftUI half of the cube. See the note at the
+    // `rotation3DEffect` it fed, in `body`. It derived 45° from a GeometryReader's global minX,
+    // which cannot follow a finger, and it was gated off whenever the real cube was running — so it
+    // was a fold that could only ever return zero. `StoryPager.applyCube` owns the fold.
     
     // DELETED HERE: `resumeFraction(at:)`. It topped the bar up to a REMEMBERED playback position
     // so bar and player could resume together. There is no remembered position any more — a video
