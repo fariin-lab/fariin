@@ -2138,23 +2138,27 @@ enum ChatService {
             .setData(["lastRead": [uid: FieldValue.serverTimestamp()]], merge: true)
     }
 
-    // Throttled read receipts (a debounced receipt sender): the per-received-message call in an
-    // open chat was one Firestore write PER message — a 20-message burst = 20 billed writes. This fires
-    // immediately when idle, then suppresses further writes for 2s and sends ONE trailing write if more
-    // messages arrived during the window (read state is monotonic, so the newest write covers them all).
-    private static var readCooldownUntil: [String: Date] = [:]
+    // Read receipts on the reference model, read from its source 2026-08-12 (owner's "our ticks
+    // feel slow" report — the old shape here was a 2s cooldown TIMER, and fast two-phone chatting
+    // lives entirely inside a 2s window, so the sender's ✓✓ ran seconds behind):
+    //
+    // NO TIMER. The first receipt is written IMMEDIATELY; while one write is IN FLIGHT, newer
+    // reads collapse into a single trailing write sent the moment it completes. Read state is
+    // monotonic — the newest write covers every earlier message — so a 20-message burst is still
+    // only a couple of writes, but the FIRST tick-flip has zero added latency and a burst's last
+    // is at most one round trip behind. Coalesce on flight, never on a clock.
+    private static var readInFlight: Set<String> = []
     private static var readTrailing: Set<String> = []
     @MainActor
     static func markReadThrottled(_ cid: String) {
-        let now = Date()
-        if let until = readCooldownUntil[cid], until > now {
-            readTrailing.insert(cid)
-            return
-        }
-        readCooldownUntil[cid] = now.addingTimeInterval(2)
-        Task { await markRead(cid) }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.05) {
-            if readTrailing.remove(cid) != nil { markReadThrottled(cid) }
+        if readInFlight.contains(cid) { readTrailing.insert(cid); return }
+        readInFlight.insert(cid)
+        Task {
+            await markRead(cid)
+            await MainActor.run {
+                readInFlight.remove(cid)
+                if readTrailing.remove(cid) != nil { markReadThrottled(cid) }
+            }
         }
     }
 
