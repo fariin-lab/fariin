@@ -191,7 +191,22 @@ final class StoryPartialFile {
         have = m.ranges.compactMap { $0.count == 2 && $0[0] < $0[1] ? $0[0] ..< $0[1] : nil }
     }
 
+    /// ⚠️ MERGES WITH WHAT IS ALREADY ON DISK RATHER THAN OVERWRITING IT, because two writers for one
+    /// clip is a normal state and not an error.
+    ///
+    /// The lookahead warms a neighbour's PREFIX through its own instance while the viewer may open a
+    /// reader for the same clip a moment later. Both write to the same file — which is safe, they
+    /// write real bytes at real offsets — but each holds its own range map, so a plain overwrite
+    /// would file away one writer's record and lose the other's. Nothing would be corrupted; the
+    /// reader would simply believe it holds less than it does and fetch those bytes again, which is
+    /// the data waste this whole thing exists to end, arriving through the back door.
     private func saveMeta() {
+        if let data = try? Data(contentsOf: metaURL),
+           let disk = try? JSONDecoder().decode(Meta.self, from: data) {
+            for r in disk.ranges where r.count == 2 && r[0] < r[1] { merge(r[0] ..< r[1]) }
+            if total == nil { total = disk.total }
+            if contentType == nil { contentType = disk.contentType }
+        }
         let m = Meta(total: total, contentType: contentType, ranges: have.map { [$0.lowerBound, $0.upperBound] })
         guard let data = try? JSONEncoder().encode(m) else { return }
         try? data.write(to: metaURL, options: .atomic)

@@ -113,6 +113,18 @@ final class StoryVideoStream: NSObject, AVAssetResourceLoaderDelegate {
             let stranded = live
             live.removeAll()
             stranded.forEach { $0.finishLoading(with: URLError(.cancelled)) }
+            // ⚠️ PROMOTION HAPPENS HERE AND NOWHERE EARLIER. It MOVES the partial onto the plain
+            // cache path, and doing that while requests are still being served pulls the file out
+            // from under the reader: the open handle would be closed, the next read would re-open a
+            // path that no longer exists — creating an empty file — and the range map would have
+            // been cleared, so the reader would decide it holds nothing and fetch the whole clip
+            // again. A story that has just finished downloading is the worst possible moment to
+            // start downloading it.
+            //
+            // Waiting costs nothing. The clip stays a `.part` for as long as it is being watched,
+            // and the next OPEN finds the promoted file through `cachedFileIfUsable` and never
+            // builds a reader at all.
+            partial.promoteIfComplete()
             // Breaks the delegate retain, cancels anything still in flight, and is the only thing
             // that lets this object deallocate.
             session.invalidateAndCancel()
@@ -341,7 +353,8 @@ extension StoryVideoStream: URLSessionDataDelegate {
         queue.async { [weak self] in
             guard let self else { return }
             self.pending.removeValue(forKey: ObjectIdentifier(task))
-            if error == nil { self.partial.promoteIfComplete() }
+            // (No promotion here — see `teardown`. Moving the file while it is still being read is
+            // how a clip that had just finished downloading started downloading again.)
             guard error != nil else {
                 for request in self.live { self.finishIfPossible(request) }
                 return
