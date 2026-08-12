@@ -227,7 +227,55 @@ enum StoryItemViewStore {
     static var retainDismounted = false {
         didSet {
             guard !retainDismounted, oldValue else { return }
+            window = []
             releaseAll()
+        }
+    }
+
+    /// THE STORIES INSIDE THE PREVIEW WINDOW RIGHT NOW — the reference app's `validIds`.
+    ///
+    /// ⚠️ THIS IS THE HALF OF HIS 2026-08-12 ASK THAT IS THEIRS VERBATIM. He asked that a story stay
+    /// alive while it is still one of the visible preview cards, and be reset only once it has
+    /// actually left that range — *"rather than resetting a video simply because its view temporarily
+    /// moves or gets detached during the carousel transition"*.
+    ///
+    /// That is exactly what `StoryItemSetContainerComponent` does, in two tiers:
+    ///
+    /// · `validIds` — everything laid out this pass. Anything NOT in it is removed on the spot, views
+    ///   off the hierarchy (`:1982-1995`).
+    /// · `trulyValidIds` — what is actually visible now. An item in `validIds` but no longer visible
+    ///   is NOT removed when it goes; the removal is attached to the completion of its own position
+    ///   animation and RE-TESTED there (`:1700-1712`):
+    ///   ```
+    ///   completion: { if !self.trulyValidIds.contains(itemId) { ...remove... } }
+    ///   ```
+    ///
+    /// Ours maps cleanly because a detach is not a decision here either: `dismantleUIView` fires
+    /// whenever SwiftUI stops rendering an item, including mid-transition, and treating that as "this
+    /// story is finished" is precisely the mistake he described. So the detach only PARKS the view,
+    /// and the release happens when the window itself moves — which is the transition having actually
+    /// settled somewhere new.
+    ///
+    /// Empty means "no window is being tracked", which is ordinary full-screen viewing: nothing is
+    /// retained then anyway (`retainDismounted`), so an empty set costs nothing.
+    private static var window: Set<String> = []
+
+    /// The host says which stories are inside the preview range. Idempotent — only a real change does
+    /// any work, and this is called from a view body path.
+    static func setWindow(_ ids: [String]) {
+        let next = Set(ids)
+        guard next != window else { return }
+        window = next
+        releaseOutsideWindow()
+    }
+
+    /// The deferred half: everything parked whose story has now genuinely left the range.
+    private static func releaseOutsideWindow() {
+        guard retainDismounted else { return }
+        var i = 0
+        while i < kept.count {
+            if window.contains(kept[i].key) { i += 1 }
+            else { kept.remove(at: i).view.teardown() }
         }
     }
 
@@ -293,8 +341,21 @@ enum StoryItemViewStore {
         view.freezeCoverToCurrentFrame()
         view.removeFromSuperview()
         kept.append((key, view))
+        // ⚠️ THE CAP EVICTS FROM OUTSIDE THE WINDOW FIRST, and that ordering is the whole point.
+        //
+        // A plain `removeFirst` is least-recently-stored, which knows nothing about what is on screen.
+        // The version of this bug that already shipped: swiping the carousel through four stories
+        // evicted the ONE view that mattered, and swiping back found nothing, built a fresh player at
+        // zero and fell back to the poster — his "reverts to the upload cover". The `hasPlayer` guard
+        // above fixed that instance by keeping player-less views out of the competition entirely.
+        //
+        // The window closes the rest of it: with a story range being tracked, the oldest entry that
+        // has ALREADY left the range goes before any entry still in it. Only when everything held is
+        // still inside does it fall back to oldest-first, which is the decoder ceiling talking and
+        // cannot be argued with — see the note on `capacity`.
         while kept.count > capacity {
-            kept.removeFirst().view.teardown()
+            let victim = kept.firstIndex { !window.contains($0.key) } ?? 0
+            kept.remove(at: victim).view.teardown()
         }
     }
 
