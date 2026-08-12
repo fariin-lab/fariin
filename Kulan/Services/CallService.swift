@@ -123,6 +123,7 @@ final class CallService: NSObject {
     /// even if both cameras go off again. It drives the auto-hiding controls: a call that has been a
     /// video call keeps behaving like one, so the controls do not start reappearing permanently just
     /// because someone closed their camera for a minute. Cleared only when the call ends.
+    /// ALSO drives the call record: a voice call where a camera came on logs as a video call.
     private(set) var everVideo = false
     /// Latch `everVideo`. It must be called from EVERY place a camera can come on, not just the mid-call
     /// toggle path: a call PLACED or ANSWERED as video sets `cameraOn` directly at setup and never goes
@@ -179,7 +180,7 @@ final class CallService: NSObject {
         return f
     }
 
-    private var startedAsVideo = false   // how the call was PLACED (cameras can toggle mid-call) — drives the call record
+    private var startedAsVideo = false   // how the call was PLACED (cameras can toggle mid-call) — speaker default at answer
     var usingFrontCamera = true
     // Video layout state — owned HERE so minimize/restore keeps the user's big/small choice and PiP
     // tile position (CallView is destroyed by the cover on minimize; its @State reset every time).
@@ -1855,7 +1856,12 @@ final class CallService: NSObject {
             let outcome = connected ? "answered" : (endReason == .declined ? "declined" : "missed")
             let cid = [me, otherUid].sorted().joined(separator: "_")
             let cidCallId = callId ?? UUID().uuidString
-            let video = startedAsVideo   // capture before the idle reset clears it
+            // The record says what the call WAS, not how it was placed (his report: voice call,
+            // camera opened mid-call, the bubble still said "Voice call"). `everVideo` is the sticky
+            // either-camera-came-on latch the controls already run on, and BOTH ends latch it (the
+            // `cams` signal carries the remote side), so the two merged writes agree. `startedAsVideo`
+            // still counts for calls that never connected — a missed video call rang as one.
+            let video = startedAsVideo || everVideo   // capture before the idle reset clears them
             Task { await ChatService.recordCall(cid: cid, callId: cidCallId, callerUid: callerUidVal, outcome: outcome, video: video, durationSec: dur) }
         }
         if updateRemote, let id = callId {
