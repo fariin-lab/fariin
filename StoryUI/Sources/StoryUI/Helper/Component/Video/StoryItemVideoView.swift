@@ -174,9 +174,24 @@ final class StoryItemVideoView: UIView {
                  timestamp: currentSecond,
                  duration: knownDuration,
                  isPlaying: player?.timeControlStatus == .playing,
-                 isBuffering: false,
+                 // ⚠️ THE LIVE ANSWER, NEVER A FLAT `false`. `updateUIView` calls this on every
+                 // re-render of the story page, and a re-render happens for reasons that have
+                 // nothing to do with the network. Publishing `false` here would clear a genuine
+                 // stall — and `noteTimeControl` only fires on a CHANGE, so nothing would ever
+                 // re-report it and the progress bar would count straight through a clip that had
+                 // stopped moving. That is the desynchronisation this engine exists to remove,
+                 // reintroduced by a line that looks like tidy initialisation.
+                 isBuffering: isStalled,
                  contentLoaded: contentLoaded,
                  failed: player?.currentItem?.status == .failed)
+    }
+
+    /// Waiting on bytes MID-CLIP. Initial buffering is not a stall — see `noteTimeControl`, and the
+    /// reference app's `.buffering(initial: false, whilePlaying: true, …)` pattern, which counts only
+    /// an interruption to playback that had already begun.
+    private var isStalled: Bool {
+        player?.timeControlStatus == .waitingToPlayAtSpecifiedRate
+            && didBeginPlayback && currentSecond > 0.3
     }
 
     /// Leave the session, if it is still ours to leave.
@@ -398,7 +413,7 @@ final class StoryItemVideoView: UIView {
             // suppresses even that for the first 0.3s of a clip. A story that has not started yet is
             // LOADING, which the spinner already says; calling it a stall froze the progress bar
             // before there was anything for it to measure.
-            setBuffering(didBeginPlayback && currentSecond > 0.3)
+            setBuffering(isStalled)
         default:
             setBuffering(false)
         }
