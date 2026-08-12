@@ -1343,10 +1343,32 @@ private extension StoryDetailView {
                     dissmis()
                 }
             } else {
-                let bundleIndex = viewModel.stories.firstIndex { currentBundle in
-                    return model.id == currentBundle.id
-                } ?? 0
-                
+                // ⚠️ `?? 0` USED TO BE HERE AND IT IS THE BUG HE REPORTED AS A BLACK SCREEN.
+                //
+                // "Not found" was being turned into "you are the first person", so the end of a
+                // bucket that is not in `viewModel.stories` navigated to `stories[1]` from wherever
+                // you actually were — and the pager, asked to move to a person it could not
+                // reconcile with the page on screen, placed nothing at all. `syncIfNeeded` returns
+                // early when either of its two index lookups fails, and a return that places nothing
+                // is a blank screen. Then the next update repopulated from `currentStoryUser` and
+                // his own story came back, which is his report exactly: black for a second, then his
+                // own story again, never the next person.
+                //
+                // ⚠️ AND THE SUBSCRIPT BELOW WAS UNCHECKED. `stories[bundleIndex + 1]` on the last
+                // index is a crash, and the guard above it tests `model.id` too — so the one input
+                // that could be wrong was gating both branches.
+                //
+                // Their rule, read from `StoryContainerScreen.navigate(direction:)`: at the end of a
+                // peer they ask whether a NEXT SLICE exists, and if it does not they
+                // `controller.dismiss()`. There is no branch in which nothing happens. So an
+                // unresolvable position dismisses here too — the viewer has run out of people to
+                // show, which is the honest reading of "I cannot find where I am".
+                guard let bundleIndex = viewModel.stories.firstIndex(where: { model.id == $0.id }),
+                      viewModel.stories.indices.contains(bundleIndex + 1) else {
+                    withAnimation { dissmis() }
+                    return
+                }
+
                 // ⚠️ NO `withAnimation` HERE, AND PUTTING ONE BACK COSTS HALF A SECOND FOR NOTHING.
                 //
                 // This used to be wrapped in a bare `withAnimation`, which is SwiftUI's default spring —

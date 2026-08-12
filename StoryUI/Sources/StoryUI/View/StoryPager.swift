@@ -441,10 +441,31 @@ struct StoryPager: UIViewControllerRepresentable {
                 }
                 return
             }
-            guard shown != parent.viewModel.currentStoryUser,
-                  let from = index(of: shown!), let to = index(of: parent.viewModel.currentStoryUser),
+            // Already showing the person we were asked for: nothing to do, and that is not a failure.
+            guard shown != parent.viewModel.currentStoryUser else { return }
+            // ⚠️ A LOOKUP THAT FAILS MUST NOT RETURN QUIETLY. THAT SILENCE IS THE BLACK SCREEN.
+            //
+            // These three used to sit in one `guard ... else { return }`, so a person who could not
+            // be located left the container holding whatever it was holding — which, mid-advance, is
+            // nothing. His report: black for a second, then his own story back again when a later
+            // update repopulated from `currentStoryUser`.
+            //
+            // Their `StoryContainerScreen.navigate(direction:)` has no such state: asked for a next
+            // peer that does not exist, they `controller.dismiss()`. Running out of people is a real
+            // outcome with a real ending; being unable to name one is not a reason to show a void.
+            guard let from = index(of: shown!),
+                  let to = index(of: parent.viewModel.currentStoryUser),
                   let target = makePage(for: parent.viewModel.currentStoryUser)
-            else { return }
+            else {
+                // Keep the person the container is actually showing as the truth, so the viewer is
+                // consistent rather than merely still on screen. If even that is gone, close.
+                if let shown, index(of: shown) != nil {
+                    parent.viewModel.currentStoryUser = shown
+                } else {
+                    parent.isPresented = false
+                }
+                return
+            }
             // ⚠️ THE WARM WAITS FOR THE TURN TO FINISH. It used to start one runloop after the
             // transition began, which is DURING it — and laying out a SwiftUI story page is not
             // cheap, so it spent main-thread time on the person after next while the person you
