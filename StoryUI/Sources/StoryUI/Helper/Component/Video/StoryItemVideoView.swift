@@ -755,7 +755,12 @@ final class StoryItemVideoView: UIView {
         rateObservation?.invalidate(); rateObservation = nil
         if let timeObserver, let player { player.removeTimeObserver(timeObserver) }
         timeObserver = nil
-        if let endToken { NotificationCenter.default.removeObserver(endToken); endToken = nil }
+        // ⚠️ BOUND TO A DIFFERENT NAME, and the shorthand is why. `if let endToken { … }` shadows the
+        // property with a NON-optional local, so the clear inside the braces was assigning nil to
+        // `any NSObjectProtocol` rather than to the property. That was the one thing in this whole
+        // rewrite the compiler caught.
+        if let token = endToken { NotificationCenter.default.removeObserver(token) }
+        endToken = nil
         player?.pause()
         // ⚠️ `replaceCurrentItem(with: nil)` AND NOT JUST DROPPING THE REFERENCE. Releasing an
         // AVPlayer does not hand its decoder back promptly, and iOS caps simultaneous decoders and
