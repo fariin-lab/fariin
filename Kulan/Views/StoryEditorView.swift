@@ -272,33 +272,56 @@ struct StoryEditorView: View {
         restoreCurrent()   // a fresh item has clean tools; this ends in recomputeEdited()
     }
 
+    /// ⚠️ THE ITEM ARRIVES FIRST AND ITS THUMBNAIL CATCHES UP — see the same note on
+    /// `StoryVideoEditorView.appendClip`, which is the other half of his 2026-08-12 report.
+    ///
+    /// A picked IMAGE is already decoded, so it lands the instant it is chosen. A picked VIDEO used
+    /// to wait here for a 1200px `AVAssetImageGenerator` decode before it joined `items` at all, and
+    /// a hand-off from the video editor runs this in a loop over the whole batch. So the composer
+    /// appeared holding only the pictures, and the clips filled in one by one over several seconds —
+    /// which is what he described as a second editor opening on top with the media in it.
+    ///
+    /// Duration still resolves before the append, because `DraftItem` carries it and the export and
+    /// the trim both read it. Only the bitmap is deferred, and it is only ever the strip's thumbnail.
     private func appendPicked(video url: URL, assetID: String? = nil) async {
         let asset = AVURLAsset(url: url)
         let dur = (try? await asset.load(.duration).seconds) ?? 0
+        await MainActor.run {
+            stashCurrent()
+            items.append(DraftItem(image: Self.blackPoster, videoURL: url, duration: dur, assetID: assetID))
+            index = max(0, items.count - 1)
+            restoreCurrent()   // same fix as the image path above — see its note
+        }
+
         let gen = AVAssetImageGenerator(asset: asset)
         gen.appliesPreferredTrackTransform = true
         gen.maximumSize = CGSize(width: 1200, height: 1200)
         let t = CMTime(seconds: min(0.1, max(0.01, dur / 2)), preferredTimescale: 600)
         // A poster that cannot be decoded must NOT drop the video on the floor — a `guard return`
         // here made a picked clip silently never appear ("i chose video, is not working"). The item
-        // joins with a black poster instead; the clip itself is fine and the export never reads
-        // this bitmap.
-        let poster: UIImage
-        if let cg = try? await gen.image(at: t).image {
-            poster = UIImage(cgImage: cg)
-        } else {
-            let side = CGSize(width: 1080, height: 1920)
-            poster = UIGraphicsImageRenderer(size: side).image { ctx in
-                UIColor.black.setFill(); ctx.fill(CGRect(origin: .zero, size: side))
-            }
-        }
+        // keeps its black poster instead; the clip itself is fine and the export never reads this
+        // bitmap.
+        guard let cg = try? await gen.image(at: t).image else { return }
+        let poster = UIImage(cgImage: cg)
         await MainActor.run {
-            stashCurrent()
-            items.append(DraftItem(image: poster, videoURL: url, duration: dur, assetID: assetID))
-            index = max(0, items.count - 1)
-            restoreCurrent()   // same fix as the image path above — see its note
+            // BY FILE, NOT BY INDEX — the strip can be reordered or thinned while this is in flight.
+            guard let i = items.firstIndex(where: { $0.videoURL == url }) else { return }
+            items[i].image = poster
+            // The canvas draws from the edited copy of the CURRENT item, so a poster landing on the
+            // one being looked at has to re-run that or the black placeholder stays on screen until
+            // the next edit touches it.
+            if i == index { recomputeEdited() }
         }
     }
+
+    /// The placeholder every picked clip wears until its own frame is decoded, and the fallback for
+    /// one that will not decode at all. Built once: it is the same black rectangle every time.
+    private static let blackPoster: UIImage = {
+        let side = CGSize(width: 1080, height: 1920)
+        return UIGraphicsImageRenderer(size: side).image { ctx in
+            UIColor.black.setFill(); ctx.fill(CGRect(origin: .zero, size: side))
+        }
+    }()
 
     /// THE PICKER'S SELECTION IS THIS POST'S SELECTION — his 2026-08-11 spec, applied as one move.
     ///

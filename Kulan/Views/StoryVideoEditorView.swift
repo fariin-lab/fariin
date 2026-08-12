@@ -156,37 +156,66 @@ struct StoryVideoEditorView: View {
 
     /// One more video from OUR picker joins the strip — the same work the old PhotosPicker handler
     /// did, minus the transferable dance (the grid resolves the asset and hands a file URL).
+    /// ⚠️ THE CLIP JOINS THE STRIP BEFORE ITS THUMBNAIL EXISTS, AND THAT IS HIS 2026-08-12 REPORT.
+    ///
+    /// He described it as two video editors stacking: "the app first opens a Story Video Editor that
+    /// does not contain the selected media, then after a few seconds another one opens with it". There
+    /// is only ever one editor. What he saw was THIS screen, unchanged, for as long as the work below
+    /// took — and then the media arriving all at once, which reads exactly like a second screen.
+    ///
+    /// The wait was a 1600px `AVAssetImageGenerator` decode per clip, run BEFORE the clip was appended,
+    /// and `onApply` runs this in a loop, so several large files waited end to end. The photo editor
+    /// never looks like this because a picked image is already a decoded `UIImage` — there is nothing
+    /// to wait for. So the fix is not to make this faster, it is to stop the strip waiting on it:
+    ///
+    /// · Duration is loaded FIRST and appended with the clip. It is metadata off a local file, so it
+    ///   costs milliseconds, and it is the one value that must be right immediately — `trimEnd`, the
+    ///   trim bar and the export all read it, and a clip appended at zero length would export as one.
+    /// · The poster is generated AFTER, and patched into the clip where it sits. It is only ever the
+    ///   strip's thumbnail; the export reads the file, never this bitmap.
+    /// · `posterData` is never nil at any point, because `payload(for:)` guards on it — a nil there
+    ///   silently drops the clip from the post, and if it is the first clip `send()` returns on the
+    ///   same guard and NEXT does nothing at all. The black placeholder holds that contract until the
+    ///   real frame replaces it.
     private func appendClip(_ url: URL, assetID: String? = nil) async {
-        var c = Clip(url: url, assetID: assetID)
         let asset = AVURLAsset(url: url)
+        var c = Clip(url: url, assetID: assetID)
         c.duration = (try? await asset.load(.duration))?.seconds ?? 0
         c.trimEnd = c.duration
-        let gen = AVAssetImageGenerator(asset: asset)
-        gen.appliesPreferredTrackTransform = true
-        gen.maximumSize = CGSize(width: 1600, height: 1600)
-        // A POSTER THAT WILL NOT DECODE MUST NOT COST THE CLIP. `posterData` was left nil here, and
-        // `payload(for:)` guards on exactly that, so the clip was dropped out of the post without a
-        // word, and if it was the FIRST clip `send()` returned on the same guard and NEXT did
-        // nothing at all. Same black-poster fallback the photo editor's `appendPicked(video:)` uses:
-        // this bitmap is only ever the strip's thumbnail, and the export reads the file, never it.
-        let poster: UIImage
-        if let cg = try? await gen.image(at: CMTime(seconds: min(0.1, c.duration / 2), preferredTimescale: 600)).image {
-            poster = UIImage(cgImage: cg)
-        } else {
-            let side = CGSize(width: 1080, height: 1920)
-            poster = UIGraphicsImageRenderer(size: side).image { ctx in
-                UIColor.black.setFill(); ctx.fill(CGRect(origin: .zero, size: side))
-            }
-        }
-        c.poster = poster
-        c.posterData = poster.jpegData(compressionQuality: 0.72)
+        let placeholder = Self.blackPoster
+        c.poster = placeholder
+        c.posterData = placeholder.jpegData(compressionQuality: 0.72)
         await MainActor.run {
             stashCurrent()
             clips.append(c)
             index = max(0, clips.count - 1)
             restoreCurrent()
         }
+
+        let gen = AVAssetImageGenerator(asset: asset)
+        gen.appliesPreferredTrackTransform = true
+        gen.maximumSize = CGSize(width: 1600, height: 1600)
+        guard let cg = try? await gen.image(at: CMTime(seconds: min(0.1, max(c.duration, 0) / 2),
+                                                       preferredTimescale: 600)).image else { return }
+        let poster = UIImage(cgImage: cg)
+        let data = poster.jpegData(compressionQuality: 0.72)
+        await MainActor.run {
+            // BY FILE, NOT BY INDEX. The strip can be reordered or have clips removed while this
+            // decode is in flight, and patching a position would paint one clip's frame onto another.
+            guard let i = clips.firstIndex(where: { $0.url == url }) else { return }
+            clips[i].poster = poster
+            if let data { clips[i].posterData = data }
+        }
     }
+
+    /// The fallback thumbnail, and the placeholder every clip wears until its own frame is decoded.
+    /// Built once: it is the same black rectangle every time.
+    private static let blackPoster: UIImage = {
+        let side = CGSize(width: 1080, height: 1920)
+        return UIGraphicsImageRenderer(size: side).image { ctx in
+            UIColor.black.setFill(); ctx.fill(CGRect(origin: .zero, size: side))
+        }
+    }()
 
     /// A picture joined the post: pack EVERYTHING for the composer. Each clip travels with its own
     /// trim, mute, drawing and text (DraftItem holds all four beside the file, same as Clip does),
