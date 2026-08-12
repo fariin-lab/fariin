@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import AVFoundation
 import UIKit   // app-lifecycle notification (foreground backstop for the background camera)
+import UserNotifications   // "sharing video" note when their camera comes on while we're backgrounded
 import CoreMedia
 import WebRTC
 import FirebaseAuth
@@ -853,6 +854,17 @@ final class CallService: NSObject {
 
     // Apply the other side's camera on/off each snapshot (their video m-line already exists; we just
     // reveal/hide it). Their track keeps arriving; `remoteCameraOn` gates whether we render it.
+    /// The reference apps' "📹 … is sharing video. Tap to view." — a LOCAL note (the app is alive in
+    /// the background on the call's audio session, so no server is involved). Removed when the call
+    /// ends so it can never outlive its call.
+    private func postVideoSharingNote() {
+        let c = UNMutableNotificationContent()
+        c.title = otherName
+        c.body = "Sharing video. Tap to view."
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "call-video-sharing", content: c, trigger: nil))
+    }
+
     private func handleRemoteCallState(_ d: [String: Any]) {
         notePeerHeartbeat(d)
         // Their mute state. Never signalled before, so muting was completely invisible to the other
@@ -863,6 +875,15 @@ final class CallService: NSObject {
         }
         if let cams = d["cams"] as? [String: Bool], let on = cams[otherUid], on != remoteCameraOn {
             remoteCameraOn = on
+            // THEIR CAMERA COMING ON DEMANDS THE SCREEN BACK (owner's side-by-side reference,
+            // 2026-08-12; FaceTime agrees): a voice call becoming video is the one moment in a call
+            // that needs eyes. Minimized in the app → the call returns fullscreen by itself.
+            // Backgrounded → a "sharing video" notification whose tap lands on the fullscreen call
+            // (minimized cleared NOW so the foregrounding presents it without another step).
+            if on, state == .active || state == .reconnecting {
+                minimized = false
+                if UIApplication.shared.applicationState != .active { postVideoSharingNote() }
+            }
             // Their video is what the swapped layout is BUILT ON: expanded means my feed is fullscreen
             // and theirs is in the tile. If they kill their camera while we are swapped, that tile has
             // nothing to draw and hides itself - taking the tap target with it and stranding me
@@ -2034,6 +2055,9 @@ final class CallService: NSObject {
         listeners.forEach { $0.remove() }
         listeners = []
         ringingWatcher?.remove(); ringingWatcher = nil
+        // The "sharing video" note must never outlive its call.
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["call-video-sharing"])
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["call-video-sharing"])
         // The route observer was installed on the first .active call and NEVER removed, so it lived for
         // the app's lifetime and kept running updateAudioRoute() — mutating isSpeaker and re-running
         // screen behaviour — with no call in progress at all.
