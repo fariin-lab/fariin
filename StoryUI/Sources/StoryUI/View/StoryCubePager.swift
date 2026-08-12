@@ -90,6 +90,19 @@ final class StoryCubePagerVC: UIViewController {
     /// sideways turn must never contest the same touch. See `installDismissPan`.
     private(set) lazy var pan: UIPanGestureRecognizer = {
         let p = HorizontalPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+        // ⚠️ IT NEEDS A DELEGATE OR IT LOSES EVERY TOUCH TO THE PAGE, AND THAT IS HIS "THE FINGER
+        // DOES NOTHING" REPORT ON THE NEW CONTAINER.
+        //
+        // What this replaced was `UIScrollView.panGestureRecognizer`, and a scroll view's pan is a
+        // system recogniser that UIKit already arbitrates in its favour against gestures inside its
+        // own content. A plain `UIPanGestureRecognizer` on a container gets no such treatment: the
+        // story page is SwiftUI and carries its own drag recognisers, and by default only ONE of the
+        // two may recognise — so the page won the touch and this never began. A tap goes through a
+        // different path entirely, which is exactly why tapping worked and swiping did not.
+        p.delegate = self
+        // The turn is ours, but the page must still see the touch: cancelling touches in the view
+        // would swallow the press-to-pause the story relies on.
+        p.cancelsTouchesInView = false
         return p
     }()
 
@@ -184,6 +197,13 @@ final class StoryCubePagerVC: UIViewController {
     private func attach(_ vc: UIViewController) {
         guard vc.parent !== self else { return }
         addChild(vc)
+        // ⚠️ A PAGE COMES BACK VISIBLE, ALWAYS. `applyFold` hides a face that is more than one turn
+        // away, `makePage` hands out CACHED controllers, and `applyFold` refuses to run at all until
+        // the container has a width — so a page that was hidden while it was two away could be
+        // re-attached as the focused one and never told to show itself again. That is a black
+        // screen, and a black screen is the one failure that looks like the app has died.
+        vc.view.isHidden = false
+        vc.view.layer.transform = CATransform3DIdentity
         vc.view.frame = view.bounds
         vc.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         // ⚠️ NEVER ITS OWN ANIMATION. Every face is written every frame from `panFraction`, and an
@@ -200,6 +220,7 @@ final class StoryCubePagerVC: UIViewController {
         vc.view.removeFromSuperview()
         vc.removeFromParent()
         vc.view.layer.transform = CATransform3DIdentity
+        vc.view.isHidden = false   // it is cached and it will be back — see `attach`
         tints[ObjectIdentifier(vc.view)]?.removeFromSuperlayer()
         tints.removeValue(forKey: ObjectIdentifier(vc.view))
     }
@@ -465,6 +486,24 @@ final class StoryCubePagerVC: UIViewController {
     }
 
     deinit { settleLink?.invalidate() }
+}
+
+extension StoryCubePagerVC: UIGestureRecognizerDelegate {
+    /// RUN BESIDE THE PAGE'S OWN GESTURES RATHER THAN INSTEAD OF THEM.
+    ///
+    /// The story page is SwiftUI and brings its own recognisers. Without this only one of the two
+    /// may recognise a given touch and the page wins, which left the horizontal turn dead while the
+    /// tap — a different path — kept working.
+    ///
+    /// ⚠️ THIS DOES NOT LET THE DOWN AND UP PANS THROUGH BY ACCIDENT. Those are wired with
+    /// `require(toFail:)` in `installDismissPan`, which is a stronger relationship than simultaneity
+    /// and is evaluated first: this pan cannot begin until they have failed, and the direction gate
+    /// in `HorizontalPanGestureRecognizer` fails IT the moment a drag is more vertical than
+    /// horizontal. So a downward close and a sideways turn still cannot contest the same touch.
+    func gestureRecognizer(_ g: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        true
+    }
 }
 
 /// A pan that only ever claims a HORIZONTAL drag, either way.
