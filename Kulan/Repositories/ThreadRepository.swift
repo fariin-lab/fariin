@@ -638,8 +638,16 @@ final class ThreadRepository {
         // Firestore rules, not gifs, just any media message with no caption.
         let deleted = String(data["deleted"] as? Bool ?? false)
         let type = data["type"] as? String ?? ""
+        // CALL ROWS ARE MUTABLE NOW (the live ring row, 2026-08-12): outcome merges
+        // ringing → ongoing → missed/answered onto the SAME doc, the duration lands with the final
+        // write, and a voice call that opened a camera upgrades callVideo. Without these the cached
+        // Message is reused and the bubble freezes at "Ringing" until relaunch — the same class of
+        // bug as `deleted` below, third instance.
+        let call = (data["callOutcome"] as? String ?? "") + ":"
+            + String((data["callDuration"] as? NSNumber)?.intValue ?? -1) + ":"
+            + String(data["callVideo"] as? Bool ?? false)
         return (data["text"] as? String ?? "") + "|" + String(data["edited"] as? Bool ?? false)
-            + "|" + reactions + "|" + albumSig + "|" + deleted + "|" + type
+            + "|" + reactions + "|" + albumSig + "|" + deleted + "|" + type + "|" + call
     }
 
     // Build a message, reusing the cached copy unless a mutable field (reactions / edit) changed.

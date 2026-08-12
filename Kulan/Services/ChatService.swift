@@ -1768,6 +1768,31 @@ enum ChatService {
     /// writes the duration — one authoritative source instead of a race. The callee's row still creates
     /// the record on its own if the caller never manages to write, so nothing is lost.
     /// Stores who the caller was, so each client renders outgoing/incoming for itself.
+    /// The LIVE call row (his WhatsApp screenshots, both sides): written the moment the call doc
+    /// exists, so the chat shows a "Ringing" bubble while the phone is still ringing. recordCall
+    /// later merges the final outcome onto the SAME doc, so the row transforms in place. Only the
+    /// CALLER writes it — one creator; the callee sees it arrive through the normal listener.
+    static func recordCallRinging(cid: String, callId: String, callerUid: String, video: Bool) async {
+        try? await db.collection("conversations").document(cid)
+            .collection("messages").document("call_\(callId)").setData([
+                "type": "call",
+                "authorId": callerUid,
+                "callerUid": callerUid,
+                "callOutcome": "ringing",
+                "callVideo": video,
+                "text": "",
+                "createdAt": FieldValue.serverTimestamp(),
+            ], merge: true)
+    }
+
+    /// Flip the live row to "ongoing" once the call connects. updateData so a row that was never
+    /// created (old-build caller) is a silent no-op rather than a half-made record.
+    static func markCallOngoing(cid: String, callId: String) async {
+        try? await db.collection("conversations").document(cid)
+            .collection("messages").document("call_\(callId)")
+            .updateData(["callOutcome": "ongoing"])
+    }
+
     static func recordCall(cid: String, callId: String, callerUid: String, outcome: String, video: Bool, durationSec: Int) async {
         let convRef = db.collection("conversations").document(cid)
         let msgRef = convRef.collection("messages").document("call_\(callId)")
@@ -1775,12 +1800,18 @@ enum ChatService {
             "type": "call",
             "authorId": callerUid,             // deterministic: the caller, not whoever wrote last
             "callerUid": callerUid,            // viewer compares to itself for direction
-            "callOutcome": outcome,            // answered | missed | declined
-            "callVideo": video,                // placed as a video call (log/preview label)
+            "callOutcome": outcome,            // answered | missed (live rows: ringing | ongoing)
+            "callVideo": video,                // video call (log/preview label)
             "text": "",
-            "createdAt": FieldValue.serverTimestamp(),
         ]
         if uid == callerUid { fields["callDuration"] = durationSec }
+        // The row's time is when the call STARTED RINGING (the live row wrote it — WhatsApp stamps
+        // it that way too). Re-stamping on the final merge shoved the row past messages sent DURING
+        // the call once re-sorted from the server. Stamp only when this write is the creator (the
+        // other side never wrote the live row, e.g. an old build placed the call).
+        if (try? await msgRef.getDocument())?.exists != true {
+            fields["createdAt"] = FieldValue.serverTimestamp()
+        }
         try? await msgRef.setData(fields, merge: true)
         // Declines write NO marker of their own (his 2026-08-12 order, WhatsApp parity): a rejected
         // call records as missed everywhere, so callers can never tell a decline from a ring-out.

@@ -811,6 +811,15 @@ service cloud.firestore {
                       'duration', 'blurhash', 'linkPreview', 'poll', 'locationCard',
                       'contactCard', 'replyTo', 'reactions', 'videoEnc', 'thumbEnc',
                       'viewOnce', 'mentions', 'forwarded']))
+            // LIVE CALL ROW (2026-08-12): a call record is created at ring time ("Ringing") and the
+            // SAME doc is finalised later (ongoing / answered / missed, duration, voice→video
+            // upgrade). Either participant may update ONLY these call fields — the callee must be
+            // able to finalise a ringing row whose caller died mid-call. createdAt is deliberately
+            // NOT in the list: the row keeps the time the call started ringing, forever.
+            || (request.auth.uid in convData().users
+                && resource.data.get('type', '') == 'call'
+                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
+                     ['callOutcome', 'callDuration', 'callVideo']))
           );
         allow delete: if signedIn() && request.auth.uid == resource.data.authorId;
 

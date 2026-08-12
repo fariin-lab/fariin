@@ -117,7 +117,7 @@ struct Message: Identifiable, Equatable {
     var localMediaURL: String? = nil        // pending video/file payload persisted to tmp → retry can re-send the REAL bytes
     var height: Double? = nil
     var callerUid: String? = nil            // call record: who placed the call (viewer derives direction)
-    var callOutcome: String? = nil          // answered | missed
+    var callOutcome: String? = nil          // answered | missed | ringing/ongoing (live row) | declined (legacy, renders missed)
     var callVideo: Bool = false             // placed as a video call (older records default to voice)
     var callDuration: Int? = nil            // seconds (0 if not answered)
     var edited: Bool = false                // text was edited after sending

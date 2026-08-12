@@ -80,7 +80,7 @@ final class CallService: NSObject {
                 wantsSpeaker = false        // stale intent made the NEXT voice call blast on loudspeaker
                 cameraPausedByBackground = false; stopPausedCameraRetry()
                 stopLinkMonitor()
-                calleeRinging = false; recordWritten = false; minimized = false
+                calleeRinging = false; recordWritten = false; minimized = false; liveRingRowId = nil
                 endReason = .none; negotiationVersion = 0; appliedRemoteRestart = 0
                 pendingOffer = nil
                 pendingRemoteCandidates = []; localCandidateBuffer = []; callDocCreated = false
@@ -109,6 +109,11 @@ final class CallService: NSObject {
     var connectedDate: Date?
     var endReason: EndReason = .none // last/in-progress end reason (UI reads it for the label)
     private var recordWritten = false
+    /// Set when THIS device (the caller) wrote the live "Ringing" row. Cleared when recordCall
+    /// finalises it; if a teardown path suppresses the record (glare loser, blocked, answered
+    /// elsewhere), finishCall deletes the row instead, so no chat keeps a call that never became
+    /// anything. See ChatService.recordCallRinging.
+    private var liveRingRowId: String?
     private var ringbackPlayer: AVAudioPlayer?
     private var tonePlayer: AVAudioPlayer?       // busy / ended one-shot tones
     private var localAudioTrack: RTCAudioTrack?
@@ -1317,6 +1322,12 @@ final class CallService: NSObject {
                             return
                         }
                         self.callDocCreated = true
+                        // THE LIVE RING ROW (his WhatsApp screenshots): the chat shows the call
+                        // while it happens — "Ringing" now, finalised in place by recordCall.
+                        self.liveRingRowId = ref.documentID
+                        let ringCid = [self.me, uid].sorted().joined(separator: "_")
+                        Task { await ChatService.recordCallRinging(cid: ringCid, callId: ref.documentID,
+                                                                   callerUid: self.me, video: self.cameraOn) }
                         self.flushLocalCandidates()   // now the doc exists, write the buffered candidates
                         // CRITICAL: listen only AFTER the doc exists. The rules gate reads on the call
                         // doc's caller/callee fields, so a listener attached before the create commits
@@ -1868,7 +1879,18 @@ final class CallService: NSObject {
             // `cams` signal carries the remote side), so the two merged writes agree. `startedAsVideo`
             // still counts for calls that never connected — a missed video call rang as one.
             let video = startedAsVideo || everVideo   // capture before the idle reset clears them
+            liveRingRowId = nil   // the final merge owns the row now — the cleanup below must not touch it
             Task { await ChatService.recordCall(cid: cid, callId: cidCallId, callerUid: callerUidVal, outcome: outcome, video: video, durationSec: dur) }
+        }
+        // A teardown that was told NOT to write a record (glare loser, blocked callee, answered on
+        // my other phone all force `recordWritten`) leaves the live "Ringing" row with no finaliser
+        // — delete it, or the chat keeps a call that never became anything. Only ever set on the
+        // device that CREATED the row, so this cannot race the other side's real record.
+        if let ringId = liveRingRowId, !otherUid.isEmpty {
+            liveRingRowId = nil
+            let cid = [me, otherUid].sorted().joined(separator: "_")
+            db.collection("conversations").document(cid)
+                .collection("messages").document("call_\(ringId)").delete()
         }
         if updateRemote, let id = callId {
             db.collection("calls").document(id).updateData(["status": "ended", "endReason": endReason.rawValue])
@@ -1942,6 +1964,12 @@ extension CallService: RTCPeerConnectionDelegate {
                 if self.connectedDate == nil {
                     self.connectedDate = Date()
                     CallKitManager.shared.reportConnected()
+                    // The live row goes "Ringing" → "Ongoing". Caller only — one writer, and it is
+                    // the device that created the row.
+                    if self.isCaller, let id = self.callId, !self.otherUid.isEmpty {
+                        let cid = [self.me, self.otherUid].sorted().joined(separator: "_")
+                        Task { await ChatService.markCallOngoing(cid: cid, callId: id) }
+                    }
                 }
                 self.recovered()                          // back to a healthy media path
             case .disconnected:

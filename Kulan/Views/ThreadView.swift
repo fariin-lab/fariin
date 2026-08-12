@@ -1951,7 +1951,10 @@ struct ThreadView: View {
                 // Being in the key is not the same as being in the value. The key decides WHETHER to
                 // recompute; only the value can say WHICH row changed.
                 let unread = m.id == firstUnreadId ? "U1" : "U0"
-                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)|\(cluster)|\(story)|\(unread)"
+                // Live call rows mutate in place (ringing → ongoing → final, duration, voice→video
+                // upgrade) and change no other field this string reads — same rule as `deleted`.
+                let call = m.isCall ? "\(m.callOutcome ?? "-"):\(m.callDuration ?? -1):\(m.callVideo)" : "-"
+                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)|\(cluster)|\(story)|\(unread)|\(call)"
             }
             sigCache.key = key
             sigCache.base = out
@@ -3491,10 +3494,18 @@ struct ThreadView: View {
     // timestamp bottom-right. Tap anywhere to call back.
     private func callRow(_ m: Message) -> some View {
         let mine = m.callerUid == me
+        // LIVE STATES (his WhatsApp screenshots): the row exists from the first ring — "Ringing",
+        // then "Ongoing" at connect — and recordCall finalises the SAME row in place. The age
+        // fallbacks are the safety net for a writer that died mid-call: an orphan "ringing" renders
+        // as a normal unanswered call, a stale "ongoing" as a plain ended one.
+        let age = Date().timeIntervalSince(m.createdAt)
+        let ringing = m.callOutcome == "ringing" && age < 120
+        let ongoing = m.callOutcome == "ongoing" && age < 4 * 3600
         // Legacy "declined" records (written before declines were removed from the log — his
         // 2026-08-12 WhatsApp-parity order) render exactly as missed: the caller reads "No answer",
         // the decliner reads the same red "Missed call" as an ignored ring.
         let missed = m.callOutcome == "missed" || m.callOutcome == "declined"
+            || (m.callOutcome == "ringing" && age >= 120)
         let video = m.callVideo
         // Call semantics (user spec): "Missed call" (red) is ONLY for calls I RECEIVED and didn't
         // answer. When I was the CALLER and nobody picked up, it's an outgoing call with "No answer" —
@@ -3507,6 +3518,8 @@ struct ThreadView: View {
         let time = m.createdAt.formatted(date: .omitted, time: .shortened)
         // Second line: status + time, kept short so the bubble stays compact.
         let detail: String = {
+            if ringing { return "Ringing · \(time)" }
+            if ongoing { return "Ongoing · \(time)" }
             if incomingMissed { return "Call back · \(time)" }   // short: the bubble wears the COMPACT width now
             if missed { return "No answer · \(time)" }            // MY unanswered outgoing call
             if let d = m.callDuration, d > 0 { return "\(callLogDuration(d)) · \(time)" }
@@ -3564,8 +3577,9 @@ struct ThreadView: View {
             // tapping the blank space anywhere on the row placed a call (accidental-call bug).
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             // CONFIRM before calling back (user spec): a stray tap on a call row must never place a
-            // call instantly. Native centered alert → Call / Cancel.
-            .onTapGesture { pendingCallBack = video ? .video : .voice }
+            // call instantly. Native centered alert → Call / Cancel. A LIVE row (ringing/ongoing)
+            // offers no call-back — that call is still happening.
+            .onTapGesture { if !ringing, !ongoing { pendingCallBack = video ? .video : .voice } }
             .frame(maxWidth: UIScreen.main.bounds.width * 0.7, alignment: mine ? .trailing : .leading)
             if !mine { Spacer(minLength: 60) }
         }
