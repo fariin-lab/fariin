@@ -696,6 +696,25 @@ final class StoriesService {
             // it exists has a picture to show. See `blurThumbBase64`.
             "blurThumb": cover,
             "duration": prepared.duration,
+            // ⚠️ THE CLIP'S OWN SHAPE AND SIZE, WHICH THIS DOCUMENT HAS NEVER CARRIED.
+            //
+            // The reference app ships all of this on the media itself (`w`, `h`, `duration`,
+            // `supports_streaming` and a server-computed `preload_prefix_size`), and it is what lets
+            // it size a placeholder correctly before a byte arrives and fetch a PREFIX of a
+            // neighbour instead of the whole file. Ours discovers the size at runtime from
+            // `AVPlayerItem.presentationSize` — which is to say, after the download.
+            //
+            // Written now even though nothing reads them yet, and that is deliberate rather than
+            // sloppy: a story expires in 24 hours, so a field first written on the day the reader
+            // ships would have no story to describe. `preloadPrefix` is the byte count worth
+            // fetching to start playback — our exports are `shouldOptimizeForNetworkUse`, so the
+            // moov atom is at the FRONT and a prefix is genuinely playable. Half a megabyte is a
+            // couple of seconds at the bitrates the transcoder produces, and the whole file when
+            // the file is smaller than that.
+            "width": prepared.width,
+            "height": prepared.height,
+            "bytes": prepared.data.count,
+            "preloadPrefix": min(prepared.data.count, 512 * 1024),
             "caption": caption,
             "audience": ["mode": everyone ? "everyone" : mode, "listId": "my-story"],
             // The label only — the custom name stays on this device. See StoryAudienceTag.
