@@ -53,7 +53,10 @@ final class CallPiPController: NSObject {
         // and the exact hazard teardown() already documents. Stop the OLD window first, then rebuild.
         stopSystemPiP()
         let vc = PiPCallViewController(bigView: bigView, tileView: tileView)
-        vc.preferredContentSize = CGSize(width: 9, height: 16)
+        // 3:5, not 9:16 (owner's side-by-side, 2026-08-12): the full portrait aspect made iOS hand
+        // us a taller, bigger window than the reference's — a squarer ask comes back smaller, and
+        // Apple's own corner rounding reads stronger on it. The feeds inside aspect-fill either way.
+        vc.preferredContentSize = CGSize(width: 3, height: 5)
         callVC = vc
 
         let source = AVPictureInPictureController.ContentSource(
