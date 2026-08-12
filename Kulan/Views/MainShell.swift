@@ -678,19 +678,30 @@ struct ChatsView: View {
     /// person to person, and the row has a card for whoever you paged to, so the anchor follows.
     private func openStoryFromRow(_ g: StoryGroup) {
         let others = StoriesRepository.shared.others.filter { !StoryPrefs.isHidden($0.authorUid) }
-        // ⚠️ MY OWN STORY STAYS ON THE SOLO HOST — REVERTED 2026-08-09 (build 512, his screenshot):
-        // routing mine through the paged host (`[g] + others`, for the sideways swipe he asked for)
-        // shipped with the viewers sheet NOT shrinking the story behind it. The paged host attaches
-        // its scroll to StoryCardMorph and installs the up pan, and I took that as proof the sheet
-        // worked over it — but the sheet had never actually RUN over a paged story (it only exists
-        // on my story, which never took this path before), and the real morph does not hold on the
-        // pager's scroll view. "completely broken", his words, and he is right.
+        // ⚠️ MY OWN STORY IS ONE PAGE AMONG SEVERAL NOW — the 2026-08-09 revert (build 512) is undone
+        // on purpose, and the thing that made it unsafe is gone.
         //
-        // DO NOT RE-ENABLE by re-adding `[g] + others` here. The sequence is: first make the
-        // sheet's shrink demonstrably work over StoryPager (a transform on a UIPageViewController's
-        // internal scroll view survives its layout only if something re-asserts it), THEN route
-        // mine through it. The sideways-swipe ask stays open until that lands.
-        StoryDoor.open(g, among: others, from: g.id, pinned: false,
+        // The revert's note said the sheet stopped shrinking because "the real morph does not hold on
+        // the pager's scroll view", and prescribed re-asserting the transform through UIKit's layout.
+        // Both halves were wrong, and the revert commit (`e0d54d6b`) admits the diagnosis came off a
+        // screenshot rather than a measurement. Nothing in this repo ever showed `_UIQueuingScrollView`
+        // resetting `transform`, and per-frame re-assertion was ALREADY running when it was prescribed
+        // (`SheetProgressAnimator`'s CADisplayLink drives `driveMorph` every frame of the drag AND the
+        // release). The real difference was the ATTACH TARGET: the solo host attaches the morph to a
+        // plain container it owns, this one attached it to UIKit's private scroll view — which also
+        // crashed build 481 inside `queuingScrollView:didEndManualScroll:toRevealView:`.
+        //
+        // `757da9e4` moved the morph onto `StoryPagerHostVC.cardContainer`, a plain view we lay out
+        // ourselves, and neutralises the internal scroll while the sheet is up. So the sheet now has
+        // the same ground under it here as on the solo host.
+        //
+        // ⚠️ THE CHECK THAT WAS NEVER RUN, and the one to run on this build: pull the viewers sheet
+        // over a FRIEND'S story and confirm it shrinks. Until mine came through here that combination
+        // could not happen, because the sheet only exists on my own story and my story never paged.
+        //
+        // What this buys, both asked for on 2026-08-12: the cube swipe from my story to a friend's,
+        // and tapping past my last story into the next person instead of closing the viewer.
+        StoryDoor.open(g, among: g.isMine ? [g] + others : others, from: g.id, pinned: false,
                        // These came out of `StoriesRepository.others`, whose query is "recipientUids
                        // contains me" — so being here IS the author's audience choice, and the reply
                        // bar follows it rather than testing my chat list a second time.

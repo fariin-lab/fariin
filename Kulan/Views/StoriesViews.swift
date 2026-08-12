@@ -886,7 +886,36 @@ struct StoryViewer: View {
     private var myStories: [Story] { groups.first { $0.isMine }?.stories ?? [] }
     // My-story viewers are always fed my bucket ALONE, so this is stable for the whole session
     // (no mid-swipe layout jumps) — it drives the card+footer layout below.
-    private var mineOnly: Bool { groups.count == 1 && (groups.first?.isMine ?? false) }
+    // ⚠️ `mineOnly` IS DELETED, AND IT IS NOT COMING BACK. It was
+    // `groups.count == 1 && (groups.first?.isMine ?? false)` — "my story is alone in this viewer" —
+    // and every reader of it actually wanted one of two other things: "this sitting is about me"
+    // (now `showingMine`) or "the page in front of me is mine" (now `currentIsMine`). Routing my
+    // bucket into the paged set makes it permanently FALSE for my own story, so anything still
+    // asking it would silently take the friend's-story branch on my own story. Leaving it defined
+    // is the trap; the substitution is recorded at each site.
+
+    /// ⚠️ "THE STORY ON SCREEN RIGHT NOW IS MINE", SAFE ON THE FIRST FRAME.
+    ///
+    /// `mineOnly` used to answer two different questions and only one of them survives my bucket
+    /// becoming one page among several (`MainShell.openStoryFromRow`). The two are:
+    ///
+    /// · "is this viewing session about me" — which is what the sheet-opening guards wanted, and
+    ///   which `mineOnly` answered correctly only because my story was always alone in its viewer.
+    /// · "is the page in front of me mine" — which is what the layout wanted, and which is
+    ///   `currentIsMine`.
+    ///
+    /// `currentIsMine` is NOT a safe substitute for the first on its own, and this is documented at
+    /// `onSwipeUpChanged` in as many words: it reads `currentBucketUid`, which the library writes on
+    /// `onUserChanged`, a beat AFTER the viewer is on screen. A swipe up inside that window would
+    /// find it false and open the REPLY KEYBOARD instead of the viewers sheet. That guard has already
+    /// shipped silently dead once (`:1406`), so the trap is real and not theoretical.
+    ///
+    /// So the empty window falls back to the bucket the viewer was actually OPENED on, which the door
+    /// records. ⚠️ Not `groups.first` — `StoryDoor.viewer` passes a `startIndex`, so the opened bucket
+    /// is not necessarily the first one in the list.
+    private var showingMine: Bool {
+        currentIsMine || (currentBucketUid.isEmpty && (StoryDoorState.shared.openGroup?.isMine ?? false))
+    }
     @State private var sheetStoryId = ""   // which of MY stories the carousel + viewers list target
     @State private var uploadSvc = StoriesService.shared   // observed → the "Uploading…" bar tracks the upload
     // The current item is the still-uploading synthetic placeholder → show the "Uploading…" bar (both
@@ -1398,12 +1427,15 @@ struct StoryViewer: View {
         // to sit here called the right fix and left for a separate change. This is that change,
         // already made: see `StoryItemVideoView.initializeVideoIfReady` and `StoryItemViewStore`.
         .onChange(of: sheetStoryId) { _, id in
-            // ⚠️ `mineOnly` TOO, NOT `currentIsMine` ALONE. `currentIsMine` depends on
+            // ⚠️ `showingMine`, NOT `currentIsMine` ALONE. `currentIsMine` depends on
             // `currentBucketUid`, which only arrives after the library's `onUserChanged`, so on a
             // fresh open it can still be empty — the note at `onSwipeUpChanged` says exactly this,
             // which is why the swipe-up that OPENS this sheet accepts either. This guard demanding
             // the stricter one is how the handler came to be silently skipped for a whole session.
-            guard showViewers, currentIsMine || mineOnly, !id.isEmpty else { return }
+            // (Was `currentIsMine || mineOnly`. `mineOnly` stopped being true for my own story the
+            // moment my bucket joined the paged set, so it had to become the first-frame fallback
+            // rather than a second reading of the same thing — see `showingMine`.)
+            guard showViewers, showingMine, !id.isEmpty else { return }
             NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: id)
             // The anchor moves with it. `currentStoryId` means "the item the library is on", and it
             // is otherwise only written by `onItemSeen`, which the library WITHHOLDS while a story is
@@ -1458,7 +1490,15 @@ struct StoryViewer: View {
     private var storyLayer: some View {
         let p = viewersProgress
         return VStack(spacing: 0) {
-            if mineOnly {
+            // ⚠️ PER PAGE NOW, NOT PER SESSION — and this is a real behaviour change, on purpose.
+            //
+            // This was `mineOnly`, which meant "my story is alone in this viewer" and so was fixed
+            // for the whole sitting. My bucket is one page among several now, so the card treatment
+            // and the owner footer follow the PERSON: my page gets the rounded card with the Views
+            // and trash bar under it, and paging on to a friend gets their full-bleed story with the
+            // library's reply bar. A friend's story must not carry my Views bar, and the footer
+            // cannot be decided once for a viewer that walks through several people.
+            if currentIsMine {
                 // My own story: a CARD (rounded bottom corners) + solid black footer below. The clip
                 // is ONLY applied here — clipping a FRIEND's full-bleed story broke the library's
                 // swipe-down-to-dismiss (the pan translates the card, but the clip pinned it to its
@@ -1629,10 +1669,13 @@ struct StoryViewer: View {
             // sheet follows the finger 1:1 (native feel) and snaps on release — WITHOUT an app gesture
             // that would fight the library's down dismiss pan. Swipe-DOWN dismiss is the library pan too.
             onSwipeUpChanged: { up in
-                // `mineOnly` (groups-based) is reliable from the first frame; `currentIsMine` depends on
-                // currentBucketUid, which is only set AFTER the library's onUserChanged fires — so on a
-                // fresh open it can still be empty and silently block the whole swipe-up. Accept either.
-                guard currentIsMine || mineOnly else { return }
+                // ⚠️ `showingMine`, and this is the guard its first-frame fallback exists for.
+                // `currentIsMine` depends on `currentBucketUid`, which is only set AFTER the library's
+                // `onUserChanged` fires — so on a fresh open it can still be empty and would silently
+                // block the whole swipe-up, or worse, drop through to the friend's-story branch below
+                // and open the REPLY KEYBOARD on my own story. `mineOnly` used to cover that window
+                // and cannot any more: my bucket is one page among several now.
+                guard showingMine else { return }
                 // Same gate as `openViewers`: an uploading placeholder has no viewers to show.
                 guard !isUploadingItem else { return }
                 sheetAnimator.cancel()   // the finger owns progress; kill any in-flight snap
@@ -1654,7 +1697,7 @@ struct StoryViewer: View {
                 viewersProgress = max(0, min(1, up / sheetH))
             },
             onSwipeUpEnded: { translation, velocity in
-                guard currentIsMine || mineOnly else {
+                guard showingMine else {
                     // Friend's story: a swipe UP opens the reply keyboard (like tapping the reply
                     // pill). StoryUI's MessageView focuses its TextField on this notification.
                     openDragging = false
@@ -1775,22 +1818,18 @@ struct StoryViewer: View {
                     .allowsHitTesting(false)   // it is a statement, not a control
             }
         }
-        // Exotic safety net: my story inside a MIXED feed (not the normal flow) still gets the
-        // old gradient overlay bar, since the footer layout is only applied to mine-only feeds.
-        .overlay(alignment: .bottom) {
-            if currentIsMine && !mineOnly {
-                ownerBar
-                    .opacity((heroFlying || dragDown > 6) ? 0 : 1)
-                    .animation(.easeOut(duration: 0.15), value: dragDown > 6)
-                    .animation(.easeOut(duration: 0.15), value: heroFlying)
-                    .contentShape(Rectangle())
-                    .simultaneousGesture(
-                        DragGesture(minimumDistance: 12).onEnded { v in
-                            if v.translation.height < -20 { openViewers() }
-                        }
-                    )
-            }
-        }
+        // ⚠️ DELETED HERE: the `currentIsMine && !mineOnly` gradient owner bar.
+        //
+        // It was the safety net for "my story inside a MIXED feed", described in its own comment as
+        // not the normal flow, because the card-and-footer layout above only ran for a mine-only
+        // viewer. Routing my bucket into the paged set makes a mixed feed THE normal flow, so this
+        // would have fired on every viewing of my own story — on top of the card footer, which now
+        // triggers on the same `currentIsMine`. Two owner bars, one gradient and one solid, stacked.
+        //
+        // The card treatment wins because it is the designed one: rounded bottom corners with a solid
+        // black Views/trash bar beneath, which is what the gradient bar was replaced by in the first
+        // place ("the old gradient bar bled over the story to the screen edge"). Its swipe-up-to-open
+        // is not lost either — `onSwipeUpChanged` carries that for every page.
     }
 
     private var topInset: CGFloat {
@@ -1822,7 +1861,17 @@ struct StoryViewer: View {
         // the free space with the status bar cleared. The narrow slot is what makes the neighbours
         // sit clearly off-centre so their scale-down actually reads.
         let countArea: CGFloat = 40
-        let contentH = scr.height - (mineOnly ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
+        // ⚠️ `currentIsMine`, MATCHING `storyLayer`'S OWN TEST, AND THEY MUST NOT DRIFT APART.
+        //
+        // This is the height the story CONTENT occupies, and it is short by the owner footer exactly
+        // when that footer is drawn. `storyLayer` decides that per page now (it was `mineOnly`, fixed
+        // for the whole sitting), so this has to ask the same question the same way or the shape the
+        // morph shrinks INTO stops matching the shape it is shrinking.
+        //
+        // ⚠️ TWO READERS DEPEND ON THIS AGREEING: `driveMorph`, which puts the live card at
+        // `slot.centerY`, and the carousel, which draws the row of cards around it. Answer this
+        // differently from `storyLayer` and the live story lands somewhere the carousel is not.
+        let contentH = scr.height - (currentIsMine ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
         // BUILD 249 card size (user: "make it exactly like 249, 250 is too long"). `slotHRef` is the
         // aspect-true reference and it DEFINES the width, so the card keeps its width and only loses
         // height; the story is centre-cropped into what is left.
@@ -3266,7 +3315,10 @@ struct StoryViewer: View {
     /// — every viewer document, names resolved — to display one number. Matching them properly means
     /// a counter denormalised onto the story doc, which is a server change and the owner's call.
     private func prefetchMyStoryCounts() {
-        guard currentIsMine || mineOnly, !prefetchedCounts else { return }
+        // `showingMine` for the same first-frame reason as the sheet guards: this runs early, and
+        // `currentBucketUid` is not written yet on the opening frame. `prefetchedCounts` latches, so
+        // being asked once more later costs nothing — being asked too early and refusing would.
+        guard showingMine, !prefetchedCounts else { return }
         prefetchedCounts = true
         let mine = myStories
         guard !mine.isEmpty else { return }
