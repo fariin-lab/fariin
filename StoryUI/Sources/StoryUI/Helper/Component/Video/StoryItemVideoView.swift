@@ -135,6 +135,8 @@ final class StoryItemVideoView: UIView {
     /// `renderCover`.
     private var coverSource: UIImage?
     private var coverIsFrame = false
+    /// What the cover currently on show is WORTH. Nil until one is set. See `CoverRank`.
+    private var coverRank: CoverRank?
     /// The card size the blurred variant was composited for, so `layoutSubviews` does not re-run a
     /// render pass on every frame of a sheet pull. `.zero` for a real frame, which needs no compositing.
     private var coverRenderedSize: CGSize = .zero
@@ -640,7 +642,7 @@ final class StoryItemVideoView: UIView {
     private func resolveCover() {
         if !blurThumb.isEmpty, let data = Data(base64Encoded: blurThumb), let img = UIImage(data: data) {
             blurThumbImage = img
-            setCover(img, isFrame: false)
+            setCover(img, rank: .blurThumb)
         }
         guard let poster, let u = URL(string: poster) else { openingFrameFallback(); return }
         // A POSTER IS A PICTURE. A video url arriving here (the window before `thumb.jpg` exists
@@ -652,20 +654,25 @@ final class StoryItemVideoView: UIView {
         // THE APP'S OWN CACHE FIRST. The two below are StoryUI's; the app draws its row through a
         // different one and warms that, so for a story just posted both of these miss and the cover
         // becomes a network fetch — leaving the hide-until-ready rule with nothing to hide behind.
-        if let img = StoryPosterSource.provider?(poster) { posterImage = img; setCover(img, isFrame: true); return }
+        if let img = StoryPosterSource.provider?(poster) { posterImage = img; setCover(img, rank: .poster); return }
         if let cached = URLCache.shared.cachedResponse(for: .init(url: u)), let img = UIImage(data: cached.data) {
-            posterImage = img; setCover(img, isFrame: true); return
+            posterImage = img; setCover(img, rank: .poster); return
         }
-        if let disk = StoryDiskCache.image(u) { posterImage = disk; setCover(disk, isFrame: true); return }
+        if let disk = StoryDiskCache.image(u) { posterImage = disk; setCover(disk, rank: .poster); return }
         URLSession.shared.dataTask(with: u) { [weak self] data, _, _ in
             guard let data, let img = UIImage(data: data) else { return }
             StoryDiskCache.store(data, for: u)
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.posterImage = img
-                // A poster landing late cannot be drawn over a clip that is playing — the still
-                // lives UNDERNEATH the video layer, so this can only ever improve what is behind it.
-                self.setCover(img, isFrame: true)
+                // ⚠️ AND IT IS RANKED, BECAUSE THIS IS THE LATE ARRIVAL THAT USED TO DEMOTE A BETTER
+                // PICTURE. A poster cannot be drawn over a clip that is playing — the still lives
+                // UNDERNEATH the video layer — but it was replacing what was behind it, and by the
+                // time a network fetch lands the view may already have frozen itself on the second
+                // it was paused at. Second zero over 0:20 is a downgrade, and `setCover` now refuses
+                // it. `posterImage` is still recorded: the canvas reads it and `openingFrameFallback`
+                // uses it to decide whether it is needed at all.
+                self.setCover(img, rank: .poster)
             }
         }.resume()
         openingFrameFallback()
@@ -684,9 +691,9 @@ final class StoryItemVideoView: UIView {
         // a cache nobody re-read.
         if let frame = StoryVideoFrames.opening(storyURL, then: { [weak self] image in
             guard let self, self.posterImage == nil else { return }
-            self.setCover(image, isFrame: true)
+            self.setCover(image, rank: .openingFrame)
         }) {
-            setCover(frame, isFrame: true)
+            setCover(frame, rank: .openingFrame)
         }
     }
 
@@ -722,17 +729,42 @@ final class StoryItemVideoView: UIView {
         let second = currentSecond
         guard second > 0.2 else { return }
         if let frame = StoryVideoFrames.frame(storyURL, at: second, then: { [weak self] image in
-            self?.setCover(image, isFrame: true)
+            self?.setCover(image, rank: .pausedFrame)
         }) {
-            setCover(frame, isFrame: true)
+            setCover(frame, rank: .pausedFrame)
         }
     }
 
-    private func setCover(_ image: UIImage, isFrame: Bool) {
-        // A real frame beats the blurred thumbnail; the thumbnail must never replace one.
-        if !isFrame, coverIsFrame { return }
+    /// WHAT A COVER IS WORTH. Four sources reach `setCover` and they are not equally good pictures.
+    ///
+    /// ⚠️ THIS USED TO BE A BOOLEAN AND THAT IS THE BUG. `isFrame` said only "better than the blurred
+    /// thumbnail", so the three that were all `true` had no order between them and the LAST writer
+    /// won. The poster is fetched from the network at the bottom of `resolveCover`, and a fetch that
+    /// lands after the view has frozen itself on the second it was paused at replaced a picture of
+    /// 0:20 with a picture of 0:00. That is the "it reverts to the upload cover" report arriving down
+    /// the network path — a different route to the same wrong picture as the one already fixed on the
+    /// capture side, which is why fixing that one did not end the reports.
+    private enum CoverRank: Int, Comparable {
+        /// The ~30px blurred thumbnail carried on the story document. A stand-in that looks like one.
+        case blurThumb = 0
+        /// The uploaded `thumb.jpg`. A real photograph of the clip, but only ever of second zero.
+        case poster = 1
+        /// Second zero decoded from the clip itself. The same instant as the poster and a truer
+        /// picture of it, and it exists for clips that never got a poster at all.
+        case openingFrame = 2
+        /// The second the player is actually parked on. The only cover that answers "what was on
+        /// screen when I left it", which is the question the card in the row is asking.
+        case pausedFrame = 3
+        static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
+    }
+
+    private func setCover(_ image: UIImage, rank: CoverRank) {
+        // A cover may only be replaced by one at least as good. Equal rank still replaces: a freshly
+        // frozen frame at a new second is worth more than the one held from the second before it.
+        if let have = coverRank, rank < have { return }
         coverSource = image
-        coverIsFrame = isFrame
+        coverRank = rank
+        coverIsFrame = rank > .blurThumb
         renderCover()
     }
 
