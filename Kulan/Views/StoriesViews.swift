@@ -2337,6 +2337,35 @@ struct StoryViewer: View {
         }
     }
 
+    /// THE STORY'S HEIGHT WHEN NOBODY HAS MEASURED IT YET — and it is the library's own formula
+    /// rather than a guess of our own, which is the whole point.
+    ///
+    /// ⚠️ THE OLD ESTIMATE WAS NOT THE STORY'S SHAPE, AND EVERY CONSUMER OF IT INHERITED THAT.
+    ///
+    /// It was `scr.height - (currentIsMine ? ownerFooter + bottomInset : 0)`: 766 for my own story
+    /// and the whole 852 before `currentIsMine` had landed, against a story that is really 699. The
+    /// slot is built as `h * (contentW / contentH)`, so the slot came out TALLER in aspect than the
+    /// picture — 1.95 or 2.17 against 1.78 — and a slot taller in aspect than its content is the
+    /// black band under the card this file has chased twice. On the 852 branch that is 31pt of empty
+    /// card, about 18% of it.
+    ///
+    /// This is `StoryDetailView.cardHeight` written out: a 9:16 card unless the screen is too short
+    /// for one, in which case it gives up height rather than running under the bar below it. On a
+    /// 393x852 it returns exactly 699 — the same number the measurement returns — so the estimated
+    /// path and the measured path now agree instead of merely being close, and the answer no longer
+    /// depends on `currentIsMine` arriving, which is known to be a beat late on a fresh open.
+    ///
+    /// ⚠️ ONE EXPRESSION, TWO CALLERS, DELIBERATELY. `cardSlot` sizes the card with it and
+    /// `sheetSizeFraction` measures the pull with it. They were two different fallbacks for one
+    /// rectangle, and on the not-mine branch that had the card sized from 852 while the pull was
+    /// computed from 793 — at p = 0.3 a fraction of 0.154 against 0.300, roughly double.
+    private var estimatedContentHeight: CGFloat {
+        let scr = UIScreen.main.bounds
+        return min(ceil(scr.width * 1.77778),
+                   scr.height - topInset - max(currentIsMine ? Self.ownerFooterHeight : 0,
+                                               bottomInset + 1))
+    }
+
     private var cardSlot: CardSlot {
         let scr = UIScreen.main.bounds
         let sheetH = scr.height * StoryViewersSheetView.heightFraction
@@ -2410,8 +2439,7 @@ struct StoryViewer: View {
         // ask.
         let content = latchedContent ?? StoryCardMorph.shared.contentSize
         let contentW = content?.width ?? scr.width
-        let contentH = content?.height
-            ?? (scr.height - (currentIsMine ? Self.ownerFooterHeight + max(10, bottomInset) : 0))
+        let contentH = content?.height ?? estimatedContentHeight
         // BUILD 249 card size (user: "make it exactly like 249, 250 is too long"), and the HEIGHT is
         // still exactly that number — `slotHRef * 0.88` has not moved since.
         let slotHRef = (avail - countArea) * 0.94
@@ -3465,8 +3493,7 @@ struct StoryViewer: View {
         // `min(itemSize.height, availableSize.height - top - bottomInset)` and so cannot exceed the
         // room above the sheet by construction. Ours is measured rather than constructed, and a
         // full-bleed rectangle arriving here would make the row read as part-collapsed at rest.
-        let restH = min(free, latchedContent?.height
-            ?? (scr.height - (currentIsMine ? Self.ownerFooterHeight + max(10, bottomInset) : 0)))
+        let restH = min(free, latchedContent?.height ?? estimatedContentHeight)
         guard restH > 1, sheetH > 1 else { return 0 }
         // With the sheet fully up, and right now. Both clamped by the story's own resting height,
         // which is what makes the start of the pull free.

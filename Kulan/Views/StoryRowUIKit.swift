@@ -777,11 +777,18 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             // because the picture inside is laid out at the slot's shape and a bounds change would
             // re-run that layout; the transform is what makes it render at `p.size`.
             //
-            // At every moment the row is VISIBLE the pull's fraction is exactly 1 (the row fades in
-            // over `p > 0.9`, where `sheetSizeFraction` has already landed), so this is exactly
-            // `itemScale` — the number these cards have always been drawn at. Below that the
-            // placement interpolates toward the full-screen story and this scales a slot-shaped
-            // picture up past its own size; nothing is on screen to see it.
+            // ⚠️ "THE FRACTION IS EXACTLY 1 WHENEVER THE ROW IS VISIBLE" WAS TRUE AND IS NOT ANY
+            // MORE. The pull runs to the end of the sheet's travel now instead of finishing at 0.9,
+            // so the row fades in over the last of the card's motion and these cards are drawn at
+            // fractions a little under 1.
+            //
+            // That is safe for exactly one reason, and it is worth stating because it is the whole
+            // reason the slot is built from the story's own aspect: the placement interpolates
+            // between two rectangles OF THE SAME SHAPE, so `p.size` keeps that shape at every
+            // fraction. A card's bounds are the slot and this transform is uniform, taken from the
+            // width alone — so it renders `p.size` exactly. Were the two ends different shapes, the
+            // rendered height would be one the placement never asked for, and the tint, which is
+            // FRAMED at `p.size` rather than transformed, would overhang the card it is dimming.
             let scale = p.size.width / max(1, geometry.slotW)
             // A card hides its own small count as it reaches the centre, where the big count below
             // takes over. Ported from the row's old `centreDistance` visual effect, which measured
@@ -917,8 +924,27 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         if let r = StoryCardMorph.shared.restContentWindowRect, r.width > 1, r.height > 1 {
             return r
         }
-        return CGRect(x: midX - geometry.slotW / 2, y: geometry.centerY - geometry.slotH / 2,
-                      width: geometry.slotW, height: geometry.slotH)
+        // ⚠️ THE FALLBACK IS THE SLOT'S SHAPE AT FULL WIDTH, AND THE SHAPE IS THE LOAD-BEARING PART.
+        //
+        // `placement` lerps width and height independently from this rectangle to the slot. Two
+        // rectangles of the SAME shape interpolate to that shape at every fraction; two of different
+        // shapes do not, and the difference is what the card and the crop then disagree about. A
+        // card's bounds are the slot and its transform is uniform from the width alone, so a lerped
+        // rect whose aspect is walking renders a height the placement never asked for — the tint,
+        // which is FRAMED at the placement's size, then overhangs it by that difference. Give the
+        // journey the same shape at both ends and none of that can happen.
+        //
+        // It used to return the slot rect itself, which is the same shape but degenerate: rest and
+        // target identical means a story drawn at card size while it is still meant to be full
+        // screen. Full width at the slot's aspect is the same shape AND the right size.
+        //
+        // The Y is the screen's middle rather than the card's true centre, which is a few points
+        // high. This runs only before any card has reported its metrics, and with the estimate now
+        // matching the measurement that window is a frame or two on the first open of a process.
+        let scr = UIScreen.main.bounds
+        let w = scr.width
+        let h = geometry.slotW > 1 ? w * (geometry.slotH / geometry.slotW) : geometry.slotH
+        return CGRect(x: midX - w / 2, y: scr.midY - h / 2, width: w, height: h)
     }
 
     /// THE PULL IS RISING AND THERE IS NO ROW TO PUT THE STORY IN.

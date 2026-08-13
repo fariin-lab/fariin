@@ -462,6 +462,24 @@ public final class StoryCardMorph {
         guard card === view else { return }
         reset()
         card = nil
+        // ⚠️ AND THE METRICS GO WITH IT, WHICH THEY NEVER USED TO.
+        //
+        // `cardTop`/`cardHeight` were written only by `setCardMetrics` and cleared by nothing — not
+        // `detach`, not `reset` — so a rectangle outlived the card it described. That was survivable
+        // while every page published on appear and one of them was always about to overwrite it.
+        // It stopped being survivable when publishing became the focused page's job alone: on any
+        // path where nobody publishes, the LAST SITTING'S rectangle is still live and `contentRect`
+        // hands it out, because its only test is `cardHeight > 1` and a stale 631 passes that.
+        //
+        // A reply-bar page followed by a plain one is 631 standing in for 699 — the bottom 68pt of
+        // the picture cut the moment the sheet moves, which is the very report this is all for. The
+        // other order gives the black band instead. One stale rectangle, two symptoms.
+        //
+        // Zeroed, the readers refuse to answer and the host falls back to its estimate, which is
+        // built from the same formula the library sizes the card with and lands on the same number.
+        // Refusing to answer is safe now in a way it was not before that estimate was corrected.
+        cardTop = 0
+        cardHeight = 0
     }
 
     /// THE STORY CONTENT'S RESTING RECTANGLE IN WINDOW COORDINATES, READABLE WHILE IT IS TRANSFORMED.
@@ -477,7 +495,19 @@ public final class StoryCardMorph {
     /// arithmetic as the lerp it feeds, which is the point — the row is taking the journey over, and
     /// it has to start from the same place the lerp did or the hand-over would be a jump.
     public var restContentWindowRect: CGRect? {
-        guard let card, let superview = card.superview, card.bounds.width > 1 else { return nil }
+        // ⚠️ `cardHeight > 1` FOR THE SAME REASON `contentSize` HAS IT, AND IT WAS MISSING HERE.
+        //
+        // Without metrics `contentRect` falls back to the whole `view.bounds`. That is the right
+        // answer for the transform — better to crop nothing than to crop wrongly — and the wrong one
+        // for a caller sizing a journey, because a full-bleed rectangle is not the shape the story
+        // is drawn in. The row would then interpolate FROM a 393x852 rest TOWARD a 9:16 slot, and
+        // two rectangles of different shapes cannot be interpolated without the crop coming back for
+        // exactly those frames.
+        //
+        // Nil instead, so the row keeps its own estimate, which is built to the slot's shape and is
+        // therefore self-consistent. Same contract as `contentSize`: answer only when you know.
+        guard let card, let superview = card.superview, card.bounds.width > 1, cardHeight > 1
+        else { return nil }
         let content = contentRect(in: card)
         guard content.width > 1, content.height > 1 else { return nil }
         let offset = CGPoint(x: content.midX - card.bounds.midX, y: content.midY - card.bounds.midY)
