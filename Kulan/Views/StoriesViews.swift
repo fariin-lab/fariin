@@ -953,6 +953,16 @@ struct StoryViewer: View {
             link = l
         }
         func cancel() { link?.invalidate(); link = nil; write = nil; completion = nil }
+
+        /// IS A SPRING ACTUALLY RUNNING RIGHT NOW.
+        ///
+        /// ⚠️ IT EXISTS BECAUSE `cancel()` THROWS THE COMPLETION AWAY, and the completion is where
+        /// every run puts its cleanup. A cancelled flight therefore never lowers the flags it
+        /// raised — `hero.live` and `StoryCardMorph.heroDismissActive` are both cleared inside the
+        /// hero's completion and nowhere else on that path — so they outlive the flight and go on
+        /// claiming the card forever. Anything that gates on those flags has to be able to ask
+        /// whether the thing they describe is still happening.
+        var isRunning: Bool { link != nil }
         @objc private func tick(_ l: CADisplayLink) {
             let dt = CGFloat(min(l.targetTimestamp - l.timestamp, 1.0 / 30.0))
             // Critically damped, so it arrives without overshooting. `k` is per animator now — see
@@ -3274,10 +3284,34 @@ struct StoryViewer: View {
     // warning. Every caller is a `body` closure, which is already on the main actor.
     @MainActor
     private func driveMorph(_ p: CGFloat) {
+        // ⚠️ A CANCELLED FLIGHT LEAVES BOTH HERO FLAGS RAISED, AND THIS IS WHERE THEY COME DOWN.
+        //
+        // `SheetProgressAnimator.cancel()` nils the completion, and the hero's completion is the
+        // ONLY place `hero.live` and `heroDismissActive` are lowered on the open path. So an open
+        // whose spring is interrupted — a finger arriving during it is enough, and that is the
+        // commonest thing a person does — leaves both standing for the rest of the sitting. Every
+        // gate below then refuses forever: the story simply never shrinks when the sheet is pulled,
+        // which is his 2026-08-13 video.
+        //
+        // The test is not a guess about who cancelled what. If the hero's own spring is not running,
+        // there is no flight, and a flag that says otherwise is describing something that has already
+        // finished. The pre-554 build survived the same leak because its shrink read neither flag;
+        // 554 put `heroDismissActive` in front of the placement, which is why the leak only started
+        // showing then.
+        if hero.live, !heroAnimator.isRunning {
+            hero.live = false
+            StoryCardMorph.heroDismissActive = false
+        }
         // A hero open or close owns the card outright. Without this, the sheet's reset-on-zero would
         // slam a card that is mid-flight back to full screen — and `viewersProgress` is written to 0
         // by several teardown paths, one of which is the close this would be interrupting.
         guard !hero.live else { return }
+        // ...and the same for the static flag on its own. `hero.live` is false from here on, so a
+        // raised `heroDismissActive` cannot be a live flight either — it is the same leak reaching
+        // the row's placement, which reads it directly.
+        if StoryCardMorph.heroDismissActive, !heroAnimator.isRunning {
+            StoryCardMorph.heroDismissActive = false
+        }
         guard showViewers else { StoryCardMorph.shared.reset(); return }
         // IF THERE IS NO CARD TO MOVE, HIDE THE STORY INSTEAD OF LEAVING IT FULL SIZE.
         //
