@@ -46,24 +46,11 @@ import UIKit.UIGestureRecognizerSubclass   // DirectionalSheetPan sets `state = 
 // exactly the disconnection the owner reported.
 //
 // WHAT IS STILL SWIFTUI, DELIBERATELY: the row's contents, through `UIHostingConfiguration`.
-// The search field's keyboard and clear button. Return = keyboard down, query and tall sheet stay
-// (the reference app). The X is HIS exit: "when i click x button go back to small sheet" — and it is the
-// only path that collapses, so backspacing a query to nothing never yanks the keyboard mid-thought
-// (`textFieldShouldClear` fires for the clear BUTTON alone, never for typing).
-extension StoryViewersSheetView: UITextFieldDelegate {
-    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-        textField.resignFirstResponder()
-        return false
-    }
-    func textFieldShouldClear(_ textField: UITextField) -> Bool {
-        textField.text = ""
-        applyFilter()
-        textField.resignFirstResponder()
-        setSearchExpanded(false)
-        return false   // the clearing is done above; returning true would double-clear
-    }
-}
-
+//
+// WHAT THIS VIEW IS NOT ANY MORE: the viewers list. Everything a list is made of — the table, the
+// search field, the tabs, the filter, the people — moved to `StoryViewersPanelView`, one instance
+// per story id, because a sheet that can slide sideways has to be able to hold two of them at once.
+// See that file's header for why, and `handlePagePan` below for the geometry that moves them.
 final class StoryViewersSheetView: UIView {
 
     // MARK: Public surface
@@ -91,10 +78,6 @@ final class StoryViewersSheetView: UIView {
     /// The host switches `sheetStoryId`; everything else (list reload, carousel recentre, the
     /// frozen story jumping underneath) already follows that one value.
     var onPage: ((Int) -> Void)?
-    /// Put the neighbour's list in the panel WITHOUT committing to it: +1 next, -1 previous, 0 back
-    /// to the story we are still on. Fired the instant a page drag picks a side, so what slides in
-    /// under the finger is the neighbour's real sheet rather than a stand-in. See `beginPagePreview`.
-    var onPagePreview: ((Int) -> Void)?
     /// LIVE sideways page drag as a FRACTION OF ONE PANEL WIDTH, signed, rubber-banded past the ends.
     /// The host spends it as card units, so one full width of travel is exactly one card.
     ///
@@ -135,70 +118,82 @@ final class StoryViewersSheetView: UIView {
 
     private(set) var progress: CGFloat = 0
 
-    var viewers: [StoryViewerInfo] = [] {
-        didSet { applyFilter() }
-    }
-    var isLoading = false {
-        didSet { loadingView.isHidden = !isLoading; updateEmptyState() }
-    }
+    // MARK: The panels
 
-    // MARK: Views
-
-    private let grabber = UIView()
-    private let allTab = UIButton(type: .system)
-    private let friendsTab = UIButton(type: .system)
-
-    /// WHAT THIS STORY'S AUDIENCE WAS, AND WHETHER A SECOND TAB SAYS ANYTHING.
+    /// EVERY LIVE PANEL, BY STORY ID — the reference app's `viewLists: [StoryId: ViewList]`.
     ///
-    /// His 2026-08-08 rule, in his words: Everyone shows Everyone plus Friends; My Friends shows only
-    /// the friends tab; a custom list shows only that list's name; View Once shows only View Once.
-    /// So the row never disappears — it always names the audience — and it only ever offers a CHOICE
-    /// for a story that went to Everyone, because that is the only audience whose viewers can be a
-    /// mix of friends and strangers. The words come from `storyAudienceTitle`, the same function the
-    /// pill on the story itself reads.
-    var audience: (title: String, bothTabs: Bool) = ("All Viewers", true) {
-        didSet {
-            // Field by field rather than as a tuple: `updateUIView` writes this on every pass, so
-            // the no-change case has to be cheap and certain, and tuple `!=` on a LABELLED tuple is
-            // the kind of thing that resolves differently than it reads.
-            guard audience.title != oldValue.title || audience.bothTabs != oldValue.bothTabs
-            else { return }
-            applyAudienceTabs()
-        }
-    }
+    /// Normally three: the story on screen and its two neighbours. A page that is still settling can
+    /// leave a fourth behind for the length of the settle (see `pageActive`), which is deliberate —
+    /// nothing is torn down while it is moving.
+    private var panels: [String: StoryViewersPanelView] = [:]
+    private var centerId = ""
+    private var prevId = ""
+    private var nextId = ""
 
-    /// THE FIRST TAB IS ALWAYS THE AUDIENCE'S OWN NAME, which makes the whole rule one sentence: the
-    /// first tab names who this story went to, and the second exists only when that was Everyone.
-    /// It used to read "All Viewers" in every case, which said nothing about the story. His words for
-    /// the Everyone case were "show Everyone + Friends", so that is what it says.
-    private var allTabTitle: String { audience.title }
+    /// The panel the sheet's own gestures talk to: the one at slot 0.
+    private var centerPanel: StoryViewersPanelView? { panels[centerId] }
 
-    private func applyAudienceTabs() {
-        // A HIDDEN FRIENDS TAB MUST NOT LEAVE ITS FILTER ON. Paging the sheet from an Everyone story
-        // you were reading on Friends across to a My Friends story would otherwise show that story's
-        // list still narrowed, under a tab that is no longer on screen to say so.
-        if !audience.bothTabs, tab != 0 {
-            tab = 0
-            applyFilter()
-        }
-        friendsTab.isHidden = !audience.bothTabs
-        // Nothing to switch to, so it stops behaving like a button: no highlight, no touch feedback
-        // on a tap that cannot change anything. It is a label with an underline at that point.
-        allTab.isUserInteractionEnabled = audience.bothTabs
-        configureTab(allTab, allTabTitle, selected: tab == 0)
-        configureTab(friendsTab, "Friends", selected: tab == 1)
+    /// Where the story-viewers panels live and what the sheet knows about their order. The host
+    /// calls this whenever the story on screen or either neighbour changes; slots are re-asserted
+    /// from it, so the host always has the last word about which story is which.
+    func setStories(center: String, prev: String, next: String) {
+        guard center != centerId || prev != prevId || next != nextId else { return }
+        centerId = center
+        prevId = prev
+        nextId = next
+        ensurePanel(center, slot: 0)
+        ensurePanel(prev, slot: -1)
+        ensurePanel(next, slot: 1)
+        // ⚠️ NEVER MID-MOTION. A panel removed while it is sliding is the bug the whole snapshot
+        // approach was working around; the reference app has the same fence
+        // (`viewListPanState != nil || isCompletingViewListPan` keeps every built list valid).
+        if !pageActive { dropStalePanels() }
         setNeedsLayout()
     }
-    private let underline = UIView()
-    private let search = UISearchTextField()
-    private let table = UITableView(frame: .zero, style: .plain)
-    private let loadingView = UIActivityIndicatorView(style: .medium)
-    private let emptyLabel = UILabel()
 
-    private var filtered: [StoryViewerInfo] = []
-    private var tab = 0
-    /// The uids of my 1:1 chats, for the Friends tab. Read once per filter rather than per row.
-    private var friendUids: Set<String> = []
+    func setViewers(_ v: [StoryViewerInfo], for id: String) { panels[id]?.viewers = v }
+    func setLoading(_ l: Bool, for id: String) { panels[id]?.isLoading = l }
+    func setAudience(title: String, bothTabs: Bool, for id: String) {
+        panels[id]?.audience = (title, bothTabs)
+    }
+
+    /// Build the panel for a story if it is not up yet, and wire it to the sheet. Empty id = no
+    /// neighbour that way, which is not an error and not a panel.
+    ///
+    /// ⚠️ THE SLOT GOES IN BEFORE THE FIRST LAYOUT, NOT AFTER. Every panel starts at slot 0, so a
+    /// neighbour laid out first and slotted second is laid out ON TOP OF THE ONE ON SCREEN for
+    /// however long it takes the next layout pass to come round.
+    @discardableResult
+    private func ensurePanel(_ id: String, slot: CGFloat) -> StoryViewersPanelView? {
+        guard !id.isEmpty else { return nil }
+        if let existing = panels[id] {
+            existing.slot = slot
+            return existing
+        }
+        let p = StoryViewersPanelView(storyId: id)
+        p.slot = slot
+        p.onSendMessage = { [weak self] v in self?.onSendMessage?(v) }
+        p.onOpenProfile = { [weak self] v in self?.onOpenProfile?(v) }
+        p.onBlock = { [weak self] v in self?.onBlock?(v) }
+        p.onSearchActive = { [weak self] on in self?.setSearchExpanded(on) }
+        p.shouldPinScroll = { [weak self] in self?.dragOwnsSheet ?? false }
+        panels[id] = p
+        addSubview(p)
+        // Laid out before it is ever seen: a panel built for a neighbour is created off the edge,
+        // and a first layout inside an animation block would fly it in from wherever zero is. It
+        // also joins the strip where the strip currently is — a panel the host hands us mid-page
+        // must not sit one displacement away from its siblings.
+        layoutPanel(p)
+        if pageOffset != 0 { p.transform = CGAffineTransform(translationX: pageOffset, y: 0) }
+        return p
+    }
+
+    private func dropStalePanels() {
+        for (id, p) in panels where id != centerId && id != prevId && id != nextId {
+            p.removeFromSuperview()
+            panels.removeValue(forKey: id)
+        }
+    }
 
     // MARK: Gestures
 
@@ -273,10 +268,6 @@ final class StoryViewersSheetView: UIView {
     /// half → full, and `dragHeight` below is the single number the finger actually writes.
     private var expand: CGFloat = 0
 
-    /// True when the sheet is at (or as good as at) the full stop. Kept as a name because the search
-    /// field's own expansion is the same state, reached a different way.
-    private var searchExpanded: Bool { expand >= 0.999 }
-
     private var halfHeight: CGFloat { bounds.height * Self.heightFraction }
     /// Their `maxViewListHeight = availableSize.height - 60.0`, with our safe-area floor.
     private var fullHeight: CGFloat { bounds.height - max(60, safeAreaInsets.top + 8) }
@@ -310,20 +301,18 @@ final class StoryViewersSheetView: UIView {
     /// direction-locked horizontal, so exactly one of them takes any given drag.
     private lazy var pagePan = DirectionalSheetPan(axis: .horizontal, target: self, action: #selector(handlePagePan(_:)))
     private var pageBaselineX: CGFloat = 0
-    /// A frozen picture of the sheet being left behind, live only while a page drag is.
-    ///
-    /// THE REAL PANEL BECOMES THE ARRIVING ONE. Snapshotting the sheet we are leaving, rather than
-    /// building a second panel, is what makes that possible: there is one table and one set of
-    /// chrome, so the thing sliding in under the finger is genuinely the neighbour's sheet with the
-    /// neighbour's viewers in it. A second panel would have been a drawing of a sheet.
-    private var pageGhost: UIView?
-    /// Which way the live page drag is going: 1 = the next story is arriving, -1 = the previous one,
-    /// 0 = no preview installed.
-    private var pageDir = 0
-    /// TRUE while a committed page is still settling. Read by the next `.began`, so an interrupting
-    /// swipe lands the previous one the way it was already going to land instead of reversing it.
-    private var pageCommitted = false
-    /// How far past the edge a departing panel is parked, so its shadow and corners clear the screen.
+    /// HOW FAR THE WHOLE STRIP OF PANELS IS DISPLACED, IN POINTS. Applied as a translation transform
+    /// to every panel, so the strip moves as one and each panel's own resting place (its `slot`)
+    /// stays a plain frame the sheet's height animations can keep writing. Zero at rest.
+    private var pageOffset: CGFloat = 0
+    /// TRUE from the first millimetre of a page drag until its settle has landed. While it is true
+    /// no panel is ever removed — see `setStories`.
+    private var pageActive = false
+    /// Bumped on every `.began`, captured by each settle's completion, so a settle that a new finger
+    /// interrupted cannot clear `pageActive` out from under the drag that replaced it.
+    private var pageCycle = 0
+    /// One panel width plus the gap the reference app leaves between two lists, so a departing
+    /// panel's shadow and rounded corners clear the screen edge before the next one arrives.
     private var pageTravel: CGFloat { bounds.width + 20 }
 
     override init(frame: CGRect) {
@@ -336,21 +325,12 @@ final class StoryViewersSheetView: UIView {
         // here and every system control inside the sheet resolves dark, matching the story area's
         // standing rule.
         overrideUserInterfaceStyle = .dark
-        buildHierarchy()
         pan.delegate = self
         addGestureRecognizer(pan)
         tapAbove.delegate = self
         addGestureRecognizer(tapAbove)
         pagePan.delegate = self
         addGestureRecognizer(pagePan)
-        // Selector-based observers, so they are dropped with this view and there is no token to
-        // keep. See `keyboardWillChange` for what they are for.
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(keyboardWillChange(_:)),
-            name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(keyboardWillChange(_:)),
-            name: UIResponder.keyboardWillHideNotification, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -454,141 +434,35 @@ final class StoryViewersSheetView: UIView {
         }
     }
 
-    private func buildHierarchy() {
-        let panel = UIView()
-        panel.backgroundColor = UIColor(white: 0.10, alpha: 1)
-        panel.layer.cornerRadius = 24
-        panel.layer.cornerCurve = .continuous
-        panel.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
-        panel.clipsToBounds = true
-        panel.tag = 1
-        addSubview(panel)
-
-        grabber.backgroundColor = UIColor.white.withAlphaComponent(0.28)
-        grabber.layer.cornerRadius = 2.5
-        panel.addSubview(grabber)
-
-        // Placeholder titles only: `audience` is set by the representable the moment this view is
-        // built and `applyAudienceTabs` writes the real ones.
-        configureTab(allTab, allTabTitle, selected: true)
-        configureTab(friendsTab, "Friends", selected: false)
-        allTab.addTarget(self, action: #selector(pickAll), for: .touchUpInside)
-        friendsTab.addTarget(self, action: #selector(pickFriends), for: .touchUpInside)
-        underline.backgroundColor = .white
-        underline.layer.cornerRadius = 1
-        panel.addSubview(allTab); panel.addSubview(friendsTab); panel.addSubview(underline)
-
-        search.placeholder = "Search"
-        search.backgroundColor = UIColor.white.withAlphaComponent(0.12)
-        search.textColor = .white
-        search.addTarget(self, action: #selector(searchChanged), for: .editingChanged)
-        // The keyboard says SEARCH (his ask — the default return key said nothing useful), and
-        // return only lowers the keyboard: the query and the expanded sheet stay, the reference app's shape.
-        search.returnKeyType = .search
-        search.delegate = self
-        // Focus grows the sheet, leaving with an empty query shrinks it — see `searchExpanded`.
-        search.addTarget(self, action: #selector(searchBegan), for: .editingDidBegin)
-        search.addTarget(self, action: #selector(searchEnded), for: .editingDidEnd)
-        panel.addSubview(search)
-
-        table.backgroundColor = .clear
-        table.separatorStyle = .none
-        table.dataSource = self
-        table.delegate = self
-        table.rowHeight = UITableView.automaticDimension
-        table.estimatedRowHeight = 64
-        table.contentInsetAdjustmentBehavior = .never
-        // The bounce is what fought the collapse drag in the SwiftUI version and had to be switched
-        // off there. It can stay on here: `handlePan` only takes the movement when the list is
-        // genuinely at its top, so the two never claim the same pixels.
-        table.alwaysBounceVertical = true
-        table.register(UITableViewCell.self, forCellReuseIdentifier: "viewer")
-        panel.addSubview(table)
-
-        loadingView.color = .white
-        loadingView.hidesWhenStopped = false
-        loadingView.startAnimating()
-        loadingView.isHidden = true
-        panel.addSubview(loadingView)
-
-        emptyLabel.text = "No views yet"
-        emptyLabel.textColor = UIColor.white.withAlphaComponent(0.55)
-        emptyLabel.font = .preferredFont(forTextStyle: .subheadline)
-        emptyLabel.textAlignment = .center
-        emptyLabel.isHidden = true
-        panel.addSubview(emptyLabel)
-    }
-
-    private func configureTab(_ b: UIButton, _ title: String, selected: Bool) {
-        b.setTitle(title, for: .normal)
-        b.titleLabel?.font = .systemFont(ofSize: 15, weight: selected ? .semibold : .regular)
-        b.setTitleColor(selected ? .white : UIColor.white.withAlphaComponent(0.5), for: .normal)
-    }
-
     // MARK: Layout
 
+    /// EVERY PANEL, PLACED BY ONE FORMULA — the reference app's, line for line:
+    ///
+    ///     var viewListFrame = CGRect(origin: CGPoint(x: viewListBaseOffsetX, ...
+    ///     let indexDistance = CGFloat(max(-1, min(1, itemIndex - currentIndex)))
+    ///     viewListFrame.origin.x += indexDistance * (availableSize.width + 20.0)
+    ///
+    /// `slot` is their `indexDistance` and `pageOffset` is their `viewListBaseOffsetX`. One number
+    /// for the strip, one number per panel, and the neighbour is placed by the same arithmetic as
+    /// the one on screen rather than by a second code path.
+    ///
+    /// ⚠️ CENTRE AND BOUNDS, NOT `frame`. Every panel carries the strip's translation as a transform
+    /// (see `handlePagePan`), and setting `frame` on a transformed view is undefined. Their
+    /// `setPosition`/`setBounds` pair is the same choice for the same reason. It is also what keeps
+    /// the sheet's HEIGHT animations (`animateExpand`, the host's settle) independent of the
+    /// sideways motion: one writes bounds and centre, the other writes the transform, and neither
+    /// can cancel the other's animation.
     override func layoutSubviews() {
         super.layoutSubviews()
-        guard let panel = viewWithTag(1) else { return }
-        let h = sheetHeight
-        // Setting `frame` on a transformed view is undefined — while the page-slide has the panel
-        // translated, its identity geometry is already correct, so leave it alone.
-        if panel.transform == .identity {
-            panel.frame = CGRect(x: 0, y: bounds.height - h * progress, width: bounds.width, height: h)
-        }
-        grabber.frame = CGRect(x: (bounds.width - 38) / 2, y: 8, width: 38, height: 5)
-
-        let tabY: CGFloat = 25
-        allTab.sizeToFit()
-        friendsTab.sizeToFit()
-        allTab.frame = CGRect(x: 18, y: tabY, width: allTab.bounds.width, height: 26)
-        friendsTab.frame = CGRect(x: allTab.frame.maxX + 24, y: tabY, width: friendsTab.bounds.width, height: 26)
-        let active = tab == 0 ? allTab : friendsTab
-        underline.frame = CGRect(x: active.frame.minX, y: allTab.frame.maxY + 4,
-                                 width: active.bounds.width, height: 2)
-
-        search.frame = CGRect(x: 16, y: underline.frame.maxY + 12, width: bounds.width - 32, height: 38)
-        let top = search.frame.maxY + 10
-        table.frame = CGRect(x: 0, y: top, width: bounds.width, height: h - top)
-        loadingView.center = CGPoint(x: bounds.width / 2, y: top + 44)
-        emptyLabel.frame = CGRect(x: 24, y: top + 40, width: bounds.width - 48, height: 22)
+        for p in panels.values { layoutPanel(p) }
     }
 
-    // MARK: Keyboard
-
-    /// THE LIST MUST NOT RUN ON UNDER THE KEYBOARD.
-    ///
-    /// The table is laid out all the way down to the bottom of the screen and its
-    /// `contentInsetAdjustmentBehavior` is `.never`, so nothing moves it out of the way by itself:
-    /// with search focused the keyboard simply covered the last rows, which could then be neither
-    /// read nor tapped. The one thing that changes here is the table's own bottom inset, which is
-    /// what a scroll view is supposed to answer a keyboard with. The SHEET's height is left alone on
-    /// purpose: its two resting heights are the reference app's and the host's settle maths is written
-    /// against them, so making the keyboard a third one would put two height models on one drag.
-    @objc private func keyboardWillChange(_ note: Notification) {
-        guard let info = note.userInfo,
-              let end = (info[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
-        else { return }
-        // A hide notification still carries a frame, and on some paths it is still the on-screen
-        // one, so the hide case is answered with a flat zero rather than by measuring anything.
-        let hiding = note.name == UIResponder.keyboardWillHideNotification
-        // `from: nil` means the window, which is the space the keyboard frame is published in.
-        let keyboardTop = hiding ? bounds.maxY : convert(end, from: nil).minY
-        let listBottom = convert(table.bounds, from: table).maxY
-        let overlap = max(0, listBottom - keyboardTop)
-        guard abs(table.contentInset.bottom - overlap) > 0.5 else { return }
-
-        let duration = info[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
-        // The keyboard rides a curve that has no `UIView.AnimationCurve` case of its own (it reports
-        // 7). Shifting the raw value into the options field is how you ride the same timing, and it
-        // is the difference between the list settling WITH the keyboard and a beat behind it.
-        let curve = info[UIResponder.keyboardAnimationCurveUserInfoKey] as? Int ?? 7
-        let timing = UIView.AnimationOptions(rawValue: UInt(curve) << 16)
-        UIView.animate(withDuration: duration, delay: 0,
-                       options: [timing, .beginFromCurrentState]) {
-            self.table.contentInset.bottom = overlap
-            self.table.verticalScrollIndicatorInsets.bottom = overlap
-        }
+    private func layoutPanel(_ p: StoryViewersPanelView) {
+        let h = sheetHeight
+        let size = CGSize(width: bounds.width, height: h)
+        if p.bounds.size != size { p.bounds = CGRect(origin: .zero, size: size) }
+        p.center = CGPoint(x: p.slot * pageTravel + bounds.width / 2,
+                           y: bounds.height - h * progress + h / 2)
     }
 
     // MARK: Progress
@@ -628,8 +502,8 @@ final class StoryViewersSheetView: UIView {
             // which was the same thing while search was the only way to reach the full stop. A drag
             // can reach it now, and a sheet a finger opened must be closable by that finger's next
             // drag rather than spending a whole gesture doing nothing.
-            if search.isFirstResponder {
-                search.resignFirstResponder()
+            if let c = centerPanel, c.isSearchFocused {
+                c.endSearchEditing()
                 setSearchExpanded(false)
                 g.setTranslation(.zero, in: self)
                 dragOwnsSheet = false
@@ -665,7 +539,7 @@ final class StoryViewersSheetView: UIView {
                 }
                 return
             }
-            table.contentOffset.y = 0          // pin it while the sheet owns the movement
+            centerPanel?.pinScrollToTop()      // pin it while the sheet owns the movement
             // ⚠️ ONE HEIGHT, IN POINTS, ACROSS BOTH STOPS. This was `setProgress(dragStart - travel /
             // sheetHeight)`, which is only the hidden → half half of the journey and stalls dead at
             // the half stop. Writing the height instead lets one finger carry the sheet from closed,
@@ -743,76 +617,87 @@ final class StoryViewersSheetView: UIView {
         onCollapseTap?()
     }
 
-    /// The sheet slides sideways under the finger and commits to the neighbour's sheet — the reference app's
-    /// thresholds (30% of the width, or 5% with 200pt/s behind it).
+    /// THE SIDEWAYS PAGE: TWO REAL PANELS, ONE NUMBER, NO PHOTOGRAPH.
     ///
-    /// BOTH SHEETS MOVE TOGETHER, WHICH IS THE WHOLE OF HIS REPORT. It used to be a relay: the one
-    /// panel slid out over 0.16s, the host flipped the story, and only THEN did the panel come back
-    /// from the far edge as the new sheet. So for the entire drag there was nothing behind the panel
-    /// but black, and the sheet he was swiping to did not exist until after he let go — "the next
-    /// sheet is coming late". The reference app's does not: the neighbour is on screen, moving, from the
-    /// first millimetre.
+    /// WHAT THIS USED TO DO AND WHY IT WAS WRONG. There was one panel, so showing two sheets at once
+    /// meant `snapshotView`-ing the one being left behind and re-pointing the real panel at the
+    /// neighbour's list mid-drag. Everything about that was a consequence of the panel not being a
+    /// view you could have two of: the departing sheet was a picture (it could not scroll, could not
+    /// answer a touch, and a fetch landing during the drag drew into the sheet under the finger
+    /// rather than into the one it belonged to), and the arriving sheet was the same table being
+    /// rewritten under the gesture. A cancelled drag then had to put the old story's list BACK into
+    /// that one panel, which is why the teardown had two modes and why an interrupted settle could
+    /// leave the wrong list on screen.
     ///
-    /// The trick that makes it cheap is `beginPagePreview`: the departing sheet becomes a snapshot
-    /// and the REAL panel becomes the arriving one, loaded with the neighbour's viewers. So the
-    /// sheet under the finger is the real sheet, there is still only one table, and the commit is
-    /// just the host's id catching up with what is already on screen.
+    /// WHAT IT DOES NOW, which is the reference app's `viewListPanGesture` and its layout pass:
+    ///   · every story keeps its own real panel (`panels`, their `viewLists` keyed by story id);
+    ///   · the drag writes ONE displacement in points, carried by every panel as a transform, so the
+    ///     strip moves together and the neighbour follows the finger from the first millimetre;
+    ///   · the release commits on their thresholds and REBASES — the arriving panel becomes slot 0
+    ///     and the displacement is shifted by exactly one travel, so the picture does not move at
+    ///     the instant the story id changes — then the strip springs home from wherever it is;
+    ///   · nothing is created, destroyed or re-pointed during the gesture.
     ///
-    /// No neighbour → no preview, a quarter-strength rubber-band and a spring home, as before.
+    /// Their commit is `fraction <= -0.3` / `>= 0.3`, or `0.05` with 200pt/s behind it, and ours are
+    /// the same numbers on the same fraction. No neighbour that way → a quarter-strength rubber-band
+    /// and a spring home, as before.
     @objc private func handlePagePan(_ g: UIPanGestureRecognizer) {
-        guard let panel = viewWithTag(1) else { return }
         let rawX = g.translation(in: self).x
+        let w = max(bounds.width, 1)
         switch g.state {
         case .began:
             onDragActive?(true)
             suspendForeignPans()
-            // A transition from the last swipe still settling: land it NOW. Otherwise the first
-            // .changed snapshots a panel that is halfway across the screen and the photograph
-            // arrives crooked.
+            // A SETTLE STILL IN FLIGHT IS LANDED, NOT REVERSED. Theirs does exactly this — the
+            // `.began` clears `isCompletingViewListPan` and starts from the current translation, so
+            // the strip snaps to its resting layout and follows the new finger from there. It is
+            // coherent because the id already changed at the previous release: the resting layout IS
+            // the committed one. This is what the old `pageCommitted` flag was hand-rolling around
+            // the snapshot, and it is why "fast fast" swiping used to land the wrong list.
             //
-            // ⚠️ AND IT MUST BE LANDED THE WAY IT WAS GOING TO LAND. The comment here used to say
-            // "restoring is right either way"; it is not. A COMMITTED page ends with
-            // `endPagePreview(restore: false)` from the animation's completion — the preview IS the
-            // story now — and interrupting it with `restore: true` runs the opposite teardown and
-            // posts `onPagePreview?(0)`, putting the departing story's list back over the one the
-            // host has already switched to. So the same state got torn down two different ways
-            // depending only on whether a finger arrived within the 0.28s.
-            //
-            // That window is exactly what "fast fast" swiping lives in, which is his 2026-08-07
-            // report. `pageCommitted` remembers which way the last cycle went so an interruption
-            // finishes it the same way it would have finished itself.
-            if pageDir != 0 {
-                panel.layer.removeAllAnimations()
-                pageGhost?.layer.removeAllAnimations()
-                endPagePreview(restore: !pageCommitted)
-                panel.transform = .identity
+            // ⚠️ ONLY WHEN A PAGE IS ACTUALLY IN FLIGHT. Clearing the panels' animations
+            // unconditionally would also kill an `animateExpand` in progress and snap the sheet's
+            // height — the two motions are deliberately on different properties (transform vs
+            // bounds/centre) so that neither has to cancel the other.
+            if pageActive {
+                for p in panels.values { p.layer.removeAllAnimations() }
             }
-            pageCommitted = false
+            pageCycle &+= 1
+            pageActive = true
+            pageOffset = 0
+            applyPageOffset()
+            // A page swipe out of the expanded (search) state steps the sheet back to half, the way
+            // it always has — the story arriving is a different audience and a query typed for the
+            // last one means nothing for it.
+            if let c = centerPanel, c.isSearchFocused {
+                c.endSearchEditing()
+                setSearchExpanded(false)
+            }
             pageBaselineX = rawX
         case .changed:
             let tx = rawX - pageBaselineX
             // Under half a point is not a direction. Without this the first frame (which is ~0 by
-            // construction, see pageBaselineX) would install a preview of whichever side the sign
-            // of zero happened to name.
+            // construction, see pageBaselineX) would pick whichever side the sign of zero named.
             guard abs(tx) >= 0.5 else {
-                if pageDir != 0 { endPagePreview(restore: true) }
-                panel.transform = .identity
+                pageOffset = 0
+                applyPageOffset()
                 onPageDrag?(0)
                 return
             }
             let dir = tx < 0 ? 1 : -1          // finger left → the NEXT story arrives
-            let allowed = dir == 1 ? hasNext : hasPrev
+            // The FLAG AND THE ID BOTH. The flag is the host's answer and the id is what a panel can
+            // actually be built from; a side with no id has nothing real to slide in and must
+            // rubber-band even if the flag says otherwise.
+            let allowed = dir == 1 ? (hasNext && !nextId.isEmpty) : (hasPrev && !prevId.isEmpty)
             guard allowed else {
-                if pageDir != 0 { endPagePreview(restore: true) }
-                panel.transform = CGAffineTransform(translationX: tx * 0.25, y: 0)
-                onPageDrag?(tx * 0.25 / max(bounds.width, 1))   // the rubber-band, same units
+                pageOffset = tx * 0.25
+                applyPageOffset()
+                onPageDrag?(pageOffset / w)    // the rubber-band, same units
                 return
             }
-            if pageDir != dir { beginPagePreview(dir) }
-            // The departing sheet rides the finger; the arriving one rides it exactly one screen
-            // behind. One number, two views, no gap between them at any moment of the drag.
-            pageGhost?.transform = CGAffineTransform(translationX: tx, y: 0)
-            panel.transform = CGAffineTransform(translationX: tx + CGFloat(dir) * pageTravel, y: 0)
+            // Clamped at one panel width, theirs: `fraction = max(-1, min(1, translation.x / width))`.
+            pageOffset = max(-w, min(w, tx))
+            applyPageOffset()
             // ⚠️ A FRACTION OF THE PANEL'S OWN JOURNEY, AND IT MUST STAY ONE. Twice now I have
             // "corrected" this into a distance and both times it was wrong, so the reasoning is
             // written down here rather than in a commit nobody re-reads.
@@ -830,86 +715,86 @@ final class StoryViewersSheetView: UIView {
             // It does mean the row travels slower than a finger ON the row, where one card is 90pt.
             // That is not a bug: these two gestures are pacing different things. The row's own pan
             // paces CARDS; this one paces PANELS, and the row is following the panel.
-            onPageDrag?(tx / max(bounds.width, 1))
+            onPageDrag?(pageOffset / w)
         case .ended, .cancelled:
             onDragActive?(false)
             let tx = rawX - pageBaselineX
             let vx = g.velocity(in: self).x
-            let w = max(bounds.width, 1)
-            let commit = g.state == .ended && pageDir != 0
+            let dir = tx < 0 ? 1 : -1
+            let allowed = dir == 1 ? (hasNext && !nextId.isEmpty) : (hasPrev && !prevId.isEmpty)
+            let commit = g.state == .ended && allowed && abs(tx) >= 0.5
                 && (abs(tx) > w * 0.30 || (abs(tx) > w * 0.05 && abs(vx) > 200))
+            let cycle = pageCycle
             if commit {
-                let dir = pageDir
+                // THE REBASE, WHICH IS THE WHOLE OF THE COMMIT. The arriving panel is at
+                // `slot * travel + pageOffset`; shifting every slot by -dir and the displacement by
+                // +dir * travel leaves every panel exactly where it already is on screen while
+                // making the arriving one slot 0. Theirs is the same move on fractions:
+                //
+                //     if case .previous = direction { fraction = 1.0 + fraction }
+                //     else { fraction = fraction - 1.0 }
+                //
+                // In points rather than fractions because our panels are one travel apart (a width
+                // PLUS the 20pt gap), and rebasing by a bare width would leave a 20pt jump.
+                for p in panels.values { p.slot -= CGFloat(dir) }
+                pageOffset += CGFloat(dir) * pageTravel
+                // What the sheet knows about the new order until the host confirms it: the story we
+                // came from is now the neighbour behind us, and the far side is unknown until the
+                // host's next pass (which arrives on the same runloop turn — `onPage` writes the
+                // host's state directly).
+                let arriving = dir == 1 ? nextId : prevId
+                if dir == 1 { prevId = centerId; nextId = "" } else { nextId = centerId; prevId = "" }
+                centerId = arriving
+                setNeedsLayout()
+                layoutIfNeeded()               // slots are frames; land them before the spring
+                applyPageOffset()              // and hold the picture still across the rebase
                 // THE ID FLIPS NOW, not when the animation lands. The host zeroes the row's drag in
                 // the same transaction, so the carousel glides its remaining distance while these
-                // two panels finish theirs — one motion. Nothing reloads: the preview already put
-                // this story's viewers in the panel, so the coordinator's load() is a no-op.
+                // panels finish theirs — one motion. Nothing reloads: the arriving panel has had
+                // this story's viewers in it since the sheet learned it was a neighbour.
                 onPage?(dir)
-                pageCommitted = true
                 // `.allowUserInteraction`, OR THE INTERRUPTION PATH ABOVE CAN NEVER RUN. Without
-                // it, UIKit turns off touch delivery to the animating panel's whole subtree for
-                // the length of the settle — so a finger arriving inside the 0.28s (his 2026-08-09
-                // "swipe back does not work until the first swipe completes") was dropped before
-                // the pan ever heard it, and the `.began` that lands a mid-flight cycle sat
-                // unreachable. The flag is what every interruptible-gesture settle carries.
+                // it, UIKit turns off touch delivery to the animating panels for the length of the
+                // settle — so a finger arriving inside the 0.28s (his 2026-08-09 "swipe back does
+                // not work until the first swipe completes") was dropped before the pan ever heard
+                // it. The flag is what every interruptible-gesture settle carries.
                 UIView.animate(withDuration: 0.28, delay: 0,
                                options: [.curveEaseOut, .allowUserInteraction]) {
-                    self.pageGhost?.transform =
-                        CGAffineTransform(translationX: -CGFloat(dir) * self.pageTravel, y: 0)
-                    panel.transform = .identity
-                } completion: { _ in
-                    self.pageCommitted = false
-                    self.endPagePreview(restore: false)   // the preview IS the story now
+                    self.pageOffset = 0
+                    self.applyPageOffset()
+                } completion: { [weak self] _ in
+                    self?.endPageCycle(cycle)
                 }
             } else {
                 onPageDrag?(0)
-                // Home for the arriving panel is back off the edge it came from; with no preview
-                // installed (no neighbour that way) it is the rubber-band springing back.
-                let parked: CGAffineTransform = pageDir == 0
-                    ? .identity
-                    : CGAffineTransform(translationX: CGFloat(pageDir) * pageTravel, y: 0)
                 UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9,
                                initialSpringVelocity: 0,
                                options: [.allowUserInteraction]) {   // same rule as the commit settle
-                    self.pageGhost?.transform = .identity
-                    panel.transform = parked
-                } completion: { _ in
-                    // Put the panel back where it belongs BEFORE it is visible again: the ghost is
-                    // covering it until the moment it goes away, and the restore inside
-                    // endPagePreview is what puts this story's own viewers back in it.
-                    self.endPagePreview(restore: true)
-                    panel.transform = .identity
+                    self.pageOffset = 0
+                    self.applyPageOffset()
+                } completion: { [weak self] _ in
+                    self?.endPageCycle(cycle)
                 }
             }
         default: break
         }
     }
 
-    /// Hand the panel to the neighbour and leave a photograph of the sheet we are on in its place.
-    private func beginPagePreview(_ dir: Int) {
-        guard let panel = viewWithTag(1) else { return }
-        if pageDir != 0 { endPagePreview(restore: true) }   // he changed his mind mid-drag
-        // `afterScreenUpdates: false` deliberately: the panel is exactly as the last frame drew it,
-        // and waiting for a commit here would snapshot the panel AFTER the preview had already
-        // swapped the list into it — a picture of the sheet we are moving to, left behind as the
-        // sheet we came from.
-        guard let shot = panel.snapshotView(afterScreenUpdates: false) else { return }
-        shot.frame = panel.frame
-        shot.transform = panel.transform
-        shot.isUserInteractionEnabled = false   // a photograph must never answer a touch
-        insertSubview(shot, aboveSubview: panel)
-        pageGhost = shot
-        pageDir = dir
-        onPagePreview?(dir)
+    /// The strip's displacement, on every panel. A transform rather than a frame so it composes with
+    /// the sheet's height rather than fighting it — see `layoutPanel`.
+    private func applyPageOffset() {
+        let t: CGAffineTransform = pageOffset == 0
+            ? .identity
+            : CGAffineTransform(translationX: pageOffset, y: 0)
+        for p in panels.values where p.transform != t { p.transform = t }
     }
 
-    /// Drop the photograph. `restore` puts the story we are still on back in the panel — true when
-    /// the swipe came to nothing, false when it committed and the panel's contents ARE the story now.
-    private func endPagePreview(restore: Bool) {
-        pageGhost?.removeFromSuperview()
-        pageGhost = nil
-        if restore, pageDir != 0 { onPagePreview?(0) }
-        pageDir = 0
+    /// The settle landed (or was abandoned by a finger that started a new one). Only the cycle that
+    /// is still current may release the fence and clear away the panels the page left behind.
+    private func endPageCycle(_ cycle: Int) {
+        guard cycle == pageCycle else { return }
+        pageActive = false
+        dropStalePanels()
     }
 
     /// Gates for all four recognizers. IN THE CLASS BODY WITH `override`, not in the delegate
@@ -966,7 +851,8 @@ final class StoryViewersSheetView: UIView {
     /// The one question the list hand-off turns on.
     private func shouldSheetTakeDrag(velocity: CGFloat) -> Bool {
         if progress < 0.999 { return true }               // not fully open → the sheet is the thing moving
-        if table.contentOffset.y > 0.5 { return false }   // list has somewhere to go → let it scroll
+        // The list on screen — a neighbour's scroll position is nothing to do with this drag.
+        if (centerPanel?.scrollOffsetY ?? 0) > 0.5 { return false }   // let it scroll
         if velocity > 0 { return true }                   // at the top and pulling down → collapse
         // ⚠️ AT THE TOP AND PUSHING UP: THE SHEET GROWS UNTIL IT IS FULL, and only then does the list
         // scroll. This line is the half → full gesture.
@@ -982,30 +868,7 @@ final class StoryViewersSheetView: UIView {
         return expand < 0.999
     }
 
-    // MARK: Filtering
-
-    @objc private func pickAll() { setTab(0) }
-    @objc private func pickFriends() { setTab(1) }
-
-    private func setTab(_ i: Int) {
-        guard tab != i else { return }
-        tab = i
-        configureTab(allTab, allTabTitle, selected: i == 0)
-        configureTab(friendsTab, "Friends", selected: i == 1)
-        applyFilter()
-        UIView.animate(withDuration: 0.18) { self.setNeedsLayout(); self.layoutIfNeeded() }
-    }
-
-    @objc private func searchChanged() { applyFilter() }
-
-    // MARK: Search expansion (the reference app's two resting heights — see `searchExpanded`)
-
-    @objc private func searchBegan() { setSearchExpanded(true) }
-    @objc private func searchEnded() {
-        // Keyboard down with a live query keeps the tall sheet (results need the room);
-        // down with an empty one has nothing to show and steps back to half.
-        if (search.text ?? "").isEmpty { setSearchExpanded(false) }
-    }
+    // MARK: Sheet height stops
 
     private func setSearchExpanded(_ on: Bool) {
         // The reference app's 0.5s spring for the search jump specifically; a drag-driven expand uses
@@ -1030,52 +893,6 @@ final class StoryViewersSheetView: UIView {
         }
     }
 
-    /// THE SHEET IS BEING POINTED AT A DIFFERENT STORY, so everything that was narrowing the LAST
-    /// story's list goes with it.
-    ///
-    /// A query typed for one story means nothing for the next one's audience, and it was surviving
-    /// the swap: `viewers.didSet` re-ran the old text against the new people, so paging sideways
-    /// showed "No views yet" for a story that has viewers, with the words that hid them sitting in a
-    /// search field that had already collapsed out of sight. There was no way to see what was wrong,
-    /// let alone undo it.
-    ///
-    /// The friends set is emptied here for a different reason with the same shape: it is read once
-    /// and then kept for ever, so the Friends tab was answering with whatever the conversation list
-    /// said the first time that tab was opened in this sheet. Emptying it makes the next filter go
-    /// and read it again.
-    func prepareForStorySwap() {
-        friendUids = []
-        guard !(search.text ?? "").isEmpty || searchExpanded else { return }
-        search.text = ""
-        search.resignFirstResponder()
-        setSearchExpanded(false)
-        applyFilter()
-    }
-
-    private func applyFilter() {
-        let me = AuthService.shared.uid ?? ""
-        if tab == 1 && friendUids.isEmpty {
-            friendUids = Set(ConversationsRepository.shared.conversations
-                .filter { !$0.isGroup }.map { $0.otherUid(me) }.filter { !$0.isEmpty })
-        }
-        var v = viewers
-        if tab == 1 { v = v.filter { friendUids.contains($0.id) } }
-        let q = (search.text ?? "").trimmingCharacters(in: .whitespaces)
-        if !q.isEmpty { v = v.filter { $0.name.localizedCaseInsensitiveContains(q) } }
-        // Reactions first, then most recent — the same order the SwiftUI sheet used, kept so the list
-        // does not reorder itself the day this replaces it.
-        filtered = v.sorted { a, b in
-            let ar = !(a.reaction ?? "").isEmpty, br = !(b.reaction ?? "").isEmpty
-            if ar != br { return ar }
-            return a.viewedAt > b.viewedAt
-        }
-        table.reloadData()
-        updateEmptyState()
-    }
-
-    private func updateEmptyState() {
-        emptyLabel.isHidden = isLoading || !filtered.isEmpty
-    }
 }
 
 /// Axis-locked pan for the sheet's window-level gestures. Judges the CUMULATIVE movement since
@@ -1157,54 +974,6 @@ final class DirectionalSheetPan: UIPanGestureRecognizer {
         guard validated else { return }
         super.touchesMoved(touches, with: event)
         if fireBegan, state == .possible { state = .began }
-    }
-}
-
-// MARK: - Table
-
-extension StoryViewersSheetView: UITableViewDataSource, UITableViewDelegate {
-    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { filtered.count }
-
-    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "viewer", for: indexPath)
-        let v = filtered[indexPath.row]
-        cell.backgroundColor = .clear
-        cell.selectionStyle = .none
-        // SwiftUI for the row's CONTENTS only. The avatar, its hashed letter fallback and the reaction
-        // badge already exist and already look right; rebuilding them in UIKit would only be a chance
-        // for the two to drift apart.
-        cell.contentConfiguration = UIHostingConfiguration {
-            StoryViewerRowContent(
-                viewer: v,
-                onSendMessage: { [weak self] in self?.onSendMessage?(v) },
-                onOpenProfile: { [weak self] in self?.onOpenProfile?(v) },
-                onToggleHidden: { [weak self] in
-                    let store = StoryAudienceStore.shared
-                    store.setHidden(v.id, !store.isHidden(v.id))
-                    // Redraw: the menu's label is the state, so a stale row would offer to hide
-                    // somebody it just hid.
-                    //
-                    // FOUND BY WHO IS IN IT, not by the index this cell happened to be built with. A
-                    // tab switch or a keystroke in the search between the build and the tap re-runs
-                    // the filter and moves everybody, and the captured index then names whoever has
-                    // since taken that slot: the wrong row redrew, and the tapped one kept the label
-                    // it had just contradicted.
-                    guard let self, let row = self.filtered.firstIndex(where: { $0.id == v.id })
-                    else { return }
-                    self.table.reloadRows(at: [IndexPath(row: row, section: 0)], with: .none)
-                },
-                onBlock: { [weak self] in self?.onBlock?(v) },
-                isHidden: StoryAudienceStore.shared.isHidden(v.id))
-        }
-        .margins(.horizontal, 16)
-        .margins(.vertical, 9)
-        return cell
-    }
-
-    /// The table's own scrolling is untouched while the list owns the drag; this only stops it
-    /// rubber-banding UPWARD past its top while the sheet is the thing that should be moving.
-    func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        if dragOwnsSheet { scrollView.contentOffset.y = 0 }
     }
 }
 
@@ -1325,17 +1094,18 @@ struct StoryViewerRowContent: View {
 /// about how far open the sheet is.
 struct StoryViewersSheet: UIViewRepresentable {
     let activeStoryId: String
-    /// This story's audience, in words, and whether it earns a second tab. See `audience` on the
-    /// view and `storyAudienceTitle` in StoriesViews, which is where both of these come from.
-    var audienceTitle: String = "All Viewers"
-    var audienceHasBothTabs: Bool = true
+    /// A story's audience, in words, and whether it earns a second tab — BY ID, not just for the one
+    /// on screen. The sheet holds a real panel per story now and each of them wears its own
+    /// audience, so the neighbour arrives with the right tabs already on it instead of inheriting
+    /// the tabs of the story you were reading. See `storyAudienceTitle` in StoriesViews.
+    var audienceFor: (String) -> (title: String, bothTabs: Bool) = { _ in ("All Viewers", true) }
     @Binding var progress: CGFloat
     var carouselBand: CGRect = .zero
     var hasPrev: Bool = false
     var hasNext: Bool = false
     /// The stories either side of `activeStoryId`. The sheet needs the IDS, not just whether they
-    /// exist, because it loads the neighbour's viewers the moment a sideways drag picks a side —
-    /// see `Coordinator.preview`. Empty string = no neighbour that way.
+    /// exist, because each of them is a real panel it builds and fills in advance — see
+    /// `Coordinator.sync`. Empty string = no neighbour that way.
     var prevStoryId: String = ""
     var nextStoryId: String = ""
     var onClose: () -> Void
@@ -1383,116 +1153,77 @@ struct StoryViewersSheet: UIViewRepresentable {
             let cid = ChatService.convId(AuthService.shared.uid ?? "", viewer.id)
             Task { await ChatService.setBlocked(cid, true) }
         }
-        v.onPagePreview = { [weak c = context.coordinator] d in c?.preview(d) }
         context.coordinator.view = v
-        v.audience = (audienceTitle, audienceHasBothTabs)
-        context.coordinator.setNeighbours(prev: prevStoryId, next: nextStoryId)
-        context.coordinator.load(activeStoryId)
+        context.coordinator.audienceFor = audienceFor
+        context.coordinator.sync(active: activeStoryId, prev: prevStoryId, next: nextStoryId)
         return v
     }
 
     func updateUIView(_ v: StoryViewersSheetView, context: Context) {
         if !context.coordinator.applying { v.setProgress(progress) }
-        // The sheet pages sideways between the author's stories, and each one may have gone to a
-        // different audience, so the tab follows the story on screen rather than the one it opened on.
-        v.audience = (audienceTitle, audienceHasBothTabs)
         v.carouselBand = carouselBand
         v.hasPrev = hasPrev
         v.hasNext = hasNext
-        context.coordinator.setNeighbours(prev: prevStoryId, next: nextStoryId)
-        context.coordinator.load(activeStoryId)
+        // The closure is rebuilt on every render and closes over this pass's story array, so it is
+        // replaced rather than kept — a stale one would answer for stories that have since moved.
+        context.coordinator.audienceFor = audienceFor
+        context.coordinator.sync(active: activeStoryId, prev: prevStoryId, next: nextStoryId)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    /// KEEPS THE THREE PANELS POINTED AT THE RIGHT THREE STORIES AND FED.
+    ///
+    /// There is no "preview" any more and no notion of the panel being borrowed. Each story has its
+    /// own panel and its own fetch; this only decides which three stories are up and pushes each
+    /// one's people into its own panel whenever they arrive. That is the reference app's shape too:
+    /// it preloads the current item's list and both neighbours' (`preloadViewListIds`) so a sideways
+    /// swipe never brings in a spinner.
     final class Coordinator {
         weak var view: StoryViewersSheetView?
         var applying = false
-        private var loadedId = ""
+        var audienceFor: (String) -> (title: String, bothTabs: Bool) = { _ in ("All Viewers", true) }
         private var activeId = ""
         private var prevId = ""
         private var nextId = ""
-        private var task: Task<Void, Never>?
-        /// A page drag owns the panel: the list in it belongs to the neighbour the finger is
-        /// bringing in, not to the story the host still thinks we are on.
-        private var previewing = false
-        /// Viewers by story id. Small (a story's whole audience) and short-lived (this sheet), and
-        /// it is what lets the arriving sheet arrive with its people already in it.
+        /// Viewers by story id. Small (a story's whole audience) and short-lived (this sheet), and it
+        /// is what lets a panel that has never been on screen arrive with its people already in it.
         private var cache: [String: [StoryViewerInfo]] = [:]
+        /// One fetch per story at a time. Scrubbing the carousel walks `activeId` across every card,
+        /// and without this each pass would start the same three reads again.
+        private var tasks: [String: Task<Void, Never>] = [:]
 
-        func setNeighbours(prev: String, next: String) {
-            guard prev != prevId || next != nextId else { return }
-            prevId = prev
-            nextId = next
-            warmNeighbours()   // paging changed who the neighbours are; go and get them
-        }
-
-        /// The host's story changed.
-        ///
-        /// While a preview is up this must NOT pull the host's story back into the panel — the
-        /// finger has already moved on. The one thing it does is notice when the host has caught up
-        /// with what the finger brought in (a commit), and hand ownership back.
-        func load(_ id: String) {
-            activeId = id
-            if previewing {
-                if id == loadedId { previewing = false }
-                return
+        func sync(active: String, prev: String, next: String) {
+            let moved = active != activeId || prev != prevId || next != nextId
+            activeId = active; prevId = prev; nextId = next
+            if moved { view?.setStories(center: active, prev: prev, next: next) }
+            // Audience every pass, not only on a move: a story's own audience can be re-read by the
+            // host (it comes from the live repository) without the neighbours changing.
+            for id in [active, prev, next] where !id.isEmpty {
+                let a = audienceFor(id)
+                view?.setAudience(title: a.title, bothTabs: a.bothTabs, for: id)
             }
-            show(id)
+            guard moved else { return }
+            for id in [active, prev, next] where !id.isEmpty { fill(id) }
         }
 
-        /// Put a neighbour in the panel without the host committing to it: +1 next, -1 previous,
-        /// 0 back to the story we are on. Called from the page drag's first millimetre.
-        func preview(_ dir: Int) {
-            previewing = dir != 0
-            let target = dir == 1 ? nextId : (dir == -1 ? prevId : activeId)
-            guard !target.isEmpty else { previewing = false; return }
-            show(target)
-        }
-
-        /// Debounced by story id: scrubbing the carousel changes this on every card, and a fetch per
-        /// card would be a request storm for a list nobody has stopped to read yet. A cache hit
-        /// skips the wait entirely, which is what makes a previewed neighbour land already filled.
-        private func show(_ id: String) {
-            guard !id.isEmpty, id != loadedId else { return }
-            loadedId = id
-            // A NEW STORY IS A NEW AUDIENCE. Drop the last one's search text and its friends set
-            // BEFORE the new people are handed over, because assigning `viewers` filters them on the
-            // way in: do it after and the first thing drawn is the new list seen through the old
-            // story's query.
-            view?.prepareForStorySwap()
-            task?.cancel()
+        /// Put a story's people in that story's own panel, fetching them once if they are not held.
+        private func fill(_ id: String) {
             if let hit = cache[id] {
-                view?.viewers = hit
-                view?.isLoading = false
-                warmNeighbours()
+                view?.setViewers(hit, for: id)
+                view?.setLoading(false, for: id)
                 return
             }
-            view?.viewers = []
-            view?.isLoading = true
-            task = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                guard !Task.isCancelled else { return }
+            guard tasks[id] == nil else { return }
+            view?.setLoading(true, for: id)
+            tasks[id] = Task { [weak self] in
                 let people = await StoriesService.shared.fetchViewers(storyId: id)
-                guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard let self else { return }
+                    self.tasks[id] = nil
                     self.cache[id] = people
-                    self.view?.viewers = people
-                    self.view?.isLoading = false
-                    self.warmNeighbours()
-                }
-            }
-        }
-
-        /// Fetch both neighbours' lists in the background so a sideways swipe has something to slide
-        /// in. Without this the arriving sheet would be a spinner every time, which is the shape of
-        /// the bug rather than a fix for it. Two small reads, only ever while this sheet is open.
-        private func warmNeighbours() {
-            for id in [prevId, nextId] where !id.isEmpty && cache[id] == nil {
-                Task { [weak self] in
-                    let people = await StoriesService.shared.fetchViewers(storyId: id)
-                    await MainActor.run { self?.cache[id] = people }
+                    self.view?.setViewers(people, for: id)
+                    self.view?.setLoading(false, for: id)
                 }
             }
         }

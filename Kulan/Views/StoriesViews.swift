@@ -3307,14 +3307,20 @@ struct StoryViewer: View {
         // right and never a stale snapshot's idea of it.
         let arr = StoriesRepository.shared.mine?.stories ?? myStories
         let idx = arr.firstIndex { $0.id == sheetStoryId }
-        // WHICH TABS THIS STORY'S VIEWERS LIST GETS, from the same two functions the story's own
-        // audience pill reads. Recomputed here rather than latched, because the sheet pages sideways
-        // between stories and `sheetStoryId` moves with it — so the tab follows the story you are
-        // looking at rather than the one you opened the sheet on.
-        let sheetStory = arr.first { $0.id == sheetStoryId }
+        // WHICH TABS A STORY'S VIEWERS LIST GETS, from the same two functions the story's own
+        // audience pill reads. BY ID rather than for the active story alone: the sheet holds a real
+        // panel per story now, and the one sliding in has to arrive wearing its own audience instead
+        // of the audience of the story it is replacing.
+        //
+        // Hoisted out of the initializer with its type written down, not inlined: this file has cost
+        // three builds to the type checker giving up on a long call, and a multi-statement closure
+        // returning a labelled tuple inside one is exactly that shape.
+        let audienceFor: (String) -> (title: String, bothTabs: Bool) = { id in
+            guard let s = arr.first(where: { $0.id == id }) else { return ("All Viewers", true) }
+            return (storyAudienceTitle(for: s), storyAudienceHasBothTabs(s))
+        }
         return StoryViewersSheet(activeStoryId: sheetStoryId,
-                          audienceTitle: sheetStory.map { storyAudienceTitle(for: $0) } ?? "All Viewers",
-                          audienceHasBothTabs: storyAudienceHasBothTabs(sheetStory),
+                          audienceFor: audienceFor,
                           progress: $viewersProgress,
                           carouselBand: carouselBandRect,
                           hasPrev: (idx ?? 0) > 0,
