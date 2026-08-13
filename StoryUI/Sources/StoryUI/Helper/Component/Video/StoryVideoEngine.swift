@@ -232,7 +232,9 @@ enum StoryItemViewStore {
         }
     }
 
-    /// THE STORIES INSIDE THE PREVIEW WINDOW RIGHT NOW — the reference app's `validIds`.
+    /// THE STORIES INSIDE THE PREVIEW WINDOW RIGHT NOW — the reference app's `validIds`, and it is
+    /// now literally that: the row's own layout pass publishes the set it just laid out. See
+    /// `StoryVideoHost.previewWindow` for why a second, narrower window on this side was the bug.
     ///
     /// ⚠️ THIS IS THE HALF OF HIS 2026-08-12 ASK THAT IS THEIRS VERBATIM. He asked that a story stay
     /// alive while it is still one of the visible preview cards, and be reset only once it has
@@ -260,12 +262,11 @@ enum StoryItemViewStore {
     /// retained then anyway (`retainDismounted`), so an empty set costs nothing.
     private static var window: Set<String> = []
 
-    /// The host says which stories are inside the preview range. Idempotent — only a real change does
-    /// any work, and this is called from a view body path.
-    static func setWindow(_ ids: [String]) {
-        let next = Set(ids)
-        guard next != window else { return }
-        window = next
+    /// The host says which stories the preview row laid out. Idempotent — only a real change does any
+    /// work, and this is called once per frame of a row scroll or a sheet page drag.
+    static func setWindow(_ ids: Set<String>) {
+        guard ids != window else { return }
+        window = ids
         releaseOutsideWindow()
     }
 

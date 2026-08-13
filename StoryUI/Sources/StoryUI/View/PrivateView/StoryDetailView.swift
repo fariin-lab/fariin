@@ -573,9 +573,9 @@ struct StoryDetailView: View {
             // Those are exactly the owner's two rules ("normal viewing restarts, the sheet
             // preserves"), and this line is the whole of the mechanism. See `StoryItemViewStore`.
             StoryItemViewStore.retainDismounted = hidden
-            // Opening the sheet is what brings the preview row into existence, so it is also where
-            // the window starts. Closing it clears the window as part of dropping retention.
-            if hidden { publishPreviewWindow(around: getCurrentIndex()) }
+            // ⚠️ NOTHING SETS THE WINDOW HERE ANY MORE. The row's own layout pass publishes it, and
+            // the row is what comes into existence with the sheet — see `StoryVideoHost.previewWindow`.
+            // Closing clears the window as part of dropping retention, which is the flag's `didSet`.
         }
         // A hero open or close is in the air: the reply bar and its black footer step aside, the
         // card's own chrome stays on the card. See `flightActive`.
@@ -787,9 +787,9 @@ struct StoryDetailView: View {
             // story being left at this instant — so it could only ever be the wrong number, dressed
             // up as care.
             timerProgress = CGFloat(idx)
-            // The row settled on a new card, so the preview window moved with it. This is the moment
-            // the reference app re-tests its deferred removals — see `StoryItemViewStore.setWindow`.
-            publishPreviewWindow(around: idx)
+            // ⚠️ AND THE WINDOW IS NOT TOUCHED HERE EITHER. It moved with the row, in the row's own
+            // layout pass, several frames before this settle — which is their ordering: the pass that
+            // lays an item out is the pass that decides it is still valid.
         }
         // Seamless per-item delete (host trash tap). Compute the adjacent index FIRST, then drop the item from
         // THIS bucket in-place and slide to it — the user never sees a blank frame. The host removes it from the
@@ -1692,26 +1692,6 @@ private extension StoryDetailView {
     /// TRUE when the advance was actually taken. The caller puts the end-of-clip latch back when it
     /// was not — see the note at the call site. A refusal here is normal (a person turn is running,
     /// or an advance is already in flight), and it must not cost the clip its only report.
-    @discardableResult
-    /// THE THREE PREVIEW CARDS, NAMED, so the store knows which stories are still on screen.
-    ///
-    /// The reference app's `validIds` is "everything laid out this pass", which for its row is the
-    /// centre item and its neighbours — the same three cards he described. Anything outside it is
-    /// released; anything inside it survives a detach, because a detach mid-transition is not a
-    /// decision about whether a story is finished with. See `StoryItemViewStore.setWindow`.
-    ///
-    /// Deliberately ±1 rather than the reference app's generous two-container sweep: their window is
-    /// measured in screen widths because their items are full-size views being scrolled, while ours
-    /// is a fixed row of three cards. Three is what is on screen, and the decoder ceiling is the
-    /// reason not to be generous with it.
-    private func publishPreviewWindow(around index: Int) {
-        guard !model.stories.isEmpty else { StoryItemViewStore.setWindow([]); return }
-        let lo = max(0, index - 1)
-        let hi = min(model.stories.count - 1, index + 1)
-        guard lo <= hi else { StoryItemViewStore.setWindow([]); return }
-        StoryItemViewStore.setWindow(model.stories[lo...hi].map(\.id))
-    }
-
     func advanceFromVideoEnd() -> Bool {
         if !timerProgress.isFinite { timerProgress = 0 }
         if Int(timerProgress) + 1 >= model.stories.count {

@@ -312,6 +312,37 @@ struct StoryImage: View {
     /// for the two builds that got this wrong in each direction.
     @Published var value: CGFloat = 0
 
+    /// THE ROW'S CONTROLLER, REACHED WITHOUT GOING THROUGH SWIFTUI TO GET THERE.
+    ///
+    /// ⚠️ THIS IS THE WHOLE OF HIS "the top preview thumbnails are not following in realtime", AND
+    /// IT IS AN ARCHITECTURE GAP RATHER THAN A NUMBER.
+    ///
+    /// In the reference app the sideways pan handler writes its fraction and calls
+    /// `self.state?.updated(transition: .immediate)`, which runs `updateScrolling` — the function
+    /// that positions the row's cards — SYNCHRONOUSLY, inside the same gesture callback. There is
+    /// one hop from finger to card.
+    ///
+    /// Ours had three: the pan wrote `value`, `@Published` invalidated `MyStoriesCarousel`, SwiftUI
+    /// scheduled an update, and the cards only moved when `StoryRowPositionReporter.body` ran inside
+    /// it. The panel under the finger is moved by the pan handler directly and is therefore instant;
+    /// the row waited for a SwiftUI pass that also rebuilds `StoryRow` and re-runs `apply` on the
+    /// way. The two halves of one gesture were on two clocks, and the row is the slow one.
+    ///
+    /// `StoryRowLink` already existed for exactly this — its own note says "so a per-frame value can
+    /// be handed to UIKit without a SwiftUI update in between" — but its only caller was inside a
+    /// SwiftUI body, which is the update it was written to avoid. Holding it here lets the drag take
+    /// their one hop. Weak: the row owns it, and a sheet that has gone away has no row.
+    weak var rowLink: StoryRowLink?
+
+    /// One frame of the sheet's sideways drag. The row is moved FIRST and directly, then the value is
+    /// published for the things that genuinely need a SwiftUI pass (the live story's placement rides
+    /// the row's own `onRowPosition` callback, so it comes with the first half for free).
+    func deliver(_ v: CGFloat) {
+        guard v.isFinite else { return }
+        rowLink?.setPageDrag(v)
+        if value != v { value = v }
+    }
+
     /// WHERE THE ROW'S SCROLLER IS, in card units, and the live story reads it every frame.
     ///
     /// ⚠️ OPTIONAL, AND THE OPTIONALITY IS THE BUG FIX. It was a plain `CGFloat = 0`, and 0 is not
@@ -3381,7 +3412,7 @@ struct StoryViewer: View {
                               // `StoryRowController.setPageDrag` starts that spring when it sees the
                               // drag return to zero.
                               sheetStoryId = live[i + d].id
-                              pageDragBox.value = 0
+                              pageDragBox.deliver(0)
                           },
                           // THE ONLY PER-FRAME WRITE, and it goes to the box, which nothing
                           // subscribes to except the row itself.
@@ -3401,12 +3432,10 @@ struct StoryViewer: View {
                               // that spring when it sees the drag return to zero, so the row is
                               // still gliding while the panel is, and there is no animated number in
                               // between for the two to disagree about.
-                              guard f != 0 else {
-                                  guard pageDragBox.value != 0 else { return }
-                                  pageDragBox.value = 0
-                                  return
-                              }
-                              pageDragBox.value = f
+                              // ⚠️ `deliver`, NOT a write to `value` — the row is moved inside this
+                              // callback rather than inside the SwiftUI pass the write schedules.
+                              // That is their one hop from finger to card; see `rowLink`.
+                              pageDragBox.deliver(f)
                           },
                           // A viewer's profile opens in the SAME sheet the story header uses, so
                           // there is one profile screen in this viewer and not two that drift.
@@ -4305,6 +4334,15 @@ struct MyStoriesCarousel: View {
         // cards would glide while the live story teleported. `Animatable` is the seam SwiftUI gives
         // for reading the interpolated value on each frame, and the row is handed it directly rather
         // than through a state write that would rebuild something.
+        // The sheet's drag reaches the row through this, in the pan handler, the way theirs does —
+        // see `StorySheetPageDrag.rowLink`. Set here rather than in an initializer because `link` is
+        // `@State` and only has its persistent identity once the view is on screen.
+        .onAppear { pageDrag.rowLink = link }
+        // ⚠️ STILL HERE, AND IT IS NOT A DUPLICATE OF THE DIRECT CALL ABOVE. This is the ANIMATED
+        // half: a `withAnimation` write does not walk the value, it sets it at once and interpolates
+        // the rendered attributes, so a frame-by-frame readout is the only way to see the
+        // in-between values. A finger goes direct; an animation comes through here. Whichever
+        // arrives first, `StoryRowController.setPageDrag` ignores the second (`v != pageDrag`).
         .modifier(StoryRowPositionReporter(pageDrag: pageDrag.value) { d in link.setPageDrag(d) })
         // ⚠️ KEYED ON THE STORIES. A bare `.task` runs once per MOUNT and never again, so the counts
         // were fetched once and a story that landed while the sheet was open kept "0" for the rest

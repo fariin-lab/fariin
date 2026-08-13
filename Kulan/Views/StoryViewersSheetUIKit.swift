@@ -666,13 +666,6 @@ final class StoryViewersSheetView: UIView {
             pageActive = true
             pageOffset = 0
             applyPageOffset()
-            // A page swipe out of the expanded (search) state steps the sheet back to half, the way
-            // it always has — the story arriving is a different audience and a query typed for the
-            // last one means nothing for it.
-            if let c = centerPanel, c.isSearchFocused {
-                c.endSearchEditing()
-                setSearchExpanded(false)
-            }
             pageBaselineX = rawX
         case .changed:
             let tx = rawX - pageBaselineX
@@ -828,9 +821,17 @@ final class StoryViewersSheetView: UIView {
             return tapAbove.location(in: self).y < panelTop
         }
         if gestureRecognizer === pagePan {
-            // Only a settled-open sheet pages — the reference app gates theirs to the .half state in
-            // as many words (`viewListDisplayState != .half` returns no allowed directions).
-            guard progress > 0.95 else { return false }
+            // ⚠️ THE .half STATE AND NOTHING ELSE, WHICH IS THEIR RULE AND NOT AN APPROXIMATION OF IT.
+            // Their allowed-directions closure opens with exactly this and returns nothing at all
+            // otherwise:
+            //
+            //     if self.viewListDisplayState != .half { return [] }
+            //
+            // Their three states are hidden, half and full. `progress > 0.95` is "not hidden"; the
+            // line below is "not full", and it was missing — so a sheet dragged up to full, or grown
+            // by focusing search, still paged sideways. Theirs cannot: a tall list is a list you are
+            // reading, and a horizontal drag inside it belongs to nothing.
+            guard progress > 0.95, expand <= 0.0001 else { return false }
             // ⚠️ EVERYWHERE EXCEPT THE THUMBNAIL ROW, WHICH IS THEIR RULE VERBATIM. Theirs allows
             // left/right when the point is inside the screen and NOT inside the items container:
             //

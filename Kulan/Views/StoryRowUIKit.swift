@@ -554,6 +554,14 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             removeItem(id, item)
         }
 
+        // ⚠️ AND THE SAME SET DECIDES WHICH STORIES KEEP THEIR PLAYER. One loop, one answer, which is
+        // their shape: `validIds` is built by the layout pass and is what the item views are kept or
+        // dropped by. The library used to hold a SECOND, narrower window of its own (centre ±1) and
+        // it won, so a story still being drawn two cards out had its player torn down — watch A,
+        // open the sheet, swipe to B then C, and coming back to A found nothing and started a new
+        // player at zero. See `StoryVideoHost.previewWindow`.
+        StoryVideoHost.previewWindow(valid)
+
         onRowPosition(scroll, pageDrag)
     }
 
