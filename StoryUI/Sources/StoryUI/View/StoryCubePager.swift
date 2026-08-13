@@ -75,6 +75,10 @@ final class StoryCubePagerVC: UIViewController {
     /// turning away to the left, which is a finger moving left, which is "the next person".
     private var panFraction: CGFloat = 0
 
+    /// Where `panFraction` stood when the current gesture began. Zero for a swipe that starts from
+    /// rest, which is every swipe except one that grabbed a cube still settling.
+    private var panBase: CGFloat = 0
+
     /// TRUE while a finger is down or a settle is running. Everything that must not interrupt a turn
     /// asks this — it replaces the old scroll view's `isTracking || isDragging || isDecelerating`,
     /// and unlike that one it cannot be left switched off by somebody else's flag.
@@ -238,13 +242,20 @@ final class StoryCubePagerVC: UIViewController {
         case .began:
             // ⚠️ A NEW PAN KILLS THE SETTLE IN FLIGHT, exactly as theirs removes the `panState`
             // animation. Without this the finger and the spring both write `panFraction` and the
-            // cube stutters between two answers.
-            stopSettle()
+            // cube stutters between two answers. It FINISHES the settle's bookkeeping on the way
+            // past — see `stopSettle(finishing:)`.
+            stopSettle(finishing: true)
+            // ⚠️ AND THE CUBE CARRIES ON FROM WHERE THE SPRING HAD GOT TO. A recogniser measures its
+            // translation from its own touch-down, so without a base the first `.changed` of a swipe
+            // that interrupted a settle wrote a fraction of about zero and the cube jumped from
+            // wherever it was back to square. Grabbing a moving cube is exactly when that is most
+            // visible.
+            panBase = panFraction
             beginTurn()
         case .changed:
             let w = view.bounds.width
             guard w > 1 else { return }
-            panFraction = banded(g.translation(in: view).x / w)
+            panFraction = banded(panBase + g.translation(in: view).x / w)
             applyFold()
         case .ended, .cancelled, .failed:
             commit(velocity: g.velocity(in: view).x)
@@ -344,7 +355,7 @@ final class StoryCubePagerVC: UIViewController {
     private static let settleDuration: CFTimeInterval = 0.165
 
     private func settle(to target: CGFloat, then done: @escaping () -> Void) {
-        stopSettle()
+        stopSettle(finishing: false)
         guard abs(panFraction - target) > 0.0001 else {
             panFraction = target
             applyFold()
@@ -368,14 +379,38 @@ final class StoryCubePagerVC: UIViewController {
         applyFold()
         guard u >= 1 else { return }
         let done = settleDone
-        stopSettle()
+        stopSettle(finishing: false)
         done?()
     }
 
-    private func stopSettle() {
+    /// STOP THE SPRING. `finishing` decides whether the work it was carrying still runs.
+    ///
+    /// ⚠️ THIS DROPPED THE COMPLETION, AND THE COMPLETION IS NOT DECORATION. A committed turn has
+    /// already moved `focused` and rebased the fraction by the time the settle starts; the closure
+    /// is the only thing that then releases the peer now two away, builds the new neighbours, ends
+    /// the pause and tells the delegate the turn landed. A second swipe arriving mid-settle called
+    /// this from `.began` and threw all four away, so:
+    ///
+    ///   * `commit` had already set the trailing neighbour to nil and `loadNeighbours` never ran, so
+    ///     the next `commit` found no target that way and sprang back instead of turning — the
+    ///     "swipe twice quickly and the second one does nothing" shape;
+    ///   * `isTurning` and `personTurnActive` stayed raised in the pager above until some later
+    ///     settle happened to clear them;
+    ///   * and now that a turn pauses the story, the resume would be lost with them.
+    ///
+    /// Theirs can safely drop its completion because it defers nothing: the content is navigated at
+    /// commit and the closure only nils the pan state, which the incoming gesture replaces anyway.
+    /// Ours carries real bookkeeping, so an interruption finishes it rather than discarding it.
+    ///
+    /// `finishing: false` is for the two callers that are not an interruption — the natural end,
+    /// which has just invoked it itself, and `settle` clearing the ground for the closure it is
+    /// about to install.
+    private func stopSettle(finishing: Bool) {
+        let done = settleDone
         settleLink?.invalidate()
         settleLink = nil
         settleDone = nil
+        if finishing { done?() }
     }
 
     /// THEIR SPRING, SAMPLED — `CASpringAnimation(mass: 3, stiffness: 1000, damping: 500)`.
