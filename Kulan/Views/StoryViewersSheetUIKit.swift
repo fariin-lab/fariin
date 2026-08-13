@@ -210,7 +210,15 @@ final class StoryViewersSheetView: UIView {
     /// Apple's interactive dismiss is free to take — the whole-viewer-closes bug through a side
     /// door. The one exception is horizontal drags in the carousel band, refused in shouldBegin so
     /// the cover-flow keeps them (bandGuard blocks the system pans there instead).
-    private lazy var outsidePan = UIPanGestureRecognizer(target: self, action: #selector(handleOutsidePan(_:)))
+    ///
+    /// ⚠️ AXIS-LOCKED NOW, AND THAT IS A BUG FIX RATHER THAN A TIDY-UP. It was a plain
+    /// `UIPanGestureRecognizer` whose direction was decided in `shouldBegin` from the INSTANTANEOUS
+    /// velocity at the ~10pt mark, and it won every tie. A thumb swiping the thumbnails along a
+    /// slight arc reported `|vy| >= |vx|` at that one instant, so this took the gesture, cancelled
+    /// the row's touches underneath it, and collapsed the sheet instead. It is a
+    /// `DirectionalSheetPan` on the vertical axis now, which fails itself after 2pt of dominant
+    /// horizontal travel — the reference app's own rule, and far earlier than either could begin.
+    private lazy var outsidePan = DirectionalSheetPan(axis: .vertical, target: self, action: #selector(handleOutsidePan(_:)))
     /// Begins on horizontal drags in the carousel band and does NOTHING except exist: the system
     /// dismiss pans are subordinated to it, so a cover-flow swipe can never feed Apple's
     /// interactive dismiss. `cancelsTouchesInView = false` keeps the SwiftUI carousel tracking.
@@ -825,15 +833,13 @@ final class StoryViewersSheetView: UIView {
             // Only while mounted with the sheet actually up, and only above the panel — the panel
             // belongs to `pan`.
             guard window != nil, progress > 0.02 else { return false }
-            let loc = outsidePan.location(in: self)
-            guard loc.y < panelTop else { return false }
-            // In the carousel band, horizontal drags belong to the cover-flow: refuse them and let
-            // bandGuard ride along with SwiftUI. Everywhere else, every direction is ours.
-            if progress > 0.95, carouselBand.contains(loc) {
-                let v = outsidePan.velocity(in: self)
-                return abs(v.y) >= abs(v.x)
-            }
-            return true
+            // ⚠️ NO DIRECTION TEST HERE ANY MORE, AND ITS ABSENCE IS THE POINT. This used to compare
+            // `|vy|` against `|vx|` inside the carousel band, which is an arbitration made from one
+            // velocity sample at the moment UIKit happened to ask. The recogniser itself decides now,
+            // from accumulated translation, and it has already failed on 2pt of dominant horizontal
+            // travel by the time this is called — so a row swipe can no longer reach here at all,
+            // anywhere on the screen, rather than only inside a rectangle we had to keep in step.
+            return outsidePan.location(in: self).y < panelTop
         }
         if gestureRecognizer === bandGuard {
             guard window != nil, progress > 0.95 else { return false }
@@ -843,10 +849,22 @@ final class StoryViewersSheetView: UIView {
             return tapAbove.location(in: self).y < panelTop
         }
         if gestureRecognizer === pagePan {
-            // Only a settled-open sheet pages (the reference app gates theirs to the .half state too), and
-            // only from the panel — the carousel band above has its own horizontal owner.
+            // Only a settled-open sheet pages — the reference app gates theirs to the .half state in
+            // as many words (`viewListDisplayState != .half` returns no allowed directions).
             guard progress > 0.95 else { return false }
-            return pagePan.location(in: self).y >= panelTop
+            // ⚠️ EVERYWHERE EXCEPT THE THUMBNAIL ROW, WHICH IS THEIR RULE VERBATIM. Theirs allows
+            // left/right when the point is inside the screen and NOT inside the items container:
+            //
+            //     if self.bounds.contains(point), !self.itemsContainerView.frame.contains(point) {
+            //         return [.left, .right]
+            //     }
+            //
+            // Ours was gated to the panel alone, so a sideways swipe on the dark area beside the
+            // shrunken story did nothing at all — and worse, it was a horizontal drag that none of
+            // our recognisers claimed, which is precisely the kind of drag Apple's interactive
+            // dismiss is free to pick up. The row keeps its own band because the row's scroller is
+            // the thing that owns it, exactly as their items container owns theirs.
+            return !carouselBand.contains(pagePan.location(in: self))
         }
         return super.gestureRecognizerShouldBegin(gestureRecognizer)
     }
@@ -948,10 +966,39 @@ final class StoryViewersSheetView: UIView {
 /// first frames to a vertical recognizer and vice versa. (The reference app's own directional gesture
 /// recognizer decides the same way: 2:1 dominance wins immediately, a distance deadline settles
 /// ambiguous diagonals.)
+/// AXIS-LOCKED PAN, USING THE REFERENCE APP'S OWN VALIDATION RULE.
+///
+/// ⚠️ THIS CLASS DECIDES WHICH GESTURE OWNS A TOUCH, AND THE OLD RULE WAS THE REASON A SWIPE ON THE
+/// THUMBNAILS SOMETIMES MOVED THE SHEET INSTEAD OF THE ROW.
+///
+/// What it used to do: wait for 8pt of travel and then compare the two axes at a 1.2 ratio. What the
+/// sheet's own outside pan did was worse — it was a plain `UIPanGestureRecognizer` and arbitrated in
+/// `shouldBegin` on INSTANTANEOUS VELOCITY at the ~10pt mark. Velocity is a sample, not a summary: a
+/// thumb that has already travelled 20pt sideways but happens to be drifting down at the instant the
+/// recogniser asks reports `|vy| >= |vx|`, so the sheet took the whole gesture and cancelled the
+/// row's touches under it.
+///
+/// Their rule, read from `InteractiveTransitionGestureRecognizer.touchesMoved` and reproduced here
+/// exactly, arbitrates on ACCUMULATED TRANSLATION and decides far earlier:
+///
+///   · past 10pt of total travel, the larger axis simply wins (`>=`, so a perfect diagonal is
+///     resolved rather than left hanging);
+///   · below that, 2pt on the wrong axis with double the dominance FAILS the recogniser outright;
+///   · below that, 2pt on the right axis with double the dominance VALIDATES it.
+///
+/// So a horizontal swipe kills the vertical recogniser after two points of movement — long before
+/// either could have begun — and the row never has a competitor to lose to.
+///
+/// ⚠️ AND TOUCHES ARE WITHHELD FROM `super` UNTIL VALIDATION, WHICH IS THEIRS TOO. A pan that starts
+/// accumulating translation before it knows it owns the gesture begins with a jump of however far
+/// the finger travelled while it was deciding. Withheld, the translation starts at the moment of
+/// validation, which is why `.began` can be forced at 2pt without the content leaping.
 final class DirectionalSheetPan: UIPanGestureRecognizer {
     enum Axis { case vertical, horizontal }
     let axis: Axis
     private var startPoint: CGPoint?
+    /// The gesture has been proven to be on our axis. Until then nothing reaches `super`.
+    private var validated = false
 
     init(axis: Axis, target: AnyObject, action: Selector) {
         self.axis = axis
@@ -966,19 +1013,33 @@ final class DirectionalSheetPan: UIPanGestureRecognizer {
     override func reset() {
         super.reset()
         startPoint = nil
+        validated = false
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
-        if state == .possible, let touch = touches.first {
+        var fireBegan = false
+        if !validated, let touch = touches.first {
             let loc = touch.location(in: view)
             let start = startPoint ?? loc
-            let ax = abs(loc.x - start.x), ay = abs(loc.y - start.y)
-            if max(ax, ay) >= 8 {
-                if ay > ax * 1.2, axis == .horizontal { state = .failed; return }
-                if ax > ay * 1.2, axis == .vertical { state = .failed; return }
+            // ON our axis and ACROSS it, named for the axis rather than for x and y, so the two
+            // branches below are one piece of arithmetic instead of two mirrored copies.
+            let along = axis == .vertical ? abs(loc.y - start.y) : abs(loc.x - start.x)
+            let across = axis == .vertical ? abs(loc.x - start.x) : abs(loc.y - start.y)
+            let total = sqrt(along * along + across * across)
+            if total > 10 {
+                // Force the dominant direction after 10pt. `>=` on OUR axis, matching theirs.
+                if along >= across { validated = true; fireBegan = true } else { state = .failed; return }
+            } else if across > 2, across > along * 2 {
+                state = .failed
+                return
+            } else if along > 2, across * 2 < along {
+                validated = true
+                fireBegan = true
             }
         }
+        guard validated else { return }
         super.touchesMoved(touches, with: event)
+        if fireBegan, state == .possible { state = .began }
     }
 }
 
