@@ -419,7 +419,8 @@ public final class StoryCardMorph {
         guard let flightCard else { return }
         applyCore(on: flightCard, sheet: false, fraction: fraction, targetSize: targetSize,
                   targetCenter: targetCenter, cornerRadius: cornerRadius,
-                  centerOverride: centerOverride, alpha: alpha, dim: dim, chrome: chrome, crop: crop,
+                  centerOverride: centerOverride, sizeOverride: nil,
+                  alpha: alpha, dim: dim, chrome: chrome, crop: crop,
                   exiting: exiting)
     }
 
@@ -463,31 +464,54 @@ public final class StoryCardMorph {
         card = nil
     }
 
-    /// Move the card `fraction` of the way from full screen to the card slot.
+    /// THE STORY CONTENT'S RESTING RECTANGLE IN WINDOW COORDINATES, READABLE WHILE IT IS TRANSFORMED.
     ///
-    /// The host passes the rectangle it wants to SEE at the far end, not a scale factor, because the
-    /// host owns the slot geometry and the design numbers that produce it. Everything is
-    /// interpolated FROM the card's own resting size and centre rather than from numbers the host
-    /// also computes, which is what makes `fraction: 0` exactly the identity by construction. Two
-    /// copies of the same geometry that have to agree to the pixel is precisely the mistake that
-    /// produced the picture-jumping-inside-its-frame bug in `402ec4d`.
+    /// ⚠️ NOT `cardWindowRect`, WHICH THIS DOES NOT REPLACE. That one converts through the card and
+    /// so folds whatever transform the card is wearing into its answer — which is right for the hero,
+    /// read once before anything moves, and useless to the preview row, which asks every frame of a
+    /// drag while the card is mid-shrink.
+    ///
+    /// This is built the way `applyCore` builds it: `center` and `bounds` are both documented as
+    /// transform-independent, so the rest centre is the card's centre plus the content's offset
+    /// within it, and the conversion runs through the SUPERVIEW, which carries no transform. Same
+    /// arithmetic as the lerp it feeds, which is the point — the row is taking the journey over, and
+    /// it has to start from the same place the lerp did or the hand-over would be a jump.
+    public var restContentWindowRect: CGRect? {
+        guard let card, let superview = card.superview, card.bounds.width > 1 else { return nil }
+        let content = contentRect(in: card)
+        guard content.width > 1, content.height > 1 else { return nil }
+        let offset = CGPoint(x: content.midX - card.bounds.midX, y: content.midY - card.bounds.midY)
+        let restCenter = CGPoint(x: card.center.x + offset.x, y: card.center.y + offset.y)
+        let inWindow = superview.convert(restCenter, to: nil)
+        return CGRect(x: inWindow.x - content.width / 2, y: inWindow.y - content.height / 2,
+                      width: content.width, height: content.height)
+    }
+
+    /// PUT THE STORY EXACTLY HERE — the preview row's one call, and it interpolates nothing.
+    ///
+    /// ⚠️ THIS REPLACES `apply(fraction:targetSize:targetCenter:)`, AND THE DELETION IS THE POINT
+    /// RATHER THAN THE RENAME.
+    ///
+    /// That method took a rectangle to arrive at and walked the card `fraction` of the way there,
+    /// which made it a SECOND opinion about where a story sits. The row already had the first: its
+    /// own loop places every card from `StoryRowGeometry`, and that formula's distances carry the
+    /// pull's fraction themselves. Two lerps over one journey is why the caller had to pre-divide the
+    /// x by the fraction to cancel this one — a correction that is only ever as right as the two
+    /// formulas' agreement, and they drifted apart four times.
+    ///
+    /// So the row now computes this card's rectangle in the same pass, from the same numbers, as
+    /// every other card in the row, and hands it over finished. `fraction` is still passed because
+    /// three things genuinely belong to the pull rather than to the row — the crop that shaves the
+    /// story into the slot's shape, the corner radius' journey, and `sheetFraction`, which the
+    /// caption fade reads — but it no longer decides where anything is.
+    ///
     /// - Parameters:
-    ///   - centerOverride: put the card's centre EXACTLY here (window coords) instead of
-    ///     interpolating rest → `targetCenter` by `fraction`. The hero close needs this: while the
-    ///     finger is down the card must sit under the finger, 1:1, and `fraction` must still be free
-    ///     to describe how far the SHRINK has got. Those are two different journeys and the sheet's
-    ///     single-fraction lerp cannot express both. Nil keeps the original behaviour exactly, which
-    ///     is what the viewers sheet still uses.
-    ///   - alpha: the card's own opacity. 1 for the sheet; the hero close softens it slightly as it
-    ///     is pulled away.
-    ///   - dim: how dark the surface BEHIND the card should be, 0…1. Another mainstream messenger darkens the list while
-    ///     the story is pulled away from it, and that darkening is most of why it reads as the
-    ///     story lifting off rather than a card sliding about on a bright white page. It is written
-    ///     onto the card's superview rather than a new view because that view is already the thing
-    ///     `prepareForHero` makes see-through, so there is exactly one answer to "what is behind the
-    ///     card". Nil leaves it alone, which is what the viewers sheet wants: it has its own canvas.
-    public func apply(fraction: CGFloat, targetSize: CGSize, targetCenter: CGPoint, cornerRadius: CGFloat,
-                      centerOverride: CGPoint? = nil, alpha: CGFloat = 1, dim: CGFloat? = nil) {
+    ///   - contentCenter: where the story CONTENT's centre goes, in window coordinates. Absolute.
+    ///   - contentSize: what the content renders as. Absolute; the scale is derived from its width.
+    ///   - fraction: how far into the slot the pull is, 0…1. Owns the crop, the radius and the
+    ///     caption fade, and nothing else.
+    public func place(contentCenter: CGPoint, contentSize: CGSize,
+                      cornerRadius: CGFloat, fraction: CGFloat) {
         // A dismiss owns the same transform. It cannot be running at the same time as the sheet
         // (both pans are direction-locked and the sheet is shut before a dismiss can start), but if
         // it ever were, the dismiss wins: it is the gesture that removes the screen.
@@ -496,10 +520,30 @@ public final class StoryCardMorph {
         // the viewers panel's slot, where the shave IS the effect: it is what hides the black above
         // and below the card. Only the flight defers it.
         sheetFraction = max(0, min(1, fraction))
-        applyCore(on: card, sheet: true, fraction: fraction, targetSize: targetSize,
-                  targetCenter: targetCenter, cornerRadius: cornerRadius,
-                  centerOverride: centerOverride, alpha: alpha, dim: dim, chrome: 0, crop: 1,
+        applyCore(on: card, sheet: true, fraction: fraction,
+                  targetSize: contentSize, targetCenter: contentCenter,
+                  cornerRadius: cornerRadius,
+                  centerOverride: contentCenter, sizeOverride: contentSize,
+                  // ⚠️ ALPHA IS ALWAYS 1 HERE NOW. The row's dim is a tint layer sitting over the
+                  // card, the way theirs is, and this card is one of the row's items — so it is
+                  // dimmed by the row's tint like every other one. Writing view alpha here as well
+                  // was the second of the two brightness owners, and two owners trading hands at the
+                  // half-card is what the owner photographed.
+                  alpha: 1, dim: nil, chrome: 0, crop: 1,
                   exiting: false)
+    }
+
+    /// Put the card back to full screen. The row calls this instead of `place` when the pull has
+    /// collapsed, which is the one transition `place` cannot express: `applyCore`'s early-out needs a
+    /// fraction of zero AND no centre override, and the row always has a centre to offer.
+    ///
+    /// The dismiss guard is the same one `place` carries, and it has to be here as well: this used
+    /// to be reached through `apply(fraction: 0)`, which checked it before falling into `reset`, so
+    /// splitting the two calls apart would have left the put-back able to yank a card out of a
+    /// swipe-down that is already removing the screen.
+    public func placeAtRest() {
+        guard !StoryPager.dismissActive else { return }
+        reset()
     }
 
     /// HOW FAR THE STORY IS INTO THE VIEWERS SLOT: 0 full screen, 1 fully shrunk. Written here, on
@@ -528,9 +572,16 @@ public final class StoryCardMorph {
 
     /// The one copy of the interpolation, serving both targets. `sheet` picks the mask slot and the
     /// reset that runs on the early-out, nothing else differs.
+    ///
+    /// - Parameter sizeOverride: render the content at EXACTLY this size instead of interpolating
+    ///   rest → `targetSize` by `fraction`. The twin of `centerOverride`, and it exists for the same
+    ///   reason: the caller owns the journey. The preview row does — every card in it, this one
+    ///   included, is sized by one formula in one loop — so a second lerp here would be a second
+    ///   opinion about a number that already has an owner. Nil keeps the interpolation.
     private func applyCore(on card: UIView, sheet: Bool,
                            fraction: CGFloat, targetSize: CGSize, targetCenter: CGPoint,
-                           cornerRadius: CGFloat, centerOverride: CGPoint?, alpha: CGFloat, dim: CGFloat?,
+                           cornerRadius: CGFloat, centerOverride: CGPoint?, sizeOverride: CGSize?,
+                           alpha: CGFloat, dim: CGFloat?,
                            chrome: CGFloat, crop: CGFloat, exiting: Bool) {
         guard let superview = card.superview else { return }
         let f = max(0, min(1, fraction))
@@ -556,8 +607,8 @@ public final class StoryCardMorph {
         // aspect (the owner signed off a card 12% shorter than aspect-true, twice), so a uniform
         // scale cannot satisfy both dimensions and the extra height is cropped rather than squashed.
         // Cropping is also what the neighbouring cards do, so the row stays consistent.
-        let visibleW = restW + (targetSize.width - restW) * f
-        let visibleH = restH + (targetSize.height - restH) * f
+        let visibleW = sizeOverride?.width ?? (restW + (targetSize.width - restW) * f)
+        let visibleH = sizeOverride?.height ?? (restH + (targetSize.height - restH) * f)
         let scale = max(0.0001, visibleW / restW)
 
         // The transform scales about the VIEW's centre, but what has to land in the slot is the
@@ -856,12 +907,12 @@ public final class StoryCardMorph {
     // The premise was the bug, not the swap. Two renderers for one story means somebody has to
     // decide WHEN to exchange them, and that decision was wrong on device twice after being fixed
     // twice — the flash, the overlapping cards, the story that stayed on A, the black window when a
-    // flag was left standing. The live card is laid out by the row's own geometry now
-    // (`StoryRowGeometry.placeLiveStory`), so it slides where its card would slide. There is nothing
-    // to stand in for it and no instant to get right.
+    // flag was left standing. The live card IS one of the row's items now — same table, same loop,
+    // same `StoryRowPlacement` — and it arrives here through `place`, already finished. There is
+    // nothing to stand in for it and no instant to get right.
     //
-    // The alpha it wrote is the cover-flow dim now, and that arrives through `apply(alpha:)` as a
-    // pure function of the card's own position — the same place its size and its corner come from.
+    // The alpha it wrote is the cover-flow dim, and that is not written on this card at all any
+    // more: it is a black tint layer the row keeps over each of its items, this one included.
 
     /// Clip the moving card to the STORY during a swipe-down dismiss.
     ///

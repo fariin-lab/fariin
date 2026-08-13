@@ -54,14 +54,15 @@ struct StoryRowCardMedia: View {
     let story: Story
     let slotW: CGFloat
     let slotH: CGFloat
-    /// The live story is drawn by the story layer itself, at this exact size and position. This card
-    /// holds its place in the row and draws no pixels.
-    ///
-    /// ⚠️ KEYED ON THE STORY THE LIVE LAYER IS HOLDING, NOT ON THE CENTRED ONE. Those two were the
-    /// same thing while the live story was pinned to the centre, and they are not the same thing now:
-    /// mid-swipe the live story is off to one side and a different card is centred. Blanking the
-    /// centred one would leave the real story drawing underneath a second picture of itself.
-    let isLive: Bool
+
+    // ⚠️ `isLive` IS GONE FROM HERE, AND ITS DELETION IS PART OF THE 2026-08-13 RULING.
+    //
+    // It was a boolean threaded down into the hosted content so the card could draw itself at
+    // opacity 0 while the real story stood in its place. That put a question the ROW answers —
+    // which of my items is the live one — inside a SwiftUI view, where changing the answer meant
+    // reassigning `host.rootView` and rebuilding the card mid-scroll. The row hides the picture
+    // directly now (`StoryRowItemView.setLive`), which is one property on a view that already
+    // exists, decided in the same loop that decides everything else about this item.
 
     /// ⚠️ A REDRAW NUDGE, NOT DATA, and it belongs to THIS card now rather than to the whole row.
     /// `StoryVideoFrames.card` answers nil the first time and generates the frame off the main
@@ -74,7 +75,6 @@ struct StoryRowCardMedia: View {
         media
             .frame(width: slotW, height: slotH)
             .clipped()
-            .opacity(isLive ? 0 : 1)
     }
 
     @ViewBuilder private var media: some View {
@@ -197,7 +197,30 @@ final class StoryRowItemView: UIView {
     /// THESE ACTUALLY CHANGES. Writing `host.rootView` is a SwiftUI update; doing it inside the
     /// layout pass would put a per-frame SwiftUI rebuild straight back into the thing this file
     /// exists to take it out of.
-    private var applied: (mediaUrl: String, previewUrl: String, isLive: Bool, w: CGFloat, h: CGFloat)?
+    ///
+    /// ⚠️ `isLive` USED TO BE IN HERE AND IS NOT ANY MORE. It changes whenever the row crosses a
+    /// half-card, so it was the one member of this tuple that moved at scroll speed — which made a
+    /// SwiftUI rebuild of two cards part of the cost of every swipe. It is a view property now, set
+    /// by `setLive`, and nothing in this tuple changes faster than the sheet's own slot.
+    private var applied: (mediaUrl: String, previewUrl: String, w: CGFloat, h: CGFloat)?
+
+    /// THE ONE ITEM WHOSE PIXELS COME FROM SOMEWHERE ELSE.
+    ///
+    /// The live story is a real player, a progress bar, a caption and a reply bar; it cannot be a
+    /// poster. So its item holds its place, its size, its corner, its tint and its tap target like
+    /// every other item in the row, and hides its own picture — the live layer underneath draws
+    /// through the hole, at the rectangle THIS item was placed at.
+    ///
+    /// ⚠️ THIS IS NOT THE OLD BLANK-CARD RULE UNDER A NEW NAME. That rule existed because two
+    /// renderers were positioned by two different code paths and one had to leave a hole for the
+    /// other to fly into; the hole and the card in it could and did disagree about where they were.
+    /// There is one code path now — `StoryRowController.updateScrolling` places this item and the
+    /// live layer from the same `StoryRowPlacement`, in the same pass — so the hole cannot be
+    /// anywhere the story is not.
+    func setLive(_ on: Bool) {
+        guard host.view.isHidden != on else { return }
+        host.view.isHidden = on
+    }
 
     init(storyId: String, media: StoryRowCardMedia) {
         self.storyId = storyId
@@ -227,14 +250,13 @@ final class StoryRowItemView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     /// Rebuild the hosted picture only if something it is drawn from moved.
-    func updateMedia(story: Story, slotW: CGFloat, slotH: CGFloat, isLive: Bool) {
+    func updateMedia(story: Story, slotW: CGFloat, slotH: CGFloat) {
         // Labelled to match the stored tuple exactly: `==` on tuples wants the same labels, not just
         // the same types.
-        let want = (mediaUrl: story.mediaUrl, previewUrl: story.previewUrl,
-                    isLive: isLive, w: slotW, h: slotH)
+        let want = (mediaUrl: story.mediaUrl, previewUrl: story.previewUrl, w: slotW, h: slotH)
         if let applied, applied == want { return }
         applied = want
-        host.rootView = StoryRowCardMedia(story: story, slotW: slotW, slotH: slotH, isLive: isLive)
+        host.rootView = StoryRowCardMedia(story: story, slotW: slotW, slotH: slotH)
     }
 
     override func layoutSubviews() {
@@ -276,8 +298,14 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     var onIndexChanged: (Int) -> Void = { _ in }
     /// The centred card was tapped: collapse the sheet.
     var onActiveTap: () -> Void = {}
-    /// Where the row is, every frame, so the live story can be placed by the same numbers.
-    var onRowPosition: (_ scroll: CGFloat, _ pageDrag: CGFloat) -> Void = { _, _ in }
+
+    // ⚠️ `onRowPosition` IS DELETED, AND SO IS EVERYTHING THAT LISTENED TO IT.
+    //
+    // It published the row's position outward every frame so the HOST could place the live story
+    // from it. The host does not place the live story any more — this controller does, in the same
+    // loop and from the same numbers as every other card — so there is nothing on the other end of
+    // that wire. What it carried (`StorySheetPageDrag.rowScroll`, `publishRowPosition`, the host's
+    // `placeLiveStory`) went with it.
 
     // MARK: Machinery
 
@@ -286,7 +314,22 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// The scroll view does the physics; nothing is ever drawn by it.
     private let scroller = UIScrollView()
     /// Their `visibleItems`: one entry per story that is inside the window, keyed by story id.
+    ///
+    /// ⚠️ THE LIVE STORY IS IN HERE TOO. That is the 2026-08-13 ruling in one line: there is no
+    /// separate concept of "the centred one" any more, no second table and no second loop. Its item
+    /// is built, culled, positioned, dimmed, layered and hit-tested by exactly the code below that
+    /// does those things for a thumbnail; the only difference is that it hides its own picture and
+    /// the live layer draws through the hole (`StoryRowItemView.setLive`).
     private var items: [String: StoryRowItemView] = [:]
+
+    /// THEIR `contentTintLayer`: one black layer per item, and a SIBLING of the cards rather than
+    /// something inside one.
+    ///
+    /// A sibling because it must be able to dim a card it knows nothing about — which is precisely
+    /// how their central, playing item is dimmed by the same code path as a thumbnail, and how ours
+    /// dims the live story, which is not in this view hierarchy at all. The row's own view sits ABOVE
+    /// the live layer, so a black layer in it covers the story the same way it covers a card.
+    private var tints: [String: CALayer] = [:]
     /// Their `ignoreScrolling` fence. A programmatic offset must not be mistaken for a finger.
     private var ignoreScrolling = false
     /// The last index handed out through `onIndexChanged`, so the answer coming back around as an
@@ -368,10 +411,7 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         self.geometry = geometry
         self.counts = counts
 
-        // Their `scroller.isScrollEnabled = itemLayout.contentScaleFraction >= 1.0 - 0.0001`: the row
-        // is only scrollable once it has finished becoming a row.
-        let enabled = geometry.fraction >= 1.0 - 0.0001
-        if scroller.isScrollEnabled != enabled { scroller.isScrollEnabled = enabled }
+        syncScrollEnabled()
 
         // Unconditionally: the content size depends on the story count AND on `fullDist`, and
         // `fullDist` is derived from the slot, which the pull can re-measure without the story set
@@ -409,6 +449,33 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             // row out while a drag is happening; this branch is for everything else.
             updateScrolling()
         }
+    }
+
+    /// Their `scroller.isScrollEnabled = itemLayout.contentScaleFraction >= 1.0 - 0.0001`: the row
+    /// is only scrollable once it has finished becoming a row.
+    private func syncScrollEnabled() {
+        let enabled = geometry.fraction >= 1.0 - 0.0001
+        if scroller.isScrollEnabled != enabled { scroller.isScrollEnabled = enabled }
+    }
+
+    /// HOW FAR THE SHEET IS UP, once per frame of the pull, straight off the finger.
+    ///
+    /// ⚠️ IT COMES IN HERE RATHER THAN GOING TO THE MORPH, and that is the shape of the 2026-08-13
+    /// ruling. The sheet's pan used to call the host's `placeLiveStory(fraction:)`, which posted a
+    /// transform to `StoryCardMorph` — so the pull moved the live story and the row moved the cards,
+    /// two writers on one layout. The pull now tells the ROW how far it has got, and the row lays
+    /// out everything it owns, the live story included, in one pass.
+    ///
+    /// Ignored until the row has a real slot: before that the geometry is the placeholder the
+    /// controller is built with, and placing a story against a 1×1 slot is worse than placing it a
+    /// frame later. The SwiftUI path (`apply`) carries the same fraction and arrives with the slot.
+    func setFraction(_ f: CGFloat) {
+        guard f.isFinite, geometry.slotH > 1 else { return }
+        let clamped = max(0, min(1, f))
+        guard clamped != geometry.fraction else { return }
+        geometry = geometry.withFraction(clamped)
+        syncScrollEnabled()
+        updateScrolling()
     }
 
     /// The page-drag, once per frame of the sheet's sideways throw.
@@ -485,13 +552,33 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// is sitting, walk every story, work out how far from the centre it is in card units, cull the
     /// ones outside the window, and set three properties on the rest.
     private func updateScrolling(animated: Bool = false) {
-        guard view.bounds.width > 0, !stories.isEmpty else { return }
+        // ⚠️ THE EARLY RETURN STILL HAS TO PLACE THE LIVE STORY, AND MISSING THAT WOULD HAVE PUT
+        // BACK A SCREENSHOT THIS FILE HAS SEEN TWICE.
+        //
+        // While the placement lived on the host it ran on every frame of a pull whatever the row was
+        // doing. It lives here now, so an early return is not "the row has nothing to lay out" any
+        // more — it is "the story does not get shrunk", and a story that ignores the sheet rising
+        // over it is the full-size-behind-the-sheet picture. Both conditions are real and both are
+        // brief: no stories yet on a first open, no bounds before the first layout pass.
+        guard view.bounds.width > 0, !stories.isEmpty else {
+            placeLiveStoryWithoutARow()
+            return
+        }
         pinToCentralWhileCollapsed()
         let central = centralIndex
         let rowPos = geometry.rowPosition(scroll: scroll, centralIndex: central, pageDrag: pageDrag)
-        let centralX = view.bounds.midX
         let containerW = view.bounds.width
         let screenW = UIScreen.main.bounds.width
+        // EVERY PLACEMENT IS COMPUTED IN WINDOW COORDINATES, and that is not bookkeeping.
+        //
+        // The cards used to be positioned in the row's own coordinates while the live story was
+        // positioned in the screen's, which meant two of the numbers that had to agree were not even
+        // measured against the same origin — they agreed only because the row happens to span the
+        // full width with its centre line on the screen's. One coordinate space removes the
+        // coincidence: the cards convert on the way out, and the live story, which is not in this
+        // hierarchy at all, needs no conversion.
+        let midX = view.convert(CGPoint(x: view.bounds.midX, y: 0), to: nil).x
+        let rest = restContentWindowRect(midX: midX)
 
         var valid = Set<String>()
         for (i, story) in stories.enumerated() {
@@ -502,20 +589,32 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             guard geometry.isVisible(combinedFraction: cf, containerWidth: containerW) else { continue }
             valid.insert(story.id)
 
+            // THE ONE PLACEMENT, FOR THIS STORY, WHATEVER DRAWS IT. See `StoryRowGeometry.placement`.
+            let p = geometry.placement(combinedFraction: cf, rest: rest, containerMidX: midX)
+            let isLive = story.id == liveStoryId
+
             // ⚠️ A CARD BORN THIS PASS IS PLACED WITHOUT THE ANIMATION. A new item view starts at
             // the origin with an identity transform, so animating its first placement would slide it
             // in from the top-left corner of the row — which is exactly what a card entering the
             // visibility window during a sheet page commit would have done.
             let existing = items[story.id]
             let item = existing ?? addItem(story)
-            let scale = geometry.itemScale(combinedFraction: cf)
-            let centre = CGPoint(x: centralX + geometry.offsetX(combinedFraction: cf),
-                                 y: geometry.slotH / 2)
-            let alpha = CGFloat(geometry.itemOpacity(combinedFraction: cf))
+            let centre = view.convert(p.center, from: nil)
+            // ⚠️ THE SCALE IS READ OFF THE PLACEMENT RATHER THAN ASKED FOR SEPARATELY, so a card and
+            // the live story cannot be told two different sizes. The item's BOUNDS stay the slot's,
+            // because the picture inside is laid out at the slot's shape and a bounds change would
+            // re-run that layout; the transform is what makes it render at `p.size`.
+            //
+            // At every moment the row is VISIBLE the pull's fraction is exactly 1 (the row fades in
+            // over `p > 0.9`, where `sheetSizeFraction` has already landed), so this is exactly
+            // `itemScale` — the number these cards have always been drawn at. Below that the
+            // placement interpolates toward the full-screen story and this scales a slot-shaped
+            // picture up past its own size; nothing is on screen to see it.
+            let scale = p.size.width / max(1, geometry.slotW)
             // A card hides its own small count as it reaches the centre, where the big count below
             // takes over. Ported from the row's old `centreDistance` visual effect, which measured
             // the card's midpoint against the screen's.
-            let dist = min(abs(centre.x - screenW / 2) / (screenW * 0.42), 1)
+            let dist = min(abs(p.center.x - screenW / 2) / (screenW * 0.42), 1)
             let countAlpha: CGFloat = dist < 0.35 ? 0 : 1
             // The card's own size. Set OUTSIDE the animation and only when it differs: a bounds
             // change re-lays-out the hosted content, and it changes for one reason (the sheet's slot
@@ -524,16 +623,34 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             if item.bounds.size != size {
                 item.bounds = CGRect(origin: .zero, size: size)
             }
+            let tint = tints[story.id]
             let write = {
                 item.center = centre
                 item.transform = CGAffineTransform(scaleX: scale, y: scale)
-                item.alpha = alpha
                 item.count.alpha = countAlpha
+                // ⚠️ THE TINT IS FRAMED, NOT TRANSFORMED, so its corner radius is a screen-space
+                // number and matches the card's rendered curve without being divided by anything.
+                if let tint {
+                    tint.frame = CGRect(x: centre.x - p.size.width / 2, y: centre.y - p.size.height / 2,
+                                        width: p.size.width, height: p.size.height)
+                    tint.cornerRadius = p.cornerRadius
+                    tint.opacity = Float(p.dim)
+                }
+                // ⚠️ INSIDE THE SAME WRITE AS THE CARDS, AND ON THE ANIMATED PASS THAT IS THE POINT.
+                //
+                // The live story used to be placed at the END of this method, outside any animation
+                // block, so a movement the row SPRINGS — the page-drag completion, a tap that
+                // navigates — glided the cards to their new seats while the story arrived at its own
+                // in one step. Position and scale disagreeing by exactly that spring is the shape he
+                // photographed. Whatever clock the cards are on, this is on it.
+                if isLive { self.placeLiveStory(p) }
             }
-            // The centred card on top, exactly as the old `zIndex(2 - |cf|)`.
-            item.layer.zPosition = 2 - abs(cf)
-            item.updateMedia(story: story, slotW: geometry.slotW, slotH: geometry.slotH,
-                             isLive: story.id == liveStoryId)
+            item.layer.zPosition = p.zPosition
+            // Just above its own card and below the next one in: the tint belongs to this item, and
+            // a nearer card must still be able to cover it.
+            tint?.zPosition = p.zPosition + 0.0001
+            item.setLive(isLive)
+            item.updateMedia(story: story, slotW: geometry.slotW, slotH: geometry.slotH)
             if animated, existing != nil {
                 // Their `.curve(duration: 0.3, curve: .spring)` for a movement that did not come from
                 // the finger. `.allowUserInteraction` so an interrupting swipe is heard during it,
@@ -543,7 +660,13 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
                                options: [.allowUserInteraction, .beginFromCurrentState],
                                animations: write)
             } else {
+                // A bare `CALayer`'s frame, cornerRadius and opacity are all implicitly animated, so
+                // outside a deliberate animation they must be written with actions off or the tint
+                // chases the card it is supposed to be sitting on by a quarter second.
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
                 write()
+                CATransaction.commit()
             }
         }
 
@@ -553,6 +676,14 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         for (id, item) in items where !valid.contains(id) {
             removeItem(id, item)
         }
+        // THE LIVE STORY WHEN ITS OWN ITEM IS NOT IN THE ROW. Two ways that happens: the story was
+        // deleted under the sheet, or the row has not been handed it yet. Either way the pull is
+        // still shrinking something, and leaving it wearing the last transform it was given is the
+        // "story sitting at full size behind the sheet" screenshot. It is held at the centre — cf 0
+        // — being about to be replaced or dismissed either way.
+        if !valid.contains(liveStoryId) {
+            placeLiveStory(geometry.placement(combinedFraction: 0, rest: rest, containerMidX: midX))
+        }
 
         // ⚠️ AND THE SAME SET DECIDES WHICH STORIES KEEP THEIR PLAYER. One loop, one answer, which is
         // their shape: `validIds` is built by the layout pass and is what the item views are kept or
@@ -561,15 +692,72 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         // open the sheet, swipe to B then C, and coming back to A found nothing and started a new
         // player at zero. See `StoryVideoHost.previewWindow`.
         StoryVideoHost.previewWindow(valid)
+    }
 
-        onRowPosition(scroll, pageDrag)
+    /// WHAT AN ITEM IS AT FRACTION 0 — the story content's own rectangle, full screen, in window
+    /// coordinates.
+    ///
+    /// Every item interpolates from this toward its card, so the live story's journey into the slot
+    /// and its neighbours' are literally the same journey with a different `combinedFraction`. Asking
+    /// the morph rather than deriving it is the same rule the slot follows: `contentRect` is the
+    /// rectangle the crop will actually be taken against, and a second copy of it computed here is
+    /// how the picture-jumping-inside-its-frame bug happened.
+    ///
+    /// Nil is normal before a pager has registered a card. The fallback is the slot itself, which
+    /// makes the interpolation degenerate — rest and target are the same rectangle — so the row is
+    /// exactly what it has always been at fraction 1, which is the only fraction it is visible at.
+    private func restContentWindowRect(midX: CGFloat) -> CGRect {
+        if let r = StoryCardMorph.shared.restContentWindowRect, r.width > 1, r.height > 1 {
+            return r
+        }
+        return CGRect(x: midX - geometry.slotW / 2, y: geometry.centerY - geometry.slotH / 2,
+                      width: geometry.slotW, height: geometry.slotH)
+    }
+
+    /// THE PULL IS RISING AND THERE IS NO ROW TO PUT THE STORY IN.
+    ///
+    /// Not an edge case to be tidy about: it is every first frame of a first open, before the
+    /// stories have landed or the row has been laid out. The screen is measured directly here
+    /// because the row's own bounds are exactly what is missing, and cf is 0 because with no row
+    /// there is nothing for the story to be off-centre from.
+    private func placeLiveStoryWithoutARow() {
+        guard geometry.slotH > 1 else { return }
+        let midX = UIScreen.main.bounds.midX
+        placeLiveStory(geometry.placement(combinedFraction: 0,
+                                          rest: restContentWindowRect(midX: midX),
+                                          containerMidX: midX))
+    }
+
+    /// THE LIVE STORY, PLACED FROM THE SAME `StoryRowPlacement` AS EVERY CARD.
+    ///
+    /// This is the whole of what used to be `StoryRowGeometry.placeLiveStory` plus the host's
+    /// `placeLiveStory(fraction:)` plus `publishRowPosition`: three call sites, two files and a
+    /// division that existed to cancel a lerp on the far side. What is left is a hand-off — the row
+    /// has already decided where this story goes, and this writes it.
+    ///
+    /// The dim is NOT passed. It is the row's tint layer over this item, like every other item's.
+    private func placeLiveStory(_ p: StoryRowPlacement) {
+        // A hero open or close owns the card outright, and it is the gesture that removes the screen.
+        guard !StoryCardMorph.heroDismissActive, StoryCardMorph.shared.isAvailable else { return }
+        // ⚠️ THE ROW OWNS THE PUT-BACK NOW, AND THAT IS A CHANGE OF OWNER RATHER THAN OF BEHAVIOUR.
+        //
+        // It used to be forbidden from driving the fraction to zero, because the HOST owned that
+        // transition and two writers for "put the story back to full screen" is one too many. The
+        // host does not write this at all any more, so the rule inverts: the row is the only writer,
+        // and a collapse that ends at zero has to be passed through or the story is left card-sized
+        // behind a sheet that has gone.
+        guard geometry.fraction > 0.0001 else {
+            StoryCardMorph.shared.placeAtRest()
+            return
+        }
+        StoryCardMorph.shared.place(contentCenter: p.center, contentSize: p.size,
+                                    cornerRadius: p.cornerRadius, fraction: geometry.fraction)
     }
 
     private func addItem(_ story: Story) -> StoryRowItemView {
         let media = StoryRowCardMedia(story: story,
                                       slotW: geometry.slotW,
-                                      slotH: geometry.slotH,
-                                      isLive: story.id == liveStoryId)
+                                      slotH: geometry.slotH)
         let item = StoryRowItemView(storyId: story.id, media: media)
         addChild(item.host)
         view.addSubview(item)
@@ -577,6 +765,16 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         let c = counts[story.id] ?? .zero
         item.count.set(views: c.views, likes: c.likes)
         items[story.id] = item
+        // Their `contentTintLayer`, black at alpha 1 and revealed by its opacity — a sibling of the
+        // card, added to the same container, so it can cover a card or the live story without
+        // knowing which it is covering.
+        let tint = CALayer()
+        tint.backgroundColor = UIColor.black.cgColor
+        tint.opacity = 0
+        tint.cornerCurve = .continuous
+        tint.isDoubleSided = false
+        view.layer.addSublayer(tint)
+        tints[story.id] = tint
         return item
     }
 
@@ -586,6 +784,7 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         item.host.removeFromParent()
         item.removeFromSuperview()
         items.removeValue(forKey: id)
+        tints.removeValue(forKey: id)?.removeFromSuperlayer()
     }
 
     // MARK: Scroll delegate — theirs, method for method
@@ -711,13 +910,11 @@ struct StoryRow: UIViewControllerRepresentable {
 
     var onIndexChanged: (Int) -> Void = { _ in }
     var onActiveTap: () -> Void = {}
-    var onRowPosition: (CGFloat, CGFloat) -> Void = { _, _ in }
 
     func makeUIViewController(context: Context) -> StoryRowController {
         let c = StoryRowController()
         c.onIndexChanged = { i in onIndexChanged(i) }
         c.onActiveTap = { onActiveTap() }
-        c.onRowPosition = { s, d in onRowPosition(s, d) }
         link.controller = c
         c.apply(stories: stories, liveStoryId: liveStoryId, geometry: geometry,
                 counts: counts, activeIndex: activeIndex)
@@ -728,7 +925,6 @@ struct StoryRow: UIViewControllerRepresentable {
         // The closures are re-installed because they capture this frame's host state.
         c.onIndexChanged = { i in onIndexChanged(i) }
         c.onActiveTap = { onActiveTap() }
-        c.onRowPosition = { s, d in onRowPosition(s, d) }
         link.controller = c
         c.apply(stories: stories, liveStoryId: liveStoryId, geometry: geometry,
                 counts: counts, activeIndex: activeIndex)
@@ -737,7 +933,12 @@ struct StoryRow: UIViewControllerRepresentable {
 
 /// A weak pointer at the row's controller, so a per-frame value can be handed to UIKit without a
 /// SwiftUI update in between.
+///
+/// Both of the row's per-frame inputs come through here, and for the same reason: a finger is
+/// writing them, and routing a finger through a SwiftUI state write to reach a UIKit layout is how
+/// the row got a frame behind the thing dragging it.
 @MainActor final class StoryRowLink {
     weak var controller: StoryRowController?
     func setPageDrag(_ v: CGFloat) { controller?.setPageDrag(v) }
+    func setFraction(_ v: CGFloat) { controller?.setFraction(v) }
 }
