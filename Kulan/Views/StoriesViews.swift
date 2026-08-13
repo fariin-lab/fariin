@@ -2315,12 +2315,33 @@ struct StoryViewer: View {
         let contentW = content?.width ?? scr.width
         let contentH = content?.height
             ?? (scr.height - (currentIsMine ? Self.ownerFooterHeight + max(10, bottomInset) : 0))
-        // BUILD 249 card size (user: "make it exactly like 249, 250 is too long"). `slotHRef` is the
-        // aspect-true reference and it DEFINES the width, so the card keeps its width and only loses
-        // height; the story is centre-cropped into what is left.
+        // BUILD 249 card size (user: "make it exactly like 249, 250 is too long"), and the HEIGHT is
+        // still exactly that number — `slotHRef * 0.88` has not moved since.
         let slotHRef = (avail - countArea) * 0.94
-        let w = slotHRef * (contentW / max(contentH, 1))
         let h = slotHRef * 0.88
+        // ⚠️ THE WIDTH COMES OFF THE HEIGHT NOW, AND THE 0.88 IS NOT IN THE CARD'S SHAPE ANY MORE.
+        //
+        // His 2026-08-13 screenshots, 555 beside the current build: same height, card ~14% wider,
+        // and it reads squat. One line moved between them and it was not this one.
+        //
+        // What 555 did:  w = slotHRef * (screenWidth / (screenHeight - ownerFooter))
+        // What it became: w = slotHRef * (contentW / contentH), contentH now MEASURED
+        //
+        // On a 430x932 with his footer that swaps 872 for 765 underneath, so the width goes
+        // 0.493 -> 0.562 of the reference. The height never changed, which is exactly what he saw.
+        //
+        // ⚠️ AND THIS IS WHY THE 0.88 WAS INVISIBLE FOR SO LONG. Paired with the screen-height guess
+        // it produced `0.88 * 872/430 = 1.785` — 9:16 to within half a percent — so the card was
+        // aspect-TRUE by accident of that pairing and the "12% shorter" it was signed off as never
+        // actually shaved anything. Swapping the guess for the real content height dropped the
+        // number under it and the 0.88 started biting for real: 1.566, genuinely squat.
+        //
+        // So the height keeps the 0.88 and the width is derived from it at the story's OWN aspect.
+        // That lands at 0.4947 of the reference against 555's 0.493 — under half a point on screen —
+        // and because the card now has exactly the content's shape, `applyCore`'s crop removes
+        // nothing and cannot leave the empty band under the card either. One expression answers both
+        // reports, which is the sign it is the right one.
+        let w = h * (contentW / max(contentH, 1))
         return CardSlot(w: w, h: h, top: topInset + (avail - countArea - h) / 2)
     }
 
