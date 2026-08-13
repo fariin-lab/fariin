@@ -828,10 +828,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // animation never takes. That is the reported "tap the down arrow mid-swipe and nothing
             // happens, it only works once the scrolling stops". The intent gate above deliberately allows
             // a jump during deceleration (finger down only), so the refusal was never ours — it was UIKit.
-            // Writing the offset it already has, unanimated, ends the deceleration in place.
-            if collectionView.isDecelerating {
-                collectionView.setContentOffset(collectionView.contentOffset, animated: false)
-            }
+            // Writing the offset it already has, unanimated, ends the deceleration in place. This is
+            // the reference app's `stopScrolling()` verbatim, and like theirs it is UNCONDITIONAL: they
+            // never test isDecelerating, because the flag can read false while an animation is still in
+            // flight, and re-writing an offset that is already at rest costs nothing.
+            collectionView.setContentOffset(collectionView.contentOffset, animated: false)
             scrollingAnimationDidStart()   // lands defer until the glide completes
             collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: true)
         } else {
