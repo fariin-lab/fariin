@@ -3441,14 +3441,32 @@ struct StoryViewer: View {
     /// 8% we had guessed at — the first hair of the drag genuinely shrinks nothing, and then the
     /// shrink runs all the way to the end rather than stopping at 0.9.
     ///
-    /// The content height is the LATCHED one, the same rectangle `cardSlot` sizes against, so the
-    /// curve cannot move under a card already in flight.
+    /// The content height is the LATCHED one, so the curve cannot move under a card already in
+    /// flight. It is deliberately not the same expression `cardSlot` uses — see the note inside.
     func sheetSizeFraction(_ p: CGFloat) -> CGFloat {
         let scr = UIScreen.main.bounds
         let sheetH = scr.height * StoryViewersSheetView.heightFraction
-        let restH = (latchedContent ?? StoryCardMorph.shared.contentSize)?.height
-            ?? (scr.height - topInset)
         let free = scr.height - topInset
+        // ⚠️ THE LATCH ONLY, NEVER THE LIVE MEASUREMENT, AND THAT IS NOT THE SAME LINE AS `cardSlot`'S.
+        //
+        // `cardSlot` reads `latchedContent ?? StoryCardMorph.shared.contentSize` because it needs an
+        // answer in the frames before anything is registered. This must not: the live property is
+        // nil until the library has reported a card height, and it can turn real at ANY point in a
+        // pull. That would move `restH` under a drag in progress and the fraction would jump
+        // BACKWARDS mid-pull — on a 393x852, 0.40 to 0.275 in one frame, about 50pt of story height.
+        // The old curve was a pure function of `p` and could not do that, so this would have been a
+        // new bug introduced by fixing an old one.
+        //
+        // Nil latch therefore falls through to the host's own estimate rather than to a live read.
+        // It is a guess, but it is the SAME guess for the whole sitting, and a stable wrong number
+        // is worth more here than a correct one that arrives halfway through a gesture.
+        //
+        // Clamped to `free` because their `contentSize.height` is built as
+        // `min(itemSize.height, availableSize.height - top - bottomInset)` and so cannot exceed the
+        // room above the sheet by construction. Ours is measured rather than constructed, and a
+        // full-bleed rectangle arriving here would make the row read as part-collapsed at rest.
+        let restH = min(free, latchedContent?.height
+            ?? (scr.height - (currentIsMine ? Self.ownerFooterHeight + max(10, bottomInset) : 0)))
         guard restH > 1, sheetH > 1 else { return 0 }
         // With the sheet fully up, and right now. Both clamped by the story's own resting height,
         // which is what makes the start of the pull free.
@@ -3484,8 +3502,19 @@ struct StoryViewer: View {
         // make against `slotH / slotW` still lives in `card(_:)`; only the numbers moved.
         let slot = cardSlot
         let blockTop = slot.top
-        // STAGING. `carIn` fades the neighbours and the count row in over the last tenth of the
-        // pull, behind a centre card that has already stopped moving.
+        // STAGING. `carIn` fades the neighbours and the count row in over the last tenth of the pull.
+        //
+        // ⚠️ IT NO LONGER HAPPENS "BEHIND A CARD THAT HAS ALREADY STOPPED MOVING", AND THE OLD
+        // SENTENCE IS DELETED RATHER THAN REPHRASED. That was only ever true by coincidence: the old
+        // fraction finished at p = 0.9 and this fade started at p = 0.9. The pull is geometric now
+        // and finishes with the sheet, so at the moment the neighbours begin to arrive the centre
+        // card still has the last tenth of its travel to make.
+        //
+        // Left that way on purpose. Theirs does not fade a row in at all — every item is present the
+        // whole time and the tint layer is what makes the neighbours invisible while the sheet is
+        // down, which is the term ported alongside this. Arriving over the last of the motion is
+        // closer to that than waiting for the motion to stop, and the thing this fade is still
+        // needed for is the count badges and the shadows, which sit outside the tint.
         //
         // THERE IS NO PICTURE OF THE STORY ANYWHERE IN THIS ROW, and that is the whole of the
         // frozen-frame fix. The live story is one of the row's items now — laid out by the row's own
@@ -3523,7 +3552,15 @@ struct StoryViewer: View {
                               pageDrag: pageDragBox)
                 .padding(.top, blockTop)
                 .opacity(Double(carIn))
-                .allowsHitTesting(carIn > 0.5)
+                // ⚠️ `> 0` RATHER THAN `> 0.5`, AND THE 0.19pt THAT BUYS IS A REAL DROPPED TAP.
+                //
+                // The sheet starts handing touches above it to this band at `progress > 0.95`
+                // (`StoryViewersSheetView.hitTest`). With the pull geometric, `carIn > 0.5` is not
+                // reached until p = 0.95034 — so for a hair of the gesture the sheet lets a tap
+                // through and the carousel refuses it, and a tap that lands there does nothing at
+                // all. The two gates have to be on the same side of each other, and the cheap way to
+                // guarantee that is for this one to open first and stay open.
+                .allowsHitTesting(carIn > 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         // NO gestures here any more. Every touch above the sheet panel is routed by
