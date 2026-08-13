@@ -874,6 +874,19 @@ struct StoryCameraView: View {
                 //
                 // The TOP keeps its radius and its 6pt either way: that edge is under the status bar,
                 // not against anything.
+                // ⚠️ THE CARD IS THE SPACE IT WAS GIVEN, WHATEVER IS INSIDE IT. Both pages stay
+                // mounted (see above), so ANY child of either one that reports more than it was
+                // offered — a fill image, a representable with an intrinsic size — silently becomes
+                // the card's size, and the bar below inherits the same wrong width. That is his "top
+                // is entering status bar, right side is entering right screen angel but left side is
+                // oky": a card wider and taller than the screen, hanging off the corners it was not
+                // anchored to.
+                //
+                // This is the fence rather than a second cure: the picture above is fixed at its
+                // source, and this makes the next one impossible. `maxWidth`/`maxHeight` .infinity
+                // accepts exactly the proposal and centres anything oversized inside it, and the
+                // clip below then cuts it at the card's edge.
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipShape(UnevenRoundedRectangle(
                     topLeadingRadius: previewCorner,
                     bottomLeadingRadius: typing ? 0 : previewCorner,
@@ -1226,10 +1239,25 @@ struct StoryCameraView: View {
             // frame for exactly this; ours is the same idea, held in memory. Under the live preview,
             // so it is simply covered the moment there is a real frame — no timing, no fade to get
             // wrong. Also what the flip cover blurs over.
+            // ⚠️ THE FILL IS DRAWN THROUGH `Color.clear`, AND THAT IS HIS "THE TEXT CARD GROWS WHEN I
+            // TAP THE TEXT". A `.scaledToFill()` image REPORTS the size it filled to, not the size it
+            // was offered — a 9:16 camera frame in a 416×751 card reports 422×751 — and a ZStack takes
+            // the LARGEST of its children, so the card became whatever the picture wanted. Measured on
+            // his own screenshots: 3pt of overhang each side at rest, and 508×904 (exactly 9:16) once
+            // the keyboard had re-run the layout, with the X and the tick pushed off the screen.
+            //
+            // A `Color.clear` takes exactly what it is offered, an OVERLAY cannot change its host's
+            // size, and `.clipped()` throws away the overhang. Same picture, same crop, no vote on the
+            // layout. The rule is general: `.scaledToFill()` with nothing under it is a view that sizes
+            // its own parent.
             if let placeholder = cam.bootPlaceholder {
-                Image(uiImage: placeholder)
-                    .resizable()
-                    .scaledToFill()
+                Color.clear
+                    .overlay {
+                        Image(uiImage: placeholder)
+                            .resizable()
+                            .scaledToFill()
+                    }
+                    .clipped()
                     .allowsHitTesting(false)
             }
             CameraPreview(session: cam.session,
@@ -1296,10 +1324,17 @@ struct StoryCameraView: View {
             // THE CAPTURED FRAME, PINNED WHERE THE PREVIEW WAS. Above the live layer so the scene
             // cannot move on underneath while the controls are still fading, and filling the same
             // card, so nothing about the picture changes at the moment the photo is taken.
+            // Through `Color.clear` for the same reason as the boot placeholder above: a captured photo
+            // is 4:3, and a 4:3 fill in this card reports ~563pt of width. It would resize the card at
+            // the exact moment the shutter fires, which is the one moment nothing may move.
             if let shot = frozenShot {
-                Image(uiImage: shot)
-                    .resizable()
-                    .scaledToFill()
+                Color.clear
+                    .overlay {
+                        Image(uiImage: shot)
+                            .resizable()
+                            .scaledToFill()
+                    }
+                    .clipped()
                     .allowsHitTesting(false)
             }
 
