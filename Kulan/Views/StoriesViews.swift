@@ -2355,10 +2355,12 @@ struct StoryViewer: View {
     /// path and the measured path now agree instead of merely being close, and the answer no longer
     /// depends on `currentIsMine` arriving, which is known to be a beat late on a fresh open.
     ///
-    /// ⚠️ ONE EXPRESSION, TWO CALLERS, DELIBERATELY. `cardSlot` sizes the card with it and
-    /// `sheetSizeFraction` measures the pull with it. They were two different fallbacks for one
-    /// rectangle, and on the not-mine branch that had the card sized from 852 while the pull was
-    /// computed from 793 — at p = 0.3 a fraction of 0.154 against 0.300, roughly double.
+    /// ⚠️ ONE CALLER NOW, AND THAT IS THE POINT RATHER THAN A LOSS. It briefly had two: `cardSlot`
+    /// sized the card with it and `sheetSizeFraction` measured the pull with it, from two different
+    /// fallbacks for one rectangle — which on the not-mine branch sized the card from 852 while the
+    /// pull was computed from 793, a fraction of 0.154 against 0.300 at the same point in the drag.
+    /// The pull does not read a content height at all any more (it is the drag itself), so the story's
+    /// own rectangle is asked for in exactly one place: here.
     private var estimatedContentHeight: CGFloat {
         let scr = UIScreen.main.bounds
         return min(ceil(scr.width * 1.77778),
@@ -3435,11 +3437,7 @@ struct StoryViewer: View {
         pageDragBox.rowLink?.setFraction(sheetSizeFraction(p))
     }
 
-    /// THE PULL, STAGED — the reference layout's `contentScaleFraction`, and the one definition of it.
-    ///
-    /// The frame shrinks across 0.08 → 0.9: the first hair of the pull stays full size so a stray
-    /// touch shrinks nothing visible, and the last tenth is left for the neighbours and the count
-    /// row to fade in behind a card that has stopped moving.
+    /// THE PULL — the reference layout's `contentScaleFraction`, and the one definition of it.
     ///
     /// ⚠️ STATIC AND SHARED, because the row is laid out from it too now. Half of `StoryRowGeometry`
     /// changes with this number — the spacing, the resting position — so the cards and the live
@@ -3463,46 +3461,43 @@ struct StoryViewer: View {
     /// that sits between its two ends. Every number in it is a length on the screen this frame, so
     /// it cannot drift out of step with the sheet: it IS the sheet.
     ///
-    /// ⚠️ AND IT PRODUCES OUR DEAD PATCH FOR A REASON INSTEAD OF BY DECREE. `min` with the resting
-    /// height means that while the sheet is still below the bottom of the story, the story still
-    /// fits and does not move at all. On a 393x852 that is the first 17% of the pull, against the
-    /// 8% we had guessed at — the first hair of the drag genuinely shrinks nothing, and then the
-    /// shrink runs all the way to the end rather than stopping at 0.9.
+    /// ⚠️ AND THERE IS NO DEAD PATCH AT THE START, BECAUSE THEIRS HAS NONE. The owner, 2026-08-13:
+    /// the shrink "start when the sheet viewer is 10/15% coming down… feeling late". He is right, and
+    /// the first version of this derivation is what put it there.
     ///
-    /// The content height is the LATCHED one, so the curve cannot move under a card already in
-    /// flight. It is deliberately not the same expression `cardSlot` uses — see the note inside.
+    /// The slack came from measuring the free space as the whole screen below the status bar. On a
+    /// 393x852 a 9:16 story is 699pt of a 793pt space, so the sheet had 94pt — about 17% of its
+    /// travel — to climb before it reached the bottom of the story and anything began to move.
+    ///
+    /// Their story has no such slack, and the three lines that say so are:
+    ///
+    ///     :3442  let defaultHeight = 60.0 + safeInsets.bottom + 1.0
+    ///     :3542  viewListInset = defaultHeight * (1 - midFraction) + midFraction * midViewListHeight
+    ///     :3551  maximizedBottomContentHeight = defaultHeight
+    ///
+    /// Their view list is never off the screen: it RESTS at `defaultHeight`, and the story's own
+    /// height is built as `min(9:16, available - top - defaultHeight)` — already fitted to the space
+    /// above it. So `contentVisualBottomInset`, which is `max(default, viewListInset)`, sits exactly
+    /// on `defaultHeight` at rest and exceeds it on the first pixel of the drag. The story starts
+    /// shrinking immediately because it was never larger than the room it had.
+    ///
+    /// Ours rests fully off the screen, so the honest equivalent is that the story cedes exactly the
+    /// height the sheet takes, from the first pixel:
+    ///
+    ///     liveH = restH - p·sheetH        minH = restH - sheetH
+    ///     fraction = (restH - liveH) / (restH - minH) = (p·sheetH) / sheetH = p
+    ///
+    /// which cancels to the drag itself. So this is `p`, and that is a derivation rather than a
+    /// shrug: the reason it is linear is that a story already fitted to its space gives up whatever
+    /// is taken from it, one point for one point.
+    ///
+    /// ⚠️ IT ALSO ENDS THE LAST FAMILY OF BUGS THIS FUNCTION HAD. Reading a measured content height
+    /// in here meant reading a value that is nil until the library reports one and can turn real at
+    /// any moment — which moved the resting height under a drag in progress and jumped the fraction
+    /// BACKWARDS mid-pull. There is nothing left to read: `p` is the finger. Do not reintroduce a
+    /// content height here; `cardSlot` is where the story's own rectangle belongs.
     func sheetSizeFraction(_ p: CGFloat) -> CGFloat {
-        let scr = UIScreen.main.bounds
-        let sheetH = scr.height * StoryViewersSheetView.heightFraction
-        let free = scr.height - topInset
-        // ⚠️ THE LATCH ONLY, NEVER THE LIVE MEASUREMENT, AND THAT IS NOT THE SAME LINE AS `cardSlot`'S.
-        //
-        // `cardSlot` reads `latchedContent ?? StoryCardMorph.shared.contentSize` because it needs an
-        // answer in the frames before anything is registered. This must not: the live property is
-        // nil until the library has reported a card height, and it can turn real at ANY point in a
-        // pull. That would move `restH` under a drag in progress and the fraction would jump
-        // BACKWARDS mid-pull — on a 393x852, 0.40 to 0.275 in one frame, about 50pt of story height.
-        // The old curve was a pure function of `p` and could not do that, so this would have been a
-        // new bug introduced by fixing an old one.
-        //
-        // Nil latch therefore falls through to the host's own estimate rather than to a live read.
-        // It is a guess, but it is the SAME guess for the whole sitting, and a stable wrong number
-        // is worth more here than a correct one that arrives halfway through a gesture.
-        //
-        // Clamped to `free` because their `contentSize.height` is built as
-        // `min(itemSize.height, availableSize.height - top - bottomInset)` and so cannot exceed the
-        // room above the sheet by construction. Ours is measured rather than constructed, and a
-        // full-bleed rectangle arriving here would make the row read as part-collapsed at rest.
-        let restH = min(free, latchedContent?.height ?? estimatedContentHeight)
-        guard restH > 1, sheetH > 1 else { return 0 }
-        // With the sheet fully up, and right now. Both clamped by the story's own resting height,
-        // which is what makes the start of the pull free.
-        let minScale = min(1, min(restH, free - sheetH) / restH)
-        let scale = min(1, min(restH, free - max(0, min(1, p)) * sheetH) / restH)
-        // A screen with no room to give (`minScale` already 1) has nothing to interpolate and must
-        // not divide by zero to find that out.
-        guard minScale < 1 - 0.0001 else { return 0 }
-        return max(0, min(1, (1 - scale) / (1 - minScale)))
+        max(0, min(1, p))
     }
 
     // ⚠️ `placeLiveStory(fraction:)` IS DELETED HERE — the 2026-08-13 ruling, and the largest single
