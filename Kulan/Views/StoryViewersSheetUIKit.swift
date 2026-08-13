@@ -666,6 +666,20 @@ final class StoryViewersSheetView: UIView {
             pageActive = true
             pageOffset = 0
             applyPageOffset()
+            // ⚠️ AND THE ROW IS TOLD, WHICH IT WAS NOT. Zeroing `pageOffset` here moves OUR panels
+            // back to their slots but said nothing to the row, and the row subtracts this number
+            // from its own position (`rowPosition`: `scroll·f + centralIndex·(1-f) - pageDrag`).
+            //
+            // So a page pan that begins and never reaches `.ended` or `.cancelled` — a gesture the
+            // system takes over, a drag that turns into a scroll — left the LAST fraction standing
+            // in the row for the rest of the sitting, with our own panels already back at zero. The
+            // row is then permanently off by whatever the abandoned drag had reached, and because
+            // nothing else writes it, it survives into the next tap and biases that too. That is
+            // the owner's "when I swipe the sheet sideways the row misbehaves", and it is why it
+            // then misbehaves on a tap he makes afterwards.
+            //
+            // Both numbers describe one thing, so they are written in one place.
+            onPageDrag?(0)
             pageBaselineX = rawX
         case .changed:
             let tx = rawX - pageBaselineX
