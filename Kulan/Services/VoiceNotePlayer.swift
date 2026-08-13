@@ -28,6 +28,16 @@ import UIKit
 /// Background audio is already declared (`UIBackgroundModes: audio` in project.yml, for calls), and
 /// the category here is `.playback`, so with the engine holding the player the note now also survives
 /// the screen locking.
+/// Carries a built-and-prerolled player from the background thread that made it to the main actor that
+/// will own it. AVAudioPlayer is not Sendable, and it does not need to be: exactly one thread touches
+/// this object at a time, and the handoff below is the only crossing. Spelled out in a box rather than
+/// left to the compiler's concurrency mode, which is what decides whether the bare capture is a
+/// warning or an error.
+private final class PreparedPlayer: @unchecked Sendable {
+    let player: AVAudioPlayer?
+    init(_ player: AVAudioPlayer?) { self.player = player }
+}
+
 @MainActor
 final class VoiceNotePlayer: NSObject, ObservableObject {
     static let shared = VoiceNotePlayer()
@@ -284,6 +294,14 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         hasNote = false
         resumeAfterInterruption = false
         self.messageId = message.id
+        // AND THE KNOB MOVES WITH IT. `progress` is ONE shared number, and `progress(for:)` hands it to
+        // whichever bubble currently owns `messageId` — so the instant the id moves, the new bubble
+        // starts drawing the position the PREVIOUS note was paused at. It then holds that wrong
+        // position for the whole load (a download, or just the session activation below) until the
+        // first tick corrects it to zero. That flash forward and snap back is his "the wave jumps,
+        // comes back to the start, then starts", and it is first-time-only per note because after the
+        // first play the id already matches. Set with the id, never after the player exists.
+        progress = pausedProgress[message.id] ?? 0
         self.cid = cid
         self.isMine = isMe
         // Kept for the played receipt below, which needs the message's OWN timestamp rather than now.
@@ -353,10 +371,19 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         Task.detached(priority: .userInitiated) {
             try? AVAudioSession.sharedInstance().setCategory(.playback)
             try? AVAudioSession.sharedInstance().setActive(true)
+            // AND THE PLAYER IS BUILT OUT HERE TOO. `AVAudioPlayer(contentsOf:)` parses the file header
+            // and stands the decoder up on whatever thread calls it, and the preroll that `play()`
+            // would otherwise do lazily allocates buffers and wakes the hardware on that same thread.
+            // Both were landing on main, and they are the half of the first-play freeze that the
+            // session move did not cover. The reference app never pays either on main — it drives
+            // AVPlayer, which loads its asset asynchronously by construction — so this is how the same
+            // answer is reached from AVAudioPlayer.
+            let built = PreparedPlayer(try? AVAudioPlayer(contentsOf: url))
+            built.player?.prepareToPlay()
             await MainActor.run { [weak self] in
                 guard let self, self.messageId == forNote else { return }   // another note took over meanwhile
-                self.player = try? AVAudioPlayer(contentsOf: url)
-                guard self.player != nil else { self.clearNowPlaying(); return }
+                guard let p = built.player else { self.clearNowPlaying(); return }
+                self.player = p
                 self.start()
             }
         }
@@ -371,6 +398,25 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         // one player now, so nothing can be playing for it to stop. A post with no listener reads to
         // the next person like a rule still being enforced somewhere.
         VoiceAudio.activeId = messageId
+        // SOUND FIRST, PAPERWORK AFTER — his "play/pause is not as fast as the reference app".
+        // Everything this method used to do before `play()` (two UserDefaults writes for the played
+        // receipt, the receipt throttle, a category set, a session activation) ran between his finger
+        // and the audio. None of it has to. The reference app orders it the same way and goes one
+        // further: it flips its own playing state BEFORE telling the engine anything, so the button
+        // answers the tap even when the audio needs a moment. `playing = true` below is that flip.
+        try? AVAudioSession.sharedInstance().setCategory(.playback)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        p.enableRate = true
+        p.rate = rateByCid[cid] ?? 1
+        // Resume where it was left, including a position chosen by scrubbing before the first play.
+        // Must precede `play()`: setting currentTime on a running player is an audible seek.
+        if let saved = pausedProgress[messageId], saved > 0, saved < 0.98, p.currentTime == 0 {
+            p.currentTime = saved * p.duration
+            progress = saved
+        }
+        p.play()
+        playing = true
+        hasNote = true
         // (One-time notes are not consumed here any more: they play in OneTimeVoicePage, never
         // through this engine, and CLOSING that page is what spends the listen — his order, the
         // photo model. The engine's no-cache viewOnce path below stays as a belt: if any future
@@ -387,21 +433,6 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             // never learn whether it was heard. Throttled and gated on the read-receipts setting inside.
             ChatService.markVoicePlayedThrottled(c, createdAtMillis: at.timeIntervalSince1970 * 1000)
         }
-        // Resume where it was left, including a position chosen by scrubbing before the first play.
-        if let saved = pausedProgress[messageId], saved > 0, saved < 0.98, p.currentTime == 0 {
-            p.currentTime = saved * p.duration
-            progress = saved
-        }
-        // Re-activate before playing. `pause()` gives the session back so other audio can carry on, and
-        // an interruption takes it away outright — both leave us deactivated, and resuming from either
-        // has to ask for it again rather than assume AVAudioPlayer will.
-        try? AVAudioSession.sharedInstance().setCategory(.playback)
-        try? AVAudioSession.sharedInstance().setActive(true)
-        p.enableRate = true
-        p.rate = rateByCid[cid] ?? 1
-        p.play()
-        playing = true
-        hasNote = true
         SleepBlocker.shared.add("voice-play")
         UIDevice.current.isProximityMonitoringEnabled = true
         enable(true)
@@ -459,8 +490,10 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
 
     func pause() {
         guard player != nil else { return }
-        player?.pause()
+        // The icon flips first, same order as the reference app's pause. The engine call is quick, but
+        // "quick" is not "before the next frame", and the button is what the finger is watching.
         playing = false
+        player?.pause()
         timer?.invalidate(); timer = nil
         pausedProgress[messageId] = progress
         // ⚠️ THE AUDIO SESSION IS NOT GIVEN BACK ON A PAUSE ANY MORE — his "still late play"
