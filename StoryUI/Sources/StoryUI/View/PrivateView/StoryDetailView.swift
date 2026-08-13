@@ -390,19 +390,28 @@ struct StoryDetailView: View {
                         // them out yet, and that is the next piece. What matters here is that they
                         // EXIST and are loaded, because a view that does not exist cannot be handed
                         // to the row to move.
-                        ZStack {
-                            ForEach(itemWindow(around: index), id: \.self) { i in
+                        // ⚠️ A UIKit CONTAINER PER STORY, NOT A `ZStack` — see `StoryItemsContainer`.
+                        //
+                        // The `ZStack` this replaces was right about identity and wrong about who
+                        // owns the frame. The next step gives every story its own position and
+                        // scale, and the only render-time scale SwiftUI has is `.scaleEffect`, which
+                        // this repo has torn out twice (`c938ad8` in, `da0bc72` out) because it
+                        // re-lays-out the hosted representable and re-insets it against the safe
+                        // area. A `CGAffineTransform` on a UIView changes no bounds and runs no
+                        // layout pass, which is why the morph has always used one — but a transform
+                        // cannot be put on a view SwiftUI writes `frame` on every pass.
+                        //
+                        // So each story's media lives inside a container this library owns. Right
+                        // now every container fills the card exactly as the `ZStack` did.
+                        StoryItemsContainer(ids: itemWindow(around: index).map { model.stories[$0].id }) { id in
+                            guard let i = model.stories.firstIndex(where: { $0.id == id }) else {
+                                return AnyView(Color.clear)
+                            }
+                            return AnyView(
                                 getStoryView(with: i, story: model.stories[i], isCentral: i == index)
                                     .opacity(i == index ? 1 : 0)
                                     .allowsHitTesting(i == index)
-                                    // ⚠️ IDENTITY IS THE STORY, NOT THE SLOT. Without this the view
-                                    // belongs to the position in the window, so advancing an item
-                                    // hands the same loader a different story — one view showing
-                                    // whatever is current, which is exactly the thing being removed.
-                                    // With it, a story keeps its own view for as long as it is in
-                                    // the window, which is what lets the row move it later.
-                                    .id(model.stories[i].id)
-                            }
+                            )
                         }
                             .frame(width: proxy.size.width,
                                    height: cardHeight(width: proxy.size.width,
