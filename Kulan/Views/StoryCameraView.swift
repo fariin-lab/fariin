@@ -985,13 +985,25 @@ struct StoryCameraView: View {
                         }
                 )
 
-                // Gone while the keyboard is up, as he drew it: the card takes that space instead,
-                // and the switch would otherwise be riding on top of the keyboard.
-                if !typing {
-                    bottomBar
-                        .frame(height: barHeight)
-                        .opacity(handingOver ? 0 : 1)
-                }
+                // Invisible while the keyboard is up, as he drew it — the switch would otherwise be
+                // riding on top of the keyboard.
+                //
+                // ⚠️ HIDDEN, NOT REMOVED FROM THE STACK, AND THAT IS HIS "THE PAGE ZOOMS IN".
+                //
+                // This was `if !typing { bottomBar }`. Taking the bar out gives its 88pt back to the
+                // card AND makes the `VStack` re-centre what is left, so the card grew by 88 and its
+                // top edge slid up by about half of that, under the status bar, on the frame the
+                // keyboard opened. The card is a flat colour with centred words, so a frame that
+                // changes size reads as the whole page being zoomed.
+                //
+                // Reserving the space costs nothing to look at: with the page not resizing for the
+                // keyboard (see below), the card's bottom edge is behind the keyboard either way, so
+                // the 88pt was never visible while typing. What it buys is that the card's frame is
+                // the SAME rectangle before and after — nothing moves except what lifts itself.
+                bottomBar
+                    .frame(height: barHeight)
+                    .opacity(typing || handingOver ? 0 : 1)
+                    .allowsHitTesting(!typing)
             }
             // THE WHOLE CAMERA RIDES THE FINGER — translation ONLY. The reference app's camera dismiss never
             // scales (that transition belongs to their media VIEWER, not the camera); the token
