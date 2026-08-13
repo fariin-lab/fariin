@@ -311,411 +311,6 @@ struct StoryImage: View {
     /// card. Divided by nothing downstream; see the note at `onPageDrag` in StoryViewersSheetUIKit
     /// for the two builds that got this wrong in each direction.
     @Published var value: CGFloat = 0
-
-    /// THE ROW'S CONTROLLER, REACHED WITHOUT GOING THROUGH SWIFTUI TO GET THERE.
-    ///
-    /// ⚠️ THIS IS THE WHOLE OF HIS "the top preview thumbnails are not following in realtime", AND
-    /// IT IS AN ARCHITECTURE GAP RATHER THAN A NUMBER.
-    ///
-    /// In the reference app the sideways pan handler writes its fraction and calls
-    /// `self.state?.updated(transition: .immediate)`, which runs `updateScrolling` — the function
-    /// that positions the row's cards — SYNCHRONOUSLY, inside the same gesture callback. There is
-    /// one hop from finger to card.
-    ///
-    /// Ours had three: the pan wrote `value`, `@Published` invalidated `MyStoriesCarousel`, SwiftUI
-    /// scheduled an update, and the cards only moved when `StoryRowPositionReporter.body` ran inside
-    /// it. The panel under the finger is moved by the pan handler directly and is therefore instant;
-    /// the row waited for a SwiftUI pass that also rebuilds `StoryRow` and re-runs `apply` on the
-    /// way. The two halves of one gesture were on two clocks, and the row is the slow one.
-    ///
-    /// `StoryRowLink` already existed for exactly this — its own note says "so a per-frame value can
-    /// be handed to UIKit without a SwiftUI update in between" — but its only caller was inside a
-    /// SwiftUI body, which is the update it was written to avoid. Holding it here lets the drag take
-    /// their one hop. Weak: the row owns it, and a sheet that has gone away has no row.
-    weak var rowLink: StoryRowLink?
-
-    /// One frame of the sheet's sideways drag. The row is moved FIRST and directly, then the value is
-    /// published for the things that genuinely need a SwiftUI pass. The live story rides the first
-    /// half for free: moving the row lays the live story out, because it is one of the row's items.
-    func deliver(_ v: CGFloat, settle: StoryRowSettle = .commit) {
-        guard v.isFinite else { return }
-        rowLink?.setPageDrag(v, settle: settle)
-        if value != v { value = v }
-    }
-
-    /// THE SHEET PAGED AND THE ROW MOVES ONCE — see `StoryRowController.commitPage`. The published
-    /// value is written directly rather than through `deliver`, because the row has already been
-    /// told; going through `deliver` would hand it a second, unanimated zero on top of the spring it
-    /// just started.
-    func commitPage(toStoryId id: String) {
-        rowLink?.commitPage(toStoryId: id)
-        if value != 0 { value = 0 }
-    }
-
-    // ⚠️ `rowScroll` / `setRowScroll` / `forgetRowScroll` ARE DELETED — 2026-08-13.
-    //
-    // The row published its scroller position here so the HOST could rebuild the live story's frame
-    // from it on every frame of a pull. That reader is gone: the row places the live story itself,
-    // in its own loop, where the scroller position is a local (`StoryRowController.scroll`) and
-    // cannot be stale, cannot be nil, and cannot default to a number that means "the first story".
-    //
-    // The bug this field's optionality was fixing is therefore not fixed here any more — it is
-    // absent. Nothing outside the row asks where the row is.
-}
-
-/// EVERY FRAME OF THE ROW'S MOVEMENT, INCLUDING THE FRAMES SWIFTUI DRAWS BY ITSELF.
-///
-/// ⚠️ READ THIS BEFORE REPLACING IT WITH AN `.onChange`. I wrote it as one first and it is wrong in
-/// a way that only shows up on two of the four ways the row can move.
-///
-/// `withAnimation { scroll = 3 }` does not walk `scroll` from 2 to 3. It sets it to 3 at once and
-/// then INTERPOLATES THE RENDERED ATTRIBUTES — the position, the scale, the opacity — over the next
-/// 0.3 seconds. So `.onChange(of: scroll)` fires exactly once, with the destination, on the first
-/// frame. A finger on the row is fine (the scroller writes a fresh value per frame and there is no
-/// animation involved), and so is a sheet page-drag; but the retarget spring and the page commit
-/// are pure SwiftUI animations, and on those two the cards would glide across while the live story
-/// teleported to the end. That is the position-and-scale disagreement he photographed, rebuilt from
-/// the other direction by the very thing meant to remove it.
-///
-/// `Animatable` is the seam SwiftUI provides for exactly this: declare the row's position as the
-/// animatable data and SwiftUI writes the INTERPOLATED value into this modifier once per frame,
-/// which is the same number the cards are being drawn from on that frame. There is no second clock,
-/// no duration copied from anywhere, and no curve to keep in step — it is not a parallel animation
-/// of the story, it is a readout of the row's real one.
-///
-/// The report happens in `body`, which is a side effect during a view update. That is only safe
-/// because of what it does: it writes a plain (non-`@Published`) property and moves a UIKit
-/// transform, so nothing it touches can invalidate a SwiftUI view and re-enter the update it was
-/// called from.
-/// ⚠️ TWO NUMBERS, NOT THEIR SUM, AND THE PAIR IS LOAD-BEARING.
-///
-/// The row is moved by two independent things — the scroller and the sheet's sideways throw — and
-/// BOTH can be animated by SwiftUI. An earlier version animated `scroll - pageDrag` as a single
-/// value, which is correct only where the layout treats them as interchangeable. It does not: the
-/// scroller's position is blended against the central item by the pull fraction while the drag is
-/// added on afterwards, so the two have to arrive separately to be recombined correctly.
-///
-/// ⚠️ ONE VALUE NOW, NOT TWO, BECAUSE ONLY ONE OF THEM STILL LIVES IN SWIFTUI.
-///
-/// It used to carry the scroller's position as well. The row's position is owned by the row's own
-/// scroll view now (see `StoryRowController`), and a scroll view is never animated by SwiftUI — so
-/// the only value left that SwiftUI interpolates behind the row's back is the sheet's sideways
-/// throw, which is written straight by a UIKit pan while a finger is down and animated to zero by
-/// `withAnimation` on the commit and on the spring home.
-struct StoryRowPositionReporter: ViewModifier, Animatable {
-    var pageDrag: CGFloat
-    let report: (CGFloat) -> Void
-
-    var animatableData: CGFloat {
-        get { pageDrag }
-        set { pageDrag = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        report(pageDrag)
-        return content
-    }
-}
-
-/// THE ROW'S LAYOUT, IN ONE PLACE, because two things now have to agree about it to the pixel: the
-/// carousel, which draws the cards, and the live story, which is one of them.
-///
-/// Every number here is the reference container's, and they were already in this file — they just
-/// lived privately inside `MyStoriesCarousel`, where the live story could not reach them. That was
-/// tolerable while the live story was pinned to the centre and never had to know where a card was;
-/// it stopped being tolerable the moment it had to slide to the same places the cards slide to.
-///
-/// ⚠️ The alternative — a second copy of the same five formulas on the host side — is exactly what
-/// `402ec4d` was: duplicated geometry that has to agree, drifting by a fraction, and the picture
-/// jumping inside its own frame.
-struct StoryRowGeometry: Equatable {
-    let slotW: CGFloat          // the centred card at full pull — their `centralVisibleItemWidth`
-    let slotH: CGFloat
-    let centerY: CGFloat        // the card block's centre line on screen
-    /// The FULL-SCREEN story width — their `contentFrame.width`. Every one of their formulas is
-    /// written against this and not against the card, which is the reason two of ours were wrong.
-    let fullW: CGFloat
-    /// HOW FAR THE SHEET IS UP: 0 full screen, 1 fully shrunk. Their `contentScaleFraction`.
-    ///
-    /// ⚠️ IT BELONGS IN THE GEOMETRY, NOT AT THE CALL SITES. Half the numbers below change with it —
-    /// the spacing, the scale, and the row's own resting position — and every one of those was
-    /// computed at fraction 1 and then used at every fraction.
-    let fraction: CGFloat
-
-    /// The same slot at a different point in the pull.
-    ///
-    /// The row is handed its geometry through SwiftUI, which is a frame behind a finger on the
-    /// sheet; the sheet's pan hands it the fraction directly through `StoryRowLink` so the story it
-    /// is shrinking does not lag the finger shrinking it. Both write the same number — both compute
-    /// `sheetSizeFraction` from the same `viewersProgress` — so the later writer is simply the
-    /// fresher one and there is nothing for them to disagree about.
-    func withFraction(_ f: CGFloat) -> StoryRowGeometry {
-        StoryRowGeometry(slotW: slotW, slotH: slotH, centerY: centerY, fullW: fullW,
-                         fraction: max(0, min(1, f)))
-    }
-
-    var itemSpacing: CGFloat { 12 }
-    /// `contentMinScale`: the card's width as a fraction of the full-screen story.
-    var contentMinScale: CGFloat { fullW > 0 ? slotW / fullW : 1 }
-    /// A FIXED 54pt narrower than the centre card, not a ratio.
-    var sideW: CGFloat { max(1, slotW - 54) }
-    /// FLOORED, because `scroll` is computed by dividing by this and then fed to `Int()`. A zero or
-    /// negative divisor gives infinity or NaN, and `Int(_:)` on either is a runtime trap rather than
-    /// a wrong number — the shape of the crash in build 463.
-    var fullDist: CGFloat { max(1, slotW * 0.5 + itemSpacing + sideW * 0.5) }
-    var halfDist: CGFloat { max(1, sideW * 0.5 + itemSpacing + sideW * 0.5) }
-    var sideRelScale: CGFloat { slotW > 0 ? sideW / slotW : 1 }
-
-    // MARK: The SCALED distances — the half of their layout I did not have
-    //
-    // ⚠️ THEY COMPUTE TWO SETS OF DISTANCES AND USE EACH FOR A DIFFERENT JOB (`:1505-1512`). The
-    // ones above are LOGICAL: fixed, measured on the fully-shrunk card, and used for the scroll
-    // arithmetic and the visibility window. The ones below are SCALED by how far the sheet is up,
-    // and they are the ones that POSITION anything.
-    //
-    // Mine used the logical set for positions at every fraction. At half a pull the items are still
-    // nearly full-screen wide, so they must be ~250pt apart; the logical set puts them ~50pt apart,
-    // which means they sit on top of each other. That is his "overlapping between the preview
-    // cards", and it is also why the live card and the row cards appeared to move in two steps —
-    // the row was drawing at final spacing while the live card was drawing at a fraction of it.
-    var currentContentScale: CGFloat { contentMinScale * fraction + 1.0 * (1 - fraction) }
-    var scaledCentralW: CGFloat { fullW * currentContentScale }
-    /// ⚠️ The 54 is scaled by the fraction too — `scaledCentralVisibleItemWidth - 54.0 * f`.
-    var scaledSideW: CGFloat { max(1, scaledCentralW - 54 * fraction) }
-    var scaledFullDist: CGFloat { max(1, scaledCentralW * 0.5 + itemSpacing + scaledSideW * 0.5) }
-    var scaledHalfDist: CGFloat { max(1, scaledSideW * 0.5 + itemSpacing + scaledSideW * 0.5) }
-
-    /// WHERE THE ROW IS SITTING, IN CARD UNITS — and it is DERIVED, never pushed.
-    ///
-    /// ⚠️ THIS IS THE BUG HE PHOTOGRAPHED, AND THIS LINE IS THE WHOLE OF THE FIX.
-    ///
-    /// Their `:1512-1513`, in card units rather than points:
-    ///
-    ///     centralItemOffset       = fullItemScrollDistance * centralIndex
-    ///     effectiveScrollingOffsetX = scroller.contentOffset.x * contentScaleFraction
-    ///                               + centralItemOffset * (1 - contentScaleFraction)
-    ///
-    /// The part that matters is the SECOND term. With the sheet down, the row's position is not the
-    /// scroller's and it is certainly not zero — it is **the central item's own index**, and it
-    /// blends into the scroller's position as the sheet comes up. So there is never a moment when
-    /// the layout has to be told where the row is; it can always work it out from the item the
-    /// viewer is on.
-    ///
-    /// Mine read a number the row pushed into a shared box, which is 0 until the row has drawn at
-    /// least once. Story 1 is index 0, so `0 - 0` is centred BY ACCIDENT; story 2 landed one whole
-    /// slot to the right and story 3 two slots, which is exactly what he measured out for me.
-    ///
-    /// `pageDrag` is their `viewListPanState.fraction`, added on `:1519` — the sheet's own sideways
-    /// throw moves the row.
-    func rowPosition(scroll: CGFloat, centralIndex: Int, pageDrag: CGFloat) -> CGFloat {
-        let base = scroll * fraction + CGFloat(centralIndex) * (1 - fraction)
-        return base - pageDrag
-    }
-
-    /// How far item `index` is from the centre, in card units, given where the row is sitting.
-    func combinedFraction(index: Int, rowPosition: CGFloat) -> CGFloat {
-        CGFloat(index) - rowPosition
-    }
-
-    /// THE TWO-SLOPE RULE, on the SCALED distances. The first card's worth of distance moves by the
-    /// FULL scroll distance and everything past it by the HALF distance, which is why the neighbours
-    /// bunch up at the edges instead of marching off the screen evenly spaced.
-    func offsetX(combinedFraction cf: CGFloat) -> CGFloat {
-        let sign: CGFloat = cf < 0 ? -1 : 1
-        let acf = abs(cf)
-        return min(1, acf) * sign * scaledFullDist + max(0, acf - 1) * sign * scaledHalfDist
-    }
-
-    /// THE SAME TWO-SLOPE RULE ON THE LOGICAL DISTANCES — their `logicalItemPositionX`.
-    ///
-    /// ⚠️ IT IS NOT A DUPLICATE OF `offsetX`, AND THE DIFFERENCE IS THE POINT. They compute the item's
-    /// position twice per pass from the same combined fraction: once on the SCALED distances, which is
-    /// what actually moves a view, and once on the LOGICAL ones, which is what the visibility window
-    /// is measured against. The logical set is fixed — it does not grow as the sheet rises — so an
-    /// item's membership of the window cannot change just because the sheet is being pulled.
-    func logicalOffsetX(combinedFraction cf: CGFloat) -> CGFloat {
-        let sign: CGFloat = cf < 0 ? -1 : 1
-        let acf = abs(cf)
-        return min(1, acf) * sign * fullDist + max(0, acf - 1) * sign * halfDist
-    }
-
-    /// IS THIS ITEM WORTH HAVING A VIEW FOR — their `itemVisible` (`:1541-1546`):
-    ///
-    ///     let itemLeftEdge = logicalItemPositionX - itemLayout.fullItemScrollDistance * 0.5
-    ///     let itemRightEdge = logicalItemPositionX + itemLayout.fullItemScrollDistance * 0.5
-    ///     if itemRightEdge >= -itemLayout.containerSize.width
-    ///        && itemLeftEdge < itemLayout.containerSize.width * 2.0 { itemVisible = true }
-    ///
-    /// A full container width of slack either side, which is generous on purpose: the window is there
-    /// to stop an author with fifty stories building fifty cards, not to shave the neighbours. Ours
-    /// had no window at all — every story in the row was built, positioned and drawn on every frame
-    /// however far off the screen it was.
-    func isVisible(combinedFraction cf: CGFloat, containerWidth w: CGFloat) -> Bool {
-        let x = w / 2 + logicalOffsetX(combinedFraction: cf)
-        return (x + fullDist * 0.5) >= -w && (x - fullDist * 0.5) < w * 2
-    }
-
-    /// THE CARD-RELATIVE SCALE: 1 at the centre, `sideRelScale` a full card out.
-    ///
-    /// This stays fraction-free on purpose, and the arithmetic is worth writing down because it
-    /// looks like it should carry the fraction the way everything else here does.
-    ///
-    /// Theirs is `itemScale = f * minItemScale + (1 - f) * 1.0`, measured against the FULL-SCREEN
-    /// width. Ours is measured against the CARD, and the morph's own `applyCore` already lerps
-    /// rest → target by `f`. Substituting their `minItemScale` into that lerp, the `f` cancels
-    /// exactly and leaves `slot * itemScale(cf)` — independent of the fraction. So the size half of
-    /// this was already right, and forcing a second `f` into it would apply the same shrink twice.
-    func itemScale(combinedFraction cf: CGFloat) -> CGFloat {
-        let scaleFraction = min(1, abs(cf))
-        return 1.0 * (1 - scaleFraction) + sideRelScale * scaleFraction
-    }
-
-    /// The dim the cover-flow puts on a card as it leaves the centre.
-    /// THE COVER-FLOW DIM, THEIRS VERBATIM.
-    ///
-    ///     let countedFractionDistanceToCenter = max(0.0, min(1.0, unboundFractionDistanceToCenter / 3.0))
-    ///     var itemAlpha = 1.0 * (1.0 - countedFractionDistanceToCenter) + 0.0 * countedFractionDistanceToCenter
-    ///     itemTransition.setAlpha(layer: visibleItem.contentTintLayer, alpha: 1.0 - itemAlpha)
-    ///
-    /// where `unboundFractionDistanceToCenter` is `abs(combinedFraction)` — distance from the centre
-    /// in CARD UNITS, not swipe progress and not screen position. That distinction is what makes the
-    /// dim continuous: one number drives position, scale and brightness, and it already carries the
-    /// pan, so a finger on the thumbnails and a finger on the sheet move all three together.
-    ///
-    /// ⚠️ WAS `1 - 0.20 * min(1, |cf|)`, AND BOTH HALVES OF THAT WERE WRONG.
-    ///
-    /// The DEPTH: 0.20 against their 0.333 is a 20% step between the centre card and its neighbour,
-    /// which is not the hierarchy he described and is only 0.20 of brightness to spend across a whole
-    /// card of travel. The change was happening; there was too little of it to read as happening.
-    ///
-    /// The CLAMP: `min(1, |cf|)` flattens everything past one card, so the second and third cards
-    /// were exactly as bright as the first neighbour. Theirs clamps at THREE, so the row keeps
-    /// falling away toward black and the centre is the only thing at full brightness.
-    ///
-    /// ⚠️ IT IS A TINT LAYER'S ALPHA NOW, NOT A VIEW'S OPACITY, AND THAT IS THE OTHER HALF OF THE
-    /// 2026-08-13 RULING.
-    ///
-    /// It used to be `1 - this`, written onto `item.alpha` for a row card and onto `card.alpha`
-    /// inside the morph for the live story: two owners, two call paths, two view hierarchies,
-    /// trading hands at the half-card. Theirs is one black sibling layer per item, positioned by the
-    /// same layout pass that positions the item
-    /// (`itemsContainerView.layer.addSublayer(visibleItem.contentTintLayer)`), which is how their
-    /// CENTRAL, playing item gets dimmed by the identical code path as a thumbnail — the tint never
-    /// has to know what kind of view it covers. Ours is that now, so the live story is dimmed by the
-    /// row like every other card and there is nothing to hand over.
-    ///
-    /// It also stops the dim from fading things that are not the picture: view alpha took the card's
-    /// shadow and its count badge with it, and would have broken outright behind any non-black
-    /// backdrop.
-    ///
-    /// The divisor is the one knob: 3 is theirs, and a larger number is a lighter dim.
-    /// ⚠️ AND THE SECOND TERM IS THE PULL'S, WHICH WE DID NOT HAVE AT ALL.
-    ///
-    /// Theirs is not one expression, it is two, and only the first was ported:
-    ///
-    ///     let collapsedAlpha = itemAlpha * contentScaleFraction + 0.0 * (1.0 - contentScaleFraction)
-    ///     itemAlpha = (1.0 - fractionDistanceToCenter) * itemAlpha + fractionDistanceToCenter * collapsedAlpha
-    ///
-    /// with `fractionDistanceToCenter = min(1.0, abs(combinedFraction))`. Multiplied out that is
-    /// `itemAlpha * (1 - fdc * (1 - contentScaleFraction))`, and what it says is: **a story that is
-    /// not the centre one is BLACK while the sheet is down, and brightens into the cover-flow dim as
-    /// the sheet rises.** With the sheet fully up the factor is exactly 1, so the row at rest is
-    /// unchanged — this only ever moves during the pull.
-    ///
-    /// Ours had the cover-flow dim alone, at every pull position. So while the sheet was down and a
-    /// sideways page was in flight, the story arriving was drawn at two thirds brightness beside the
-    /// one leaving instead of out of sight — two stories on the screen at once, which is what the
-    /// owner photographed and called the transition being "not synchronized". The neighbour is not
-    /// meant to be dim there. It is meant to be invisible.
-    ///
-    /// Their third term, `itemAlpha *= (1.0 - contentOverflowFraction)`, is deliberately NOT ported:
-    /// it fades the row when their sheet is dragged BEYOND its detent, and our pull is clamped so
-    /// there is no overflow state to fade. Porting a term whose input is always zero would just be a
-    /// line waiting to be wrong.
-    func dim(combinedFraction cf: CGFloat) -> CGFloat {
-        let counted = min(1, abs(cf) / 3)
-        let distance = min(1, abs(cf))
-        let alpha = (1 - counted) * (1 - distance * (1 - fraction))
-        return 1 - alpha
-    }
-
-    /// WHERE ONE STORY SITS THIS FRAME — the whole of the row's layout, for EVERY story in it.
-    ///
-    /// ⚠️ THIS REPLACES `placeLiveStory`, AND THE DELETION IS THE RULING OF 2026-08-13.
-    ///
-    /// There used to be two ways out of this type: the cards read `offsetX`, `itemScale` and the
-    /// dim separately inside the row's loop, and the live story went through a
-    /// `placeLiveStory` that reassembled the same three numbers, added a division to cancel a lerp
-    /// on the far side, and posted them to the morph. Same inputs, two assemblies, one of which had
-    /// to know what the OTHER side would do with its answer. Every story bug of that week lived on
-    /// that seam.
-    ///
-    /// One function, one answer, one caller. What differs between a side card and the live story is
-    /// no longer the arithmetic — it is only which surface the answer is written onto, and the row
-    /// decides that in one place.
-    ///
-    /// - Parameters:
-    ///   - cf: how far this story is from the centre, in card units (`combinedFraction`).
-    ///   - rest: what this item is at fraction 0 — the story CONTENT's rectangle, full screen. Every
-    ///     item interpolates from it, so the live story's journey and its neighbours' are the same
-    ///     journey. (The neighbours only become visible at fraction 1, where the interpolation has
-    ///     landed and their size is exactly `slot × itemScale` — the number they have always had.)
-    ///   - containerMidX: the row's centre line, in WINDOW coordinates — the same space `rest` and
-    ///     `centerY` are in. Everything here is computed in one space, because the cards being
-    ///     measured against the row's origin while the live story was measured against the screen's
-    ///     is how two numbers that had to agree were not even taken from the same place.
-    func placement(combinedFraction cf: CGFloat, rest: CGRect, containerMidX: CGFloat) -> StoryRowPlacement {
-        let scale = itemScale(combinedFraction: cf)
-        // ⚠️ THE SLOT IS SCALED, NOT THE FRACTION. The way to land on a side card's size is to
-        // interpolate toward the side card's size. Scaling the fraction instead would walk the card
-        // toward the slot along the PULL's path, which is a different journey with a different crop.
-        // (See `itemScale`: their fraction blend and this lerp are the same lerp, so it cancels and
-        // the resting size is fraction-free.)
-        let targetW = slotW * scale, targetH = slotH * scale
-        let w = rest.width + (targetW - rest.width) * fraction
-        let h = rest.height + (targetH - rest.height) * fraction
-        // ⚠️ THE X IS ABSOLUTE AND IS NOT INTERPOLATED BY ANYBODY. `offsetX` is computed from the
-        // SCALED distances, which already carry the fraction — `scaledFullDist` grows as the sheet
-        // rises — so the fraction is in this number once, which is once more than it used to be and
-        // once less than the pre-division existed to correct.
-        let x = containerMidX + offsetX(combinedFraction: cf)
-        // The Y is the one part of the journey the PULL owns rather than the row: a story rises from
-        // where it rests to the card block's centre line, and no scroll ever changes that.
-        let y = rest.midY + (centerY - rest.midY) * fraction
-        return StoryRowPlacement(center: CGPoint(x: x, y: y),
-                                 size: CGSize(width: max(1, w), height: max(1, h)),
-                                 // His ruling, twice: 24, scaling with the card.
-                                 cornerRadius: 24 * scale,
-                                 dim: dim(combinedFraction: cf))
-    }
-}
-
-/// WHERE ONE STORY SITS THIS FRAME. The output of the row's one loop, and the only thing that
-/// stands between `StoryRowGeometry` and a pixel.
-///
-/// It is a value rather than four writes because two different surfaces consume it — a card view the
-/// row owns, and the live story the library owns — and the whole point of the 2026-08-13 rewrite is
-/// that those two are handed the SAME numbers rather than each computing their own.
-struct StoryRowPlacement: Equatable {
-    /// In WINDOW coordinates. The live story wants them as they are; a card view converts into the
-    /// row on the way out.
-    let center: CGPoint
-    /// What the card RENDERS as, not what its bounds are.
-    let size: CGSize
-    /// On screen, at this size — already multiplied by the item's scale.
-    let cornerRadius: CGFloat
-    /// How black the tint over this card is, 0…1. Their `contentTintLayer`'s alpha.
-    ///
-    /// ⚠️ THE ONLY BRIGHTNESS OWNER IN THE ROW, AND THAT IS THE POINT OF IT BEING HERE. It is one
-    /// number, computed once per story per frame from the same `combinedFraction` that decides where
-    /// that story sits, so a card's brightness cannot be a frame out of step with its position.
-    let dim: CGFloat
-
-    // ⚠️ `zPosition` IS DELETED FROM THIS TYPE — 2026-08-13. It carried the old `zIndex(2 - |cf|)`,
-    // written onto layers every frame, and `zPosition` is implicitly animated: what the compositor
-    // sorted by was therefore a lagging value, which is survivable while it only decides which of
-    // two non-overlapping cards is in front and fatal once layer order is what makes the tint
-    // visible. The reference app does not set `zPosition` anywhere; order is insertion order.
 }
 
 // Local per-author story prefs.
@@ -995,16 +590,6 @@ struct StoryViewer: View {
             link = l
         }
         func cancel() { link?.invalidate(); link = nil; write = nil; completion = nil }
-
-        /// IS A SPRING ACTUALLY RUNNING RIGHT NOW.
-        ///
-        /// ⚠️ IT EXISTS BECAUSE `cancel()` THROWS THE COMPLETION AWAY, and the completion is where
-        /// every run puts its cleanup. A cancelled flight therefore never lowers the flags it
-        /// raised — `hero.live` and `StoryCardMorph.heroDismissActive` are both cleared inside the
-        /// hero's completion and nowhere else on that path — so they outlive the flight and go on
-        /// claiming the card forever. Anything that gates on those flags has to be able to ask
-        /// whether the thing they describe is still happening.
-        var isRunning: Bool { link != nil }
         @objc private func tick(_ l: CADisplayLink) {
             let dt = CGFloat(min(l.targetTimestamp - l.timestamp, 1.0 / 30.0))
             // Critically damped, so it arrives without overshooting. `k` is per animator now — see
@@ -1033,10 +618,10 @@ struct StoryViewer: View {
     @State private var profileSheet: StoryGroup?        // tap the header → profile sheet OVER the story (paused)
     @State private var toastText = "Sent"               // reused for "Sent" (reply) and "Saved"
     @State private var dragDown: CGFloat = 0            // swipe-down amount → fade my overlays with the card
-    // ⚠️ `carouselInteracting` IS DELETED. It said "a swipe is in flight, so stand the real story
-    // aside and let the row draw a copy of it" — one of the three inputs to a handover that no
-    // longer happens. The real story slides with the row now; a swipe being in flight is not a
-    // thing anything needs to be told about.
+    // Horizontal carousel swipe in flight: all cards show + slide normally while the REAL
+    // story steps aside; it takes the centre back once the swipe settles (identical pixels
+    // at both hand-off moments = invisible swaps, and the swipe stays as smooth as ever).
+    @State private var carouselInteracting = false
     /// The sheet's sideways page-drag, live per frame, in POINTS and signed. While it is non-zero
     /// the carousel draws the centre copy and slides the row with the panel, so the card's picture
     /// follows the finger instead of switching when the swipe commits.
@@ -1065,12 +650,12 @@ struct StoryViewer: View {
     /// `@State`, which stores a reference WITHOUT subscribing to it. Per-frame writes now invalidate
     /// the row and nothing else.
     ///
-    /// ⚠️ AND THE HOST NO LONGER NEEDS TO KNOW ABOUT PAGING AT ALL. `sheetPaging`, the boolean half
-    /// of this, is deleted: it existed so the host could re-render twice a drag and decide which of
-    /// two pictures of the active story to show. There is one picture now. The box carries the
-    /// drag's own value for the row, and the row's position for the live story, and neither of those
-    /// is a reason to re-render anything.
+    /// The three places this view genuinely needs to know about paging want a BOOLEAN, and a boolean
+    /// changes twice a drag rather than a hundred times a second — that is `sheetPaging` below.
     @State private var pageDragBox = StorySheetPageDrag()
+    /// Is a sheet page-drag in flight? The boolean half of `pageDragBox`, kept as ordinary `@State`
+    /// because the host really does have to re-render when it flips — twice per drag, not per frame.
+    @State private var sheetPaging = false
     /// Which story the owner footer's viewers belong to, so a story change empties it instead of
     /// leaving the previous one's count and faces up during the fetch. See `loadBarViewers`.
     @State private var lastBarViewersStoryId: String = ""
@@ -1084,10 +669,15 @@ struct StoryViewer: View {
     /// Whether `prefetchMyStoryCounts` has already swept this viewing.
     @State private var prefetchedCounts = false
 
-    // ⚠️ `carouselOwnsSlot` IS DELETED. It meant "the row's own card owns the slot and the real
-    // story must stand aside", which was the copy-swap's on switch. Its three inputs are down to
-    // one, and that one — `rowIsOnAnotherStory` — survives for a completely different job: telling
-    // the close which story to land on. Read it as the deferred jump, not as a handover.
+    /// TRUE while the CAROUSEL'S OWN card owns the slot and the real story card must stand aside.
+    ///
+    /// Three reasons, and the third is the deferred jump: once the selection has moved away from the
+    /// story the player is actually holding, the real card is showing the WRONG story and must not be
+    /// the thing on screen. Without it the slot would show the story you paged away from while the
+    /// sheet below it listed the viewers of the one you paged to.
+    private var carouselOwnsSlot: Bool {
+        carouselInteracting || sheetPaging || rowIsOnAnotherStory
+    }
 
     /// Is the card in the centre of the row a DIFFERENT story from the one the player is holding?
     ///
@@ -1150,22 +740,6 @@ struct StoryViewer: View {
     /// The morph has no card to move. Only ever true when something upstream has gone wrong; it makes
     /// the story fade rather than sit there at full size under the sheet. See `driveMorph`.
     @State private var morphUnavailable = false
-
-    /// THE STORY'S CONTENT RECTANGLE, CAPTURED ONCE PER PULL AND HELD FOR IT.
-    ///
-    /// ⚠️ IT IS LATCHED BECAUSE A SLOT MUST NOT MOVE WHILE SOMETHING IS SHRINKING INTO IT.
-    ///
-    /// `cardSlot` sizes the card against this. Read live from the morph it is not a constant: the
-    /// library reports its metrics part way through the pull, so the first frames were measured
-    /// against a full-screen height and the rest against the real content height. The card therefore
-    /// changed size in mid-flight, which is his "sometimes too tall, sometimes too short" — and it
-    /// was my own regression from the black-band fix, which replaced a stable wrong number with an
-    /// accurate moving one. It needs to be accurate AND stable, which is what a latch buys.
-    ///
-    /// Nil means "not known yet"; `cardSlot` then uses its screen-derived estimate, which is stable
-    /// for the same reason. Cleared when the sheet goes, so the next sitting measures afresh rather
-    /// than inheriting a rectangle from a story with a different footer.
-    @State private var latchedContent: CGSize?
 
     // MARK: - The hero transition's live state
     //
@@ -1685,19 +1259,18 @@ struct StoryViewer: View {
         .onChange(of: showViewers) { _, on in
             guard !on else { return }
             sheetAnimator.cancel(); viewersProgress = 0
-            // This used to be load-bearing for a different reason: any input to `carouselOwnsSlot`
-            // left standing after the sheet went put the live card at alpha 0 with nothing drawn
-            // over it — his "screen story is going black". Nothing hides the card any more, so a
-            // stale value can no longer black the screen out; it is still cleared here because the
-            // row's position has to start from a known place on the next open.
+            // ⚠️ EVERY INPUT TO `carouselOwnsSlot` DIES WITH THE SHEET, not just this one.
+            //
+            // All three of them can only mean anything while there is a sheet, and any one of them
+            // left standing afterwards puts the live card at alpha 0 with nothing drawn over it —
+            // a black story page, which is what his "screen story is going black" report was. The
+            // third input is scoped in `rowIsOnAnotherStory` itself; these two are owned here.
+            //
+            // `sheetPaging` was the live risk: it is cleared by the sheet's own page commit and by
+            // `settleViewers`, and a close arriving mid page-drag reaches neither.
+            carouselInteracting = false
+            sheetPaging = false
             pageDragBox.value = 0
-            // The measured rectangle belongs to the sitting that just ended. A story with an owner
-            // footer and one without do not share a content height, so carrying it into the next
-            // open would size the card against the wrong story.
-            latchedContent = nil
-            // The scroller position used to be forgotten here as well. It is not published outside
-            // the row any more (see `StorySheetPageDrag`), and the row's own scroller re-seats itself
-            // on the central item the moment the next sitting opens — `pinToCentralWhileCollapsed`.
             // Same rule as driveMorph: a hero flight owns the card and this teardown must not
             // reset it out from under one.
             guard !hero.live else { return }
@@ -1705,60 +1278,6 @@ struct StoryViewer: View {
             // (close, dismiss, teardown) and a card left mid-transform would open the NEXT story
             // already shrunken.
             StoryCardMorph.shared.reset()
-        }
-        // ⚠️ NAVIGATE THE MOMENT THE CENTRED CARD CHANGES. THE JUMP IS NOT DEFERRED ANY MORE.
-        //
-        // Read from their `scrollViewDidScroll` (`:1372-1387`), which is the rule this viewer never
-        // had:
-        //
-        //     if contentScaleFraction >= 1.0 - 0.0001 {
-        //         var index = Int(round(contentOffset.x / fullItemScrollDistance))
-        //         if index != currentIndex { component.navigate(.id(nextId)) }
-        //     }
-        //
-        // They move the story WHILE the row scrolls, as soon as the rounded index changes. The
-        // consequence is the invariant this area has been missing: the centred card and the story
-        // the viewer is on are never different things, so nothing ever has to be positioned as
-        // though they were. Their `:5236-5240` closes the other side of it — with the sheet down the
-        // scroller is FORCED onto the central item rather than left wherever it was.
-        //
-        // Ours deferred the jump to the sheet's close (`rowIsOnAnotherStory`, spent in
-        // `settleViewers`). That was survivable while the live card was pinned to the centre and
-        // hidden behind a copy during a swipe; it stopped being survivable when the live card
-        // started being laid out by the row, because a deliberate disagreement between the row and
-        // the central item becomes a card sitting one or two whole slots off centre. That is his
-        // report, and this is its cause rather than its symptom.
-        //
-        // ⚠️ THIS CANNOT MAKE THE LIVE LAYER TELEPORT, and the arithmetic is worth stating. At full
-        // pull `rowPosition` is `scroll - pageDrag` and the central index drops out of it entirely
-        // (their `effectiveScrollingOffsetX` reduces to the scroller's own offset at fraction 1). So
-        // when the live story flips from index 1 to index 2 half way through a swipe, story 1 keeps
-        // the place it already had — drawn by the row now instead of by the live layer — and story 2
-        // appears where it already was, drawn by the live layer instead of by the row. Identical
-        // geometry on both sides of the swap, which is the whole one-picture-per-story property.
-        //
-        // The row only reports a change on a ROUNDED index (`onChange(of: index)`), so this fires
-        // once per card crossed rather than once per frame, exactly as theirs does. And the story is
-        // paused for the whole life of the sheet, so moving through items here spends no views —
-        // see the note on `onItemChanged` versus the seen receipt.
-        .onChange(of: sheetStoryId) { _, id in
-            guard showViewers, !id.isEmpty, id != currentStoryId else { return }
-            NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: id)
-            // ⚠️ THE ANCHOR IS NOT WRITTEN HERE ANY MORE, AND THAT DELETION IS THE TAP FIX.
-            //
-            // It was written here because `currentStoryId` used to be fed by the WATCHED receipt,
-            // which the library withholds while a story is paused — and the sheet pauses the story
-            // for its whole life, so waiting for it would have waited for ever. That is no longer
-            // true: the ungated `onItemChanged` owns this value now, and the jump handler reports
-            // from the statement that swaps the item, so the answer arrives on the same runloop turn
-            // as the picture.
-            //
-            // Writing it here made it a SECOND writer, and an early one: it claimed the story was B
-            // before the library had drawn B. The row keys its whole animated pass off that claim, so
-            // it teleported the scroller and sprang the cards toward B while the live layer was still
-            // showing A — the old story sitting in the middle for a few frames, the brightness
-            // stepping at the wrong moment, and the card arriving before the story. One writer, and
-            // it tells the truth.
         }
         // SELF-HEALING for a PARKED sheet (user video: sheet resting at ~73% open — story stuck
         // as a giant half-morphed card, carousel never faded in). Two ways to get parked: a
@@ -1788,20 +1307,31 @@ struct StoryViewer: View {
             // A picture that is fetched cannot be caught at the wrong moment, so there is no moment
             // left to move.
         }
-        // ⚠️ THE HANDOVER IS GONE. There is no `.onChange(of: carouselOwnsSlot)` any more and no
-        // `setHidden` on this path at all.
-        //
-        // The swap was never a bad idea given its premise: the live card sat at the slot centre and
-        // could not slide, so for the length of a swipe the row drew its own card and the real one
-        // waited underneath at alpha 0. Every bug in this area came out of that premise rather than
-        // out of the swap — two renderers for one story, and a question ("is the centred card the
-        // story the player is holding?") that had to be answered at exactly the right instant, three
-        // times over, by three signals that each had a path around them. It was wrong on device
-        // twice after being fixed twice.
-        //
-        // The premise is what changed. The live card is laid out by the row's own geometry now, so
-        // it slides where its card would slide and there is never a moment when something else has
-        // to stand in for it. No hide, no copy, no instant to get right.
+        // The carousel row took over, or gave the centre back — by a finger on the row OR by the
+        // sheet being thrown sideways (both slide cards through the slot, both need the copy).
+        // See StoryCardMorph.setHidden.
+        .onChange(of: carouselOwnsSlot) { _, on in
+            // ⚠️ THE TWO CAPTURES THAT USED TO BOOKEND THIS LINE ARE GONE. One fired on the way in
+            // ("photograph the story being left, while it is still the live one") and one on the way
+            // out. Both existed because the row's cards drew from a dictionary somebody had to fill
+            // in time; they draw from the frame bank now and fill themselves.
+            //
+            // ⚠️ THE HANDOVER STAYS, BUT ITS THIRD INPUT IS NO LONGER A REMEMBERED FLAG.
+            //
+            // The swap itself was never the wrong idea: the live card sits at the slot centre and
+            // cannot slide, so for the length of a swipe the row draws its own card and the real one
+            // waits underneath. What broke was the ANSWER to "is the centred card the story the
+            // player is holding" — kept in `pendingJumpStoryId`, written by a handler whose guard
+            // could be skipped on the very beat the sheet opens. Skipped once, the live card was
+            // never told to stand aside for the rest of that session, and it sat there painting
+            // story A behind a card showing story B.
+            //
+            // `rowIsOnAnotherStory` computes that answer from the two ids every time it is asked, so
+            // there is no write to miss and nothing to go stale. The two gesture inputs beside it
+            // (`carouselInteracting`, `sheetPaging`) were never the problem: both are owned by one
+            // writer each and both self-clear.
+            StoryCardMorph.shared.setHidden(on)
+        }
         // Safety net: never leave a story paused after the viewer goes away (the swipe-down dismiss posts
         // pauseStory and does not resume on commit; a sheet up at teardown can also skip the resume).
         .onDisappear {
@@ -1909,15 +1439,12 @@ struct StoryViewer: View {
             // rather than a second reading of the same thing — see `showingMine`.)
             guard showViewers, showingMine, !id.isEmpty else { return }
             NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: id)
-            // ⚠️ THE ANCHOR IS NOT WRITTEN HERE EITHER, AND THIS IS THE SECOND OF THE TWO.
-            //
-            // There are two `.onChange(of: sheetStoryId)` handlers on this view and both wrote it,
-            // for the same out-of-date reason: `currentStoryId` used to come only from the WATCHED
-            // receipt, which is withheld while a story is paused, and the sheet pauses the story for
-            // its whole life. The ungated item-changed report owns it now and the jump handler fires
-            // that report from the statement that swaps the item, so the truth arrives on the same
-            // runloop turn as the picture. Removing it from one handler and leaving it in the other
-            // would have fixed nothing.
+            // The anchor moves with it. `currentStoryId` means "the item the library is on", and it
+            // is otherwise only written by `onItemSeen`, which the library WITHHOLDS while a story is
+            // paused — and the story is paused for the entire time this sheet is up. Left stale,
+            // `rowIsOnAnotherStory` would stay true after the jump had already landed and the live
+            // card would be held aside for no reason.
+            currentStoryId = id
         }
         // The COVER'S OWN BACKING (not just an inner canvas) must be opaque black while the viewers
         // sheet is up — otherwise the .zoom transition composites the clear backing over the inner
@@ -2323,49 +1850,9 @@ struct StoryViewer: View {
     private struct CardSlot {
         let w: CGFloat          // card width
         let h: CGFloat          // card height, deliberately shorter than aspect-true (see below)
-        // `miniH` (the full mini-screen composite height) lived here and is deleted: it was passed
-        // to the row and never read by it, left over from a card that drew a window onto a composite
-        // rather than a story of its own.
+        let miniH: CGFloat      // full mini-screen composite height; the card shows a `h` window of it
         let top: CGFloat        // the card block's top edge on screen
         var centerY: CGFloat { top + h / 2 }
-        /// The row's layout AT A GIVEN PULL. `fraction` is load-bearing — half the numbers in
-        /// `StoryRowGeometry` change with it — so it is a parameter rather than something the
-        /// geometry is left to guess.
-        func row(fraction: CGFloat) -> StoryRowGeometry {
-            StoryRowGeometry(slotW: w, slotH: h, centerY: centerY,
-                             fullW: UIScreen.main.bounds.width, fraction: max(0, min(1, fraction)))
-        }
-    }
-
-    /// THE STORY'S HEIGHT WHEN NOBODY HAS MEASURED IT YET — and it is the library's own formula
-    /// rather than a guess of our own, which is the whole point.
-    ///
-    /// ⚠️ THE OLD ESTIMATE WAS NOT THE STORY'S SHAPE, AND EVERY CONSUMER OF IT INHERITED THAT.
-    ///
-    /// It was `scr.height - (currentIsMine ? ownerFooter + bottomInset : 0)`: 766 for my own story
-    /// and the whole 852 before `currentIsMine` had landed, against a story that is really 699. The
-    /// slot is built as `h * (contentW / contentH)`, so the slot came out TALLER in aspect than the
-    /// picture — 1.95 or 2.17 against 1.78 — and a slot taller in aspect than its content is the
-    /// black band under the card this file has chased twice. On the 852 branch that is 31pt of empty
-    /// card, about 18% of it.
-    ///
-    /// This is `StoryDetailView.cardHeight` written out: a 9:16 card unless the screen is too short
-    /// for one, in which case it gives up height rather than running under the bar below it. On a
-    /// 393x852 it returns exactly 699 — the same number the measurement returns — so the estimated
-    /// path and the measured path now agree instead of merely being close, and the answer no longer
-    /// depends on `currentIsMine` arriving, which is known to be a beat late on a fresh open.
-    ///
-    /// ⚠️ ONE CALLER NOW, AND THAT IS THE POINT RATHER THAN A LOSS. It briefly had two: `cardSlot`
-    /// sized the card with it and `sheetSizeFraction` measured the pull with it, from two different
-    /// fallbacks for one rectangle — which on the not-mine branch sized the card from 852 while the
-    /// pull was computed from 793, a fraction of 0.154 against 0.300 at the same point in the drag.
-    /// The pull does not read a content height at all any more (it is the drag itself), so the story's
-    /// own rectangle is asked for in exactly one place: here.
-    private var estimatedContentHeight: CGFloat {
-        let scr = UIScreen.main.bounds
-        return min(ceil(scr.width * 1.77778),
-                   scr.height - topInset - max(currentIsMine ? Self.ownerFooterHeight : 0,
-                                               bottomInset + 1))
     }
 
     private var cardSlot: CardSlot {
@@ -2386,90 +1873,15 @@ struct StoryViewer: View {
         // ⚠️ TWO READERS DEPEND ON THIS AGREEING: `driveMorph`, which puts the live card at
         // `slot.centerY`, and the carousel, which draws the row of cards around it. Answer this
         // differently from `storyLayer` and the live story lands somewhere the carousel is not.
-        // ⚠️ MEASURED, NOT PREDICTED — and that is the fix for the black band under the story.
-        //
-        // This used to be `scr.height - (currentIsMine ? ownerFooter + bottomInset : 0)`: a guess at
-        // the height the morph would crop against. The morph does not guess — `contentRect` builds
-        // it from the metrics the library reports — so two numbers had to agree about one rectangle,
-        // and `currentIsMine` is known to arrive a beat late on a fresh open.
-        //
-        // Guess high and the card is TALLER IN ASPECT than the content it is cropping. The crop then
-        // asks for more height than the scaled content renders, and the surplus is empty: a black
-        // band across the bottom of the card. With the footer mispredicted the card wants
-        // 0.88 × 852 = 750pt of a content only 734pt tall — a 2% error, which is exactly why it
-        // appeared "sometimes" rather than always.
-        //
-        // Reading the morph's own rectangle removes the second copy instead of correcting it. The
-        // old estimate stays as the fallback for the frames before a card is registered.
-        // ⚠️ LATCHED, NOT READ LIVE — and this is the second half of the fix.
-        //
-        // Reading the morph directly here made the slot a moving target: the metrics arrive part way
-        // through the pull, so the card was sized against a full-screen height for the first frames
-        // and against the real content height afterwards. The card grew or shrank as it flew, which
-        // is his "sometimes too tall, sometimes too short". A slot has to be ONE rectangle for the
-        // whole of a pull or the thing shrinking into it cannot be still.
-        //
-        // `latchedContent` is captured once at the start of each pull (see `driveMorph`) and held
-        // for that sitting. Nil falls back to the old estimate, which is stable for the same reason
-        // — it is a pure function of the screen.
-        // ⚠️ THE LIVE MEASUREMENT BEFORE THE PREDICTION, AND THAT ORDER IS THE FIX FOR HIS BLACK
-        // BAND UNDER THE STORY ON THE FIRST PULL.
-        //
-        // The latch is still first, and still for the reason below: a slot that moves under a card
-        // already in the air is a card that changes size as it flies. But `latchedContent` is only
-        // written from `driveMorph` while `p < 0.25`, so a sitting where the morph has not answered
-        // inside that window keeps NIL for the whole pull — and nil used to fall straight through to
-        // the screen-derived guess. It only fails the first time because that guess reads
-        // `currentIsMine`, which arrives a beat late on a fresh open.
-        //
-        // WHY A HIGH GUESS LEAVES A BAND, in numbers, because "it looks cut off" has been diagnosed
-        // three different ways in this file:
-        //
-        //     slot aspect  = 0.88 · contentH_host / contentW      (h = slotHRef · 0.88, w from contentH)
-        //     card aspect  = contentH_real / contentW             (what `applyCore` actually crops)
-        //
-        // `applyCore` renders `cropH · scale = min(restH · scale, visibleH)`, so the moment the slot
-        // is TALLER in aspect than the content, the card draws shorter than the seat it was given and
-        // the surplus is empty. With the owner footer mispredicted the host says 932 where the real
-        // content is 765 — 22% out, against the 13.6% the 0.88 buys — so the card renders short and
-        // the gap is under it. Nothing is cropped, which is why the whole picture is still there in
-        // his screenshot with black beneath it.
-        //
-        // Asking the morph is not a second copy of the number; it is the same rectangle `applyCore`
-        // will crop against, which is what `contentSize` exists for. The guess stays as the last
-        // resort for the frames before any card is registered, where there is genuinely nothing to
-        // ask.
-        let content = latchedContent ?? StoryCardMorph.shared.contentSize
-        let contentW = content?.width ?? scr.width
-        let contentH = content?.height ?? estimatedContentHeight
-        // BUILD 249 card size (user: "make it exactly like 249, 250 is too long"), and the HEIGHT is
-        // still exactly that number — `slotHRef * 0.88` has not moved since.
+        let contentH = scr.height - (currentIsMine ? Self.ownerFooterHeight + max(10, bottomInset) : 0)
+        // BUILD 249 card size (user: "make it exactly like 249, 250 is too long"). `slotHRef` is the
+        // aspect-true reference and it DEFINES the width, so the card keeps its width and only loses
+        // height; the story is centre-cropped into what is left.
         let slotHRef = (avail - countArea) * 0.94
+        let w = slotHRef * (scr.width / max(contentH, 1))
         let h = slotHRef * 0.88
-        // ⚠️ THE WIDTH COMES OFF THE HEIGHT NOW, AND THE 0.88 IS NOT IN THE CARD'S SHAPE ANY MORE.
-        //
-        // His 2026-08-13 screenshots, 555 beside the current build: same height, card ~14% wider,
-        // and it reads squat. One line moved between them and it was not this one.
-        //
-        // What 555 did:  w = slotHRef * (screenWidth / (screenHeight - ownerFooter))
-        // What it became: w = slotHRef * (contentW / contentH), contentH now MEASURED
-        //
-        // On a 430x932 with his footer that swaps 872 for 765 underneath, so the width goes
-        // 0.493 -> 0.562 of the reference. The height never changed, which is exactly what he saw.
-        //
-        // ⚠️ AND THIS IS WHY THE 0.88 WAS INVISIBLE FOR SO LONG. Paired with the screen-height guess
-        // it produced `0.88 * 872/430 = 1.785` — 9:16 to within half a percent — so the card was
-        // aspect-TRUE by accident of that pairing and the "12% shorter" it was signed off as never
-        // actually shaved anything. Swapping the guess for the real content height dropped the
-        // number under it and the 0.88 started biting for real: 1.566, genuinely squat.
-        //
-        // So the height keeps the 0.88 and the width is derived from it at the story's OWN aspect.
-        // That lands at 0.4947 of the reference against 555's 0.493 — under half a point on screen —
-        // and because the card now has exactly the content's shape, `applyCore`'s crop removes
-        // nothing and cannot leave the empty band under the card either. One expression answers both
-        // reports, which is the sign it is the right one.
-        let w = h * (contentW / max(contentH, 1))
-        return CardSlot(w: w, h: h, top: topInset + (avail - countArea - h) / 2)
+        return CardSlot(w: w, h: h, miniH: w * (scr.height / scr.width),
+                        top: topInset + (avail - countArea - h) / 2)
     }
 
     // ⚠️ `scheduleFrozenCapture` AND `captureFrozenCover` ARE GONE, AND NOTHING REPLACES THEM HERE.
@@ -3361,41 +2773,11 @@ struct StoryViewer: View {
         }
     }
 
-    // ⚠️ `@MainActor` FROM HERE DOWN THIS PATH, EXPLICITLY. `StorySheetPageDrag` is a `@MainActor`
-    // class and this chain reads it (`pageDragBox.rowLink`), so the isolation has to be
-    // stated rather than inherited: conforming to `View` isolates `body`, not the type's own
-    // methods, and a nonisolated method touching a main-actor class is a hard error rather than a
-    // warning. Every caller is a `body` closure, which is already on the main actor.
-    @MainActor
     private func driveMorph(_ p: CGFloat) {
-        // ⚠️ A CANCELLED FLIGHT LEAVES BOTH HERO FLAGS RAISED, AND THIS IS WHERE THEY COME DOWN.
-        //
-        // `SheetProgressAnimator.cancel()` nils the completion, and the hero's completion is the
-        // ONLY place `hero.live` and `heroDismissActive` are lowered on the open path. So an open
-        // whose spring is interrupted — a finger arriving during it is enough, and that is the
-        // commonest thing a person does — leaves both standing for the rest of the sitting. Every
-        // gate below then refuses forever: the story simply never shrinks when the sheet is pulled,
-        // which is his 2026-08-13 video.
-        //
-        // The test is not a guess about who cancelled what. If the hero's own spring is not running,
-        // there is no flight, and a flag that says otherwise is describing something that has already
-        // finished. The pre-554 build survived the same leak because its shrink read neither flag;
-        // 554 put `heroDismissActive` in front of the placement, which is why the leak only started
-        // showing then.
-        if hero.live, !heroAnimator.isRunning {
-            hero.live = false
-            StoryCardMorph.heroDismissActive = false
-        }
         // A hero open or close owns the card outright. Without this, the sheet's reset-on-zero would
         // slam a card that is mid-flight back to full screen — and `viewersProgress` is written to 0
         // by several teardown paths, one of which is the close this would be interrupting.
         guard !hero.live else { return }
-        // ...and the same for the static flag on its own. `hero.live` is false from here on, so a
-        // raised `heroDismissActive` cannot be a live flight either — it is the same leak reaching
-        // the row's placement, which reads it directly.
-        if StoryCardMorph.heroDismissActive, !heroAnimator.isRunning {
-            StoryCardMorph.heroDismissActive = false
-        }
         guard showViewers else { StoryCardMorph.shared.reset(); return }
         // IF THERE IS NO CARD TO MOVE, HIDE THE STORY INSTEAD OF LEAVING IT FULL SIZE.
         //
@@ -3410,179 +2792,67 @@ struct StoryViewer: View {
             return
         }
         if morphUnavailable { morphUnavailable = false }
-        // ⚠️ CAPTURE THE CONTENT RECTANGLE ONCE, AT THE TOP OF THE PULL, AND NOT AGAIN.
-        //
-        // The morph answers nil until the library's metrics are real, so the first frames of a pull
-        // may find nothing and keep the screen-derived estimate. The moment a real answer exists it
-        // is latched for the rest of this sitting — `cardSlot` must not be re-measured under a card
-        // that is already flying, or the slot moves and the card changes size in the air.
-        //
-        // Written only while the pull is still near the bottom. Past that the card is committed to a
-        // shape and a late arrival would be exactly the jump this exists to prevent.
-        if latchedContent == nil, p < 0.25, let real = StoryCardMorph.shared.contentSize {
-            latchedContent = real
-        }
-        // ⚠️ `setHidden(false)` USED TO BE FORCED HERE ON EVERY FRAME BELOW p≈0.9, AND IT IS GONE
-        // WITH THE THING IT WAS REPAIRING.
-        //
-        // It was a belt on the copy-swap: the copy faded out with the carousel under 0.9, so a hide
-        // left standing by a cancelled swipe meant alpha 0 under a vanished copy — his black window.
-        // Nothing hides the live story any more, so there is no stuck flag to sweep up after, and a
-        // per-frame repair for a state that cannot occur is just a line waiting to be wrong.
-        //
-        // ⚠️ THE PULL TELLS THE ROW HOW FAR IT HAS GOT, AND STOPS THERE. It used to compute the live
-        // story's whole rectangle and post it to the morph, which made it the second thing laying
-        // out a story the row was already laying out. One number goes out now; the row owns the
-        // layout, the live story included. See `StoryRowController.setFraction`.
-        pageDragBox.rowLink?.setFraction(sheetSizeFraction(p))
+        // BELOW THE CAROUSEL'S PLATEAU THE LIVE CARD MUST BE VISIBLE, whatever the row's scroller
+        // thinks. The hide (`setHidden(true)`) belongs to the copy-swap, and the copy fades out
+        // WITH the carousel under p≈0.9 — so a collapse drag that had also tickled the row's pan,
+        // or a hide stuck by a cancelled swipe, left alpha-0 under a vanished copy: his black
+        // window. Idempotent and cheap, and legit swipes only exist above the 0.95 band gate, so
+        // this cannot fight the designed exchange.
+        if p < 0.9 { StoryCardMorph.shared.setHidden(false) }
+        let slot = cardSlot
+        let scr = UIScreen.main.bounds
+        // Same staging the morph card used: the frame shrinks across 0.08 → 0.9. The first hair of
+        // the pull stays full size so a stray touch shrinks nothing visible, and the last tenth is
+        // left for the carousel to fade in behind a card that has already stopped moving.
+        let sizeP = max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
+        StoryCardMorph.shared.apply(fraction: sizeP,
+                                    targetSize: CGSize(width: slot.w, height: slot.h),
+                                    targetCenter: CGPoint(x: scr.width / 2, y: slot.centerY),
+                                    cornerRadius: 24)
     }
 
-    /// THE PULL — the reference layout's `contentScaleFraction`, and the one definition of it.
-    ///
-    /// ⚠️ STATIC AND SHARED, because the row is laid out from it too now. Half of `StoryRowGeometry`
-    /// changes with this number — the spacing, the resting position — so the cards and the live
-    /// story reading two different copies of it would put them in two different places, which is the
-    /// exact failure this rebuild is being repaired for.
-    /// ⚠️ THIS IS DERIVED FROM THE SHEET'S OWN GEOMETRY NOW, NOT DRAWN BY HAND.
-    ///
-    /// It used to be `clamp((p - 0.08) / (0.9 - 0.08))`: a straight line with a dead patch at the
-    /// start and a tenth left over at the end, chosen by eye. It lands in the right place at both
-    /// ends and agrees with the sheet nowhere in between, which is the owner's report that the
-    /// thumbnails do not stay in step with the sheet while he drags it. A remap cannot be in step
-    /// with something it does not read.
-    ///
-    /// Theirs is not a curve at all — it is what fits. `:3955-3971`, in their names:
-    ///
-    ///     contentVisualHeight = min(contentSize.height, availableSize.height - insets.top - viewListInset)
-    ///     contentVisualScale  = min(1.0, contentVisualHeight / contentSize.height)
-    ///     contentScaleFraction = 1.0 - (contentVisualScale - contentMinScale) / (contentMaxScale - contentMinScale)
-    ///
-    /// The story is only ever as big as the room left above the sheet, and the fraction is where
-    /// that sits between its two ends. Every number in it is a length on the screen this frame, so
-    /// it cannot drift out of step with the sheet: it IS the sheet.
-    ///
-    /// ⚠️ AND THERE IS NO DEAD PATCH AT THE START, BECAUSE THEIRS HAS NONE. The owner, 2026-08-13:
-    /// the shrink "start when the sheet viewer is 10/15% coming down… feeling late". He is right, and
-    /// the first version of this derivation is what put it there.
-    ///
-    /// The slack came from measuring the free space as the whole screen below the status bar. On a
-    /// 393x852 a 9:16 story is 699pt of a 793pt space, so the sheet had 94pt — about 17% of its
-    /// travel — to climb before it reached the bottom of the story and anything began to move.
-    ///
-    /// Their story has no such slack, and the three lines that say so are:
-    ///
-    ///     :3442  let defaultHeight = 60.0 + safeInsets.bottom + 1.0
-    ///     :3542  viewListInset = defaultHeight * (1 - midFraction) + midFraction * midViewListHeight
-    ///     :3551  maximizedBottomContentHeight = defaultHeight
-    ///
-    /// Their view list is never off the screen: it RESTS at `defaultHeight`, and the story's own
-    /// height is built as `min(9:16, available - top - defaultHeight)` — already fitted to the space
-    /// above it. So `contentVisualBottomInset`, which is `max(default, viewListInset)`, sits exactly
-    /// on `defaultHeight` at rest and exceeds it on the first pixel of the drag. The story starts
-    /// shrinking immediately because it was never larger than the room it had.
-    ///
-    /// Ours rests fully off the screen, so the honest equivalent is that the story cedes exactly the
-    /// height the sheet takes, from the first pixel:
-    ///
-    ///     liveH = restH - p·sheetH        minH = restH - sheetH
-    ///     fraction = (restH - liveH) / (restH - minH) = (p·sheetH) / sheetH = p
-    ///
-    /// which cancels to the drag itself. So this is `p`, and that is a derivation rather than a
-    /// shrug: the reason it is linear is that a story already fitted to its space gives up whatever
-    /// is taken from it, one point for one point.
-    ///
-    /// ⚠️ IT ALSO ENDS THE LAST FAMILY OF BUGS THIS FUNCTION HAD. Reading a measured content height
-    /// in here meant reading a value that is nil until the library reports one and can turn real at
-    /// any moment — which moved the resting height under a drag in progress and jumped the fraction
-    /// BACKWARDS mid-pull. There is nothing left to read: `p` is the finger. Do not reintroduce a
-    /// content height here; `cardSlot` is where the story's own rectangle belongs.
-    func sheetSizeFraction(_ p: CGFloat) -> CGFloat {
-        max(0, min(1, p))
-    }
-
-    // ⚠️ `placeLiveStory(fraction:)` IS DELETED HERE — the 2026-08-13 ruling, and the largest single
-    // piece of it.
-    //
-    // It worked out which story was live, where the row was sitting, and what rectangle the story
-    // should therefore occupy, and posted that to `StoryCardMorph`. Every one of those questions is
-    // one the ROW answers for each of its own cards, in a loop, from `StoryRowGeometry` — so this
-    // was a second, hand-written copy of the row's layout that had to arrive at the same answer as
-    // the loop it was standing beside. It did not, four times: the row position that defaulted to
-    // "story one", the logical distances used where the scaled ones were needed, the two-step motion
-    // at the page commit, and the pre-divided x that existed to cancel a lerp on the far side.
-    //
-    // The live story is an item in the row's own table now (`StoryRowController.items`), placed by
-    // the same `StoryRowPlacement` as its neighbours in the same pass. What used to be pushed from
-    // here is one number: how far the pull has got. See `driveMorph`.
-
-    // The layer behind the viewers sheet: the row of ALL my stories, with the live one among them
-    // rather than parked in the middle of them. The neighbours and the count row fade in over the
-    // last tenth of the pull, behind a card that has already stopped moving.
+    // The layer behind the viewers sheet: the carousel of ALL my stories, and NOTHING in its centre
+    // slot, because the live story is put there by `driveMorph`. The neighbours and the count row
+    // fade in over the last tenth of the pull, behind a centre that has already stopped moving.
     @ViewBuilder private var viewersBackdrop: some View {
         let p = viewersProgress
         // ONE source for the slot (see `cardSlot`). The fill-vs-blur decision the neighbour cards
         // make against `slotH / slotW` still lives in `card(_:)`; only the numbers moved.
         let slot = cardSlot
+        let slotW = slot.w
+        let slotH = slot.h
+        let miniH = slot.miniH
+        let cropY: CGFloat = 0
         let blockTop = slot.top
-        // STAGING. `carIn` fades the neighbours and the count row in over the last tenth of the pull.
+        // STAGING. `carIn` fades the neighbours and the count row in over the last tenth of the
+        // pull, behind a centre card that has already stopped moving.
         //
-        // ⚠️ IT NO LONGER HAPPENS "BEHIND A CARD THAT HAS ALREADY STOPPED MOVING", AND THE OLD
-        // SENTENCE IS DELETED RATHER THAN REPHRASED. That was only ever true by coincidence: the old
-        // fraction finished at p = 0.9 and this fade started at p = 0.9. The pull is geometric now
-        // and finishes with the sheet, so at the moment the neighbours begin to arrive the centre
-        // card still has the last tenth of its travel to make.
-        //
-        // Left that way on purpose. Theirs does not fade a row in at all — every item is present the
-        // whole time and the tint layer is what makes the neighbours invisible while the sheet is
-        // down, which is the term ported alongside this. Arriving over the last of the motion is
-        // closer to that than waiting for the motion to stop, and the thing this fade is still
-        // needed for is the count badges and the shadows, which sit outside the tint.
-        //
-        // THERE IS NO PICTURE OF THE STORY ANYWHERE IN THIS ROW, and that is the whole of the
-        // frozen-frame fix. The live story is one of the row's items now — laid out by the row's own
-        // geometry, sliding when the row slides — so a video shows the frame it is actually on
-        // because it is still the same layer drawing it, at every position and not only at rest.
-        // The card standing in its place keeps its frame and its tap target and draws no pixels, so
-        // there is exactly ONE picture of a story at every moment and nothing to hand over at any
-        // threshold. That seam, where two renderers disagreed about framing, was `402ec4d`'s bug and
-        // the parent of every frozen-cover report since.
-        //
-        // ⚠️ STAGED OFF THE PULL'S OWN FRACTION NOW, NOT OFF `p` A SECOND TIME. It was
-        // `(p - 0.9) / 0.07`, a second hand-drawn curve on the same input, and it only lined up with
-        // the card stopping because the old fraction happened to finish at 0.9 as well. The fraction
-        // is geometric now and finishes when the sheet does, so a curve on `p` would have started
-        // fading the row in while the card was still moving. One progress value, read once, and the
-        // staging expressed against it.
-        let pull = sheetSizeFraction(p)
-        let carIn = max(0, min(1, (pull - 0.88) / 0.12))
-        // Feed the row from the LIVE repo (not the viewer's immutable snapshot), so a story
+        // THERE IS NO MORPH CARD ANY MORE, and that is the whole of the frozen-frame fix. The centre
+        // of this carousel is the REAL story, put there by `driveMorph` as a UIKit transform, so a
+        // video shows the frame it is actually on because it is still the same layer drawing it.
+        // The carousel's own centre card keeps its frame and its tap target but draws no pixels, so
+        // there is exactly ONE picture in that slot at every moment and nothing to hand over at
+        // p=0.97 — that seam, where two renderers disagreed about framing, was `402ec4d`'s bug.
+        let carIn = max(0, min(1, (p - 0.9) / 0.07))
+        // Feed the carousel from the LIVE repo (not the viewer's immutable snapshot), so a story
         // deleted while viewing doesn't linger as a ghost card. Fall back to the snapshot.
         let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories
         ZStack(alignment: .top) {
             MyStoriesCarousel(stories: liveMyStories, activeId: $sheetStoryId,
-                              // THE SAME `pull` THE STAGING ABOVE AND THE LIVE STORY BOTH USE — one
-                              // value, computed once in this body, handed to everything that has to
-                              // agree about how far the sheet has got. See `sheetSizeFraction`.
-                              row: slot.row(fraction: pull),
-                              // WHICH OF THE ROW'S ITEMS IS THE LIVE ONE. It is the only thing the
-                              // row needs to be told about the story layer: that item hides its own
-                              // picture and its placement is handed to the morph instead. Where it
-                              // goes is not passed, because the row works that out for this card the
-                              // same way it works it out for every other one.
-                              liveStoryId: targetStoryId,
+                              slotW: slotW, slotH: slotH, miniH: miniH, cropY: cropY,
                               onActiveTap: { closeViewers() },
+                              // The live story occupies the centre slot, so the carousel draws no
+                              // pixels there — EXCEPT while the row is being swiped. The story
+                              // cannot follow a card that is mid-flight (it sits at the slot centre
+                              // while the row slides past), so for the length of the swipe the
+                              // carousel draws its own centre card and the real story hides
+                              // underneath. Same size, same place, so the exchange is invisible.
+                              hideActiveContent: !carouselOwnsSlot,
+                              onInteracting: { carouselInteracting = $0 },
                               pageDrag: pageDragBox)
                 .padding(.top, blockTop)
                 .opacity(Double(carIn))
-                // ⚠️ `> 0` RATHER THAN `> 0.5`, AND THE 0.19pt THAT BUYS IS A REAL DROPPED TAP.
-                //
-                // The sheet starts handing touches above it to this band at `progress > 0.95`
-                // (`StoryViewersSheetView.hitTest`). With the pull geometric, `carIn > 0.5` is not
-                // reached until p = 0.95034 — so for a hair of the gesture the sheet lets a tap
-                // through and the carousel refuses it, and a tap that lands there does nothing at
-                // all. The two gates have to be on the same side of each other, and the cheap way to
-                // guarantee that is for this one to open first and stay open.
-                .allowsHitTesting(carIn > 0)
+                .allowsHitTesting(carIn > 0.5)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         // NO gestures here any more. Every touch above the sheet panel is routed by
@@ -3604,20 +2874,14 @@ struct StoryViewer: View {
         // right and never a stale snapshot's idea of it.
         let arr = StoriesRepository.shared.mine?.stories ?? myStories
         let idx = arr.firstIndex { $0.id == sheetStoryId }
-        // WHICH TABS A STORY'S VIEWERS LIST GETS, from the same two functions the story's own
-        // audience pill reads. BY ID rather than for the active story alone: the sheet holds a real
-        // panel per story now, and the one sliding in has to arrive wearing its own audience instead
-        // of the audience of the story it is replacing.
-        //
-        // Hoisted out of the initializer with its type written down, not inlined: this file has cost
-        // three builds to the type checker giving up on a long call, and a multi-statement closure
-        // returning a labelled tuple inside one is exactly that shape.
-        let audienceFor: (String) -> (title: String, bothTabs: Bool) = { id in
-            guard let s = arr.first(where: { $0.id == id }) else { return ("All Viewers", true) }
-            return (storyAudienceTitle(for: s), storyAudienceHasBothTabs(s))
-        }
+        // WHICH TABS THIS STORY'S VIEWERS LIST GETS, from the same two functions the story's own
+        // audience pill reads. Recomputed here rather than latched, because the sheet pages sideways
+        // between stories and `sheetStoryId` moves with it — so the tab follows the story you are
+        // looking at rather than the one you opened the sheet on.
+        let sheetStory = arr.first { $0.id == sheetStoryId }
         return StoryViewersSheet(activeStoryId: sheetStoryId,
-                          audienceFor: audienceFor,
+                          audienceTitle: sheetStory.map { storyAudienceTitle(for: $0) } ?? "All Viewers",
+                          audienceHasBothTabs: storyAudienceHasBothTabs(sheetStory),
                           progress: $viewersProgress,
                           carouselBand: carouselBandRect,
                           hasPrev: (idx ?? 0) > 0,
@@ -3642,80 +2906,66 @@ struct StoryViewer: View {
                               let live = StoriesRepository.shared.mine?.stories ?? myStories
                               guard let i = live.firstIndex(where: { $0.id == sheetStoryId }),
                                     live.indices.contains(i + d) else {
-                                  pageDragBox.value = 0
+                                  // Same rule as the commit below: the flag describes the MOVEMENT,
+                                  // so it cannot be dropped on the frame the movement starts.
+                                  withAnimation(.easeOut(duration: 0.28)) {
+                                      pageDragBox.value = 0
+                                  } completion: {
+                                      sheetPaging = false
+                                  }
                                   return
                               }
                               // The drag zeroes IN THE SAME TRANSACTION as the id flip, on the
                               // panel's own 0.28s return curve — the row glides its remaining
                               // distance while the new sheet slides in, one motion.
                               //
-                              // ⚠️ THE FLAG THAT USED TO OUTLIVE THIS GESTURE IS DELETED, AND SO IS
-                              // THE BUG IT WAS PATCHING.
+                              // ⚠️ AND THE FLAG OUTLIVES THE GESTURE, BECAUSE THE MOTION DOES.
                               //
-                              // `sheetPaging` existed because clearing it one frame into a 0.28s
-                              // glide handed the live story back to the slot while the row was still
-                              // two thirds of a card off centre, and the cards then slid over the
-                              // top of it — his overlapping cards. The whole difficulty was that a
-                              // boolean had to describe a MOVEMENT and therefore had to be timed to
-                              // match one. Nothing is handed anywhere now: the live story reads the
-                              // row's position on every frame of this glide, so the glide needs no
-                              // description of itself.
-                              // ⚠️ THE DRAG IS DROPPED AT ONCE AND THE ROW SPRINGS ITS OWN VIEWS,
-                              // WHICH IS THEIRS AND IS NOT THE SAME AS ANIMATING THE NUMBER.
-                              //
-                              // This used to animate `pageDragBox.value` to zero over 0.28s in the
-                              // same transaction as the id flip. With the row deriving its position
-                              // as `scroll - pageDrag`, that is a DISCONTINUITY: the offset moves a
-                              // whole card at once while the drag is still two thirds of a card, so
-                              // the row jumps backwards by the difference and then glides forwards
-                              // again. It was invisible while the row was redrawn from scratch every
-                              // frame and it is not invisible now.
-                              //
-                              // Theirs sets `viewListPanState = nil` — the pan contribution is gone
-                              // in one step — raises `isCompletingViewListPan`, and animates the
-                              // ITEM POSITIONS over a 0.3s spring. The number is discontinuous and
-                              // the pictures are not, which is the only way round that is smooth.
-                              // `StoryRowController.setPageDrag` starts that spring when it sees the
-                              // drag return to zero.
-                              // ⚠️ THE ROW IS RE-SEATED AND THE DRAG ZEROED IN ONE CALL. Zeroing the
-                              // drag on its own sprang the cards back to the OLD story's centre, and
-                              // the new id then reached the row a turn later and sprang them again to
-                              // the new one — two springs over the same cards half a frame apart.
-                              // `commitPage` does both before a single layout pass runs, which is
-                              // what theirs does by construction.
-                              let arriving = live[i + d].id
-                              pageDragBox.commitPage(toStoryId: arriving)
-                              sheetStoryId = arriving
+                              // `sheetPaging = false` used to run on this line, one frame into a
+                              // 0.28s glide the row has not started yet. For the whole glide
+                              // `carouselOwnsSlot` was false, so the live story was handed back to
+                              // the slot while the row was still two thirds of a card off centre,
+                              // and the cards slid straight over the top of it — his overlapping
+                              // cards. The gesture is over; the movement it started is not, and this
+                              // flag describes the movement.
+                              withAnimation(.easeOut(duration: 0.28)) {
+                                  sheetStoryId = live[i + d].id
+                                  pageDragBox.value = 0
+                              } completion: {
+                                  sheetPaging = false
+                              }
                           },
-                          // THE ONLY PER-FRAME WRITE, and it goes to the box, which nothing
-                          // subscribes to except the row itself.
+                          // THE ONLY PER-FRAME WRITE, and it goes to the box. The boolean beside
+                          // it changes twice a drag, which is what the host actually needs to know.
                           onPageDrag: { f in
-                              // ⚠️ A DRAG THAT IS GIVEN UP DOES NOT TELEPORT THE ROW, AND THE THING
-                              // THAT MAKES IT SMOOTH IS THE ROW'S SPRING, NOT AN ANIMATED NUMBER.
+                              // ⚠️ A DRAG THAT IS GIVEN UP DOES NOT TELEPORT THE ROW.
                               //
                               // The sheet answers an abandoned page by calling this with 0 and THEN
-                              // springing its panel home. Written straight through with the row
-                              // drawn from the raw value, the row snapped back in one frame while
-                              // the panel was still travelling — two halves of one gesture on two
-                              // clocks. That was patched by animating the value itself.
+                              // springing its panel home over 0.3s. Written straight through, the row
+                              // jumped back to centre in one frame while the panel was still
+                              // travelling: two halves of one gesture on two different clocks, which
+                              // is the other half of his "swipe is not smooth". It now walks home on
+                              // the panel's own curve, and `sheetPaging` stays up until it arrives,
+                              // for the same reason the commit's does.
                               //
-                              // Theirs does neither: `viewListPanState = nil` drops the contribution
-                              // at once and a 0.4s spring carries the item POSITIONS home
-                              // (`isCompletingViewListPan`). `StoryRowController.setPageDrag` starts
-                              // that spring when it sees the drag return to zero, so the row is
-                              // still gliding while the panel is, and there is no animated number in
-                              // between for the two to disagree about.
-                              // ⚠️ `deliver`, NOT a write to `value` — the row is moved inside this
-                              // callback rather than inside the SwiftUI pass the write schedules.
-                              // That is their one hop from finger to card; see `rowLink`.
-                              //
-                              // ⚠️ AND IT IS LABELLED AN ABANDON, WHICH IS THEIR 0.4s RATHER THAN
-                              // 0.3s. A zero arriving HERE is always a drag released short — the
-                              // commit has its own path above — and theirs deliberately springs a
-                              // given-up drag home more slowly than one that meant something. The
-                              // label is ignored on the frames of a live drag, which are the
-                              // finger's and are never animated.
-                              pageDragBox.deliver(f, settle: .abandon)
+                              // (SwiftUI's `.spring(response:dampingFraction:)` is not arithmetically
+                              // identical to UIKit's `usingSpringWithDamping` — see the translation
+                              // note in the row's UIKit rewrite — but over 0.3s at 0.9 damping the
+                              // two are within a frame of each other, and the alternative is a jump.)
+                              guard f != 0 else {
+                                  guard pageDragBox.value != 0 else {
+                                      if sheetPaging { sheetPaging = false }
+                                      return
+                                  }
+                                  withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+                                      pageDragBox.value = 0
+                                  } completion: {
+                                      sheetPaging = false
+                                  }
+                                  return
+                              }
+                              pageDragBox.value = f
+                              if !sheetPaging { sheetPaging = true }
                           },
                           // A viewer's profile opens in the SAME sheet the story header uses, so
                           // there is one profile screen in this viewer and not two that drift.
@@ -3821,24 +3071,18 @@ struct StoryViewer: View {
         if rowIsOnAnotherStory {
             let landing = sheetStoryId
             NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: landing)
-            // ⚠️ THE ONE PLACE THIS IS STILL WRITTEN BY HAND, AND IT IS KEPT ON PURPOSE.
+            // ⚠️ AND THE ANCHOR MOVES WITH IT, IN THE SAME BREATH.
             //
-            // The two handlers that used to write it while the sheet is OPEN no longer do: the
-            // ungated item-changed report owns the anchor, and the jump handler fires that report
-            // from the statement that swaps the item, synchronously inside this very `post`. So by
-            // the time this line runs the anchor is usually already `landing` and this is a no-op.
+            // `currentStoryId` means "the item the library is on", and we have just told it to be on
+            // `landing`. Without this line it keeps naming the old story until `onItemSeen` fires —
+            // which the library WITHHOLDS while a story is paused, and the story stays paused until
+            // the very end of the collapse. So for the whole of that collapse `rowIsOnAnotherStory`
+            // would still answer true, the carousel would still own the slot, and the story would
+            // grow back to full screen with the live card standing aside.
             //
-            // It stays for the one case the report cannot cover. The library's handler refuses a
-            // jump to the item it is already on (`idx != getCurrentIndex()`), and it refuses
-            // silently — so if the anchor has drifted while the library sits exactly where we are
-            // asking it to go, nothing reports and nothing corrects it. Anywhere else that is
-            // harmless; here it is not, because this is the collapse, and a stale anchor is the id
-            // the row blanks and the id the live card flies home to. The story would grow back to
-            // full screen out of the wrong slot with the wrong card blanked.
-            //
-            // The old reason written here — that `onItemSeen` is withheld while the story is paused
-            // — was true and is no longer why. Do not restore the same line to the two open-sheet
-            // handlers on the strength of it.
+            // This is not a second copy of anything: it is the one anchor, updated at the moment the
+            // thing it describes actually changed, instead of waiting for a receipt that cannot
+            // arrive yet.
             currentStoryId = landing
         }
         sheetAnimator.animate(from: viewersProgress, to: 0, velocity: velocity, write: { viewersProgress = $0 }) {
@@ -4422,182 +3666,234 @@ struct UploadingAvatarRing: View {
 struct MyStoriesCarousel: View {
     let stories: [Story]
     @Binding var activeId: String
-    /// THE ROW'S LAYOUT, OWNED BY THE HOST NOW. It used to be five private formulas down this file,
-    /// which was fine while the only thing laid out by them was a card. The live story is laid out
-    /// by them too now, so they cannot live where only the cards can see them — see `StoryRowGeometry`.
-    let row: StoryRowGeometry
-    /// WHICH STORY THE LIVE LAYER IS HOLDING, and therefore the one card that draws no pixels.
-    ///
-    /// ⚠️ THIS REPLACES `hideActiveContent`, AND THE DIFFERENCE IS THAT IT IS UNCONDITIONAL.
-    ///
-    /// The old flag was the copy-swap: for the length of a swipe the row drew its own centre card
-    /// and the real story was hidden underneath it, because the real story was pinned to the slot
-    /// centre and could not follow a moving row. Two renderers for one story, exchanged mid-motion,
-    /// which is where the flash, the overlapping cards and the frozen covers all came from.
-    ///
-    /// The live story slides with the row now, so there is nothing to stand in for and nothing to
-    /// exchange. Exactly one view draws a given story at every moment, which is the whole of the
-    /// reference app's rule and the reason they have none of these bugs to fix.
-    let liveStoryId: String
+    let slotW: CGFloat
+    let slotH: CGFloat
+    let miniH: CGFloat                  // full mini-screen composite height; the card shows a slotH window of it
+    let cropY: CGFloat                  // the window's top within the composite (photo-centred, mirrors the morph)
     var onActiveTap: () -> Void = {}    // tap the centred card → collapse back to full screen
-    /// The sheet's sideways page-drag, ALREADY IN CARD UNITS — a fraction of the panel's journey,
-    /// and one panel journey is one card. It is their `viewListPanState.fraction`, which they add to
-    /// the same `offsetFraction` the scroller feeds, and it must not be divided by anything: see the
-    /// long note at `onPageDrag` in StoryViewersSheetUIKit for the two builds that got it wrong in
-    /// each direction.
+    var hideActiveContent = false       // the REAL story covers the centre slot — keep the frame/tap, hide the pixels
+    var onInteracting: (Bool) -> Void = { _ in }   // horizontal swipe in flight (drag + settle spring)
+    /// The sheet's sideways page-drag IN POINTS (see onPageDrag). Slides the whole row in step with
+    /// the sliding panel, so the picture in the slot follows the finger instead of switching at
+    /// commit. Converted to card units below with `fullDist`, which is exactly what CarouselScroller
+    /// divides a finger's own travel by — so both ways of moving the row move it the same distance.
     /// ⚠️ `@ObservedObject`, SO THIS IS THE ONLY VIEW A PAGE-DRAG RE-RENDERS. It used to be a plain
     /// `CGFloat` copied down from the host's `@State`, which meant every frame of the drag
     /// invalidated the host's whole body — the pager, the sheet, every overlay — to move this row.
     /// See `pageDragBox` on the host.
     @ObservedObject var pageDrag: StorySheetPageDrag
-    // ⚠️ THE FRAME-TICK OBSERVER IS GONE FROM HERE AND LIVES ON THE CARD NOW. It is the nudge that
-    // makes a card re-ask for a generated video frame, and observed at this level one clip's frame
-    // arriving redrew every card in the row. `StoryRowCardMedia` observes it, so it redraws one.
+    /// ⚠️ A REDRAW NUDGE, NOT DATA. `cardMedia` asks for a clip's frame synchronously and gets nil
+    /// the first time, because generating it is a decode off the main thread. Without something to
+    /// observe, the better picture would sit in the cache until an unrelated change happened to
+    /// redraw the row. This counter is bumped once per generated frame and carries nothing — the
+    /// card re-asks, which is the only thing that knows the answer.
+    @ObservedObject private var frameTick = StoryFrameTick.shared
 
-    /// Per-story numbers, fetched once and then only when the story set changes.
+    @State private var byStory: [String: [StoryViewerInfo]] = [:]   // per-story viewers (counts)
+    // Native paged scroll position: the id of the card snapped to centre. Seeded to the opened-on story
+    // so the row opens centred on it; SwiftUI's .viewAligned physics follow the finger 1:1 and snap to
+    // the nearest card on release (swipe past ~50% → next). It only updates when the scroll SETTLES, so
+    // the parent no longer re-renders every frame mid-swipe (that was the jank / "hard to swipe").
+    // Custom finger-tracking pager (replaces a .viewAligned ScrollView, which needed a ~50% drag or a
+    // hard flick to advance and snapped back otherwise — the "hard to swipe"). `index` is the centred
+    // card; the row is a plain offset HStack so the drag follows the finger 1:1 and commits to the next
+    // card at just 30%. Seeding `index` in init also kills the old .scrollPosition centring race.
+    /// ONE CONTINUOUS POSITION, in card units, and everything is derived from it: 2.0 means card 2
+    /// is centred, 2.5 means you are exactly between 2 and 3.
     ///
-    /// ⚠️ THE NUMBERS, NOT THE PEOPLE. This was `[String: [StoryViewerInfo]]` and the row derived the
-    /// counts from it inside `body` — a dictionary rebuilt, and a `filter` per story, on every pass.
-    /// That was free while the only thing that ran a pass was a fetch landing; a sheet page-drag runs
-    /// one per frame, so it is not free any more. The people were never used here.
-    @State private var counts: [String: StoryRowCounts] = [:]
-    // ⚠️ `scroll` IS NOT SWIFTUI STATE ANY MORE, AND THAT DELETION IS THE POINT OF THIS WHOLE MOVE.
-    //
-    // It was a `@State private var scroll: CGFloat`, written by the scroll view's delegate on every
-    // frame of a drag. Every one of those writes invalidated this view, so a swipe rebuilt the entire
-    // row's view tree — each card re-asking for its picture, re-applying a clip, a shape, an opacity
-    // and a shadow — sixty to a hundred and twenty times a second, to move some views sideways. That
-    // is the largest part of the owner's "the swipe is slow and jumpy".
-    //
-    // The reference app writes `position` and `scale` onto views that already exist, from a function
-    // called by the scroll delegate, and rebuilds nothing. `StoryRowController` is that function, and
-    // the row's position lives in its scroll view where a position belongs. What is left here is the
-    // things that genuinely change at human speed: which card is centred, and the counts.
+    /// THIS IS THE FIX FOR THE FLICK (owner 2026-08-04: dragging is smooth, a flick "sticks" and
+    /// then continues). It used to be an Int `index` plus the live finger translation, and SwiftUI
+    /// cannot interpolate an Int — so on release the index CHANGED AT ONCE, teleporting the cards by
+    /// however many steps the flick was worth, and only the leftover finger distance was animated.
+    /// The jump was the stick, and the scaling looked choppy because it is computed from the same
+    /// number. A CGFloat animates, so position and scale now move together for the whole glide.
+    @State private var scroll: CGFloat = 0
 
-    /// Which card the row is centred on, reported by the row when it crosses a half-card. It drives
-    /// the big count row below the cards and keeps `activeId` in step; it does not move anything.
-    @State private var centredIndex = 0
+    /// A finger or the native glide owns the row — reported by `CarouselScroller`.
+    @State private var scrollerBusy = false
+    /// OUR OWN spring is carrying the row to a card somebody else chose (`onChange(of: activeId)`).
+    /// The scroller knows nothing about this one, which is exactly how the hole below opened.
+    @State private var retargeting = false
 
-    /// A weak pointer at the row's controller, so the interpolated page-drag can be handed to UIKit
-    /// once per frame without going through a SwiftUI update to get there.
-    @State private var link = StoryRowLink()
-
-    // ⚠️ `scrollerBusy`, `retargeting` AND `rowBusy` ARE ALL DELETED, AND THE QUESTION THEY ANSWERED
-    // NO LONGER EXISTS.
-    //
-    // "Is the row still moving?" was only ever asked so the host could decide WHICH OF TWO PICTURES
-    // of the active story to show: the carousel's own card while anything was in motion, the real
-    // story once everything had stopped. Three separate signals fed it — a finger, our own retarget
-    // spring, and a fractional-position belt for the paths neither knew about — and it still got the
-    // answer wrong twice on device, because a question asked at the wrong instant is wrong however
-    // many ways you ask it. His "the window cards are overlapping when I swipe the viewers sheet"
-    // was this: the row cards sat exactly where the formula puts them at 0.63 of a card past centre
-    // while the card in the slot sat at dead centre wearing the scale of a card 0.37 to the LEFT.
-    //
-    // Position and scale disagreeing by exactly the page-drag is the signature of a view that is
-    // pinned to the slot centre while the row moves around it. The live story is not pinned any
-    // more — it is laid out by `StoryRowGeometry` like every other card, from the same row position,
-    // in the same frame. There is one picture of a story, it is always in the right place, and there
-    // is no moment at which anything has to be swapped for anything. So there is nothing to time.
-    //
-    // What the row owes the outside world is now one number instead of a boolean: where it is.
-
-    // ⚠️ `publishRowPosition` IS DELETED, WITH THE WIRE IT RAN ON.
-    //
-    // The row reported its position outward every frame so this view could turn it back into a
-    // placement for the live story. That was the SwiftUI half of the two-renderer seam: the row had
-    // already computed where every card goes, published a number, and had it computed again by
-    // somebody else. The row places the live story itself now, in the same loop, from the same
-    // `StoryRowPlacement` — so there is nothing to publish and nobody to publish it to.
-    //
-    // The guard that used to live here, "the row never drives the fraction to zero", moved with the
-    // job into `StoryRowController.placeLiveStory` and inverted: the row is the only writer now, so
-    // it has to be the one that puts the story back.
-
-    // `rowPos` lived here, deriving the row's position for the cards to be drawn from. The row
-    // derives it inside `StoryRowController.updateScrolling` now, off the same `StoryRowGeometry`,
-    // which is what makes it a UIKit layout pass rather than a SwiftUI one.
-
-    /// The card the row is centred on, clamped into the stories it actually has.
+    /// ⚠️ THE ONE ANSWER TO "IS THE ROW STILL MOVING", and the reason the centre card stopped ending
+    /// up UNDERNEATH its neighbours.
     ///
-    /// ⚠️ `Int(_:)` TRAPS ON INFINITY AND NaN rather than clamping — the shape of the crash in build
-    /// 463 — so the row does the rounding and this only has to defend against a stale index left over
-    /// from a story that has since been deleted.
-    private var index: Int {
-        max(0, min(max(0, stories.count - 1), centredIndex))
+    /// The live story is not drawn by this carousel. It is the real story view, parked at the slot
+    /// centre by `driveMorph`, and the host hides it (`StoryCardMorph.setHidden`) from exactly this
+    /// signal so the carousel can draw its own centre card while the row slides. The carousel is a
+    /// SwiftUI layer ABOVE the story, so the moment this says "at rest" while the row is in fact
+    /// off-centre, the story is revealed in the middle and the neighbour cards — which are directly
+    /// over it and overlap the slot at any fractional position — cover it. That is his report: the
+    /// active centre picture behind the ones that should be behind IT.
+    ///
+    /// It used to be the scroller's word alone, and the scroller only knows about fingers. A sheet
+    /// paged sideways retargets `activeId`, which springs `scroll` for 0.30s with no finger anywhere
+    /// — the whole glide ran with the story exposed. `retargeting` closes that path and the
+    /// fractional test is the belt for any path neither of them knows about: whatever the reason, a
+    /// row that is not sitting on a whole card has not finished moving.
+    /// ⚠️ AND THE BELT MUST BE MEASURED ON THE ROW THAT IS ON SCREEN, NOT ON `scroll` ALONE.
+    ///
+    /// His 2026-08-10 report, "the window cards are overlapping when I swipe the viewers sheet",
+    /// MEASURED off the screenshot rather than reasoned: the four row cards were exactly where this
+    /// file's own formula puts them at 0.63 of a card past centre, spacing perfect, while the card
+    /// filling the slot sat at dead centre wearing the scale of a card 0.37 to the LEFT. Position and
+    /// scale disagreeing by exactly the page-drag is the signature of the live story — the one view
+    /// that is parked at the slot centre and cannot slide — being on screen during a swipe.
+    ///
+    /// The row's real position is `scroll - pageDrag.value`, and this line only ever looked at
+    /// `scroll`. A sheet page-drag moves the row entirely through `pageDrag`: `scroll` stays on a
+    /// whole number for the length of the drag, so the belt answered "landed" while the row was
+    /// visibly two thirds of a card away. Both gesture flags can be false there too — the commit
+    /// clears `sheetPaging` on the first frame of a 0.28s glide, and a drag abandoned below the
+    /// commit threshold clears it with the panel still springing home — which is exactly the "any
+    /// path neither of them knows about" this test was written to cover and could not, because it
+    /// was reading the wrong number.
+    private var rowBusy: Bool {
+        let onScreen = scroll - pageDrag.value
+        return scrollerBusy || retargeting || abs(onScreen - onScreen.rounded()) > 0.002
     }
 
-    init(stories: [Story], activeId: Binding<String>, row: StoryRowGeometry, liveStoryId: String,
-         onActiveTap: @escaping () -> Void = {}, pageDrag: StorySheetPageDrag) {
+    /// The card the carousel considers centred. Derived, never stored: with `scroll` continuous
+    /// there is exactly one answer and it cannot drift from what is on screen.
+    private var index: Int {
+        // `Int(_:)` traps on infinity and NaN rather than clamping. `scroll` is written by a
+        // division, and this is read on every layout pass — see the 463 crash for what that costs.
+        scroll.isFinite ? max(0, min(max(0, stories.count - 1), Int(scroll.rounded()))) : 0
+    }
+
+    init(stories: [Story], activeId: Binding<String>, slotW: CGFloat, slotH: CGFloat, miniH: CGFloat, cropY: CGFloat,
+         onActiveTap: @escaping () -> Void = {}, hideActiveContent: Bool = false,
+         onInteracting: @escaping (Bool) -> Void = { _ in }, pageDrag: StorySheetPageDrag) {
         self.stories = stories
         self._activeId = activeId
-        self.row = row
-        self.liveStoryId = liveStoryId
+        self.slotW = slotW
+        self.slotH = slotH
+        self.miniH = miniH
+        self.cropY = cropY
         self.onActiveTap = onActiveTap
+        self.hideActiveContent = hideActiveContent
+        self.onInteracting = onInteracting
         self._pageDrag = ObservedObject(wrappedValue: pageDrag)
-        // Seeded to the opened-on story so the big count row underneath is right on the first frame.
-        // The ROW seeds itself from `activeIndex`, which is the same expression — see `StoryRow`.
-        self._centredIndex = State(initialValue: stories.firstIndex(where: { $0.id == activeId.wrappedValue }) ?? 0)
+        self._scroll = State(initialValue: CGFloat(stories.firstIndex(where: { $0.id == activeId.wrappedValue }) ?? 0))
     }
 
     // The settle timer that used to live here is gone: the scroller's own delegate events say
     // exactly when the row has stopped, so the story hand-off no longer waits a guessed beat.
 
-    // The five geometry formulas that used to live here are `StoryRowGeometry` now, unchanged. They
-    // moved because the live story is laid out by them too — see that type's note.
-    private var slotH: CGFloat { row.slotH }
-
+    // Carousel geometry (ported from the reference container). itemSpacing=12;
+    // side cards are 54pt narrower (sideVisibleItemWidth); fullItemScrollDistance / halfItemScroll-
+    // Distance are the reference metrics; sideVisibleItemScale is the side card's relative
+    // scale. Each card's x + scale come straight from the combinedFraction math.
+    private var itemSpacing: CGFloat { 12 }
+    private var sideW: CGFloat { max(1, slotW - 54) }                          // sideVisibleItemWidth
+    /// FLOORED, because `scroll` is computed by dividing by this and `scroll` is then fed to `Int()`.
+    /// A zero or negative divisor gives infinity or NaN, and `Int(_:)` on either is a runtime trap,
+    /// not a wrong number — the same shape as the crash in build 463. `slotW` is derived from the
+    /// screen minus the sheet, so a short screen or a taller sheet could in principle drive it
+    /// negative; a floor costs nothing and removes the question.
+    private var fullDist: CGFloat { max(1, slotW * 0.5 + itemSpacing + sideW * 0.5) }
+    private var halfDist: CGFloat { max(1, sideW * 0.5 + itemSpacing + sideW * 0.5) }
+    private var sideRelScale: CGFloat { slotW > 0 ? sideW / slotW : 1 }        // sideVisibleItemScale (relative)
 
     var body: some View {
         let focusedID = stories.indices.contains(index) ? stories[index].id : activeId
-        let focused = counts[focusedID] ?? .zero
+        let active = byStory[focusedID] ?? []
+        let activeReacts = active.filter { !($0.reaction ?? "").isEmpty }.count
+        let n = stories.count
         VStack(spacing: 12) {
-            // THE ROW, IN UIKIT — see StoryRowUIKit.swift. What used to be here was a `ZStack` of
-            // SwiftUI cards positioned from an `@State` the scroll view wrote on every frame, which
-            // is a full body rebuild per frame to move some views sideways. The reference app writes
-            // `position` and `scale` onto views that already exist and rebuilds nothing; this is that.
-            StoryRow(stories: stories,
-                     liveStoryId: liveStoryId,
-                     geometry: row,
-                     counts: counts,
-                     // Only ever read to catch a selection somebody ELSE moved — the sheet paging
-                     // sideways, or the row being opened on a story it is not centred on. The row's
-                     // own scrolling reports outward and is never told what it already knows.
-                     activeIndex: stories.firstIndex(where: { $0.id == activeId }),
-                     link: link,
-                     // THE SELECTION MOVES DURING THE SCROLL, at the half-card, which is their
-                     // `scrollViewDidScroll` navigate. `activeId` is `sheetStoryId` on the host, so
-                     // the viewers list and the story behind follow the card you are looking at.
-                     onIndexChanged: { i in
-                         centredIndex = i
-                         guard stories.indices.contains(i), stories[i].id != activeId else { return }
-                         activeId = stories[i].id
-                     },
-                     onActiveTap: { onActiveTap() })
-                .frame(maxWidth: .infinity)
-                .frame(height: slotH)
-            // The centred card's count, big + centred under the row (mockup).
-            countRow(views: focused.views, likes: focused.likes, big: true)
+            GeometryReader { geo in
+                let centralX = geo.size.width / 2
+                ZStack {
+                    ForEach(Array(stories.enumerated()), id: \.element.id) { pair in
+                        let i = pair.offset
+                        let s = pair.element
+                        // combinedFraction = (index offset) + scroll fraction. `pageDrag` biases the
+                        // whole row while the SHEET is being thrown sideways: finger left → points
+                        // negative → effective scroll grows → the NEXT card slides toward the
+                        // centre, in step with the panel under the same finger.
+                        //
+                        // `pageDrag` IS ALREADY IN CARD UNITS — a fraction of the panel's journey,
+                        // and one panel journey is one card. See the long note at `onPageDrag` in
+                        // StoryViewersSheetUIKit for why this must not be divided by anything: I
+                        // divided it in build 493 and the row froze, then sent points instead and it
+                        // overshot fourfold. The commit snaps the row to exactly +1 card, so only a
+                        // value that reaches exactly 1.0 over a full panel travel lands where the
+                        // snap lands.
+                        let cf = CGFloat(i) - (scroll - pageDrag.value)
+                        let sign: CGFloat = cf < 0 ? -1 : 1
+                        let acf = abs(cf)
+                        // itemPositionX = centralX + min(1,|cf|)·sign·fullDist + max(0,|cf|-1)·sign·halfDist
+                        let posX = centralX
+                            + min(1, acf) * sign * fullDist
+                            + max(0, acf - 1) * sign * halfDist
+                        // scaleFraction = |clamp(cf,-1,1)|; itemScale = centre(1)…side(sideRelScale)
+                        let scaleFraction = min(1, acf)
+                        let itemScale = 1.0 * (1 - scaleFraction) + sideRelScale * scaleFraction
+                        card(s)
+                            .scaleEffect(itemScale)
+                            .opacity(1.0 - 0.20 * Double(scaleFraction))
+                            .position(x: posX, y: slotH / 2)
+                            .zIndex(Double(2 - acf))     // centred card on top
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: slotH)
+            // THE REFERENCE APP'S ENGINE, not a SwiftUI gesture (owner 2026-08-05: "make it exactly like the reference app
+            // no lag and clear... deep read first"). The overlay owns the row's touches; a hidden
+            // UIScrollView's re-homed pan does the physics, willEndDragging snaps to a whole card,
+            // and `scroll` is fed continuously from its contentOffset — the same number the cards
+            // below already draw from, so the drag, the glide and the scale are one motion on the
+            // native deceleration curve. The hand-rolled momentum formula, the engage dead-zone and
+            // the settle timer are deleted with the gesture that needed them; settle is now an
+            // exact scroll-view event, so the story hand-off happens when the row has actually
+            // stopped, not a guessed 0.58s later.
+            .overlay {
+                CarouselScroller(count: n, fullDist: fullDist, scroll: $scroll,
+                                 // Into the local flag, not straight out to the host: `rowBusy` is
+                                 // what the host hears, and the scroller is only one of its three
+                                 // reasons to be true.
+                                 onInteracting: { on in scrollerBusy = on },
+                                 onSettled: { i in
+                                     if stories.indices.contains(i) { activeId = stories[i].id }
+                                 },
+                                 onTap: { steps in if steps == 0 { onActiveTap() } })
+            }
+            // The centred card's count, big + centred under the carousel (mockup).
+            countRow(views: active.count, likes: activeReacts, big: true)
         }
-        // ⚠️ THE ONE VALUE SWIFTUI STILL INTERPOLATES BEHIND THE ROW'S BACK.
+        // The CENTRED card is the single source of truth: keep sheetStoryId (activeId) in lockstep with
+        // it, so the story behind + the close ALWAYS land on exactly the card you see. Without this the
+        // seeded `index` and `activeId` could drift (open on A, close showed B).
+        // Watch the POSITION, act on the card it resolves to. `index` is derived now, and a computed
+        // property is not something onChange can observe.
+        .onChange(of: index) { _, i in
+            guard stories.indices.contains(i), stories[i].id != activeId else { return }
+            activeId = stories[i].id
+        }
+        // External retarget → recentre. The scroller ignores pushed positions while a finger is down
+        // (its sync checks isTracking), so this cannot fight a live drag.
         //
-        // A finger on the row is the row's own scroll view and never comes through here. A finger on
-        // the SHEET writes `pageDrag.value` per frame, and the commit and the spring home animate it
-        // with `withAnimation` — which does NOT walk the value, it sets it at once and interpolates
-        // the rendered attributes. So an `.onChange` would fire once with the destination and the
-        // cards would glide while the live story teleported. `Animatable` is the seam SwiftUI gives
-        // for reading the interpolated value on each frame, and the row is handed it directly rather
-        // than through a state write that would rebuild something.
-        // The sheet's drag reaches the row through this, in the pan handler, the way theirs does —
-        // see `StorySheetPageDrag.rowLink`. Set here rather than in an initializer because `link` is
-        // `@State` and only has its persistent identity once the view is on screen.
-        .onAppear { pageDrag.rowLink = link }
-        // ⚠️ STILL HERE, AND IT IS NOT A DUPLICATE OF THE DIRECT CALL ABOVE. This is the ANIMATED
-        // half: a `withAnimation` write does not walk the value, it sets it at once and interpolates
-        // the rendered attributes, so a frame-by-frame readout is the only way to see the
-        // in-between values. A finger goes direct; an animation comes through here. Whichever
-        // arrives first, `StoryRowController.setPageDrag` ignores the second (`v != pageDrag`).
-        .modifier(StoryRowPositionReporter(pageDrag: pageDrag.value) { d in link.setPageDrag(d) })
+        // ⚠️ IT ANNOUNCES ITSELF. This is not rare — every sideways page of the viewers sheet lands
+        // here — and for the length of the spring the row is off-centre with no finger on it. Told
+        // nothing, the host gave the live story back at the first frame of the glide and the
+        // neighbour cards spent 0.30s sliding over the top of it. See `rowBusy`.
+        .onChange(of: activeId) { _, v in
+            guard let ni = stories.firstIndex(where: { $0.id == v }), ni != index else { return }
+            retargeting = true
+            withAnimation(.interactiveSpring(response: 0.30, dampingFraction: 0.82)) {
+                scroll = CGFloat(ni)
+            } completion: {
+                retargeting = false
+            }
+        }
+        // ONE writer to the host. A finger, our own spring and the belt all speak through here, so
+        // the live story is hidden for as long as any of them says the row has not landed.
+        .onChange(of: rowBusy) { _, on in onInteracting(on) }
+        // Re-seed from the opened-on story in case `stories` was still loading at init.
+        .onAppear {
+            if let ni = stories.firstIndex(where: { $0.id == activeId }), ni != index { scroll = CGFloat(ni) }
+        }
         // ⚠️ KEYED ON THE STORIES. A bare `.task` runs once per MOUNT and never again, so the counts
         // were fetched once and a story that landed while the sheet was open kept "0" for the rest
         // of the session no matter how many people watched it. `id:` re-runs it when the set
@@ -4605,16 +3901,92 @@ struct MyStoriesCarousel: View {
         .task(id: stories.map(\.id)) { await loadAll() }
     }
 
-    // `cardMedia`, `card` and `centreDistance` moved to StoryRowUIKit.swift with the row itself.
-    // `cardMedia` is `StoryRowCardMedia` there, unchanged in every branch; the clip and the corner
-    // are the card view's; the live story's item hides its own picture, which is the row's decision
-    // and lives in the row's loop (`setLive`); and `centreDistance` — which hid a card's own small
-    // count as it reached the centre — is two lines inside the layout pass, where it costs an alpha
-    // write instead of a SwiftUI geometry read per card per frame.
+    /// The picture on a carousel card: the frame photographed off the live story if there is one,
+    /// otherwise the poster the way it has always been.
+    ///
+    /// The fill lives INSIDE an overlay of `Color.clear` for the same reason every other fill in this
+    /// file does: a bare `scaledToFill` reports its own oversized layout and the ZStack adopts it.
+    @ViewBuilder private func cardMedia(_ s: Story) -> some View {
+        // ⚠️ ASKED FOR BY STORY, AT DRAW TIME. There is no capture here, no timing and no moment to
+        // get right — this card asks for a picture of ITS OWN clip, and the answer is generated from
+        // that clip's own file at the second its own player is paused on. The player is still alive
+        // (the viewers sheet keeps it), so the second is a fact rather than something that had to be
+        // caught before a pause took it away.
+        //
+        // What this replaces is the whole reason this area kept breaking: a dictionary the host
+        // filled by PHOTOGRAPHING the live card through one global pointer at one player, at an
+        // instant that was moved three times (`16ba3c63`, `13952868`, `8693f1ee`) and was still
+        // wrong on build 520. A card that fetches its own picture cannot be handed the wrong story's
+        // frame, cannot be left holding a stale one, and cannot miss its turn.
+        //
+        // Nil is the normal answer for a photo (nothing is ever banked for one, and a photo's poster
+        // IS the photo) and for a video nobody has watched this session. Both fall through to the
+        // poster below, which is exactly what they had before.
+        if s.isVideo, let u = URL(string: s.mediaUrl),
+           let shot = StoryVideoFrames.card(u, storyId: s.id, width: slotW) {
+            // ⚠️ PINNED TO THE SLOT, exactly like the branch below. `Color.clear` is size-NEUTRAL: it
+            // accepts whatever size it is proposed, and inside the cover-flow `ZStack` that proposal
+            // is not the card, it is the container. The poster branch cannot drift that way because
+            // `StoryImage` carries its own sizing, so before the frozen covers were swept onto every
+            // video story only the CENTRED card ever took this path and the difference never showed.
+            // Once every card could take it, the cards stopped agreeing about how wide they were and
+            // grew into each other — his overlapping window cards.
+            Color.clear
+                .frame(width: slotW, height: slotH)
+                .overlay(Image(uiImage: shot).resizable().scaledToFill())
+                .clipped()
+        } else {
+            // His 2026-08-08 report was: "non-centered cards lose their blur effect or show weak
+            // blur. The blur only appears when the card is centered." That was a `UIVisualEffectView`
+            // DROPPING ITS BLUR when composited at fractional opacity — which is exactly what the
+            // cover-flow does to every card that is not centred (`.opacity(1 - 0.20 * scaleFraction)`
+            // in the body above, on top of a `.scaleEffect`). The centre card was the only one drawn
+            // at opacity 1, so it was the only one whose blur survived.
+            //
+            // It was patched with a pre-baked imitation of the material. The canvas ends the
+            // question instead: a gradient at 80% opacity is the same gradient, 20% weaker, in every
+            // card at once — there is no state in which it can be present for one card and absent
+            // for its neighbour.
+            StoryImage(url: s.previewUrl, fitCanvas: true, cardFillThreshold: slotH / slotW)
+        }
+    }
 
-    // Eye + views + heart + likes, white over a soft shadow — the row's BIG count, under the cards.
-    // The small one inside each card is `StoryRowCountView`, in UIKit, because its alpha is written
-    // on every frame of a scroll. This one changes when the centred card changes and no faster.
+    private func card(_ s: Story) -> some View {
+        let vs = byStory[s.id] ?? []
+        let reacts = vs.filter { !($0.reaction ?? "").isEmpty }.count
+        // IMAGE + CANVAS (build 213, user: keep both): the card is a live StoryImage(fitCanvas:) —
+        // the whole image over its own canvas — exactly what the morph card shows, so the
+        // morph→carousel hand-off at full-open is seamless (same view, same size). `fitCanvas` keeps
+        // the story framed exactly as it is full-screen (user rule: keep image + backdrop if it has
+        // one; fill with none if it doesn't). A story with a frozen cover draws that — see cardMedia.
+        return cardMedia(s)
+            .frame(width: slotW, height: slotH)
+            .clipped()
+            .opacity(hideActiveContent && s.id == activeId ? 0 : 1)
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(alignment: .bottom) {
+                // Side cards show a small count inside; the CENTRED card hides it (big count below).
+                countRow(views: vs.count, likes: reacts, big: false)
+                    .padding(.bottom, 10)
+                    .visualEffect { content, proxy in
+                        content.opacity(Self.centreDistance(proxy) < 0.35 ? 0 : 1)
+                    }
+            }
+            // (Cover-flow scale now comes from the itemScale applied in body — no per-card
+            // visualEffect scale here, or it would double.)
+            .id(s.id)
+            // Taps live on the scroller overlay now (centre card → collapse, side card → native
+            // glide to it) — a gesture here would never fire underneath it.
+    }
+
+    // 0 when the card is centred on screen, → 1 one slot-width away (clamped). Drives the cover-flow scale.
+    private static func centreDistance(_ proxy: GeometryProxy) -> CGFloat {
+        let screenMid = UIScreen.main.bounds.width / 2
+        let mid = proxy.frame(in: .global).midX
+        return min(abs(mid - screenMid) / (UIScreen.main.bounds.width * 0.42), 1)
+    }
+
+    // Eye + views + heart + likes, white over a soft shadow. `big` = the centred card's row below.
     private func countRow(views: Int, likes: Int, big: Bool) -> some View {
         HStack(spacing: big ? 7 : 5) {
             Image(systemName: "eye.fill")
@@ -4637,11 +4009,7 @@ struct MyStoriesCarousel: View {
     private func loadAll() async {
         await withTaskGroup(of: (String, [StoryViewerInfo]).self) { group in
             for s in stories { group.addTask { (s.id, await StoriesService.shared.fetchViewers(storyId: s.id)) } }
-            // Reduced to numbers HERE, once per fetch, rather than in `body` once per frame.
-            for await (id, v) in group {
-                counts[id] = StoryRowCounts(views: v.count,
-                                            likes: v.filter { !($0.reaction ?? "").isEmpty }.count)
-            }
+            for await (id, v) in group { byStory[id] = v }
         }
     }
 }
