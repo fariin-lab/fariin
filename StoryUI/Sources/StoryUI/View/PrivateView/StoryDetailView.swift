@@ -558,6 +558,15 @@ struct StoryDetailView: View {
                     .onChange(of: viewModel.currentStoryUser) { _ in
                         publishCardRect(proxy: proxy, footerH: footerH)
                     }
+                    // ⚠️ AND ON THE FOOTER ITSELF, BECAUSE IT IS PER ITEM AND NOT PER PAGE.
+                    //
+                    // `isReplyBar` is read off `story.config.storyType`, so one bucket can hold an
+                    // item with a reply bar and an item without one — `allowsReplies` is per story.
+                    // Moving between them changes the card's height by 110pt with no page change and
+                    // no size change, so neither of the two triggers above would fire and the crop
+                    // would keep the height of the item we just left. Same shape of bug as the one
+                    // above, one level down.
+                    .onChange(of: footerH) { _ in publishCardRect(proxy: proxy, footerH: footerH) }
                     // (Removed the always-on bottom photo scrim: the reply pill now sits on the solid
                     // black footer BELOW the card, not over the photo, so dimming the photo's bottom
                     // was pointless and just darkened captionless photos.)

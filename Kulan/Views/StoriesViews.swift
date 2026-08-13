@@ -1909,12 +1909,15 @@ struct StoryViewer: View {
             // rather than a second reading of the same thing — see `showingMine`.)
             guard showViewers, showingMine, !id.isEmpty else { return }
             NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: id)
-            // The anchor moves with it. `currentStoryId` means "the item the library is on", and it
-            // is otherwise only written by `onItemSeen`, which the library WITHHOLDS while a story is
-            // paused — and the story is paused for the entire time this sheet is up. Left stale,
-            // `rowIsOnAnotherStory` would stay true after the jump had already landed and the live
-            // card would be held aside for no reason.
-            currentStoryId = id
+            // ⚠️ THE ANCHOR IS NOT WRITTEN HERE EITHER, AND THIS IS THE SECOND OF THE TWO.
+            //
+            // There are two `.onChange(of: sheetStoryId)` handlers on this view and both wrote it,
+            // for the same out-of-date reason: `currentStoryId` used to come only from the WATCHED
+            // receipt, which is withheld while a story is paused, and the sheet pauses the story for
+            // its whole life. The ungated item-changed report owns it now and the jump handler fires
+            // that report from the statement that swaps the item, so the truth arrives on the same
+            // runloop turn as the picture. Removing it from one handler and leaving it in the other
+            // would have fixed nothing.
         }
         // The COVER'S OWN BACKING (not just an inner canvas) must be opaque black while the viewers
         // sheet is up — otherwise the .zoom transition composites the clear backing over the inner
@@ -3759,19 +3762,24 @@ struct StoryViewer: View {
         if rowIsOnAnotherStory {
             let landing = sheetStoryId
             NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: landing)
-            // ⚠️ AND THE ANCHOR MOVES WITH IT, IN THE SAME BREATH.
+            // ⚠️ THE ONE PLACE THIS IS STILL WRITTEN BY HAND, AND IT IS KEPT ON PURPOSE.
             //
-            // `currentStoryId` means "the item the library is on", and we have just told it to be on
-            // `landing`. Without this line it keeps naming the old story until `onItemSeen` fires —
-            // which the library WITHHOLDS while a story is paused, and the story stays paused until
-            // the very end of the collapse. So for the whole of that collapse `targetStoryId` would
-            // still name the story we have just left, and since that is the id the row blanks and
-            // the id the live card is positioned by, the story would grow back to full screen from
-            // the wrong slot with the wrong card blanked out.
+            // The two handlers that used to write it while the sheet is OPEN no longer do: the
+            // ungated item-changed report owns the anchor, and the jump handler fires that report
+            // from the statement that swaps the item, synchronously inside this very `post`. So by
+            // the time this line runs the anchor is usually already `landing` and this is a no-op.
             //
-            // This is not a second copy of anything: it is the one anchor, updated at the moment the
-            // thing it describes actually changed, instead of waiting for a receipt that cannot
-            // arrive yet.
+            // It stays for the one case the report cannot cover. The library's handler refuses a
+            // jump to the item it is already on (`idx != getCurrentIndex()`), and it refuses
+            // silently — so if the anchor has drifted while the library sits exactly where we are
+            // asking it to go, nothing reports and nothing corrects it. Anywhere else that is
+            // harmless; here it is not, because this is the collapse, and a stale anchor is the id
+            // the row blanks and the id the live card flies home to. The story would grow back to
+            // full screen out of the wrong slot with the wrong card blanked.
+            //
+            // The old reason written here — that `onItemSeen` is withheld while the story is paused
+            // — was true and is no longer why. Do not restore the same line to the two open-sheet
+            // handlers on the strength of it.
             currentStoryId = landing
         }
         sheetAnimator.animate(from: viewersProgress, to: 0, velocity: velocity, write: { viewersProgress = $0 }) {

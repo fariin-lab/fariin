@@ -532,6 +532,13 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
                 // sitting, which is a worse failure than a missed animation.
                 animateNextStoryId = nil
             }
+            // ⚠️ AND THE THIRD CASE IS DELIBERATELY NOT HANDLED HERE: a story this row HAS that the
+            // library's own bucket does not, so the jump is refused and `liveStoryId` never becomes
+            // `pending`. It cannot strand the row, and that is worth writing down because the
+            // eager anchor write used to hide it: `handleTap` overwrites this flag unconditionally,
+            // so the next tap on any other card replaces the request and moves, and a finger on the
+            // row clears it outright. What is left is that the refused card itself does nothing when
+            // tapped again — which is honest, because there is no picture for the viewer to show.
         }
         // ⚠️ THE WAIT BLOCKS THE JUMP, NOT THE LAYOUT. A pending tap must not swallow an ordinary
         // relayout — a story arriving, a count landing — or the row would sit frozen for as long as
