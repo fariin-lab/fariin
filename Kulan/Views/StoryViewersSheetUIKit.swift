@@ -232,6 +232,12 @@ final class StoryViewersSheetView: UIView {
     /// Translation already accumulated when the pan engaged (the recognizer begins ~10pt in);
     /// subtracted so the first frame moves nothing — the engagement snap the owner once measured.
     private var panBaselineY: CGFloat = 0
+    /// The sheet's height in points when the current drag began — their `viewListHeight` at the start
+    /// of a pan, and the thing a finger's travel is added to.
+    private var dragStartHeight: CGFloat = 0
+    /// Whether that drag began above the half stop, so a release that has come back down to exactly
+    /// the stop still knows it belongs to the expand rule rather than to the close rule.
+    private var dragStartExpand: CGFloat = 0
     private var outsideDragStart: CGFloat = 0
     private var outsideBaselineY: CGFloat = 0
     /// True once a drag has decided the SHEET owns it rather than the list.
@@ -248,13 +254,54 @@ final class StoryViewersSheetView: UIView {
     /// steps it back to half. Ours maps their "half" to the resting `heightFraction` sheet and their "full"
     /// to this flag — same layout path, one number changes, so every child lays out through the
     /// code that already positions it.
-    private var searchExpanded = false
+    /// HOW FAR PAST THE HALF STOP THE SHEET IS: 0 = half, 1 = full screen.
+    ///
+    /// ⚠️ THE REFERENCE APP HAS THREE RESTING STATES AND WE ONLY EVER HAD TWO. Theirs are hidden,
+    /// half and full, and the way to full is to DRAG THE LIST UP — the whole of
+    /// `viewListDismissPanGesture`'s upward half exists for it. Ours could only reach full by
+    /// focusing the search field, so a long viewers list had no way to be made bigger.
+    ///
+    /// Theirs is not a third flag either. It is ONE height, clamped between two stops:
+    ///
+    ///     viewListHeight += -verticalPanState.accumulatedOffset
+    ///     viewListHeight = max(minViewListHeight, min(maxViewListHeight, viewListHeight))
+    ///     self.targetViewListDisplayStateIsFull = viewListHeight > midViewListHeight
+    ///
+    /// so the drag past the half stop is continuous and the state is a description of where the
+    /// height ended up rather than something the gesture has to decide as it goes. `progress` and
+    /// this are the two halves of that one height: `progress` covers hidden → half, this covers
+    /// half → full, and `dragHeight` below is the single number the finger actually writes.
+    private var expand: CGFloat = 0
 
-    private var sheetHeight: CGFloat {
-        searchExpanded ? bounds.height - max(60, safeAreaInsets.top + 8)
-                       : bounds.height * Self.heightFraction
-    }
+    /// True when the sheet is at (or as good as at) the full stop. Kept as a name because the search
+    /// field's own expansion is the same state, reached a different way.
+    private var searchExpanded: Bool { expand >= 0.999 }
+
+    private var halfHeight: CGFloat { bounds.height * Self.heightFraction }
+    /// Their `maxViewListHeight = availableSize.height - 60.0`, with our safe-area floor.
+    private var fullHeight: CGFloat { bounds.height - max(60, safeAreaInsets.top + 8) }
+    private var sheetHeight: CGFloat { halfHeight + (fullHeight - halfHeight) * expand }
     private var panelTop: CGFloat { bounds.height - sheetHeight * progress }
+
+    /// THE ONE NUMBER A VERTICAL DRAG WRITES — their `viewListHeight`. Reading it turns the two
+    /// stored fractions back into points; writing it splits the points back into the two, which is
+    /// what keeps a single finger travelling smoothly across the half stop instead of stalling at it.
+    private var dragHeight: CGFloat {
+        get { halfHeight * progress + (fullHeight - halfHeight) * expand }
+        set {
+            let h = max(0, min(fullHeight, newValue))
+            setProgress(min(1, h / max(1, halfHeight)))
+            setExpand(max(0, h - halfHeight) / max(1, fullHeight - halfHeight))
+        }
+    }
+
+    private func setExpand(_ v: CGFloat) {
+        let clamped = max(0, min(1, v))
+        guard abs(clamped - expand) > 0.0001 else { return }
+        expand = clamped
+        setNeedsLayout()
+        layoutIfNeeded()
+    }
 
     // MARK: Init
 
@@ -552,6 +599,14 @@ final class StoryViewersSheetView: UIView {
         let clamped = max(0, min(1, p))
         guard abs(clamped - progress) > 0.0001 else { return }
         progress = clamped
+        // A SHEET ON ITS WAY DOWN IS NOT AN EXPANDED SHEET.
+        //
+        // The host's release spring writes this directly, frame by frame, and knows nothing about the
+        // half → full stop. Left standing, `expand` would keep `sheetHeight` at the FULL height for
+        // the whole of a close, so the panel would slide out at full height and the story behind it
+        // would be measured against a sheet that is no longer there. Zeroed without animation on
+        // purpose: the sheet is already moving, and a spring on top of a spring is two curves.
+        if clamped < 0.999, expand > 0 { expand = 0 }
         setNeedsLayout()
         layoutIfNeeded()
         onProgress?(clamped)
@@ -566,10 +621,14 @@ final class StoryViewersSheetView: UIView {
         switch g.state {
         case .began:
             dragSpentOnSearch = false
-            // A DRAG ON THE EXPANDED SHEET STEPS BACK ONE LEVEL, the reference app's rule: full+search →
-            // half, and only the NEXT drag can dismiss. The host's settle math is written against
-            // the half height, so letting a drag run while expanded would fight two height models.
-            if searchExpanded {
+            // A DRAG WHILE THE KEYBOARD IS UP STEPS BACK ONE LEVEL, the reference app's rule: search →
+            // half, and only the NEXT drag can dismiss.
+            //
+            // ⚠️ IT ASKS THE SEARCH FIELD NOW, NOT THE HEIGHT. The test used to be `searchExpanded`,
+            // which was the same thing while search was the only way to reach the full stop. A drag
+            // can reach it now, and a sheet a finger opened must be closable by that finger's next
+            // drag rather than spending a whole gesture doing nothing.
+            if search.isFirstResponder {
                 search.resignFirstResponder()
                 setSearchExpanded(false)
                 g.setTranslation(.zero, in: self)
@@ -586,6 +645,8 @@ final class StoryViewersSheetView: UIView {
             onDragActive?(true)   // finger beats spring: the host cancels any in-flight settle
             suspendForeignPans()  // catch any lazily-created system pan before it can ride along
             dragStart = progress
+            dragStartHeight = dragHeight
+            dragStartExpand = expand
             panBaselineY = translation
             dragOwnsSheet = shouldSheetTakeDrag(velocity: velocity)
         case .changed:
@@ -597,13 +658,20 @@ final class StoryViewersSheetView: UIView {
                 if shouldSheetTakeDrag(velocity: velocity) {
                     dragOwnsSheet = true
                     dragStart = progress
+                    dragStartHeight = dragHeight
+                    dragStartExpand = expand
                     g.setTranslation(.zero, in: self)
                     panBaselineY = 0
                 }
                 return
             }
             table.contentOffset.y = 0          // pin it while the sheet owns the movement
-            setProgress(dragStart - (translation - panBaselineY) / sheetHeight)
+            // ⚠️ ONE HEIGHT, IN POINTS, ACROSS BOTH STOPS. This was `setProgress(dragStart - travel /
+            // sheetHeight)`, which is only the hidden → half half of the journey and stalls dead at
+            // the half stop. Writing the height instead lets one finger carry the sheet from closed,
+            // through half, up to full without the gesture noticing there is a stop in the middle —
+            // which is what theirs does with `viewListHeight`.
+            dragHeight = dragStartHeight - (translation - panBaselineY)
         case .ended, .cancelled:
             // Balanced with `.began`. A gesture spent on the collapse never said a finger owns
             // progress, so it must not say one has let go either: it moved no sheet, there is no
@@ -615,7 +683,33 @@ final class StoryViewersSheetView: UIView {
             onDragActive?(false)
             guard dragOwnsSheet else { return }
             dragOwnsSheet = false
-            onRelease?(progress, dragStart, -velocity / sheetHeight)
+            // ⚠️ THE EXPAND ZONE HAS ITS OWN RELEASE RULE, AND IT IS NOT THE HOST'S.
+            //
+            // Theirs, for a release that happened above the half stop (`accumulatedOffset < 0`):
+            //
+            //     if verticalPanState.fraction <= -0.05 || velocity.y <= -80.0 {
+            //         self.viewListDisplayState = .full
+            //     } else {
+            //         self.viewListDisplayState = .half
+            //     }
+            //
+            // on a 0.4s spring. `fraction` is the drag as a share of the SCREEN height and negative is
+            // upward, so it commits to full on a twentieth of the screen where the close asks for
+            // three tenths. An expand is meant to be easy; a dismiss is not.
+            if progress > 0.999, expand > 0.0001 || dragStartExpand > 0.0001 {
+                let fraction = (translation - panBaselineY) / max(1, bounds.height)
+                animateExpand(to: (fraction <= -0.05 || velocity <= -80) ? 1 : 0)
+                return
+            }
+            // Dropped back below the half stop: the gesture is a collapse and the host owns that
+            // decision, exactly as before. Anything left of the expansion goes home with it.
+            if expand > 0.0001 { animateExpand(to: 0) }
+            // ⚠️ `halfHeight`, NOT `sheetHeight`. The host's settle maths is written against the half
+            // height (`StoryViewersSheetView.heightFraction`), so the velocity handed to it has to be
+            // in those units. `sheetHeight` is bigger than that whenever the sheet is expanded, and
+            // dividing by it would under-report the speed of exactly the drags that come down from
+            // full — the ones most likely to be a deliberate close.
+            onRelease?(progress, dragStart, -velocity / max(1, halfHeight))
         default:
             break
         }
@@ -873,7 +967,19 @@ final class StoryViewersSheetView: UIView {
     private func shouldSheetTakeDrag(velocity: CGFloat) -> Bool {
         if progress < 0.999 { return true }               // not fully open → the sheet is the thing moving
         if table.contentOffset.y > 0.5 { return false }   // list has somewhere to go → let it scroll
-        return velocity > 0                               // at the top and pulling down → collapse
+        if velocity > 0 { return true }                   // at the top and pulling down → collapse
+        // ⚠️ AT THE TOP AND PUSHING UP: THE SHEET GROWS UNTIL IT IS FULL, and only then does the list
+        // scroll. This line is the half → full gesture.
+        //
+        // Theirs is the same rule, written from the other side: while the list is in `.half` an
+        // upward drag is accumulated into the sheet's height rather than into the scroll view —
+        //
+        //     if self.viewListDisplayState == .half && verticalPanState.didLockScrolling {
+        //         verticalPanState.accumulatedOffset += -overflowY
+        //
+        // — and `didLockScrolling` is set the moment the scroll view is at its top. So the list is
+        // only scrollable once there is no more sheet to open.
+        return expand < 0.999
     }
 
     // MARK: Filtering
@@ -902,12 +1008,23 @@ final class StoryViewersSheetView: UIView {
     }
 
     private func setSearchExpanded(_ on: Bool) {
-        guard searchExpanded != on else { return }
-        searchExpanded = on
-        // The reference app's 0.5s spring for exactly this jump. `.allowUserInteraction` for the same
-        // reason the page settles carry it: a finger must be able to interrupt.
-        UIView.animate(withDuration: 0.5, delay: 0, usingSpringWithDamping: 0.85,
+        // The reference app's 0.5s spring for the search jump specifically; a drag-driven expand uses
+        // their 0.4s, which is the number on that transition in their source.
+        animateExpand(to: on ? 1 : 0, duration: 0.5, damping: 0.85)
+    }
+
+    /// Take the sheet to a stop, half (0) or full (1), on a spring.
+    ///
+    /// `expand` is a plain stored property and nothing animates it directly. What animates is the
+    /// LAYOUT it produces: setting it inside the block and laying out there is the shape the search
+    /// expansion has always used, and the frames that change are what carry the curve.
+    /// `.allowUserInteraction` for the same reason every settle in this file has it — a finger has to
+    /// be able to interrupt one.
+    private func animateExpand(to target: CGFloat, duration: Double = 0.4, damping: CGFloat = 0.85) {
+        guard abs(expand - target) > 0.0001 else { return }
+        UIView.animate(withDuration: duration, delay: 0, usingSpringWithDamping: damping,
                        initialSpringVelocity: 0, options: [.allowUserInteraction]) {
+            self.expand = target
             self.setNeedsLayout()
             self.layoutIfNeeded()
         }
