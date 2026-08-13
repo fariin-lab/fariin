@@ -1101,8 +1101,19 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             StoryCardMorph.shared.placeAtRest()
             return
         }
+        // ⚠️ `p.dim` GOES WITH THE PLACEMENT NOW, AND IT IS THE SAME NUMBER EVERY OTHER CARD GETS.
+        //
+        // This card was the only one in the row nothing ever dimmed. The tints above are siblings in
+        // THIS view; the live story is drawn by the morph in the presenter's hierarchy, so a tint
+        // added here is not above it and cannot darken it — the morph's own note said the row would
+        // cover this card "like every other one", which was true of every card except this one. His
+        // 2026-08-13 video: the moving card at full brightness between two dimmed ones.
+        //
+        // One number, computed once by `StoryRowGeometry.placement` for every card including this,
+        // and handed to whoever draws it. Nothing here works out a second dim of its own.
         StoryCardMorph.shared.place(contentCenter: p.center, contentSize: p.size,
                                     cornerRadius: p.cornerRadius, fraction: geometry.fraction,
+                                    dim: p.dim,
                                     animated: settle.map { Self.settleAnimation($0) })
     }
 

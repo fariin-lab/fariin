@@ -75,6 +75,32 @@ public final class StoryCardMorph {
     private weak var card: UIView?
     private var maskLayer: CALayer?
 
+    /// THE LIVE STORY'S OWN TINT, because the row's tint cannot reach it.
+    ///
+    /// ⚠️ EVERY CARD IN THE ROW IS DIMMED BY A LAYER THE ROW ADDS DIRECTLY ABOVE IT — and the live
+    /// story is the one card the row does not own. `StoryRowUIKit` keeps `tints[storyId]` as
+    /// siblings inside its own view and hands each one its card's geometry; this class draws the
+    /// live story, in the presenter's hierarchy, so a tint sitting in the row is not above it and
+    /// cannot darken it. `place` therefore passed `dim: nil` and said the row's tint would cover
+    /// this card "like every other one", which was true of every card except this one. That is the
+    /// owner's 2026-08-13 report: a bright card moving between two dimmed ones, on the tap.
+    ///
+    /// ⚠️ NOT `applyCore`'s existing `dim:` PARAMETER. That one writes `superview.backgroundColor` —
+    /// the wall BEHIND the story, the cover-flow dim — so feeding the row's number into it would
+    /// have darkened the background and left the card exactly as bright as before.
+    ///
+    /// It is a sublayer of the CARD, which is the whole of why it needs no geometry: the transform
+    /// that moves and scales the card carries it, and the crop mask that rounds the card rounds it.
+    /// The row's own note makes the same point about theirs — a tint cannot be the wrong size for
+    /// its card if it was never told a size of its own.
+    private let contentTint: CALayer = {
+        let l = CALayer()
+        l.backgroundColor = UIColor.black.cgColor
+        l.opacity = 0
+        l.isHidden = true
+        return l
+    }()
+
     /// THE FLIGHT CARD — the second transform target, and the reason there are two.
     ///
     /// The hero open/close used to fly the SAME view the sheet shrinks, and for a friend's story
@@ -555,8 +581,12 @@ public final class StoryCardMorph {
         }
     }
 
+    /// - Parameter dim: how dark this card is at its current distance from the centre — the same
+    ///   `StoryRowPlacement.dim` the row writes onto every other card's tint. Defaulted so the
+    ///   flight and the sheet's own callers are unchanged.
     public func place(contentCenter: CGPoint, contentSize: CGSize,
                       cornerRadius: CGFloat, fraction: CGFloat,
+                      dim: CGFloat = 0,
                       animated: Animation? = nil) {
         // A dismiss owns the same transform. It cannot be running at the same time as the sheet
         // (both pans are direction-locked and the sheet is shut before a dismiss can start), but if
@@ -577,6 +607,35 @@ public final class StoryCardMorph {
                   // half-card is what the owner photographed.
                   alpha: 1, dim: nil, chrome: 0, crop: 1,
                   exiting: false, animated: animated)
+        // AFTER the transform, so the bounds it copies are the ones this pass just settled on.
+        applyContentTint(on: card, dim: dim, animated: animated)
+    }
+
+    /// Kept beside the card at all times, on the row's number.
+    ///
+    /// ⚠️ INSERTION ORDER IS THE ORDERING, AND `zPosition` IS NEVER TOUCHED. It is implicitly
+    /// animated, so a per-frame write sorts by a value up to a quarter of a second stale — which is
+    /// how a tint came to be drawn BEHIND the card it was dimming once already (2026-08-13,
+    /// `730d98e6`). Re-adding the layer is how it stays on top, exactly as the row pairs
+    /// `addSubview(contentContainerView)` with `layer.addSublayer(contentTintLayer)`.
+    ///
+    /// The write follows the caller's animation: a settle animates the dim with the movement that
+    /// caused it, while the frames of a live drag are the finger's and are never animated — the same
+    /// rule the row applies to its own tints.
+    private func applyContentTint(on card: UIView, dim: CGFloat, animated: Animation?) {
+        let d = max(0, min(1, dim))
+        if contentTint.superlayer !== card.layer || card.layer.sublayers?.last !== contentTint {
+            card.layer.addSublayer(contentTint)
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(animated == nil)
+        if let animated { CATransaction.setAnimationDuration(animated.duration) }
+        // `bounds`, never `frame`: the card carries a transform and `frame` is undefined on a view
+        // that does. The tint lives in the card's own untransformed space and inherits everything.
+        contentTint.frame = card.bounds
+        contentTint.isHidden = d <= 0.0001
+        contentTint.opacity = Float(d)
+        CATransaction.commit()
     }
 
     /// Put the card back to full screen. The row calls this instead of `place` when the pull has
@@ -1027,6 +1086,12 @@ public final class StoryCardMorph {
         // it comes off entirely at rest rather than being left covering the whole card.
         card.layer.mask = nil
         maskLayer = nil
+        // OFF IN THE SAME BREATH, for the same reason: a story at rest is a story at full screen,
+        // and full screen is never dimmed. Left behind, the tint would hold the last card's darkness
+        // over a story that nothing is shrinking any more.
+        contentTint.isHidden = true
+        contentTint.opacity = 0
+        contentTint.removeFromSuperlayer()
         CATransaction.commit()
     }
 
