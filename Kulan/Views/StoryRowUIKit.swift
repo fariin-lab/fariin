@@ -332,6 +332,17 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     private var tints: [String: CALayer] = [:]
     /// Their `ignoreScrolling` fence. A programmatic offset must not be mistaken for a finger.
     private var ignoreScrolling = false
+
+    /// ⚠️ THE ROW IS STILL MOVING AND `isDecelerating` HAS ALREADY GONE FALSE.
+    ///
+    /// `snapScrolling` finishes a drag that stopped short of a whole card with an ANIMATED
+    /// `setContentOffset`, and a scroll view animating its own offset reports itself as neither
+    /// dragging, tracking nor decelerating. Without this the row would be back to accepting an
+    /// outside jump for the length of that animation — a smaller window than the deceleration one
+    /// below it, and the same bug in it.
+    ///
+    /// Lowered in `scrollViewDidEndScrollingAnimation`, which is the only thing that ends it.
+    private var isSnapping = false
     /// The last index handed out through `onIndexChanged`, so the answer coming back around as an
     /// input cannot be mistaken for somebody else asking for a jump.
     private var reportedIndex = -1
@@ -434,8 +445,30 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         // SOMEBODY ELSE MOVED THE SELECTION — the sheet paged sideways, or the row was opened on a
         // story it is not currently centred on. Their `animateNextNavigationId` path: the offset is
         // put on the new item AT ONCE and the layout is animated to catch up over 0.3s.
+        //
+        // ⚠️ ONLY WHILE THE ROW IS COMPLETELY STILL, AND THAT IS THE WHOLE OF THE FAST-SWIPE FIX.
+        //
+        // Their rule, read off `:5234-5247`: while the row is open, the ONLY programmatic write to
+        // the scroll offset is the sheet-page commit — `resetScrollingOffsetWithItemTransition`,
+        // set at `:2764` only when the model has ARRIVED at the id the sideways pan asked for, and
+        // never from the scroller's own navigation. The scroller is the truth and the story id
+        // follows it. They cannot yank a moving row because they never write a moving row.
+        //
+        // Ours tested `!isDragging, !isTracking` — which are both FALSE for the whole of a flick's
+        // deceleration, the one window this needs to cover. What arrives in that window is our own
+        // report coming back around: the row says "index 3", that goes out through `onIndexChanged`
+        // → `activeId` → `sheetStoryId` → a notification → the library's pager → back as
+        // `targetStoryId`. Cross three cards in two hundred milliseconds and the value returning is
+        // a card or two behind where the row already is. It does not match `reportedIndex`, so it
+        // reads as somebody else asking for a jump, and the row teleports BACKWARDS mid-flight and
+        // springs the cards 0.3s onto a card the finger already left. That is his "the centre one
+        // has not finished leaving before the next one arrives".
+        //
+        // Deceleration and our own snap animation are as much the row's own movement as a finger is.
+        let rowIsStill = !scroller.isDragging && !scroller.isTracking
+            && !scroller.isDecelerating && !isSnapping
         if let activeIndex, activeIndex != reportedIndex, activeIndex != centredIndex,
-           stories.indices.contains(activeIndex), !scroller.isDragging, !scroller.isTracking {
+           stories.indices.contains(activeIndex), rowIsStill {
             navigate(to: activeIndex, animated: true)
         } else if storiesChanged || countsChanged || geometryChanged || liveChanged {
             // ⚠️ ONLY WHEN SOMETHING THIS METHOD OWNS ACTUALLY MOVED, AND THAT GUARD IS LOAD-BEARING
@@ -498,6 +531,11 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// itself moves immediately, which is what keeps the cards and the live story on one clock.
     func navigate(to index: Int, animated: Bool) {
         guard stories.indices.contains(index), geometry.fullDist > 0.5 else { return }
+        // An unanimated `setContentOffset` cancels a running snap WITHOUT delivering
+        // `didEndScrollingAnimation`, so the flag has to come down here or it would never come down
+        // at all — and a stuck `isSnapping` means the row ignores every outside jump for the rest of
+        // the sitting. A tap can reach this while a snap is in flight.
+        isSnapping = false
         ignoreScrolling = true
         scroller.setContentOffset(CGPoint(x: CGFloat(index) * geometry.fullDist, y: 0), animated: false)
         ignoreScrolling = false
@@ -789,6 +827,12 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
 
     // MARK: Scroll delegate — theirs, method for method
 
+    /// A finger cancels a snap animation, and UIKit does NOT deliver
+    /// `didEndScrollingAnimation` for one it interrupted. Same reason as the clear in `navigate`.
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        isSnapping = false
+    }
+
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard !ignoreScrolling else { return }
         updateScrolling()
@@ -827,6 +871,7 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { snapScrolling() }
 
     func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+        isSnapping = false
         updateScrolling()
     }
 
@@ -839,6 +884,7 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         guard off > 0, off < maxOff else { return }
         let target = (off / geometry.fullDist).rounded() * geometry.fullDist
         guard abs(target - off) > 0.5 else { return }
+        isSnapping = true
         scroller.setContentOffset(CGPoint(x: target, y: 0), animated: true)
     }
 
