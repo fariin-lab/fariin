@@ -129,6 +129,10 @@ private struct SheetCaptionFade: ViewModifier {
 struct StoryDetailView: View {
     // MARK: Public Properties
     @ObservedObject var viewModel: StoryViewModel
+    /// The host's per-story placements and the switch. Observed rather than read, because the card's
+    /// clip has to come off in the same update the items start placing themselves — a clip that
+    /// lagged the switch by one pass would cut the stories off for exactly that pass.
+    @ObservedObject private var itemLayout = StoryItemLayout.shared
     @Environment(\.scenePhase) private var scenePhase
 
     @State var model: StoryUIModel
@@ -512,8 +516,25 @@ struct StoryDetailView: View {
                             // Radius ZERO while a flight mask is on — the mask owns the corner for the
                             // whole flight (see `flightMaskOn`); the rectangle clip itself stays, it is
                             // what cuts the blur backdrop's spill.
-                            .clipShape(RoundedRectangle(cornerRadius: flightMaskOn ? 0 : cardRadius,
-                                                        style: .continuous))
+                            // ⚠️ AND NO CLIP AT ALL WHILE THE ITEMS PLACE THEMSELVES, WHICH IS PART
+                            // OF THE FLIP RATHER THAN A TWEAK.
+                            //
+                            // This clip is the card's rectangle. Once each story carries its own
+                            // position and scale, the stories TRAVEL — out to the sides, into the
+                            // row — and every one of them crosses this edge. Left on, the clip cuts
+                            // them off at the card's boundary and a story simply vanishes as it
+                            // leaves. Verified in the source before the flip, not on the phone
+                            // after it.
+                            //
+                            // The corner it was drawing goes with it: each item carries its own
+                            // radius from the placement now, which is the right owner anyway, since
+                            // the cards in the row have never all shared one.
+                            //
+                            // ⚠️ AND IT IS THE MODIFIER THAT GOES, NOT ITS RADIUS. A `clipShape` at
+                            // radius 0 still clips — to the card's rectangle, which is the very edge
+                            // the travelling stories have to cross.
+                            .modifier(CardClip(on: !itemLayout.hostOwnsItems,
+                                               radius: flightMaskOn ? 0 : cardRadius))
                             .overlay(
                                 tapStory()
                                     .offset(
@@ -956,6 +977,18 @@ private extension StoryDetailView {
     /// already built around — see `StoryItemViewStore.capacity`.
     private func itemWindow(around index: Int) -> [Int] {
         guard !model.stories.isEmpty else { return [] }
+        // ⚠️ THE ROW'S WINDOW WHEN THE ROW IS PLACING, OURS ONLY WHEN IT IS NOT.
+        //
+        // The row publishes a placement for every story it lays out. Those are exactly the stories
+        // that need a real view: any story it draws that we do not hold would have to be a thumbnail
+        // instead, and a row that is half real views and half pictures is the split being removed.
+        // Their `validIds` is built by the layout pass for the same reason — one loop decides both
+        // what is laid out and what exists.
+        let placed = StoryItemLayout.shared.placements
+        if !placed.isEmpty {
+            let idx = model.stories.indices.filter { placed[model.stories[$0].id] != nil }
+            if !idx.isEmpty { return idx }
+        }
         let lo = max(0, index - 1)
         let hi = min(model.stories.count - 1, index + 1)
         return Array(lo...hi)
@@ -1148,7 +1181,14 @@ private extension StoryDetailView {
         // footer would be a bar of black across the bottom of the chat list while the story flew home.
         // Another mainstream messenger does the same: at rest there is a reply bar, and the instant the pull starts it
         // is not there. See `flightActive`.
-        .opacity(flightActive ? 0 : 1)
+        //
+        // ⚠️ AND ON `chromeHidden` TOO, WHICH IT WAS MISSING. Every other piece of chrome is gated on
+        // it — the bars, the name, the scrim, the caption — and this one was not. It has been
+        // invisible anyway for one reason only: the viewers sheet opens over MY story, my story is
+        // `.plain()`, and a plain `MessageView` renders an empty view. So the hole was covered by
+        // whose story it happens to be, which is not a reason. Once the card stops being transformed
+        // for the pull, an ungated bar is one that stays FULL SIZE over the row.
+        .opacity((flightActive || chromeHidden) ? 0 : 1)
         .animation(.easeOut(duration: 0.15), value: flightActive)
         // Ride the keyboard's own timing (critically-damped spring keyed to the keyboard duration):
         // front-loaded like the keyboard, so the reply pill stays just above the keyboard's top edge

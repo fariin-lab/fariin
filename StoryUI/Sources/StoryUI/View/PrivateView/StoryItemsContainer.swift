@@ -26,6 +26,26 @@
 import SwiftUI
 import UIKit
 
+/// The card's own rectangle clip, present only while the card owns the geometry.
+///
+/// ⚠️ A `clipShape` AT RADIUS ZERO STILL CLIPS. It had to become a modifier that is absent rather
+/// than a radius that is zero, because the edge itself is the problem: once each story carries its
+/// own placement they travel out of the card's rectangle, and a clip there cuts them off as they
+/// leave. Each item carries its own corner radius instead, which is the right owner anyway — the
+/// cards in the row have never all shared one.
+struct CardClip: ViewModifier {
+    let on: Bool
+    let radius: CGFloat
+
+    func body(content: Content) -> some View {
+        if on {
+            content.clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        } else {
+            content
+        }
+    }
+}
+
 /// The host controller: one child per story id, each holding that story's media.
 final class StoryItemsHostVC: UIViewController {
     /// Keyed by story id, because identity is the STORY. A slot-keyed cache would hand one view a
@@ -71,6 +91,9 @@ final class StoryItemsHostVC: UIViewController {
             hc.removeFromParent()
         }
         order.removeAll { !live.contains($0) }
+        // The row blanks its own card for every story held here. Published by the container because
+        // it is the thing that knows, rather than guessed at a second time on the host side.
+        StoryVideoHost.setHeldItemIds(live)
     }
 
     override func viewDidLayoutSubviews() {
@@ -122,6 +145,13 @@ final class StoryItemsHostVC: UIViewController {
             let centre = view.convert(p.center, from: nil)
             v.transform = CGAffineTransform(scaleX: max(scale, 0.0001), y: max(scale, 0.0001))
             v.center = centre
+            // The card's clip is gone while we own the geometry, so each item wears its own corner —
+            // which is correct rather than merely necessary: the row's cards have never all shared
+            // one radius. Pre-divided by the scale it is about to be multiplied by, their
+            // `12.0 * (1.0 / itemScale)`, so it reads on screen as the number the host asked for.
+            v.layer.cornerCurve = .continuous
+            v.layer.cornerRadius = p.cornerRadius / max(scale, 0.0001)
+            v.layer.masksToBounds = p.cornerRadius > 0
         }
     }
 }

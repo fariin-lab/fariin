@@ -3554,7 +3554,22 @@ struct StoryViewer: View {
         // fading the row in while the card was still moving. One progress value, read once, and the
         // staging expressed against it.
         let pull = sheetSizeFraction(p)
-        let carIn = max(0, min(1, (pull - 0.88) / 0.12))
+        // ⚠️ THE ROW NO LONGER FADES IN, BECAUSE IT IS NO LONGER WHAT YOU LOOK AT.
+        //
+        // `carIn` faded the whole carousel in over the last of the pull, which was right while the
+        // row's cards were the pictures. They are not any more: every story is drawn by its own view
+        // inside the story page, and what the row still holds is the FRAMES, the tap targets and —
+        // load-bearing — the tint layer that dims each story. Fading that container out for the
+        // first 88% of the pull would take the dim with it, so the stories would be at full
+        // brightness on the way in and snap dark at the end.
+        //
+        // Their row does not fade either. Every item is present the whole time and the tint is what
+        // makes the neighbours invisible while the sheet is down — which is the term ported in
+        // `dim`, and which now does this job on its own.
+        //
+        // The count badges were the other thing this hid. They fade on the same curve, one level
+        // down, where they can be hidden without hiding the dim: see `countAlpha`.
+        let carIn: CGFloat = 1
         // Feed the row from the LIVE repo (not the viewer's immutable snapshot), so a story
         // deleted while viewing doesn't linger as a ghost card. Fall back to the snapshot.
         let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories

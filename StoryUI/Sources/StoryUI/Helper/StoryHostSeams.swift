@@ -122,6 +122,19 @@ public enum StoryVideoHost {
     public static func pullFraction(_ f: CGFloat) {
         StoryItemLayout.shared.setFraction(max(0, min(1, f)))
     }
+
+    /// THE SWITCH. True while the row is placing every story itself — see `StoryItemLayout`.
+    public static func setHostOwnsItems(_ on: Bool) {
+        StoryItemLayout.shared.setHostOwnsItems(on)
+    }
+
+    public static var hostOwnsItems: Bool { StoryItemLayout.shared.hostOwnsItems }
+
+    /// The stories the library is holding a real view for this pass. The row blanks its own card for
+    /// each of these: two pictures of one story is the thing being removed.
+    public static var heldItemIds: Set<String> { StoryItemLayout.shared.heldIds }
+
+    static func setHeldItemIds(_ ids: Set<String>) { StoryItemLayout.shared.setHeld(ids) }
 }
 
 /// WHERE ONE STORY'S VIEW SITS — in WINDOW coordinates, the space the host computes in.
@@ -167,9 +180,18 @@ final class StoryItemLayout: ObservableObject {
     /// screen with two of every story on it.
     @Published private(set) var hostOwnsItems = false
 
+    /// The stories the library actually holds a view for, written by the container itself so the
+    /// answer comes from the thing that knows rather than from a second guess on the host side.
+    @Published private(set) var heldIds: Set<String> = []
+
     func setHostOwnsItems(_ on: Bool) {
         guard on != hostOwnsItems else { return }
         hostOwnsItems = on
+    }
+
+    func setHeld(_ ids: Set<String>) {
+        guard ids != heldIds else { return }
+        heldIds = ids
     }
 
     func set(_ p: [String: StoryItemPlacement]) {

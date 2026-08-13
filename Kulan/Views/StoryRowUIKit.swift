@@ -826,7 +826,12 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             // takes over. Ported from the row's old `centreDistance` visual effect, which measured
             // the card's midpoint against the screen's.
             let dist = min(abs(p.center.x - screenW / 2) / (screenW * 0.42), 1)
-            let countAlpha: CGFloat = dist < 0.35 ? 0 : 1
+            // ⚠️ AND STAGED BY THE PULL, WHICH `carIn` USED TO DO FOR IT ONE LEVEL UP. The container
+            // cannot fade any more — it carries the tint that dims the real stories — so the badges
+            // carry their own fade instead. Same curve, same end point, one level lower, where
+            // hiding them does not hide the dim with them.
+            let staged = max(0, min(1, (geometry.fraction - 0.88) / 0.12))
+            let countAlpha: CGFloat = (dist < 0.35 ? 0 : 1) * staged
             // The card's own size. Set OUTSIDE the animation and only when it differs: a bounds
             // change re-lays-out the hosted content, and it changes for one reason (the sheet's slot
             // was re-measured) which is not something a scroll ever does.
@@ -954,7 +959,15 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
                         settle: nil)
                 }
             }
-            item.setLive(isLive)
+            // ⚠️ EVERY STORY THE LIBRARY HOLDS A VIEW FOR DRAWS NOTHING HERE — not just the live one.
+            //
+            // This is the flip. `setLive` used to blank exactly one card, because exactly one story
+            // had a real view and the rest were pictures. Every story in this loop has a real view
+            // now, so every card is a frame and a tap target and draws no pixels. There is one
+            // picture of each story on the screen, and it is the story's own view — which is the
+            // whole architecture, and what lets A move centre → side while B moves side → centre
+            // instead of one of them being handed over mid-flight.
+            item.setLive(isLive || StoryVideoHost.heldItemIds.contains(story.id))
             item.updateMedia(story: story, slotW: geometry.slotW, slotH: geometry.slotH)
             if willAnimate {
                 // Their `.curve(duration: 0.3, curve: .spring)` for a movement that did not come from
@@ -1018,6 +1031,13 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         // published set is inert — which is deliberate, so this can be built and verified on its own.
         StoryVideoHost.itemPlacements(placements)
         StoryVideoHost.pullFraction(geometry.fraction)
+        // ⚠️ THE SWITCH, AND IT FOLLOWS THE PULL RATHER THAN BEING A MODE.
+        //
+        // At fraction 0 the story is full screen and the library lays itself out exactly as it
+        // always has — one item filling the card, nothing transformed. Off zero, the row is placing
+        // every story and the items take their own geometry. Deriving it from the pull means there
+        // is no third state to get stuck in and nothing to reset on collapse.
+        StoryVideoHost.setHostOwnsItems(geometry.fraction > 0.0001)
     }
 
     /// WHAT AN ITEM IS AT FRACTION 0 — the story content's own rectangle, full screen, in window
@@ -1105,6 +1125,12 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             StoryCardMorph.shared.placeAtRest()
             return
         }
+        // ⚠️ THE SHEET PATH STANDS DOWN WHEN THE ITEMS PLACE THEMSELVES, AND IT MUST BE ALL OR
+        // NOTHING. This transforms the whole card container; an item that also carries its own
+        // placement would then wear the shrink TWICE. One of the two owns the geometry, never both.
+        //
+        // The flight path is untouched — that is a separate question and a separate transform.
+        guard !StoryVideoHost.hostOwnsItems else { return }
         StoryCardMorph.shared.place(contentCenter: p.center, contentSize: p.size,
                                     cornerRadius: p.cornerRadius, fraction: geometry.fraction,
                                     animated: settle.map { Self.settleAnimation($0) })
