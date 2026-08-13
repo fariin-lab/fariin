@@ -208,7 +208,9 @@ final class StoryRowItemView: UIView {
         // row was applied AFTER the shape and so was never clipped by it. Clipping the whole card
         // would cut the count's shadow off at the corners.
         //
-        // The radius itself is written per frame by `setCornerRadius` — see there.
+        // The radius scales with the card because the card carries the transform and the picture is
+        // inside it — the same thing `.clipShape` under a `.scaleEffect` did.
+        host.view.layer.cornerRadius = 24
         host.view.layer.cornerCurve = .continuous
         host.view.clipsToBounds = true
         // A hosting controller's view is opaque by default on some paths, which would paint a
@@ -223,25 +225,6 @@ final class StoryRowItemView: UIView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    /// THE CORNER, COMPENSATED FOR THE CARD'S SCALE — their
-    /// `setCornerRadius(layer: contentContainerView.layer, cornerRadius: 12.0 * (1.0 / itemScale))`.
-    ///
-    /// ⚠️ THE POINT IS THAT THE RADIUS ON SCREEN DOES NOT CHANGE. A layer's `cornerRadius` is in the
-    /// layer's OWN coordinates, so a card carrying a scale transform renders `radius * scale`. Ours
-    /// was a flat 24 and therefore drew about 13 on a side card and 24 on the centred one — the
-    /// corner grew and shrank as a card moved through the row. Dividing by the scale cancels the
-    /// transform exactly, which is why theirs is written as a reciprocal.
-    ///
-    /// The value is 12, theirs, rather than the 24 this row used.
-    func setCornerRadius(scale: CGFloat) {
-        let r = StoryRowItemView.screenCornerRadius / max(scale, 0.05)
-        guard abs(host.view.layer.cornerRadius - r) > 0.01 else { return }
-        host.view.layer.cornerRadius = r
-    }
-
-    /// The radius wanted ON SCREEN, at any card scale.
-    static let screenCornerRadius: CGFloat = 12
 
     /// Rebuild the hosted picture only if something it is drawn from moved.
     func updateMedia(story: Story, slotW: CGFloat, slotH: CGFloat, isLive: Bool) {
@@ -551,10 +534,6 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             item.layer.zPosition = 2 - abs(cf)
             item.updateMedia(story: story, slotW: geometry.slotW, slotH: geometry.slotH,
                              isLive: story.id == liveStoryId)
-            // Outside the animation on purpose: a corner radius that springs while the card also
-            // springs is two curves on one shape, and theirs is written in the same pass as the
-            // transform with no separate animation of its own.
-            item.setCornerRadius(scale: scale)
             if animated, existing != nil {
                 // Their `.curve(duration: 0.3, curve: .spring)` for a movement that did not come from
                 // the finger. `.allowUserInteraction` so an interrupting swipe is heard during it,

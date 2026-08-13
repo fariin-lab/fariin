@@ -601,23 +601,11 @@ struct StoryRowGeometry: Equatable {
                                     targetSize: CGSize(width: slotW * scale, height: slotH * scale),
                                     targetCenter: CGPoint(x: scr.width / 2 + lerpCancelledX,
                                                           y: centerY),
-                                    // ⚠️ NOT MULTIPLIED BY THE SCALE ANY MORE, AND THAT IS THE WHOLE
-                                    // OF THE CORNER FIX ON THIS SIDE.
-                                    //
-                                    // The morph renders this as `cornerRadius * f` ON SCREEN (its
-                                    // mask is `cornerRadius * f / scale` in the card's own space, and
-                                    // the card is drawn at `scale`). So multiplying by the card's
-                                    // scale here made the on-screen radius shrink with the card —
-                                    // about 13pt on a side card against 24 in the middle.
-                                    //
-                                    // Theirs is a constant 12 on screen at every scale, written as
-                                    // `12.0 * (1.0 / itemScale)` in the item's own coordinates. A
-                                    // flat 12 here is the same statement through this API, and it is
-                                    // the same number `StoryRowItemView.setCornerRadius` gives the
-                                    // row's cards — so the blank card and the real story still round
-                                    // identically, which is the constraint the old `* scale` existed
-                                    // to satisfy.
-                                    cornerRadius: StoryRowItemView.screenCornerRadius,
+                                    // The cards' own radius scales with `scaleEffect`, so the story's
+                                    // scales by the same factor or the blank card and the real one
+                                    // would round differently at the same position. His ruling: no
+                                    // visible change to the card's corner radius.
+                                    cornerRadius: 24 * scale,
                                     alpha: itemOpacity(combinedFraction: cf))
     }
 }
