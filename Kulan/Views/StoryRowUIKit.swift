@@ -779,6 +779,10 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         let rest = restContentWindowRect(midX: midX)
 
         var valid = Set<String>()
+        /// Every story's placement this pass, for the library to lay its own item views out with.
+        /// Built in the same loop that positions the thumbnails, because one loop with one answer per
+        /// story is the property the whole rewrite is for.
+        var placements: [String: StoryItemPlacement] = [:]
         for (i, story) in stories.enumerated() {
             let cf = geometry.combinedFraction(index: i, rowPosition: rowPos)
             // THEIR VISIBILITY WINDOW (`:1541-1546`), measured on the LOGICAL distances rather than
@@ -789,6 +793,8 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
 
             // THE ONE PLACEMENT, FOR THIS STORY, WHATEVER DRAWS IT. See `StoryRowGeometry.placement`.
             let p = geometry.placement(combinedFraction: cf, rest: rest, containerMidX: midX)
+            placements[story.id] = StoryItemPlacement(center: p.center, size: p.size,
+                                                      cornerRadius: p.cornerRadius)
             let isLive = story.id == liveStoryId
 
             // ⚠️ A CARD BORN THIS PASS IS PLACED WITHOUT THE ANIMATION. A new item view starts at
@@ -993,6 +999,25 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         // open the sheet, swipe to B then C, and coming back to A found nothing and started a new
         // player at zero. See `StoryVideoHost.previewWindow`.
         StoryVideoHost.previewWindow(valid)
+
+        // ⚠️ AND THE SAME LOOP NOW PUBLISHES WHERE EVERY STORY GOES, WHICH IS THE SEAM THAT ENDS THE
+        // SINGLE LIVE SURFACE.
+        //
+        // This method already computed a placement for every story in the window; it applied most of
+        // them to its own thumbnails and handed exactly one — the live story's — to the morph. That
+        // asymmetry IS the architecture we are replacing: one story could move because it had a
+        // surface, the rest were pictures on cards, and a story crossing between the two had to be
+        // handed over mid-motion.
+        //
+        // Sending all of them costs nothing here (they are already computed, in window coordinates)
+        // and lets the library place its own item views — the views it now holds one of per story.
+        // Numbers move, views do not: nothing changes parent, so the row's conditional lifetime, its
+        // pan, its tap and its tint ordering are all left alone.
+        //
+        // Consumed by nothing yet. The library applies these in the next step, and until it does the
+        // published set is inert — which is deliberate, so this can be built and verified on its own.
+        StoryVideoHost.itemPlacements(placements)
+        StoryVideoHost.pullFraction(geometry.fraction)
     }
 
     /// WHAT AN ITEM IS AT FRACTION 0 — the story content's own rectangle, full screen, in window

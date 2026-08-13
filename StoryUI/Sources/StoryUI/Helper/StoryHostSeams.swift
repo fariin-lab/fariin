@@ -93,5 +93,79 @@ public enum StoryVideoHost {
         // a chat list is not a thing to leave to an edge.
         StoryItemViewStore.releaseAll()
         StoryVideoFrames.clearAll()
+        StoryItemLayout.shared.clear()
+    }
+
+    /// WHERE EVERY STORY'S VIEW GOES THIS FRAME — the host's one loop, published for all of them.
+    ///
+    /// ⚠️ THIS IS THE SEAM THAT REMOVES THE SINGLE LIVE SURFACE, AND IT DELIBERATELY MOVES NUMBERS
+    /// RATHER THAN VIEWS.
+    ///
+    /// The obvious way to give every story its own moving view is to hand the row the real story
+    /// views. It is the wrong way here: the row's parent (`viewersBackdrop`) only exists while the
+    /// sheet is up, so a live surface handed to it is handed to something SwiftUI destroys on
+    /// collapse — plus the row's carousel opacity, its own pan and tap, and the tint sublayer order
+    /// all have to be unpicked first.
+    ///
+    /// Nothing needs to move. The row already computes a placement for EVERY story in its loop; it
+    /// simply applies most of them to its own thumbnails and hands only the central one over. Send
+    /// all of them instead and the library places its own views. Layout stays where it is already
+    /// correct, and the views stay where their players, identities and lifetimes are already
+    /// correct — which is one loop with one placement per item, theirs, without a view changing
+    /// parent.
+    public static func itemPlacements(_ placements: [String: StoryItemPlacement]) {
+        StoryItemLayout.shared.set(placements)
+    }
+
+    /// The pull, so an item view can tell the row state from the full-screen one without the host
+    /// having to say it twice. Their `contentScaleFraction`: 0 is full screen, 1 is the row.
+    public static func pullFraction(_ f: CGFloat) {
+        StoryItemLayout.shared.setFraction(max(0, min(1, f)))
+    }
+}
+
+/// WHERE ONE STORY'S VIEW SITS — in WINDOW coordinates, the space the host computes in.
+///
+/// A value rather than four writes because two things consume it and they must not each do their own
+/// arithmetic: that is the exact defect that put a half-covered tint on the owner's screen, and the
+/// exact defect that made a card and its crop disagree about one rectangle.
+public struct StoryItemPlacement: Equatable {
+    public let center: CGPoint
+    public let size: CGSize
+    public let cornerRadius: CGFloat
+
+    public init(center: CGPoint, size: CGSize, cornerRadius: CGFloat) {
+        self.center = center
+        self.size = size
+        self.cornerRadius = cornerRadius
+    }
+}
+
+/// The published placements, read by the item views.
+///
+/// ⚠️ EMPTY MEANS "THE HOST IS NOT PLACING ITEMS", NOT "PLACE THEM AT ZERO". The library draws
+/// exactly as it does today whenever this is empty, which is every path that is not the viewers
+/// sheet — the full-screen viewer, the hero flight, a friend's bucket. The rewrite has to be
+/// invisible everywhere it is not being used.
+final class StoryItemLayout: ObservableObject {
+    static let shared = StoryItemLayout()
+    @Published private(set) var placements: [String: StoryItemPlacement] = [:]
+    /// Their `contentScaleFraction`. 0 = the story is full screen and the library lays itself out as
+    /// it always has; 1 = the row owns the layout.
+    @Published private(set) var fraction: CGFloat = 0
+
+    func set(_ p: [String: StoryItemPlacement]) {
+        guard p != placements else { return }
+        placements = p
+    }
+
+    func setFraction(_ f: CGFloat) {
+        guard f != fraction else { return }
+        fraction = f
+    }
+
+    func clear() {
+        if !placements.isEmpty { placements = [:] }
+        if fraction != 0 { fraction = 0 }
     }
 }
