@@ -102,6 +102,7 @@ struct ThreadView: View {
     @State private var showLibrary = false
     @State private var showVideoSoon = false
     @State private var showContactInfo = false   // tap avatar/name in header → profile (or Group Info for groups)
+    @State private var showEncryptionInfo = false   // empty-chat notice → the safety-number screen
     /// The requester's @username, fetched once for the message-request card. Empty until it lands,
     /// and the line simply is not drawn until then rather than showing a placeholder.
     @State private var requestHandle = ""
@@ -507,6 +508,11 @@ struct ThreadView: View {
                     ThreadSkeleton().allowsHitTesting(false)
                 }
             }
+            // A chat with nothing in it yet says what it is. Every standard messenger does this: two of
+            // the reference apps put a lock notice where the first message will go, a third fills the
+            // same space with an empty-state line. Ours takes the lock notice, and states what is
+            // actually protected (messages AND calls) rather than naming the app that protects it.
+            .overlay(alignment: .center) { encryptionNotice }
             // Brief centered toast (e.g. reply to a deleted original).
             .overlay(alignment: .center) {
                 if let t = jumpToast {
@@ -569,6 +575,32 @@ struct ThreadView: View {
         guard !seeding, let a = arrived, !isAtBottom else { return }
         reactionJumpEmoji = a.emoji
         withAnimation(.spring(response: 0.35, dampingFraction: 0.7)) { reactionJumpId = a.id }
+    }
+
+    // Drawn only on a chat that genuinely has nothing in it, and only AFTER the first page has landed
+    // (didInitialLoad) — otherwise it flashes over every cold open while the messages are still being
+    // decrypted, which is the same mistake the skeleton above is written to avoid.
+    //
+    // An OVERLAY, not a list row. Same reason as the recording bubble: a transient row goes through the
+    // inverted list's scroll machine, and this one would insert and remove itself at the exact moment
+    // the first message arrives — the worst possible time to move that layout.
+    @ViewBuilder private var encryptionNotice: some View {
+        if repo.didInitialLoad, repo.items.isEmpty, !notAMember {
+            let line = Text("\(Image(systemName: "lock.fill")) Messages and calls are end-to-end encrypted. Only people in this chat can read or listen to them.")
+            // The safety number is a number BETWEEN two devices, so a group has nothing to show. It
+            // gets the notice with no link rather than a link that leads nowhere.
+            if isGroup || otherUid.isEmpty {
+                line.modifier(EmptyChatNotice()).allowsHitTesting(false)
+            } else {
+                Button { showEncryptionInfo = true } label: {
+                    // Fixed brand blue, not accentColor — accentColor is WHITE in dark mode, which is
+                    // the bug that made the jump-button count invisible.
+                    (line + Text(" Learn more").foregroundStyle(Theme.defaultBubble(dark)))
+                        .modifier(EmptyChatNotice())
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 
     @ViewBuilder private var jumpToBottomButton: some View {
@@ -684,6 +716,11 @@ struct ThreadView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { activateSearch() }   // …then open search
                 })
             }
+        }
+        // "Learn more" on the empty-chat notice. The screen already exists and is already reachable
+        // from Contact Info; this is a second door onto the same one, not a new screen.
+        .navigationDestination(isPresented: $showEncryptionInfo) {
+            VerifyEncryptionView(cid: cid, peerName: title, peerUid: otherUid, peerPhotoUrl: photoUrl)
         }
         .alert("Video calls", isPresented: $showVideoSoon) {
             Button("OK", role: .cancel) {}
@@ -5153,6 +5190,24 @@ struct ChatNoticePill: ViewModifier {
             .padding(.horizontal, 12).padding(.vertical, 5)
             .background(.ultraThinMaterial, in: Capsule())
             .overlay(Capsule().stroke(.white.opacity(0.06), lineWidth: 0.5))
+    }
+}
+
+// The empty-chat lock notice. Same family as ChatNoticePill — translucent, centred, hairline edge —
+// but a rounded rect instead of a capsule: this text wraps to three lines, and a capsule drawn around
+// three lines reads as a lozenge rather than a pill.
+struct EmptyChatNotice: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .font(.caption)
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.primary)
+            .frame(maxWidth: 280)
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(.white.opacity(0.06), lineWidth: 0.5))
+            .padding(.horizontal, 24)
     }
 }
 
