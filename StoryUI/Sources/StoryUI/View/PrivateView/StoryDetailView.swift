@@ -375,7 +375,35 @@ struct StoryDetailView: View {
                     // THE CARD. Sized and placed by the reference app's rule (see `cardHeight`), pinned to the
                     // safe-area top by the VStack below rather than centred in the screen.
                     VStack(spacing: 0) {
-                        getStoryView(with: index, story: story)
+                        // ⚠️ ONE VIEW PER STORY, ALL ALIVE AT ONCE — their `visibleItems`, and the
+                        // start of removing the single-live-surface dependency.
+                        //
+                        // This used to be `getStoryView(with: index, story: story)`: ONE media view
+                        // per page, rebuilt to show whichever item was current. That is the reason a
+                        // story could not travel during a transition — there was only ever one view,
+                        // so changing story was a content swap at a fixed place rather than two
+                        // views moving past each other.
+                        //
+                        // Now every story in the window owns a view for as long as it is in the
+                        // window, keyed by its own id, holding its own picture. The neighbours are
+                        // stacked with the centre and drawn transparent for the moment: nothing lays
+                        // them out yet, and that is the next piece. What matters here is that they
+                        // EXIST and are loaded, because a view that does not exist cannot be handed
+                        // to the row to move.
+                        ZStack {
+                            ForEach(itemWindow(around: index), id: \.self) { i in
+                                getStoryView(with: i, story: model.stories[i], isCentral: i == index)
+                                    .opacity(i == index ? 1 : 0)
+                                    .allowsHitTesting(i == index)
+                                    // ⚠️ IDENTITY IS THE STORY, NOT THE SLOT. Without this the view
+                                    // belongs to the position in the window, so advancing an item
+                                    // hands the same loader a different story — one view showing
+                                    // whatever is current, which is exactly the thing being removed.
+                                    // With it, a story keeps its own view for as long as it is in
+                                    // the window, which is what lets the row move it later.
+                                    .id(model.stories[i].id)
+                            }
+                        }
                             .frame(width: proxy.size.width,
                                    height: cardHeight(width: proxy.size.width,
                                                       containerH: proxy.size.height,
@@ -907,8 +935,51 @@ struct StoryDetailView: View {
 // MARK: Private Configuration
 private extension StoryDetailView {
     
+    /// THE ITEMS THIS PAGE HOLDS A VIEW FOR — their `visibleItems`, bounded.
+    ///
+    /// ⚠️ ONE VIEW PER STORY IS THE WHOLE ARCHITECTURE, AND A BOUND IS NOT A COMPROMISE OF IT.
+    /// Theirs is bounded too (`:1541-1546`: a container width of slack either side, then the item is
+    /// not built at all). The window exists so an author with fifty stories does not build fifty
+    /// views, which is the same reason theirs has one.
+    ///
+    /// ±1 because that is what the transition needs: the story being left, the one arriving, and the
+    /// one either could arrive from. It is also the number the decoder cap and the item store were
+    /// already built around — see `StoryItemViewStore.capacity`.
+    private func itemWindow(around index: Int) -> [Int] {
+        guard !model.stories.isEmpty else { return [] }
+        let lo = max(0, index - 1)
+        let hi = min(model.stories.count - 1, index + 1)
+        return Array(lo...hi)
+    }
+
+    /// ⚠️ `isCentral` DOES NOT CHANGE WHAT THE VIEW IS — except for the one thing theirs also
+    /// changes, which is whether a video node exists at all.
+    ///
+    /// Theirs: `index != centralIndex` sets `itemProgressMode = .pause`, and `initializeVideoIfReady`
+    /// refuses to build a player while paused. So a non-central item is its POSTER, and that is not
+    /// a shortcut — it is what makes one-view-per-story affordable. iOS caps simultaneous decoders
+    /// and going over fails SILENTLY with black cards; this repo has paid for that once already
+    /// (`StoryVideoEngine`'s pool is capped at 3 for the same reason).
+    ///
+    /// It also keeps the page's one video `session` bound to exactly one view, which four separate
+    /// things have to agree about (this identity, the view store, the session's claim, the card).
     @ViewBuilder
-    func getStoryView(with index: Int, story: Story) -> some View {
+    func getStoryView(with index: Int, story: Story, isCentral: Bool = true) -> some View {
+        let corner: CGFloat = (story.config.storyType != .plain() || model.isMine) ? 24 : 0
+        if !isCentral {
+            // The neighbour's own picture, owning its own view, ready to travel the moment it is
+            // tapped — which is the entire point of the rewrite. A video neighbour shows the poster
+            // it would open on, and builds no player until it becomes central.
+            ImageView(imageURL: story.config.mediaType == .video ? story.previewURL : story.mediaURL,
+                      previewURL: story.previewURL,
+                      bottomCornerRadius: corner) { }
+        } else {
+            centralStoryView(with: index, story: story)
+        }
+    }
+
+    @ViewBuilder
+    private func centralStoryView(with index: Int, story: Story) -> some View {
         switch story.config.mediaType {
         case .image:
             // Round the card's bottom corners in UIKit (a SwiftUI clip doesn't clip the blurred backdrop).
