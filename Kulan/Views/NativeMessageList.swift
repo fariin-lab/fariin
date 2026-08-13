@@ -823,6 +823,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard abs(collectionView.contentOffset.y - target) > 0.5 else { return }
         lastStableOffset = target
         if animated {
+            // KILL THE COAST FIRST. An animated setContentOffset issued while the list is still
+            // decelerating is swallowed: UIScrollView keeps driving the offset from its own fling and our
+            // animation never takes. That is the reported "tap the down arrow mid-swipe and nothing
+            // happens, it only works once the scrolling stops". The intent gate above deliberately allows
+            // a jump during deceleration (finger down only), so the refusal was never ours — it was UIKit.
+            // Writing the offset it already has, unanimated, ends the deceleration in place.
+            if collectionView.isDecelerating {
+                collectionView.setContentOffset(collectionView.contentOffset, animated: false)
+            }
             scrollingAnimationDidStart()   // lands defer until the glide completes
             collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: true)
         } else {
