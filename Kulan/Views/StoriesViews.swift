@@ -660,9 +660,7 @@ struct StoryRowGeometry: Equatable {
                                  size: CGSize(width: max(1, w), height: max(1, h)),
                                  // His ruling, twice: 24, scaling with the card.
                                  cornerRadius: 24 * scale,
-                                 dim: dim(combinedFraction: cf),
-                                 // The centred card on top, exactly as the old `zIndex(2 - |cf|)`.
-                                 zPosition: 2 - abs(cf))
+                                 dim: dim(combinedFraction: cf))
     }
 }
 
@@ -681,8 +679,17 @@ struct StoryRowPlacement: Equatable {
     /// On screen, at this size — already multiplied by the item's scale.
     let cornerRadius: CGFloat
     /// How black the tint over this card is, 0…1. Their `contentTintLayer`'s alpha.
+    ///
+    /// ⚠️ THE ONLY BRIGHTNESS OWNER IN THE ROW, AND THAT IS THE POINT OF IT BEING HERE. It is one
+    /// number, computed once per story per frame from the same `combinedFraction` that decides where
+    /// that story sits, so a card's brightness cannot be a frame out of step with its position.
     let dim: CGFloat
-    let zPosition: CGFloat
+
+    // ⚠️ `zPosition` IS DELETED FROM THIS TYPE — 2026-08-13. It carried the old `zIndex(2 - |cf|)`,
+    // written onto layers every frame, and `zPosition` is implicitly animated: what the compositor
+    // sorted by was therefore a lagging value, which is survivable while it only decides which of
+    // two non-overlapping cards is in front and fatal once layer order is what makes the tint
+    // visible. The reference app does not set `zPosition` anywhere; order is insertion order.
 }
 
 // Local per-author story prefs.

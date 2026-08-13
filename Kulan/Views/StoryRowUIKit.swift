@@ -820,10 +820,33 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
                 // what turns that transaction into the row's own curve for this pass.
                 if isLive { self.placeLiveStory(p, settle: willAnimate ? settle : nil) }
             }
-            item.layer.zPosition = p.zPosition
-            // Just above its own card and below the next one in: the tint belongs to this item, and
-            // a nearer card must still be able to cover it.
-            tint?.zPosition = p.zPosition + 0.0001
+            // ⚠️ NO `zPosition` HERE ANY MORE, AND ITS REMOVAL IS THE WHOLE OF THE BRIGHTNESS FIX.
+            //
+            // `zPosition` is an implicitly animated CALayer property. Written per frame from outside
+            // a disabled transaction, every write started a quarter-second animation on a number
+            // that was changing again on the next frame — so what the compositor sorted by was a
+            // lagging PRESENTATION value, not the one just written. That is survivable while layer
+            // order only decides which of two cards is in front, because our cards never overlap.
+            // It stopped being survivable the moment the dim became a tint layer, because then layer
+            // order is the only thing making the dim visible at all: a tint whose presentation
+            // zPosition is momentarily below its own card renders BEHIND it, and the card is
+            // therefore FULLY BRIGHT until the animation catches up.
+            //
+            // The worst case is a card entering the window mid-swipe. Its tint is created this pass
+            // with zPosition 0 and animates UP to its target over 0.25s, so for a quarter of a
+            // second the incoming card has no dim at all and then snaps into it. That is his "the
+            // card I am swiping toward becomes bright too early", and the flashing with it.
+            //
+            // ⚠️ THE REFERENCE APP DOES NOT SET `zPosition` ANYWHERE IN THIS FILE. Not once. Their
+            // order is INSERTION order: `addSubview(contentContainerView)` immediately followed by
+            // `layer.addSublayer(contentTintLayer)`, per item, so a tint is always directly above
+            // the card it belongs to and can never be anywhere else. There is nothing to animate,
+            // nothing to lag, and nothing to get wrong. `addItem` pairs them the same way.
+            //
+            // What we lose is the old `zIndex(2 - |cf|)`, the centre card drawn on top. That was
+            // decorative rather than load-bearing — at any `|cf|` the centre distance is the sum of
+            // the two half widths plus 12pt, so no two cards ever overlap — and theirs does not have
+            // it either.
             item.setLive(isLive)
             item.updateMedia(story: story, slotW: geometry.slotW, slotH: geometry.slotH)
             if willAnimate {
@@ -961,7 +984,19 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         tint.opacity = 0
         tint.cornerCurve = .continuous
         tint.isDoubleSided = false
-        view.layer.addSublayer(tint)
+        // ⚠️ INSERTED DIRECTLY ABOVE ITS OWN CARD, WHICH IS THE ONLY THING KEEPING IT IN FRONT.
+        //
+        // Theirs, per item, in this order and with no `zPosition` anywhere:
+        //
+        //     self.itemsContainerView.addSubview(visibleItem.contentContainerView)
+        //     self.itemsContainerView.layer.addSublayer(visibleItem.contentTintLayer)
+        //
+        // Pairing the two at insertion makes "the tint is above its card" a structural fact rather
+        // than a number that has to be re-asserted every frame — and a number written per frame is
+        // a number being implicitly ANIMATED, which is what broke the dim. A later card's layer
+        // lands after this pair and so sits above this tint; that is theirs too, and it is harmless
+        // because no two cards ever overlap.
+        view.layer.insertSublayer(tint, above: item.layer)
         tints[story.id] = tint
         return item
     }
@@ -1059,8 +1094,17 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// Hit-testing the real frames cannot be wrong about it.
     @objc private func handleTap(_ g: UITapGestureRecognizer) {
         let point = g.location(in: view)
-        // Front to back, so an overlap resolves to the card drawn on top.
-        let ordered = items.values.sorted { $0.layer.zPosition > $1.layer.zPosition }
+        // Most central first, so an ambiguous point resolves to the card nearest the middle.
+        //
+        // ⚠️ THIS USED TO SORT ON `layer.zPosition`, WHICH IS NOW ALWAYS ZERO — see the note in the
+        // layout pass. Measuring the distance to the row's centre says the same thing the old
+        // `2 - |cf|` said, without a per-frame write to an implicitly animated property. Theirs does
+        // not order at all: it walks `visibleItems` in dictionary order and breaks on the first hit,
+        // because no two cards ever overlap and at most one of them can contain the point.
+        let mid = view.bounds.midX
+        let ordered = items.values.sorted {
+            abs($0.center.x - mid) < abs($1.center.x - mid)
+        }
         // ⚠️ `convert(bounds:)`, NOT `frame`. UIKit documents `frame` as undefined once a view carries
         // a transform, and every card here carries one. Theirs asks the same question the same way:
         // `visibleItem.contentContainerView.convert(visibleItem.contentContainerView.bounds, to: self)`.
