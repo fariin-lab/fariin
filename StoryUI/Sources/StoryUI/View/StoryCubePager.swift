@@ -228,8 +228,12 @@ final class StoryCubePagerVC: UIViewController {
     // MARK: - The finger
 
     @objc private func handlePan(_ g: UIPanGestureRecognizer) {
-        let w = view.bounds.width
-        guard w > 1 else { return }
+        // ⚠️ THE WIDTH GUARD BELONGS TO `.changed` ALONE, AND IT USED TO SHORT-CIRCUIT THE WHOLE
+        // METHOD. Only the drag arithmetic needs a width; `commit` does not, and `applyFold` and
+        // `settle` guard themselves. Standing in front of every case meant a container that lost its
+        // width between a touch-down and a lift never ran `commit` at all — no settle, no landing,
+        // no delegate. That was survivable while a turn posted nothing; now that `beginTurn` pauses
+        // the story it would be a clip stopped with nothing left to start it again.
         switch g.state {
         case .began:
             // ⚠️ A NEW PAN KILLS THE SETTLE IN FLIGHT, exactly as theirs removes the `panState`
@@ -238,6 +242,8 @@ final class StoryCubePagerVC: UIViewController {
             stopSettle()
             beginTurn()
         case .changed:
+            let w = view.bounds.width
+            guard w > 1 else { return }
             panFraction = banded(g.translation(in: view).x / w)
             applyFold()
         case .ended, .cancelled, .failed:
@@ -276,7 +282,9 @@ final class StoryCubePagerVC: UIViewController {
         let goNext = far ? panFraction < 0 : vx < 0
         guard let target = goNext ? after : before, far || fast else {
             settle(to: 0) { [weak self] in
-                guard let self, let focused = self.focused else { return }
+                guard let self else { return }
+                self.endTurn()
+                guard let focused = self.focused else { return }
                 self.delegate?.cubePager(self, didSettleOn: focused, committed: false)
             }
             return
@@ -298,11 +306,13 @@ final class StoryCubePagerVC: UIViewController {
         }
         applyFold()
         settle(to: 0) { [weak self] in
-            guard let self, let focused = self.focused else { return }
+            guard let self else { return }
             // The peer that is now two away is released here rather than at the start of the turn:
             // it is on screen for the whole of it.
             self.releaseDistantPeers()
             self.loadNeighbours()
+            self.endTurn()
+            guard let focused = self.focused else { return }
             self.delegate?.cubePager(self, didSettleOn: focused, committed: true)
         }
     }
@@ -393,8 +403,34 @@ final class StoryCubePagerVC: UIViewController {
 
     // MARK: - The fold
 
+    /// ⚠️ THE TURN PAUSES THE STORY, AND IT PAUSES AT THE START OF THE GESTURE, NOT AT A DISTANCE.
+    ///
+    /// This file posted NOTHING here, and that was the whole of it: the person being left kept
+    /// playing for the entire turn, and the person being arrived at started the instant the model
+    /// changed rather than when the motion finished. Two clips ran at once through every swipe.
+    ///
+    /// Theirs derives one `isProgressPaused` whose first input is "a pan state exists" — a nil
+    /// check, not a fraction threshold — so there is no percentage at which a clip stops. It stops
+    /// when a finger moves. The same value also holds the INCOMING story paused, because the pan
+    /// state is not cleared until the settle completes; a committed turn therefore navigates
+    /// immediately and still does not play anything for the length of the animation.
+    ///
+    /// `beginTurn` and `endTurn` are the two ends of exactly that window. Every path in and out of a
+    /// turn already runs through them, and after the settle-completion fix below there is no route
+    /// that begins one without ending it.
     private func beginTurn() {
+        NotificationCenter.default.post(name: .pauseStory, object: nil)
         delegate?.cubePagerWillBeginTurn(self)
+    }
+
+    /// The turn is over, whether it landed on somebody new or sprang back to who we started on.
+    ///
+    /// ⚠️ THIS IS WHERE THE INCOMING STORY STARTS, and it is deliberately not the moment the model
+    /// changed. `commit` swaps the focus at the top of the settle so the picture does not jump, so
+    /// the new person is already focused while the cube is still turning; resuming there would start
+    /// a clip playing behind a face that is still edge-on.
+    private func endTurn() {
+        NotificationCenter.default.post(name: .resumeStory, object: nil)
     }
 
     /// Write every face from the one number. This is the whole renderer.
