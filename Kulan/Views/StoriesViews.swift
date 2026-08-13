@@ -609,8 +609,34 @@ struct StoryRowGeometry: Equatable {
     /// backdrop.
     ///
     /// The divisor is the one knob: 3 is theirs, and a larger number is a lighter dim.
+    /// ⚠️ AND THE SECOND TERM IS THE PULL'S, WHICH WE DID NOT HAVE AT ALL.
+    ///
+    /// Theirs is not one expression, it is two, and only the first was ported:
+    ///
+    ///     let collapsedAlpha = itemAlpha * contentScaleFraction + 0.0 * (1.0 - contentScaleFraction)
+    ///     itemAlpha = (1.0 - fractionDistanceToCenter) * itemAlpha + fractionDistanceToCenter * collapsedAlpha
+    ///
+    /// with `fractionDistanceToCenter = min(1.0, abs(combinedFraction))`. Multiplied out that is
+    /// `itemAlpha * (1 - fdc * (1 - contentScaleFraction))`, and what it says is: **a story that is
+    /// not the centre one is BLACK while the sheet is down, and brightens into the cover-flow dim as
+    /// the sheet rises.** With the sheet fully up the factor is exactly 1, so the row at rest is
+    /// unchanged — this only ever moves during the pull.
+    ///
+    /// Ours had the cover-flow dim alone, at every pull position. So while the sheet was down and a
+    /// sideways page was in flight, the story arriving was drawn at two thirds brightness beside the
+    /// one leaving instead of out of sight — two stories on the screen at once, which is what the
+    /// owner photographed and called the transition being "not synchronized". The neighbour is not
+    /// meant to be dim there. It is meant to be invisible.
+    ///
+    /// Their third term, `itemAlpha *= (1.0 - contentOverflowFraction)`, is deliberately NOT ported:
+    /// it fades the row when their sheet is dragged BEYOND its detent, and our pull is clamped so
+    /// there is no overflow state to fade. Porting a term whose input is always zero would just be a
+    /// line waiting to be wrong.
     func dim(combinedFraction cf: CGFloat) -> CGFloat {
-        min(1, abs(cf) / 3)
+        let counted = min(1, abs(cf) / 3)
+        let distance = min(1, abs(cf))
+        let alpha = (1 - counted) * (1 - distance * (1 - fraction))
+        return 1 - alpha
     }
 
     /// WHERE ONE STORY SITS THIS FRAME — the whole of the row's layout, for EVERY story in it.
@@ -3375,7 +3401,7 @@ struct StoryViewer: View {
         // story's whole rectangle and post it to the morph, which made it the second thing laying
         // out a story the row was already laying out. One number goes out now; the row owns the
         // layout, the live story included. See `StoryRowController.setFraction`.
-        pageDragBox.rowLink?.setFraction(Self.sheetSizeFraction(p))
+        pageDragBox.rowLink?.setFraction(sheetSizeFraction(p))
     }
 
     /// THE PULL, STAGED — the reference layout's `contentScaleFraction`, and the one definition of it.
@@ -3388,8 +3414,47 @@ struct StoryViewer: View {
     /// changes with this number — the spacing, the resting position — so the cards and the live
     /// story reading two different copies of it would put them in two different places, which is the
     /// exact failure this rebuild is being repaired for.
-    static func sheetSizeFraction(_ p: CGFloat) -> CGFloat {
-        max(0, min(1, (p - 0.08) / (0.9 - 0.08)))
+    /// ⚠️ THIS IS DERIVED FROM THE SHEET'S OWN GEOMETRY NOW, NOT DRAWN BY HAND.
+    ///
+    /// It used to be `clamp((p - 0.08) / (0.9 - 0.08))`: a straight line with a dead patch at the
+    /// start and a tenth left over at the end, chosen by eye. It lands in the right place at both
+    /// ends and agrees with the sheet nowhere in between, which is the owner's report that the
+    /// thumbnails do not stay in step with the sheet while he drags it. A remap cannot be in step
+    /// with something it does not read.
+    ///
+    /// Theirs is not a curve at all — it is what fits. `:3955-3971`, in their names:
+    ///
+    ///     contentVisualHeight = min(contentSize.height, availableSize.height - insets.top - viewListInset)
+    ///     contentVisualScale  = min(1.0, contentVisualHeight / contentSize.height)
+    ///     contentScaleFraction = 1.0 - (contentVisualScale - contentMinScale) / (contentMaxScale - contentMinScale)
+    ///
+    /// The story is only ever as big as the room left above the sheet, and the fraction is where
+    /// that sits between its two ends. Every number in it is a length on the screen this frame, so
+    /// it cannot drift out of step with the sheet: it IS the sheet.
+    ///
+    /// ⚠️ AND IT PRODUCES OUR DEAD PATCH FOR A REASON INSTEAD OF BY DECREE. `min` with the resting
+    /// height means that while the sheet is still below the bottom of the story, the story still
+    /// fits and does not move at all. On a 393x852 that is the first 17% of the pull, against the
+    /// 8% we had guessed at — the first hair of the drag genuinely shrinks nothing, and then the
+    /// shrink runs all the way to the end rather than stopping at 0.9.
+    ///
+    /// The content height is the LATCHED one, the same rectangle `cardSlot` sizes against, so the
+    /// curve cannot move under a card already in flight.
+    func sheetSizeFraction(_ p: CGFloat) -> CGFloat {
+        let scr = UIScreen.main.bounds
+        let sheetH = scr.height * StoryViewersSheetView.heightFraction
+        let restH = (latchedContent ?? StoryCardMorph.shared.contentSize)?.height
+            ?? (scr.height - topInset)
+        let free = scr.height - topInset
+        guard restH > 1, sheetH > 1 else { return 0 }
+        // With the sheet fully up, and right now. Both clamped by the story's own resting height,
+        // which is what makes the start of the pull free.
+        let minScale = min(1, min(restH, free - sheetH) / restH)
+        let scale = min(1, min(restH, free - max(0, min(1, p)) * sheetH) / restH)
+        // A screen with no room to give (`minScale` already 1) has nothing to interpolate and must
+        // not divide by zero to find that out.
+        guard minScale < 1 - 0.0001 else { return 0 }
+        return max(0, min(1, (1 - scale) / (1 - minScale)))
     }
 
     // ⚠️ `placeLiveStory(fraction:)` IS DELETED HERE — the 2026-08-13 ruling, and the largest single
@@ -3427,17 +3492,24 @@ struct StoryViewer: View {
         // there is exactly ONE picture of a story at every moment and nothing to hand over at any
         // threshold. That seam, where two renderers disagreed about framing, was `402ec4d`'s bug and
         // the parent of every frozen-cover report since.
-        let carIn = max(0, min(1, (p - 0.9) / 0.07))
+        //
+        // ⚠️ STAGED OFF THE PULL'S OWN FRACTION NOW, NOT OFF `p` A SECOND TIME. It was
+        // `(p - 0.9) / 0.07`, a second hand-drawn curve on the same input, and it only lined up with
+        // the card stopping because the old fraction happened to finish at 0.9 as well. The fraction
+        // is geometric now and finishes when the sheet does, so a curve on `p` would have started
+        // fading the row in while the card was still moving. One progress value, read once, and the
+        // staging expressed against it.
+        let pull = sheetSizeFraction(p)
+        let carIn = max(0, min(1, (pull - 0.88) / 0.12))
         // Feed the row from the LIVE repo (not the viewer's immutable snapshot), so a story
         // deleted while viewing doesn't linger as a ghost card. Fall back to the snapshot.
         let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories
         ZStack(alignment: .top) {
             MyStoriesCarousel(stories: liveMyStories, activeId: $sheetStoryId,
-                              // The SAME staged fraction the live story is placed with — see
-                              // `sheetSizeFraction`. The row re-renders on every frame of the pull
-                              // anyway (`carIn` above reads the same `p`), so handing it down costs
-                              // nothing and is what keeps the cards and the story in one layout.
-                              row: slot.row(fraction: Self.sheetSizeFraction(p)),
+                              // THE SAME `pull` THE STAGING ABOVE AND THE LIVE STORY BOTH USE — one
+                              // value, computed once in this body, handed to everything that has to
+                              // agree about how far the sheet has got. See `sheetSizeFraction`.
+                              row: slot.row(fraction: pull),
                               // WHICH OF THE ROW'S ITEMS IS THE LIVE ONE. It is the only thing the
                               // row needs to be told about the story layer: that item hides its own
                               // picture and its placement is handed to the morph instead. Where it
