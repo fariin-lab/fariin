@@ -811,12 +811,37 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
                 item.center = centre
                 item.transform = CGAffineTransform(scaleX: scale, y: scale)
                 item.count.alpha = countAlpha
-                // ⚠️ THE TINT IS FRAMED, NOT TRANSFORMED, so its corner radius is a screen-space
-                // number and matches the card's rendered curve without being divided by anything.
                 if let tint {
-                    tint.frame = CGRect(x: centre.x - p.size.width / 2, y: centre.y - p.size.height / 2,
-                                        width: p.size.width, height: p.size.height)
-                    tint.cornerRadius = p.cornerRadius
+                    // ⚠️ THE SAME BOUNDS, THE SAME POSITION AND THE SAME SCALE AS THE CARD — NOT A
+                    // RECTANGLE WORKED OUT SEPARATELY. This is the whole of the 2026-08-13 seam fix.
+                    //
+                    // It used to be `tint.frame = CGRect(centre ± p.size / 2)`: a second, independent
+                    // calculation of where the card had ended up, standing beside the card's own
+                    // `bounds` + `transform`. Two routes to one rectangle, and the owner photographed
+                    // them disagreeing — a hard vertical edge down the middle of the two outermost
+                    // cards, the outward half shaded and the inward half not, because the tint was
+                    // arriving at a different width from the card it was supposed to be covering.
+                    //
+                    // Theirs never computes it (`:1719-1741`). The tint is handed the identical
+                    // `itemPositionX`, the identical `contentFrame.size` and the identical
+                    // `transform` variable the card is given seven lines earlier:
+                    //
+                    //     itemTransition.setPosition(layer: contentTintLayer, position: ...)
+                    //     itemTransition.setBounds(layer: contentTintLayer, bounds: contentFrame.size)
+                    //     itemTransition.setTransform(layer: contentTintLayer, transform: transform)
+                    //
+                    // so it does not match the card, it IS the card's geometry with a black fill. A
+                    // tint cannot be the wrong size for its card if it was never told a size of its
+                    // own. `bounds` and `position` rather than `frame`, because `frame` is undefined
+                    // on a layer carrying a transform.
+                    tint.bounds = CGRect(origin: .zero, size: size)
+                    tint.position = centre
+                    tint.transform = CATransform3DMakeScale(scale, scale, 1)
+                    // Their `12.0 * (1.0 / itemScale)` at `:1736`: the radius lives in the layer's own
+                    // untransformed space now, so it has to be pre-divided by the scale it is about to
+                    // be multiplied by. `p.cornerRadius` is already the number this is meant to READ
+                    // as on screen, so dividing by the scale lands exactly on it at every fraction.
+                    tint.cornerRadius = p.cornerRadius / max(scale, 0.0001)
                     tint.opacity = Float(p.dim)
                 }
                 // ⚠️ INSIDE THE SAME WRITE AS THE CARDS, AND ON THE ANIMATED PASS THAT IS THE POINT.
