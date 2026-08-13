@@ -293,10 +293,14 @@ enum StoryItemViewStore {
     /// ⚠️ EVERY LIVE ITEM VIEW, MOUNTED OR STORED, AND IT HAS TO BE BOTH.
     ///
     /// The card picture asks this registry where a clip's player is paused. If it only knew about
-    /// STORED views it would answer nil for the story the sheet came up over — which is the one the
-    /// carousel draws its own card for the moment a swipe begins (`carouselOwnsSlot` hides the live
-    /// card and uncovers the row's). That card would fall back to the poster, which is second zero,
-    /// which is the exact report this whole area has been failing on.
+    /// STORED views it would answer nil for the story the sheet came up over — the one whose player
+    /// is mounted and paused rather than parked here — and that card would fall back to the poster,
+    /// which is second zero, which is the exact report this whole area has been failing on.
+    ///
+    /// (It used to matter for a second reason as well: the row drew its own copy of the live card
+    /// for the length of a swipe, so the copy had to be able to find that player. There is no copy
+    /// any more — the live story slides with the row — but a mounted player still has to be findable
+    /// by the cards on either side of it, which is what this is for.)
     ///
     /// Weak, so a view that is torn down takes its entry with it. Nothing to clear and nothing to
     /// leak.
