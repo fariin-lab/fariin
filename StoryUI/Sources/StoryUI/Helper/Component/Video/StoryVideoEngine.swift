@@ -531,6 +531,17 @@ public enum StoryVideoFrames {
     /// swipe builds an `AVURLAsset` and an `AVAssetImageGenerator` sixty times a second, for ever.
     private static var refused = Set<String>()
 
+    /// FAILED ATTEMPTS ON THE STREAMED PATH, WHICH IS THE ONE THAT CAN FAIL FOR A REASON THAT GOES
+    /// AWAY.
+    ///
+    /// A local file that will not vend a frame will not start; refusing it on the first miss is
+    /// right. A clip being read through the range loader is different — the bytes for that second
+    /// may simply not have arrived yet, and one miss says nothing about the next. So it gets a small
+    /// budget and then the same permanent refusal, because "retry for ever" is how this path opened
+    /// a decoder sixty times a second in the first place.
+    private static var streamFailures: [String: Int] = [:]
+    private static let maxStreamAttempts = 3
+
     /// ⚠️ AND A CEILING ON HOW MANY RUN AT ONCE. The store caps PLAYERS at three for the decoder
     /// budget, and then this path opened an unbounded number of image generators beside them — one
     /// per distinct key, and a carousel can ask for every visible card in a single pass. Two is
@@ -611,15 +622,54 @@ public enum StoryVideoFrames {
     public static func frame(_ url: URL, at second: Double, then: ((UIImage) -> Void)? = nil) -> UIImage? {
         let k = key(url, second)
         if let hit = full.object(forKey: k as NSString) { return hit }
-        if let then { pending[k, default: []].append(then) }
-        generate(url, at: second, key: k)
+        // ⚠️ THE LANDING IS REGISTERED ONLY WHEN A DECODE IS ACTUALLY IN FLIGHT, AND THAT ORDERING IS
+        // THE FIX. This used to append unconditionally and then ask `generate`, which has four ways
+        // to answer "not now" — and on three of them nothing ever drained the array again. The one
+        // caller that passes a landing is `openingFrameFallback`, and `layoutSubviews` re-runs it on
+        // every pass for as long as the cover is empty, so the single case where no frame could be
+        // made was also the case that appended a closure sixty times a second and fired none of them.
+        //
+        // Safe to append after the call: this type is main-actor and `generate` lands its result in a
+        // hop, so the drain cannot run before this returns.
+        if generate(url, at: second, key: k), let then {
+            pending[k, default: []].append(then)
+        }
         return nil
     }
 
-    private static func generate(_ url: URL, at second: Double, key k: String) {
-        guard !running.contains(k), !refused.contains(k),
+    /// WHERE THE PIXELS COME FROM, AND WHY THIS IS NO LONGER JUST A FILE.
+    ///
+    /// ⚠️ RANGE STREAMING WENT ON ON 2026-08-12 AND TOOK THE COVERS WITH IT. A streamed clip never
+    /// lands a whole object in `VideoCache`: the reader fills `<name>.part` and only promotes it once
+    /// every byte is there. So `cachedFileIfUsable` answers nil for exactly the clips people are
+    /// watching, this refused to generate, and a story with no `thumb.jpg` and no embedded thumbnail
+    /// had nothing at all to draw — a black card, arriving with the switch rather than with any
+    /// story code.
+    ///
+    /// The reader serves an image generator as well as it serves a player, and for the OPENING frame
+    /// it is nearly free: second zero is the head of the file, which is the part the lookahead prefix
+    /// has already fetched, so the loader answers it off disk without a transfer.
+    ///
+    /// The whole file still wins whenever it is there — one open and no state machine at all.
+    private static func source(for url: URL) -> (asset: AVURLAsset, streamed: Bool)? {
+        if let file = CacheManager.cachedFileIfUsable(for: url) {
+            return (AVURLAsset(url: file), false)
+        }
+        guard let streamed = StoryVideoStream.asset(for: url) else { return nil }
+        return (streamed, true)
+    }
+
+    /// Returns whether a decode for this key is in flight by the time it returns. The caller registers
+    /// a landing only on true — see `frame`.
+    @discardableResult
+    private static func generate(_ url: URL, at second: Double, key k: String) -> Bool {
+        // Already decoding: that run drains the landings, so a new one may join it.
+        if running.contains(k) { return true }
+        guard !refused.contains(k),
               running.count < maxConcurrentGenerations,
-              let file = CacheManager.cachedFileIfUsable(for: url) else { return }
+              let pixels = source(for: url) else { return false }
+        let asset = pixels.asset
+        let streamed = pixels.streamed
         running.insert(k)
         let time = CMTime(seconds: second, preferredTimescale: 600)
         // ⚠️ A CARD FRAME IS DRAWN ABOUT A HUNDRED POINTS WIDE. Generating it at 1080 costs eight
@@ -628,7 +678,7 @@ public enum StoryVideoFrames {
         // drawn full-card behind the video, needs the full size.
         let maxSize = second <= 0 ? CGSize(width: 1080, height: 1920) : CGSize(width: 640, height: 1138)
         DispatchQueue.global(qos: .userInitiated).async {
-            let generator = AVAssetImageGenerator(asset: AVURLAsset(url: file))
+            let generator = AVAssetImageGenerator(asset: asset)
             // TURNED THE WAY THE CLIP IS MEANT TO BE SEEN. A phone does not rotate the pixels it
             // records: a portrait capture is a landscape buffer plus a 90° transform, and only some
             // of our exports bake it. The layer applies it for playback, so without this the card
@@ -643,12 +693,28 @@ public enum StoryVideoFrames {
             let cg = try? generator.copyCGImage(at: time, actualTime: nil)
             DispatchQueue.main.async {
                 running.remove(k)
+                // ⚠️ THE READER IS RELEASED ON BOTH PATHS. `StoryVideoStream.asset` files its delegate
+                // in a table that AVFoundation cannot empty for us, and the delegate owns a URLSession
+                // that retains it right back — a reader merely forgotten keeps its transfers running
+                // for a picture nobody is waiting for any more.
+                if streamed { StoryVideoStream.release(asset) }
                 guard let cg else {
-                    // It will not answer for this key. Do not ask it sixty times a second.
-                    refused.insert(k)
+                    if streamed {
+                        // May yet answer once more bytes land. Budgeted, not endless.
+                        let n = (streamFailures[k] ?? 0) + 1
+                        streamFailures[k] = n
+                        if n >= maxStreamAttempts { refused.insert(k) }
+                    } else {
+                        // A file that is here and will not vend this frame never will. Do not ask it
+                        // sixty times a second.
+                        refused.insert(k)
+                    }
+                    // Dropped rather than kept: the only caller with a landing re-asks from
+                    // `layoutSubviews`, and a list nothing drains is what this method used to grow.
                     pending.removeValue(forKey: k)
                     return
                 }
+                streamFailures.removeValue(forKey: k)
                 let image = UIImage(cgImage: cg)
                 let cost = Int(image.size.width * image.size.height * 4)
                 full.setObject(image, forKey: k as NSString, cost: cost)
@@ -657,6 +723,7 @@ public enum StoryVideoFrames {
                 StoryFrameTick.shared.bump()
             }
         }
+        return true
     }
 
     /// A copy no bigger than it needs to be. Returns the original when it is already small enough.
@@ -678,6 +745,7 @@ public enum StoryVideoFrames {
         cards = [:]
         running.removeAll()
         refused.removeAll()
+        streamFailures.removeAll()
         pending.removeAll()
     }
 }

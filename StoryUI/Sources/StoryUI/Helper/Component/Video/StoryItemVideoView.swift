@@ -324,7 +324,10 @@ final class StoryItemVideoView: UIView {
         // ⚠️ THE STREAM IS TRIED FIRST AND ONLY WHEN THE WHOLE FILE IS NOT ALREADY HERE. A clip that
         // is fully cached has nothing to gain from a reader and everything to lose — a local file is
         // one open and no state machine at all. `StoryVideoStream.asset` answers nil when streaming
-        // is off (it is, by default — see its header), so this line is a no-op until it is turned on.
+        // is off, and IT IS ON as of 2026-08-12 — this line is live, not the no-op it used to be.
+        // The knock-on is worth knowing here: while a clip is being read this way there is no whole
+        // file in `VideoCache`, so anything that wants a still of it has to go through the reader
+        // too. See `StoryVideoFrames.source`.
         // ⚠️ `!didRetryRemote` IS THE FALLBACK, NOT A DETAIL. `handleFailedItem` recovers a clip that
         // will not play by pointing `localFile` at the remote url and rebuilding — and on the
         // streaming path `localFile` IS the remote url, so without this the recovery built a second
