@@ -152,7 +152,16 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             MainActor.assumeIsolated {
                 guard let self, self.playing else { return }
                 let toEar = UIDevice.current.proximityState
-                try? AVAudioSession.sharedInstance().setCategory(toEar ? .playAndRecord : .playback)
+                Self.setCategoryIfNeeded(toEar ? .playAndRecord : .playback)
+                if toEar {
+                    // AND CLEAR ANY SPEAKER OVERRIDE, which is the half that was missing. `.playAndRecord`
+                    // routes to the earpiece by DEFAULT, so this looked complete — but an override set
+                    // earlier SURVIVES on the shared session, and CallService sets `.speaker` in seven
+                    // places. Take a call on speaker, end it, raise a note to your ear, and the note came
+                    // out of the loudspeaker. The reference app clears the override every single time it
+                    // routes to the ear, and this is the reason.
+                    try? AVAudioSession.sharedInstance().overrideOutputAudioPort(.none)
+                }
                 try? AVAudioSession.sharedInstance().setActive(true)
             }
         }
@@ -369,7 +378,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         // late-play fix), which is exactly the first-time-only shape he reported.
         let forNote = messageId
         Task.detached(priority: .userInitiated) {
-            try? AVAudioSession.sharedInstance().setCategory(.playback)
+            VoiceNotePlayer.setCategoryIfNeeded(.playback)
             try? AVAudioSession.sharedInstance().setActive(true)
             // AND THE PLAYER IS BUILT OUT HERE TOO. `AVAudioPlayer(contentsOf:)` parses the file header
             // and stands the decoder up on whatever thread calls it, and the preroll that `play()`
@@ -404,7 +413,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         // and the audio. None of it has to. The reference app orders it the same way and goes one
         // further: it flips its own playing state BEFORE telling the engine anything, so the button
         // answers the tap even when the audio needs a moment. `playing = true` below is that flip.
-        try? AVAudioSession.sharedInstance().setCategory(.playback)
+        Self.setCategoryIfNeeded(.playback)
         try? AVAudioSession.sharedInstance().setActive(true)
         p.enableRate = true
         p.rate = rateByCid[cid] ?? 1
@@ -536,8 +545,34 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         if !VoiceAudio.callActive {
             // Back to plain playback first: raise-to-ear may have left it on `.playAndRecord`, and the
             // microphone must not stay hot after a note finishes.
-            try? AVAudioSession.sharedInstance().setCategory(.playback)
-            try? AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+            Self.setCategoryIfNeeded(.playback)
+            Self.deactivate()
+        }
+    }
+
+    /// Touch the session only when the answer would actually change. `setCategory` is not free — it can
+    /// renegotiate the route — and `start()` calls it on every single play. The reference app guards the
+    /// same call the same way rather than setting it blind.
+    ///
+    /// A non-empty options set counts as a difference on its own: we always set plain categories here,
+    /// so leftovers from the recorder (`.duckOthers`) or a call must be cleared, not inherited.
+    nonisolated private static func setCategoryIfNeeded(_ category: AVAudioSession.Category) {
+        let s = AVAudioSession.sharedInstance()
+        guard s.category != category || !s.categoryOptions.isEmpty else { return }
+        try? s.setCategory(category)
+    }
+
+    /// Give the session back, and DO NOT ACCEPT A REFUSAL SILENTLY. AVAudioSession answers `.isBusy`
+    /// when the hardware has not finished tearing down, which a `try?` swallows whole — and a session
+    /// that never deactivates is a session that never posts `.notifyOthersOnDeactivation`, so the
+    /// person's music stays dead after they listen to a note. The reference app retries this exact
+    /// error code for this exact reason; everything else is a real failure and is left alone.
+    nonisolated private static func deactivate(retries: Int = 3) {
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        } catch let error as NSError {
+            guard retries > 0, error.code == AVAudioSession.ErrorCode.isBusy.rawValue else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { deactivate(retries: retries - 1) }
         }
     }
 
