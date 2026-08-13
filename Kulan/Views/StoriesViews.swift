@@ -570,8 +570,35 @@ struct StoryRowGeometry: Equatable {
     }
 
     /// The dim the cover-flow puts on a card as it leaves the centre.
+    /// THE COVER-FLOW DIM, THEIRS VERBATIM.
+    ///
+    ///     let countedFractionDistanceToCenter = max(0.0, min(1.0, unboundFractionDistanceToCenter / 3.0))
+    ///     var itemAlpha = 1.0 * (1.0 - countedFractionDistanceToCenter) + 0.0 * countedFractionDistanceToCenter
+    ///     itemTransition.setAlpha(layer: visibleItem.contentTintLayer, alpha: 1.0 - itemAlpha)
+    ///
+    /// where `unboundFractionDistanceToCenter` is `abs(combinedFraction)` — distance from the centre
+    /// in CARD UNITS, not swipe progress and not screen position. That distinction is what makes the
+    /// dim continuous: one number drives position, scale and brightness, and it already carries the
+    /// pan, so a finger on the thumbnails and a finger on the sheet move all three together.
+    ///
+    /// ⚠️ WAS `1 - 0.20 * min(1, |cf|)`, AND BOTH HALVES OF THAT WERE WRONG.
+    ///
+    /// The DEPTH: 0.20 against their 0.333 is a 20% step between the centre card and its neighbour,
+    /// which is not the hierarchy he described and is only 0.20 of brightness to spend across a whole
+    /// card of travel. The change was happening; there was too little of it to read as happening.
+    ///
+    /// The CLAMP: `min(1, |cf|)` flattens everything past one card, so the second and third cards
+    /// were exactly as bright as the first neighbour. Theirs clamps at THREE, so the row keeps
+    /// falling away toward black and the centre is the only thing at full brightness.
+    ///
+    /// Ours is view alpha where theirs is a black tint layer over an item at alpha 1. Over this
+    /// screen's black those composite to the same pixels, and the alpha carries the card's shadow and
+    /// its count badge with it, which is what we want. If the row ever gains a non-black backdrop,
+    /// this has to become a tint layer.
+    ///
+    /// The divisor is the one knob: 3 is theirs, and a larger number is a lighter dim.
     func itemOpacity(combinedFraction cf: CGFloat) -> Double {
-        1.0 - 0.20 * Double(min(1, abs(cf)))
+        1.0 - Double(min(1, abs(cf) / 3))
     }
 
     /// PUT THE LIVE STORY WHERE ITS CARD WOULD BE.
