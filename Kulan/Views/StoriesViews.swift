@@ -2284,7 +2284,34 @@ struct StoryViewer: View {
         // `latchedContent` is captured once at the start of each pull (see `driveMorph`) and held
         // for that sitting. Nil falls back to the old estimate, which is stable for the same reason
         // — it is a pure function of the screen.
-        let content = latchedContent
+        // ⚠️ THE LIVE MEASUREMENT BEFORE THE PREDICTION, AND THAT ORDER IS THE FIX FOR HIS BLACK
+        // BAND UNDER THE STORY ON THE FIRST PULL.
+        //
+        // The latch is still first, and still for the reason below: a slot that moves under a card
+        // already in the air is a card that changes size as it flies. But `latchedContent` is only
+        // written from `driveMorph` while `p < 0.25`, so a sitting where the morph has not answered
+        // inside that window keeps NIL for the whole pull — and nil used to fall straight through to
+        // the screen-derived guess. It only fails the first time because that guess reads
+        // `currentIsMine`, which arrives a beat late on a fresh open.
+        //
+        // WHY A HIGH GUESS LEAVES A BAND, in numbers, because "it looks cut off" has been diagnosed
+        // three different ways in this file:
+        //
+        //     slot aspect  = 0.88 · contentH_host / contentW      (h = slotHRef · 0.88, w from contentH)
+        //     card aspect  = contentH_real / contentW             (what `applyCore` actually crops)
+        //
+        // `applyCore` renders `cropH · scale = min(restH · scale, visibleH)`, so the moment the slot
+        // is TALLER in aspect than the content, the card draws shorter than the seat it was given and
+        // the surplus is empty. With the owner footer mispredicted the host says 932 where the real
+        // content is 765 — 22% out, against the 13.6% the 0.88 buys — so the card renders short and
+        // the gap is under it. Nothing is cropped, which is why the whole picture is still there in
+        // his screenshot with black beneath it.
+        //
+        // Asking the morph is not a second copy of the number; it is the same rectangle `applyCore`
+        // will crop against, which is what `contentSize` exists for. The guess stays as the last
+        // resort for the frames before any card is registered, where there is genuinely nothing to
+        // ask.
+        let content = latchedContent ?? StoryCardMorph.shared.contentSize
         let contentW = content?.width ?? scr.width
         let contentH = content?.height
             ?? (scr.height - (currentIsMine ? Self.ownerFooterHeight + max(10, bottomInset) : 0))
