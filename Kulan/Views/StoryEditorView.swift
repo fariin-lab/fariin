@@ -15,16 +15,37 @@ import StoryUI   // StoryCanvas: the one sampler + drawer for a story's backdrop
 // only the bottom bar by this measured height.
 final class KeyboardWatcher: ObservableObject {
     @Published var height: CGFloat = 0
+    /// WHERE THE KEYBOARD'S TOP EDGE IS ON THE SCREEN, which is the number a view that is not the
+    /// screen actually needs.
+    ///
+    /// ⚠️ `height` IS MEASURED FROM THE BOTTOM OF THE SCREEN, AND SPENDING IT INSIDE A VIEW THAT
+    /// DOES NOT REACH THE BOTTOM OF THE SCREEN DOUBLE-COUNTS EVERYTHING IN BETWEEN.
+    ///
+    /// The story text card is the top half of a VStack whose other half is an 88pt bar, over a home
+    /// indicator: its bottom edge is about 122pt up from the screen's. Padding it by `height` lifts
+    /// its contents 122pt further than the keyboard ever came, which is the owner's Aa row floating
+    /// far above the keys with a gap nobody asked for.
+    ///
+    /// Signal does not do this arithmetic at all. `PhotoCaptureViewController.handleKeyboardNotification`
+    /// converts the end frame into the composer's OWN space
+    /// (`textStoryComposerView.convert(endFrame, from: nil)`) and insets by the difference against
+    /// its own bounds, so the amount it moves cannot depend on what is underneath it.
+    ///
+    /// A view can subtract this from its own `maxY` and get exactly the overlap it has to clear.
+    /// `.infinity` while the keyboard is down means "nothing overlaps", with no special case.
+    @Published var topOnScreen: CGFloat = .infinity
     private var tokens: [NSObjectProtocol] = []
     init() {
         tokens.append(NotificationCenter.default.addObserver(
             forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { [weak self] n in
                 guard let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
                 self?.height = max(0, UIScreen.main.bounds.height - f.origin.y)
+                self?.topOnScreen = f.origin.y
         })
         tokens.append(NotificationCenter.default.addObserver(
             forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { [weak self] _ in
                 self?.height = 0
+                self?.topOnScreen = .infinity
         })
     }
     deinit { tokens.forEach { NotificationCenter.default.removeObserver($0) } }

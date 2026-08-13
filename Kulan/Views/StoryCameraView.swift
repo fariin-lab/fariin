@@ -882,7 +882,15 @@ struct StoryCameraView: View {
                     style: .continuous))
                 .padding(.horizontal, typing ? 0 : 6)
                 .padding(.top, 6)
-                .animation(.easeInOut(duration: 0.2), value: typing)
+                // ⚠️ THE KEYBOARD'S OWN CURVE AND DURATION, MATCHING THE CARD'S. It was
+                // `.easeInOut(duration: 0.2)` against the card's `.easeOut(duration: 0.22)`, and
+                // this one changes the card's WIDTH by 12pt while that one moves its contents.
+                // Two clocks over one subtree started by one event, so for a fifth of a second the
+                // card's edges and everything centred inside them were moving to different tunes —
+                // and a `TextField` whose content changes on every keystroke re-enters both. Signal
+                // has one animation here, taking the keyboard's duration and curve, and its
+                // composer's frame does not change at all.
+                .animation(.easeOut(duration: 0.22), value: typing)
                 // SWIPE BETWEEN THE TWO, which is the half that was missing — tapping worked, so the
                 // switch looked like a tab strip and did not behave like one.
                 //

@@ -1,5 +1,5 @@
 import SwiftUI
-import UIKit   // the window's safe-area insets, read directly (see `bottomInset`)
+import UIKit
 
 // The TEXT half of the story camera, to the owner's reference (2026-08-03): a coloured card with
 // the X top-left and the colour button top-right, the words in the middle, "Aa" bottom-left, and a
@@ -61,12 +61,31 @@ struct StoryTextCard: View {
     /// different heights, and a constant would be wrong on all three.
     @StateObject private var keyboard = KeyboardWatcher()
 
-    /// The home-indicator strip, read from the window the same way the editors read the top one.
-    /// The card's layout already excludes it; the keyboard's height does not.
-    private var bottomInset: CGFloat {
-        UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
-            .first ?? 0
+    /// THE CARD'S OWN BOTTOM EDGE ON SCREEN, and the whole keyboard problem is solved in its terms.
+    @State private var cardMaxY: CGFloat = 0
+
+    /// HOW MUCH OF THIS CARD THE KEYBOARD ACTUALLY COVERS — Signal's number, not ours.
+    ///
+    /// ⚠️ IT WAS `keyboard.height`, MEASURED FROM THE BOTTOM OF THE SCREEN, AND THIS CARD IS NOT AT
+    /// THE BOTTOM OF THE SCREEN.
+    ///
+    /// The card is the top half of a VStack whose other half is the 88pt CAMERA/TEXT bar, sitting
+    /// above the home indicator: its bottom edge is roughly 122pt up from the screen's. Every
+    /// consumer of `keyboard.height` here was therefore counting that 122pt as if the keyboard had
+    /// covered it. The old code took back the home-indicator strip and named the double-count in a
+    /// comment, but it never took back the BAR — which is 88 of the 122. That is the owner's Aa row
+    /// floating a long way above the keys, and the words lifting about 44pt too far, because the
+    /// same wrong number is halved and spent again as an offset.
+    ///
+    /// Signal does not compute this from the screen at all.
+    /// `PhotoCaptureViewController.handleKeyboardNotification` converts the keyboard's end frame
+    /// into the composer's own coordinate space and insets by the difference against its own
+    /// bounds, so what the composer moves by cannot depend on what is laid out beneath it. This is
+    /// that: our own bottom edge, minus where the keyboard's top edge really is.
+    ///
+    /// With the keyboard down `topOnScreen` is `.infinity`, so this is 0 with no special case.
+    private var keyboardOverlap: CGFloat {
+        max(0, cardMaxY - keyboard.topOnScreen)
     }
 
     private let charLimit = 700
@@ -99,11 +118,10 @@ struct StoryTextCard: View {
                     .background(Color.clear)
                     .padding(.horizontal, 28)
             }
-            // HALF the keyboard, because the words are CENTRED: lifting them by the whole height
-            // would put them as far above the middle as they were below it. Half keeps them centred
-            // in the part of the card you can still see.
-            .offset(y: -keyboard.height / 2)
-            .animation(.easeOut(duration: 0.22), value: keyboard.height)
+            // HALF the covered part, because the words are CENTRED: lifting them by the whole
+            // overlap would put them as far above the middle as they were below it. Half keeps them
+            // centred in the part of the card you can still see.
+            .offset(y: -keyboardOverlap / 2)
 
             VStack(spacing: 0) {
                 HStack {
@@ -154,20 +172,43 @@ struct StoryTextCard: View {
                 }
                 .padding(.horizontal, 14)
                 // RIDE JUST ABOVE THE KEYBOARD, and this time actually 14pt above it (owner
-                // 2026-08-04: "Aa and Done button and keyboard has more space").
+                // 2026-08-04: "Aa and Done button and keyboard has more space", and again on
+                // 2026-08-13 with the row floating in the middle of the card).
                 //
-                // `keyboard.height` is measured from the bottom of the SCREEN — it is
-                // `screenHeight - keyboardTop` — but this card is laid out inside the safe area, so
-                // its own bottom already sits about 34pt up on any phone with a home indicator.
-                // Padding by the full keyboard height therefore counted that strip twice and left
-                // the buttons ~48pt clear of the keys instead of 14. Take the inset back off.
-                .padding(.bottom, keyboard.height > 0
-                         ? max(10, 14 + keyboard.height - bottomInset)
-                         : 14)
-                .animation(.easeOut(duration: 0.22), value: keyboard.height)
+                // ⚠️ THE SUBTRACTION THAT USED TO BE HERE IS GONE, NOT CORRECTED. It was
+                // `14 + keyboard.height - bottomInset`: a screen-referenced height with one of the
+                // two things between this card and the screen's bottom taken back off. The other one
+                // is the 88pt bar, and nothing here can know about that — which is the sign the
+                // arithmetic belonged somewhere else entirely. `keyboardOverlap` is measured against
+                // this card's own bottom edge, so there is nothing left to subtract: what it covers
+                // is what we clear.
+                .padding(.bottom, 14 + keyboardOverlap)
             }
             .foregroundStyle(style.ink)
         }
+        // WHERE THIS CARD'S BOTTOM EDGE REALLY IS. Read from the card itself rather than worked out
+        // from the screen and what is stacked under it — see `keyboardOverlap`. It is a `.background`
+        // so it measures the card's own frame and takes part in no layout of its own, and the frame
+        // it reports is the CARD's, which the keyboard never moves, so this cannot feed back on the
+        // offset it feeds.
+        .background(
+            GeometryReader { g in
+                Color.clear
+                    .onAppear { cardMaxY = g.frame(in: .global).maxY }
+                    .onChange(of: g.frame(in: .global).maxY) { _, v in cardMaxY = v }
+            }
+        )
+        // ⚠️ ONE ANIMATION FOR THE WHOLE CARD, DRIVEN BY ONE VALUE, AND THAT IS THE OTHER HALF OF
+        // SIGNAL'S APPROACH.
+        //
+        // The words and the button row used to carry an `.animation` each, both keyed on
+        // `keyboard.height`, while the host carried a THIRD on `typing` for the 12pt of side margin
+        // it drops when the keyboard arrives. Three implicit animations over one subtree, on two
+        // durations and two curves, all started by the same event: every keystroke that changes the
+        // layout re-enters them and they disagree about where things are on the way. Signal moves
+        // ONE constraint inside a single `UIView.animate` taking the keyboard's own duration and
+        // curve, and its composer's frame never changes at all.
+        .animation(.easeOut(duration: 0.22), value: keyboardOverlap)
         // NO KEYBOARD ON ARRIVAL (owner 2026-08-03: "dont open keyboard in story when i click text
         // tab"). Tapping TEXT is choosing a MODE, not asking to type — and a keyboard that arrives
         // uninvited covers the CAMERA/TEXT switch you may have come to use. Tap the card when you
