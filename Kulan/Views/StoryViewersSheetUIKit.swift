@@ -685,11 +685,13 @@ final class StoryViewersSheetView: UIView {
             guard allowed else {
                 pageOffset = tx * 0.25
                 applyPageOffset()
-                onPageDrag?(pageOffset / w)    // the rubber-band, same units
+                onPageDrag?(pageOffset / pageTravel)   // the rubber-band, same units as below
                 return
             }
             // Clamped at one panel width, theirs: `fraction = max(-1, min(1, translation.x / width))`.
-            pageOffset = max(-w, min(w, tx))
+            // Clamped to the panel's own travel, which is what the fraction below is measured
+            // against — clamping to `w` capped the row a hair short of a whole card.
+            pageOffset = max(-pageTravel, min(pageTravel, tx))
             applyPageOffset()
             // ⚠️ A FRACTION OF THE PANEL'S OWN JOURNEY, AND IT MUST STAY ONE. Twice now I have
             // "corrected" this into a distance and both times it was wrong, so the reasoning is
@@ -708,7 +710,13 @@ final class StoryViewersSheetView: UIView {
             // It does mean the row travels slower than a finger ON the row, where one card is 90pt.
             // That is not a bug: these two gestures are pacing different things. The row's own pan
             // paces CARDS; this one paces PANELS, and the row is following the panel.
-            onPageDrag?(pageOffset / w)
+            //
+            // ⚠️ AND THE DIVISOR IS `pageTravel`, NOT `w`. The note above says it in as many words —
+            // "the row has to cross exactly one card over that same full travel" — and the travel is
+            // `bounds.width + 20`, because of the gap left between two lists. Divided by `w` the row
+            // reached a whole card while the panel still had 20pt to go, so through every drag the
+            // two were about 4.7% out of step and only agreed at the ends. One number, both readers.
+            onPageDrag?(pageOffset / pageTravel)
         case .ended, .cancelled:
             onDragActive?(false)
             let tx = rawX - pageBaselineX
@@ -751,8 +759,16 @@ final class StoryViewersSheetView: UIView {
                 // settle — so a finger arriving inside the 0.28s (his 2026-08-09 "swipe back does
                 // not work until the first swipe completes") was dropped before the pan ever heard
                 // it. The flag is what every interruptible-gesture settle carries.
-                UIView.animate(withDuration: 0.28, delay: 0,
-                               options: [.curveEaseOut, .allowUserInteraction]) {
+                //
+                // ⚠️ AND THE CURVE IS THE ROW'S OWN, NOT A FOURTH ONE. This was 0.28 ease-out while
+                // the cards it belongs to settled over a 0.3s spring, and the abandon below was a
+                // third number again — so the viewers list and the row arrived at different times on
+                // different curves for one gesture. Theirs runs both off ONE transition; both read
+                // `StoryRowSettle` now, which is where their 0.3 and 0.4 live.
+                UIView.animate(withDuration: StoryRowSettle.commit.duration, delay: 0,
+                               usingSpringWithDamping: StoryRowSettle.commit.damping,
+                               initialSpringVelocity: 0,
+                               options: [.allowUserInteraction]) {
                     self.pageOffset = 0
                     self.applyPageOffset()
                 } completion: { [weak self] _ in
@@ -760,7 +776,11 @@ final class StoryViewersSheetView: UIView {
                 }
             } else {
                 onPageDrag?(0)
-                UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.9,
+                // Their abandon is deliberately SLOWER than their commit — 0.4s against 0.3s — so a
+                // drag that undoes itself does not read as decisive as one that meant something.
+                // Ours was 0.3 at a different damping, i.e. neither their number nor our own commit's.
+                UIView.animate(withDuration: StoryRowSettle.abandon.duration, delay: 0,
+                               usingSpringWithDamping: StoryRowSettle.abandon.damping,
                                initialSpringVelocity: 0,
                                options: [.allowUserInteraction]) {   // same rule as the commit settle
                     self.pageOffset = 0

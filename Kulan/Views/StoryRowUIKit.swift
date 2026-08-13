@@ -43,6 +43,32 @@ struct StoryRowCounts: Equatable {
     static let zero = StoryRowCounts(views: 0, likes: 0)
 }
 
+/// WHY THE ROW IS MOVING WITHOUT A FINGER ON IT, and therefore how long it takes.
+///
+/// The reference app has exactly two of these and they are not the same length. A COMMIT — a tap on
+/// a side card, a sheet page that crossed its threshold — settles over
+/// `.curve(duration: 0.3, curve: .spring)`. An ABANDON — a sheet page released short — springs home
+/// over `.curve(duration: 0.4, curve: .spring)`, deliberately slower, because a movement that
+/// undoes itself should not look as decisive as one that meant something.
+///
+/// Ours had 0.3 for both, and the sheet's own panels had a THIRD number (0.28, ease-out) for the
+/// commit and a FOURTH (0.3, damping 0.9) for the abandon — so the viewers list and the cards it
+/// belongs to arrived on different curves at different times. One enum, read by both.
+enum StoryRowSettle {
+    case commit
+    case abandon
+
+    var duration: TimeInterval {
+        switch self {
+        case .commit: return 0.3
+        case .abandon: return 0.4
+        }
+    }
+
+    /// One spring for both, as theirs is: only the length differs.
+    var damping: CGFloat { 0.82 }
+}
+
 // MARK: - The picture on one card
 
 /// The card's media, hosted once per story.
@@ -526,7 +552,11 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             // one running immediately after `setPageDrag` had started the completion spring, writing
             // the same values hard on top of it. The drag's own path (`setPageDrag`) is what lays the
             // row out while a drag is happening; this branch is for everything else.
-            updateScrolling()
+            //
+            // ⚠️ AND IT JOINS A SETTLE RATHER THAN ENDING ONE. See `isSettling`: at a sheet-page
+            // commit this branch runs one turn after the spring started, because the live story's id
+            // changed, and an unanimated pass here writes the destination hard over it.
+            updateScrolling(settle: isSettling ? .commit : nil)
         }
     }
 
@@ -566,11 +596,34 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// answers it by animating the item POSITIONS rather than the number
     /// (`transition.attachAnimation(view: self, id: "isCompletingViewListPan")`, a 0.3s spring on
     /// the commit and 0.4s on the abandon), which is what this branch does.
-    func setPageDrag(_ v: CGFloat) {
+    /// - Parameter settle: which curve a RETURN TO ZERO travels on. A drag released short of its
+    ///   threshold is an abandon and takes their slower 0.4s; anything else is a commit at 0.3s.
+    ///   Ignored on the frames of a live drag, which are the finger's and are never animated.
+    func setPageDrag(_ v: CGFloat, settle: StoryRowSettle = .commit) {
         guard v.isFinite, v != pageDrag else { return }
         let completing = v == 0 && pageDrag != 0
         pageDrag = v
-        updateScrolling(animated: completing)
+        updateScrolling(settle: completing ? settle : nil)
+    }
+
+    /// THE SHEET PAGED, AND THE ROW MOVES ONCE.
+    ///
+    /// ⚠️ IT IS ONE CALL BECAUSE IT WAS TWO MOVEMENTS. The host used to zero the page drag — one
+    /// animated pass, springing the cards back to where the OLD story sat centred — and then, on the
+    /// next SwiftUI turn, let the `activeIndex` branch re-seat the scroller: a second animated pass,
+    /// to where the NEW story sits. Two springs half a frame apart over the same cards, which is the
+    /// double movement at every sheet page.
+    ///
+    /// Theirs is one pass by construction: the pan's fraction and the central item change in the
+    /// same update, so their layout runs once with one transition. This is that — the drag returns
+    /// to zero and the scroller is re-seated before a single layout pass runs.
+    func commitPage(toStoryId id: String) {
+        pageDrag = 0
+        guard let i = stories.firstIndex(where: { $0.id == id }) else {
+            updateScrolling(settle: .commit)
+            return
+        }
+        navigate(to: i, animated: true)
     }
 
     /// Put the row on this story. `animated` runs their 0.3s spring over the layout while the offset
@@ -586,7 +639,7 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         scroller.setContentOffset(CGPoint(x: CGFloat(index) * geometry.fullDist, y: 0), animated: false)
         ignoreScrolling = false
         reportedIndex = index
-        updateScrolling(animated: animated)
+        updateScrolling(settle: animated ? .commit : nil)
     }
 
     /// WITH THE SHEET DOWN, THE SCROLLER IS NOT THE TRUTH — THE CENTRAL ITEM IS. Theirs, at `:5233`:
@@ -635,7 +688,35 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// This is their `updateScrolling`, and the shape is theirs line for line: derive where the row
     /// is sitting, walk every story, work out how far from the centre it is in card units, cull the
     /// ones outside the window, and set three properties on the rest.
-    private func updateScrolling(animated: Bool = false) {
+    /// ⚠️ A SETTLE IS RUNNING AND A RELAYOUT ARRIVING INSIDE IT MUST JOIN IT, NOT SLAM IT.
+    ///
+    /// The commit of a sheet page does two things in two turns: the drag springs out at once, and
+    /// then SwiftUI re-renders with the new story, which reaches `apply` as `liveChanged` and used
+    /// to run an UNANIMATED `updateScrolling()` — writing the destination hard over the spring that
+    /// had just started. The cards therefore jumped to their new seats while the viewers panel slid,
+    /// which is "the incoming card appears before the outgoing one has left". The file already
+    /// warned about this shape for the page-drag frames; the id changing was the case it missed.
+    ///
+    /// `.beginFromCurrentState` is already on the animation, so re-animating mid-flight resumes from
+    /// what is on screen rather than restarting.
+    private var isSettling = false
+    private var settleCycle = 0
+
+    private func beginSettle(_ settle: StoryRowSettle) {
+        settleCycle &+= 1
+        let cycle = settleCycle
+        isSettling = true
+        // Cleared by the clock rather than by an animation completion: the animation is per ITEM and
+        // per pass, so there is no single completion to hang this on, and a completion that fires
+        // for an interrupted animation would clear it early.
+        DispatchQueue.main.asyncAfter(deadline: .now() + settle.duration) { [weak self] in
+            guard let self, self.settleCycle == cycle else { return }
+            self.isSettling = false
+        }
+    }
+
+    private func updateScrolling(settle: StoryRowSettle? = nil) {
+        if let settle { beginSettle(settle) }
         // ⚠️ THE EARLY RETURN STILL HAS TO PLACE THE LIVE STORY, AND MISSING THAT WOULD HAVE PUT
         // BACK A SCREENSHOT THIS FILE HAS SEEN TWICE.
         //
@@ -711,7 +792,7 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             // Decided BEFORE the closure is built, because the closure reads it: a card born this
             // pass is placed without the animation (see the note above), so "is this pass animated"
             // is per item, not per pass.
-            let willAnimate = animated && existing != nil
+            let willAnimate = settle != nil && existing != nil
             let write = {
                 item.center = centre
                 item.transform = CGAffineTransform(scaleX: scale, y: scale)
@@ -737,7 +818,7 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
                 // `CATransaction` with actions DISABLED — right for a finger, and it beats the
                 // enclosing animation — so the live story arrived in one step anyway. The flag is
                 // what turns that transaction into the row's own curve for this pass.
-                if isLive { self.placeLiveStory(p, animated: willAnimate) }
+                if isLive { self.placeLiveStory(p, settle: willAnimate ? settle : nil) }
             }
             item.layer.zPosition = p.zPosition
             // Just above its own card and below the next one in: the tint belongs to this item, and
@@ -749,7 +830,9 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
                 // Their `.curve(duration: 0.3, curve: .spring)` for a movement that did not come from
                 // the finger. `.allowUserInteraction` so an interrupting swipe is heard during it,
                 // and `.beginFromCurrentState` so an interrupting one starts where this one got to.
-                UIView.animate(withDuration: Self.settleDuration, delay: 0, usingSpringWithDamping: 0.82,
+                UIView.animate(withDuration: settle?.duration ?? StoryRowSettle.commit.duration,
+                               delay: 0,
+                               usingSpringWithDamping: settle?.damping ?? StoryRowSettle.commit.damping,
                                initialSpringVelocity: 0,
                                options: [.allowUserInteraction, .beginFromCurrentState],
                                animations: write)
@@ -835,13 +918,12 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// `CAMediaTimingFunction` are not the same maths, but they are the same 0.3s ease-out journey,
     /// and 0.82 damping is close enough to `easeOut` over that distance that the two read as one
     /// movement. What matters is that neither arrives while the other is travelling.
-    static let settleDuration: CFTimeInterval = 0.3
-    static var settleAnimation: StoryCardMorph.Animation {
-        StoryCardMorph.Animation(duration: settleDuration,
+    static func settleAnimation(_ settle: StoryRowSettle) -> StoryCardMorph.Animation {
+        StoryCardMorph.Animation(duration: settle.duration,
                                  timing: CAMediaTimingFunction(name: .easeOut))
     }
 
-    private func placeLiveStory(_ p: StoryRowPlacement, animated: Bool = false) {
+    private func placeLiveStory(_ p: StoryRowPlacement, settle: StoryRowSettle? = nil) {
         // A hero open or close owns the card outright, and it is the gesture that removes the screen.
         guard !StoryCardMorph.heroDismissActive, StoryCardMorph.shared.isAvailable else { return }
         // ⚠️ THE ROW OWNS THE PUT-BACK NOW, AND THAT IS A CHANGE OF OWNER RATHER THAN OF BEHAVIOUR.
@@ -857,7 +939,7 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         }
         StoryCardMorph.shared.place(contentCenter: p.center, contentSize: p.size,
                                     cornerRadius: p.cornerRadius, fraction: geometry.fraction,
-                                    animated: animated ? Self.settleAnimation : nil)
+                                    animated: settle.map { Self.settleAnimation($0) })
     }
 
     private func addItem(_ story: Story) -> StoryRowItemView {
@@ -1076,6 +1158,9 @@ struct StoryRow: UIViewControllerRepresentable {
 /// the row got a frame behind the thing dragging it.
 @MainActor final class StoryRowLink {
     weak var controller: StoryRowController?
-    func setPageDrag(_ v: CGFloat) { controller?.setPageDrag(v) }
+    func setPageDrag(_ v: CGFloat, settle: StoryRowSettle = .commit) {
+        controller?.setPageDrag(v, settle: settle)
+    }
     func setFraction(_ v: CGFloat) { controller?.setFraction(v) }
+    func commitPage(toStoryId id: String) { controller?.commitPage(toStoryId: id) }
 }

@@ -337,10 +337,19 @@ struct StoryImage: View {
     /// One frame of the sheet's sideways drag. The row is moved FIRST and directly, then the value is
     /// published for the things that genuinely need a SwiftUI pass. The live story rides the first
     /// half for free: moving the row lays the live story out, because it is one of the row's items.
-    func deliver(_ v: CGFloat) {
+    func deliver(_ v: CGFloat, settle: StoryRowSettle = .commit) {
         guard v.isFinite else { return }
-        rowLink?.setPageDrag(v)
+        rowLink?.setPageDrag(v, settle: settle)
         if value != v { value = v }
+    }
+
+    /// THE SHEET PAGED AND THE ROW MOVES ONCE — see `StoryRowController.commitPage`. The published
+    /// value is written directly rather than through `deliver`, because the row has already been
+    /// told; going through `deliver` would hand it a second, unanimated zero on top of the spring it
+    /// just started.
+    func commitPage(toStoryId id: String) {
+        rowLink?.commitPage(toStoryId: id)
+        if value != 0 { value = 0 }
     }
 
     // ⚠️ `rowScroll` / `setRowScroll` / `forgetRowScroll` ARE DELETED — 2026-08-13.
@@ -3518,8 +3527,15 @@ struct StoryViewer: View {
                               // the pictures are not, which is the only way round that is smooth.
                               // `StoryRowController.setPageDrag` starts that spring when it sees the
                               // drag return to zero.
-                              sheetStoryId = live[i + d].id
-                              pageDragBox.deliver(0)
+                              // ⚠️ THE ROW IS RE-SEATED AND THE DRAG ZEROED IN ONE CALL. Zeroing the
+                              // drag on its own sprang the cards back to the OLD story's centre, and
+                              // the new id then reached the row a turn later and sprang them again to
+                              // the new one — two springs over the same cards half a frame apart.
+                              // `commitPage` does both before a single layout pass runs, which is
+                              // what theirs does by construction.
+                              let arriving = live[i + d].id
+                              pageDragBox.commitPage(toStoryId: arriving)
+                              sheetStoryId = arriving
                           },
                           // THE ONLY PER-FRAME WRITE, and it goes to the box, which nothing
                           // subscribes to except the row itself.
@@ -3542,7 +3558,14 @@ struct StoryViewer: View {
                               // ⚠️ `deliver`, NOT a write to `value` — the row is moved inside this
                               // callback rather than inside the SwiftUI pass the write schedules.
                               // That is their one hop from finger to card; see `rowLink`.
-                              pageDragBox.deliver(f)
+                              //
+                              // ⚠️ AND IT IS LABELLED AN ABANDON, WHICH IS THEIR 0.4s RATHER THAN
+                              // 0.3s. A zero arriving HERE is always a drag released short — the
+                              // commit has its own path above — and theirs deliberately springs a
+                              // given-up drag home more slowly than one that meant something. The
+                              // label is ignored on the frames of a live drag, which are the
+                              // finger's and are never animated.
+                              pageDragBox.deliver(f, settle: .abandon)
                           },
                           // A viewer's profile opens in the SAME sheet the story header uses, so
                           // there is one profile screen in this viewer and not two that drift.
