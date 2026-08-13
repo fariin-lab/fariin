@@ -331,38 +331,6 @@ public final class StoryCardMorph {
     /// crash if one was never registered.
     public var isAvailable: Bool { card != nil }
 
-    /// THE STORY CONTENT'S REAL RECTANGLE — the exact one `applyCore` will crop against.
-    ///
-    /// ⚠️ IT EXISTS SO THE HOST STOPS PREDICTING THIS NUMBER. `cardSlot` used to derive the content
-    /// height itself, as `screen.height - (currentIsMine ? ownerFooter + bottomInset : 0)`, and size
-    /// the card against that. Two things then had to agree about one rectangle: this, which is
-    /// measured from the metrics the library reports, and that, which is a guess about whether an
-    /// owner footer is drawn — and `currentIsMine` is known to arrive a beat late on a fresh open.
-    ///
-    /// When the guess runs high the card ends up TALLER IN ASPECT THAN THE CONTENT, and the crop
-    /// then asks for more height than the scaled content actually renders. What fills the surplus is
-    /// nothing: a black band across the bottom of the card, which is his report. The margin is small
-    /// — with the footer mispredicted the card wants 0.88 × 852 = 750pt of a content that is only
-    /// 734pt tall — which is why it was intermittent rather than constant.
-    ///
-    /// Nil until a card is registered; the host keeps its old estimate for that window only.
-    /// ⚠️ NIL UNTIL THE METRICS ARE REAL, AND THAT GUARD IS THE WHOLE VALUE OF THIS PROPERTY.
-    ///
-    /// `contentRect` falls back to `view.bounds` when the library has not reported `cardHeight` yet.
-    /// That fallback is right for the transform — it is better to crop nothing than to crop wrongly
-    /// — but it is POISON for a caller sizing a slot, because it is a full-screen height that later
-    /// becomes a content height. A slot derived from it changes width in the middle of the pull, and
-    /// the card visibly grows or shrinks as it flies: his report, and my own regression from the
-    /// black-band fix earlier the same day.
-    ///
-    /// So this answers only when it knows. A caller that gets nil keeps its own estimate, which is
-    /// stable, rather than being handed a number that is about to change.
-    public var contentSize: CGSize? {
-        guard let card, card.bounds.width > 1,
-              cardHeight > 1, cardTop + 1 < card.bounds.height else { return nil }
-        return contentRect(in: card).size
-    }
-
     public func attach(_ view: UIView?) {
         card = view
     }
@@ -419,8 +387,7 @@ public final class StoryCardMorph {
         guard let flightCard else { return }
         applyCore(on: flightCard, sheet: false, fraction: fraction, targetSize: targetSize,
                   targetCenter: targetCenter, cornerRadius: cornerRadius,
-                  centerOverride: centerOverride, sizeOverride: nil,
-                  alpha: alpha, dim: dim, chrome: chrome, crop: crop,
+                  centerOverride: centerOverride, alpha: alpha, dim: dim, chrome: chrome, crop: crop,
                   exiting: exiting)
     }
 
@@ -462,102 +429,33 @@ public final class StoryCardMorph {
         guard card === view else { return }
         reset()
         card = nil
-        // ⚠️ AND THE METRICS GO WITH IT, WHICH THEY NEVER USED TO.
-        //
-        // `cardTop`/`cardHeight` were written only by `setCardMetrics` and cleared by nothing — not
-        // `detach`, not `reset` — so a rectangle outlived the card it described. That was survivable
-        // while every page published on appear and one of them was always about to overwrite it.
-        // It stopped being survivable when publishing became the focused page's job alone: on any
-        // path where nobody publishes, the LAST SITTING'S rectangle is still live and `contentRect`
-        // hands it out, because its only test is `cardHeight > 1` and a stale 631 passes that.
-        //
-        // A reply-bar page followed by a plain one is 631 standing in for 699 — the bottom 68pt of
-        // the picture cut the moment the sheet moves, which is the very report this is all for. The
-        // other order gives the black band instead. One stale rectangle, two symptoms.
-        //
-        // Zeroed, the readers refuse to answer and the host falls back to its estimate, which is
-        // built from the same formula the library sizes the card with and lands on the same number.
-        // Refusing to answer is safe now in a way it was not before that estimate was corrected.
-        cardTop = 0
-        cardHeight = 0
     }
 
-    /// THE STORY CONTENT'S RESTING RECTANGLE IN WINDOW COORDINATES, READABLE WHILE IT IS TRANSFORMED.
+    /// Move the card `fraction` of the way from full screen to the card slot.
     ///
-    /// ⚠️ NOT `cardWindowRect`, WHICH THIS DOES NOT REPLACE. That one converts through the card and
-    /// so folds whatever transform the card is wearing into its answer — which is right for the hero,
-    /// read once before anything moves, and useless to the preview row, which asks every frame of a
-    /// drag while the card is mid-shrink.
-    ///
-    /// This is built the way `applyCore` builds it: `center` and `bounds` are both documented as
-    /// transform-independent, so the rest centre is the card's centre plus the content's offset
-    /// within it, and the conversion runs through the SUPERVIEW, which carries no transform. Same
-    /// arithmetic as the lerp it feeds, which is the point — the row is taking the journey over, and
-    /// it has to start from the same place the lerp did or the hand-over would be a jump.
-    public var restContentWindowRect: CGRect? {
-        // ⚠️ `cardHeight > 1` FOR THE SAME REASON `contentSize` HAS IT, AND IT WAS MISSING HERE.
-        //
-        // Without metrics `contentRect` falls back to the whole `view.bounds`. That is the right
-        // answer for the transform — better to crop nothing than to crop wrongly — and the wrong one
-        // for a caller sizing a journey, because a full-bleed rectangle is not the shape the story
-        // is drawn in. The row would then interpolate FROM a 393x852 rest TOWARD a 9:16 slot, and
-        // two rectangles of different shapes cannot be interpolated without the crop coming back for
-        // exactly those frames.
-        //
-        // Nil instead, so the row keeps its own estimate, which is built to the slot's shape and is
-        // therefore self-consistent. Same contract as `contentSize`: answer only when you know.
-        guard let card, let superview = card.superview, card.bounds.width > 1, cardHeight > 1
-        else { return nil }
-        let content = contentRect(in: card)
-        guard content.width > 1, content.height > 1 else { return nil }
-        let offset = CGPoint(x: content.midX - card.bounds.midX, y: content.midY - card.bounds.midY)
-        let restCenter = CGPoint(x: card.center.x + offset.x, y: card.center.y + offset.y)
-        let inWindow = superview.convert(restCenter, to: nil)
-        return CGRect(x: inWindow.x - content.width / 2, y: inWindow.y - content.height / 2,
-                      width: content.width, height: content.height)
-    }
-
-    /// PUT THE STORY EXACTLY HERE — the preview row's one call, and it interpolates nothing.
-    ///
-    /// ⚠️ THIS REPLACES `apply(fraction:targetSize:targetCenter:)`, AND THE DELETION IS THE POINT
-    /// RATHER THAN THE RENAME.
-    ///
-    /// That method took a rectangle to arrive at and walked the card `fraction` of the way there,
-    /// which made it a SECOND opinion about where a story sits. The row already had the first: its
-    /// own loop places every card from `StoryRowGeometry`, and that formula's distances carry the
-    /// pull's fraction themselves. Two lerps over one journey is why the caller had to pre-divide the
-    /// x by the fraction to cancel this one — a correction that is only ever as right as the two
-    /// formulas' agreement, and they drifted apart four times.
-    ///
-    /// So the row now computes this card's rectangle in the same pass, from the same numbers, as
-    /// every other card in the row, and hands it over finished. `fraction` is still passed because
-    /// three things genuinely belong to the pull rather than to the row — the crop that shaves the
-    /// story into the slot's shape, the corner radius' journey, and `sheetFraction`, which the
-    /// caption fade reads — but it no longer decides where anything is.
-    ///
+    /// The host passes the rectangle it wants to SEE at the far end, not a scale factor, because the
+    /// host owns the slot geometry and the design numbers that produce it. Everything is
+    /// interpolated FROM the card's own resting size and centre rather than from numbers the host
+    /// also computes, which is what makes `fraction: 0` exactly the identity by construction. Two
+    /// copies of the same geometry that have to agree to the pixel is precisely the mistake that
+    /// produced the picture-jumping-inside-its-frame bug in `402ec4d`.
     /// - Parameters:
-    ///   - contentCenter: where the story CONTENT's centre goes, in window coordinates. Absolute.
-    ///   - contentSize: what the content renders as. Absolute; the scale is derived from its width.
-    ///   - fraction: how far into the slot the pull is, 0…1. Owns the crop, the radius and the
-    ///     caption fade, and nothing else.
-    /// HOW A PLACEMENT TRAVELS, when it is not a finger.
-    ///
-    /// The row springs its cards on two passes — a tap on a side card, and a sheet page-drag
-    /// completing — and the live story has to be on that same clock or it arrives while they are
-    /// still moving. Carrying the numbers rather than a boolean so the row states its own curve
-    /// once and this file does not keep a second copy of it.
-    public struct Animation {
-        public let duration: CFTimeInterval
-        public let timing: CAMediaTimingFunction
-        public init(duration: CFTimeInterval, timing: CAMediaTimingFunction) {
-            self.duration = duration
-            self.timing = timing
-        }
-    }
-
-    public func place(contentCenter: CGPoint, contentSize: CGSize,
-                      cornerRadius: CGFloat, fraction: CGFloat,
-                      animated: Animation? = nil) {
+    ///   - centerOverride: put the card's centre EXACTLY here (window coords) instead of
+    ///     interpolating rest → `targetCenter` by `fraction`. The hero close needs this: while the
+    ///     finger is down the card must sit under the finger, 1:1, and `fraction` must still be free
+    ///     to describe how far the SHRINK has got. Those are two different journeys and the sheet's
+    ///     single-fraction lerp cannot express both. Nil keeps the original behaviour exactly, which
+    ///     is what the viewers sheet still uses.
+    ///   - alpha: the card's own opacity. 1 for the sheet; the hero close softens it slightly as it
+    ///     is pulled away.
+    ///   - dim: how dark the surface BEHIND the card should be, 0…1. Another mainstream messenger darkens the list while
+    ///     the story is pulled away from it, and that darkening is most of why it reads as the
+    ///     story lifting off rather than a card sliding about on a bright white page. It is written
+    ///     onto the card's superview rather than a new view because that view is already the thing
+    ///     `prepareForHero` makes see-through, so there is exactly one answer to "what is behind the
+    ///     card". Nil leaves it alone, which is what the viewers sheet wants: it has its own canvas.
+    public func apply(fraction: CGFloat, targetSize: CGSize, targetCenter: CGPoint, cornerRadius: CGFloat,
+                      centerOverride: CGPoint? = nil, alpha: CGFloat = 1, dim: CGFloat? = nil) {
         // A dismiss owns the same transform. It cannot be running at the same time as the sheet
         // (both pans are direction-locked and the sheet is shut before a dismiss can start), but if
         // it ever were, the dismiss wins: it is the gesture that removes the screen.
@@ -566,30 +464,10 @@ public final class StoryCardMorph {
         // the viewers panel's slot, where the shave IS the effect: it is what hides the black above
         // and below the card. Only the flight defers it.
         sheetFraction = max(0, min(1, fraction))
-        applyCore(on: card, sheet: true, fraction: fraction,
-                  targetSize: contentSize, targetCenter: contentCenter,
-                  cornerRadius: cornerRadius,
-                  centerOverride: contentCenter, sizeOverride: contentSize,
-                  // ⚠️ ALPHA IS ALWAYS 1 HERE NOW. The row's dim is a tint layer sitting over the
-                  // card, the way theirs is, and this card is one of the row's items — so it is
-                  // dimmed by the row's tint like every other one. Writing view alpha here as well
-                  // was the second of the two brightness owners, and two owners trading hands at the
-                  // half-card is what the owner photographed.
-                  alpha: 1, dim: nil, chrome: 0, crop: 1,
-                  exiting: false, animated: animated)
-    }
-
-    /// Put the card back to full screen. The row calls this instead of `place` when the pull has
-    /// collapsed, which is the one transition `place` cannot express: `applyCore`'s early-out needs a
-    /// fraction of zero AND no centre override, and the row always has a centre to offer.
-    ///
-    /// The dismiss guard is the same one `place` carries, and it has to be here as well: this used
-    /// to be reached through `apply(fraction: 0)`, which checked it before falling into `reset`, so
-    /// splitting the two calls apart would have left the put-back able to yank a card out of a
-    /// swipe-down that is already removing the screen.
-    public func placeAtRest() {
-        guard !StoryPager.dismissActive else { return }
-        reset()
+        applyCore(on: card, sheet: true, fraction: fraction, targetSize: targetSize,
+                  targetCenter: targetCenter, cornerRadius: cornerRadius,
+                  centerOverride: centerOverride, alpha: alpha, dim: dim, chrome: 0, crop: 1,
+                  exiting: false)
     }
 
     /// HOW FAR THE STORY IS INTO THE VIEWERS SLOT: 0 full screen, 1 fully shrunk. Written here, on
@@ -618,18 +496,10 @@ public final class StoryCardMorph {
 
     /// The one copy of the interpolation, serving both targets. `sheet` picks the mask slot and the
     /// reset that runs on the early-out, nothing else differs.
-    ///
-    /// - Parameter sizeOverride: render the content at EXACTLY this size instead of interpolating
-    ///   rest → `targetSize` by `fraction`. The twin of `centerOverride`, and it exists for the same
-    ///   reason: the caller owns the journey. The preview row does — every card in it, this one
-    ///   included, is sized by one formula in one loop — so a second lerp here would be a second
-    ///   opinion about a number that already has an owner. Nil keeps the interpolation.
     private func applyCore(on card: UIView, sheet: Bool,
                            fraction: CGFloat, targetSize: CGSize, targetCenter: CGPoint,
-                           cornerRadius: CGFloat, centerOverride: CGPoint?, sizeOverride: CGSize?,
-                           alpha: CGFloat, dim: CGFloat?,
-                           chrome: CGFloat, crop: CGFloat, exiting: Bool,
-                           animated: StoryCardMorph.Animation? = nil) {
+                           cornerRadius: CGFloat, centerOverride: CGPoint?, alpha: CGFloat, dim: CGFloat?,
+                           chrome: CGFloat, crop: CGFloat, exiting: Bool) {
         guard let superview = card.superview else { return }
         let f = max(0, min(1, fraction))
         // The dim is written before the early-out: a drag that has begun but not yet moved is still a
@@ -654,8 +524,8 @@ public final class StoryCardMorph {
         // aspect (the owner signed off a card 12% shorter than aspect-true, twice), so a uniform
         // scale cannot satisfy both dimensions and the extra height is cropped rather than squashed.
         // Cropping is also what the neighbouring cards do, so the row stays consistent.
-        let visibleW = sizeOverride?.width ?? (restW + (targetSize.width - restW) * f)
-        let visibleH = sizeOverride?.height ?? (restH + (targetSize.height - restH) * f)
+        let visibleW = restW + (targetSize.width - restW) * f
+        let visibleH = restH + (targetSize.height - restH) * f
         let scale = max(0.0001, visibleW / restW)
 
         // The transform scales about the VIEW's centre, but what has to land in the slot is the
@@ -793,27 +663,7 @@ public final class StoryCardMorph {
         // backgroundColor all are, which is why they live inside the same disabled-actions block.
         // (Was a CAShapeLayer path, same hazard, same reason — see `applyMask`.)
         CATransaction.begin()
-        // ⚠️ ACTIONS ARE DISABLED FOR A FINGER AND ENABLED FOR A SPRING, AND THE DIFFERENCE IS THE
-        // WHOLE OF THE TAP TRANSITION.
-        //
-        // Disabling them is right under a finger, for the reason written above: a bare layer's
-        // geometry is implicitly animated, so the mask would chase the card by a quarter second.
-        // But `card.transform` is written inside this block too, and a disabled transaction beats
-        // `UIView.animate` — so on the passes the ROW springs (a tap on a side card, a page-drag
-        // completing) the row's cards glided to their new seats while the live story arrived in one
-        // step. Position and scale disagreeing for the length of a spring is the shape the owner has
-        // photographed more than once.
-        //
-        // Theirs has no equivalent hazard because every write in their layout pass goes through the
-        // one `itemTransition` — mask, tint, transform and position all carry the same animation or
-        // none. This is that: the caller says which pass it is, and the mask travels with the card
-        // either way.
-        if let animation = animated {
-            CATransaction.setAnimationDuration(animation.duration)
-            CATransaction.setAnimationTimingFunction(animation.timing)
-        } else {
-            CATransaction.setDisableActions(true)
-        }
+        CATransaction.setDisableActions(true)
         // ⚠️ THE COVER IS FRAMED TO THE CROP, NOT TO THE WHOLE STRIP, and that is a pixel identity
         // rather than a preference. The strip is 9:16; the row card is not (the slot is deliberately
         // shorter, and the crop above is what takes the difference out of the story). A cover framed
@@ -964,22 +814,20 @@ public final class StoryCardMorph {
     // generates it from the clip's own file at the second that player is actually on. No instant, no
     // subject, no capture — which is why this file no longer knows that video exists.
 
-    // ⚠️ DELETED HERE: `setHidden`, and with it the last of the copy-swap.
-    //
-    // It stepped the live card aside — alpha 0 — while the row was being swiped, because the story
-    // sat pinned at the slot centre and could not follow a card that was mid-flight. The row drew
-    // its own copy of the centre card for the length of the swipe and the real one waited
-    // underneath, the two being the same size in the same place at the moment of the exchange.
-    //
-    // The premise was the bug, not the swap. Two renderers for one story means somebody has to
-    // decide WHEN to exchange them, and that decision was wrong on device twice after being fixed
-    // twice — the flash, the overlapping cards, the story that stayed on A, the black window when a
-    // flag was left standing. The live card IS one of the row's items now — same table, same loop,
-    // same `StoryRowPlacement` — and it arrives here through `place`, already finished. There is
-    // nothing to stand in for it and no instant to get right.
-    //
-    // The alpha it wrote is the cover-flow dim, and that is not written on this card at all any
-    // more: it is a black tint layer the row keeps over each of its items, this one included.
+    /// Step the live card aside while the carousel row is being swiped.
+    ///
+    /// The story cannot follow a card that is mid-flight: it sits at the slot centre while the row
+    /// slides past it, so for the length of the swipe the carousel draws its own centre card and the
+    /// real one hides underneath. Both are the same size in the same place at the moment of the
+    /// exchange, so it is not visible. `jumpToStoryItem` has already moved the story to whichever
+    /// card the row settles on by the time it comes back.
+    public func setHidden(_ hidden: Bool) {
+        guard let card else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        card.alpha = hidden ? 0 : 1
+        CATransaction.commit()
+    }
 
     /// Clip the moving card to the STORY during a swipe-down dismiss.
     ///

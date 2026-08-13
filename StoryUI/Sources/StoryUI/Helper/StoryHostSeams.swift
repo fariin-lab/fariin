@@ -67,24 +67,6 @@ public enum StoryPosterSource {
 /// where a clip was in a session that has ended.
 @MainActor
 public enum StoryVideoHost {
-    /// THE STORIES THE PREVIEW ROW LAID OUT THIS PASS — their `validIds`, published by the thing that
-    /// computes it.
-    ///
-    /// ⚠️ IT COMES FROM THE ROW NOW, AND THAT IS THE FIX RATHER THAN THE PLUMBING.
-    ///
-    /// The reference app has ONE loop: the same pass that positions an item is the pass that decides
-    /// the item is still valid, so what is laid out and what is retained cannot disagree. We had two
-    /// answers to that one question — the row's own visibility window (their formula, verbatim) and a
-    /// separate hand-written "centre ±1" on the library side. The ±1 was the narrower of the two, so
-    /// a story two cards away was destroyed while the row was still drawing it: watch A, open the
-    /// sheet, swipe to B then C, and A's player was torn down on the second swipe. Swiping back
-    /// built a new one, and a new player starts at zero.
-    ///
-    /// Now there is one answer and it is the row's, which is theirs.
-    public static func previewWindow(_ storyIds: Set<String>) {
-        StoryItemViewStore.setWindow(storyIds)
-    }
-
     public static func viewerClosed() {
         StoryItemViewStore.retainDismounted = false
         // ⚠️ AND EXPLICITLY, NOT ONLY THROUGH THE FLAG. The flag's own `didSet` releases on a
