@@ -1718,12 +1718,21 @@ struct StoryViewer: View {
         .onChange(of: sheetStoryId) { _, id in
             guard showViewers, !id.isEmpty, id != currentStoryId else { return }
             NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: id)
-            // The anchor moves in the same breath, for the reason spelled out at the close's own
-            // jump: `currentStoryId` is written by a receipt the library WITHHOLDS while a story is
-            // paused, and the story is paused for the whole life of this sheet. Waiting for it would
-            // leave `targetStoryId` naming the story we just left — which is the id the row blanks
-            // and the id the live card is positioned by.
-            currentStoryId = id
+            // ⚠️ THE ANCHOR IS NOT WRITTEN HERE ANY MORE, AND THAT DELETION IS THE TAP FIX.
+            //
+            // It was written here because `currentStoryId` used to be fed by the WATCHED receipt,
+            // which the library withholds while a story is paused — and the sheet pauses the story
+            // for its whole life, so waiting for it would have waited for ever. That is no longer
+            // true: the ungated `onItemChanged` owns this value now, and the jump handler reports
+            // from the statement that swaps the item, so the answer arrives on the same runloop turn
+            // as the picture.
+            //
+            // Writing it here made it a SECOND writer, and an early one: it claimed the story was B
+            // before the library had drawn B. The row keys its whole animated pass off that claim, so
+            // it teleported the scroller and sprang the cards toward B while the live layer was still
+            // showing A — the old story sitting in the middle for a few frames, the brightness
+            // stepping at the wrong moment, and the card arriving before the story. One writer, and
+            // it tells the truth.
         }
         // SELF-HEALING for a PARKED sheet (user video: sheet resting at ~73% open — story stuck
         // as a giant half-morphed card, carousel never faded in). Two ways to get parked: a

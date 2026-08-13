@@ -337,6 +337,17 @@ struct StoryDetailView: View {
     /// Hand the card's rectangle to `StoryCardMorph`, which shrinks the live story into the viewers
     /// sheet and needs to know it is aiming at the card and not at this whole page.
     private func publishCardRect(proxy: GeometryProxy, footerH: CGFloat) {
+        // ⚠️ ONE PUBLISHER: THE PAGE THE VIEWER IS ON. See the note at the call site.
+        //
+        // `setCardMetrics` is a single slot on a singleton with no identity, and a neighbour page
+        // that has a reply bar answers a different question by 110pt. This is the same test the
+        // jump handler uses to decide whether a notification is meant for this page, deliberately —
+        // "am I the page on screen" must have one answer in this file, not two.
+        //
+        // A fresh open where `currentStoryUser` has not landed yet publishes NOTHING rather than
+        // publishing a guess. `contentRect` refuses to answer without metrics and the host keeps its
+        // own estimate for those frames, which is what that fallback is for.
+        guard viewModel.currentStoryUser == model.id else { return }
         StoryCardMorph.shared.setCardMetrics(
             top: winInsets.top,
             height: cardHeight(width: proxy.size.width, containerH: proxy.size.height, footerH: footerH),
@@ -519,10 +530,34 @@ struct StoryDetailView: View {
                     .padding(.top, winInsets.top)
                     // Tell the viewers-sheet morph WHERE the card is, because it is no longer the
                     // whole view. Without this it would shrink the black margins into the slot along
-                    // with the story and centre on the wrong point. Every page computes the same
-                    // rectangle, so whichever one runs last is still right.
+                    // with the story and centre on the wrong point.
+                    //
+                    // ⚠️ "EVERY PAGE COMPUTES THE SAME RECTANGLE, SO WHICHEVER ONE RUNS LAST IS STILL
+                    // RIGHT" IS WHAT THIS USED TO SAY, AND IT IS FALSE. That sentence was the bug.
+                    //
+                    // `footerH` is per PAGE, not per screen: a page with a reply bar gives up
+                    // `44 + 32 + safeBottom` = 110pt that a page without one keeps. My own story is
+                    // `.plain()` and has no reply bar, a friend's has one — and the pager parents
+                    // BOTH neighbours as real child view controllers, so a friend's page appears,
+                    // runs this, and overwrites the metrics my page just published. There is no
+                    // identity on `setCardMetrics`; it is one slot and the last writer wins.
+                    //
+                    // On a 393x852 that is 631 written over 699. Nothing shows it at rest, because
+                    // each page draws itself from its OWN `cardHeight`. It only bites when the sheet
+                    // starts to rise, because the morph then crops the live story to this rectangle
+                    // — 68pt shorter than the picture actually is, pinned at the top, so the missing
+                    // strip is taken off the BOTTOM. That is the owner's report: the story does not
+                    // zoom out, its bottom is cut away, and the text at the foot of his story
+                    // disappears the instant the sheet moves.
+                    //
+                    // The page the viewer is actually ON is the only one whose rectangle is the one
+                    // being cropped, so it is the only one allowed to answer. Paging to another
+                    // person re-answers through the `currentStoryUser` change below.
                     .onAppear { publishCardRect(proxy: proxy, footerH: footerH) }
                     .onChange(of: proxy.size) { _ in publishCardRect(proxy: proxy, footerH: footerH) }
+                    .onChange(of: viewModel.currentStoryUser) { _ in
+                        publishCardRect(proxy: proxy, footerH: footerH)
+                    }
                     // (Removed the always-on bottom photo scrim: the reply pill now sits on the solid
                     // black footer BELOW the card, not over the photo, so dimming the photo's bottom
                     // was pointless and just darkened captionless photos.)
@@ -787,6 +822,20 @@ struct StoryDetailView: View {
             // story being left at this instant — so it could only ever be the wrong number, dressed
             // up as care.
             timerProgress = CGFloat(idx)
+            // ⚠️ AND THE HOST IS TOLD IN THE SAME BREATH, WHICH IS THE WHOLE OF THE TAP FIX.
+            //
+            // The item has changed HERE — `timerProgress`'s integer part is what selects it — but the
+            // report that says so lives on the 20fps timer, so the host learned it up to a tick later
+            // and on a different runloop turn. The row waits for that report before it moves (it is
+            // what `liveStoryId` is built from), so the picture swapped on one clock and the layout
+            // sprang on another, which is the tap looking nothing like the swipe.
+            //
+            // Reporting it from the statement that causes it puts both on one clock. The latch is
+            // written too, so the timer does not report the same id a second time a tick later.
+            if lastChangedItem != id {
+                lastChangedItem = id
+                onItemChanged?(id)
+            }
             // ⚠️ AND THE WINDOW IS NOT TOUCHED HERE EITHER. It moved with the row, in the row's own
             // layout pass, several frames before this settle — which is their ordering: the pass that
             // lays an item out is the pass that decides it is still valid.
