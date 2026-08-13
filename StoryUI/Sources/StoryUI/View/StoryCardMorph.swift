@@ -510,8 +510,24 @@ public final class StoryCardMorph {
     ///   - contentSize: what the content renders as. Absolute; the scale is derived from its width.
     ///   - fraction: how far into the slot the pull is, 0…1. Owns the crop, the radius and the
     ///     caption fade, and nothing else.
+    /// HOW A PLACEMENT TRAVELS, when it is not a finger.
+    ///
+    /// The row springs its cards on two passes — a tap on a side card, and a sheet page-drag
+    /// completing — and the live story has to be on that same clock or it arrives while they are
+    /// still moving. Carrying the numbers rather than a boolean so the row states its own curve
+    /// once and this file does not keep a second copy of it.
+    public struct Animation {
+        public let duration: CFTimeInterval
+        public let timing: CAMediaTimingFunction
+        public init(duration: CFTimeInterval, timing: CAMediaTimingFunction) {
+            self.duration = duration
+            self.timing = timing
+        }
+    }
+
     public func place(contentCenter: CGPoint, contentSize: CGSize,
-                      cornerRadius: CGFloat, fraction: CGFloat) {
+                      cornerRadius: CGFloat, fraction: CGFloat,
+                      animated: Animation? = nil) {
         // A dismiss owns the same transform. It cannot be running at the same time as the sheet
         // (both pans are direction-locked and the sheet is shut before a dismiss can start), but if
         // it ever were, the dismiss wins: it is the gesture that removes the screen.
@@ -530,7 +546,7 @@ public final class StoryCardMorph {
                   // was the second of the two brightness owners, and two owners trading hands at the
                   // half-card is what the owner photographed.
                   alpha: 1, dim: nil, chrome: 0, crop: 1,
-                  exiting: false)
+                  exiting: false, animated: animated)
     }
 
     /// Put the card back to full screen. The row calls this instead of `place` when the pull has
@@ -582,7 +598,8 @@ public final class StoryCardMorph {
                            fraction: CGFloat, targetSize: CGSize, targetCenter: CGPoint,
                            cornerRadius: CGFloat, centerOverride: CGPoint?, sizeOverride: CGSize?,
                            alpha: CGFloat, dim: CGFloat?,
-                           chrome: CGFloat, crop: CGFloat, exiting: Bool) {
+                           chrome: CGFloat, crop: CGFloat, exiting: Bool,
+                           animated: StoryCardMorph.Animation? = nil) {
         guard let superview = card.superview else { return }
         let f = max(0, min(1, fraction))
         // The dim is written before the early-out: a drag that has begun but not yet moved is still a
@@ -746,7 +763,27 @@ public final class StoryCardMorph {
         // backgroundColor all are, which is why they live inside the same disabled-actions block.
         // (Was a CAShapeLayer path, same hazard, same reason — see `applyMask`.)
         CATransaction.begin()
-        CATransaction.setDisableActions(true)
+        // ⚠️ ACTIONS ARE DISABLED FOR A FINGER AND ENABLED FOR A SPRING, AND THE DIFFERENCE IS THE
+        // WHOLE OF THE TAP TRANSITION.
+        //
+        // Disabling them is right under a finger, for the reason written above: a bare layer's
+        // geometry is implicitly animated, so the mask would chase the card by a quarter second.
+        // But `card.transform` is written inside this block too, and a disabled transaction beats
+        // `UIView.animate` — so on the passes the ROW springs (a tap on a side card, a page-drag
+        // completing) the row's cards glided to their new seats while the live story arrived in one
+        // step. Position and scale disagreeing for the length of a spring is the shape the owner has
+        // photographed more than once.
+        //
+        // Theirs has no equivalent hazard because every write in their layout pass goes through the
+        // one `itemTransition` — mask, tint, transform and position all carry the same animation or
+        // none. This is that: the caller says which pass it is, and the mask travels with the card
+        // either way.
+        if let animation = animated {
+            CATransaction.setAnimationDuration(animation.duration)
+            CATransaction.setAnimationTimingFunction(animation.timing)
+        } else {
+            CATransaction.setDisableActions(true)
+        }
         // ⚠️ THE COVER IS FRAMED TO THE CROP, NOT TO THE WHOLE STRIP, and that is a pixel identity
         // rather than a preference. The strip is 9:16; the row card is not (the slot is deliberately
         // shorter, and the crop above is what takes the difference out of the story). A cover framed

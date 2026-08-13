@@ -343,6 +343,14 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     ///
     /// Lowered in `scrollViewDidEndScrollingAnimation`, which is the only thing that ends it.
     private var isSnapping = false
+
+    /// THEIR `animateNextNavigationId`: a story this row ASKED for, whose arrival it owns the
+    /// animation of.
+    ///
+    /// Set by a tap on a side card and cleared on the pass where the live story actually becomes it
+    /// — their `if animateNextNavigationId == component.slice.item.id`. While it is set, the row
+    /// refuses every other reason to move, because the only move it is waiting for is this one.
+    private var animateNextStoryId: String?
     /// The last index handed out through `onIndexChanged`, so the answer coming back around as an
     /// input cannot be mistaken for somebody else asking for a jump.
     private var reportedIndex = -1
@@ -467,8 +475,46 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         // Deceleration and our own snap animation are as much the row's own movement as a finger is.
         let rowIsStill = !scroller.isDragging && !scroller.isTracking
             && !scroller.isDecelerating && !isSnapping
-        if let activeIndex, activeIndex != reportedIndex, activeIndex != centredIndex,
-           stories.indices.contains(activeIndex), rowIsStill {
+        var seatedByTap = false
+        if let pending = animateNextStoryId {
+            // A TAP IS WAITING FOR ITS OWN STORY TO ARRIVE. Theirs, at the top of the update pass:
+            //
+            //     if let animateNextNavigationId = self.animateNextNavigationId,
+            //        animateNextNavigationId == component.slice.item.id {
+            //         self.animateNextNavigationId = nil
+            //         itemsTransition = transition.withAnimation(.curve(duration: 0.3, curve: .spring))
+            //         resetScrollingOffsetWithItemTransition = true
+            //     }
+            //
+            // and `resetScrollingOffsetWithItemTransition` is what puts the offset on the new
+            // central item AT ONCE (`:5240`), unanimated, inside their `ignoreScrolling` fence —
+            // after which the one layout pass springs every view from where it was to where that
+            // offset puts it. The offset never travels; the VIEWS do. `navigate(to:animated:)` is
+            // that pair, and it always was — what was missing is the waiting.
+            //
+            // ⚠️ AND NOTHING ELSE MAY MOVE THE ROW WHILE THIS IS PENDING. The tap has already told
+            // the outside world, so `activeIndex` is ALREADY the tapped story; letting the branch
+            // below see it would seat the row immediately and put back the exact window this
+            // exists to close.
+            if liveStoryId == pending, let i = stories.firstIndex(where: { $0.id == pending }) {
+                animateNextStoryId = nil
+                navigate(to: i, animated: true)
+                seatedByTap = true
+            } else if !stories.contains(where: { $0.id == pending }) {
+                // The story went away before it could arrive — deleted under the sheet. Waiting for
+                // it forever would leave the row unable to accept any jump for the rest of the
+                // sitting, which is a worse failure than a missed animation.
+                animateNextStoryId = nil
+            }
+        }
+        // ⚠️ THE WAIT BLOCKS THE JUMP, NOT THE LAYOUT. A pending tap must not swallow an ordinary
+        // relayout — a story arriving, a count landing — or the row would sit frozen for as long as
+        // the navigation takes. It blocks exactly one thing: somebody else seating the row.
+        if seatedByTap {
+            // `navigate` has already laid out, with the animation. Nothing further.
+        } else if animateNextStoryId == nil, let activeIndex, activeIndex != reportedIndex,
+                  activeIndex != centredIndex,
+                  stories.indices.contains(activeIndex), rowIsStill {
             navigate(to: activeIndex, animated: true)
         } else if storiesChanged || countsChanged || geometryChanged || liveChanged {
             // ⚠️ ONLY WHEN SOMETHING THIS METHOD OWNS ACTUALLY MOVED, AND THAT GUARD IS LOAD-BEARING
@@ -662,6 +708,10 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
                 item.bounds = CGRect(origin: .zero, size: size)
             }
             let tint = tints[story.id]
+            // Decided BEFORE the closure is built, because the closure reads it: a card born this
+            // pass is placed without the animation (see the note above), so "is this pass animated"
+            // is per item, not per pass.
+            let willAnimate = animated && existing != nil
             let write = {
                 item.center = centre
                 item.transform = CGAffineTransform(scaleX: scale, y: scale)
@@ -681,7 +731,13 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
                 // navigates — glided the cards to their new seats while the story arrived at its own
                 // in one step. Position and scale disagreeing by exactly that spring is the shape he
                 // photographed. Whatever clock the cards are on, this is on it.
-                if isLive { self.placeLiveStory(p) }
+                //
+                // ⚠️ AND IT HAS TO BE TOLD, NOT JUST WRAPPED. Being inside `UIView.animate` is not
+                // enough on its own: `applyCore` writes the card's transform inside a
+                // `CATransaction` with actions DISABLED — right for a finger, and it beats the
+                // enclosing animation — so the live story arrived in one step anyway. The flag is
+                // what turns that transaction into the row's own curve for this pass.
+                if isLive { self.placeLiveStory(p, animated: willAnimate) }
             }
             item.layer.zPosition = p.zPosition
             // Just above its own card and below the next one in: the tint belongs to this item, and
@@ -689,11 +745,11 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             tint?.zPosition = p.zPosition + 0.0001
             item.setLive(isLive)
             item.updateMedia(story: story, slotW: geometry.slotW, slotH: geometry.slotH)
-            if animated, existing != nil {
+            if willAnimate {
                 // Their `.curve(duration: 0.3, curve: .spring)` for a movement that did not come from
                 // the finger. `.allowUserInteraction` so an interrupting swipe is heard during it,
                 // and `.beginFromCurrentState` so an interrupting one starts where this one got to.
-                UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.82,
+                UIView.animate(withDuration: Self.settleDuration, delay: 0, usingSpringWithDamping: 0.82,
                                initialSpringVelocity: 0,
                                options: [.allowUserInteraction, .beginFromCurrentState],
                                animations: write)
@@ -774,7 +830,18 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// has already decided where this story goes, and this writes it.
     ///
     /// The dim is NOT passed. It is the row's tint layer over this item, like every other item's.
-    private func placeLiveStory(_ p: StoryRowPlacement) {
+    /// The row's own spring for a movement that did not come from a finger, stated once so the cards
+    /// and the live story cannot be given two different curves. `UIView.animate`'s spring and a
+    /// `CAMediaTimingFunction` are not the same maths, but they are the same 0.3s ease-out journey,
+    /// and 0.82 damping is close enough to `easeOut` over that distance that the two read as one
+    /// movement. What matters is that neither arrives while the other is travelling.
+    static let settleDuration: CFTimeInterval = 0.3
+    static var settleAnimation: StoryCardMorph.Animation {
+        StoryCardMorph.Animation(duration: settleDuration,
+                                 timing: CAMediaTimingFunction(name: .easeOut))
+    }
+
+    private func placeLiveStory(_ p: StoryRowPlacement, animated: Bool = false) {
         // A hero open or close owns the card outright, and it is the gesture that removes the screen.
         guard !StoryCardMorph.heroDismissActive, StoryCardMorph.shared.isAvailable else { return }
         // ⚠️ THE ROW OWNS THE PUT-BACK NOW, AND THAT IS A CHANGE OF OWNER RATHER THAN OF BEHAVIOUR.
@@ -789,7 +856,8 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             return
         }
         StoryCardMorph.shared.place(contentCenter: p.center, contentSize: p.size,
-                                    cornerRadius: p.cornerRadius, fraction: geometry.fraction)
+                                    cornerRadius: p.cornerRadius, fraction: geometry.fraction,
+                                    animated: animated ? Self.settleAnimation : nil)
     }
 
     private func addItem(_ story: Story) -> StoryRowItemView {
@@ -831,6 +899,11 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// `didEndScrollingAnimation` for one it interrupted. Same reason as the clear in `navigate`.
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         isSnapping = false
+        // A FINGER SUPERSEDES A TAP THAT IS STILL WAITING. The row is about to be driven directly,
+        // so seating it on a story tapped a moment ago would fight the drag — and this is also the
+        // release valve for a navigation that never lands, which would otherwise leave the row
+        // unable to accept any jump for the rest of the sitting.
+        animateNextStoryId = nil
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -913,7 +986,25 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             if item.storyId == liveStoryId {
                 onActiveTap()
             } else if let i = stories.firstIndex(where: { $0.id == item.storyId }) {
-                navigate(to: i, animated: true)
+                // ⚠️ THE ROW DOES NOT MOVE YET, AND THAT IS THEIRS EXACTLY.
+                //
+                //     } else {
+                //         self.animateNextNavigationId = id
+                //         component.navigate(.id(id))
+                //     }
+                //
+                // The tap ASKS for the story and remembers that the answer is its own to animate. It
+                // moves nothing. The move happens later, on the pass where the model has actually
+                // arrived at that id (`animateNextNavigationId == component.slice.item.id`), and
+                // then the offset jumps and the layout springs in ONE pass.
+                //
+                // Ours used to seat the row on the tap and tell the outside world afterwards, which
+                // opened a window — a few frames, and 0.3s of spring — where the row was on B and
+                // the live story was still A. Story A was consequently being flown out to the side
+                // slot as a LIVE story while B's poster sat in the centre, and the hand-over landed
+                // somewhere inside that. That is the old story jumping and briefly staying in the
+                // centre. Waiting removes the window rather than timing it.
+                animateNextStoryId = item.storyId
                 onIndexChanged(i)
             }
             return
