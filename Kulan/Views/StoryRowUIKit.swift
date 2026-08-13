@@ -563,7 +563,25 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             // ⚠️ AND IT JOINS A SETTLE RATHER THAN ENDING ONE. See `isSettling`: at a sheet-page
             // commit this branch runs one turn after the spring started, because the live story's id
             // changed, and an unanimated pass here writes the destination hard over it.
-            updateScrolling(settle: isSettling ? .commit : nil)
+            //
+            // ⚠️ BUT NEVER WHEN THE PULL ITSELF HAS MOVED, AND THAT EXCEPTION IS THE OWNER'S
+            // 2026-08-13 REPORT: the sheet is half open and the row has not got there, the corners
+            // arrive late, and the story is still shrinking after the sheet has finished.
+            //
+            // `isSettling` is a 0.3s WINDOW, not a single pass. Opening the sheet sets `sheetStoryId`,
+            // which lands a `.commit` — and for the next 300ms every pass through here animated,
+            // including every frame of the pull. So each frame started a fresh 0.3s spring toward
+            // that frame's target while the finger had already moved on: the row chasing the sheet
+            // by a third of a second, and the corner radius, which is written in the same block,
+            // arriving with it.
+            //
+            // Theirs cannot do this. `animateNextNavigationId` upgrades the transition on the ONE
+            // pass where the tapped item's model arrives (`:2750`) and is cleared in the same
+            // statement; every other pass, including all of a pan's, is `.immediate`. A pass caused
+            // by the finger is immediate, full stop — a settle can only ever own a pass the finger
+            // did not cause.
+            let pulled = geometryChanged
+            updateScrolling(settle: (isSettling && !pulled) ? .commit : nil)
         }
     }
 
