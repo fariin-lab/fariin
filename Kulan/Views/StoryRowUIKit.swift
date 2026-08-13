@@ -243,7 +243,15 @@ final class StoryRowItemView: UIView {
     /// There is one code path now — `StoryRowController.updateScrolling` places this item and the
     /// live layer from the same `StoryRowPlacement`, in the same pass — so the hole cannot be
     /// anywhere the story is not.
+    /// Whether the live layer is standing in for this card right now. Asked by `updateScrolling` on
+    /// the pass a tap lands, to tell "this story is arriving" from "this story is already here" —
+    /// the first needs the live layer seeded at this card's position so it has somewhere to travel
+    /// from, the second must not be touched. Kept as a stored answer rather than read back off
+    /// `host.view.isHidden`, because a value you are about to write is not a value to ask about.
+    private(set) var isLive = false
+
     func setLive(_ on: Bool) {
+        isLive = on
         guard host.view.isHidden != on else { return }
         host.view.isHidden = on
     }
@@ -904,6 +912,42 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             // decorative rather than load-bearing — at any `|cf|` the centre distance is the sum of
             // the two half widths plus 12pt, so no two cards ever overlap — and theirs does not have
             // it either.
+            // ⚠️ THE ARRIVING STORY HAS TO TRAVEL, AND THIS SEEDS THE JOURNEY IT WOULD OTHERWISE SKIP.
+            //
+            // The owner's tap report, and it is the last of that family. On the pass where a tap
+            // lands, this item stops being an ordinary card and becomes the live one — and the live
+            // layer is a SINGLE surface that is always wherever the central story is. It was already
+            // at the centre, drawing the story we are leaving; the only thing that changed is the
+            // picture inside it. So the incoming story did not move at all: it APPEARED at the
+            // centre, full size, while the outgoing card was revealed underneath it and sprang away
+            // sideways. Two stories in the middle for the length of the spring, one of them
+            // teleported there. That is his screenshot, and his "it goes one way and comes back".
+            //
+            // Theirs has no such moment because every story owns its own view for the whole of its
+            // life: on the commit pass A's view springs centre → side and B's view springs side →
+            // centre, and nothing is revealed, hidden or swapped (`:1719-1741`, one `itemTransition`
+            // over every item).
+            //
+            // We cannot give the live layer a second surface, but we can give it the journey. This
+            // item's view is still standing exactly where the arriving story was drawn a moment ago
+            // — that is the card the finger tapped — so the live layer is put THERE first, without
+            // animation, and the animated write below then carries it to the centre. Same two
+            // movements as theirs, from the same two starting points, in one spring.
+            //
+            // Only when it is BECOMING live. While it already is, its position is the pull's and
+            // seeding would fight it.
+            if willAnimate, isLive, !item.isLive {
+                let wasScale = item.transform.a
+                if wasScale > 0.0001 {
+                    self.placeLiveStory(
+                        StoryRowPlacement(center: view.convert(item.center, to: nil),
+                                          size: CGSize(width: geometry.slotW * wasScale,
+                                                       height: geometry.slotH * wasScale),
+                                          cornerRadius: p.cornerRadius,
+                                          dim: p.dim),
+                        settle: nil)
+                }
+            }
             item.setLive(isLive)
             item.updateMedia(story: story, slotW: geometry.slotW, slotH: geometry.slotH)
             if willAnimate {
