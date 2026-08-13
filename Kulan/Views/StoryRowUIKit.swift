@@ -1077,6 +1077,27 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         // and a collapse that ends at zero has to be passed through or the story is left card-sized
         // behind a sheet that has gone.
         guard geometry.fraction > 0.0001 else {
+            // ⚠️ A PLACEHOLDER GEOMETRY IS NOT A COLLAPSE, AND TELLING THE TWO APART IS HIS "SWIPE
+            // THE SHEET SIDEWAYS AND THE STORY GOES BIG".
+            //
+            // A controller is built with `StoryRowGeometry(slotW: 1, slotH: 1, …, fraction: 0)` and
+            // holds it until the first `apply` arrives carrying the measured slot. So a row that
+            // comes into existence during a sideways page drag answers "fraction 0" for its first
+            // pass — which reads here as "the sheet has gone" and puts the story back to FULL
+            // SCREEN, while the row beside it is still laying cards out at row scale. That is the
+            // two sizes at once in his screenshot: a full-size story in the corner with small cards
+            // drawn over it.
+            //
+            // `placeAtRest` is the whole screen, so it is the one decision in this file a 1×1
+            // placeholder must never be allowed to make. The other two entry points already refuse
+            // it — `setFraction` guards `slotH > 1` before it will even record a fraction, and
+            // `placeLiveStoryWithoutARow` guards the same thing before it places anything — and
+            // this was the only one that did not. It is their rule, applied where it was missing,
+            // not a new one.
+            //
+            // A real collapse still passes through: the sheet cannot reach fraction 0 without the
+            // row having been measured first, so the close is unaffected.
+            guard geometry.slotH > 1 else { return }
             StoryCardMorph.shared.placeAtRest()
             return
         }
