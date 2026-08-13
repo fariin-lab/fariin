@@ -147,17 +147,11 @@ struct ChatWallpaperPage: View {
                             }
                         }
                     }
-                    // Built-in PHOTO wallpapers.
-                    ForEach(WallpaperPresets.all) { p in
-                        presetTile(.preset(p.id)) {
-                            Group {
-                                if let img = p.image(dark: dark) {
-                                    Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
-                                } else { Color.secondary.opacity(0.15) }
-                            }
-                        }
-                    }
-                    // Gradient wallpapers.
+                    // The built-in themes. There used to be a SECOND row above this one listing the
+                    // same six as "built-in photo wallpapers", from when a preset was a JPEG and a
+                    // gradient was a fallback palette. They are one thing now and rendered by one
+                    // view, so the second row would have been these six tiles drawn twice.
+                    // `.preset(id)` is still resolved everywhere — chats have it stored.
                     ForEach(ChatWallpapers.all) { g in
                         presetTile(.gradient(g.id)) {
                             GradientWallpaperView(g: g, dark: dark)
@@ -425,10 +419,8 @@ struct WallpaperPreviewScreen: View {
         case .color(let hex):
             Color(hex: hex)
         case .preset(let id):
-            if let img = WallpaperPreset(id: id).image(dark: dark) {
-                Color.clear
-                    .overlay { Image(uiImage: img).resizable().scaledToFill().blur(radius: blurred ? 10 : 0) }
-                    .clipped()
+            if let g = WallpaperPreset(id: id).theme {
+                GradientWallpaperView(g: g, dark: dark, blur: blurred ? 10 : 0)
             } else { Theme.bg(dark) }
         }
     }
@@ -573,8 +565,8 @@ struct ChatColorPage: View {
         case .color(let hex):
             Color(hex: hex)
         case .preset(let id):
-            if let img = WallpaperPreset(id: id).image(dark: dark) {
-                Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
+            if let g = WallpaperPreset(id: id).theme {
+                GradientWallpaperView(g: g, dark: dark)
             } else { Color(.secondarySystemGroupedBackground) }
         }
     }

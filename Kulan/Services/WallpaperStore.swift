@@ -20,7 +20,7 @@ enum ChatWallpaper: Equatable {
     case gradient(String)   // gradient id (ChatWallpapers.all)
     case photo(String)      // library photo id (WallpaperStore.libraryIds)
     case color(UInt)        // a plain solid-colour background (hex)
-    case preset(String)     // a built-in PHOTO wallpaper (WallpaperPresets.all)
+    case preset(String)     // legacy id for a built-in theme (see WallpaperPreset.theme)
 
     // Compact string form for UserDefaults.
     var stored: String {
@@ -45,39 +45,39 @@ enum ChatWallpaper: Equatable {
     static let legacyMarker = "__legacy__"
 }
 
-// Built-in wallpapers — original art bundled in the app (Resources/Wallpapers). Each is a PAIR:
-// `<id>-light.jpg` and `<id>-dark.jpg`, and the app picks by colour scheme.
-struct WallpaperPreset: Identifiable, Equatable {
-    let id: String        // base name in Resources/Wallpapers (e.g. "wp-paper")
+/// THE DOODLE SHEET, ONCE. It is an ALPHA MASK — white ink on transparent — so this single file
+/// serves every theme in both appearances: the shape comes from here, the colour comes from the
+/// theme. It is the whole reason a theme is a row of numbers below instead of a pair of 300 KB
+/// photographs, and it is how the reference app ships dozens of themes without shipping dozens of
+/// pictures.
+///
+/// It was extracted from the art we already had rather than redrawn, so the six themes render
+/// exactly what they rendered before — their grounds and inks were measured out of the same files.
+enum ChatPattern {
+    static let sheet: UIImage? = Bundle.main.url(forResource: "wp-pattern", withExtension: "png")
+        .flatMap { UIImage(contentsOfFile: $0.path) }?
+        .withRenderingMode(.alwaysTemplate)
 }
 
-enum WallpaperPresets {
-    /// ONE PATTERN, SIX GROUNDS, AND A LIGHT AND A DARK OF EACH — his instruction, and it is how
-    /// the reference app actually ships this. Their picker is not a row of different drawings; it is the same
-    /// doodle sheet over a row of colours, which is exactly why it reads as one set rather than a
-    /// collection somebody accumulated.
-    ///
-    /// The trick in the pattern is the contrast, not the drawing: the ground carries the colour, the
-    /// hairline doodles carry texture, and the gap between them is small enough that a message
-    /// bubble always wins. So there is nothing here to read as "busy" and nothing to fight the
-    /// messages, which is the whole job of a chat background.
-    ///
-    /// The grounds are keyed to the app's own chat accents, so a wallpaper and the bubble colour it
-    /// pairs with belong together, and the ids ARE the theme ids so `imageId` is never a guess.
-    static let all: [WallpaperPreset] = [
-        .init(id: "wp-paper"), .init(id: "wp-ocean"), .init(id: "wp-forest"),
-        .init(id: "wp-dusk"), .init(id: "wp-rose"), .init(id: "wp-graphite"),
-    ]
+/// A `.preset(id)` stored on a chat. It is NOT a second kind of wallpaper any more — it resolves to
+/// a theme in `ChatWallpapers` and renders through the same view. The type survives only because
+/// chats have these ids written into UserDefaults; nothing new is ever stored as one.
+///
+/// The list of them is gone with the `WallpaperPresets` enum: it named the same six themes a second
+/// time, from when a preset was a bundled JPEG and a gradient was the fallback palette for it.
+struct WallpaperPreset: Identifiable, Equatable {
+    let id: String        // e.g. "wp-paper"
 }
 
 extension WallpaperPreset {
-    /// The bundled JPEG for this scheme. A wallpaper is a PAIR now — the pattern is the same in both
-    /// and only the ground and the ink change, so a chat that follows the system appearance keeps
-    /// the same wallpaper rather than swapping to a different one at sunset.
-    func image(dark: Bool) -> UIImage? {
-        Bundle.main.url(forResource: "\(id)-\(dark ? "dark" : "light")", withExtension: "jpg")
-            .flatMap { UIImage(contentsOfFile: $0.path) }
-    }
+    /// The theme this preset draws. Two ids kept their original names when the art was introduced
+    /// (`sunset` is Paper, `mono` is Graphite) and chats have those strings stored, so the mapping is
+    /// a table rather than a string operation — a chat set two months ago must still resolve.
+    private static let themeIds: [String: String] = [
+        "wp-paper": "sunset", "wp-ocean": "ocean", "wp-forest": "forest",
+        "wp-dusk": "dusk", "wp-rose": "rose", "wp-graphite": "mono",
+    ]
+    var theme: WallpaperGradient? { Self.themeIds[id].flatMap { ChatWallpapers.gradient($0) } }
 }
 
 // Solid-colour wallpaper choices (the "Wallpaper Color" grid).
@@ -89,73 +89,99 @@ enum WallpaperColors {
     ]
 }
 
-// A built-in gradient wallpaper with light + dark palettes (so a chat looks right in either mode).
+/// A built-in theme, stored as NUMBERS. Three ground stops and one ink colour per appearance, plus
+/// the bubble colour it is paired with. That is the entire definition — there is no artwork for a
+/// theme any more, because `ChatPattern` is shared by all of them and everything else here is a
+/// colour. Adding a theme is adding one of these; it costs no app size and no App Store review.
+///
+/// ⚠️ THE HEXES ARE MEASURED, NOT CHOSEN. Every ground and ink below was read out of the JPEG it
+/// replaces (per-channel mode for the ground at three heights; the mean of the pixels furthest from
+/// the ground for the ink), so these six render what they have always rendered. Do not "tidy" them
+/// toward rounder numbers — the difference between a ground and its ink is single digits, and that
+/// narrowness is the design: the sheet has to lose to a message bubble.
 struct WallpaperGradient: Identifiable, Equatable {
     let id: String
     let name: String
-    let light: [Color]
-    let dark: [Color]
+    let lightGround: [UInt]   // top → bottom
+    let lightInk: UInt
+    let darkGround: [UInt]
+    let darkInk: UInt
     let tint: Color        // vivid representative colour → the "Apply Wallpaper" button tint
     let bubbleHex: UInt    // the bubble colour this wallpaper is PAIRED with (a "theme" = both)
-    // The real image this theme renders (user spec: themes/presets are photo wallpapers, not flat
-    // gradients). The gradient palettes stay as the fallback if the file is ever missing.
-    var imageId: String? = nil
-    func colors(_ dark: Bool) -> [Color] { dark ? self.dark : light }
-    func image(_ dark: Bool) -> UIImage? { imageId.flatMap { WallpaperPreset(id: $0).image(dark: dark) } }
+
+    func colors(_ dark: Bool) -> [Color] { (dark ? darkGround : lightGround).map { Color(hex: $0) } }
+    func ink(_ dark: Bool) -> Color { Color(hex: dark ? darkInk : lightInk) }
 }
 
-/// Renders a built-in theme wallpaper: its real IMAGE when one is bundled, else the gradient
-/// palette. One place, so every tile/preview/chat background shows the same thing.
+/// The one place a built-in theme becomes pixels: the ground gradient, with the shared pattern inked
+/// over it. Every tile, preview and chat background goes through here, so none of them can drift
+/// from the others — which is what the old two-path version (bundled image, else gradient) could not
+/// promise, since the two paths did not look alike.
 struct GradientWallpaperView: View {
     let g: WallpaperGradient
     let dark: Bool
+    var blur: CGFloat = 0
     var body: some View {
-        if let img = g.image(dark) {
-            Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
-        } else {
-            // The actual gradient, which is what the doc above promises. This branch used to return
-            // GradientWallpaperView(g:dark:) — itself, with identical inputs — so any theme whose
-            // bundled image failed to load would recurse until the app died (audit). Latent while
-            // the files ship, fatal the day one goes missing.
-            LinearGradient(colors: g.colors(dark), startPoint: .top, endPoint: .bottom)
-        }
+        LinearGradient(colors: g.colors(dark), startPoint: .top, endPoint: .bottom)
+            .overlay {
+                // Color.clear is the layout-defining view and the sheet rides as a CLIPPED overlay,
+                // the same shape the photo wallpaper uses: a bare scaledToFill re-flows when the
+                // container height changes (keyboard open/close) and nudges the composer.
+                if let sheet = ChatPattern.sheet {
+                    Color.clear
+                        .overlay {
+                            Image(uiImage: sheet).resizable().scaledToFill()
+                                .foregroundStyle(g.ink(dark))
+                        }
+                        .clipped()
+                }
+            }
+            .blur(radius: blur)
     }
 }
 
 enum ChatWallpapers {
     // Kept subtle so message bubbles always read clearly on top (the top→bottom fall is gentle).
-    // BUILT-IN wallpapers: never deletable (they aren't part of the user library at all).
-    /// The palettes are the GROUNDS of the art, so the fallback looks like the wallpaper it stands
-    /// in for rather than being a second design. They differ per mode again, because the wallpapers
-    /// do: every one is a light paper and a dark paper carrying the same doodle sheet.
+    // BUILT-IN themes: never deletable (they aren't part of the user library at all).
+    /// ONE PATTERN, SIX GROUNDS, A LIGHT AND A DARK OF EACH — his instruction, and how the reference
+    /// apps actually ship this. Their picker is not a row of different drawings; it is the same
+    /// doodle sheet over a row of colours, which is why it reads as one set rather than a collection
+    /// somebody accumulated. Ours is now built that way for real: the sheet is `ChatPattern` and
+    /// everything below is colour.
     ///
-    /// `sunset` and `mono` kept their ids — a chat that stored either still resolves — and now point
-    /// at the paper and graphite grounds.
+    /// The trick is the contrast, not the drawing. The ground carries the colour, the hairline
+    /// doodles carry the texture, and the gap between them is small enough that a message bubble
+    /// always wins — which is the whole job of a chat background.
+    ///
+    /// `sunset` and `mono` kept their ids — a chat that stored either still resolves — and are the
+    /// Paper and Graphite grounds.
+    ///
+    /// ADDING ONE IS ADDING A ROW HERE. No asset, no app-size cost, no review.
     static let all: [WallpaperGradient] = [
         .init(id: "sunset", name: "Paper",
-              light: [Color(hex: 0xEDE4DA), Color(hex: 0xEAE0D6), Color(hex: 0xE6DCD1)],
-              dark:  [Color(hex: 0x0C1116), Color(hex: 0x0B0F14), Color(hex: 0x090D11)],
-              tint: Color(hex: 0xF08A5D), bubbleHex: 0xF08A5D, imageId: "wp-paper"),
+              lightGround: [0xECE4D9, 0xE9DFD5, 0xE6DCD2], lightInk: 0xADA39A,
+              darkGround:  [0x0B1014, 0x0A0E12, 0x090C11], darkInk:  0x464B50,
+              tint: Color(hex: 0xF08A5D), bubbleHex: 0xF08A5D),
         .init(id: "ocean", name: "Ocean",
-              light: [Color(hex: 0xE3ECF5), Color(hex: 0xDDE8F3), Color(hex: 0xD6E3F0)],
-              dark:  [Color(hex: 0x0A141D), Color(hex: 0x09121A), Color(hex: 0x070F16)],
-              tint: Color(hex: 0x3DA1FD), bubbleHex: 0x2E8BF0, imageId: "wp-ocean"),
+              lightGround: [0xE2EBF4, 0xDDE7F1, 0xD7E3F1], lightInk: 0xA2AEBA,
+              darkGround:  [0x09131C, 0x08111A, 0x060F16], darkInk:  0x414B54,
+              tint: Color(hex: 0x3DA1FD), bubbleHex: 0x2E8BF0),
         .init(id: "dusk", name: "Dusk",
-              light: [Color(hex: 0xEAE5F5), Color(hex: 0xE4DEF2), Color(hex: 0xDED7EE)],
-              dark:  [Color(hex: 0x100C1A), Color(hex: 0x0E0A17), Color(hex: 0x0B0813)],
-              tint: Color(hex: 0x9B6DF3), bubbleHex: 0x8A5CF0, imageId: "wp-dusk"),
+              lightGround: [0xE8E4F4, 0xE2DEF1, 0xDFD7EE], lightInk: 0xABA4BA,
+              darkGround:  [0x0F0B19, 0x0D0917, 0x0B0813], darkInk:  0x464351,
+              tint: Color(hex: 0x9B6DF3), bubbleHex: 0x8A5CF0),
         .init(id: "forest", name: "Forest",
-              light: [Color(hex: 0xE2EFE4), Color(hex: 0xDBEBDF), Color(hex: 0xD4E7D9)],
-              dark:  [Color(hex: 0x0A1410), Color(hex: 0x09110E), Color(hex: 0x070F0C)],
-              tint: Color(hex: 0x34C76F), bubbleHex: 0x1FA85A, imageId: "wp-forest"),
+              lightGround: [0xE1EEE4, 0xDAEAE0, 0xD5E7D9], lightInk: 0xA0B2A5,
+              darkGround:  [0x091410, 0x08110E, 0x060F0C], darkInk:  0x434D4A,
+              tint: Color(hex: 0x34C76F), bubbleHex: 0x1FA85A),
         .init(id: "mono", name: "Graphite",
-              light: [Color(hex: 0xEFEFF1), Color(hex: 0xE9E9EC), Color(hex: 0xE3E3E7)],
-              dark:  [Color(hex: 0x101012), Color(hex: 0x0E0E10), Color(hex: 0x0B0B0D)],
-              tint: Color(hex: 0x8E8E93), bubbleHex: 0x3A3A3C, imageId: "wp-graphite"),
+              lightGround: [0xEEEEF0, 0xE8E8EA, 0xE3E2E7], lightInk: 0xADACB1,
+              darkGround:  [0x0F0F11, 0x0D0D0F, 0x0B0B0D], darkInk:  0x4A4A4C,
+              tint: Color(hex: 0x8E8E93), bubbleHex: 0x3A3A3C),
         .init(id: "rose", name: "Rose",
-              light: [Color(hex: 0xF6E6EA), Color(hex: 0xF2E0E5), Color(hex: 0xEED9E0)],
-              dark:  [Color(hex: 0x150B10), Color(hex: 0x12090E), Color(hex: 0x0F080C)],
-              tint: Color(hex: 0xF06792), bubbleHex: 0xE84D86, imageId: "wp-rose"),
+              lightGround: [0xF5E5E8, 0xF2DFE4, 0xEED9E0], lightInk: 0xB9A6AC,
+              darkGround:  [0x150A10, 0x12090E, 0x0F090D], darkInk:  0x4C4348,
+              tint: Color(hex: 0xF06792), bubbleHex: 0xE84D86),
     ]
 
     /// A theme = the paired wallpaper + bubble colour, applied together by a Chat Theme card.
@@ -358,17 +384,15 @@ struct ChatWallpaperBackground: View {
         case .color(let hex):
             Color(hex: hex)
         case .preset(let id):
-            if let img = WallpaperPreset(id: id).image(dark: dark) {
-                Color.clear
-                    .overlay { Image(uiImage: img).resizable().scaledToFill() }
-                    .clipped()
-                    // ⚠️ NO SCRIM ON A BUILT-IN, and that is a decision rather than an omission.
-                    // The scrim exists because an imported gallery photo can be anything — a white
-                    // beach, a face, a screenshot — and bubbles have to survive it. A built-in is
-                    // not anything: it is a flat ground with hairline doodles at a contrast chosen
-                    // so the bubbles already win, and it ships in a light AND a dark version so it
-                    // never needs correcting toward the scheme. Washing 28% black over that only
-                    // removes the pattern it was made for. See `WallpaperPresets`.
+            // ⚠️ NO SCRIM ON A BUILT-IN, and that is a decision rather than an omission.
+            // The scrim exists because an imported gallery photo can be anything — a white
+            // beach, a face, a screenshot — and bubbles have to survive it. A built-in is
+            // not anything: it is a flat ground with hairline doodles at a contrast chosen
+            // so the bubbles already win, and it carries a light AND a dark palette so it
+            // never needs correcting toward the scheme. Washing 28% black over that only
+            // removes the pattern it was made for. See `ChatWallpapers`.
+            if let g = WallpaperPreset(id: id).theme {
+                GradientWallpaperView(g: g, dark: dark)
             } else {
                 Theme.bg(dark)
             }

@@ -934,8 +934,8 @@ struct AppearanceSettingsView: View {
         case .color(let hex):
             Color(hex: hex)
         case .preset(let id):
-            if let img = WallpaperPreset(id: id).image(dark: dark) {
-                Color.clear.overlay { Image(uiImage: img).resizable().scaledToFill() }.clipped()
+            if let g = WallpaperPreset(id: id).theme {
+                GradientWallpaperView(g: g, dark: dark)
             } else { Color(.secondarySystemGroupedBackground) }
         }
     }
