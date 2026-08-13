@@ -154,6 +154,24 @@ final class StoryItemLayout: ObservableObject {
     /// it always has; 1 = the row owns the layout.
     @Published private(set) var fraction: CGFloat = 0
 
+    /// ⚠️ THE SWITCH, AND IT IS FALSE UNTIL THE ROW HAS STOPPED DRAWING ITS OWN CARDS.
+    ///
+    /// The two layouts cannot both be right at once. While the row draws a thumbnail per story and
+    /// the morph transforms the whole card container for the pull, an item that also placed itself
+    /// would wear the shrink TWICE and every story would be drawn twice over — once by the row and
+    /// once here.
+    ///
+    /// So the item side is built, compiled and inert, and the flip is one commit: the row stops
+    /// drawing cards for stories the library holds views for, `carIn` stops hiding them, the morph's
+    /// sheet path stands down, and this goes true. Anything less than all of those together is a
+    /// screen with two of every story on it.
+    @Published private(set) var hostOwnsItems = false
+
+    func setHostOwnsItems(_ on: Bool) {
+        guard on != hostOwnsItems else { return }
+        hostOwnsItems = on
+    }
+
     func set(_ p: [String: StoryItemPlacement]) {
         guard p != placements else { return }
         placements = p
@@ -167,5 +185,6 @@ final class StoryItemLayout: ObservableObject {
     func clear() {
         if !placements.isEmpty { placements = [:] }
         if fraction != 0 { fraction = 0 }
+        if hostOwnsItems { hostOwnsItems = false }
     }
 }

@@ -75,10 +75,53 @@ final class StoryItemsHostVC: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // Every item fills the card, which is what the `ZStack` did. Positions and scales arrive in
-        // the next step; until then this must be indistinguishable from what shipped.
+        layoutItems()
+    }
+
+    /// ⚠️ TWO LAYOUTS, AND THE FLAG DECIDES WHICH — because they cannot both be right at once.
+    ///
+    /// While the host is NOT placing items, the story page owns its own geometry exactly as it
+    /// always has: the card container is what `StoryCardMorph` transforms for the pull, and every
+    /// item simply fills it. Applying a per-item placement in that state would apply the shrink
+    /// TWICE — once as the container's transform and once as the item's — which is why this is a
+    /// switch and not an addition.
+    ///
+    /// While the host IS placing items, the container is left alone and each item takes its own
+    /// position and scale, in the container's own space. That is the state where a story can travel:
+    /// A moves centre → side and B moves side → centre because each has a view of its own to move.
+    ///
+    /// The placements arrive in WINDOW coordinates, which is the one space the host computes in and
+    /// the same space `StoryRowPlacement` has always used. Converting per item rather than asking
+    /// the host for local coordinates keeps the host free of any knowledge of this hierarchy.
+    func layoutItems() {
+        let layout = StoryItemLayout.shared
+        guard layout.hostOwnsItems, !layout.placements.isEmpty else {
+            for id in order {
+                guard let v = hosts[id]?.view else { continue }
+                if v.transform != .identity { v.transform = .identity }
+                v.frame = view.bounds
+            }
+            return
+        }
         for id in order {
-            hosts[id]?.view.frame = view.bounds
+            guard let v = hosts[id]?.view else { continue }
+            guard let p = layout.placements[id] else {
+                // A story the host is not placing this pass has nowhere to be. Hidden rather than
+                // left at its last seat, which would be a stale card sitting in the row.
+                v.isHidden = true
+                continue
+            }
+            v.isHidden = false
+            // ⚠️ BOUNDS STAY THE CARD'S AND THE TRANSFORM DOES THE SIZING, WHICH IS THE WHOLE REASON
+            // THIS IS UIKit. A bounds change re-lays-out the SwiftUI content inside — the media, its
+            // aspect fill, its corner — and that is a layout pass per frame of a drag. A transform
+            // changes nothing and runs nothing.
+            if v.transform != .identity { v.transform = .identity }
+            v.frame = view.bounds
+            let scale = view.bounds.width > 1 ? p.size.width / view.bounds.width : 1
+            let centre = view.convert(p.center, from: nil)
+            v.transform = CGAffineTransform(scaleX: max(scale, 0.0001), y: max(scale, 0.0001))
+            v.center = centre
         }
     }
 }
@@ -96,6 +139,10 @@ struct StoryItemsContainer: UIViewControllerRepresentable {
 
     func updateUIViewController(_ vc: StoryItemsHostVC, context: Context) {
         vc.sync(ids: ids, content: content)
-        vc.view.setNeedsLayout()
+        // ⚠️ LAID OUT NOW, NOT ON THE NEXT PASS. `setNeedsLayout` alone defers to the next runloop
+        // turn, which is a frame of lag against a finger — the exact shape of the lag the row was
+        // just repaired for. The placements for this pass are already published when SwiftUI runs
+        // this, so they are spent here.
+        vc.layoutItems()
     }
 }
