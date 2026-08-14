@@ -781,7 +781,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private func perform(_ intent: ScrollIntent) {
         switch intent {
         case .newest(let animated):
-            guard didFirstLand, !isUserScrolling else { return }
+            guard didFirstLand else { return }
+            // A TAP IS NOT A DROP. The finger rule stands — nothing moves the reader while they are
+            // touching the glass — but the request used to be thrown away here, and the binding that
+            // carried it is one-shot, so a jump asked for with a thumb still down was gone for good.
+            // It waits for the lift now (see scrollViewDidEndDragging).
+            guard !isUserScrolling else { pendingNewestJump = animated; return }
+            pendingNewestJump = nil
             scrollToOffset(minContentOffsetY, animated: animated)
         case .message(let id):
             guard let ip = dataSource.indexPath(for: id),
@@ -832,9 +838,31 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // the reference app's `stopScrolling()` verbatim, and like theirs it is UNCONDITIONAL: they
             // never test isDecelerating, because the flag can read false while an animation is still in
             // flight, and re-writing an offset that is already at rest costs nothing.
-            collectionView.setContentOffset(collectionView.contentOffset, animated: false)
+            // ⚠️ THE MARK COMES FIRST, AND THAT ORDERING IS THE WHOLE OF THE SECOND REPORT (owner
+            // 2026-08-13: still dead mid-scroll on a build that has the coast-kill above). Killing
+            // the coast makes UIKit fire `scrollViewDidEndDecelerating` immediately, and that
+            // callback runs `settleFlush()` — so with the mark still down, `canLandLoad` was true
+            // inside it and whatever land had been parked went through right there, its async
+            // snapshot completion arriving in the middle of the glide we were about to start and
+            // putting the reader back. The kill worked; what came in through the door it opened did
+            // not. Marked first, that same callback sees an animation in flight and defers.
             scrollingAnimationDidStart()   // lands defer until the glide completes
+            collectionView.setContentOffset(collectionView.contentOffset, animated: false)
             collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: true)
+            // AND THEN CHECK THAT IT ACTUALLY HAPPENED. Everything above is a chain of things that
+            // each have to hold; this asks the only question that matters — am I there? — and puts
+            // the reader there if not. Skipped the moment the reader takes over or a newer move
+            // supersedes this one, so it can never fight a hand on the glass.
+            glideSeq &+= 1
+            let seq = glideSeq
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, seq == self.glideSeq,
+                      !self.collectionView.isDragging, !self.collectionView.isTracking,
+                      abs(self.collectionView.contentOffset.y - target) > 2 else { return }
+                self.collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+                self.lastStableOffset = target
+                self.scrollingAnimationDidComplete()
+            }
         } else {
             collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
         }
@@ -874,6 +902,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // the reference app's `viewState.isUserScrolling`: FINGER DOWN ONLY. Deceleration is tracked separately and
     // deliberately does not count.
     private var isUserScrolling: Bool { collectionView.isDragging || collectionView.isTracking }
+
+    /// A jump-to-newest that arrived while a finger was down, waiting for the lift. `nil` = none.
+    private var pendingNewestJump: Bool?
+    /// Bumped by every animated glide so a late arrival check can tell whether it is still the
+    /// current one — see scrollToOffset.
+    private var glideSeq: Int = 0
 
     private func scrollingAnimationDidStart() {
         programmaticScrollAnimating = true
@@ -2261,6 +2295,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // The finger has left. If the keyboard shrank the inset out from under a reader who was at the
         // newest message (interactive dismissal), this is the first honest moment to put them back.
         if !decelerate { consumeKeyboardSettleIfPending(); clampToNewestIfBeyond(); settleFlush() }
+        // The lift is the moment a jump asked for mid-drag becomes allowed. It runs whether the list
+        // is about to coast or not: perform() kills the coast on its way past.
+        if let animated = pendingNewestJump {
+            pendingNewestJump = nil
+            perform(.newest(animated: animated))
+        }
     }
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         consumeKeyboardSettleIfPending(); clampToNewestIfBeyond(); settleFlush()
