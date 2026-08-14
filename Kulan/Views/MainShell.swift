@@ -1499,6 +1499,20 @@ struct ChatsView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
+            // ⚠️ TYPE-ERASED, AND THAT IS NOT DECORATION. This body is one of the two in the app
+            // that the compiler has given up on before ("unable to type-check this expression in
+            // reasonable time" — three CI rounds in one day, recorded in the build notes), and adding
+            // the archive's destination to the chain was enough to tip it again. AnyView resets the
+            // complexity the stack has to solve, exactly the way the messages chain in ThreadView is
+            // erased at its own boundary. No behaviour changes; the same views render.
+            AnyView(homeStack)
+        }
+        .onAppear { repo.start(); openPendingChat() }
+        .onChange(of: router.pendingChatId) { _, _ in openPendingChat() }
+        .onChange(of: repo.conversations.count) { _, _ in openPendingChat() }   // retry once chats load
+    }
+
+    private var homeStack: some View {
             Group {
                 if !repo.hasLoaded && repo.expectsChats && repo.skeletonArmed {
                     // Shimmer placeholders on a cold load — ONLY for an account that has ever had
@@ -1604,10 +1618,6 @@ struct ChatsView: View {
                 Button("Delete", role: .destructive) { deleteSelected() }
                 Button("Cancel", role: .cancel) {}
             }
-        }
-        .onAppear { repo.start(); openPendingChat() }
-        .onChange(of: router.pendingChatId) { _, _ in openPendingChat() }
-        .onChange(of: repo.conversations.count) { _, _ in openPendingChat() }   // retry once chats load
     }
 
     // Open a chat from a notification tap. Stays pending until the chat list loads
