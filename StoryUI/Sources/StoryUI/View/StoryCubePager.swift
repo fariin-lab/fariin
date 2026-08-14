@@ -53,6 +53,15 @@ protocol StoryCubePagerDataSource: AnyObject {
 protocol StoryCubePagerDelegate: AnyObject {
     /// A turn is starting, by finger or by tap. Raised before anything moves.
     func cubePagerWillBeginTurn(_ pager: StoryCubePagerVC)
+    /// THE PICTURE IS THIS PEER'S FROM NOW ON. Raised the instant the commit swaps the focus, which
+    /// is the first frame you are looking at the new person — NOT when the cube finishes turning.
+    ///
+    /// Everything outside the pager that answers "whose story is on screen" has to hear it here.
+    /// Hearing it at the settle instead left the app describing the person you had just LEFT for
+    /// the length of the turn, and anything that queued behind the incoming page's own layout
+    /// stretched that from a fifth of a second into something you can watch: his 2026-08-14
+    /// screenshot of a friend's story wearing MY Views-and-trash footer.
+    func cubePager(_ pager: StoryCubePagerVC, didFocus vc: UIViewController)
     /// The turn has landed. `committed` is false when the finger was released short and the focused
     /// peer sprang back to where it started — the person asked for nothing and nothing changed.
     func cubePager(_ pager: StoryCubePagerVC, didSettleOn vc: UIViewController, committed: Bool)
@@ -316,6 +325,14 @@ final class StoryCubePagerVC: UIViewController {
             panFraction -= 1
         }
         applyFold()
+        // ⚠️ ANNOUNCED HERE, ONE LINE AFTER THE SWAP, AND NOT AT THE SETTLE. The focus has moved and
+        // the new person's face is what the screen is showing; anybody still being told otherwise
+        // for the next 0.165s is being told something untrue. See `didFocus`.
+        //
+        // It does NOT start the story playing. That is the pause raised in `beginTurn` and lowered
+        // in `endTurn`, deliberately still at the end of the turn, so the incoming clip cannot run
+        // behind a face that is edge-on.
+        delegate?.cubePager(self, didFocus: target)
         settle(to: 0) { [weak self] in
             guard let self else { return }
             // The peer that is now two away is released here rather than at the start of the turn:

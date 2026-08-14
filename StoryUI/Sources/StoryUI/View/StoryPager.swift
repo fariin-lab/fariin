@@ -601,6 +601,23 @@ struct StoryPager: UIViewControllerRepresentable {
             StoryPager.personTurnActive = true
         }
 
+        /// THE MODEL FOLLOWS THE PICTURE, NOT THE ANIMATION.
+        ///
+        /// The finger's turn used to name its new person only when the cube stopped moving, while
+        /// the TAP's turn named them before it started — two paths, two answers, and the whole app
+        /// outside the pager reads that one value. So for the length of a swipe everything else was
+        /// still describing the person being left: the story viewer's own footer is chosen from it,
+        /// which is his 2026-08-14 screenshot of a friend's story wearing MY Views-and-trash bar.
+        /// The settle is 0.165s, but the incoming page lays itself out in that same window, so the
+        /// host's redraw queues behind it and the wrong bar can sit there for seconds.
+        ///
+        /// Written at the swap now, which is what the tap path has always done. `syncIfNeeded` sees
+        /// the shown page already matching and returns, so nothing else moves.
+        func cubePager(_ pager: StoryCubePagerVC, didFocus vc: UIViewController) {
+            guard let cur = (vc as? StoryPageHostVC)?.bucketID else { return }
+            if parent.viewModel.currentStoryUser != cur { parent.viewModel.currentStoryUser = cur }
+        }
+
         func cubePager(_ pager: StoryCubePagerVC, didSettleOn vc: UIViewController, committed: Bool) {
                 StoryPager.personTurnActive = false
             // ⚠️ THE TURN IS OVER BEFORE ANY EARLY RETURN CAN SKIP SAYING SO. THIS ORDER IS THE BUG.
