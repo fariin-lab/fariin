@@ -1005,12 +1005,12 @@ struct ChatsView: View {
     @ViewBuilder private var archivedEntryRow: some View {
         if showsArchivedRow {
             Button { showArchived = true } label: {
-                HStack(spacing: 12) {
-                    // Centred in the 56pt column the avatars stand in, so "Archived" starts on the
-                    // same left edge as every chat name under it.
+                HStack(spacing: 8) {
+                    // Centred in the 60pt column the avatars stand in, at the same 8pt gap, so
+                    // "Archived" starts on the same left edge as every chat name under it.
                     MenuIcon("ic_archive", size: 22)
                         .foregroundStyle(.secondary)
-                        .frame(width: 56)
+                        .frame(width: 60)
                     Text("Archived")
                         .font(.system(size: 16, weight: .semibold))   // a chat name's font: it is a peer of the rows under it
                     Spacer(minLength: 8)
@@ -2095,7 +2095,7 @@ struct ChatRow: View, Equatable {
     private func previewRow(_ icon: String, _ text: String, iconTint: Color? = nil) -> some View {
         HStack(spacing: 5) {
             Image(systemName: icon).font(.system(size: 12)).foregroundStyle(iconTint ?? Color.secondary)
-            Text(text).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
+            Text(text).font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(1)
         }
     }
     /// The emoji shown as the row's trailing badge — the same fresh-reaction test the preview text
@@ -2184,9 +2184,9 @@ struct ChatRow: View, Equatable {
             previewRow("hand.raised.fill", "Blocked")
         } else if let r = recordingLabel, !activityExpired {
             (Text(Image(systemName: "mic.fill")).font(.system(size: 12)) + Text(" \(r)"))
-                .font(.system(size: 14)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
+                .font(.system(size: 15)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
         } else if let t = typingLabel, !activityExpired {
-            Text(t).font(.system(size: 14)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
+            Text(t).font(.system(size: 15)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
         } else if voiceDraftSecs > 0 {
             // A parked voice recording (his reference screenshots): the same red "Draft:" the text
             // draft below wears, then the mic and the note's length. Wins over a text draft — the
@@ -2194,20 +2194,20 @@ struct ChatRow: View, Equatable {
             (Text("Draft: ").foregroundStyle(.red)
              + Text(Image(systemName: "mic.fill")).font(.system(size: 12))
              + Text(" " + voiceDraftLabel).foregroundStyle(.secondary))
-                .font(.system(size: 14)).lineLimit(1)
+                .font(.system(size: 15)).lineLimit(1)
         } else if !draft.isEmpty {
             (Text("Draft: ").foregroundStyle(.red) + Text(draft).foregroundStyle(.secondary))
                 // 2 lines is the design, but the first layout pass can offer almost no width, and
                 // without a cap the text stacks one letter per line. See the note on timeStr.
-                .font(.system(size: 14)).lineLimit(2).truncationMode(.tail)
+                .font(.system(size: 15)).lineLimit(2).truncationMode(.tail)
         } else if let r = reactionPreview {
-            Text(r).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
+            Text(r).font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(1)
         } else if isPhotoPreview {
             HStack(spacing: 5) {
                 SecureImageView(imageUrl: conv.lastImageUrl ?? "", enc: conv.lastImageEnc, cid: conv.id)
                     .frame(width: 20, height: 20)
                     .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                Text(lastSenderPrefix + photoPreviewLabel).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
+                Text(lastSenderPrefix + photoPreviewLabel).font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(1)
             }
         } else if let badge = previewBadge(conv.lastMessageCipher) {
             // Unheard voice note = accent mic (like an unread badge, but for your ears).
@@ -2234,7 +2234,7 @@ struct ChatRow: View, Equatable {
             previewRow("arrow.up.circle.fill", "Message from a newer version")
         } else {
             Text(lastSenderPrefix + decodedLast)
-                .font(.system(size: 14, weight: unread > 0 ? .medium : .regular))
+                .font(.system(size: 15, weight: unread > 0 ? .medium : .regular))
                 .foregroundStyle(unread > 0 ? Color.primary : .secondary).lineLimit(2)   // darker when unread
         }
     }
@@ -2264,20 +2264,25 @@ struct ChatRow: View, Equatable {
     }
 
     var body: some View {
-        // 56pt avatar; up to 2 preview lines; mute/pin/tick indicators inline.
-        HStack(spacing: 12) {
+        // 60pt avatar; up to 2 preview lines; mute/pin/tick indicators inline.
+        //
+        // 8, not 12, and the two numbers move together: 16pt gutter + 60 avatar + 8 = the name
+        // starts 84pt in, which is exactly where theirs starts (16 + 8 + 60 in their own layout).
+        // The old pair, 16 + 56 + 12, also came to 84 — growing the avatar without shrinking this
+        // would have pushed every name 4pt right and lost the one number we already matched.
+        HStack(spacing: 8) {
             let _ = clockTick   // dependency: the tick task's flip must re-evaluate muted/timeStr
             // Rule: a story ring must NOT enlarge the row — the photo shrinks a hair
-            // inside the same 56pt footprint, so ringed and ringless avatars line up equal.
+            // inside the same 60pt footprint, so ringed and ringless avatars line up equal.
             Group {
                 // The official channel has no account and therefore no profile photo to fetch: its
-                // face is the app's own mark, drawn from the bundle. Same 56pt footprint as every
+                // face is the app's own mark, drawn from the bundle. Same 60pt footprint as every
                 // other row, so nothing about the list's rhythm changes.
                 if OfficialChannel.isOfficial(conv.id) {
-                    OfficialAvatar(size: storySeen.isEmpty ? 56 : 49)
+                    OfficialAvatar(size: storySeen.isEmpty ? 60 : 53)
                 } else {
                     AvatarView(name: conv.displayName(me), photoUrl: conv.displayPhoto(me),
-                               size: storySeen.isEmpty ? 56 : 49)
+                               size: storySeen.isEmpty ? 60 : 53)
                 }
             }
                 // THIS CIRCLE IS THE STORY'S DOOR: opening from here grows the viewer out of it, and
@@ -2292,12 +2297,17 @@ struct ChatRow: View, Equatable {
                 // Reported on the PHOTO, not the ring: with the ring inside the anchor the transition
                 // stretched the grey ring segments, which the owner screenshotted.
                 .modifier(MediaRectReporter(id: "row-\(conv.id)", scope: .storyRow,
-                                            cornerRadius: (storySeen.isEmpty ? 56 : 49) / 2))
-                .frame(width: 56, height: 56)
+                                            cornerRadius: (storySeen.isEmpty ? 60 : 53) / 2))
+                // 60, THEIR NUMBER, READ FROM THEIR SOURCE (`avatarDiameter` in their chat-list item,
+                // 2026-08-13, on his "match please"). Ours was 56 inside a 76pt row, so a smaller
+                // picture sat in more white — which is the whole of why our list reads airy beside
+                // theirs, not the layout: their name starts 84pt from the left edge (16 + 8 + 60)
+                // and so does ours (16 + 12 + 56), exactly.
+                .frame(width: 60, height: 60)
                 .overlay {   // story ring around the avatar when this person has an active story
                     if !storySeen.isEmpty {
                         StoryRingView(seen: storySeen, lineWidth: 2)
-                            .frame(width: 56, height: 56)
+                            .frame(width: 60, height: 60)
                     }
                 }
                 // Tap the ringed avatar → open their story (high-priority so it beats the row's open-chat tap).
@@ -2329,7 +2339,7 @@ struct ChatRow: View, Equatable {
                     }
                     Spacer(minLength: 8)
                     Text(timeStr)
-                        .font(.system(size: 12))
+                        .font(.system(size: 14))
                         .foregroundStyle(unread > 0 ? Theme.accent(dark) : .secondary)
                         // NEVER WRAP. The list's first layout pass can offer a row almost no width,
                         // and an unconstrained Text answers that by stacking one letter per line —
@@ -2381,7 +2391,10 @@ struct ChatRow: View, Equatable {
                 }
             }
         }
-        .frame(minHeight: 76)
+        // 70 + this row's own 2+2 padding = 74, against their ~74 (their `itemHeight`, which works
+        // out at title line + three measure lines − 4). Was 76, which with a 56pt avatar left 12pt
+        // of air above and below it; theirs leaves about 7 around a 60. See the note on the avatar.
+        .frame(minHeight: 70)
         .animation(.easeInOut(duration: 0.22), value: unread)   // smooth bold/color/badge changes
         .animation(.easeInOut(duration: 0.22), value: muted)
         .animation(.easeInOut(duration: 0.22), value: conv.isPinned(me))   // pin icon fade
