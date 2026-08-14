@@ -153,6 +153,9 @@ struct ThreadView: View {
     // (so the newest message clears the bar). Not a keyboard signal; the keyboard comes from .always.
     @State private var composerBarHeight: CGFloat = 0
     @State private var pinBarHeight: CGFloat = 0   // pinned-message bar height → floating date pill drops below it
+    /// Set when this person's identity key has been replaced by a different one — see SafetyKeyLog.
+    /// Read once on open and again whenever the fetch notices a change while the chat is up.
+    @State private var keyChanged = false
     // Message multi-select: leading checkmark, whole-row tap, bottom action bar.
     @State private var selecting = false
     @State private var selectedIds = Set<String>()
@@ -283,8 +286,39 @@ struct ThreadView: View {
     }
 
     // Extracted so the type-checker isn't overloaded (the inline `if` in the big chain broke the build).
+    /// THE SAFETY-NUMBER NOTICE (owner 2026-08-14, the one real gap he asked to close first). The app
+    /// could always show a safety number; nothing ever watched it. This says, in the chat where it
+    /// matters, that the number is not the one we saw before.
+    ///
+    /// ⚠️ IT ACCUSES NOBODY, and that is deliberate. A reinstall or a new phone changes somebody's key
+    /// too, and that is by far the commonest cause — so the line states the fact, offers the number,
+    /// and blocks nothing. Tapping through to the verify screen counts as having seen it.
+    @ViewBuilder private var keyChangeNotice: some View {
+        if keyChanged, !isGroup {
+            Button {
+                SafetyKeyLog.acknowledge(otherUid)
+                keyChanged = false
+                showEncryptionInfo = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "lock.rotation").font(.system(size: 13, weight: .semibold))
+                    Text("\(title)'s safety number changed")
+                        .font(.system(size: 13, weight: .medium)).lineLimit(1)
+                    Spacer(minLength: 4)
+                    Text("Verify").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.accentColor)
+                }
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 14).padding(.vertical, 9)
+                .background(.bar)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
     @ViewBuilder private var topPinArea: some View {
         if !searchActive {   // search owns the top area — the pin bar hides while searching
+            keyChangeNotice
             pinnedBar
                 // Measure the pin bar's height and feed it to the list so the floating date pill drops BELOW
                 // it (the reference app behavior). 0 when nothing is pinned (pinnedBar is empty) → the pill stays put.
@@ -360,6 +394,12 @@ struct ThreadView: View {
                             }
                         }
                     }
+            }
+            // A key that changes WHILE the chat is open (their reinstall lands mid-conversation) has
+            // to say so there and then, not on the next open.
+            .onReceive(NotificationCenter.default.publisher(for: .peerKeyChanged)) { note in
+                guard let uid = note.object as? String, uid == otherUid, !isGroup else { return }
+                withAnimation(.easeInOut(duration: 0.2)) { keyChanged = true }
             }
             // Per-chat wallpaper behind the messages (extends under the bars).
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
@@ -1243,6 +1283,7 @@ struct ThreadView: View {
             settled = false
             if isGroup || !cid.contains("_") { startGroupCallListener() }
             AppRouter.shared.activeChatId = cid          // suppress this chat's own banners
+            keyChanged = !isGroup && SafetyKeyLog.changedAt(otherUid) != nil
             // A note of THIS chat's that is sitting paused on the bar has nothing to say once you are
             // in here looking at its bubble — see chatOpened. One that is still playing is left alone.
             VoiceNotePlayer.shared.chatOpened(cid)

@@ -42,6 +42,7 @@ enum SessionWipe {
         wipeAccountPrefs()
         CallPrivacyIndex.clear()                // who-refuses-calls is per-account too
         VerificationIndex.clear()               // and who is verified — the next account starts blank
+        SafetyKeyLog.wipe()                     // whose key we have seen: per account, never inherited
         Crypto.shared.wipeIdentity()            // fresh keypair for the next account
     }
 

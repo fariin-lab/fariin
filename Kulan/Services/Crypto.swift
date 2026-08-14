@@ -310,6 +310,13 @@ final class Crypto {
                 let key = Bytes(data)
                 lock.withLock { pubCache[uid] = key }
                 persistPubKey(uid, key)   // disk cache → decrypt works on the next cold launch's first render
+                // AND SAY SO WHEN IT IS A DIFFERENT KEY THAN LAST TIME. This is the one place every
+                // peer key enters the app, so it is the only place that can notice. See SafetyKeyLog:
+                // the working caches above are cleared on purpose when a decrypt fails, so they can
+                // never answer "what did we use to see?" — the log is separate for exactly that.
+                if SafetyKeyLog.note(uid: uid, key: data) {
+                    NotificationCenter.default.post(name: .peerKeyChanged, object: uid)
+                }
                 return key
             }
         } catch {
