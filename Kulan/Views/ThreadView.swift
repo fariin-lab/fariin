@@ -1165,9 +1165,15 @@ struct ThreadView: View {
         .onReceive(NotificationCenter.default.publisher(for: .voiceNoteFinished)) { note in
             guard let id = note.object as? String,
                   let idx = repo.items.firstIndex(where: { $0.id == id }) else { return }
-            // Never chain INTO a one-time note: auto-advance would spend its single listen on
+            // THE VERY NEXT MESSAGE, and only if it is a voice note (his 2026-08-13 screenshot: two
+            // notes, a text, a third note — the run ends at the text). `first(where:)` searched PAST
+            // whatever sat between them and chained into a note further down the chat, which is not
+            // a run, it is a jump. The engine's off-screen chain takes the same rule.
+            //
+            // Never chain INTO a one-time note either: auto-advance would spend its single listen on
             // somebody who never chose to open it.
-            guard let next = repo.items.dropFirst(idx + 1).first(where: { $0.isAudio && !$0.viewOnce }) else { return }
+            guard let next = repo.items.dropFirst(idx + 1).first,
+                  next.isAudio, !next.viewOnce else { return }
             nativeScrollTarget = next.rowId
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 NotificationCenter.default.post(name: .voiceNotePlay, object: next.id)

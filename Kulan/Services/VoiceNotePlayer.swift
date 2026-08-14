@@ -150,9 +150,17 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             followOn = []
             return
         }
-        // One-time notes are excluded: auto-advance playing one would SPEND its single listen on a
-        // person who never chose to open it. They are only ever played by a deliberate tap.
-        followOn = Array(items.dropFirst(idx + 1).filter { $0.isAudio && !$0.viewOnce }.prefix(Self.followOnCap))
+        // ⚠️ CONSECUTIVE, NOT "ALL THE VOICE NOTES BELOW" (his 2026-08-13 screenshot: two notes, a
+        // text, then a third note — "I can't play 3 because it has a gap"). A `filter` walked PAST
+        // anything in between, so a run of two would carry on into a note further down the chat with
+        // a message sitting between them. A run is what was sent one after another and nothing else,
+        // so it stops at the first thing that is not a voice note.
+        //
+        // One-time notes end a run for the same reason they are never auto-played: advancing into
+        // one would SPEND its single listen on somebody who never chose to open it.
+        followOn = Array(items.dropFirst(idx + 1)
+            .prefix { $0.isAudio && !$0.viewOnce }
+            .prefix(Self.followOnCap))
     }
 
     private override init() {
