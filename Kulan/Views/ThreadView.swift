@@ -2769,6 +2769,14 @@ struct ThreadView: View {
     // Custom attach panel — slides up from the + button.
     // Top: one-tap recents strip (camera-roll photos + videos). Below: the pickers.
     private var attachPanel: some View {
+        // THE BAR FLOATS, AND THE PHOTOS RUN UNDER IT (owner 2026-08-13: "make it floating without
+        // background, must see what's underneath scrolling").
+        //
+        // It used to be the second row of a VStack, which is a slot: the grid stopped above it and
+        // the sheet's own background filled the strip around it, so the bar sat ON something. As a
+        // bottom safe-area inset it is the same thing the caption bar inside the strip already is —
+        // the grid keeps its full height and simply inherits the bar's height as content inset, so
+        // nothing is ever hidden at rest and everything slides under the glass while you scroll.
         VStack(spacing: 0) {
             // (No custom grabber — the sheet's SYSTEM drag indicator already shows one; drawing our own
             // capsule produced the "two lines" at the top.)
@@ -2856,37 +2864,9 @@ struct ThreadView: View {
                 // as well as by name.
                 removedIds: deselectedIds)
                 .padding(.top, 10)
-            // Source row (Photos/Files/GIF/Poll) — HIDDEN while items are selected (the caption + Send
-            // bar in the recents strip takes its place).
-            if !recentsHasSelection {
-                // ONE BAR, NOT THREE BUTTONS (owner 2026-08-13, ours photographed beside theirs).
-                //
-                // Each source used to be its own 76×50 glass capsule with its label hanging BELOW it,
-                // so three actions read as three loose blobs with words underneath — the shape he
-                // called UIKit-looking. Theirs is a single glass bar with the sources INSIDE it, icon
-                // over label, and that is the difference: the glass is the bar, not each button.
-                //
-                // Left-aligned and still scrollable, exactly like theirs: the first source sits at
-                // the left edge and any that do not fit are a swipe away, rather than four items
-                // spreading themselves thin across the width.
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 2) {
-                        // Order: GIF · Files · Location · Poll (groups only). The Contacts tile is gone
-                        // (user 2026-07-29): sharing "a contact" is a phone-book idea, and Fariin has no
-                        // phone book — you introduce someone by sharing their profile from THEIR
-                        // profile page, which is where the action still lives.
-                        attachTile("ic_gif_tile", "GIF") { showGifPicker = true }
-                        attachTile("ic_file", "Files") { showFileImporter = true }
-                        attachTile("ic_location", "Location") { showLocationShare = true }
-                        if isGroup { attachTile("chart.bar", "Poll") { showPollComposer = true } }
-                    }
-                    .padding(.horizontal, 6)
-                }
-                .padding(.vertical, 6)
-                .liquidGlass(Capsule())   // the ONE piece of glass on this row
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-            }
+                // Source row (GIF/Files/Location/Poll) — HIDDEN while items are selected (the caption
+                // + Send bar inside the strip takes its place, and two bottom bars is one too many).
+                .safeAreaInset(edge: .bottom, spacing: 0) { sourceBar }
         }
         // Single-image editor presented OVER the media sheet (the sheet stays underneath): X dismisses
         // only the editor → straight back to the sheet to pick another image. Send delivers the photo
@@ -2931,6 +2911,39 @@ struct ThreadView: View {
                 }
                 showAttachPanel = false
             }, selfDismissOnSend: false, onRemove: { deselectedIds.insert($0) })
+        }
+    }
+
+    /// The sources row, as the panel's bottom bar. NOTHING paints behind it: the capsule is the only
+    /// surface, so the grid runs under the glass while you scroll (owner 2026-08-13, "make it
+    /// floating without background, must see what's underneath scrolling").
+    ///
+    /// ONE BAR, NOT THREE BUTTONS, which was the round before this one. Each source used to be its
+    /// own 76×50 glass capsule with its label hanging BELOW it, so three actions read as three loose
+    /// blobs with words underneath. Theirs is a single glass bar with the sources INSIDE it, icon
+    /// over label: the glass belongs to the bar, not to each button.
+    ///
+    /// Left-aligned and scrollable like theirs — the first source sits at the left edge and anything
+    /// that does not fit is a swipe away, rather than four items spread thin across the width.
+    @ViewBuilder private var sourceBar: some View {
+        if !recentsHasSelection {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 2) {
+                    // Order: GIF · Files · Location · Poll (groups only). The Contacts tile is gone
+                    // (user 2026-07-29): sharing "a contact" is a phone-book idea, and Fariin has no
+                    // phone book — you introduce someone by sharing their profile from THEIR profile
+                    // page, which is where the action still lives.
+                    attachTile("ic_gif_tile", "GIF") { showGifPicker = true }
+                    attachTile("ic_file", "Files") { showFileImporter = true }
+                    attachTile("ic_location", "Location") { showLocationShare = true }
+                    if isGroup { attachTile("chart.bar", "Poll") { showPollComposer = true } }
+                }
+                .padding(.horizontal, 6)
+            }
+            .padding(.vertical, 6)
+            .liquidGlass(Capsule())   // the ONE piece of glass here, and the only background
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
         }
     }
 
