@@ -2955,20 +2955,24 @@ struct ThreadView: View {
             // Let the sheet finish dismissing before presenting the next picker (avoids a clash).
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { action() }
         } label: {
-            VStack(spacing: 5) {
+            // MEDIUM, HIS WORD (2026-08-14): the bar read thick beside the sheet it floats on. Not
+            // thin either — these are the only three shortcuts on that screen and they have to stay
+            // easy to hit. Icon 24→21, label caption→caption2, tile 80×58→72×48, which takes the bar
+            // from about 70pt tall to about 56.
+            VStack(spacing: 4) {
                 // "ic_" names one of our own drawings; anything else is an SF Symbol.
                 Group {
                     if icon.hasPrefix("ic_") {
                         Image(icon).renderingMode(.template).resizable().scaledToFit()
-                            .frame(width: 24, height: 24)
+                            .frame(width: 21, height: 21)
                     } else {
-                        Image(systemName: icon).font(.system(size: 21, weight: .medium))
+                        Image(systemName: icon).font(.system(size: 18, weight: .medium))
                     }
                 }
                 .foregroundStyle(.primary)
-                Text(label).font(.caption.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
+                Text(label).font(.caption2.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
             }
-            .frame(width: 80, height: 58)
+            .frame(width: 72, height: 48)
             .contentShape(Capsule())
         }
         // The app's own press feel, rather than nothing at all — same style the story editor's
