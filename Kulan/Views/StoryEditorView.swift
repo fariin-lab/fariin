@@ -278,7 +278,14 @@ struct StoryEditorView: View {
         var filterIndex = 0
         var drawing = PKDrawing()
         var overlays: [TextOverlay] = []
-        var zoom: CGFloat = 1
+        /// ⚠️ ZERO MEANS "NOBODY HAS CHOSEN ONE YET", NOT "no zoom". The default depends on the shape
+        /// of the picture AND on the size of the card, which the model cannot know — so the value is
+        /// left unset here and resolved the first time this item is put on the tools
+        /// (`restoreCurrent` → `defaultZoom`). Any number in here, 1 included, is the OWNER's: it was
+        /// either pinched or it was the default he accepted, and neither may be recomputed
+        /// underneath him. That is his rule in as many words: "if user use manual zoom out or crop
+        /// or other things dont change after upload".
+        var zoom: CGFloat = 0
         var offset: CGSize = .zero
 
         // VIDEO-ONLY, and they are the whole of the owner's report that a video thumbnail brought up
@@ -1645,10 +1652,57 @@ struct StoryEditorView: View {
         filterIndex = it.filterIndex
         drawing = it.drawing
         overlays = it.overlays
-        photoZoom = it.zoom
+        // ⚠️ RESOLVED ONCE, HERE, AND WRITTEN BACK. A zero is an item nobody has framed yet; from
+        // this moment it has a number of its own and `defaultZoom` is never asked about it again.
+        if it.zoom <= 0 {
+            // ⚠️ PHOTOS ONLY, WHICH IS HIS SCOPE ("only in editor story image") AND THE CAUTIOUS
+            // READING. On a clip the pinch is not a zoom at all, it is the transcoder's crop
+            // rectangle (`videoBurnIn`), so a default one would silently centre-crop every portrait
+            // video anybody posts. Their own rule does cover video; ours can be widened to it later
+            // on his word, and not before.
+            let z = it.isVideo ? 1 : defaultZoom(for: it.cropped ?? it.image)
+            items[index].zoom = z
+            photoZoom = z
+        } else {
+            photoZoom = it.zoom
+        }
         photoOffset = it.offset
         selectedID = nil; editingID = nil
         recomputeEdited()
+    }
+
+    /// WHERE A PICTURE STARTS IN THE STORY FRAME — their rule, read off `VideoFinishPass.process`,
+    /// which is the pass that puts the media on the story canvas:
+    ///
+    ///     if input.texture.height > input.texture.width {
+    ///         baseScale = max(canvasSize.width / w, canvasSize.height / h)   // FILL
+    ///     } else {
+    ///         baseScale = canvasSize.width / w                               // fit the WIDTH
+    ///     }
+    ///
+    /// So a TALLER-THAN-WIDE picture fills the frame and is centre-cropped, and a square or
+    /// landscape one spans the full width with the gradient above and below it. Their `cropScale`
+    /// starts at 1.0 and MULTIPLIES that base, which is why a pinch in their editor starts from the
+    /// filled state rather than from a fitted one.
+    ///
+    /// Ours draws with `scaledToFit`, which is their width-fit for anything square or wider — that
+    /// is why he reported 1:1 as already correct — and is a HEIGHT-fit for a tall picture, which is
+    /// the case he reported. So the only thing missing was the multiplier for a portrait picture,
+    /// and this is it: how much a fitted picture has to grow to cover the card.
+    ///
+    /// ⚠️ THE GRADIENT IS UNAFFECTED. It is sampled from the picture's own colours and drawn behind,
+    /// so it is right at any scale; at a filling scale it simply stops being visible.
+    /// ⚠️ AND THIS IS A DEFAULT, NOT A RULE THE PICTURE OBEYS. It is written into the item once and
+    /// then belongs to the owner: a pinch, a crop, a 90° turn all leave their own number behind, and
+    /// the upload reads that number.
+    private func defaultZoom(for image: UIImage) -> CGFloat {
+        let w = image.size.width, h = image.size.height
+        guard w > 1, h > 1, h > w else { return 1 }   // square or landscape: their width fit
+        let card = self.card
+        guard card.width > 1, card.height > 1 else { return 1 }
+        let a = w / h, c = card.width / card.height
+        // `scaledToFit` already matched one axis; the fill is the ratio on the other.
+        return max(1, a > c ? a / c : c / a)
     }
 
     private func select(_ i: Int) {

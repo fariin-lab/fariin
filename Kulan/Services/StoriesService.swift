@@ -161,6 +161,57 @@ struct StoryViewSummary {
     }
 }
 
+/// THE LAST COUNT WE KNEW FOR EACH OF MY STORIES, KEPT ON DISK.
+///
+/// The owner's footer reads "N Views", and until the fetch for that story lands there is nothing to
+/// read it from — so it read zero, which is not a placeholder, it is a number, and it is a wrong
+/// one. His 2026-08-14 report: "Views count shows 0 when I first open the story, then updates a few
+/// seconds later." The in-viewer cache that already existed only helped within one sitting, because
+/// it is `@State` and dies with the screen; the FIRST open after every launch paid the round trip
+/// with a zero painted over it.
+///
+/// Two integers per story, so the number that was true when he last looked is on screen in the first
+/// frame and the network only ever corrects it.
+///
+/// ⚠️ NOT THE VIEWERS THEMSELVES. Names and photographs of other people are worth more room than
+/// they save here, and the eye icon they fall back to is not a wrong answer the way a 0 is.
+///
+/// ⚠️ THIS IS A CACHE, NOT A COUNTER. The real fix is the count travelling down WITH the story, the
+/// way the reference app's own story object carries it — a denormalised field on the story document,
+/// which is a server change and the owner's call (it is item 3B of the open season). Until then the
+/// number can be one visit stale for the moment the fetch takes, which is what he asked for.
+enum StoryCountCache {
+    private static let key = "storyViewCounts.v1"
+    /// Stories live 24h; this is generous enough that nothing he can still open has been dropped.
+    private static let capacity = 300
+
+    /// `[storyId: [count, reactions]]`, plus the order they were written in so the oldest go first.
+    private static var store: [String: [Int]] {
+        get { UserDefaults.standard.dictionary(forKey: key) as? [String: [Int]] ?? [:] }
+        set { UserDefaults.standard.set(newValue, forKey: key) }
+    }
+    private static let orderKey = "storyViewCounts.v1.order"
+
+    static func summary(for storyId: String) -> StoryViewSummary? {
+        guard let v = store[storyId], v.count == 2 else { return nil }
+        return StoryViewSummary(count: v[0], reactionCount: v[1], recent: [])
+    }
+
+    static func put(_ storyId: String, count: Int, reactions: Int) {
+        var s = store
+        var order = UserDefaults.standard.stringArray(forKey: orderKey) ?? []
+        if s[storyId] == nil { order.append(storyId) }
+        s[storyId] = [count, reactions]
+        // Oldest first, and only ever a few at a time — this runs on a story change, not in a loop.
+        while order.count > capacity {
+            let dropped = order.removeFirst()
+            s.removeValue(forKey: dropped)
+        }
+        store = s
+        UserDefaults.standard.set(order, forKey: orderKey)
+    }
+}
+
 @Observable
 final class StoriesService {
     static let shared = StoriesService()

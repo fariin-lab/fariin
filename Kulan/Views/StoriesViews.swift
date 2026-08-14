@@ -4115,6 +4115,10 @@ struct StoryViewer: View {
                 for s in mine { group.addTask { (s.id, await Self.viewSummary(storyId: s.id)) } }
                 for await (id, v) in group {
                     viewersByStory[id] = v
+                    // Every one of them, not just the one on screen: this sweep is the cheapest
+                    // chance the cache gets to be right about the stories he has not reached yet,
+                    // so the NEXT visit opens on a number for all of them.
+                    StoryCountCache.put(id, count: v.count, reactions: v.reactionCount)
                     // The one on screen paints as soon as ITS answer lands, whichever order they
                     // arrive in — the group is not awaited as a batch for exactly that reason.
                     if id == currentStoryId { barViewers = v }
@@ -4146,11 +4150,26 @@ struct StoryViewer: View {
             // Tapping back and forth through your own stories, and re-opening the viewer, both used
             // to repaint "0 Views" for a Firestore round trip every single time. Now only a story
             // nobody has asked about yet waits, and the refresh below still lands over the top.
-            barViewers = viewersByStory[id]
+            // ⚠️ AND WHEN THIS SESSION HAS NOTHING, THE LAST SESSION'S NUMBER STANDS IN — his
+            // 2026-08-14 report: "Views count shows 0 when I first open the story, then updates a
+            // few seconds later."
+            //
+            // `viewersByStory` dies with the viewer, so it only ever helped WITHIN one sitting. The
+            // first open of the day therefore always paid a Firestore round trip with "0 Views"
+            // painted over the top of it, and 0 is not a neutral placeholder — it is a number, and
+            // it is a wrong one. `StoryCountCache` keeps just the two numbers per story on disk, so
+            // the count that was true when he last looked is on screen in the first frame and the
+            // fetch below only ever corrects it.
+            //
+            // The faces are not cached and still arrive with the fetch. That is deliberate: they are
+            // names and photographs of other people, they are worth more room than they save, and
+            // the eye icon they fall back to is not a wrong answer the way a 0 is.
+            barViewers = viewersByStory[id] ?? StoryCountCache.summary(for: id)
         }
         Task {
             let v = await Self.viewSummary(storyId: id)
             viewersByStory[id] = v
+            StoryCountCache.put(id, count: v.count, reactions: v.reactionCount)
             if id == currentStoryId { barViewers = v }
         }
     }
