@@ -2839,10 +2839,18 @@ struct ThreadView: View {
             // Source row (Photos/Files/GIF/Poll) — HIDDEN while items are selected (the caption + Send
             // bar in the recents strip takes its place).
             if !recentsHasSelection {
-                // Horizontally scrollable so the row never clips a tile (5 tiles overflow a phone width
-                // once Poll is added in groups) — swipe to reach them all.
+                // ONE BAR, NOT THREE BUTTONS (owner 2026-08-13, ours photographed beside theirs).
+                //
+                // Each source used to be its own 76×50 glass capsule with its label hanging BELOW it,
+                // so three actions read as three loose blobs with words underneath — the shape he
+                // called UIKit-looking. Theirs is a single glass bar with the sources INSIDE it, icon
+                // over label, and that is the difference: the glass is the bar, not each button.
+                //
+                // Left-aligned and still scrollable, exactly like theirs: the first source sits at
+                // the left edge and any that do not fit are a swipe away, rather than four items
+                // spreading themselves thin across the width.
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
+                    HStack(spacing: 2) {
                         // Order: GIF · Files · Location · Poll (groups only). The Contacts tile is gone
                         // (user 2026-07-29): sharing "a contact" is a phone-book idea, and Fariin has no
                         // phone book — you introduce someone by sharing their profile from THEIR
@@ -2852,9 +2860,12 @@ struct ThreadView: View {
                         attachTile("ic_location", "Location") { showLocationShare = true }
                         if isGroup { attachTile("chart.bar", "Poll") { showPollComposer = true } }
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, 6)
                 }
-                .padding(.vertical, 12)
+                .padding(.vertical, 6)
+                .liquidGlass(Capsule())   // the ONE piece of glass on this row
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
             }
         }
         // Single-image editor presented OVER the media sheet (the sheet stays underneath): X dismisses
@@ -2914,31 +2925,34 @@ struct ThreadView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    // Attachment-button spec: a 76×50pt CAPSULE button
-    // with the icon inside, and a footnote-medium label 8pt BELOW the capsule.
+    /// One source INSIDE the bar: icon over label, no glass of its own — the bar carries that now.
+    /// The old spec (a 76×50 glass capsule per source with the label hanging below it) is what made
+    /// three actions read as three loose blobs. See the row above.
     private func attachTile(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {
         Button {
             showAttachPanel = false
             // Let the sheet finish dismissing before presenting the next picker (avoids a clash).
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { action() }
         } label: {
-            VStack(spacing: 8) {
+            VStack(spacing: 5) {
                 // "ic_" names one of our own drawings; anything else is an SF Symbol.
                 Group {
                     if icon.hasPrefix("ic_") {
                         Image(icon).renderingMode(.template).resizable().scaledToFit()
-                            .frame(width: 22, height: 22)
+                            .frame(width: 24, height: 24)
                     } else {
-                        Image(systemName: icon).font(.system(size: 20, weight: .medium))
+                        Image(systemName: icon).font(.system(size: 21, weight: .medium))
                     }
                 }
-                    .foregroundStyle(.primary)
-                    .frame(width: 76, height: 50)
-                    .liquidGlass(Capsule(), interactive: true)   // real Liquid Glass capsule
-                Text(label).font(.footnote.weight(.medium)).foregroundStyle(.primary)
+                .foregroundStyle(.primary)
+                Text(label).font(.caption.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
             }
+            .frame(width: 80, height: 58)
+            .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        // The app's own press feel, rather than nothing at all — same style the story editor's
+        // buttons use, so a tap here answers the way a tap does everywhere else.
+        .buttonStyle(StoryPressStyle())
     }
 
     // Download the encrypted file, decrypt it, write to a temp file, and preview it (QuickLook).
