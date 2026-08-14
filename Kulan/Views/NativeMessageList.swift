@@ -847,7 +847,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // putting the reader back. The kill worked; what came in through the door it opened did
             // not. Marked first, that same callback sees an animation in flight and defers.
             scrollingAnimationDidStart()   // lands defer until the glide completes
-            collectionView.setContentOffset(collectionView.contentOffset, animated: false)
+            stopScrolling()
             collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: true)
             // AND THEN CHECK THAT IT ACTUALLY HAPPENED. Everything above is a chain of things that
             // each have to hold; this asks the only question that matters — am I there? — and puts
@@ -902,6 +902,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // the reference app's `viewState.isUserScrolling`: FINGER DOWN ONLY. Deceleration is tracked separately and
     // deliberately does not count.
     private var isUserScrolling: Bool { collectionView.isDragging || collectionView.isTracking }
+
+    /// THEIR ANSWER TO THIS EXACT PROBLEM, read from their own list source (`ListView.stopScrolling()`,
+    /// and the `ignoreScrollingEvents` guard at the top of their `scrollViewDidScroll`). Ending a
+    /// fling means writing the offset the scroller already has, and that write makes UIKit call
+    /// straight back into our delegate — so they raise a flag first and their own callbacks go deaf
+    /// for the length of it. Every one of their programmatic offset writes is wrapped this way, not
+    /// only this one.
+    ///
+    /// Ours needed it for the same reason and did not have it: the callback the stop fires runs
+    /// `clampToNewestIfBeyond()` and `settleFlush()`, either of which can move the reader, and both
+    /// were running INSIDE the stop that was supposed to be clearing the way for a jump.
+    private var ignoringScrollEvents = false
+
+    private func stopScrolling() {
+        let was = ignoringScrollEvents
+        ignoringScrollEvents = true
+        collectionView.setContentOffset(collectionView.contentOffset, animated: false)
+        ignoringScrollEvents = was   // restore, never assume false — theirs nests too
+    }
 
     /// A jump-to-newest that arrived while a finger was down, waiting for the lift. `nil` = none.
     private var pendingNewestJump: Bool?
@@ -2292,6 +2311,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         scrollingAnimationDidComplete()
     }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        guard !ignoringScrollEvents else { return }
         // The finger has left. If the keyboard shrank the inset out from under a reader who was at the
         // newest message (interactive dismissal), this is the first honest moment to put them back.
         if !decelerate { consumeKeyboardSettleIfPending(); clampToNewestIfBeyond(); settleFlush() }
@@ -2303,10 +2323,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        guard !ignoringScrollEvents else { return }   // our own stop, not the reader's — see stopScrolling
         consumeKeyboardSettleIfPending(); clampToNewestIfBeyond(); settleFlush()
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        guard !ignoringScrollEvents else { return }   // ditto: a stop is not a scroll
         // During the screenshot-capture freeze the SYSTEM owns the offset: write no SwiftUI state and fire
         // nothing.
         if Date() < captureFreezeUntil { return }
