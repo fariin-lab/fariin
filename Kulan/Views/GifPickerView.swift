@@ -151,10 +151,15 @@ struct GifPickerView: View {
             .onScrollGeometryChange(for: Bool.self,
                                     of: { $0.contentOffset.y <= 0.5 },
                                     action: { _, top in atTop?.wrappedValue = top })
-            // The moods sit at the BOTTOM in a panel, where the keyboard's own bottom row is and
-            // where the thumb already is (his reference, 2026-08-14). At the top they were where the
-            // eye lands, competing with the GIFs for the first look.
-            categoryRow
+            // FLOATING, THE WAY THE ATTACHMENT SOURCES FLOAT (his call, 2026-08-14: "make it like
+            // the one you did on the plus photos"). A bottom inset rather than a row: the grid keeps
+            // its full height and takes the bar's height as content inset, so nothing is hidden at
+            // rest and the GIFs pass UNDER the glass while you scroll.
+            //
+            // The moods sit at the bottom in a panel, where the keyboard's own bottom row is and
+            // where the thumb already is. At the top they were where the eye lands, competing with
+            // the GIFs for the first look.
+            .safeAreaInset(edge: .bottom, spacing: 0) { floatingMoodBar }
         }
         // ⚠️ A PANEL IN THE KEYBOARD'S SLOT NEEDS THE KEYBOARD'S SURFACE (his 571 screenshot: the
         // search row and the strip under it showing the chat wallpaper straight through). It had no
@@ -304,7 +309,25 @@ struct GifPickerView: View {
         if !Task.isCancelled { gifs = results }
     }
 
+    /// The panel's mood bar: the same buttons, on one piece of glass, floating over the grid. The
+    /// page version keeps the plain pinned row — it has a navigation bar over it and a second
+    /// floating shape under that would be one too many.
+    private var floatingMoodBar: some View {
+        categoryButtons
+            .padding(.horizontal, 6).padding(.vertical, 4)
+            .liquidGlass(Capsule())
+            .padding(.horizontal, 10)
+            .padding(.bottom, 8)
+    }
+
     private var categoryRow: some View {
+        categoryButtons
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            // Opaque under the pinned row, or the grid shows through while scrolling beneath it.
+            .background(Color(uiColor: .systemBackground))
+    }
+
+    private var categoryButtons: some View {
         HStack(spacing: 4) {
             ForEach(GifCategory.allCases, id: \.self) { c in
                 Button {
@@ -332,9 +355,6 @@ struct GifPickerView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        // Opaque under the pinned row, or the grid shows through while scrolling beneath it.
-        .background(Color(uiColor: .systemBackground))
         .animation(.easeInOut(duration: 0.15), value: category)
     }
 
