@@ -1680,6 +1680,15 @@ struct ArchivedChatsView: View {
     /// answers. So a pushed archive hands the tap up to its parent instead.
     var pushed = false
     var onOpenChat: ((ChatTarget) -> Void)? = nil
+    /// ⚠️ SPELLED OUT, because the synthesised one cannot be called from here. Every other stored
+    /// property below is `private`, so the memberwise initializer is synthesised private too — and
+    /// `private` reaches this type and its own extensions, NOT the view next door that presents it,
+    /// even in the same file. Without this, `ArchivedChatsView(pushed:)` resolves to the no-argument
+    /// init and the compiler says the call takes no arguments.
+    init(pushed: Bool = false, onOpenChat: ((ChatTarget) -> Void)? = nil) {
+        self.pushed = pushed
+        self.onOpenChat = onOpenChat
+    }
     private var repo = ConversationsRepository.shared
     private var storiesRepo = StoriesRepository.shared   // archived (hidden) stories appear at the top
     @Environment(\.dismiss) private var dismiss
