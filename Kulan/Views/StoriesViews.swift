@@ -1973,34 +1973,62 @@ struct StoryViewer: View {
             // and trash bar under it, and paging on to a friend gets their full-bleed story with the
             // library's reply bar. A friend's story must not carry my Views bar, and the footer
             // cannot be decided once for a viewer that walks through several people.
+            //
+            // ⚠️ AND THE STORY ITSELF IS WRITTEN ONCE, OUTSIDE THAT DECISION. THIS IS HIS
+            // "MY OWN STORY NEVER REACHES THE NEXT PERSON" REPORT, 2026-08-14.
+            //
+            // `storyContent` used to be written once inside `if currentIsMine` and once inside its
+            // `else`. Two branches of one conditional are two STRUCTURAL IDENTITIES to SwiftUI, so
+            // the moment the viewer left my bucket for a friend's — which is precisely when this
+            // flag flips — the whole `StoryView` was destroyed and a new one built in the other
+            // branch. The rebuild takes its `@StateObject StoryViewModel` with it, and the fresh one
+            // runs `startStory()` on appear, which seeds `currentStoryUser` from `selectedIndex`:
+            // THE BUCKET THE DOOR OPENED ON. Mine. So every attempt to leave my own story — the tap
+            // past the last item, the sideways swipe, and the last item simply finishing — moved one
+            // page forward and was thrown straight back onto me, with the pager rebuilt underneath
+            // it. That is his "it stays on my own story… the viewer is locked to the owner story",
+            // and it is why only MY bucket could show it: a friend-to-friend turn never moves this
+            // flag, so a friend's story paged perfectly all along.
+            //
+            // ⚠️ DO NOT PUT IT BACK INSIDE THE BRANCH, however tempting the symmetry looks. One
+            // writing, at a fixed position in this stack, is what keeps its identity independent of
+            // whose page is showing. Only the FOOTER varies, and an `if` with no `else` leaves the
+            // sibling in front of it alone. Anything else that has to differ per person must differ
+            // by VALUE (a modifier's argument), never by which branch drew it.
+            //
+            // My own story: a CARD (rounded bottom corners) + solid black footer below. The clip
+            // is ONLY applied for mine — clipping a FRIEND's full-bleed story broke the library's
+            // swipe-down-to-dismiss (the pan translates the card, but the clip pinned it to its
+            // frame so it couldn't visibly move → "scroll down to close doesn't work").
+            // The caption overlay that hung HERE is gone: it anchored to the PAGE bottom and
+            // was stranded ~35pt under the card when the story shrank to 9:16 — see the
+            // caption note at the model builder. The library's card-anchored captionView
+            // draws my caption now, exactly as it draws a friend's.
+            storyContent
+                // NO app-level CLIP (the clip pinned the card and broke the native dismiss) — the
+                // card's corners are rounded in UIKit inside the library now. But KEEP a solid black
+                // background: the cover is see-through (.clear) for the swipe-down, so without this
+                // the light chat list shows through as a WHITE story. A background (unlike a clip)
+                // doesn't pin the card, so the library dismiss stays smooth.
+                //
+                // AND IT STEPS ASIDE FOR A HERO FLIGHT. This layer is a SwiftUI view behind the
+                // pager, so the morph — a UIView transform on the pager's own card — cannot move
+                // it: it stayed full screen and opaque while the card flew, and what he saw was
+                // his story shrinking into the row over a black wall, with the chat list only
+                // arriving once the cover was gone ("it has that black background still, then
+                // after a bit it will go"). The library's own swipe-down does not need this
+                // because it slides the WHOLE page, black included, off the screen as one thing.
+                //
+                // Only during the flight. At rest the card does not fill the screen — the strip
+                // above it and the footer's surround are this black, and dropping it there would
+                // put the chat list back in the very gaps it was added to cover.
+                //
+                // ⚠️ AND IT IS A VALUE, NOT A BRANCH. A friend's page gets the same modifier at
+                // zero opacity, which paints exactly what their page painted before: nothing.
+                // Deciding it with a second copy of `storyContent` is what cost the whole
+                // viewer its identity — see the note above this stack.
+                .background(Color.black.opacity(currentIsMine && !heroFlying ? 1 : 0))
             if currentIsMine {
-                // My own story: a CARD (rounded bottom corners) + solid black footer below. The clip
-                // is ONLY applied here — clipping a FRIEND's full-bleed story broke the library's
-                // swipe-down-to-dismiss (the pan translates the card, but the clip pinned it to its
-                // frame so it couldn't visibly move → "scroll down to close doesn't work").
-                // The caption overlay that hung HERE is gone: it anchored to the PAGE bottom and
-                // was stranded ~35pt under the card when the story shrank to 9:16 — see the
-                // caption note at the model builder. The library's card-anchored captionView
-                // draws my caption now, exactly as it draws a friend's.
-                storyContent
-                    // NO app-level CLIP (the clip pinned the card and broke the native dismiss) — the
-                    // card's corners are rounded in UIKit inside the library now. But KEEP a solid black
-                    // background: the cover is see-through (.clear) for the swipe-down, so without this
-                    // the light chat list shows through as a WHITE story. A background (unlike a clip)
-                    // doesn't pin the card, so the library dismiss stays smooth.
-                    //
-                    // AND IT STEPS ASIDE FOR A HERO FLIGHT. This layer is a SwiftUI view behind the
-                    // pager, so the morph — a UIView transform on the pager's own card — cannot move
-                    // it: it stayed full screen and opaque while the card flew, and what he saw was
-                    // his story shrinking into the row over a black wall, with the chat list only
-                    // arriving once the cover was gone ("it has that black background still, then
-                    // after a bit it will go"). The library's own swipe-down does not need this
-                    // because it slides the WHOLE page, black included, off the screen as one thing.
-                    //
-                    // Only during the flight. At rest the card does not fill the screen — the strip
-                    // above it and the footer's surround are this black, and dropping it there would
-                    // put the chat list back in the very gaps it was added to cover.
-                    .background(Color.black.opacity(heroFlying ? 0 : 1))
                 ownerFooter
                     // Hidden on swipe-down AND while the sheet is REALLY engaged (showViewers
                     // gate: a stray leftover progress value once hid the Views/Delete bar with
@@ -2014,10 +2042,10 @@ struct StoryViewer: View {
                     .animation(.easeOut(duration: 0.15), value: dragDown > 6)
                     .animation(.easeOut(duration: 0.15), value: heroFlying)
                     .animation(.easeOut(duration: 0.15), value: showViewers && viewersProgress > 0.05)
-            } else {
-                // Friend's story: full-bleed, NO clip → the library's swipe-down dismiss works.
-                storyContent
             }
+            // (A friend's page adds nothing here: their story is full-bleed and the library draws
+            // their reply bar inside the page. The `else` that used to sit here held a SECOND
+            // `storyContent`, and that second writing was the bug — see the note above.)
         }
         // NO app-level drag gesture on the story anymore. BOTH directions are the library's native
         // UIKit pans: swipe-DOWN → dismiss (smooth, same as friends), swipe-UP → onSwipeUp → openViewers.
@@ -4257,6 +4285,21 @@ struct UploadingStoryHandoff: View {
                           stories: pending, lastViewedAt: nil, isMine: true)
     }
 
+    /// THE PEOPLE AFTER ME, so a story opened while it is still posting reaches them like any other.
+    ///
+    /// This door fed the viewer ONE bucket, so tapping past the last of my items ran out of people
+    /// and closed the viewer instead of moving on, and there was nobody to swipe to at all — the
+    /// same complaint as the row's door, arriving through the one path that had never been changed
+    /// with it. Same list and same order the row's door builds (`MainShell.openStoryFromRow`): me
+    /// first, then everyone I have not hidden.
+    ///
+    /// Nobody else posting leaves this exactly as it was — one bucket, the solo host, today's
+    /// behaviour byte for byte.
+    private var siblings: [StoryGroup] {
+        guard let g = group else { return [] }
+        return [g] + repo.others.filter { !StoryPrefs.isHidden($0.authorUid) }
+    }
+
     var body: some View {
         ZStack {
             // ⚠️ CLEAR WHILE THE CARD IS IN THE AIR, and this is the only structural difference
@@ -4283,11 +4326,13 @@ struct UploadingStoryHandoff: View {
                     let active = (note.object as? Bool) ?? false
                     if active != flightActive { flightActive = active }
                 }
-            if let g = group {
+            if !siblings.isEmpty {
                 // The app's own flight, same as every other story: it grows out of the uploading
-                // card and the drag-down flies back into it. `heroSourcePinned` because there is
-                // exactly one card in the row for a story that has not finished posting.
-                StoryViewer(group: g,
+                // card and the drag-down flies back into it. `heroSourcePinned` STAYS TRUE even
+                // though the viewer can page now: while a post is still in the air the row's only
+                // card for me is the uploading placeholder, registered under its own key, so the
+                // anchor cannot follow the way the row's door lets it. One card, one landing.
+                StoryViewer(groups: siblings, startIndex: 0,
                             heroDismiss: !heroSourceKey.isEmpty,
                             heroSourceKey: heroSourceKey, heroSourcePinned: true,
                             onHeroClose: onHeroClose,
