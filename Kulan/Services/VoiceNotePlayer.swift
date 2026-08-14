@@ -158,9 +158,20 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         //
         // One-time notes end a run for the same reason they are never auto-played: advancing into
         // one would SPEND its single listen on somebody who never chose to open it.
-        followOn = Array(items.dropFirst(idx + 1)
-            .prefix { $0.isAudio && !$0.viewOnce }
-            .prefix(Self.followOnCap))
+        //
+        // A NOTICE IS NOT SOMETHING ANYBODY SENT, so it does not end a run — his rule, in his own
+        // words: everything sendable breaks the group. "You pinned a photo" and "messages
+        // auto-delete in 1 week" are lines the app writes about the chat, drawn down the middle of
+        // the screen rather than as a bubble, and stopping a run of notes on one would be stopping
+        // it on nothing.
+        var run: [Message] = []
+        for m in items.dropFirst(idx + 1) {
+            if m.isSystem || m.pinNotice != nil { continue }
+            guard m.isAudio, !m.viewOnce else { break }
+            run.append(m)
+            if run.count >= Self.followOnCap { break }
+        }
+        followOn = run
     }
 
     private override init() {

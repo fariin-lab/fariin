@@ -1172,7 +1172,10 @@ struct ThreadView: View {
             //
             // Never chain INTO a one-time note either: auto-advance would spend its single listen on
             // somebody who never chose to open it.
-            guard let next = repo.items.dropFirst(idx + 1).first,
+            // Notices are stepped over rather than treated as the end of the run — see handOff:
+            // nobody sent them, so they are not the gap he means.
+            guard let next = repo.items.dropFirst(idx + 1)
+                .first(where: { !$0.isSystem && $0.pinNotice == nil }),
                   next.isAudio, !next.viewOnce else { return }
             nativeScrollTarget = next.rowId
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
