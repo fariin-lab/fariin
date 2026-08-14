@@ -176,14 +176,17 @@ struct MediaGalleryView: View {
                                        set: { tab = Tab.allCases[$0] }))
         .padding(.horizontal, 16)
         .padding(.vertical, 8)   // together with barHeight this is MediaTabBar.slotHeight
-        // A BACKDROP ACROSS THE WHOLE SLOT, not just under the control. Without this the bar was
-        // floating over nothing: the 16pt beside it and the 8pt above and below were transparent,
-        // so photos scrolling under the bar were visible raw in that gap — empty black at rest,
-        // full of sliding tiles mid-scroll (owner report). "Scrolls under it" only reads as under
-        // if there is something to be under. `.bar` is the same material the navigation bar
-        // directly above uses, so the two sit flush and read as one surface instead of a strip.
+        // NO BACKDROP ACROSS THE SLOT ANY MORE (his call, 2026-08-14: "can you make the capsule
+        // float over the grid, now it looks like it has a background"). The full-width `.bar` band
+        // came from the opposite report — the bar floating over nothing, with photos sliding raw
+        // through the transparent gap beside it — and the answer to both is the same one the mood
+        // bar and the attachment bar landed on: THE CONTROL IS THE SURFACE. Apple's segmented
+        // control already carries an opaque track with the selected pill on it, so it is a capsule
+        // floating over the photos, and the gap beside it is meant to show them.
+        //
+        // ⚠️ Do NOT put a glass capsule back around it to "help". That is the fifth-swing bug: our
+        // capsule around Apple's track drew one pill inside another, which is what he circled.
         .frame(maxWidth: .infinity)
-        .background(.bar)
     }
 
     // (Deleted: ClearSegmentedTrack. It reached into the segmented control and erased its background
