@@ -58,7 +58,18 @@ struct MediaTabBar: View {
         // replaces it", but the call was only removed from that file's notes and not from here, so
         // the bug it describes has been live the whole time.
         .frame(height: Self.barHeight)
-        // The same call the Back button's circle makes, so the two read as one material.
-        .liquidGlass(Capsule())
+        // FIFTH SWING, AND IT IS THE LAST SHAPE COMING OFF (owner 2026-08-13, our bar beside theirs:
+        // "it has duplicate… it has both, one and the other one").
+        //
+        // `.liquidGlass(Capsule())` used to sit here. It made sense only while `ClearSegmentedTrack`
+        // was erasing the control's own track — capsule outside, nothing inside. That erase was
+        // removed two rounds ago because it took the selected pill with it, and the capsule was left
+        // behind. So the bar has been drawing OUR rounded shape with APPLE'S rounded track nested
+        // inside it, one pill inside another, which is exactly what he circled.
+        //
+        // Nothing replaces it. The slot already carries `.background(.bar)` across its full width
+        // (see MediaGalleryView.tabBar), which is the material the nav bar above uses, so the strip
+        // still reads as one surface with the header — and what sits on it is one control with one
+        // track and one pill, the same as the Calls page bar he pointed at in the first place.
     }
 }
