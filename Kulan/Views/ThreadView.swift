@@ -366,6 +366,11 @@ struct ThreadView: View {
                     if gifPanelOpen {
                         GifPickerView(onPick: { gif in sendGif(gif) }, inline: true)
                             .frame(height: keyboardSlot)
+                            // Down past the home indicator, the way a keyboard does. The slot height
+                            // deliberately excludes that strip (see keyboardSlot), so without this
+                            // the wallpaper shows in the gap under the panel.
+                            .background(Color(uiColor: .secondarySystemBackground)
+                                .ignoresSafeArea(edges: .bottom))
                             .transition(.move(edge: .bottom))
                     }
                 }

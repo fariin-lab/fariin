@@ -143,6 +143,11 @@ struct GifPickerView: View {
             .scrollDismissesKeyboard(.immediately)
             inlineSearchField
         }
+        // ⚠️ A PANEL IN THE KEYBOARD'S SLOT NEEDS THE KEYBOARD'S SURFACE (his 571 screenshot: the
+        // search row and the strip under it showing the chat wallpaper straight through). It had no
+        // background of its own, so everything that was not a GIF was a hole. The keyboard it stands
+        // in for is opaque, and so is this.
+        .background(Color(uiColor: .secondarySystemBackground))
         .task {
             if gifs.isEmpty, !Self.trendingCache.isEmpty { gifs = Self.trendingCache }
             let fresh = await GiphyService.shared.search("")
