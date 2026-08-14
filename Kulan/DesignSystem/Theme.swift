@@ -284,10 +284,12 @@ struct RowPressFill: ButtonStyle {
     /// lifts the row at about half a second), short enough that a stranded press is never seen.
     static let watchdog: UInt64 = 3_000_000_000
 
-    func makeBody(configuration: Configuration) -> some View { Body(configuration: configuration) }
+    func makeBody(configuration: Configuration) -> some View { Fill(configuration: configuration) }
 
     // The state lives in a real View, not in makeBody: a ButtonStyle is a value that gets rebuilt.
-    private struct Body: View {
+    // ⚠️ NOT named `Body`: ButtonStyle declares an associatedtype of that name, so a nested type
+    // called Body is taken as the witness for it and a private one cannot be (compile error).
+    private struct Fill: View {
         let configuration: ButtonStyleConfiguration
         @State private var expired = false
 
