@@ -1020,10 +1020,27 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         // THE LIVE STORY WHEN ITS OWN ITEM IS NOT IN THE ROW. Two ways that happens: the story was
         // deleted under the sheet, or the row has not been handed it yet. Either way the pull is
         // still shrinking something, and leaving it wearing the last transform it was given is the
-        // "story sitting at full size behind the sheet" screenshot. It is held at the centre — cf 0
-        // — being about to be replaced or dismissed either way.
+        // "story sitting at full size behind the sheet" screenshot.
+        //
+        // ⚠️ "NOT IN THE ROW" IS NOT THE SAME QUESTION AS "NOT IN THE WINDOW", AND ANSWERING THE
+        // SECOND ONE IS HIS 2026-08-14 "the top preview thumbnail became big when it is coming to
+        // the centre".
+        //
+        // `valid` is this pass's VISIBILITY window. A sideways sheet swipe moves the row, so the
+        // live story's own card can fall out of that window for a few frames while still being a
+        // perfectly real story at a perfectly known position — and this then placed it at
+        // `combinedFraction: 0`, the CENTRE, at the centre's full size, unanimated, in the middle of
+        // the drag. That is both halves of his screenshot: a card at centre size sitting where no
+        // card belongs, and a second copy of the same story at its true position, because the item
+        // it was drawn from is elsewhere.
+        //
+        // The story's own fraction is known whenever the story is known — the row has its index —
+        // so it is used, culled or not. The centre is kept for the one case it was written for: a
+        // live id that is not in this row's list at all.
         if !valid.contains(liveStoryId) {
-            placeLiveStory(geometry.placement(combinedFraction: 0, rest: rest, containerMidX: midX))
+            let cf = stories.firstIndex(where: { $0.id == liveStoryId })
+                .map { geometry.combinedFraction(index: $0, rowPosition: rowPos) } ?? 0
+            placeLiveStory(geometry.placement(combinedFraction: cf, rest: rest, containerMidX: midX))
         }
 
         // ⚠️ AND THE SAME SET DECIDES WHICH STORIES KEEP THEIR PLAYER. One loop, one answer, which is
