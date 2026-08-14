@@ -2133,9 +2133,16 @@ struct TextOverlayView: View {
 // Full-screen text editor: focused field + font/color/align/bg controls.
 struct TextEditorOverlay: View {
     @Binding var draft: TextOverlay
+    /// ⚠️ KEPT, AND DELIBERATELY UNUSED BY THE CHROME. The Cancel button is gone on his instruction
+    /// — "only remove cancel text cuz user can use done button" — and this stays because a caller
+    /// may still need a way to abandon an overlay (an empty one is trimmed on the way out either
+    /// way). Nothing on screen calls it today.
     var onCancel: () -> Void
     var onDone: () -> Void
     @FocusState private var focused: Bool
+    /// Is the font row open? Shut at rest: the Aa in the bar is its door, and it draws itself in
+    /// whichever font is currently chosen.
+    @State private var showFonts = false
 
     private let palette: [Color] = [.white, .black, .red, .orange, .yellow, .green, .blue, .purple, .pink]
     private func nextAlign(_ a: TextAlignment) -> TextAlignment { a == .leading ? .center : a == .center ? .trailing : .leading }
@@ -2146,22 +2153,17 @@ struct TextEditorOverlay: View {
         ZStack {
             Color.black.opacity(0.5).ignoresSafeArea().onTapGesture { onDone() }
             VStack {
-                HStack {
-                    Button("Cancel") { onCancel() }.foregroundStyle(.white)
-                    Spacer()
-                    Button { draft.alignment = nextAlign(draft.alignment) } label: {
-                        Image(systemName: alignIcon(draft.alignment)).font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
-                            .frame(width: 44, height: 44).background(.white.opacity(0.16), in: Circle()).contentShape(Circle())
-                    }
-                    Button { draft.background = nextBg(draft.background) } label: {
-                        Image(systemName: "a.square").font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
-                            .background(.white.opacity(draft.background == .plain ? 0.16 : 0.34), in: Circle()).contentShape(Circle())
-                    }
-                    Spacer()
-                    Button("Done") { onDone() }.foregroundStyle(.white).fontWeight(.semibold)
-                }
-                .padding()
+                // ⚠️ NO TOP BAR AT ALL, AND THAT IS THE WHOLE OF THE REDESIGN he asked for: "the
+                // current UI looks confusing… make it clean, minimal and easy to understand."
+                //
+                // It had a bar at the top with four controls and two more rows at the bottom, so the
+                // one thing this screen exists for — the words — was hemmed in from both ends while
+                // the eye had three places to look. Everything lives in ONE bar above the keyboard
+                // now, which is where the thumb already is and where the reference he sent puts it.
+                //
+                // Cancel is gone on his instruction ("user can use done button"). Nothing else is:
+                // all four fonts, all nine colours, the three alignments and the three backgrounds
+                // are still here, and the two that were rows are the two that are used least.
                 Spacer()
                 TextField("", text: $draft.text, prompt: Text("Type…").foregroundColor(.white.opacity(0.5)), axis: .vertical)
                     .focused($focused)
@@ -2181,28 +2183,94 @@ struct TextEditorOverlay: View {
                     .contentShape(Rectangle())          // tap anywhere on the text block, not just the glyphs
                     .onTapGesture { focused = true }
                 Spacer()
-                VStack(spacing: 14) {
-                    HStack(spacing: 14) {
-                        ForEach(TextOverlay.FontStyle.allCases, id: \.self) { fs in
-                            Text("Aa").font(.system(size: 16, weight: .semibold, design: fs.design))
-                                .foregroundStyle(draft.font == fs ? Color.black : .white)
-                                .frame(width: 42, height: 30)
-                                .background(draft.font == fs ? Color.white : Color.white.opacity(0.15), in: Capsule())
-                                .onTapGesture { draft.font = fs }
+                VStack(spacing: 12) {
+                    // THE FONTS, BEHIND THE Aa THAT NAMES THEM. A permanent row of four for a choice
+                    // made once per caption is a row spent on nothing most of the time; the button
+                    // that opens it draws itself in the font it would give you, so the row is not
+                    // the only way to know what is selected.
+                    if showFonts {
+                        HStack(spacing: 12) {
+                            ForEach(TextOverlay.FontStyle.allCases, id: \.self) { fs in
+                                Text("Aa").font(.system(size: 16, weight: .semibold, design: fs.design))
+                                    .foregroundStyle(draft.font == fs ? Color.black : .white)
+                                    .frame(width: 46, height: 32)
+                                    .background(draft.font == fs ? Color.white : Color.white.opacity(0.16),
+                                                in: Capsule())
+                                    .contentShape(Capsule())
+                                    .onTapGesture { draft.font = fs }
+                            }
                         }
+                        .transition(.opacity)
                     }
-                    HStack(spacing: 12) {
-                        ForEach(palette, id: \.self) { c in
-                            Circle().fill(c).frame(width: 28, height: 28)
-                                .overlay(Circle().strokeBorder(.white, lineWidth: draft.color == c ? 3 : 1))
-                                .onTapGesture { draft.color = c }
+                    // ONE BAR: the tools, the colours, and the way out.
+                    HStack(spacing: 10) {
+                        HStack(spacing: 18) {
+                            // Aa is a door, not a cycle, so nothing is chosen by accident — and it
+                            // wears the font it currently holds.
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.18)) { showFonts.toggle() }
+                            } label: {
+                                Text("Aa")
+                                    .font(.system(size: 17, weight: .semibold, design: draft.font.design))
+                                    .foregroundStyle(showFonts ? Color(hex: 0x3DA1FD) : .white)
+                                    .frame(width: 32, height: 32).contentShape(Rectangle())
+                            }
+                            .buttonStyle(StoryPressStyle())
+                            barIcon(alignIcon(draft.alignment), active: false) {
+                                draft.alignment = nextAlign(draft.alignment)
+                            }
+                            barIcon("a.square", active: draft.background != .plain) {
+                                draft.background = nextBg(draft.background)
+                            }
                         }
+                        .padding(.horizontal, 16).frame(height: 46)
+                        .liquidGlass(Capsule())
+
+                        // THE NINE COLOURS, STILL ALL NINE. They scroll rather than wrap, because
+                        // white and black have to stay one tap away and a wrapped second row is the
+                        // band this redesign is removing. The reference puts a spectrum here
+                        // instead; a spectrum cannot be tapped for exactly white or exactly black,
+                        // which is what a caption on a photograph needs most.
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 10) {
+                                ForEach(palette, id: \.self) { c in
+                                    Circle().fill(c).frame(width: 24, height: 24)
+                                        .overlay(Circle().strokeBorder(.white,
+                                                                       lineWidth: draft.color == c ? 3 : 1))
+                                        .contentShape(Circle())
+                                        .onTapGesture { draft.color = c }
+                                }
+                            }
+                            .padding(.horizontal, 4)
+                        }
+                        .frame(height: 46)
+
+                        Button { onDone() } label: {
+                            Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 44, height: 44)
+                                .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
+                                .contentShape(Circle())
+                        }
+                        .buttonStyle(.plain)
                     }
+                    .padding(.horizontal, 16)
                 }
-                .padding(.bottom, 24)
+                .padding(.bottom, 14)
             }
         }
         .onAppear { focused = true }
+    }
+
+    /// A plain icon inside the tool capsule — the capsule is its background, exactly as on the crop
+    /// and pen bars, so the editor's three tool screens are laid out the same way.
+    private func barIcon(_ name: String, active: Bool, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: name).font(.system(size: 18, weight: .medium))
+                .foregroundStyle(active ? Color(hex: 0x3DA1FD) : .white)
+                .frame(width: 32, height: 32).contentShape(Rectangle())
+        }
+        .buttonStyle(StoryPressStyle())
     }
 }
 
