@@ -80,12 +80,27 @@ struct VoiceMessageView: View {
     /// duration-deterministic, so the bloom rule (pre-measure == render, always) holds for free.
     /// The `message` parameter stays: every call site already passes it, and the day this becomes
     /// per-note again the signature will not have to change back.
-    static func waveWidth(for message: Message) -> CGFloat { 190 }
-    /// play button + HStack spacing + waveform: 38 + 10 + 190 = 238, ~the reference's footprint
-    /// on a standard phone. Every number here and nowhere else, so the pre-measure (which calls
-    /// this) and the render can never disagree.
+    static func waveWidth(for message: Message) -> CGFloat { 170 }
+    /// COMPACT, 2026-08-13, on his side-by-side ("make it like the second one… ours is bigger and
+    /// wider"). Three things were making it bigger and all three come down here:
+    ///
+    ///   * the play disc was 38 — a filled circle, where the app he is holding up draws a bare
+    ///     triangle and spends nothing on a circle at all. 32 keeps our disc (it is the other
+    ///     reference's shape, and it is what the scrub gesture aims at) at a size nearer theirs.
+    ///   * the waveform was 190 wide and 26 tall for every note, the widest single thing in the
+    ///     bubble. 170 × 22.
+    ///   * and the gap between the disc and the wave was 10. 8.
+    ///
+    /// 32 + 8 + 170 = 210, against 238. With the shorter wave and a 2pt row gap the bubble loses
+    /// about twelve points of height as well.
+    ///
+    /// ⚠️ EVERY NUMBER LIVES HERE AND NOWHERE ELSE, so the pre-measure (which calls this) and the
+    /// render can never disagree — that equality is what stops the bloom described above.
+    static let discSize: CGFloat = 32
+    static let waveHeight: CGFloat = 22
+    static let discGap: CGFloat = 8
     static func contentWidth(for message: Message) -> CGFloat {
-        38 + 10 + waveWidth(for: message)
+        discSize + discGap + waveWidth(for: message)
     }
 
     /// ⚠️ THE PLAYER IS NOT IN HERE ANY MORE, AND THAT IS THE WHOLE POINT.
@@ -150,8 +165,8 @@ struct VoiceMessageView: View {
         // it centred on both and ended up sitting roughly 10pt BELOW the middle of the wave. Nothing in
         // the bubble lined up with anything. Now the button is boxed with the wave alone, so the two are
         // on one line, which is what both references do.
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: Self.discGap) {
                 playButton
                 WaveformBars(bars: displayBars, progress: progress, played: tint,
                              // 0.45, not 0.3. The unplayed half is most of the bar for most of a
@@ -165,7 +180,7 @@ struct VoiceMessageView: View {
                              onScrub: { s in
                                  engine.setScrubbing(s); VoiceScrubState.active = s; onScrub(s)
                              })
-                    .frame(width: Self.waveWidth(for: message), height: 26)
+                    .frame(width: Self.waveWidth(for: message), height: Self.waveHeight)
             }
             bottomLine
         }
@@ -243,11 +258,11 @@ struct VoiceMessageView: View {
         Group {
             if loading {
                 ProgressView().tint(tint)
-                    .frame(width: 38, height: 38)
+                    .frame(width: Self.discSize, height: Self.discSize)
                     .background(tint.opacity(0.22), in: Circle())
             } else {
                 Circle().fill(tint)
-                    .frame(width: 38, height: 38)
+                    .frame(width: Self.discSize, height: Self.discSize)
                     .overlay {
                         Image(systemName: playing ? "pause.fill" : "play.fill")
                             .font(.system(size: 14))
@@ -263,7 +278,7 @@ struct VoiceMessageView: View {
                     .compositingGroup()
             }
         }
-        .frame(width: 38, height: 38)
+        .frame(width: Self.discSize, height: Self.discSize)
         .contentShape(Circle())
         .onTapGesture { toggle() }
     }
