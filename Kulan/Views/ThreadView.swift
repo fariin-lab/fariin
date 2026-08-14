@@ -6217,13 +6217,19 @@ struct MessageBubble: View, Equatable {
             // fill, secondary text — identical in every chat colour, still sitting on the sender's
             // side so the conversation flow keeps who-did-what. No time or tick: a notice has no
             // delivery state to report.
+            // FADED, AND ITALIC, AND THE SLASHED CIRCLE (owner 2026-08-13, ours beside theirs: "why
+            // is our deleted placeholder white, [not] dead grey"). The paragraph above already said
+            // "the slashed circle and the italic are what make it read as removed" — the code had
+            // drifted to a trash can in full-strength white, so a notice about nothing was drawn
+            // louder than the messages around it. A tombstone is the one thing in a chat that should
+            // recede.
             HStack(spacing: 6) {
-                Image(systemName: "trash.slash")
+                Image(systemName: "nosign")
                     .font(.system(size: 12))
-                    .foregroundStyle(isMe ? onMyBubble.opacity(0.8) : .secondary.opacity(0.7))
+                    .foregroundStyle(isMe ? onMyBubble.opacity(0.65) : .secondary.opacity(0.65))
                 Text(isMe ? "You deleted this message" : "This message was deleted")
-                    .font(.system(size: 15))
-                    .foregroundStyle(isMe ? onMyBubble : .secondary)
+                    .font(.system(size: 15).italic())
+                    .foregroundStyle(isMe ? onMyBubble.opacity(0.72) : .secondary.opacity(0.85))
             }
             .padding(.horizontal, 14).padding(.vertical, 8)
             // THE BUBBLE'S OWN FILL, no tint and no material (owner 2026-08-03, correcting the soft
