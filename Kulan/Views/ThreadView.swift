@@ -3669,12 +3669,11 @@ struct ThreadView: View {
         return HStack(spacing: 0) {
             if mine { Spacer(minLength: 60) }
             // No flexible Spacer inside -> the bubble hugs its content (compact, not a banner).
-            // SIZE HISTORY, third calibration (do not relitigate without his word): first cut was
-            // thin (15/12/34), his side-by-side bumped it one size up (17/14/40, ~62pt tall), and
-            // on 2026-08-12 he called that "long" against his 544 screenshots — now the height
-            // pieces come down (title 16, detail 13, disc 34) and he named the final number
-            // himself: 58pt tall (34 disc + 12 vertical padding). The 232 width stays, which was
-            // his separate, explicit choice.
+            // SIZE HISTORY: first cut thin (15/12/34); his side-by-side bumped it up (17/14/40);
+            // 2026-08-12 he called that long and the height pieces came down (title 16, detail 13,
+            // disc 34); 2026-08-13 he measured 220 × 60 off his own screenshot; and later the same
+            // day, beside theirs, the width stopped being a number at all. See the block below the
+            // content for where those numbers come from now.
             HStack(alignment: .center, spacing: 11) {
                 ZStack {
                     Circle().fill(circleBg).frame(width: 34, height: 34)
@@ -3693,20 +3692,20 @@ struct ThreadView: View {
                         .lineLimit(1)
                 }
             }
-            // ONE WIDTH FOR EVERY CALL BUBBLE, AND IT IS THE COMPACT ONE — his order, correcting
-            // the first cut of this fix which took the widest case. The size is set by the
-            // longest TITLE ("Missed voice call", the one string that cannot shorten); the long
-            // subtitle shortened to fit ("Tap to call back" → "Call back").
+            // FIFTH CALIBRATION, AND THE WIDTH IS NOT A NUMBER ANY MORE (2026-08-13, "ours still
+            // looks long… make it what size they use"). Read from their call bubble rather than
+            // guessed: title medium 16, label regular 13, content height 47 inside 6pt top and
+            // bottom insets — 59 — and a width of `max(titleWidth, labelsWidth + 14) + 22 + 54`.
+            // Every term of that is content. Theirs HUGS, and that is the whole difference: at a
+            // fixed 220 a short label like "Video call · 3:01 AM" leaves a stretch of empty bubble
+            // to the right of itself, which is exactly what reads as long.
             //
-            // FOURTH CALIBRATION, 2026-08-13, and this time both numbers are HIS, measured off his
-            // own screenshot: 220 wide, 60 tall (was 232 wide). ⚠️ They are the bubble's OUTER size
-            // now — the old comment added an inner 204 to 28pt of padding and called the height
-            // "34 disc + 12 + 12 = 58", which was never what rendered: the two text lines stack to
-            // ~37pt, taller than the 34pt disc, so the bubble was really ~61. A height nobody sets
-            // is a height nobody can hold to, which is how a "58pt" bubble drifted three points.
-            // Pinned, so the number in this comment is the number on the glass.
-            .frame(width: 192, alignment: .leading)   // 192 + 28 padding = 220
+            // ⚠️ THIS REVERSES HIS OWN "one width for every call bubble" FROM 2026-08-12, deliberately
+            // and on his newer word. If tidy-and-equal ever matters more than matching them, that is
+            // the rule to come back to. The floor and the ceiling keep the old order's spirit: a
+            // one-word call cannot draw a stubby bubble, and "Missed video call" cannot run away.
             .padding(.horizontal, 14)
+            .frame(minWidth: 150, maxWidth: 260)
             .frame(height: 60)
             .background(mine ? myBubbleFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
