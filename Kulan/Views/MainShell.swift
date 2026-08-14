@@ -1012,7 +1012,12 @@ struct ChatsView: View {
                 HStack(spacing: 12) {
                     // Centred in the 56pt column the avatars stand in, so "Archived" starts on the
                     // same left edge as every chat name under it.
-                    MenuIcon("ic_archive", size: 22)
+                    // 20, which is `MenuIcon.custom` — the size every one of OUR drawings is drawn
+                    // at everywhere else in the app (two points under a system symbol's box, because
+                    // a solid shape carries more weight than a stroked one). It was 22 because this
+                    // one stands alone in a wide column; his call, 2026-08-14: smaller, but not
+                    // small. The app's own number is exactly that.
+                    MenuIcon("ic_archive", size: 20)
                         .foregroundStyle(.secondary)
                         .frame(width: 56)
                     Text("Archived")
