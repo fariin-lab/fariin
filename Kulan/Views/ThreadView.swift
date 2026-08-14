@@ -107,6 +107,21 @@ struct ThreadView: View {
     /// The default is a 6.7" phone's keyboard less its home-indicator strip, used only until the
     /// keyboard has been seen once this session.
     @State private var keyboardSlot: CGFloat = 302
+    /// HOW FAR THE PANEL IS PULLED UP, 0 = the keyboard's slot, 1 = full height. Theirs is
+    /// `expansionFraction` on ChatInputPanelContainer and every number below is read from it:
+    ///
+    ///   * while the finger moves, the fraction IS the finger — `−translation ÷ distance`, no
+    ///     animation, so the panel is under the thumb rather than chasing it
+    ///   * on release, three tests in their order: moved more than 0.25 of the way → carry on to
+    ///     that end; else a flick over 100pt/s → go where it was flicked; else fall back to the half
+    ///     it started in
+    ///   * then a 0.4s spring, which is their duration
+    @State private var panelExpansion: CGFloat = 0
+    @State private var panelDragFrom: CGFloat? = nil    // the fraction the current drag began at
+    /// The drag only becomes an expand when the grid has nothing left to scroll — their direction
+    /// lock, expressed the way SwiftUI can actually enforce it. Otherwise the finger belongs to the
+    /// grid and the panel stays put.
+    @State private var gifGridAtTop = true
     @State private var filePreview: PreviewFile?
     @State private var pdfDoc: PDFDocWrap?           // received PDF → custom PDFKit reader (Liquid Glass)
     @State private var showLibrary = false
@@ -368,8 +383,10 @@ struct ThreadView: View {
                                       // The magnifier opens the full picker over the panel: searching
                                       // needs a keyboard, and the panel is sitting in the keyboard's
                                       // slot. Closing the sheet drops you back onto the panel.
-                                      onSearch: { showGifPicker = true })
-                            .frame(height: keyboardSlot)
+                                      onSearch: { showGifPicker = true },
+                                      atTop: $gifGridAtTop)
+                            .frame(height: panelHeight)
+                            .simultaneousGesture(panelExpandDrag)
                             // Down past the home indicator, the way a keyboard does. The slot height
                             // deliberately excludes that strip (see keyboardSlot), so without this
                             // the wallpaper shows in the gap under the panel.
@@ -408,7 +425,9 @@ struct ThreadView: View {
             // has to leave — otherwise the composer sits on top of both and the chat loses the height
             // of two of them.
             .onChange(of: inputFocused) { _, focused in
-                if focused, gifPanelOpen { withAnimation(.easeOut(duration: 0.22)) { gifPanelOpen = false } }
+                if focused, gifPanelOpen {
+                    withAnimation(.easeOut(duration: 0.22)) { gifPanelOpen = false; panelExpansion = 0 }
+                }
             }
             // Per-chat wallpaper behind the messages (extends under the bars).
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
@@ -4799,7 +4818,7 @@ struct ThreadView: View {
     private var inFieldGif: some View {
         Button {
             if gifPanelOpen {
-                withAnimation(.easeOut(duration: 0.22)) { gifPanelOpen = false }
+                withAnimation(.easeOut(duration: 0.22)) { gifPanelOpen = false; panelExpansion = 0 }
                 inputFocused = true          // the real keyboard takes the slot back
             } else {
                 // Resign FIRST: the keyboard and the panel are one slot, and both in it at once is
@@ -4820,6 +4839,46 @@ struct ThreadView: View {
             .foregroundStyle(.primary)
             .frame(width: 40, height: 40)
         }
+    }
+
+    /// The panel's height at rest and pulled up. Their formula exactly: the keyboard's slot plus the
+    /// fraction of everything above it — `standardInputHeight + fraction × (maximum − standard)`.
+    private var panelHeight: CGFloat {
+        keyboardSlot + panelExpansion * max(0, panelMaxHeight - keyboardSlot)
+    }
+    /// Full height leaves the conversation a strip at the top rather than taking the screen: theirs
+    /// keeps the chat visible as a card, and a panel that swallows everything stops being a keyboard.
+    private var panelMaxHeight: CGFloat { UIScreen.main.bounds.height * 0.72 }
+    /// Their `scrollableDistance` — the travel one full pull covers.
+    private var panelTravel: CGFloat { max(1, panelMaxHeight - keyboardSlot) }
+
+    /// Drag the panel up to grow it, down to put it back. See `panelExpansion` for whose numbers
+    /// these are. `simultaneousGesture` rather than `gesture`, so the grid keeps its own scrolling
+    /// and this only takes over at the ends, where the grid has nowhere to go.
+    private var panelExpandDrag: some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { v in
+                let goingUp = v.translation.height < 0
+                // The lock: collapsed we only listen for up, expanded only for down, and either way
+                // only while the grid is at its top. Anything else is the grid's finger, not ours.
+                guard gifGridAtTop, panelDragFrom != nil || (goingUp ? panelExpansion < 1 : panelExpansion > 0) else { return }
+                let from = panelDragFrom ?? panelExpansion
+                if panelDragFrom == nil { panelDragFrom = from }
+                panelExpansion = min(1, max(0, from - v.translation.height / panelTravel))
+            }
+            .onEnded { v in
+                guard let from = panelDragFrom else { return }
+                panelDragFrom = nil
+                let target: CGFloat
+                if abs(panelExpansion - from) > 0.25 {
+                    target = from < 0.5 ? 1 : 0
+                } else if abs(v.velocity.height) > 100 {
+                    target = v.velocity.height < 0 ? 1 : 0
+                } else {
+                    target = from < 0.5 ? 0 : 1
+                }
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.86)) { panelExpansion = target }
+            }
     }
 
     /// One send for both GIF routes (the composer's panel and the attach sheet's tile).

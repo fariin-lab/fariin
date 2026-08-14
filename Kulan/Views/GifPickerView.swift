@@ -85,6 +85,10 @@ struct GifPickerView: View {
     /// Inline only: the magnifier opens the full picker as a sheet, because searching wants a
     /// keyboard and the panel is standing in the keyboard's place — see `inlineTopRow`.
     var onSearch: (() -> Void)? = nil
+    /// Inline only: is the grid scrolled to its top? The expand drag reads it — see the panel's
+    /// gesture in ThreadView. A drag only becomes an expand when the grid has nowhere left to go,
+    /// which is how their direction lock and their scroll view avoid fighting over one finger.
+    var atTop: Binding<Bool>? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var gifs: [GiphyService.Gif] = []
@@ -144,6 +148,9 @@ struct GifPickerView: View {
                 .padding(6)
             }
             .scrollDismissesKeyboard(.immediately)
+            .onScrollGeometryChange(for: Bool.self,
+                                    of: { $0.contentOffset.y <= 0.5 },
+                                    action: { _, top in atTop?.wrappedValue = top })
             // The moods sit at the BOTTOM in a panel, where the keyboard's own bottom row is and
             // where the thumb already is (his reference, 2026-08-14). At the top they were where the
             // eye lands, competing with the GIFs for the first look.
