@@ -393,12 +393,12 @@ struct ThreadView: View {
                             // down past the home indicator — the slot height stops above that strip
                             // (see keyboardSlot), and without this the wallpaper shows in the gap.
                             .background {
-                                UnevenRoundedRectangle(cornerRadii: .init(topLeading: 16, topTrailing: 16),
+                                UnevenRoundedRectangle(cornerRadii: .init(topLeading: 20, topTrailing: 20),
                                                        style: .continuous)
                                     .fill(Color(uiColor: .secondarySystemBackground))
                                     .ignoresSafeArea(edges: .bottom)
                             }
-                            .clipShape(UnevenRoundedRectangle(cornerRadii: .init(topLeading: 16, topTrailing: 16),
+                            .clipShape(UnevenRoundedRectangle(cornerRadii: .init(topLeading: 20, topTrailing: 20),
                                                               style: .continuous))
                             .transition(.move(edge: .bottom))
                     }
