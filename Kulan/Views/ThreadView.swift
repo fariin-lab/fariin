@@ -2158,6 +2158,31 @@ struct ThreadView: View {
             return out
         }
 
+        // A CALL RECORD IS NOT A MESSAGE, and the general path below only ever gave it a menu by
+        // accident: Forward, Copy, Edit, Save and Pin each fail their own test, so what survived was
+        // Reply/Select/Delete and no mention of the one thing you actually want from a call row.
+        // Owner 2026-08-13, "it's a gap we missing". Call back takes Forward's place in the order.
+        if m.isCall {
+            // The same liveness test the row itself uses (see callRow): a call still happening
+            // offers no call-back, and a writer that died mid-call ages out of "live" on its own.
+            let age = Date().timeIntervalSince(m.createdAt)
+            let live = (m.callOutcome == "ringing" && age < 120)
+                || (m.callOutcome == "ongoing" && age < 4 * 3600)
+            out.append(CMAction(title: "Reply", icon: "arrowshape.turn.up.left") { beginReply(to: m) })
+            if !live {
+                out.append(CMAction(title: m.callVideo ? "Video Call" : "Voice Call",
+                                    icon: m.callVideo ? "video" : "phone") {
+                    // Through the same confirm the row's tap uses — a menu must not dial either.
+                    pendingCallBack = m.callVideo ? .video : .voice
+                })
+            }
+            out.append(CMAction(title: "Select", icon: "checkmark.circle") {
+                withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
+            })
+            out.append(CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = m })
+            return out
+        }
+
         // THE REFERENCE APP'S ORDER (owner's circled reference): Reply · Forward · Copy · Select · Info · Pin,
         // Delete last. Our extra items slot in where they belong: Edit and Save Image after Copy.
         // NOT-YET-DELIVERED messages carry a local clientId, not a server doc id, so anything that
@@ -3063,7 +3088,7 @@ struct ThreadView: View {
         input = ""
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
+                     text: replyQuoteText($0))
         }
         // Animated, exactly like the X button does it (see the reply banner's cancel). Clearing it
         // bare drops the banner's ~54pt out of the composer in one frame with no layout pass the
@@ -3366,7 +3391,7 @@ struct ThreadView: View {
         // A photo sent while replying carries the reply (like text/voice) and clears the bar.
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
+                     text: replyQuoteText($0))
         }
         await MainActor.run {
             var pending = Message(localImageData: preview, width: Double(size.width), height: Double(size.height),
@@ -3624,6 +3649,10 @@ struct ThreadView: View {
             // .onTapGesture sat on the outer HStack (which includes the empty-side Spacer), so
             // tapping the blank space anywhere on the row placed a call (accidental-call bug).
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            // The long press lifts THIS, not the full-width row. Without a published rect the menu
+            // falls back to lifting the whole row, which is why the call row's menu never looked
+            // like the one every other bubble gets.
+            .modifier(CMBubbleRectReporter(id: m.id, radius: 16))
             // CONFIRM before calling back (user spec): a stray tap on a call row must never place a
             // call instantly. Native centered alert → Call / Cancel. A LIVE row (ringing/ongoing)
             // offers no call-back — that call is still happening.
@@ -4367,6 +4396,15 @@ struct ThreadView: View {
             Text(r.viewOnce ? "View-once photo" : "Photo").font(.caption).foregroundStyle(.secondary)
         } else if r.isGif {
             Text("GIF").font(.caption).foregroundStyle(.secondary)
+        } else if r.isCall {
+            // A call carries no text at all, so the banner drew an empty line under the name until
+            // this branch existed. Its own glyph, like the file and voice rows above.
+            HStack(spacing: 4) {
+                Image(systemName: r.callVideo ? "video.fill" : "phone.fill")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                Text(r.callVideo ? "Video call" : "Voice call")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         } else if r.isVideo {
             Text("Video").font(.caption).foregroundStyle(.secondary)
         } else if r.isFile {
@@ -5145,7 +5183,7 @@ struct ThreadView: View {
         // targets too), and the reply bar must clear after sending.
         let reply = replyingTo.map {
             ReplyRef(id: $0.id, authorId: $0.authorId,
-                     text: $0.isAlbum ? "📷 Photos" : ($0.isImage ? ($0.viewOnce ? "View-once photo" : "📷 Photo") : ($0.isVideo ? "🎥 Video" : ($0.isAudio ? "🎤 Voice message" : ($0.isFile ? "📄 \($0.fileName ?? "Document")" : ($0.isGif ? "GIF" : $0.safeText))))))
+                     text: replyQuoteText($0))
         }
         await MainActor.run {
             // The optimistic bubble must carry the quote too — without it the voice reply
@@ -7303,7 +7341,11 @@ private struct MessageActionDialogs: ViewModifier {
                     // Delete for Me cancels it properly (see ThreadView.deleteForMe).
                     // NOT for a tombstone either (owner order): it was already deleted for everyone;
                     // the only thing left to do is clear the marker from your own side.
-                    if m.authorId == me, m.sendState == nil, !m.deleted {
+                    // NOT for a call record either: `callRow` draws the bubble from the call fields
+                    // and never looks at `deleted`, so a tombstone there would remove the row for
+                    // the other person and leave mine looking untouched. A call goes from my own
+                    // side only, which is what the phone's own call log does.
+                    if m.authorId == me, m.sendState == nil, !m.deleted, !m.isCall {
                         Button("Delete for Everyone", role: .destructive) {
                             // The bubble becomes a tombstone NOW, and the server work runs behind it.
                             // deleteMessage reads the doc before writing (it needs the Storage urls),
@@ -7408,6 +7450,23 @@ struct FilePreview: UIViewControllerRepresentable {
 // DISPLAY-TIME guard for reply-quote snippets (file scope — used by MessageBubble AND ThreadView):
 // quotes persisted BEFORE the safeText fix carry the raw "fariin-…:" marker forever (encrypted
 // snapshots) — map them to friendly labels when rendering, so old quotes clean up too.
+/// The line a reply SEALS about the message it is quoting.
+///
+/// This was written out as the same nested ternary in three send paths (text, photo, voice), and
+/// that is exactly how a call came to be quoted as the bare word "Message": the chain fell through
+/// to `safeText`, and a call record's text field is empty by construction. One copy now, so the next
+/// message type is described once instead of three times, or twice and forgotten.
+func replyQuoteText(_ m: Message) -> String {
+    if m.isCall { return m.callVideo ? "📹 Video call" : "📞 Voice call" }
+    if m.isAlbum { return "📷 Photos" }
+    if m.isImage { return m.viewOnce ? "View-once photo" : "📷 Photo" }
+    if m.isVideo { return "🎥 Video" }
+    if m.isAudio { return "🎤 Voice message" }
+    if m.isFile { return "📄 \(m.fileName ?? "Document")" }
+    if m.isGif { return "GIF" }
+    return m.safeText
+}
+
 func quoteSafeLabel(_ t: String) -> String {
     if t.hasPrefix(Message.contactMarker) { return "Contact" }
     if t.hasPrefix(Message.locationMarker) { return "Location" }
