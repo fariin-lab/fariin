@@ -69,6 +69,19 @@ enum GifFavorites {
 
 struct GifPickerView: View {
     let onPick: (GiphyService.Gif) -> Void
+    /// INLINE = the panel that takes the keyboard's place, rather than a page of its own.
+    ///
+    /// Read from their source before building it (2026-08-13, on his "read telegram first"): their
+    /// composer has ONE input mode at a time — `.text` is the keyboard, `.stickers` is this — and one
+    /// accessory button that flips between them (`accessoryItemButtonPressed`: mode `.keyboard`
+    /// switches back to `.text`, mode `.stickers` calls `openStickers()`). The panel is sized
+    /// `keyboardHeight + predictiveInputHeight` for the device, which is why it lands in exactly the
+    /// keyboard's slot rather than near it.
+    ///
+    /// So this view drops its page chrome when inline: no navigation stack, no title, no X — a
+    /// panel is not a screen. ⚠️ And `dismiss()` must never fire in this mode: there is no
+    /// presentation to close, so the environment's dismiss would reach the CHAT and pop it.
+    var inline = false
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var gifs: [GiphyService.Gif] = []
@@ -109,6 +122,69 @@ struct GifPickerView: View {
     @MainActor static var trendingCache: [GiphyService.Gif] = []
 
     var body: some View {
+        if inline { inlineBody } else { pageBody }
+    }
+
+    /// The keyboard-slot panel: the mood row, the grid, and a search field where the keyboard's own
+    /// bottom row would be. Same grid, same loader, same picks — only the chrome differs.
+    private var inlineBody: some View {
+        VStack(spacing: 0) {
+            categoryRow
+            ScrollView {
+                HStack(alignment: .top, spacing: 4) {
+                    ForEach(0..<2, id: \.self) { col in
+                        LazyVStack(spacing: 4) {
+                            ForEach(masonryColumns[col]) { g in gifCell(g) }
+                        }
+                    }
+                }
+                .padding(6)
+            }
+            .scrollDismissesKeyboard(.immediately)
+            inlineSearchField
+        }
+        .task {
+            if gifs.isEmpty, !Self.trendingCache.isEmpty { gifs = Self.trendingCache }
+            let fresh = await GiphyService.shared.search("")
+            if !fresh.isEmpty {
+                Self.trendingCache = fresh
+                if query.trimmingCharacters(in: .whitespaces).isEmpty, category == .trending { gifs = fresh }
+            }
+        }
+        .onChange(of: query) { _, _ in
+            searchTask?.cancel()
+            searchTask = Task {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                if Task.isCancelled { return }
+                await refresh()
+            }
+        }
+    }
+
+    /// The panel's own search row. `.searchable` belongs to a navigation stack, and this has none.
+    private var inlineSearchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").font(.system(size: 15)).foregroundStyle(.secondary)
+            TextField("Search GIFs", text: $query)
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled()
+            if !query.isEmpty {
+                Button { query = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 15)).foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            // Required by Giphy's terms wherever their results are shown — the page body carries the
+            // same line under its grid.
+            Text("GIPHY").font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
+        .padding(.horizontal, 10)
+        .padding(.bottom, 8)
+    }
+
+    private var pageBody: some View {
         NavigationStack {
             ScrollView {
                 // Recents live on their OWN clock tab (owner's 416 idea: heavy GIF use would let
@@ -187,7 +263,10 @@ struct GifPickerView: View {
     private func pick(_ g: GiphyService.Gif) {
         GifRecents.note(g)
         onPick(g)
-        dismiss()
+        // ⚠️ NOT INLINE. As a panel there is no presentation of its own to close, and the
+        // environment's dismiss would travel up and pop the CHAT. The panel also stays open on
+        // purpose — sending several GIFs in a row is the whole point of it being a keyboard.
+        if !inline { dismiss() }
     }
 
     // ONE loader for every state: a typed search wins; otherwise the selected mood. Recent is

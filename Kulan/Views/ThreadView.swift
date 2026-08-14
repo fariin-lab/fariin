@@ -97,6 +97,16 @@ struct ThreadView: View {
     @State private var showPollComposer = false      // Poll tile (groups) → new-poll composer
     @State private var showFileImporter = false
     @State private var showGifPicker = false
+    /// THE GIF PANEL THAT TAKES THE KEYBOARD'S PLACE, which is what he asked for twice and what
+    /// their source does (see GifPickerView's `inline` note): one input mode at a time — the
+    /// keyboard, or this, never both — and one button in the field that flips between them.
+    @State private var gifPanelOpen = false
+    /// The real keyboard's height, remembered the last time it appeared, so the panel lands in
+    /// exactly its slot instead of near it. Theirs is `keyboardHeight + predictiveInputHeight` per
+    /// device; measuring the thing itself is the same answer without a device table to maintain.
+    /// The default is a 6.7" phone's keyboard less its home-indicator strip, used only until the
+    /// keyboard has been seen once this session.
+    @State private var keyboardSlot: CGFloat = 302
     @State private var filePreview: PreviewFile?
     @State private var pdfDoc: PDFDocWrap?           // received PDF → custom PDFKit reader (Liquid Glass)
     @State private var showLibrary = false
@@ -347,7 +357,18 @@ struct ThreadView: View {
                 // THE REFERENCE MODEL — NO background at all. The iOS-26 input toolbar is a
                 // UIGlassContainerEffect: the container paints NOTHING across the bar; only the pill
                 // controls themselves are Liquid Glass, blurring what passes directly under THEM.
-                bottomBarContent
+                VStack(spacing: 0) {
+                    bottomBarContent
+                    // The panel sits UNDER the composer and inside the same bar, which is what makes
+                    // it the keyboard's replacement rather than something over the top: the bar's
+                    // height is what the list reserves, so the conversation lifts for the panel
+                    // exactly as it lifts for the keyboard, and stays live above it.
+                    if gifPanelOpen {
+                        GifPickerView(onPick: { gif in sendGif(gif) }, inline: true)
+                            .frame(height: keyboardSlot)
+                            .transition(.move(edge: .bottom))
+                    }
+                }
                     // Measure the composer bar's height and feed it to the list as extra bottom clearance.
                     // Because the list is full-bleed under the composer (.ignoresSafeArea(.container,.bottom)),
                     // the composer's own safe-area inset is NO LONGER folded in — so without this the newest
@@ -360,6 +381,25 @@ struct ThreadView: View {
                             }
                         }
                     }
+            }
+            // MEASURE THE KEYBOARD, so the panel can be exactly its size. Their version reads a
+            // per-device table (`standardInputHeight` = keyboardHeight + predictiveInputHeight);
+            // measuring the real thing is the same answer with nothing to keep up to date. The home
+            // indicator's strip comes off because the bar this panel lives in already sits above it —
+            // counting it twice would make the panel taller than the keyboard it replaces.
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { note in
+                guard let f = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue,
+                      f.height > 120 else { return }   // a floating/undocked keyboard is not a slot
+                let bottom = UIApplication.shared.connectedScenes
+                    .compactMap { ($0 as? UIWindowScene)?.keyWindow }
+                    .first?.safeAreaInsets.bottom ?? 0
+                keyboardSlot = max(200, f.height - bottom)
+            }
+            // ONE SLOT, ONE OCCUPANT. Tapping the text field raises the real keyboard, so the panel
+            // has to leave — otherwise the composer sits on top of both and the chat loses the height
+            // of two of them.
+            .onChange(of: inputFocused) { _, focused in
+                if focused, gifPanelOpen { withAnimation(.easeOut(duration: 0.22)) { gifPanelOpen = false } }
             }
             // Per-chat wallpaper behind the messages (extends under the bars).
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
@@ -953,35 +993,13 @@ struct ThreadView: View {
                 Task { try? await ChatService.sendText(cid: cid, text: marker, group: isGroup ? groupMembers : nil) }
             }
         }
+        // The SHEET is the attach panel's route only (its GIF tile). The composer's own GIF button
+        // opens the inline panel instead — see `gifPanelOpen`. Both hand the pick to `sendGif`.
         .sheet(isPresented: $showGifPicker) {
-            GifPickerView { gif in
-                // OPTIMISTIC, exactly like a text send (user: "make it like how it works when I send a
-                // new message"). The bubble lands locally the moment you pick — and that local insert
-                // is what fires the send glide to the newest message. GIF was the one send type without
-                // an optimistic bubble: it only appeared on the server echo, which never scrolled.
-                let clientId = UUID().uuidString
-                repo.addPending(Message(localGifUrl: gif.url, width: gif.width, height: gif.height,
-                                        authorId: me, clientId: clientId, sendState: .sending))
-                Task {
-                    // Surface failures — the old try? made a failed send look like a dead tap.
-                    do { try await ChatService.sendGif(cid: cid, url: gif.url, width: gif.width, height: gif.height, clientId: clientId, group: isGroup ? groupMembers : nil) }
-                    catch { await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't send the GIF. Check your connection and try again." } }
-                }
-            }
-            // A PANEL OVER THE CHAT, NOT A PAGE INSTEAD OF IT (owner 2026-08-13, ours beside theirs:
-            // theirs "does not open separately… you can see what you send in the chat as you send").
-            // The picker already stayed open after a pick — the whole point, several GIFs in a row —
-            // but at full height there was nothing to watch them land in. Half height puts the
-            // conversation above it, and `backgroundInteraction` keeps that half live rather than a
-            // dimmed picture: scroll it, read it, tap it, with the panel still up. Drag the grabber
-            // for the full grid.
-            //
-            // NOT the same thing as theirs, and worth being straight about: theirs is glued under the
-            // composer and swaps places with the keyboard. That is a composer rebuild, not a
-            // presentation option, and this is the shape of it that today's screen can carry.
-            .presentationDetents([.fraction(0.55), .large])
-            .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.55)))
-            .presentationDragIndicator(.visible)
+            GifPickerView { gif in sendGif(gif) }
+                .presentationDetents([.fraction(0.55), .large])
+                .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.55)))
+                .presentationDragIndicator(.visible)
         }
         .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
             handlePickedFile(result)
@@ -4745,16 +4763,49 @@ struct ThreadView: View {
         }
     }
     // One-tap GIFs from the field (big apps keep GIFs next to the camera, not buried in +).
+    /// ONE BUTTON, TWO MODES — theirs exactly (`accessoryItemButtonPressed`: in keyboard mode it
+    /// switches the input back to text, in sticker mode it opens the panel). Showing a keyboard while
+    /// the panel is up is the only way back that does not need a second control.
     private var inFieldGif: some View {
         Button {
-            // Same as "+": resign the keyboard first so it doesn't flash back after the picker.
-            inputFocused = false
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-            showGifPicker = true
+            if gifPanelOpen {
+                withAnimation(.easeOut(duration: 0.22)) { gifPanelOpen = false }
+                inputFocused = true          // the real keyboard takes the slot back
+            } else {
+                // Resign FIRST: the keyboard and the panel are one slot, and both in it at once is
+                // what makes a composer jump.
+                inputFocused = false
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                withAnimation(.easeOut(duration: 0.22)) { gifPanelOpen = true }
+            }
         } label: {
-            Image("ic_gif").renderingMode(.template).resizable().scaledToFit()
-                .frame(width: 24, height: 24).foregroundStyle(.primary)
-                .frame(width: 40, height: 40)
+            Group {
+                if gifPanelOpen {
+                    Image(systemName: "keyboard").font(.system(size: 20))
+                } else {
+                    Image("ic_gif").renderingMode(.template).resizable().scaledToFit()
+                        .frame(width: 24, height: 24)
+                }
+            }
+            .foregroundStyle(.primary)
+            .frame(width: 40, height: 40)
+        }
+    }
+
+    /// One send for both GIF routes (the composer's panel and the attach sheet's tile).
+    ///
+    /// OPTIMISTIC, exactly like a text send (user: "make it like how it works when I send a new
+    /// message"). The bubble lands locally the moment you pick — and that local insert is what fires
+    /// the send glide to the newest message. GIF was the one send type without an optimistic bubble:
+    /// it only appeared on the server echo, which never scrolled.
+    private func sendGif(_ gif: GiphyService.Gif) {
+        let clientId = UUID().uuidString
+        repo.addPending(Message(localGifUrl: gif.url, width: gif.width, height: gif.height,
+                                authorId: me, clientId: clientId, sendState: .sending))
+        Task {
+            // Surface failures — the old try? made a failed send look like a dead tap.
+            do { try await ChatService.sendGif(cid: cid, url: gif.url, width: gif.width, height: gif.height, clientId: clientId, group: isGroup ? groupMembers : nil) }
+            catch { await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't send the GIF. Check your connection and try again." } }
         }
     }
 
