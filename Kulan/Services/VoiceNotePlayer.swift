@@ -69,8 +69,21 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     ///
     /// Loading deliberately does not count: a bar that flashes for the half second before audio
     /// starts, in the chat you are already reading, is noise.
+    /// PAUSED BY THE PERSON, as opposed to paused by the world. His rule (2026-08-13): play a note,
+    /// stop it yourself, walk out of the chat — no bar. You were finished with it.
+    ///
+    /// ⚠️ AND THIS IS WHY IT IS A FLAG RATHER THAN JUST `!playing`. Unplugging headphones pauses, and
+    /// so does a phone call, and both of those pause a note the person very much has NOT finished
+    /// with. Hiding the bar there strands it: paused, in a chat they have left, with the only control
+    /// that could restart it gone. Who paused it is the difference, so who paused it is what is
+    /// recorded.
+    private(set) var pausedByUser = false
+
+    /// Show the floating bar? Only when a note is open AND its chat is not the one on screen (there
+    /// the bubble already shows everything the bar would) AND the person did not stop it themselves.
     var barVisible: Bool {
         hasNote && !messageId.isEmpty && cid != (AppRouter.shared.activeChatId ?? "")
+            && !(pausedByUser && !playing)
     }
 
     /// Who the open note is from, for the bar and for the lock screen. One answer, because those two
@@ -188,7 +201,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
                 // right one: the person pulled them out, and starting again by itself is the exact
                 // thing this handler exists to prevent.
                 self.resumeAfterInterruption = false
-                self.pause()
+                self.pause(byUser: false)   // the cable was pulled, not the button — see pausedByUser
             }
         }
 
@@ -209,7 +222,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
                 case .began:
                     guard self.playing else { return }
                     self.resumeAfterInterruption = true
-                    self.pause()
+                    self.pause(byUser: false)   // a call is not them finishing — see pausedByUser
                 case .ended:
                     guard self.resumeAfterInterruption else { return }
                     self.resumeAfterInterruption = false
@@ -470,9 +483,17 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             timer?.invalidate(); timer = nil
             p.currentTime = 0
             release()
-            // Played to the end: the note is no longer open, so the bar goes and the lock screen is
-            // handed back. MUST come after `release()`, which identifies itself by `messageId`.
-            hasNote = false
+            // THE END OF THE RUN LEAVES THE BAR STANDING, PAUSED (his rule, 2026-08-13: "it must
+            // pause on the chat list so the user has to play again or tap x"). It used to close
+            // itself, which is the one moment a person is most likely to want the thing again — the
+            // note just ended and there is nothing on screen to press. So the note stays OPEN at
+            // second zero with a play button, and the X is how you say you are done.
+            //
+            // ⚠️ EXCEPT A ONE-TIME NOTE. Its bytes are thrown away the moment it finishes and it has
+            // no second listen by design, so leaving a play button over it would be a lie.
+            let oneTime = transientURL != nil
+            if oneTime { hasNote = false }
+            pausedByUser = false     // the note ended by itself; nobody pressed anything
             clearNowPlaying()
             disposeTransient()   // a finished one-time note's bytes do not outlive the listen
             // CHAIN ON. Inside the chat the chat still does it, and should: it scrolls the next bubble
@@ -494,11 +515,13 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     /// `toggle`, which also has to cope with the note not being loaded yet.
     func resume() {
         guard player != nil, !playing else { return }
+        pausedByUser = false
         start()
     }
 
-    func pause() {
+    func pause(byUser: Bool = true) {
         guard player != nil else { return }
+        pausedByUser = byUser
         // The icon flips first, same order as the reference app's pause. The engine call is quick, but
         // "quick" is not "before the next frame", and the button is what the finger is watching.
         playing = false
