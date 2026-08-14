@@ -740,6 +740,24 @@ struct StoryDetailView: View {
             if newValue == model.id {
                 let i = resumeIndex()
                 timerProgress = CGFloat(i)
+                // ⚠️ A CLIP COMES BACK PARKED AT ITS OWN END, AND THAT IS READ AS "IT HAS FINISHED".
+                // HIS 2026-08-14 REPORT, WHICH IS VIDEO-ONLY AND IS VIDEO-ONLY FOR A REASON.
+                //
+                // A photo's bucket ends by ARITHMETIC — `timerProgress` crossing the item count — and
+                // that is now clamped on the way out, so a photo page cannot come back claiming to be
+                // finished. A video's bucket ends by REPORT, and the bar is capped under the boundary
+                // precisely so the player's own word is the only way out of a clip. There is a second
+                // path for a clip that reaches its end without saying so (`startProgress`'s inference:
+                // loaded, not playing, meant to be playing, clock at the end) — and a retained item
+                // view returned to after an auto-advance matches every one of those the instant this
+                // page is handed the screen again. So the tick that follows the back swipe's commit
+                // advanced straight back to the friend, which is his finger leaving the screen.
+                //
+                // Rewinding is not a new rule, it is the rule this viewer already has written down: a
+                // story returned to restarts at zero, the item is remembered and the position inside
+                // it is not. Every other return gets that free by being a NEW player; a retained one
+                // has to be told. That is also the exception `restart()`'s own note is about.
+                if getStoryOrNil(with: i)?.config.mediaType == .video { video.restart() }
                 // The page being handed the screen is not folding, whatever the last geometry
                 // snapshot said. `resetProgress` above cleared this too, but a preference delivered
                 // mid-transition can arrive AFTER it — see the note in `startProgress`.
