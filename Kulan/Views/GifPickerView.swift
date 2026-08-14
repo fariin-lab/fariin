@@ -69,26 +69,6 @@ enum GifFavorites {
 
 struct GifPickerView: View {
     let onPick: (GiphyService.Gif) -> Void
-    /// INLINE = the panel that takes the keyboard's place, rather than a page of its own.
-    ///
-    /// Read from their source before building it (2026-08-13, on his "read telegram first"): their
-    /// composer has ONE input mode at a time — `.text` is the keyboard, `.stickers` is this — and one
-    /// accessory button that flips between them (`accessoryItemButtonPressed`: mode `.keyboard`
-    /// switches back to `.text`, mode `.stickers` calls `openStickers()`). The panel is sized
-    /// `keyboardHeight + predictiveInputHeight` for the device, which is why it lands in exactly the
-    /// keyboard's slot rather than near it.
-    ///
-    /// So this view drops its page chrome when inline: no navigation stack, no title, no X — a
-    /// panel is not a screen. ⚠️ And `dismiss()` must never fire in this mode: there is no
-    /// presentation to close, so the environment's dismiss would reach the CHAT and pop it.
-    var inline = false
-    /// Inline only: the magnifier opens the full picker as a sheet, because searching wants a
-    /// keyboard and the panel is standing in the keyboard's place — see `inlineTopRow`.
-    var onSearch: (() -> Void)? = nil
-    /// Inline only: is the grid scrolled to its top? The expand drag reads it — see the panel's
-    /// gesture in ThreadView. A drag only becomes an expand when the grid has nowhere left to go,
-    /// which is how their direction lock and their scroll view avoid fighting over one finger.
-    var atTop: Binding<Bool>? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var gifs: [GiphyService.Gif] = []
@@ -129,85 +109,6 @@ struct GifPickerView: View {
     @MainActor static var trendingCache: [GiphyService.Gif] = []
 
     var body: some View {
-        if inline { inlineBody } else { pageBody }
-    }
-
-    /// The keyboard-slot panel: the mood row, the grid, and a search field where the keyboard's own
-    /// bottom row would be. Same grid, same loader, same picks — only the chrome differs.
-    private var inlineBody: some View {
-        VStack(spacing: 0) {
-            inlineTopRow
-            ScrollView {
-                HStack(alignment: .top, spacing: 4) {
-                    ForEach(0..<2, id: \.self) { col in
-                        LazyVStack(spacing: 4) {
-                            ForEach(masonryColumns[col]) { g in gifCell(g) }
-                        }
-                    }
-                }
-                .padding(6)
-            }
-            .scrollDismissesKeyboard(.immediately)
-            .onScrollGeometryChange(for: Bool.self,
-                                    of: { $0.contentOffset.y <= 0.5 },
-                                    action: { _, top in atTop?.wrappedValue = top })
-            // FLOATING, THE WAY THE ATTACHMENT SOURCES FLOAT (his call, 2026-08-14: "make it like
-            // the one you did on the plus photos"). A bottom inset rather than a row: the grid keeps
-            // its full height and takes the bar's height as content inset, so nothing is hidden at
-            // rest and the GIFs pass UNDER the glass while you scroll.
-            //
-            // The moods sit at the bottom in a panel, where the keyboard's own bottom row is and
-            // where the thumb already is. At the top they were where the eye lands, competing with
-            // the GIFs for the first look.
-            .safeAreaInset(edge: .bottom, spacing: 0) { floatingMoodBar }
-        }
-        // ⚠️ A PANEL IN THE KEYBOARD'S SLOT NEEDS THE KEYBOARD'S SURFACE (his 571 screenshot: the
-        // search row and the strip under it showing the chat wallpaper straight through). It had no
-        // background of its own, so everything that was not a GIF was a hole. The keyboard it stands
-        // in for is opaque, and so is this.
-        .background(Color(uiColor: .secondarySystemBackground))
-        .task {
-            if gifs.isEmpty, !Self.trendingCache.isEmpty { gifs = Self.trendingCache }
-            let fresh = await GiphyService.shared.search("")
-            if !fresh.isEmpty {
-                Self.trendingCache = fresh
-                if query.trimmingCharacters(in: .whitespaces).isEmpty, category == .trending { gifs = fresh }
-            }
-        }
-        .onChange(of: query) { _, _ in
-            searchTask?.cancel()
-            searchTask = Task {
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                if Task.isCancelled { return }
-                await refresh()
-            }
-        }
-    }
-
-    /// SEARCH IS A BUTTON HERE, NOT A FIELD (his reference: "if you tap search it opens a full sheet
-    /// for search"). A field at the bottom of the panel was the wrong shape twice over — typing in it
-    /// raises the keyboard, and the keyboard is the thing this panel replaced, so the two fight over
-    /// one slot. The magnifier hands the job to the full picker, which has a navigation stack and can
-    /// hold a real search bar.
-    private var inlineTopRow: some View {
-        HStack(spacing: 10) {
-            Button { onSearch?() } label: {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(.primary)
-                    .frame(width: 34, height: 34)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            Spacer(minLength: 0)
-            // Required by Giphy's terms wherever their results are shown.
-            Text("GIPHY").font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 4)
-    }
-
-    private var pageBody: some View {
         NavigationStack {
             ScrollView {
                 // Recents live on their OWN clock tab (owner's 416 idea: heavy GIF use would let
@@ -286,10 +187,7 @@ struct GifPickerView: View {
     private func pick(_ g: GiphyService.Gif) {
         GifRecents.note(g)
         onPick(g)
-        // ⚠️ NOT INLINE. As a panel there is no presentation of its own to close, and the
-        // environment's dismiss would travel up and pop the CHAT. The panel also stays open on
-        // purpose — sending several GIFs in a row is the whole point of it being a keyboard.
-        if !inline { dismiss() }
+        dismiss()
     }
 
     // ONE loader for every state: a typed search wins; otherwise the selected mood. Recent is
@@ -309,25 +207,7 @@ struct GifPickerView: View {
         if !Task.isCancelled { gifs = results }
     }
 
-    /// The panel's mood bar: the same buttons, on one piece of glass, floating over the grid. The
-    /// page version keeps the plain pinned row — it has a navigation bar over it and a second
-    /// floating shape under that would be one too many.
-    private var floatingMoodBar: some View {
-        categoryButtons
-            .padding(.horizontal, 6).padding(.vertical, 4)
-            .liquidGlass(Capsule())
-            .padding(.horizontal, 10)
-            .padding(.bottom, 8)
-    }
-
     private var categoryRow: some View {
-        categoryButtons
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            // Opaque under the pinned row, or the grid shows through while scrolling beneath it.
-            .background(Color(uiColor: .systemBackground))
-    }
-
-    private var categoryButtons: some View {
         HStack(spacing: 4) {
             ForEach(GifCategory.allCases, id: \.self) { c in
                 Button {
@@ -355,6 +235,18 @@ struct GifPickerView: View {
                 .buttonStyle(.plain)
             }
         }
+        // FLOATING GLASS, NOT AN OPAQUE STRIP (his call, 2026-08-14, with the corner magnified: the
+        // one thing to keep from the panel experiment). It used to paint `systemBackground` across
+        // the full width, because a transparent pinned row let the grid show through raw while it
+        // scrolled. Glass answers that better than paint does — it blurs what passes under it, which
+        // is what makes it read as floating ABOVE the GIFs rather than as a lid on top of them.
+        //
+        // Same treatment as the attachment sources bar and the media tabs: the control is the
+        // surface, and it is the only surface.
+        .padding(.horizontal, 6).padding(.vertical, 5)
+        .liquidGlass(Capsule())
+        .padding(.horizontal, 10)
+        .padding(.bottom, 6)
         .animation(.easeInOut(duration: 0.15), value: category)
     }
 
