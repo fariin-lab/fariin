@@ -229,9 +229,21 @@ struct RootView: View {
         // below stalls ~10s on its timeout (a measured 11s cold start). ensureReady
         // is Keychain-only now, so the whole fast path is local.
         if await ProfileStore.shared.loadCachedMine() {
-            // Deliberately re-checked from the SERVER before using the cache: the deletion may have
-            // been scheduled on another device, and the cached copy would happily let them in.
-            if let due = await ProfileStore.shared.scheduledDeletionDate() {
+            // ⚠️ THE SERVER CHECK CAME OFF THE BOOT PATH, AND THE TWO LINES ABOVE ARE WHY.
+            //
+            // This asked the server whether the account is pending deletion, and awaited it, three
+            // lines under a comment that says launch must never wait on the network. It is an
+            // ordinary `getDocument()`, so it is server-FIRST: on a bad connection it sits on its own
+            // timeout — the same ~10s stall that comment was written about — and every launch paid
+            // it, for a state almost nobody is in.
+            //
+            // The reason it was server-first is real and is kept: the deletion may have been
+            // scheduled on ANOTHER device, and this phone's cache would happily let them in. So the
+            // question is still asked, just not in front of the door. The cached answer routes
+            // instantly, and the server's answer arrives a moment later and routes then — the
+            // difference is a second or two inside an account that is being deleted anyway, against
+            // a ten-second white screen for everybody else.
+            if let due = ProfileStore.shared.me?.deletionScheduledFor, due > Date() {
                 phase = .restore(handle: ProfileStore.shared.me?.handle ?? "", due: due)
                 return
             }
@@ -241,6 +253,12 @@ struct RootView: View {
             startOfficialChannel()
             phase = .main
             Task {   // background refresh + key self-heal, off the boot path
+                // The server's word on a deletion scheduled from another device (see above). First,
+                // because it is the one answer that changes which screen you should be looking at.
+                if let due = await ProfileStore.shared.scheduledDeletionDate() {
+                    phase = .restore(handle: ProfileStore.shared.me?.handle ?? "", due: due)
+                    return
+                }
                 await ProfileStore.shared.loadMine()
                 await Crypto.shared.publishPublicKey()
                 // Send anything an app kill left queued, whatever chat it belongs to — the queue's
