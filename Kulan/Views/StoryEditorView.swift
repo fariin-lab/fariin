@@ -1422,7 +1422,18 @@ struct StoryEditorView: View {
                     // Reserve the slot rather than let a late filmstrip shove the layout up.
                     .opacity(trimThumbs.isEmpty ? 0 : 1)
             }
-            .background(Color.black.opacity(0.55).ignoresSafeArea())
+            // ⚠️ ALMOST NOTHING, AND IT USED TO BE 0.55. His 2026-08-14 report: "the trim page video
+            // brightness is going low, I can't see what I'm trimming."
+            //
+            // The wash is over the WHOLE screen and the clip is underneath it, so it was taking
+            // nearly half the light out of the one picture this screen exists to let him look at.
+            // It was there to say "the editor is behind this now" — and two other things already
+            // say that: the canvas steps back to 0.9 and drops 10pt as the trim opens, and every
+            // one of the editor's own bars is gone while it is up. A third voice saying the same
+            // thing was the only one charging for it.
+            //
+            // What is left is enough to seat the glass buttons on and no more.
+            .background(Color.black.opacity(0.18).ignoresSafeArea())
             .transition(.opacity)
             .task(id: items[index].id) { await loadTrimThumbs() }
             // The strip reports where the finger is; the clip goes there. `.zero` tolerance because a
