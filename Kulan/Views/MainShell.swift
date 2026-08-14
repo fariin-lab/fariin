@@ -1949,8 +1949,7 @@ struct ArchivedChatsView: View {
             }
             .sheet(isPresented: $showArchiveSettings) { ArchiveSettingsView() }
             .sheet(isPresented: $showHowItWorks) { ArchiveHelpView() }
-        }
-        .onAppear { repo.start() }
+            .onAppear { repo.start() }
     }
 
     /// The page's own menu. Everything it holds was already in the app and unreachable from here:
