@@ -819,13 +819,20 @@ struct StoryEditorView: View {
         .darkConfirm("Discard this story?", isPresented: $showDiscard,
                      destructive: "Discard", onDestructive: { dismiss() })
         // THE PEN'S OWN CANCEL, asked the same way and drawn the same way. It is a smaller question
-        // than the one above — this session's strokes, not the whole post — so it says so, and
-        // "Keep" leaves the pen with the drawing intact rather than returning to it. Raised only
-        // when something was actually drawn; see `closePenFromCancel`.
+        // than the one above — this session's strokes, not the whole post — so it says so.
+        //
+        // ⚠️ "KEEP" STAYS ON THE PEN. It does not leave with the drawing intact, which is what it
+        // did for one build and what he corrected: "I said keep, please stay the page." Keep is the
+        // answer that CANCELS THE CANCEL — the ✕ was a mistake, nothing happens, the pen is still
+        // open with every stroke where it was. That is what `darkConfirm`'s own default label for
+        // this button says in full ("Keep Editing"), and it is the only reading under which the two
+        // buttons are not two ways of leaving.
+        //
+        // The way OUT with the drawing is the ✓ beside the ✕, which is the button that has always
+        // meant that. Raised only when something was actually drawn; see `closePenFromCancel`.
         .darkConfirm("Discard your drawing?", isPresented: $confirmDiscardDrawing,
-                     destructive: "Discard", cancel: "Keep",
-                     onDestructive: { closePen(discarding: true) },
-                     onCancel: { closePen(discarding: false) })
+                     destructive: "Discard", cancel: "Keep Drawing",
+                     onDestructive: { closePen(discarding: true) })
         // OUR OWN PICKER, images AND videos, always (owner 2026-08-05: "The + button should always
         // open our custom media picker… Never fall back to Apple's Photo Picker"). It stays open
         // while you tap — each pick lands in the strip behind it — and the X brings you back.
