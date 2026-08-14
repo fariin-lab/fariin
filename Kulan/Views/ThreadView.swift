@@ -3606,10 +3606,18 @@ struct ThreadView: View {
             // ONE WIDTH FOR EVERY CALL BUBBLE, AND IT IS THE COMPACT ONE — his order, correcting
             // the first cut of this fix which took the widest case. The size is set by the
             // longest TITLE ("Missed voice call", the one string that cannot shorten); the long
-            // subtitle shortened to fit ("Tap to call back" → "Call back"). 204 + 28 padding =
-            // 232 total, the tidy small bubble from his photo, worn by every call row.
-            .frame(width: 204, alignment: .leading)
-            .padding(.vertical, 12).padding(.horizontal, 14)
+            // subtitle shortened to fit ("Tap to call back" → "Call back").
+            //
+            // FOURTH CALIBRATION, 2026-08-13, and this time both numbers are HIS, measured off his
+            // own screenshot: 220 wide, 60 tall (was 232 wide). ⚠️ They are the bubble's OUTER size
+            // now — the old comment added an inner 204 to 28pt of padding and called the height
+            // "34 disc + 12 + 12 = 58", which was never what rendered: the two text lines stack to
+            // ~37pt, taller than the 34pt disc, so the bubble was really ~61. A height nobody sets
+            // is a height nobody can hold to, which is how a "58pt" bubble drifted three points.
+            // Pinned, so the number in this comment is the number on the glass.
+            .frame(width: 192, alignment: .leading)   // 192 + 28 padding = 220
+            .padding(.horizontal, 14)
+            .frame(height: 60)
             .background(mine ? myBubbleFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             // Tap target is ONLY the bubble — NOT the full-width row. The old .contentShape/
