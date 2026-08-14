@@ -1505,14 +1505,20 @@ struct ChatsView: View {
             // the archive's destination to the chain was enough to tip it again. AnyView resets the
             // complexity the stack has to solve, exactly the way the messages chain in ThreadView is
             // erased at its own boundary. No behaviour changes; the same views render.
-            AnyView(homeStack)
+            AnyView(homeStackC)
         }
         .onAppear { repo.start(); openPendingChat() }
         .onChange(of: router.pendingChatId) { _, _ in openPendingChat() }
         .onChange(of: repo.conversations.count) { _, _ in openPendingChat() }   // retry once chats load
     }
 
-    private var homeStack: some View {
+    /// SLICE ONE of the chat list's chain. ⚠️ THE CHAIN IS CUT INTO THREE AND EACH JOIN IS AN
+    /// `AnyView`, because the whole of it in one expression is what the compiler gives up on
+    /// ("unable to type-check this expression in reasonable time", twice tonight, and three CI
+    /// rounds in one day before that — it is in the build notes). ThreadView's picker chain is cut
+    /// the same way for the same reason. Nothing renders differently; the compiler just gets three
+    /// small problems instead of one it cannot finish.
+    private var homeStackA: some View {
             Group {
                 if !repo.hasLoaded && repo.expectsChats && repo.skeletonArmed {
                     // Shimmer placeholders on a cold load — ONLY for an account that has ever had
@@ -1555,6 +1561,11 @@ struct ChatsView: View {
             } message: {
                 Text("This person restricts who can call them.")
             }
+    }
+
+    /// SLICE TWO: the presentations and the two navigation destinations. See homeStackA.
+    private var homeStackB: some View {
+        AnyView(homeStackA)
             .sheet(item: $profileGroup) { g in
                 NavigationStack {
                     // .story source: no chat underneath → no Search/Wallpaper dead buttons (audit).
@@ -1590,6 +1601,11 @@ struct ChatsView: View {
                     showNew = false
                 }
             }
+    }
+
+    /// SLICE THREE: the alerts and the last of the sheets. See homeStackA.
+    private var homeStackC: some View {
+        AnyView(homeStackB)
             // Native alert (the confirmationDialog rendered as an anchored popover bubble on iOS 26,
             // which read as non-native). A destructive-action confirmation as an alert with a red
             // Delete button is the textbook Apple HIG pattern.
