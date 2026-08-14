@@ -6004,16 +6004,6 @@ struct MessageBubble: View, Equatable {
         }
     }
 
-    /// The bubble's outline: the same uneven corners as always, plus the TAIL on the last message of
-    /// a run (his 2026-08-13 ask, geometry read from their source — see ChatBubbleShape).
-    ///
-    /// One property, ten call sites: every place that used to name the rounded rectangle now names
-    /// this, so the tail can never end up on the background and off the clip, or on a photo bubble
-    /// and not a text one.
-    private var bubbleShape: ChatBubbleShape {
-        ChatBubbleShape(corners: bubbleCorners, mine: isMe, tail: isLastInCluster)
-    }
-
     // Reaction pills (our own design): up to 3 emoji+count capsules, my reaction tinted
     // with the brand accent, the rest neutral, and a "+N" capsule when there are more.
     /// Does a single tap on this bubble OPEN something? Media does: the viewer, the player, the album
@@ -6118,7 +6108,7 @@ struct MessageBubble: View, Equatable {
                     // report). On content (not the outer row) so it hugs the bubble and rides the swipe
                     // offset; reactions/sender-name stay un-dimmed like the reference app.
                     .overlay(
-                        bubbleShape
+                        UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)
                             .fill(Color.primary.opacity(isHighlighted ? 0.18 : 0))
                             .allowsHitTesting(false)
                     )
@@ -6373,7 +6363,7 @@ struct MessageBubble: View, Equatable {
             // taller shape in VoiceMessageView).
             .padding(.vertical, 8)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
-            .clipShape(bubbleShape)
+            .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if message.isFile {
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
@@ -6434,14 +6424,14 @@ struct MessageBubble: View, Equatable {
             }
             .padding(.horizontal, 13).padding(.vertical, 10)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
-            .clipShape(bubbleShape)
+            .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if message.isGif {
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
                 if let url = message.imageUrl {
                     AnimatedGifView(url: url)
                         .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
-                        .clipShape(bubbleShape)
+                        .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
                         // The UIKit-backed gif region isn't an interactive SwiftUI area, so long-press
                         // (context menu) and swipe-to-reply never engaged over it. A clear, hit-testable
                         // overlay makes SwiftUI own the region; touches then reach the ancestor gestures.
@@ -6525,7 +6515,7 @@ struct MessageBubble: View, Equatable {
                 }
                 .frame(width: videoBox.width)
                 .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
-                .clipShape(bubbleShape)
+                .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             }
         } else if message.isAlbum {
             // Album (2+ photos as ONE message): a MOSAIC GRID inside the bubble + one caption.
@@ -6552,7 +6542,7 @@ struct MessageBubble: View, Equatable {
                 if !message.text.isEmpty { captionBody(width: albumWidth) }
             }
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
-            .clipShape(bubbleShape)
+            .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             // THE WHOLE-BUBBLE UPLOAD RING IS GONE (the agreed per-item spec): every sending tile
             // now carries its own ring, its own bytes and its own X — see `albumTile`. One ring
             // centred on the bubble could not say which image was slow, could not cancel one of
@@ -6690,7 +6680,7 @@ struct MessageBubble: View, Equatable {
                 }
                 .frame(width: box.width)
                 .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
-                .clipShape(bubbleShape)
+                .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             }
         } else if let poll = message.poll {
             // POLL: question + options with live vote bars. Content is E2EE (rides the encrypted text
@@ -6703,7 +6693,7 @@ struct MessageBubble: View, Equatable {
             .padding(12)
             .frame(width: maxBubbleWidth * 0.9)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
-            .clipShape(bubbleShape)
+            .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if let loc = message.locationCard {
             // SHARED LOCATION card: pin + label + coordinates; tap opens Apple Maps at the spot.
             VStack(alignment: .leading, spacing: 8) {
@@ -6725,7 +6715,7 @@ struct MessageBubble: View, Equatable {
             .padding(12)
             .frame(width: maxBubbleWidth * 0.85)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
-            .clipShape(bubbleShape)
+            .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             .contentShape(Rectangle())
             .onTapGesture {
                 let q = (loc.label ?? "Shared Location").addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "Location"
@@ -6761,7 +6751,7 @@ struct MessageBubble: View, Equatable {
             .padding(12)
             .frame(width: maxBubbleWidth)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
-            .clipShape(bubbleShape)
+            .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if jumbomojiCount > 0, message.replyTo == nil || message.replyTo?.isStatus == true,
                   firstLinkURL == nil {
             // JUMBOMOJI — the reference app's behaviour, read from their source (2026-07-28) rather than eyeballed.
@@ -6854,7 +6844,7 @@ struct MessageBubble: View, Equatable {
             .padding(.horizontal, 15)
             .padding(.vertical, 10)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
-            .clipShape(bubbleShape)
+            .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         }
     }
 
