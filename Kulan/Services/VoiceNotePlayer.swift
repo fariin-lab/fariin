@@ -548,7 +548,12 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
 
     func pause(byUser: Bool = true) {
         guard player != nil else { return }
-        pausedByUser = byUser
+        // ⚠️ "THEY ARE DONE WITH IT" ONLY COUNTS INSIDE ITS OWN CHAT (his report, 2026-08-14: pausing
+        // from the bar made the bar vanish as if he had pressed X). His rule was about stopping a
+        // note in the chat and walking out — the pause he presses THERE is the bubble's. A pause on
+        // the BAR is the opposite: the bar is where the play button lives, so hiding it for pressing
+        // pause takes away the only way back. Same flag, decided by where the finger was.
+        pausedByUser = byUser && cid == (AppRouter.shared.activeChatId ?? "")
         // The icon flips first, same order as the reference app's pause. The engine call is quick, but
         // "quick" is not "before the next frame", and the button is what the finger is watching.
         playing = false
