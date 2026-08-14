@@ -374,7 +374,15 @@ struct CallsView: View {
                         }
                     }
                     .listStyle(.plain)
-                    .animation(.spring(response: 0.38, dampingFraction: 0.86), value: shownRuns.map(\.id))   // deletes/filter switch animate (parity with chats)
+                    // ANIMATE THE HISTORY CHANGING, NOT THE QUESTION CHANGING (owner 2026-08-13: tap
+                    // Missed and "the whole page sorts in front of me"). Keyed on `shownRuns` this
+                    // fired on the FILTER and the SEARCH too, so switching All → Missed sprang every
+                    // surviving row into a new position while the rest faded — a re-sort performed
+                    // for somebody who only asked a different question. Keyed on the call count it
+                    // still animates the things that are genuinely movement in the list (a call
+                    // arrives, a run is deleted), and a filter or a search term, which change no
+                    // history at all, simply show their answer.
+                    .animation(.spring(response: 0.38, dampingFraction: 0.86), value: repo.calls.count)
                     .environment(\.defaultMinListRowHeight, 56)   // tight, compact rows
                     .environment(\.editMode, .constant(selecting ? .active : .inactive))
                 }
