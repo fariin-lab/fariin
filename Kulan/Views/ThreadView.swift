@@ -2911,11 +2911,20 @@ struct ThreadView: View {
     /// blobs with words underneath. Theirs is a single glass bar with the sources INSIDE it, icon
     /// over label: the glass belongs to the bar, not to each button.
     ///
-    /// Left-aligned and scrollable like theirs — the first source sits at the left edge and anything
-    /// that does not fit is a swipe away, rather than four items spread thin across the width.
+    /// COMPACT, AND IT GROWS WHEN THERE IS SOMETHING TO GROW FOR (his call, 2026-08-14, circling the
+    /// empty half of the glass). Three sources cannot fill a full-width capsule, and a bar that is
+    /// mostly empty surface reads as one waiting for content.
+    ///
+    /// ⚠️ NO ScrollView, and NO `maxWidth` on the pill. A scroll view takes the whole width by
+    /// definition, which is what made the capsule full width; and a finite maxWidth would inflate it
+    /// rather than cap it — the call bubble taught that the same night. The pill hugs its tiles and
+    /// two spacers centre it. Four tiles (GIF · Files · Location · Poll in a group) come to about
+    /// 300pt, which still fits the narrowest phone we build for; the day a fifth arrives, the scroll
+    /// view comes back.
     @ViewBuilder private var sourceBar: some View {
         if !recentsHasSelection {
-            ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
                 HStack(spacing: 2) {
                     // Order: GIF · Files · Location · Poll (groups only). The Contacts tile is gone
                     // (user 2026-07-29): sharing "a contact" is a phone-book idea, and Fariin has no
@@ -2927,9 +2936,10 @@ struct ThreadView: View {
                     if isGroup { attachTile("chart.bar", "Poll") { showPollComposer = true } }
                 }
                 .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .liquidGlass(Capsule())   // the ONE piece of glass here, and the only background
+                Spacer(minLength: 0)
             }
-            .padding(.vertical, 6)
-            .liquidGlass(Capsule())   // the ONE piece of glass here, and the only background
             .padding(.horizontal, 16)
             .padding(.bottom, 10)
         }
