@@ -973,6 +973,32 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             if willAnimate, isLive, !item.isLive {
                 let wasScale = item.transform.a
                 if wasScale > 0.0001 {
+                    // ⚠️ THE SEED IS BUILT BY `placement`, THE SAME FUNCTION EVERY OTHER CARD IS
+                    // BUILT BY. MEASURED OFF HIS SCREEN RECORDING, FRAME BY FRAME:
+                    //
+                    //   frames 1-3   card 50pt wide   (the side size, correct)
+                    //   frame  4     card 134pt wide  (ONE frame, wider than the centre card)
+                    //   frames 5-20  134 → 84         (the settle, correct)
+                    //
+                    // 84 is the centre size, so the seed put it at something the row's own
+                    // arithmetic never produces — and the spring then spent its whole length
+                    // undoing that. THAT is "the card comes late, after the brightness": the card
+                    // was not travelling from the thumbnail, it was travelling back from a size it
+                    // should never have had, while the tint — which IS built by `placement` — went
+                    // straight where it belonged.
+                    //
+                    // The size was the mistake. `slotW * wasScale` is a plausible-looking number and
+                    // it is not the one `placement` computes: that lerps between the RESTING
+                    // rectangle and the target by the sheet's fraction, so anything worked out from
+                    // the slot alone lands somewhere else entirely. Reading the fraction back out of
+                    // the scale (`itemScale` is a straight lerp, so it inverts exactly) and asking
+                    // `placement` is what makes the seed and its destination two points on one
+                    // journey rather than two different calculations.
+                    let span = max(0.0001, 1 - geometry.sideRelScale)
+                    let mag = min(1, max(0, (1 - wasScale) / span))
+                    let cfBefore = item.center.x < view.bounds.midX ? -mag : mag
+                    let from = geometry.placement(combinedFraction: cfBefore,
+                                                  rest: rest, containerMidX: midX)
                     // ⚠️ THE DIM IS SEEDED AT THE VALUE IT IS LEAVING, NOT THE ONE IT IS GOING TO,
                     // AND THAT IS HIS "the brightness does not follow the card when I tap".
                     //
@@ -986,12 +1012,11 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
                     //
                     // The tint layer this item is already wearing knows what it is leaving, so it is
                     // asked rather than recomputed.
-                    let leavingDim = tints[story.id].map { CGFloat($0.opacity) } ?? p.dim
+                    let leavingDim = tints[story.id].map { CGFloat($0.opacity) } ?? from.dim
                     self.placeLiveStory(
-                        StoryRowPlacement(center: view.convert(item.center, to: nil),
-                                          size: CGSize(width: geometry.slotW * wasScale,
-                                                       height: geometry.slotH * wasScale),
-                                          cornerRadius: p.cornerRadius,
+                        StoryRowPlacement(center: from.center,
+                                          size: from.size,
+                                          cornerRadius: from.cornerRadius,
                                           dim: leavingDim),
                         settle: nil)
                 }
