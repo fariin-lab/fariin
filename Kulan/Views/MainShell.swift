@@ -1912,7 +1912,16 @@ struct ArchivedChatsView: View {
                                 // no menu keeps the press highlight it lit on touch-down, which is the
                                 // grey that never went away. Giving the row a menu takes the gesture
                                 // and takes the highlight with it.
-                                .contextMenu { archivedMenu(conv) }
+                                // AND THE SAME PEEK THE CHAT LIST HAS (his question, 2026-08-14: does
+                                // the archive not have the preview?). It did not — menu only, while
+                                // the chat list showed the conversation's real last messages above
+                                // it. Same card, same builder; an archived chat is still a chat and
+                                // the whole point of the peek is reading it without opening it.
+                                .contextMenu {
+                                    archivedMenu(conv)
+                                } preview: {
+                                    ChatPeekPreview(cid: conv.id, me: me)
+                                }
                             }
                         }
                         .listStyle(.plain)
