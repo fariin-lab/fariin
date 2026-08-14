@@ -3716,9 +3716,19 @@ struct ThreadView: View {
             // and on his newer word. If tidy-and-equal ever matters more than matching them, that is
             // the rule to come back to. The floor and the ceiling keep the old order's spirit: a
             // one-word call cannot draw a stubby bubble, and "Missed video call" cannot run away.
+            // ⚠️ NO `maxWidth`, AND THAT IS THE BUG HE CAUGHT ON 571 ("I told you to make it smaller
+            // and you made it longer"). A finite `maxWidth` in SwiftUI is GREEDY: it does not cap a
+            // hugging view, it fills whatever the parent offers up to the number. So the bubble that
+            // was meant to shrink to its text stretched to 260 — forty points WIDER than the fixed
+            // 220 it replaced. `fixedSize` is what actually says "take your ideal width", and the
+            // floor stays as a floor, which is not greedy.
+            //
+            // No ceiling is needed: every title is one line and the longest of them
+            // ("Missed video call") lands near 208 with the disc and the padding.
+            .frame(minWidth: 122, alignment: .leading)   // 122 + 28 padding = 150 at its narrowest
             .padding(.horizontal, 14)
-            .frame(minWidth: 150, maxWidth: 260)
             .frame(height: 60)
+            .fixedSize(horizontal: true, vertical: false)
             .background(mine ? myBubbleFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             // Tap target is ONLY the bubble — NOT the full-width row. The old .contentShape/
