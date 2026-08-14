@@ -413,13 +413,19 @@ struct StoryEditorView: View {
             // writing the full length in would make every clip look trimmed to `isTrimmed`, which
             // decides whether the export re-encodes and whether closing asks about discarding work.
             //
-            // The clip plays the moment the screen is up, which is what the old video-only editor
-            // did on open. Only here, and only for the item the post opened on: pressing play is
-            // how you start any OTHER clip, and building a decoder for one nobody has asked to
-            // watch is what `ensurePreviewPlayer`'s note is about.
-            guard i == index, previewPlayer == nil else { return }
-            ensurePreviewPlayer()?.play()
-            previewPlaying = true
+            // ⚠️ IT DOES NOT PLAY ITSELF ANY MORE — his 2026-08-14 instruction: "first time i chose
+            // video, video is playing, please make pause default. If user want to play just click
+            // play, if again click pause."
+            //
+            // This used to build the player and start it for the item the post opened on, because
+            // that is what the old video-only editor did. But this is an EDITING screen: you arrive
+            // to crop, write on it and trim it, and a clip that starts talking the moment it opens
+            // is one you have to silence before you can work. Every other clip in the post already
+            // waited to be asked; now they all do.
+            //
+            // The player is still not built here either. `ensurePreviewPlayer` is the one place
+            // that does it, on first need, so nothing decodes for a clip nobody has asked to watch.
+            _ = i
         }
 
         let gen = AVAssetImageGenerator(asset: asset)
@@ -740,6 +746,25 @@ struct StoryEditorView: View {
                         // (The "Done" that used to sit here while drawing is GONE. The pen carries
                         // its own ✕ and ✓ at the two ends of its bar now — his 2026-08-14 design —
                         // and a second Done up here would be the same decision offered twice.)
+                        //
+                        // SOUND LIVES UP HERE NOW, opposite the ✕ and built the same way — his
+                        // 2026-08-14 instruction, in his words: "remove [it from the] bottom, then
+                        // put [it] top line around X button right side, also make same size [as the]
+                        // x button."
+                        //
+                        // It reads better here than it did in the tool capsule: everything else in
+                        // that capsule OPENS something — a keyboard, a crop screen, a pen — and this
+                        // one silently flips a state. A switch belongs with the screen's other
+                        // switch-like control, not among its doors.
+                        if currentIsVideo {
+                            Button { items[index].muted.toggle() } label: {
+                                Image(systemName: items[index].muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(.primary)
+                                    .shadow(color: .black.opacity(0.35), radius: 2)
+                                    .frame(width: 40, height: 40).contentShape(Circle()).liquidGlass(Circle())
+                            }
+                        }
                     }
                     // HIG: inside the safe area, 16pt leading, 12pt below the Dynamic Island / notch.
                     // Higher up, into the top-left corner (clear of the centred Dynamic Island) per request.
@@ -1020,16 +1045,24 @@ struct StoryEditorView: View {
             // A REAL BUTTON NOW. It was `allowsHitTesting(false)` — a picture of a play button on a
             // screen with nothing to play, which is exactly what the owner reported. It hides while
             // the clip is running so it does not sit over the video you asked to watch.
+            // ⚠️ IT STAYS ON SCREEN WHILE THE CLIP RUNS, AND THAT IS THE OTHER HALF OF HIS REPORT:
+            // "also now pause video is not working."
+            //
+            // It was faded to `opacity(0)` the moment playback started, so the only way to stop a
+            // clip was to press a control that could not be seen — a button whose whole purpose is
+            // to be pressed a second time. Playing shows a pause glyph at a little under half
+            // strength: enough to find and press, faint enough not to sit over the picture he is
+            // framing. Same button, same place, both ways round, which is what he asked for.
             Button { togglePreview() } label: {
                 Image(systemName: previewPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 26))
                     .foregroundStyle(.white.opacity(0.9))
                     .frame(width: 72, height: 72)
-                    .background(.black.opacity(0.35), in: Circle())
+                    .background(.black.opacity(previewPlaying ? 0.22 : 0.35), in: Circle())
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .opacity(previewPlaying ? 0 : 1)
+            .opacity(previewPlaying ? 0.45 : 1)
             .animation(.easeInOut(duration: 0.18), value: previewPlaying)
             .transition(.opacity)
         }
@@ -1235,10 +1268,9 @@ struct StoryEditorView: View {
                 HStack(spacing: 22) {
                     capsuleTool("textformat", active: false) { addTextOverlay() }   // Aa — add text on either
                     if currentIsVideo {
-                        capsuleTool(items[index].muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
-                                    active: items[index].muted) {
-                            items[index].muted.toggle()
-                        }
+                        // (Sound is NOT here any more — it is beside the ✕ at the top, on his
+                        // instruction. Everything left in this capsule opens something; sound was
+                        // the one entry that silently flipped a state.)
                         capsuleTool("scissors", active: items[index].isTrimmed) { openTrim() }
                     } else {
                         capsuleTool("crop", active: croppedSource != nil) {
