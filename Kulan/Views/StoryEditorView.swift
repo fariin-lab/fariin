@@ -1698,9 +1698,15 @@ struct StoryEditorView: View {
     private func defaultZoom(for image: UIImage) -> CGFloat {
         let w = image.size.width, h = image.size.height
         guard w > 1, h > 1, h > w else { return 1 }   // square or landscape: their width fit
-        let card = self.card
-        guard card.width > 1, card.height > 1 else { return 1 }
-        let a = w / h, c = card.width / card.height
+        // ⚠️ THE CARD'S ASPECT, WITH A CONSTANT BEHIND IT. Only the SHAPE of the frame matters here,
+        // and this can be asked before the canvas has been measured — an unmeasured one would
+        // resolve to 1 and, because the answer is written into the item and never asked again,
+        // LOCK the picture at fitted. The card is 9:16 by design on every phone with the room for
+        // it, so that is the fallback rather than a zero.
+        let a = w / h
+        let c: CGFloat = (canvasSize.width > 1 && canvasSize.height > 1)
+            ? canvasSize.width / canvasSize.height
+            : 9.0 / 16.0
         // `scaledToFit` already matched one axis; the fill is the ratio on the other.
         return max(1, a > c ? a / c : c / a)
     }
