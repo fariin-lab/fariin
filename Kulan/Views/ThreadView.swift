@@ -364,7 +364,11 @@ struct ThreadView: View {
                     // height is what the list reserves, so the conversation lifts for the panel
                     // exactly as it lifts for the keyboard, and stays live above it.
                     if gifPanelOpen {
-                        GifPickerView(onPick: { gif in sendGif(gif) }, inline: true)
+                        GifPickerView(onPick: { gif in sendGif(gif) }, inline: true,
+                                      // The magnifier opens the full picker over the panel: searching
+                                      // needs a keyboard, and the panel is sitting in the keyboard's
+                                      // slot. Closing the sheet drops you back onto the panel.
+                                      onSearch: { showGifPicker = true })
                             .frame(height: keyboardSlot)
                             // Down past the home indicator, the way a keyboard does. The slot height
                             // deliberately excludes that strip (see keyboardSlot), so without this

@@ -82,6 +82,9 @@ struct GifPickerView: View {
     /// panel is not a screen. ⚠️ And `dismiss()` must never fire in this mode: there is no
     /// presentation to close, so the environment's dismiss would reach the CHAT and pop it.
     var inline = false
+    /// Inline only: the magnifier opens the full picker as a sheet, because searching wants a
+    /// keyboard and the panel is standing in the keyboard's place — see `inlineTopRow`.
+    var onSearch: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @State private var gifs: [GiphyService.Gif] = []
@@ -129,7 +132,7 @@ struct GifPickerView: View {
     /// bottom row would be. Same grid, same loader, same picks — only the chrome differs.
     private var inlineBody: some View {
         VStack(spacing: 0) {
-            categoryRow
+            inlineTopRow
             ScrollView {
                 HStack(alignment: .top, spacing: 4) {
                     ForEach(0..<2, id: \.self) { col in
@@ -141,7 +144,10 @@ struct GifPickerView: View {
                 .padding(6)
             }
             .scrollDismissesKeyboard(.immediately)
-            inlineSearchField
+            // The moods sit at the BOTTOM in a panel, where the keyboard's own bottom row is and
+            // where the thumb already is (his reference, 2026-08-14). At the top they were where the
+            // eye lands, competing with the GIFs for the first look.
+            categoryRow
         }
         // ⚠️ A PANEL IN THE KEYBOARD'S SLOT NEEDS THE KEYBOARD'S SURFACE (his 571 screenshot: the
         // search row and the strip under it showing the chat wallpaper straight through). It had no
@@ -166,27 +172,27 @@ struct GifPickerView: View {
         }
     }
 
-    /// The panel's own search row. `.searchable` belongs to a navigation stack, and this has none.
-    private var inlineSearchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").font(.system(size: 15)).foregroundStyle(.secondary)
-            TextField("Search GIFs", text: $query)
-                .textFieldStyle(.plain)
-                .autocorrectionDisabled()
-            if !query.isEmpty {
-                Button { query = "" } label: {
-                    Image(systemName: "xmark.circle.fill").font(.system(size: 15)).foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
+    /// SEARCH IS A BUTTON HERE, NOT A FIELD (his reference: "if you tap search it opens a full sheet
+    /// for search"). A field at the bottom of the panel was the wrong shape twice over — typing in it
+    /// raises the keyboard, and the keyboard is the thing this panel replaced, so the two fight over
+    /// one slot. The magnifier hands the job to the full picker, which has a navigation stack and can
+    /// hold a real search bar.
+    private var inlineTopRow: some View {
+        HStack(spacing: 10) {
+            Button { onSearch?() } label: {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(.primary)
+                    .frame(width: 34, height: 34)
+                    .contentShape(Rectangle())
             }
-            // Required by Giphy's terms wherever their results are shown — the page body carries the
-            // same line under its grid.
+            .buttonStyle(.plain)
+            Spacer(minLength: 0)
+            // Required by Giphy's terms wherever their results are shown.
             Text("GIPHY").font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, 12).padding(.vertical, 9)
-        .background(Color(uiColor: .tertiarySystemFill), in: Capsule())
-        .padding(.horizontal, 10)
-        .padding(.bottom, 8)
+        .padding(.horizontal, 12)
+        .padding(.top, 4)
     }
 
     private var pageBody: some View {
