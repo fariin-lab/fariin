@@ -1378,7 +1378,34 @@ private extension StoryDetailView {
     /// on `isCurrent` (`startProgress`), and the position is wiped properly the next time this page
     /// becomes current — the `newValue == model.id` branch runs the full reset and then restores.
     func resetProgress(keepPosition: Bool = false) {
-        if !keepPosition { timerProgress = 0 }
+        if !keepPosition {
+            timerProgress = 0
+        } else if timerProgress >= CGFloat(model.stories.count) {
+            // ⚠️ A BUCKET THAT FINISHED MUST NOT BE LEFT SAYING SO. HIS 2026-08-14 REPORT, EXACTLY.
+            //
+            // "When I am watching my story and the image finishes, it automatically advances to my
+            // friend's story. Then when I swipe back toward my own story, I can see my own story
+            // during the swipe, but as soon as I release my finger it jumps back to my friend's."
+            //
+            // `timerProgress` counts items, so reaching `count` IS the sentence "this person is
+            // finished" — it is what the tick tests to fire the advance. Keeping the position on the
+            // way out is right, and it is what leaves the picture up through the slide, but it also
+            // kept THAT. So the page went away still finished, and the moment it was handed the
+            // screen again — at the commit of the back swipe, before `onChange` had restored the
+            // remembered item one runloop later — the very next 20fps tick read "finished" and fired
+            // the advance again. Release the finger, and it is on the friend.
+            //
+            // ⚠️ THIS IS WHY THE TAP DID NOT DO IT and the auto-advance did, which is the whole of
+            // what he narrowed down for me. `tapNextStory` reaches the next person WITHOUT moving
+            // `timerProgress` past the last item — it tests `Int(timerProgress) + 1 >= count` and
+            // calls `updateStory()` — so a tapped-away page is left mid-item and reads as unfinished.
+            // Only the timer's own crossing leaves it at `count`.
+            //
+            // A hair under, rather than zero: `getCurrentIndex` floors this, so `count - 0.0001` is
+            // still the SAME last item and the departing page keeps the exact picture it had. What
+            // it loses is only the claim to be finished.
+            timerProgress = max(0, CGFloat(model.stories.count) - 0.0001)
+        }
         isAdvancing = false
         isPaused = false   // safety: never carry a stuck pause across a user switch (R1 freeze fix)
         scenePaused = false
