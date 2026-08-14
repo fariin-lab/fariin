@@ -2205,12 +2205,6 @@ struct TextEditorOverlay: View {
     /// What the finished overlay's own `Text` measures at, which is what the editing box is sized
     /// to. See the note beside the field.
     @State private var textWidth: CGFloat = 0
-    /// ⚠️ THIS SCREEN MOVES ITSELF WITH THE KEYBOARD NOW, rather than being moved by SwiftUI's
-    /// automatic avoidance — his 2026-08-14 "the keyboard is closing too fast… feeling like jumping
-    /// down". The automatic inset animates on the way UP and can drop in a single step on the way
-    /// DOWN, which is the jump: the bar arrives at the bottom before the keys have finished
-    /// leaving. One owner, one curve, and the same one in both directions.
-    @StateObject private var keyboard = KeyboardWatcher()
 
     private let palette: [Color] = [.white, .black, .red, .orange, .yellow, .green, .blue, .purple, .pink]
     private func nextAlign(_ a: TextAlignment) -> TextAlignment { a == .leading ? .center : a == .center ? .trailing : .leading }
@@ -2355,11 +2349,17 @@ struct TextEditorOverlay: View {
                 .padding(.bottom, 14)
             }
         }
-        // The automatic avoidance is switched off precisely because this view now does it itself;
-        // leaving both on would inset twice and lift the bar clear of the keys.
-        .ignoresSafeArea(.keyboard, edges: .bottom)
-        .padding(.bottom, keyboard.height)
-        .animation(.easeOut(duration: 0.25), value: keyboard.height)
+        // ⚠️ NOTHING HERE MOVES THIS SCREEN FOR THE KEYBOARD, AND THE ATTEMPT TO IS REVERTED.
+        //
+        // Answering his "the keyboard closes too fast" by turning off SwiftUI's own avoidance and
+        // padding the bottom by the keyboard's height BROKE THE SCREEN: padding the outer stack
+        // shortens it, so the dim, the text and the bar were all laid out inside a box the height of
+        // the space above the keys — his screenshot, with the whole editor squeezed into a band at
+        // the top and the photo showing underneath it.
+        //
+        // The automatic avoidance is correct about WHERE this screen goes; it is only its curve on
+        // the way down that he can feel. Whatever answers that has to move the BAR, not the screen,
+        // and it is not worth a broken editor to find out. Left alone.
         .onAppear { focused = true }
     }
 
