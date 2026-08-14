@@ -1693,7 +1693,6 @@ struct ArchivedChatsView: View {
     private var storiesRepo = StoriesRepository.shared   // archived (hidden) stories appear at the top
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
-    @State private var search = ""
     @State private var path = NavigationPath()
     @State private var selecting = false
     @State private var selection = Set<String>()
@@ -1828,13 +1827,11 @@ struct ArchivedChatsView: View {
         repo.conversations.contains { $0.isArchived(me) && !$0.isCleared(me) && (Flags.groupsEnabled || !$0.isGroup) }
     }
     private var archived: [Conversation] {
-        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
         // The official channel can be archived like any other chat, so it has to be findable here or
         // archiving it would look like deleting it.
-        return (repo.conversations + [OfficialChannelStore.shared.listEntry].compactMap { $0 })
+        (repo.conversations + [OfficialChannelStore.shared.listEntry].compactMap { $0 })
             .filter { $0.isArchived(me) && !$0.isCleared(me) }
             .filter { Flags.groupsEnabled || !$0.isGroup }
-            .filter { q.isEmpty || $0.displayName(me).lowercased().contains(q) }
             .sorted { $0.displayUpdatedAt(me) > $1.displayUpdatedAt(me) }
     }
 
@@ -1913,14 +1910,16 @@ struct ArchivedChatsView: View {
                         }
                         .listStyle(.plain)
                         .environment(\.editMode, .constant(selecting ? .active : .inactive))
-                        .overlay { if archived.isEmpty && !search.isEmpty { ContentUnavailableView.search(text: search) } }
                     }
                 }
             }
             .navigationTitle("Archived")
             .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always),
-                        prompt: "Search archived")
+            // NO SEARCH BAR (his call, 2026-08-13, first thing he caught on 571). It has been here
+            // since June and neither reference has one: the archive is the short list you put things
+            // in on purpose, and a permanent search field over a handful of rows is furniture. The
+            // app's own search tab still finds these chats — archiving hides a chat from the list,
+            // it does not hide it from search.
             // ⚠️ ONLY WHEN THIS VIEW OWNS THE STACK. Pushed, the chat list's stack already answers
             // for ChatTarget, and a second registration for the same type in one stack is two views
             // claiming the same destination.
