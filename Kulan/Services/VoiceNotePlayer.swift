@@ -570,6 +570,22 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         updateNowPlaying()
     }
 
+    /// YOU OPENED THE CHAT THE PAUSED NOTE LIVES IN, so the bar has nothing left to say.
+    ///
+    /// The other half of the rule his question exposed. A note that ends outside its chat stays open
+    /// on purpose, so the bar can offer it again — but walking INTO that chat means you are looking
+    /// at the bubble itself, which has its own play button and its own position. Leaving the note
+    /// open there means the bar reappears the next time you step out, for a sound that finished long
+    /// ago. So opening its chat closes it.
+    ///
+    /// ⚠️ Only when it is NOT playing. A note still going stays exactly as it is: the bubble takes
+    /// over the display and the audio never stops, which is the whole promise of the engine outliving
+    /// the view.
+    func chatOpened(_ id: String) {
+        guard hasNote, cid == id, !playing else { return }
+        dismiss()
+    }
+
     /// Stop and forget, for the bar's close button.
     func dismiss() {
         resumeAfterInterruption = false   // they ended it; a call finishing must not bring it back

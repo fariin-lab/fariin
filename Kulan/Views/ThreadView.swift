@@ -1285,6 +1285,9 @@ struct ThreadView: View {
             settled = false
             if isGroup || !cid.contains("_") { startGroupCallListener() }
             AppRouter.shared.activeChatId = cid          // suppress this chat's own banners
+            // A note of THIS chat's that is sitting paused on the bar has nothing to say once you are
+            // in here looking at its bubble — see chatOpened. One that is still playing is left alone.
+            VoiceNotePlayer.shared.chatOpened(cid)
             NotificationCleaner.clear(cid: cid)          // clear its notifications + fix the badge
             RecentsCache.prewarm()   // fetch + decode the media sheet's first thumbs NOW, before + is tapped
             Task {
