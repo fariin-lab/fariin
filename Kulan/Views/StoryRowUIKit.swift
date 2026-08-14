@@ -489,6 +489,7 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         self.stories = stories
         self.liveStoryId = liveStoryId
         self.geometry = geometry
+        if geometry.fraction > 0.0001, geometry.slotH > 1 { everRaised = true }
         self.counts = counts
 
         syncScrollEnabled()
@@ -620,6 +621,11 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         }
     }
 
+    /// HAS THIS ROW EVER BEEN OPEN? A row that has only ever been at zero has not collapsed, it has
+    /// not STARTED — and only a row that started may put the live story back to full screen. See the
+    /// note in `placeLiveStory`.
+    private var everRaised = false
+
     /// Their `scroller.isScrollEnabled = itemLayout.contentScaleFraction >= 1.0 - 0.0001`: the row
     /// is only scrollable once it has finished becoming a row.
     private func syncScrollEnabled() {
@@ -643,6 +649,7 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         let clamped = max(0, min(1, f))
         guard clamped != geometry.fraction else { return }
         geometry = geometry.withFraction(clamped)
+        if clamped > 0.0001 { everRaised = true }
         syncScrollEnabled()
         updateScrolling()
     }
@@ -1152,6 +1159,21 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             // A real collapse still passes through: the sheet cannot reach fraction 0 without the
             // row having been measured first, so the close is unaffected.
             guard geometry.slotH > 1 else { return }
+            // ⚠️ AND A MEASURED SLOT IS NOT ENOUGH EITHER — HIS 2026-08-14 "ONLY WHEN I SWIPE THE
+            // SHEET FAST", WITH THE STORY DRAWN THREE TIMES ITS SLOT.
+            //
+            // The guard above tells a 1×1 placeholder from a collapse. It cannot tell a row that has
+            // been MEASURED but never RAISED from one — and a fast sideways swipe builds exactly
+            // that: the incoming panel's row arrives already knowing the slot (the host measures it)
+            // while the sheet's own fraction has not reached it yet. Its very first pass therefore
+            // reads "measured, and at zero", which is the sentence "the sheet has gone", and it puts
+            // the live story back to FULL SCREEN — over a row that is still laying its cards out at
+            // row scale. That is his screenshot: one enormous card with the real one inside it.
+            //
+            // A row cannot collapse without having risen. `everRaised` is that in one word, and it
+            // is the same shape of fix as every other one in this file: a zero that means "not yet"
+            // must not be spent as a zero that means "finished".
+            guard everRaised else { return }
             StoryCardMorph.shared.placeAtRest()
             return
         }
