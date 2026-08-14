@@ -1,11 +1,12 @@
 import SwiftUI
 
 // Interactive crop screen (standard photo-crop behaviour, my own code). Clean, minimalist layout:
-//   • top bar  — Cancel (✕) · Reset
+//   • top bar  — Reset, alone
 //   • image band — the photo with a crop frame: corner brackets to resize, drag inside to move,
 //                  thirds grid, everything outside the frame dimmed
-//   • controls  — rotate 90° · flip horizontal, a scrollable aspect-ratio row, then Done
-// Nothing overlaps the photo; the frame never leaves the image; Done crops to the selected region.
+//   • bottom bar — ✕ · one glass capsule (rotate 90° · flip · resize) · ✓, with the aspect-ratio
+//                  row revealed behind the resize icon (his 2026-08-14 design)
+// Nothing overlaps the photo; the frame never leaves the image; ✓ crops to the selected region.
 struct ChatCropView: View {
     let image: UIImage
     var inline: Bool = false              // true = presented INLINE (fade) → close via onClose, NOT dismiss
@@ -24,6 +25,8 @@ struct ChatCropView: View {
     @State private var start: CGRect = .zero        // crop at gesture-begin
     @State private var aspect: CGFloat? = nil        // locked w/h, nil = free
     @State private var edited = false                // any change made → show Reset
+    /// Is the ratio row open? Closed at rest — the resize icon in the tool capsule is its door.
+    @State private var showAspects = false
 
     init(image: UIImage, inline: Bool = false, onClose: @escaping () -> Void = {},
          onRect: ((CGRect) -> Void)? = nil, onDone: @escaping (UIImage) -> Void) {
@@ -150,16 +153,14 @@ struct ChatCropView: View {
 
     // MARK: Controls
 
-    // Top bar: Cancel (✕) left · Reset right — native circular glass buttons, placed in the safe area.
+    // Top bar: Reset, alone on the right.
+    //
+    // ⚠️ THE ✕ IS NOT MISSING FROM HERE, IT MOVED. His 2026-08-14 design puts the two decisions —
+    // leave without cropping, and take the crop — at the two ends of the bottom bar, where the
+    // thumb already is, with the tools between them. A second ✕ up here would be the same decision
+    // offered twice, so the top corner keeps only the thing that is neither: Reset.
     private var topBar: some View {
         HStack {
-            Button { close() } label: {
-                Image(systemName: "xmark").font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary)
-                    .frame(width: 44, height: 44)
-                    .liquidGlass(Circle(), interactive: true)   // real native Liquid Glass
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
             Spacer()
             Button { reset() } label: {
                 Text("Reset").font(.system(size: 15, weight: .semibold))
@@ -176,45 +177,83 @@ struct ChatCropView: View {
         .padding(.bottom, 4)
     }
 
-    // Bottom controls: rotate/flip tool row · aspect presets · Done — placed in the bottom safe area.
+    // Bottom bar, his 2026-08-14 design: ✕ · one tool group · ✓, in one row.
+    //
+    // It was three stacked rows — two labelled icons, a permanent scroller of seven ratio chips, and
+    // a full-width white Done — which is most of the height of a phone's bottom third spent on a
+    // screen whose subject is the picture. Now the tools are ONE capsule (the same 46pt glass
+    // capsule the story toolbar uses, so the two screens read as one app), and the ratios live
+    // behind the resize icon instead of standing open. Nothing is gone: every chip is one tap away
+    // and the tap is on the icon that means shape.
     private var bottomControls: some View {
-        VStack(spacing: 18) {
-            HStack(spacing: 40) {
-                toolButton("rotate.left", "Rotate") { rotate() }
-                toolButton("arrow.left.and.right", "Flip") { flipH() }
-            }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    aspectChip("Original", originalRatio)
-                    aspectChip("Free", nil)
-                    aspectChip("1:1", 1)
-                    aspectChip("4:5", 4.0/5.0)
-                    aspectChip("3:4", 3.0/4.0)
-                    aspectChip("16:9", 16.0/9.0)
-                    aspectChip("9:16", 9.0/16.0)
+        VStack(spacing: 14) {
+            if showAspects {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        aspectChip("Original", originalRatio)
+                        aspectChip("Free", nil)
+                        aspectChip("1:1", 1)
+                        aspectChip("4:5", 4.0/5.0)
+                        aspectChip("3:4", 3.0/4.0)
+                        aspectChip("16:9", 16.0/9.0)
+                        aspectChip("9:16", 9.0/16.0)
+                    }
+                    .padding(.horizontal, 20)
                 }
-                .padding(.horizontal, 20)
+                .transition(.opacity)
             }
-            Button { apply() } label: {
-                Text("Done").font(.system(size: 17, weight: .semibold)).foregroundStyle(.black)
-                    .frame(maxWidth: .infinity).frame(height: 50)
-                    .background(Color.white, in: Capsule())
+            HStack(spacing: 12) {
+                // Leave with the picture untouched.
+                Button { close() } label: {
+                    Image(systemName: "xmark").font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .liquidGlass(Circle(), interactive: true)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 8)
+
+                HStack(spacing: 22) {
+                    toolButton("rotate.left", active: false) { rotate() }
+                    toolButton("arrow.left.and.right", active: false) { flipH() }
+                    // The ratios' door. It is the only one of the three that HOLDS a state, so it is
+                    // the only one that lights up.
+                    toolButton("aspectratio", active: showAspects) {
+                        withAnimation(.easeInOut(duration: 0.2)) { showAspects.toggle() }
+                    }
+                }
+                .padding(.horizontal, 20).frame(height: 46)   // the story toolbar's own capsule
+                .liquidGlass(Capsule())
+
+                Spacer(minLength: 8)
+
+                // Take the crop. Blue-tinted glass rather than a flat fill — the app's one shape for
+                // a prominent round action (see the composer's send).
+                Button { apply() } label: {
+                    Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
             }
-            .padding(.horizontal, 40)
+            .padding(.horizontal, 16)
         }
-        .padding(.top, 14)
+        .padding(.top, 12)
         .padding(.bottom, 8)
     }
 
-    private func toolButton(_ icon: String, _ label: String, _ action: @escaping () -> Void) -> some View {
+    // Plain icon inside the tool capsule — no background of its own, the capsule is the background.
+    private func toolButton(_ icon: String, active: Bool, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 5) {
-                Image(systemName: icon).font(.system(size: 20, weight: .medium))
-                Text(label).font(.system(size: 11, weight: .medium))
-            }
-            .foregroundStyle(.white)
+            Image(systemName: icon).font(.system(size: 20, weight: .medium))
+                .foregroundStyle(active ? Color(hex: 0x3DA1FD) : .white)
+                .frame(width: 32, height: 32).contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(StoryPressStyle())
     }
 
     private func aspectChip(_ label: String, _ ratio: CGFloat?) -> some View {

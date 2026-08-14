@@ -115,6 +115,9 @@ struct StoryEditorView: View {
     @State private var caption = ""
     @State private var drawing = PKDrawing()
     @State private var isDrawing = false
+    /// The strokes as they were when the pen was opened, so its ✕ can put them back. Nil whenever
+    /// the pen is shut — see `cancelDrawing`.
+    @State private var drawingAtPenOpen: PKDrawing?
     @State private var filterIndex = 0
     @State private var croppedSource: UIImage?   // result of the interactive crop (nil = uncropped)
     @State private var showCrop = false
@@ -725,9 +728,9 @@ struct StoryEditorView: View {
                                 .frame(width: 40, height: 40).contentShape(Circle()).liquidGlass(Circle())
                         }
                         Spacer()
-                        if isDrawing {
-                            Button("Done") { isDrawing = false }.foregroundStyle(.white).fontWeight(.semibold)
-                        }
+                        // (The "Done" that used to sit here while drawing is GONE. The pen carries
+                        // its own ✕ and ✓ at the two ends of its bar now — his 2026-08-14 design —
+                        // and a second Done up here would be the same decision offered twice.)
                     }
                     // HIG: inside the safe area, 16pt leading, 12pt below the Dynamic Island / notch.
                     // Higher up, into the top-left corner (clear of the centred Dynamic Island) per request.
@@ -735,11 +738,14 @@ struct StoryEditorView: View {
                     Spacer()
                 }
                 // …and out of the way while a stroke is under the finger, same as the pen bar below.
-                // The X and Done are in the top corners, which is exactly where a drawing runs off.
+                // The X is in a top corner, which is exactly where a drawing runs off.
                 // AND DURING TRIM: the trim overlay carries its own X/✓ in the same corners, and
                 // the composer's X kept drawing UNDER it — his screenshot showed the two close
                 // buttons stacked on top of each other.
-                .opacity(draggingID == nil && editingID == nil && !strokeInFlight && !showTrim ? 1 : 0)
+                // AND WHILE THE PEN IS OPEN, for the same reason one step further on: the pen's bar
+                // now has its own ✕, and this one closes the WHOLE editor. Two ✕ on one screen
+                // meaning two different things is worse than one extra tap to get out.
+                .opacity(draggingID == nil && editingID == nil && !strokeInFlight && !showTrim && !isDrawing ? 1 : 0)
                 .ignoresSafeArea(.keyboard, edges: .bottom)
 
                 // The bottom bars and the crop overlay are siblings of the canvas, in `body`,
@@ -1215,7 +1221,13 @@ struct StoryEditorView: View {
                             withAnimation(.easeInOut(duration: 0.28)) { showCrop = true }
                         }
                     }
-                    capsuleTool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle", active: isDrawing) { isDrawing.toggle() }
+                    capsuleTool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle", active: isDrawing) {
+                        // The pen's ✕ undoes back to here, so the snapshot is taken on the way IN
+                        // and nowhere else — see `cancelDrawing`.
+                        if isDrawing { drawingAtPenOpen = nil }   // shutting it here KEEPS, like ✓
+                        else { drawingAtPenOpen = drawing }
+                        isDrawing.toggle()
+                    }
                     // NO EXTRA TOOL beyond these. It used to carry a second "add another
                     // picture", kept on the reasoning that two doors to one action beat two doors
                     // to two different ones. He has now seen both and called it: "remove the
@@ -1433,49 +1445,79 @@ struct StoryEditorView: View {
                 colors: [.white] + stride(from: 0.02, through: 1.0, by: 0.08).map { Color(hue: $0, saturation: 1, brightness: 1) },
                 startPoint: .leading, endPoint: .trailing))
                 .padding(.horizontal, 20)
+            // ✕ · one tool group · ✓ — his 2026-08-14 design, the same three-part bar the crop
+            // screen wears, so the two tools of one editor are laid out the same way. Five loose
+            // glass circles in a row read as five unrelated things; the four that are the PEN are
+            // one object now, and the two that end the session sit at the two ends where the thumb
+            // already is.
             HStack(spacing: 12) {
-                penTool("arrow.uturn.backward") {
-                    var strokes = drawing.strokes
-                    if !strokes.isEmpty { strokes.removeLast(); drawing = PKDrawing(strokes: strokes) }
-                }
-                penTool("pencil.tip", active: !isHighlighter) { isHighlighter = false }
-                penTool("highlighter", active: isHighlighter) { isHighlighter = true }
-                Button { penWidth = penWidth >= 16 ? 4 : penWidth + 6 } label: {
-                    Circle().fill(currentColor).frame(width: min(penWidth + 6, 26), height: min(penWidth + 6, 26))
+                // Leave the pen and take this session's strokes with it. See `cancelDrawing`.
+                Button { cancelDrawing() } label: {
+                    Image(systemName: "xmark").font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
                         .frame(width: 44, height: 44)
-                        .liquidGlass(Circle(), interactive: true).contentShape(Circle())
+                        .liquidGlass(Circle(), interactive: true)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
-                Spacer()
-                Button { isDrawing = false } label: {
-                    Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+
+                Spacer(minLength: 8)
+
+                HStack(spacing: 22) {
+                    capsuleTool("arrow.uturn.backward", active: false, tint: Color(hex: 0x3DA1FD)) {
+                        var strokes = drawing.strokes
+                        if !strokes.isEmpty { strokes.removeLast(); drawing = PKDrawing(strokes: strokes) }
+                    }
+                    capsuleTool("pencil.tip", active: !isHighlighter, tint: Color(hex: 0x3DA1FD)) { isHighlighter = false }
+                    capsuleTool("highlighter", active: isHighlighter, tint: Color(hex: 0x3DA1FD)) { isHighlighter = true }
+                    // The width, which is also the only place the chosen colour is shown as a
+                    // solid. No glass circle of its own any more — the capsule is its background.
+                    Button { penWidth = penWidth >= 16 ? 4 : penWidth + 6 } label: {
+                        Circle().fill(currentColor)
+                            .frame(width: min(penWidth + 6, 24), height: min(penWidth + 6, 24))
+                            .frame(width: 32, height: 32).contentShape(Rectangle())
+                    }
+                    .buttonStyle(StoryPressStyle())
+                }
+                .padding(.horizontal, 20).frame(height: 46)   // the story toolbar's own capsule
+                .liquidGlass(Capsule())
+
+                Spacer(minLength: 8)
+
+                // Keep the drawing. Blue-tinted glass, the app's one shape for a prominent round
+                // action, matching the crop screen's ✓.
+                Button { drawingAtPenOpen = nil; isDrawing = false } label: {
+                    Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white)
                         .frame(width: 44, height: 44)
-                        .background(.ultraThinMaterial, in: Circle())
-                        .environment(\.colorScheme, .dark)
+                        .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 16)
         }
     }
 
-    private func penTool(_ icon: String, active: Bool = false, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon).font(.system(size: 17, weight: .medium))
-                .foregroundStyle(active ? Color(hex: 0x3DA1FD) : .primary)
-                .frame(width: 44, height: 44)
-                .liquidGlass(Circle(), interactive: true).contentShape(Circle())
-        }
-        .buttonStyle(.plain)
+    /// LEAVE THE PEN WITH THE PICTURE AS IT WAS WHEN IT OPENED.
+    ///
+    /// A ✕ that did the same thing as the ✓ would be a decoration, so this one has to mean
+    /// something: it drops the strokes made in THIS pen session and keeps everything drawn before
+    /// it. The snapshot is taken where the pen is opened (`toolRowLayer`) and released by either
+    /// way out, so it can never be spent on a later session.
+    private func cancelDrawing() {
+        if let snapshot = drawingAtPenOpen { drawing = snapshot }
+        drawingAtPenOpen = nil
+        isDrawing = false
     }
 
     // Plain icon button inside the dark tool capsule (no per-button background — the capsule is the bg).
     @ViewBuilder
-    private func capsuleTool(_ icon: String, active: Bool, _ action: @escaping () -> Void) -> some View {
+    private func capsuleTool(_ icon: String, active: Bool, tint: Color = .green,
+                             _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon).font(.system(size: 20, weight: .medium))
-                .foregroundStyle(active ? .green : .white)
+                .foregroundStyle(active ? tint : .white)
                 .frame(width: 32, height: 32).contentShape(Rectangle())
         }
         .buttonStyle(StoryPressStyle())
