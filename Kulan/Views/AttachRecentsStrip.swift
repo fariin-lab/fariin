@@ -114,7 +114,13 @@ struct AttachRecentsStrip: View {
         Group {
             if showAlbums { albumsList } else { grid }
         }
-        .safeAreaInset(edge: .top, spacing: 0) { header }
+        // ⚠️ AN OVERLAY, NOT AN INSET, and that is his follow-up ("it still has a bit left"). An inset
+        // RESERVES its height, so at rest there was still a strip of the sheet's own background above
+        // the first photos — the white was gone but the space it held was not. Overlaid, the grid
+        // runs to the very top edge and the header floats on it from the first frame, which is what
+        // theirs does. Nothing is unreachable: the first row sits under a close button with its own
+        // glass circle and a floating title, and one scroll moves it clear.
+        .overlay(alignment: .top) { header }
         // ≥1 selected → a caption + Send bar as a native bottom inset bar, so iOS pins it directly above
         // the keyboard (no home-indicator gap between the bar and the keyboard) and above the home
         // indicator when the keyboard is down — exactly like a composer.
