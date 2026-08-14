@@ -1433,7 +1433,18 @@ struct StoryEditorView: View {
             // thing was the only one charging for it.
             //
             // What is left is enough to seat the glass buttons on and no more.
-            .background(Color.black.opacity(0.18).ignoresSafeArea())
+            //
+            // ⚠️ AND IT ANSWERS A TAP, which is the other half of the same report: "I can't play
+            // video in the trim page." The play circle was visible the whole time — it belongs to
+            // the canvas underneath — and this wash sits over it, so the tap died in the wash. A
+            // full-screen background is not a picture, it is a surface, and it was silently
+            // swallowing the only control on the screen. The strip and the two buttons are children
+            // of this stack and sit above it, so they keep their own touches.
+            .background(
+                Color.black.opacity(0.18).ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { togglePreview() }
+            )
             .transition(.opacity)
             .task(id: items[index].id) { await loadTrimThumbs() }
             // The strip reports where the finger is; the clip goes there. `.zero` tolerance because a
