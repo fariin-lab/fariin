@@ -2182,6 +2182,14 @@ struct TextOverlayView: View {
 }
 
 // Full-screen text editor: focused field + font/color/align/bg controls.
+/// The width the draft's words actually occupy, reported by an invisible `Text` laid out exactly as
+/// the finished overlay will be. A `TextField` cannot answer this: offered a width it takes all of
+/// it, which is why the editing box used to be wider than the words inside it.
+private struct DraftTextWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
 struct TextEditorOverlay: View {
     @Binding var draft: TextOverlay
     /// ⚠️ KEPT, AND DELIBERATELY UNUSED BY THE CHROME. The Cancel button is gone on his instruction
@@ -2194,6 +2202,9 @@ struct TextEditorOverlay: View {
     /// Is the font row open? Shut at rest: the Aa in the bar is its door, and it draws itself in
     /// whichever font is currently chosen.
     @State private var showFonts = false
+    /// What the finished overlay's own `Text` measures at, which is what the editing box is sized
+    /// to. See the note beside the field.
+    @State private var textWidth: CGFloat = 0
 
     private let palette: [Color] = [.white, .black, .red, .orange, .yellow, .green, .blue, .purple, .pink]
     private func nextAlign(_ a: TextAlignment) -> TextAlignment { a == .leading ? .center : a == .center ? .trailing : .leading }
@@ -2216,23 +2227,51 @@ struct TextEditorOverlay: View {
                 // all four fonts, all nine colours, the three alignments and the three backgrounds
                 // are still here, and the two that were rows are the two that are used least.
                 Spacer()
-                TextField("", text: $draft.text, prompt: Text("Type…").foregroundColor(.white.opacity(0.5)), axis: .vertical)
-                    .focused($focused)
-                    .multilineTextAlignment(draft.alignment)
-                    .font(.system(size: draft.baseSize, weight: .semibold, design: draft.font.design))
-                    .foregroundStyle(draft.background == .solid ? Color.black : draft.color)
-                    .tint(.white)
-                    .padding(draft.background == .plain ? 6 : 14)
-                    .background {
-                        switch draft.background {
-                        case .plain: Color.clear
-                        case .semi:  RoundedRectangle(cornerRadius: 10).fill(.black.opacity(0.38))
-                        case .solid: RoundedRectangle(cornerRadius: 10).fill(draft.color)
-                        }
+                // ⚠️ THE BOX IS THE TEXT'S WIDTH, NOT THE FIELD'S — his 2026-08-14 report: the white
+                // background is far wider than the words while the keyboard is up, and exactly
+                // right once Done is pressed.
+                //
+                // Both of those are the same fact seen twice. A `TextField` is GREEDY: offered 320pt
+                // it takes 320pt, whether it has two words in it or none, so a background attached
+                // to the field is 320pt wide. The finished overlay is drawn with a `Text`, which
+                // takes only what it needs — so the box changed size at Done because the two are
+                // different views with different appetites, and only one of them was ever wrong.
+                //
+                // The invisible `Text` below is the same string in the same font at the same wrap
+                // width, so it lays out to exactly what the finished overlay will, and it is what
+                // this block is sized by. The field is fitted into that width rather than asked for
+                // its own opinion. It costs one hidden layout pass and it cannot drift from the
+                // result, because it IS the result's own view type.
+                ZStack {
+                    Text(draft.text.isEmpty ? "Type…" : draft.text)
+                        .font(.system(size: draft.baseSize, weight: .semibold, design: draft.font.design))
+                        .multilineTextAlignment(draft.alignment)
+                        .background(GeometryReader { g in
+                            Color.clear.preference(key: DraftTextWidthKey.self, value: g.size.width)
+                        })
+                        .frame(maxWidth: 320)
+                        .opacity(0)
+                        .accessibilityHidden(true)
+                    TextField("", text: $draft.text,
+                              prompt: Text("Type…").foregroundColor(.white.opacity(0.5)), axis: .vertical)
+                        .focused($focused)
+                        .multilineTextAlignment(draft.alignment)
+                        .font(.system(size: draft.baseSize, weight: .semibold, design: draft.font.design))
+                        .foregroundStyle(draft.background == .solid ? Color.black : draft.color)
+                        .tint(.white)
+                        .frame(width: max(24, textWidth))
+                }
+                .onPreferenceChange(DraftTextWidthKey.self) { textWidth = $0 }
+                .padding(draft.background == .plain ? 6 : 14)
+                .background {
+                    switch draft.background {
+                    case .plain: Color.clear
+                    case .semi:  RoundedRectangle(cornerRadius: 10).fill(.black.opacity(0.38))
+                    case .solid: RoundedRectangle(cornerRadius: 10).fill(draft.color)
                     }
-                    .frame(maxWidth: 320)
-                    .contentShape(Rectangle())          // tap anywhere on the text block, not just the glyphs
-                    .onTapGesture { focused = true }
+                }
+                .contentShape(Rectangle())          // tap anywhere on the text block, not just the glyphs
+                .onTapGesture { focused = true }
                 Spacer()
                 VStack(spacing: 12) {
                     // THE FONTS, BEHIND THE Aa THAT NAMES THEM. A permanent row of four for a choice
