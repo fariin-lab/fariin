@@ -277,9 +277,10 @@ struct MenuIcon: View {
 /// begins, a task starts that takes the fill away by itself. A press that ends normally cancels it
 /// (the id flips), a press that never ends cannot outlive it. Nothing here can leave grey behind.
 struct RowPressFill: ButtonStyle {
-    /// The app's own highlight token — the same fill the custom menu paints its pressed row with,
-    /// and it adapts to light/dark on its own.
-    static let fill = Color(.secondarySystemFill)
+    /// The app's own highlight token, one step up from the menu's `.secondarySystemFill`: a menu row
+    /// is a small target under a finger that is already still, a chat row is the full width of the
+    /// screen and the eye is somewhere else. It still adapts to light and dark on its own.
+    static let fill = Color(.systemFill)
     /// Long enough that a long press keeps its grey while the context menu takes over (the menu
     /// lifts the row at about half a second), short enough that a stranded press is never seen.
     static let watchdog: UInt64 = 3_000_000_000
@@ -291,16 +292,31 @@ struct RowPressFill: ButtonStyle {
     // called Body is taken as the witness for it and a private one cannot be (compile error).
     private struct Fill: View {
         let configuration: ButtonStyleConfiguration
-        @State private var expired = false
+        @State private var lit = false
 
         var body: some View {
             configuration.label
-                .background(configuration.isPressed && !expired ? RowPressFill.fill : .clear)
+                .background(lit ? RowPressFill.fill : .clear)
                 .task(id: configuration.isPressed) {
-                    guard configuration.isPressed else { expired = false; return }   // released: re-arm
-                    try? await Task.sleep(nanoseconds: RowPressFill.watchdog)
-                    guard !Task.isCancelled else { return }
-                    expired = true
+                    if configuration.isPressed {
+                        lit = true                                   // instant, on touch down
+                        // The stranding watchdog (see the type's note): a press that never ends
+                        // cannot leave grey behind.
+                        try? await Task.sleep(nanoseconds: RowPressFill.watchdog)
+                        guard !Task.isCancelled else { return }
+                        withAnimation(.easeOut(duration: 0.2)) { lit = false }
+                    } else {
+                        // ⚠️ IT HAS TO OUTLIVE THE FINGER, and this is the second report (owner
+                        // 2026-08-13 on build 570, which carries the first fix: "you said you made
+                        // it and you did not"). Painting only while `isPressed` is true is correct
+                        // and invisible: a tap holds the glass for about a tenth of a second and the
+                        // chat is already pushing over the row by the time the eye arrives. So the
+                        // fill survives the lift by a beat and then fades, which is what makes a tap
+                        // something you SAW rather than something that happened.
+                        try? await Task.sleep(nanoseconds: 180_000_000)
+                        guard !Task.isCancelled else { return }
+                        withAnimation(.easeOut(duration: 0.18)) { lit = false }
+                    }
                 }
         }
     }
