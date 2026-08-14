@@ -387,11 +387,19 @@ struct ThreadView: View {
                                       atTop: $gifGridAtTop)
                             .frame(height: panelHeight)
                             .simultaneousGesture(panelExpandDrag)
-                            // Down past the home indicator, the way a keyboard does. The slot height
-                            // deliberately excludes that strip (see keyboardSlot), so without this
-                            // the wallpaper shows in the gap under the panel.
-                            .background(Color(uiColor: .secondarySystemBackground)
-                                .ignoresSafeArea(edges: .bottom))
+                            // ROUNDED AT THE TOP, SQUARE AT THE BOTTOM, which is theirs and is also
+                            // the only shape that makes sense: the top edge is a card rising over the
+                            // conversation, the bottom edge is the edge of the phone. The fill runs
+                            // down past the home indicator — the slot height stops above that strip
+                            // (see keyboardSlot), and without this the wallpaper shows in the gap.
+                            .background {
+                                UnevenRoundedRectangle(cornerRadii: .init(topLeading: 16, topTrailing: 16),
+                                                       style: .continuous)
+                                    .fill(Color(uiColor: .secondarySystemBackground))
+                                    .ignoresSafeArea(edges: .bottom)
+                            }
+                            .clipShape(UnevenRoundedRectangle(cornerRadii: .init(topLeading: 16, topTrailing: 16),
+                                                              style: .continuous))
                             .transition(.move(edge: .bottom))
                     }
                 }
