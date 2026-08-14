@@ -779,10 +779,10 @@ final class StoryViewersSheetView: UIView {
                 // third number again — so the viewers list and the row arrived at different times on
                 // different curves for one gesture. Theirs runs both off ONE transition; both read
                 // `StoryRowSettle` now, which is where their 0.3 and 0.4 live.
+                // ⚠️ AND THE CURVE COMES FROM THERE TOO, NOT JUST THE LENGTH. It was a spring here
+                // and an ease-out on the story the cards belong to — see `StoryRowSettle.viewOptions`.
                 UIView.animate(withDuration: StoryRowSettle.commit.duration, delay: 0,
-                               usingSpringWithDamping: StoryRowSettle.commit.damping,
-                               initialSpringVelocity: 0,
-                               options: [.allowUserInteraction]) {
+                               options: [StoryRowSettle.commit.viewOptions, .allowUserInteraction]) {
                     self.pageOffset = 0
                     self.applyPageOffset()
                 } completion: { [weak self] _ in
@@ -794,9 +794,8 @@ final class StoryViewersSheetView: UIView {
                 // drag that undoes itself does not read as decisive as one that meant something.
                 // Ours was 0.3 at a different damping, i.e. neither their number nor our own commit's.
                 UIView.animate(withDuration: StoryRowSettle.abandon.duration, delay: 0,
-                               usingSpringWithDamping: StoryRowSettle.abandon.damping,
-                               initialSpringVelocity: 0,
-                               options: [.allowUserInteraction]) {   // same rule as the commit settle
+                               options: [StoryRowSettle.abandon.viewOptions,
+                                         .allowUserInteraction]) {   // same rule as the commit settle
                     self.pageOffset = 0
                     self.applyPageOffset()
                 } completion: { [weak self] _ in

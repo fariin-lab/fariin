@@ -629,7 +629,18 @@ public final class StoryCardMorph {
         }
         CATransaction.begin()
         CATransaction.setDisableActions(animated == nil)
-        if let animated { CATransaction.setAnimationDuration(animated.duration) }
+        // ⚠️ THE CURVE, NOT JUST THE LENGTH — AND THE MISSING LINE WAS THE BRIGHTNESS ITSELF.
+        //
+        // The duration was set and the timing function was not, so this dim travelled on Core
+        // Animation's default ease-in-ease-out while the card underneath it travelled on the curve
+        // the caller actually asked for. Same length, different shape: the darkness was ahead of
+        // its own card in the first half and behind it in the second. That is the "brightness
+        // briefly appears in the wrong position" half of his 2026-08-14 report, and it is a third
+        // clock on top of the two the row had.
+        if let animated {
+            CATransaction.setAnimationDuration(animated.duration)
+            CATransaction.setAnimationTimingFunction(animated.timing)
+        }
         // `bounds`, never `frame`: the card carries a transform and `frame` is undefined on a view
         // that does. The tint lives in the card's own untransformed space and inherits everything.
         contentTint.frame = card.bounds

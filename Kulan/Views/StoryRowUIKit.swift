@@ -65,8 +65,35 @@ enum StoryRowSettle {
         }
     }
 
-    /// One spring for both, as theirs is: only the length differs.
-    var damping: CGFloat { 0.82 }
+    /// ⚠️ ONE CURVE, AND EVERY PIECE OF ONE MOVEMENT READS IT FROM HERE. HIS 2026-08-14 REPORT.
+    ///
+    /// The length was already shared and the CURVE was not, which is a subtler version of the same
+    /// bug this enum was written to end. The side cards and their tints travelled on
+    /// `usingSpringWithDamping: 0.82` — an UNDERDAMPED spring, slow to leave and overshooting at the
+    /// far end — while the centre story, drawn by the morph in another hierarchy, travelled on a
+    /// `CAMediaTimingFunction(name: .easeOut)`, which is fastest at the start. Over 0.3s those two
+    /// are nowhere near each other: at the half-way point ease-out has covered about 85% of the
+    /// distance and the spring about two thirds.
+    ///
+    /// So on every change of the centre story — a tap on a thumbnail, a sideways page — the centre
+    /// card arrived while the thumbnails were still leaving, and the dimming, which is written with
+    /// the cards it covers, arrived with them. That is his "the thumbnails have a delayed
+    /// animation… the incoming card appears to move over the outgoing card… the brightness briefly
+    /// appears in the wrong position": three symptoms of one movement drawn on two clocks.
+    ///
+    /// The old note said a 0.82 spring was "close enough to easeOut that the two read as one
+    /// movement". It is not, and it never was.
+    ///
+    /// Ease-out is the curve because it is the one both sides can state EXACTLY: `.curveEaseOut` and
+    /// `CAMediaTimingFunction(name: .easeOut)` are the same function, so the row's views and the
+    /// morph's layers cannot drift again. (Theirs is `kCAMediaTimingFunctionSpring`, a private curve
+    /// they pair with `UIView.AnimationOptions(rawValue: 7 << 16)`. A curve that can only be named
+    /// exactly on one of the two sides is how this happened in the first place.)
+    ///
+    /// ⚠️ WHOEVER ADDS A THIRD SURFACE TO THIS MOVEMENT READS BOTH OF THESE. Neither a duration nor
+    /// a curve may be written anywhere else.
+    var viewOptions: UIView.AnimationOptions { .curveEaseOut }
+    var timing: CAMediaTimingFunction { CAMediaTimingFunction(name: .easeOut) }
 }
 
 // MARK: - The picture on one card
@@ -954,11 +981,10 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
                 // Their `.curve(duration: 0.3, curve: .spring)` for a movement that did not come from
                 // the finger. `.allowUserInteraction` so an interrupting swipe is heard during it,
                 // and `.beginFromCurrentState` so an interrupting one starts where this one got to.
-                UIView.animate(withDuration: settle?.duration ?? StoryRowSettle.commit.duration,
+                let curve = settle ?? .commit
+                UIView.animate(withDuration: curve.duration,
                                delay: 0,
-                               usingSpringWithDamping: settle?.damping ?? StoryRowSettle.commit.damping,
-                               initialSpringVelocity: 0,
-                               options: [.allowUserInteraction, .beginFromCurrentState],
+                               options: [curve.viewOptions, .allowUserInteraction, .beginFromCurrentState],
                                animations: write)
             } else {
                 // A bare `CALayer`'s frame, cornerRadius and opacity are all implicitly animated, so
@@ -1055,15 +1081,12 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// division that existed to cancel a lerp on the far side. What is left is a hand-off — the row
     /// has already decided where this story goes, and this writes it.
     ///
-    /// The dim is NOT passed. It is the row's tint layer over this item, like every other item's.
-    /// The row's own spring for a movement that did not come from a finger, stated once so the cards
-    /// and the live story cannot be given two different curves. `UIView.animate`'s spring and a
-    /// `CAMediaTimingFunction` are not the same maths, but they are the same 0.3s ease-out journey,
-    /// and 0.82 damping is close enough to `easeOut` over that distance that the two read as one
-    /// movement. What matters is that neither arrives while the other is travelling.
+    /// The row's own curve for a movement that did not come from a finger, in the form the morph
+    /// takes it. ⚠️ BOTH NUMBERS COME OUT OF `StoryRowSettle` AND NEITHER IS WRITTEN HERE — the
+    /// duration always did; the curve is the one that used to be stated twice, differently, and
+    /// that was his 2026-08-14 report. Read the note on `viewOptions`.
     static func settleAnimation(_ settle: StoryRowSettle) -> StoryCardMorph.Animation {
-        StoryCardMorph.Animation(duration: settle.duration,
-                                 timing: CAMediaTimingFunction(name: .easeOut))
+        StoryCardMorph.Animation(duration: settle.duration, timing: settle.timing)
     }
 
     private func placeLiveStory(_ p: StoryRowPlacement, settle: StoryRowSettle? = nil) {
