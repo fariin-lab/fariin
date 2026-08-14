@@ -2173,7 +2173,9 @@ struct ChatRow: View, Equatable {
         if s.hasPrefix("🎬 ") { return ("photo.on.rectangle.angled", String(s.dropFirst("🎬 ".count))) }
         switch s {
         case "📄 File":              return ("doc.fill", "File")
-        case "GIF":                  return ("sparkles", "GIF")
+        // Our own GIF mark, the one the composer button wears. `sparkles` was standing in for a
+        // symbol Apple does not ship, and it says "magic" rather than "GIF" (his 573 screenshot).
+        case "GIF":                  return ("ic_gif", "GIF")
         case "📞 Missed call":         return ("phone.down.fill", "Missed call")
         case "📞 Call":                return ("phone.fill", "Call")
         // Legacy markers from before declines were removed from the log (2026-08-12): old
@@ -2185,9 +2187,20 @@ struct ChatRow: View, Equatable {
         default: return nil
         }
     }
+    /// "ic_" names one of OUR drawings; anything else is an SF Symbol — the same convention the
+    /// composer's attachment tiles use. It exists here because of the GIF row: SF Symbols has no GIF
+    /// glyph at all, which is why that preview wore `sparkles` and read as anything but a GIF.
     private func previewRow(_ icon: String, _ text: String, iconTint: Color? = nil) -> some View {
         HStack(spacing: 5) {
-            Image(systemName: icon).font(.system(size: 12)).foregroundStyle(iconTint ?? Color.secondary)
+            Group {
+                if icon.hasPrefix("ic_") {
+                    Image(icon).renderingMode(.template).resizable().scaledToFit()
+                        .frame(width: 14, height: 14)
+                } else {
+                    Image(systemName: icon).font(.system(size: 12))
+                }
+            }
+            .foregroundStyle(iconTint ?? Color.secondary)
             Text(text).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
         }
     }
