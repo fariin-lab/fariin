@@ -998,7 +998,12 @@ struct ChatsView: View {
     // Not while selecting (the row carries no tag, so it can never be part of a selection), and not
     // under a filter — Unread and Groups are questions about the chats on THIS page.
     private var showsArchivedRow: Bool {
-        !selecting && chatFilter == 0 && (!archivedChats.isEmpty || hasArchivedStories)
+        // ⚠️ `selecting` IS NOT IN HERE ANY MORE (his reference, 2026-08-14): in select mode the row
+        // STAYS, greyed and unselectable, instead of vanishing. A row that disappears the moment you
+        // tap Edit reads as something you broke; theirs dims it, which says "not this one" without
+        // moving anything. It carries no tag and takes `selectionDisabled`, so it never grows a
+        // checkbox and can never end up in a selection.
+        chatFilter == 0 && (!archivedChats.isEmpty || hasArchivedStories)
     }
     /// 22pt of icon between two 11pt paddings. Only the empty-state overlay needs the number, and it
     /// needs it BEFORE layout, which is why it is written down rather than measured.
@@ -1034,6 +1039,10 @@ struct ChatsView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(RowPressFill())    // the same touch grey as the chat rows under it
+            // Select mode: dimmed and dead, not gone. `disabled` is the right tool here for once —
+            // it stops the tap AND greys the row, and greyed is exactly the state being asked for.
+            .disabled(selecting)
+            .selectionDisabled(true)        // no checkbox, ever
             .listRowInsets(EdgeInsets())
             .listRowSeparator(.hidden)
             .deleteDisabled(true)
