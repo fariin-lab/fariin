@@ -270,7 +270,8 @@ struct StoryDetailView: View {
     init(viewModel: StoryViewModel, model: StoryUIModel, isPresented: Binding<Bool>,
          userClosure: UserCompletionHandler?, onProfile: ((StoryUIUser) -> Void)? = nil,
          onItemSeen: ((String) -> Void)? = nil, onItemChanged: ((String) -> Void)? = nil,
-         showMore: Bool = false, isDismissing: Bool = false) {
+         showMore: Bool = false, isDismissing: Bool = false,
+         ownerBar: ((String) -> AnyView)? = nil, ownerBarHeight: CGFloat = 0) {
         self.viewModel = viewModel
         _model = State(initialValue: model)
         _isPresented = isPresented
@@ -280,6 +281,8 @@ struct StoryDetailView: View {
         self.onItemChanged = onItemChanged
         self.showMore = showMore
         self.isDismissing = isDismissing
+        self.ownerBar = ownerBar
+        self.ownerBarHeight = ownerBarHeight
         // A page swiped two people away is dismantled and REBUILT when you come back, so the resume
         // has to be answered here as well as in `.onChange` — otherwise going back far enough still
         // restarted the person. Split into named steps rather than a chain of `??`: this file has
