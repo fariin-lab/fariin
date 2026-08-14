@@ -35,55 +35,86 @@ struct ArchiveSettingsView: View {
 
 /// What archiving does, in THIS app's words.
 ///
-/// Every line here was checked against the code rather than carried over from the app it is modelled
-/// on: the list filter that hides an archived chat, the tab-badge filter that skips it, and the fact
-/// that a new message does not pull it back. The one thing the reference app does that we do not is
-/// mute on archive — manual archiving touches `archivedBy` and nothing else — so the page says so
-/// instead of promising quiet it cannot deliver.
+/// REWRITTEN 2026-08-13 after he held it up against theirs and asked which one a person understands.
+/// Theirs, and not by a small margin — for three reasons that are all shape rather than wording:
+/// their lines are ONE line each, every line starts with the thing you DO rather than what the
+/// feature IS, and the sheet ends in one big button with a shortcut to the setting sitting in the
+/// text. Ours was more accurate and less understandable, on an app read in a second language.
+///
+/// So: one line per point, each one an action, a half sheet rather than a page, and Got it at the
+/// bottom. ⚠️ HIS CONDITION, and it is the reason not one string here is theirs: "don't copy their
+/// text, make our own". The SHAPE is what was learned; the words are this app's, and every one of
+/// them is still checked against the code — the list filter that hides an archived chat, the badge
+/// filter that skips it, a new message not pulling it back, and the fact that manual archiving does
+/// not mute, which is the one thing the app it is modelled on does and we do not.
 struct ArchiveHelpView: View {
     @Environment(\.dismiss) private var dismiss
+    /// Straight to the switch, from the line that mentions it — the shortcut theirs puts in its
+    /// opening sentence. Nobody reads an explainer and then goes hunting through Settings.
+    @State private var showSettings = false
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 20) {
-                    MenuIcon("ic_archive", size: 40)
-                        .foregroundStyle(Color.accentColor)
-                        .frame(width: 88, height: 88)
-                        .background(Circle().fill(Color.accentColor.opacity(0.12)))
-                        .padding(.top, 20)
-                    Text("Archived Chats")
-                        .font(.title2.weight(.semibold))
-                    VStack(alignment: .leading, spacing: 20) {
-                        point("tray.and.arrow.down", "They leave your chat list",
-                              "An archived chat moves out of Chats and waits in here. Nothing is deleted, and the messages stay exactly where they are.")
-                        point("bell.slash", "Only the list goes quiet",
-                              "Unread messages in here are left out of the number on the Chats tab. Notifications still arrive unless you mute the chat itself.")
-                        point("hand.draw", "They stay until you take them out",
-                              "A new message does not pull a chat back. Swipe it here, or hold it, and choose Unarchive.")
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(spacing: 18) {
+                        MenuIcon("ic_archive", size: 34)
+                            .foregroundStyle(.white)
+                            .frame(width: 76, height: 76)
+                            .background(Circle().fill(Color.accentColor))
+                            .padding(.top, 8)
+                        Text("Archived Chats")
+                            .font(.title3.weight(.semibold))
+                        VStack(alignment: .leading, spacing: 18) {
+                            point("hand.draw", "Swipe a chat to put it here")
+                            point("tray.and.arrow.up", "Swipe it again to take it back")
+                            point("bell.slash", "It stops counting on the Chats tab")
+                            point("bell.badge", "It still notifies you, unless you mute it")
+                        }
+                        Button { showSettings = true } label: {
+                            HStack(spacing: 4) {
+                                Text("New chats from people you don't know can come straight here.")
+                                    .foregroundStyle(.secondary)
+                                Text("Change").foregroundStyle(Color.accentColor)
+                            }
+                            .font(.footnote)
+                            .multilineTextAlignment(.center)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.top, 2)
                     }
-                    .padding(.top, 4)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 12)
+                    .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 36)
-                .frame(maxWidth: .infinity)
+                Button { dismiss() } label: {
+                    Text("Got it").font(.headline).foregroundStyle(.white)
+                        .frame(maxWidth: .infinity).frame(height: 50)
+                        .background(Color.accentColor, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 24).padding(.bottom, 12)
             }
-            .navigationTitle("How It Works")
+            .navigationTitle("Archived")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .toolbar(.hidden, for: .navigationBar)   // one exit, and it is the button
+            .sheet(isPresented: $showSettings) { ArchiveSettingsView() }
         }
+        // A half sheet, not a page: it is four lines, and a full screen for four lines reads as
+        // something you have to get through.
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 
-    private func point(_ symbol: String, _ title: String, _ detail: String) -> some View {
-        HStack(alignment: .top, spacing: 14) {
+    /// One line, one action, one icon. No second paragraph — the paragraph is what made the old one
+    /// something to read rather than something to glance at.
+    private func point(_ symbol: String, _ text: String) -> some View {
+        HStack(alignment: .center, spacing: 14) {
             Image(systemName: symbol)
-                .font(.system(size: 19))
+                .font(.system(size: 18))
                 .foregroundStyle(Color.accentColor)
-                .frame(width: 28, alignment: .center)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.system(size: 16, weight: .semibold))
-                Text(detail).font(.subheadline).foregroundStyle(.secondary)
-            }
+                .frame(width: 26, alignment: .center)
+            Text(text).font(.system(size: 15))
             Spacer(minLength: 0)
         }
     }
