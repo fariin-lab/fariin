@@ -960,6 +960,66 @@ struct ChatsView: View {
             }
     }
 
+    // ARCHIVE, VISIBLE FROM THE CHAT LIST (owner 2026-08-13: "make our archive visible ... now it
+    // needs finding other ways"). It only lived in the filter menu, which is a place you have to
+    // already know about. The reference app puts it where he pointed: one compact row at the top of
+    // the chats, only there when the drawer holds something, scrolling away with the list.
+    private var archivedChats: [Conversation] {
+        // Same filter the archive page itself uses — including the official channel, which can be
+        // archived like any other chat, so the count cannot disagree with what opens.
+        (repo.conversations + [officialChannel.listEntry].compactMap { $0 })
+            .filter { $0.isArchived(me) && !$0.isCleared(me) }
+            .filter { Flags.groupsEnabled || !$0.isGroup }
+    }
+    // Hidden people's stories live in the archive too, so the way in has to exist for them even
+    // with no archived chat at all — otherwise unhiding somebody becomes unreachable.
+    private var hasArchivedStories: Bool {
+        storiesRepo.others.contains { StoryPrefs.isHidden($0.authorUid) }
+    }
+    // The number goes accent instead of grey when something in there is unread: same digit, and the
+    // colour is the only thing saying there is news behind the door.
+    private var archivedUnread: Bool {
+        archivedChats.contains { !$0.isBlockedByMe(me) && $0.hasUnreadMark(me) }
+    }
+    // Not while selecting (the row carries no tag, so it can never be part of a selection), and not
+    // under a filter — Unread and Groups are questions about the chats on THIS page.
+    private var showsArchivedRow: Bool {
+        !selecting && chatFilter == 0 && (!archivedChats.isEmpty || hasArchivedStories)
+    }
+    /// 22pt of icon between two 11pt paddings. Only the empty-state overlay needs the number, and it
+    /// needs it BEFORE layout, which is why it is written down rather than measured.
+    private let archivedRowHeight: CGFloat = 44
+
+    @ViewBuilder private var archivedEntryRow: some View {
+        if showsArchivedRow {
+            Button { showArchived = true } label: {
+                HStack(spacing: 12) {
+                    // Centred in the 56pt column the avatars stand in, so "Archived" starts on the
+                    // same left edge as every chat name under it.
+                    MenuIcon("ic_archive", size: 22)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 56)
+                    Text("Archived")
+                        .font(.system(size: 16, weight: .semibold))   // a chat name's font: it is a peer of the rows under it
+                    Spacer(minLength: 8)
+                    if !archivedChats.isEmpty {
+                        Text("\(archivedChats.count)")
+                            .font(.system(size: 15))
+                            .foregroundStyle(archivedUnread ? Color.accentColor : Color.secondary)
+                    }
+                }
+                .padding(.vertical, 11)
+                .padding(.horizontal, 16)   // the chat row's gutter, for the same reason (row insets are zero)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)            // same deal as a chat row: the cell paints its own press
+            .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .deleteDisabled(true)
+            .moveDisabled(true)
+        }
+    }
+
     private var visible: [Conversation] {
         // The official channel joins the list as an ordinary Conversation value, so every filter,
         // sort, badge and swipe below treats it like any other chat and none of them had to learn
@@ -1280,6 +1340,10 @@ struct ChatsView: View {
                           // native circles-slide-in + rows-shift-right animate smoothly (withAnimation on
                           // `selecting` at the tap sites drives it).
                           List(selection: $selection) {
+                          // The way into the archive, above the chats. Empty when there is nothing
+                          // archived — the `if` lives inside the property so this body only grows by
+                          // one element (this file's type-checker budget is a known cost).
+                          archivedEntryRow
                           // Row body extracted (chatListRow): the inline closure blew past the
                           // type-checker's budget once the peek preview + row background joined it.
                           ForEach(visible) { conv in chatListRow(conv) }
@@ -1398,8 +1462,12 @@ struct ChatsView: View {
                                     // With stories opted out the row is unmounted but storiesRowHeight
                                     // keeps its initial value — the empty state floated ~175pt too low
                                     // (audit). Pad only for a row that actually exists.
+                                    // + the archive row when it is showing: archive every chat you
+                                    // have and the list is "empty", so this overlay would otherwise
+                                    // land on top of the one row still standing (and eat its taps).
                                     emptyWelcome
-                                        .padding(.top, (storiesOptedOut ? 0 : storiesRowHeight) + 24)
+                                        .padding(.top, (storiesOptedOut ? 0 : storiesRowHeight) + 24
+                                                 + (showsArchivedRow ? archivedRowHeight : 0))
                                 } else {
                                     // Per-filter copy — the Groups filter was showing the Unread text.
                                     ContentUnavailableView(
@@ -1407,6 +1475,8 @@ struct ChatsView: View {
                                         systemImage: chatFilter == 2 ? "person.3" : "checkmark.circle",
                                         description: Text(chatFilter == 2 ? "Groups you join will appear here." : "You're all caught up."))
                                         .padding(.top, (storiesOptedOut ? 0 : storiesRowHeight) + 24)
+                                        // No archive row under a filter (see showsArchivedRow), so
+                                        // this branch needs no clearance for it.
                                         .allowsHitTesting(false)
                                 }
                             }
