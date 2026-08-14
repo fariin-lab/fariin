@@ -991,6 +991,9 @@ final class CallService: NSObject {
     enum AudioRoute { case earpiece, speaker, external }
     var audioRoute: AudioRoute = .earpiece
     var externalAudioAvailable = false
+    /// When the route last landed on the built-in speaker. The bounce-back guard below reads it —
+    /// see the note there.
+    private var speakerLandedAt: Date?
     private var routeObserver: NSObjectProtocol?
 
     func startRouteObservation() {
@@ -1017,6 +1020,26 @@ final class CallService: NSObject {
             // The follow-up routeChange notification re-runs this and lands in the .speaker branch.
             return
         }
+        // ⚠️ AND THE SAME RE-ASSERT AGAINST BLUETOOTH, which is his report (2026-08-14: with AirPods
+        // in, picking Speaker in the system picker jumps straight back to the AirPods, but picking
+        // iPhone first and Speaker second works).
+        //
+        // A Bluetooth headset does not merely offer itself, it CLAIMS the route: choosing the
+        // built-in speaker while HFP is connected lands on the speaker for a moment and the headset
+        // takes it back. Going via iPhone works because that first hop moves the session off the
+        // headset, so the second choice has nothing to fight. The rule above already knew this shape
+        // and only covered the earpiece.
+        //
+        // ⚠️ THE TWO-SECOND WINDOW IS THE WHOLE CARE HERE, because the rule it stands beside is the
+        // opposite one and both are right: AirPods CONNECTING mid-call must win, and they still do —
+        // that is a person putting something in their ear. What must not win is the same headset
+        // grabbing back a route the person deliberately moved a moment ago.
+        if audioRoute == .external, wantsSpeaker,
+           let landed = speakerLandedAt, Date().timeIntervalSince(landed) < 2 {
+            try? session.overrideOutputAudioPort(.speaker)
+            return
+        }
+        if audioRoute == .speaker { speakerLandedAt = Date(); wantsSpeaker = true }
         // Keep the toggle state honest no matter WHAT moved the route (picker, AirPods
         // connecting mid-call, CallKit) — the button highlight reads from this.
         isSpeaker = audioRoute == .speaker
@@ -1037,7 +1060,10 @@ final class CallService: NSObject {
         // destroyed the speakerphone intent a video call had set, so UNPLUGGING them later landed the
         // call on the EARPIECE — a video call held at arm's length with the audio in the earpiece,
         // because the re-assert branch above had nothing left to re-assert.
-        if audioRoute == .external, !(cameraOn || remoteCameraOn) { wantsSpeaker = false }
+        if audioRoute == .external, !(cameraOn || remoteCameraOn),
+           !(speakerLandedAt.map { Date().timeIntervalSince($0) < 2 } ?? false) {
+            wantsSpeaker = false
+        }
         // Any external playback device around? Bluetooth headsets surface as available INPUTS
         // during a playAndRecord call; a currently-external route obviously counts too.
         let external: Set<AVAudioSession.Port> = [.bluetoothHFP, .bluetoothLE, .bluetoothA2DP,
