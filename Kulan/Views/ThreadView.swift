@@ -615,6 +615,12 @@ struct ThreadView: View {
                     nativeScrollTarget = row.rowId
                     firstUnreadId = nil   // consumed → next press goes to the bottom
                 } else {
+                    // STRAIGHT TO THE LIST, NOT THROUGH FIVE LAYERS (owner, third report, still dead
+                    // on 570 with all three earlier fixes in it). The binding below is one-shot, and
+                    // between it and the scroll sit an updateUIView pass and an apply() with its own
+                    // early returns; this wire has nothing in between. Both are fired: whichever
+                    // arrives second finds the reader already at the target and returns.
+                    NotificationCenter.default.post(name: .chatListJumpToNewest, object: nil)
                     nativeScrollTarget = "BOTTOM"
                     newWhileAway = 0
                 }

@@ -1,6 +1,13 @@
 import SwiftUI
 import UIKit
 
+extension Notification.Name {
+    /// "Take me to the newest message." Posted by the down-arrow button, answered by whichever
+    /// message list is currently on screen — see `jumpToNewestRequested` for why it is a wire rather
+    /// than a piece of state.
+    static let chatListJumpToNewest = Notification.Name("chatListJumpToNewest")
+}
+
 // UIKit-backed conversation list. A UICollectionView hosts our existing SwiftUI rows (MessageBubble etc.)
 // via UIHostingConfiguration, so no bubble feature is lost â€” only the scroll container differs.
 //
@@ -539,8 +546,31 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
         NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
                                                name: UIApplication.userDidTakeScreenshotNotification, object: nil)
+        // THE DOWN ARROW'S DIRECT LINE (owner 2026-08-13, third report, still dead on build 570 with
+        // all three earlier fixes in it).
+        //
+        // Everything tried so far assumed the request was arriving and something downstream was
+        // undoing it. Two fixes to the scroll itself and an arrival check that FORCES the offset half
+        // a second later did not change what he sees, and the only honest reading left is that the
+        // request never gets here at all. It had five layers to survive: a SwiftUI @State, a
+        // Binding into the representable, an updateUIView pass, an apply() with its own early
+        // returns and id comparison, and finally the intent gate — and the binding that carries it
+        // is ONE-SHOT, cleared a runloop later, so anything that drops it drops it for good.
+        //
+        // So the button gets a wire straight to this controller. No state, no binding, no apply, no
+        // id comparison: post, receive, scroll. The old path stays for the reply/search jumps, which
+        // legitimately ride the load.
+        NotificationCenter.default.addObserver(self, selector: #selector(jumpToNewestRequested),
+                                               name: .chatListJumpToNewest, object: nil)
 
         buildDataSource()
+    }
+
+    /// One live list at a time answers this. A pushed-then-popped thread leaves its controller alive
+    /// until ARC catches up, and a controller with no window has no reader to move.
+    @objc private func jumpToNewestRequested() {
+        guard collectionView.window != nil else { return }
+        perform(.newest(animated: true))
     }
 
     func setLoadingOlder(_ loading: Bool) {
