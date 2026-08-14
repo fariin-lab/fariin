@@ -38,6 +38,9 @@ struct StoryPager: UIViewControllerRepresentable {
     /// with the passive watcher (that one exists only to nudge Apple's transition along).
     var heroDismiss: Bool = false
     var onHeroDrag: (StoryHeroPhase, CGPoint, CGPoint) -> Void = { _, _, _ in }   // phase, translation, velocity
+    /// The owner's bar, drawn inside my own page — see `StoryDetailView.ownerBar`.
+    var ownerBar: ((String) -> AnyView)? = nil
+    var ownerBarHeight: CGFloat = 0
 
     // TRUE while a swipe-down dismiss drag/exit is running. The cube fold derives its angle from
     // each page's position — and the dismiss transform MOVES the card, so a fast flick slammed the
@@ -379,7 +382,9 @@ struct StoryPager: UIViewControllerRepresentable {
                 onProfile: parent.onProfile,
                 onItemSeen: parent.onItemSeen,
                 onItemChanged: parent.onItemChanged,
-                showMore: parent.showMore
+                showMore: parent.showMore,
+                ownerBar: parent.ownerBar,
+                ownerBarHeight: parent.ownerBarHeight
             )
             let vc = StoryPageHostVC(rootView: root)
             vc.bucketID = id

@@ -157,6 +157,24 @@ struct StoryDetailView: View {
     /// immediately. Two questions, two answers.
     var onItemChanged: ((String) -> Void)?
     var showMore: Bool = false   // show the header "…" dropdown menu (buttons post notifications to the host)
+    /// THE OWNER'S BAR, DRAWN INSIDE MY OWN PAGE — his 2026-08-14 order: "view and trash most be
+    /// follow my owner story dont leave".
+    ///
+    /// It was drawn by the SCREEN, in a stack below the pager, and that is why it could not travel:
+    /// the cube turns PAGES, and a sibling of the pager is not one. Swipe from my story to a
+    /// friend's and the Views and trash sat flat at the bottom while the story folded away above
+    /// them, which is his screenshot. A friend's reply bar never had this problem because it has
+    /// always been part of the page — `footerH` below is the room it asks for. This is the same slot,
+    /// for the same reason, for my own story.
+    ///
+    /// ⚠️ IT MUST BE A VIEW THAT WATCHES SOMETHING LIVE. A page is built once and cached, so anything
+    /// this closure captured at build time is frozen at build time. The app's bar reads a shared
+    /// observable instead, which is what keeps the count and the faces current in a page nobody
+    /// rebuilds.
+    var ownerBar: ((String) -> AnyView)?
+    /// How much room to leave for it. One number from the app, so the card's height and the bar's
+    /// height cannot disagree.
+    var ownerBarHeight: CGFloat = 0
     var isDismissing: Bool = false   // true while swiping down to close → cube fold off (no skew)
     @State private var lastSeenItem: String = ""
     /// The item `onItemChanged` last reported. Its own latch, not shared with `lastPrefetchItem`
@@ -371,7 +389,13 @@ struct StoryDetailView: View {
                     // of the screen; the difference between the two is just `footerH` below, which is
                     // how much room the bar underneath needs.
                     let isReplyBar = story.config.storyType != .plain()
-                    let footerH: CGFloat = isReplyBar ? Constant.MessageView.height + 32 + winInsets.bottom : 0
+                    // ⚠️ AND MY OWN BAR ASKS FOR ROOM THE SAME WAY A REPLY BAR DOES. It is the one
+                    // line that makes the card shorter by exactly what the bar takes, so the two
+                    // cannot overlap and the card the morph is told about is the card that is drawn.
+                    let ownFooter: CGFloat = (ownerBar != nil && model.isMine) ? ownerBarHeight : 0
+                    let footerH: CGFloat = isReplyBar
+                        ? Constant.MessageView.height + 32 + winInsets.bottom
+                        : ownFooter
                     // THE CARD. Sized and placed by the reference app's rule (see `cardHeight`), pinned to the
                     // safe-area top by the VStack below rather than centred in the screen.
                     VStack(spacing: 0) {
@@ -525,6 +549,13 @@ struct StoryDetailView: View {
                                     .animation(.linear(duration: 0.18), value: chromeHidden),
                                 alignment: .top
                             )
+                        // MY OWN BAR, IN THE PAGE, DIRECTLY UNDER THE CARD. It travels with the card
+                        // through the cube for the same reason a friend's reply bar always did:
+                        // both are the page. See `ownerBar`.
+                        if let ownerBar, model.isMine, ownerBarHeight > 0 {
+                            ownerBar(model.id)
+                                .frame(height: ownerBarHeight)
+                        }
                         Spacer(minLength: 0)
                     }
                     .padding(.top, winInsets.top)

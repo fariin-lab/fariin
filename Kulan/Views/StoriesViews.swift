@@ -2028,24 +2028,14 @@ struct StoryViewer: View {
                 // Deciding it with a second copy of `storyContent` is what cost the whole
                 // viewer its identity — see the note above this stack.
                 .background(Color.black.opacity(currentIsMine && !heroFlying ? 1 : 0))
-            if currentIsMine {
-                ownerFooter
-                    // Hidden on swipe-down AND while the sheet is REALLY engaged (showViewers
-                    // gate: a stray leftover progress value once hid the Views/Delete bar with
-                    // no sheet in sight — the tab bar showed through the empty strip).
-                    //
-                    // AND FOR THE WHOLE HERO FLIGHT, not just for a drag. It paints its own black
-                    // (`ownerFooter`) and it is outside the card, so on a BUTTON close — where
-                    // `dragDown` never moves — it hung on at the bottom of the screen as a black
-                    // bar while the card flew home over the chat list.
-                    .opacity((heroFlying || dragDown > 6 || (showViewers && viewersProgress > 0.05)) ? 0 : 1)
-                    .animation(.easeOut(duration: 0.15), value: dragDown > 6)
-                    .animation(.easeOut(duration: 0.15), value: heroFlying)
-                    .animation(.easeOut(duration: 0.15), value: showViewers && viewersProgress > 0.05)
-            }
-            // (A friend's page adds nothing here: their story is full-bleed and the library draws
-            // their reply bar inside the page. The `else` that used to sit here held a SECOND
-            // `storyContent`, and that second writing was the bug — see the note above.)
+            // ⚠️ EMPTY NOW, AND ON PURPOSE. The owner's bar used to be drawn here, as a sibling of
+            // the pager, which is exactly why it could not travel with the story: the cube turns
+            // PAGES. It is passed to the library instead and drawn inside my own page, beneath the
+            // card, where a friend's reply bar has always been drawn. Nothing replaces it here.
+            // (A friend's page adds nothing here either: their story is full-bleed and the library
+            // draws their reply bar inside the page, which is now true of MY bar as well. The
+            // `else` that used to sit here held a SECOND `storyContent`, and that second writing
+            // was the bug — see the note above.)
         }
         // NO app-level drag gesture on the story anymore. BOTH directions are the library's native
         // UIKit pans: swipe-DOWN → dismiss (smooth, same as friends), swipe-UP → onSwipeUp → openViewers.
@@ -2117,6 +2107,7 @@ struct StoryViewer: View {
                 currentBucketUid = uid
                 publishActive(uid)
                 loadBarViewers()
+                publishOwnerBar()
                 // The counts for ALL of my stories start here, together, rather than one at a time
                 // as each becomes current — see `prefetchMyStoryCounts`. This is the earliest moment
                 // the viewer knows whose bucket it is on.
@@ -2159,6 +2150,7 @@ struct StoryViewer: View {
             // published immediately.
             onItemChanged: { id in
                 currentStoryId = id
+                publishOwnerBar()
                 // The synthetic still-uploading item has no real doc, so there are no viewers to
                 // fetch — but it MUST still become `currentStoryId`, because that is exactly how the
                 // "Uploading…" bar knows the placeholder is the thing on screen.
@@ -2239,7 +2231,11 @@ struct StoryViewer: View {
                                    // fix it fires reliably, and it FAILS cleanly on downward drags — unlike
                                    // the removed SwiftUI DragGesture whose activation cancelled the down pan
             heroDismiss: heroDismiss,
-            onHeroDrag: { phase, t, v in onHeroDrag(phase, t, v) }
+            onHeroDrag: { phase, t, v in onHeroDrag(phase, t, v) },
+            // MY BAR, HANDED TO THE PAGE THAT DRAWS IT. The view it returns watches
+            // `StoryOwnerBarModel`, so a page that is built once still shows a count that moves.
+            ownerBar: { _ in AnyView(StoryOwnerBarView()) },
+            ownerBarHeight: Self.ownerFooterHeight + max(10, bottomInset)
         )
         // The card is attached at a different moment in each of the two hosts and is in a window at
         // neither of them, so the open waits for real geometry rather than for an event. See
@@ -4070,7 +4066,29 @@ struct StoryViewer: View {
     // Solid black footer BELOW the rounded story card (target design): the story canvas is a card
     // with clipped bottom corners, and the Views + trash controls live on their own black bar —
     // no more gradient bleeding over the story to the screen edge.
+    //
+    // ⚠️ THIS IS NOT DRAWN BY THIS SCREEN ANY MORE. It is handed to the library and drawn INSIDE my
+    // own page, so it turns with the cube instead of sitting flat at the bottom while the story
+    // folds away above it — his 2026-08-14 order, and his third report of that bar. What is left
+    // here is the CONTENT and the two actions; where it is drawn belongs to the page now. See
+    // `StoryDetailView.ownerBar` and `StoryOwnerBarModel`.
     static let ownerFooterHeight: CGFloat = 52
+    /// Hand the CURRENT contents of the bar to the page that draws it. Called wherever any of it can
+    /// change: a new count landing, the item changing, an upload starting or finishing.
+    private func publishOwnerBar() {
+        let m = StoryOwnerBarModel.shared
+        m.faces = barViewers?.recent ?? []
+        m.count = barViewers?.count ?? 0
+        m.reactions = barViewers?.reactionCount ?? 0
+        let s = currentStory
+        m.oneTimeFull = (s?.oneTime ?? false) && s?.recipientsLeft == 0
+        m.uploading = isUploadingItem
+        m.bottomInset = bottomInset
+        m.onViews = { openViewers() }
+        m.onDelete = { confirmDelete = true }
+        m.onCancelUpload = { uploadSvc.cancelUpload(); onClose() }
+    }
+
     private var ownerFooter: some View {
         Group { if isUploadingItem { uploadingControls } else { ownerControls } }
             .padding(.horizontal, 18)
@@ -4121,7 +4139,7 @@ struct StoryViewer: View {
                     StoryCountCache.put(id, count: v.count, reactions: v.reactionCount)
                     // The one on screen paints as soon as ITS answer lands, whichever order they
                     // arrive in — the group is not awaited as a batch for exactly that reason.
-                    if id == currentStoryId { barViewers = v }
+                    if id == currentStoryId { barViewers = v; publishOwnerBar() }
                 }
             }
         }
@@ -4165,12 +4183,13 @@ struct StoryViewer: View {
             // names and photographs of other people, they are worth more room than they save, and
             // the eye icon they fall back to is not a wrong answer the way a 0 is.
             barViewers = viewersByStory[id] ?? StoryCountCache.summary(for: id)
+            publishOwnerBar()
         }
         Task {
             let v = await Self.viewSummary(storyId: id)
             viewersByStory[id] = v
             StoryCountCache.put(id, count: v.count, reactions: v.reactionCount)
-            if id == currentStoryId { barViewers = v }
+            if id == currentStoryId { barViewers = v; publishOwnerBar() }
         }
     }
 
@@ -4367,6 +4386,84 @@ struct UploadingStoryHandoff: View {
                 Color.clear.onAppear { onClose() }
             }
         }
+    }
+}
+
+/// WHAT THE OWNER'S BAR SAYS, IN A PLACE THE PAGE CAN READ IT.
+///
+/// The bar is drawn inside my own story page now, so that it turns with the story instead of sitting
+/// flat at the bottom of the screen while the story folds away above it. A page is built ONCE and
+/// cached (`StoryPager.makePage`), so anything the injected closure captured at build time would be
+/// frozen at build time — the count would never move again. This is the live channel: the viewer
+/// writes it whenever any of it changes, the bar observes it, and the page is never rebuilt.
+@Observable final class StoryOwnerBarModel {
+    static let shared = StoryOwnerBarModel()
+    private init() {}
+    var faces: [StoryViewerInfo] = []
+    var count = 0
+    var reactions = 0
+    var oneTimeFull = false
+    /// The still-uploading placeholder wears the cancel bar instead of the Views bar.
+    var uploading = false
+    var bottomInset: CGFloat = 0
+    var onViews: () -> Void = {}
+    var onDelete: () -> Void = {}
+    var onCancelUpload: () -> Void = {}
+}
+
+/// The bar itself, drawn by the page. Everything it says comes from the model above, which is what
+/// keeps it current inside a page nobody rebuilds.
+struct StoryOwnerBarView: View {
+    @State private var m = StoryOwnerBarModel.shared
+
+    var body: some View {
+        Group {
+            if m.uploading {
+                HStack(spacing: 12) {
+                    Button { m.onCancelUpload() } label: { UploadCancelRing(diameter: 28) }
+                        .buttonStyle(.plain)
+                    Text("Uploading…").font(.subheadline).foregroundStyle(.white)
+                    Spacer()
+                }
+            } else {
+                HStack(spacing: 12) {
+                    Button { m.onViews() } label: {
+                        HStack(spacing: 8) {
+                            if !m.faces.isEmpty {
+                                HStack(spacing: -8) {
+                                    ForEach(m.faces) { v in
+                                        AvatarView(name: v.name, photoUrl: v.photoUrl, size: 26)
+                                            .overlay(Circle().stroke(.black, lineWidth: 1.5))
+                                    }
+                                }
+                            } else {
+                                Image(systemName: m.oneTimeFull ? "1.circle" : "eye")
+                                    .font(.subheadline).foregroundStyle(.white)
+                            }
+                            Text(m.oneTimeFull ? "Once viewer is full"
+                                               : "\(m.count) View\(m.count == 1 ? "" : "s")")
+                                .font(.subheadline.weight(.medium)).foregroundStyle(.white)
+                                .lineLimit(1)
+                            if m.reactions > 0 {
+                                Image(systemName: "heart.fill").font(.subheadline).foregroundStyle(.red)
+                                Text("\(m.reactions)").font(.subheadline).foregroundStyle(.white)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                    Button { m.onDelete() } label: {
+                        Image(systemName: "trash").font(.title3).foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(.horizontal, 18)
+        .frame(maxWidth: .infinity)
+        .frame(height: StoryViewer.ownerFooterHeight)
+        .padding(.bottom, max(10, m.bottomInset))
+        .background(Color.black)
     }
 }
 

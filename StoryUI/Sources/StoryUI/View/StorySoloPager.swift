@@ -35,6 +35,9 @@ struct StorySoloPager: UIViewControllerRepresentable {
     /// The host's own close (see StoryPager.heroDismiss). Mutually exclusive with both of the above.
     var heroDismiss: Bool = false
     var onHeroDrag: (StoryHeroPhase, CGPoint, CGPoint) -> Void = { _, _, _ in }   // phase, translation, velocity
+    /// The owner's bar, drawn inside my own page — see `StoryDetailView.ownerBar`.
+    var ownerBar: ((String) -> AnyView)? = nil
+    var ownerBarHeight: CGFloat = 0
 
     func makeUIViewController(context: Context) -> StorySoloHostVC {
         StoryPager.dismissActive = false   // fresh viewer never inherits a stale flag
@@ -123,7 +126,9 @@ struct StorySoloPager: UIViewControllerRepresentable {
                 onProfile: parent.onProfile,
                 onItemSeen: parent.onItemSeen,
                 onItemChanged: parent.onItemChanged,
-                showMore: parent.showMore
+                showMore: parent.showMore,
+                ownerBar: parent.ownerBar,
+                ownerBarHeight: parent.ownerBarHeight
             )
             // No `AnyView`: StoryPageHostVC takes the concrete view now, so SwiftUI keeps the
             // structural information it needs to diff. See the note on the class.

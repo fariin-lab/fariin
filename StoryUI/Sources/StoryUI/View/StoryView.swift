@@ -37,6 +37,9 @@ public struct StoryView: View {
     /// card back into whatever it was opened from. Takes precedence over `dismissEnabled`.
     let heroDismiss: Bool
     let onHeroDrag: ((StoryHeroPhase, CGPoint, CGPoint) -> Void)?
+    /// The owner's bar, drawn INSIDE my own page so it travels with it. See `StoryDetailView.ownerBar`.
+    let ownerBar: ((String) -> AnyView)?
+    let ownerBarHeight: CGFloat
 
 
     /// Stories and isPresented required, selectedIndex is optional default: 0
@@ -62,7 +65,9 @@ public struct StoryView: View {
         dismissEnabled: Bool = true,
         swipeUpEnabled: Bool = true,
         heroDismiss: Bool = false,
-        onHeroDrag: ((StoryHeroPhase, CGPoint, CGPoint) -> Void)? = nil
+        onHeroDrag: ((StoryHeroPhase, CGPoint, CGPoint) -> Void)? = nil,
+        ownerBar: ((String) -> AnyView)? = nil,
+        ownerBarHeight: CGFloat = 0
     ) {
         self.stories = stories
         self.selectedIndex = selectedIndex
@@ -81,6 +86,8 @@ public struct StoryView: View {
         self.swipeUpEnabled = swipeUpEnabled
         self.heroDismiss = heroDismiss
         self.onHeroDrag = onHeroDrag
+        self.ownerBar = ownerBar
+        self.ownerBarHeight = ownerBarHeight
     }
     
     /// My own story is always a SINGLE bucket, and it is the only place the viewers-sheet morph
@@ -112,7 +119,9 @@ public struct StoryView: View {
                         onSwipeUpEnded: { t, v in onSwipeUpEnded?(t, v) },
                         dismissEnabled: dismissEnabled,
                         heroDismiss: heroDismiss,
-                        onHeroDrag: { p, t, v in onHeroDrag?(p, t, v) }
+                        onHeroDrag: { p, t, v in onHeroDrag?(p, t, v) },
+                        ownerBar: ownerBar,
+                        ownerBarHeight: ownerBarHeight
                     )
                 } else {
                     // UIKit pager owns left/right (flat slide) AND the swipe-down dismiss. The card moves in pure
@@ -144,7 +153,9 @@ public struct StoryView: View {
                         dismissEnabled: dismissEnabled,
                         swipeUpEnabled: swipeUpEnabled,
                         heroDismiss: heroDismiss,
-                        onHeroDrag: { p, t, v in onHeroDrag?(p, t, v) }
+                        onHeroDrag: { p, t, v in onHeroDrag?(p, t, v) },
+                        ownerBar: ownerBar,
+                        ownerBarHeight: ownerBarHeight
                     )
                 }
             }
