@@ -757,7 +757,15 @@ struct StoryEditorView: View {
                         // one silently flips a state. A switch belongs with the screen's other
                         // switch-like control, not among its doors.
                         if currentIsVideo {
-                            Button { items[index].muted.toggle() } label: {
+                            Button {
+                                items[index].muted.toggle()
+                                // ⚠️ AND THE PLAYER HEARS IT. THIS IS THE WHOLE OF "MUTE IS NOT
+                                // WORKING". The flag only ever reached the EXPORT — the posted file
+                                // came out silent, correctly — and nothing ever told the preview,
+                                // so the clip he was listening to kept talking and the button
+                                // looked dead. It was doing its job somewhere he could not hear.
+                                previewPlayer?.isMuted = items[index].muted
+                            } label: {
                                 Image(systemName: items[index].muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                                     .font(.system(size: 15, weight: .semibold))
                                     .foregroundStyle(.primary)
@@ -1045,26 +1053,34 @@ struct StoryEditorView: View {
             // A REAL BUTTON NOW. It was `allowsHitTesting(false)` — a picture of a play button on a
             // screen with nothing to play, which is exactly what the owner reported. It hides while
             // the clip is running so it does not sit over the video you asked to watch.
-            // ⚠️ IT STAYS ON SCREEN WHILE THE CLIP RUNS, AND THAT IS THE OTHER HALF OF HIS REPORT:
-            // "also now pause video is not working."
+            // ⚠️ THE PLAY CIRCLE IS FOR STARTING. STOPPING IS THE WHOLE PICTURE — his 2026-08-14
+            // report, twice: "I click play, I can't make pause", "pause icon are appearing all the
+            // time".
             //
-            // It was faded to `opacity(0)` the moment playback started, so the only way to stop a
-            // clip was to press a control that could not be seen — a button whose whole purpose is
-            // to be pressed a second time. Playing shows a pause glyph at a little under half
-            // strength: enough to find and press, faint enough not to sit over the picture he is
-            // framing. Same button, same place, both ways round, which is what he asked for.
-            Button { togglePreview() } label: {
-                Image(systemName: previewPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 26))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .frame(width: 72, height: 72)
-                    .background(.black.opacity(previewPlaying ? 0.22 : 0.35), in: Circle())
-                    .contentShape(Circle())
+            // Both of those are one mistake. A 72pt target in the middle of a clip is a small thing
+            // to hit, and leaving it on screen to be hit was answering the second complaint by
+            // making the first one worse: an icon parked over the picture he is framing. Every
+            // video editor answers this the same way — the whole frame stops it — and that target
+            // cannot be missed.
+            //
+            // The layer exists ONLY while the clip runs, so the pinch, the pan and the sideways
+            // strip swipe are untouched at rest, which is when framing actually happens.
+            if previewPlaying {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { togglePreview() }
+            } else {
+                Button { togglePreview() } label: {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 26))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .frame(width: 72, height: 72)
+                        .background(.black.opacity(0.35), in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .transition(.opacity)
             }
-            .buttonStyle(.plain)
-            .opacity(previewPlaying ? 0.45 : 1)
-            .animation(.easeInOut(duration: 0.18), value: previewPlaying)
-            .transition(.opacity)
         }
     }
 
@@ -1098,6 +1114,9 @@ struct StoryEditorView: View {
         guard items.indices.contains(index), let url = items[index].videoURL else { return nil }
         let p = AVPlayer(url: url)
         p.actionAtItemEnd = .pause
+        // The clip's own sound setting, from the moment it can make a sound. A player built AFTER
+        // the button was pressed would otherwise start unmuted on a clip already marked silent.
+        p.isMuted = items[index].muted
         previewPlayer = p
         // Back to the start when it finishes, so a second press replays rather than doing nothing.
         // The TOKEN is kept: see `previewEndObserver`.
