@@ -962,6 +962,20 @@ struct ThreadView: View {
                     catch { await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't send the GIF. Check your connection and try again." } }
                 }
             }
+            // A PANEL OVER THE CHAT, NOT A PAGE INSTEAD OF IT (owner 2026-08-13, ours beside theirs:
+            // theirs "does not open separately… you can see what you send in the chat as you send").
+            // The picker already stayed open after a pick — the whole point, several GIFs in a row —
+            // but at full height there was nothing to watch them land in. Half height puts the
+            // conversation above it, and `backgroundInteraction` keeps that half live rather than a
+            // dimmed picture: scroll it, read it, tap it, with the panel still up. Drag the grabber
+            // for the full grid.
+            //
+            // NOT the same thing as theirs, and worth being straight about: theirs is glued under the
+            // composer and swaps places with the keyboard. That is a composer rebuild, not a
+            // presentation option, and this is the shape of it that today's screen can carry.
+            .presentationDetents([.fraction(0.55), .large])
+            .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.55)))
+            .presentationDragIndicator(.visible)
         }
         .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
             handlePickedFile(result)
