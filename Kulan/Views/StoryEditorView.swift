@@ -945,7 +945,26 @@ struct StoryEditorView: View {
             // The UIKit container clips to its own bounds, so a zoomed photo never leaves the card.
             ZoomableImageView(image: edited, scale: $photoZoom, offset: $photoOffset,
                               maxScale: 4, interactive: !isDrawing && editingID == nil,
-                              onTap: { captionFocused = false; selectedID = nil },
+                              onTap: {
+                                  captionFocused = false; selectedID = nil
+                                  // ⚠️ AND PLAY IS THE WHOLE FRAME TOO — his 2026-08-14 report:
+                                  // "pause is working all frame video, play must work all the frame
+                                  // like how it works [for] pause."
+                                  //
+                                  // It could not be the same clear layer the PAUSE uses. That layer
+                                  // is put over the picture while the clip runs, which is safe
+                                  // because nobody frames a moving clip; over a STOPPED one it
+                                  // would sit on top of the pinch, the pan and the sideways strip
+                                  // swipe, which is exactly when those are wanted. So the play tap
+                                  // is given to the view that already owns all three — its own tap
+                                  // recogniser, alongside its own pinch and pan, with nothing new
+                                  // laid over anything.
+                                  //
+                                  // The circle stays as the thing that SAYS it can be played.
+                                  if currentIsVideo, !previewPlaying, !isDrawing, editingID == nil {
+                                      togglePreview()
+                                  }
+                              },
                               onSwipe: { step in
                                   // ZOOMED IN = a horizontal drag is panning the PICTURE, never
                                   // a page turn (owner 2026-08-05: "if I make zoom, block swipe
