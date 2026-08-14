@@ -116,8 +116,10 @@ struct StoryEditorView: View {
     @State private var drawing = PKDrawing()
     @State private var isDrawing = false
     /// The strokes as they were when the pen was opened, so its ✕ can put them back. Nil whenever
-    /// the pen is shut — see `cancelDrawing`.
+    /// the pen is shut — see `closePen`.
     @State private var drawingAtPenOpen: PKDrawing?
+    /// The pen's Discard / Keep question, raised only when this session actually drew something.
+    @State private var confirmDiscardDrawing = false
     @State private var filterIndex = 0
     @State private var croppedSource: UIImage?   // result of the interactive crop (nil = uncropped)
     @State private var showCrop = false
@@ -816,6 +818,14 @@ struct StoryEditorView: View {
         // never reaches it. See `darkConfirm`.
         .darkConfirm("Discard this story?", isPresented: $showDiscard,
                      destructive: "Discard", onDestructive: { dismiss() })
+        // THE PEN'S OWN CANCEL, asked the same way and drawn the same way. It is a smaller question
+        // than the one above — this session's strokes, not the whole post — so it says so, and
+        // "Keep" leaves the pen with the drawing intact rather than returning to it. Raised only
+        // when something was actually drawn; see `closePenFromCancel`.
+        .darkConfirm("Discard your drawing?", isPresented: $confirmDiscardDrawing,
+                     destructive: "Discard", cancel: "Keep",
+                     onDestructive: { closePen(discarding: true) },
+                     onCancel: { closePen(discarding: false) })
         // OUR OWN PICKER, images AND videos, always (owner 2026-08-05: "The + button should always
         // open our custom media picker… Never fall back to Apple's Photo Picker"). It stays open
         // while you tap — each pick lands in the strip behind it — and the X brings you back.
@@ -1224,9 +1234,8 @@ struct StoryEditorView: View {
                     capsuleTool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle", active: isDrawing) {
                         // The pen's ✕ undoes back to here, so the snapshot is taken on the way IN
                         // and nowhere else — see `cancelDrawing`.
-                        if isDrawing { drawingAtPenOpen = nil }   // shutting it here KEEPS, like ✓
-                        else { drawingAtPenOpen = drawing }
-                        isDrawing.toggle()
+                        if isDrawing { closePen(discarding: false) }   // shutting it here KEEPS, like ✓
+                        else { drawingAtPenOpen = drawing; isDrawing = true }
                     }
                     // NO EXTRA TOOL beyond these. It used to carry a second "add another
                     // picture", kept on the reasoning that two doors to one action beat two doors
@@ -1451,8 +1460,8 @@ struct StoryEditorView: View {
             // one object now, and the two that end the session sit at the two ends where the thumb
             // already is.
             HStack(spacing: 12) {
-                // Leave the pen and take this session's strokes with it. See `cancelDrawing`.
-                Button { cancelDrawing() } label: {
+                // CANCEL, and it asks before it throws anything away. See `closePenFromCancel`.
+                Button { closePenFromCancel() } label: {
                     Image(systemName: "xmark").font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 44, height: 44)
@@ -1486,7 +1495,7 @@ struct StoryEditorView: View {
 
                 // Keep the drawing. Blue-tinted glass, the app's one shape for a prominent round
                 // action, matching the crop screen's ✓.
-                Button { drawingAtPenOpen = nil; isDrawing = false } label: {
+                Button { closePen(discarding: false) } label: {
                     Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 44, height: 44)
@@ -1499,14 +1508,34 @@ struct StoryEditorView: View {
         }
     }
 
-    /// LEAVE THE PEN WITH THE PICTURE AS IT WAS WHEN IT OPENED.
+    /// HAS THIS PEN SESSION CHANGED ANYTHING? Cheap answer first, exact answer second.
     ///
-    /// A ✕ that did the same thing as the ✓ would be a decoration, so this one has to mean
-    /// something: it drops the strokes made in THIS pen session and keeps everything drawn before
-    /// it. The snapshot is taken where the pen is opened (`toolRowLayer`) and released by either
-    /// way out, so it can never be spent on a later session.
-    private func cancelDrawing() {
-        if let snapshot = drawingAtPenOpen { drawing = snapshot }
+    /// The stroke count settles it for everything ordinary — a stroke added, a stroke undone. It
+    /// cannot settle "drew one, undid it, drew another", which is the same count and a different
+    /// picture, so that falls through to comparing the serialised drawings. `PKDrawing` is not
+    /// `Equatable`, and its data is the only exact comparison there is.
+    private var penSessionEdited: Bool {
+        guard let snapshot = drawingAtPenOpen else { return !drawing.strokes.isEmpty }
+        if snapshot.strokes.count != drawing.strokes.count { return true }
+        return snapshot.dataRepresentation() != drawing.dataRepresentation()
+    }
+
+    /// THE PEN'S ✕ IS A CANCEL, AND A CANCEL ASKS BEFORE IT THROWS WORK AWAY.
+    ///
+    /// His 2026-08-14 order, in his words: "X must function as Cancel, with a Discard / Keep
+    /// confirmation when the user has made pen changes." Nothing drawn since the pen opened and
+    /// there is nothing to ask about, so it simply leaves. This is the same rule the composer's own
+    /// X already follows for the whole post, for the same reason: one tap should not be able to
+    /// destroy work with nothing asked and nothing to undo it.
+    private func closePenFromCancel() {
+        if penSessionEdited { confirmDiscardDrawing = true } else { closePen(discarding: false) }
+    }
+
+    /// The one way out of the pen. `discarding` puts the strokes back to the snapshot taken when it
+    /// opened (`toolRowLayer`); either way the snapshot is released, so it can never be spent on a
+    /// later session.
+    private func closePen(discarding: Bool) {
+        if discarding, let snapshot = drawingAtPenOpen { drawing = snapshot }
         drawingAtPenOpen = nil
         isDrawing = false
     }
