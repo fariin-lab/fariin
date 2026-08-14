@@ -97,6 +97,10 @@ struct ThreadView: View {
     @State private var showPollComposer = false      // Poll tile (groups) → new-poll composer
     @State private var showFileImporter = false
     @State private var showGifPicker = false
+    /// Which height the GIF sheet opens at. From the attach panel it is a browse, so half the screen
+    /// with the chat above it. From the panel's magnifier it is a SEARCH, and a search needs the
+    /// keyboard — at half height the keyboard would take everything that was left.
+    @State private var gifSheetDetent: PresentationDetent = .fraction(0.55)
     /// THE GIF PANEL THAT TAKES THE KEYBOARD'S PLACE, which is what he asked for twice and what
     /// their source does (see GifPickerView's `inline` note): one input mode at a time — the
     /// keyboard, or this, never both — and one button in the field that flips between them.
@@ -383,7 +387,7 @@ struct ThreadView: View {
                                       // The magnifier opens the full picker over the panel: searching
                                       // needs a keyboard, and the panel is sitting in the keyboard's
                                       // slot. Closing the sheet drops you back onto the panel.
-                                      onSearch: { showGifPicker = true },
+                                      onSearch: { gifSheetDetent = .large; showGifPicker = true },
                                       atTop: $gifGridAtTop)
                             .frame(height: panelHeight)
                             .simultaneousGesture(panelExpandDrag)
@@ -1033,7 +1037,7 @@ struct ThreadView: View {
         // opens the inline panel instead — see `gifPanelOpen`. Both hand the pick to `sendGif`.
         .sheet(isPresented: $showGifPicker) {
             GifPickerView { gif in sendGif(gif) }
-                .presentationDetents([.fraction(0.55), .large])
+                .presentationDetents([.fraction(0.55), .large], selection: $gifSheetDetent)
                 .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.55)))
                 .presentationDragIndicator(.visible)
         }
@@ -2999,7 +3003,7 @@ struct ThreadView: View {
                     // (user 2026-07-29): sharing "a contact" is a phone-book idea, and Fariin has no
                     // phone book — you introduce someone by sharing their profile from THEIR profile
                     // page, which is where the action still lives.
-                    attachTile("ic_gif_tile", "GIF") { showGifPicker = true }
+                    attachTile("ic_gif_tile", "GIF") { gifSheetDetent = .fraction(0.55); showGifPicker = true }
                     attachTile("ic_file", "Files") { showFileImporter = true }
                     attachTile("ic_location", "Location") { showLocationShare = true }
                     if isGroup { attachTile("chart.bar", "Poll") { showPollComposer = true } }
