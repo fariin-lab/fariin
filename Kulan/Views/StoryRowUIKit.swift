@@ -532,7 +532,11 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             // exists to close.
             if liveStoryId == pending, let i = stories.firstIndex(where: { $0.id == pending }) {
                 animateNextStoryId = nil
-                navigate(to: i, animated: true)
+                // `rowIsOpen` for the same reason as the branch below, and it costs this path
+                // nothing: a card can only be tapped on a row that is already open, so the answer
+                // here is true in every case a tap can actually reach. It is written rather than
+                // assumed because "animated" and "the row is open" have to stay one question.
+                navigate(to: i, animated: rowIsOpen)
                 seatedByTap = true
             } else if !stories.contains(where: { $0.id == pending }) {
                 // The story went away before it could arrive — deleted under the sheet. Waiting for
@@ -556,7 +560,42 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         } else if animateNextStoryId == nil, let activeIndex, activeIndex != reportedIndex,
                   activeIndex != centredIndex,
                   stories.indices.contains(activeIndex), rowIsStill {
-            navigate(to: activeIndex, animated: true)
+            // ⚠️ `rowIsOpen`, AND THIS IS HIS 2026-08-14 "THE PREVIEW THUMBNAILS HAVE A DELAYED
+            // ANIMATION" REPORT, ROOT CAUSE AND ALL.
+            //
+            // The row is BUILT when the sheet starts to open, with its scroller at offset zero,
+            // which means "the first story". Open the sheet on anything else — story 2 of 2, which
+            // is his screenshot — and this branch fires on the FIRST FRAME OF THE PULL: the row is
+            // still (his finger is on the story, not on the row), the active index is not the one
+            // the fresh scroller is seated on, so it re-seated with a 0.3s spring.
+            //
+            // That spring then ran for 300ms UNDERNEATH the pull, while every following frame of
+            // the finger wrote the same layers straight through `setFraction` with actions off. The
+            // side cards were therefore drawn from a stale presentation value while the live story
+            // followed the finger exactly, and the tints, which are written in the same block as
+            // the cards they cover, lagged with them. That is all three of his symptoms in one
+            // cause: thumbnails behind the pull, a centre card the incoming one appears to cross,
+            // and brightness a beat away from the card it belongs to.
+            //
+            // Theirs cannot do this, and says so in one line (`:5236-5239`): while the row is
+            // collapsed the offset is assigned DIRECTLY, with no transition at all —
+            //
+            //     if itemLayout.contentScaleFraction <= 0.0001 {
+            //         if abs(self.scroller.contentOffset.x - centralX) > .ulpOfOne {
+            //             self.scroller.contentOffset = CGPoint(x: centralX, y: 0.0)
+            //         }
+            //     } else if resetScrollingOffsetWithItemTransition { … }
+            //
+            // — and a spring is reserved for `resetScrollingOffsetWithItemTransition`, which is set
+            // ONLY on the pass where a tap's or a sheet page's story has arrived (`:2750`, `:2766`)
+            // and is cleared in the same statement. They are stricter still while collapsed: a
+            // non-central item is not laid out at all (`:1548-1552`), so at the bottom of the pull
+            // there are no side cards to be out of step with anything.
+            //
+            // So the answer to "does the reference app use this delayed animation" is no for a
+            // pull and yes for a tap, and the rule that separates them is the fraction, not the
+            // cause. A re-seat while the row is anything short of fully open is immediate.
+            navigate(to: activeIndex, animated: rowIsOpen)
         } else if storiesChanged || countsChanged || geometryChanged || liveChanged {
             // ⚠️ ONLY WHEN SOMETHING THIS METHOD OWNS ACTUALLY MOVED, AND THAT GUARD IS LOAD-BEARING
             // RATHER THAN THRIFT.
@@ -588,16 +627,26 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             // statement; every other pass, including all of a pan's, is `.immediate`. A pass caused
             // by the finger is immediate, full stop — a settle can only ever own a pass the finger
             // did not cause.
+            // ⚠️ AND `rowIsOpen` CLOSES THE SAME HOLE FROM THE OTHER SIDE. `pulled` catches a pass
+            // that carries a new fraction, but the pull's own path (`setFraction`) usually gets
+            // there first, so a pass landing between two frames of the finger sees an UNCHANGED
+            // fraction and would have animated on the strength of a settle raised elsewhere. The
+            // row is only allowed a spring once it is a row: mid-pull, at any fraction between the
+            // two ends, every pass is the finger's and every pass is immediate.
             let pulled = geometryChanged
-            updateScrolling(settle: (isSettling && !pulled) ? .commit : nil)
+            updateScrolling(settle: (isSettling && !pulled && rowIsOpen) ? .commit : nil)
         }
     }
+
+    /// Their `contentScaleFraction >= 1.0 - 0.0001`: the row has finished becoming a row.
+    ///
+    /// ⚠️ IT IS ALSO WHAT DECIDES WHETHER A PROGRAMMATIC RE-SEAT MAY BE ANIMATED. See `apply`.
+    private var rowIsOpen: Bool { geometry.fraction >= 1.0 - 0.0001 }
 
     /// Their `scroller.isScrollEnabled = itemLayout.contentScaleFraction >= 1.0 - 0.0001`: the row
     /// is only scrollable once it has finished becoming a row.
     private func syncScrollEnabled() {
-        let enabled = geometry.fraction >= 1.0 - 0.0001
-        if scroller.isScrollEnabled != enabled { scroller.isScrollEnabled = enabled }
+        if scroller.isScrollEnabled != rowIsOpen { scroller.isScrollEnabled = rowIsOpen }
     }
 
     /// HOW FAR THE SHEET IS UP, once per frame of the pull, straight off the finger.
