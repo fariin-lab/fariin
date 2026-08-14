@@ -114,22 +114,29 @@ struct ChatCropView: View {
                 // Clipped to the window, so the window stays the whole of what this screen shows
                 // however far it is zoomed, and so the crop frame's clamps — every one of which is
                 // against `imageFrame` — stay exactly as they were before any of this existed.
+                // ⚠️ `offset` INSIDE A FIXED FRAME, NOT A SECOND `position`. A `.position` makes a
+                // view fill its parent and place its content at that point; putting a `.frame`
+                // AFTER one re-parents what was just placed, so the point it was placed at now
+                // means something else. That is the picture he photographed sitting low in the
+                // frame with black above it, and it arrived with the zoom.
+                //
+                // A frame centres its content by default, so the window-sized frame below puts the
+                // picture's centre on the window's centre and `pan` moves it from there — which is
+                // exactly what `displayFrame` says (window centre + pan), so the export and the
+                // screen are computing one thing in two places and cannot disagree.
                 Image(uiImage: img).resizable().scaledToFit()
                     .frame(width: displayFrame.width, height: displayFrame.height)
                     .rotationEffect(.degrees(angle))
-                    .position(x: displayFrame.midX, y: displayFrame.midY)
+                    .offset(x: pan.width, y: pan.height)
                     .frame(width: imageFrame.width, height: imageFrame.height)
                     .clipped()
                     .position(x: imageFrame.midX, y: imageFrame.midY)
-                // THE PICTURE'S OWN GESTURES, UNDERNEATH THE CROP FRAME'S.
-                //
-                // A pinch anywhere zooms, and a drag in the dimmed part slides the picture. They sit
-                // BELOW the crop's move and handle gestures in this stack, so a one-finger drag
-                // inside the frame still moves the frame exactly as it always has: the crop's own
-                // views are on top and claim it first. Nothing here is modal.
+                // Slide the picture: in the dimmed part, because inside the frame a one-finger drag
+                // belongs to the frame and always has. Below the crop's own views in this stack, so
+                // it can only ever get what they did not want.
                 Color.clear
                     .contentShape(Rectangle())
-                    .gesture(SimultaneousGesture(pinchGesture, imagePanGesture))
+                    .gesture(imagePanGesture)
 
                 // Dim everything outside the crop frame (even-odd fill).
                 Path { p in p.addRect(CGRect(origin: .zero, size: geo.size)); p.addRect(crop) }
@@ -148,6 +155,12 @@ struct ChatCropView: View {
             // .position(from crop), so they MOVE as you drag — measuring the drag in the handle's own
             // (.local) space fed its movement back into the translation → the crop "shook". Measuring in
             // this stable canvas space instead means translation = pure finger movement, no feedback.
+            // ⚠️ THE PINCH BELONGS TO THE WHOLE CANVAS, AND THAT IS WHY IT DID NOTHING. It was on a
+            // layer UNDERNEATH the crop frame's own views — and the frame covers the entire picture
+            // the moment this screen opens, so there was nowhere left to put two fingers. A
+            // simultaneous gesture on the canvas itself is heard wherever they land, and a
+            // magnification never competes with the frame's one-finger drags.
+            .simultaneousGesture(pinchGesture)
             .coordinateSpace(name: "cropCanvas")
             .onAppear { layout(geo.size) }
             .onChange(of: geo.size) { _, s in layout(s) }

@@ -966,12 +966,26 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             if willAnimate, isLive, !item.isLive {
                 let wasScale = item.transform.a
                 if wasScale > 0.0001 {
+                    // ⚠️ THE DIM IS SEEDED AT THE VALUE IT IS LEAVING, NOT THE ONE IT IS GOING TO,
+                    // AND THAT IS HIS "the brightness does not follow the card when I tap".
+                    //
+                    // Everything else in this seed is the card's OLD state — its old centre, its old
+                    // size — because the point of the seed is to start the journey where the picture
+                    // already is. The dim was the one number taken from the DESTINATION, so the
+                    // unanimated seed wrote the arriving brightness onto the departing position: the
+                    // card went dark (or bright) on the spot and only then travelled. The swipe
+                    // never showed it because a swipe has no seed; it is the tap's alone, which is
+                    // exactly the difference he reported.
+                    //
+                    // The tint layer this item is already wearing knows what it is leaving, so it is
+                    // asked rather than recomputed.
+                    let leavingDim = tints[story.id].map { CGFloat($0.opacity) } ?? p.dim
                     self.placeLiveStory(
                         StoryRowPlacement(center: view.convert(item.center, to: nil),
                                           size: CGSize(width: geometry.slotW * wasScale,
                                                        height: geometry.slotH * wasScale),
                                           cornerRadius: p.cornerRadius,
-                                          dim: p.dim),
+                                          dim: leavingDim),
                         settle: nil)
                 }
             }
