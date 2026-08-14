@@ -552,14 +552,25 @@ struct StoryDetailView: View {
                                     .animation(.linear(duration: 0.18), value: chromeHidden),
                                 alignment: .top
                             )
-                        // MY OWN BAR, IN THE PAGE, DIRECTLY UNDER THE CARD. It travels with the card
-                        // through the cube for the same reason a friend's reply bar always did:
-                        // both are the page. See `ownerBar`.
+                        // ⚠️ THE SPACER GOES ABOVE THE BAR, NOT BELOW IT, AND THAT IS THE GAP HE
+                        // LOST. The card is capped at 9:16, so on most phones it does not use all
+                        // the room this stack has; the leftover used to fall between the card and
+                        // the bar, because the bar was pinned to the bottom of the SCREEN and the
+                        // page ended above it. Moving the bar into the page put the leftover
+                        // UNDERNEATH it instead — the card met the bar with nothing between them
+                        // and the black he described as empty was at the very bottom. His words:
+                        // "space between story image frame and views count is too small… before is
+                        // good… iam feeling buttom empty."
+                        //
+                        // Pushed to the bottom of the page, the leftover is back where it was and
+                        // the geometry is the old one to the point.
+                        Spacer(minLength: 0)
+                        // MY OWN BAR, IN THE PAGE. It travels with the card through the cube for
+                        // the same reason a friend's reply bar always did: both are the page.
                         if let ownerBar, model.isMine, ownerBarHeight > 0 {
                             ownerBar(model.id)
                                 .frame(height: ownerBarHeight)
                         }
-                        Spacer(minLength: 0)
                     }
                     .padding(.top, winInsets.top)
                     // Tell the viewers-sheet morph WHERE the card is, because it is no longer the
