@@ -843,10 +843,12 @@ struct ChatsView: View {
         // NavigationLink row draws the disclosure chevron and there is no API to turn it off
         // (user: "remove the arrow in chat list"). The link ALSO set the List's selection, and
         // SwiftUI never cleared it on the way back; fixed in the two onChange handlers on the List.
-        // THE HIGHLIGHT IS ENTIRELY APPLE'S, and this is the whole of it: a plain-styled Button in a
-        // List row lets the cell's own pressed state paint. It arrives on touch down, stays while a
-        // long press waits for the menu, and clears the moment the finger lifts or a scroll steals
-        // the touch. Nothing of ours is involved, so there is nothing that can be left behind.
+        // ⚠️ THAT LEFT THE ROW WITH NO HIGHLIGHT AT ALL, and the paragraph that used to sit here said
+        // the opposite: that a plain-styled Button in a List row lets the cell's own pressed state
+        // paint through it. It does not. The Button takes the touch, the cell never learns a press
+        // happened, and `.plain` adds no feedback of its own — so tapping a chat to open it looked
+        // like nothing had been tapped (owner 2026-08-13). The grey is ours again, via RowPressFill,
+        // which carries the watchdog that makes the old stranding impossible.
         //
         // A row used to stay lit while its chat was open (the reference app's `selectRow`, build 441). It is
         // deleted. On a phone that highlight is only ever VISIBLE during the back swipe, because
@@ -861,7 +863,9 @@ struct ChatsView: View {
         } label: {
             chatListRowLabel(conv)
         }
-        .buttonStyle(.plain)   // no accent tint on the label, and no custom press flag to get stuck
+        // `.plain` is what left a tap with no feedback at all — see RowPressFill, which paints the
+        // grey the cell underneath was never going to paint, and cannot strand it.
+        .buttonStyle(RowPressFill())
         // Edit mode: the push is off, and the tap-catcher overlay below owns the tap.
         //
         // `.disabled(selecting)` was the wrong tool and `.opacity(1)` did not rescue it. Disabled
@@ -1012,7 +1016,7 @@ struct ChatsView: View {
                 .padding(.horizontal, 16)   // the chat row's gutter, for the same reason (row insets are zero)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)            // same deal as a chat row: the cell paints its own press
+            .buttonStyle(RowPressFill())    // the same touch grey as the chat rows under it
             .listRowInsets(EdgeInsets())
             .listRowSeparator(.hidden)
             .deleteDisabled(true)
@@ -1630,6 +1634,9 @@ struct ArchivedChatsView: View {
     @State private var selecting = false
     @State private var selection = Set<String>()
     @State private var showDeleteSelected = false
+    @State private var pendingDelete: Conversation?     // one chat, from the swipe or the row menu
+    @State private var showArchiveSettings = false
+    @State private var showHowItWorks = false
     @State private var prefsTick = 0              // re-render after Unhide
 
     private var me: String { AuthService.shared.uid ?? "" }
@@ -1659,9 +1666,10 @@ struct ArchivedChatsView: View {
                 Label { Text("Unread") } icon: { MenuIcon("ic_menu_unread") }
             }
         }
-        Button(role: .destructive) {
-            Task { await ChatService.deleteForMe(conv.id) }
-        } label: {
+        // Through the same confirmation the swipe uses, and the same one the chat list has always
+        // had. This one deleted on the spot, which made the archive the only place in the app where
+        // a chat could go with one tap and no question.
+        Button(role: .destructive) { pendingDelete = conv } label: {
             Label { Text("Delete") } icon: { MenuIcon(system: "trash.fill") }
         }
     }
@@ -1803,16 +1811,25 @@ struct ArchivedChatsView: View {
                                             voiceDraftSecs: AudioRecorder.draftIndex[conv.id] ?? 0,
                                             voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(RowPressFill())   // the same touch grey the chat list has
                                 .tag(conv.id)
                                 .listRowInsets(EdgeInsets())
                                 .listRowSeparator(.hidden)
                                 // Native swipe platter (grey) — no white listRowBackground override
                                 // that painted over the row content on swipe.
+                                //
+                                // Unarchive stays FIRST, which is both the outermost button and the
+                                // one a full swipe fires: taking something out is what this drawer is
+                                // for, and it is what the reference app puts under the same finger.
+                                // Delete was menu-only, so the one action people reach for by swiping
+                                // on every other list was missing here (owner 2026-08-13).
                                 .swipeActions(edge: .trailing) {
                                     Button { Task { await ChatService.setArchived(conv.id, false) } } label: {
                                         Label("Unarchive", systemImage: "tray.and.arrow.up")
                                     }.tint(.indigo)
+                                    Button(role: .destructive) { pendingDelete = conv } label: {
+                                        Label { Text("Delete") } icon: { MenuIcon(system: "trash.fill") }
+                                    }
                                 }
                                 // THERE WAS NO LONG-PRESS MENU HERE AT ALL, and that is both of his
                                 // reports about this list. The chat page has carried one since it was
@@ -1863,11 +1880,9 @@ struct ArchivedChatsView: View {
                             .disabled(selection.isEmpty)
                     }
                 } else {
-                    if hasAnyArchived {
-                        ToolbarItem(placement: .topBarLeading) {
-                            Button("Select") { withAnimation(.smooth(duration: 0.35)) { selecting = true } }.tint(.primary)
-                        }
-                    }
+                    // Select moved off the left and into the menu, where the reference app keeps it —
+                    // two doors into one mode is clutter. Done stays exactly where it was.
+                    ToolbarItem(placement: .topBarTrailing) { archiveMenu }
                     ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
                 }
             }
@@ -1876,8 +1891,45 @@ struct ArchivedChatsView: View {
                 Button("Delete", role: .destructive) { deleteSelected() }
                 Button("Cancel", role: .cancel) {}
             }
+            // Word for word the chat list's own delete alert — one question, asked the same way
+            // wherever a chat can go.
+            .alert("Delete this chat?",
+                   isPresented: Binding(get: { pendingDelete != nil },
+                                        set: { if !$0 { pendingDelete = nil } })) {
+                Button("Delete Chat", role: .destructive) {
+                    if let c = pendingDelete { Task { await ChatService.deleteForMe(c.id) } }
+                    pendingDelete = nil
+                }
+                Button("Cancel", role: .cancel) { pendingDelete = nil }
+            } message: {
+                Text("This removes the chat from your list. It comes back if you get a new message.")
+            }
+            .sheet(isPresented: $showArchiveSettings) { ArchiveSettingsView() }
+            .sheet(isPresented: $showHowItWorks) { ArchiveHelpView() }
         }
         .onAppear { repo.start() }
+    }
+
+    /// The page's own menu. Everything it holds was already in the app and unreachable from here:
+    /// the auto-archive switch lived three taps away in Settings > Chats, nothing explained what the
+    /// drawer does, and Select was a word in the corner (owner 2026-08-13).
+    private var archiveMenu: some View {
+        Menu {
+            Button { showArchiveSettings = true } label: {
+                Label { Text("Archive Settings") } icon: { MenuIcon(system: "slider.horizontal.3") }
+            }
+            Button { showHowItWorks = true } label: {
+                Label { Text("How Does It Work?") } icon: { MenuIcon(system: "questionmark.circle") }
+            }
+            if hasAnyArchived {
+                Button { withAnimation(.smooth(duration: 0.35)) { selecting = true } } label: {
+                    Label { Text("Select Chats") } icon: { MenuIcon(system: "checkmark.circle") }
+                }
+            }
+        } label: {
+            Image(systemName: "ellipsis").font(.system(size: 18))
+        }
+        .tint(.primary)
     }
 
     private func exitSelect() { withAnimation(.smooth(duration: 0.35)) { selecting = false; selection = [] } }

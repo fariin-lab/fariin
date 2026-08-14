@@ -262,6 +262,48 @@ struct MenuIcon: View {
     }
 }
 
+/// The grey a list row wears while a finger is on it.
+///
+/// THE ROWS HAD NO TOUCH FEEDBACK AT ALL (owner 2026-08-13, on the chat list: tapping a chat to open
+/// it shows nothing, "no gray that tells it's tapped this user"). The chat row is a plain-styled
+/// Button, and the belief written beside it was that the List cell underneath would paint its own
+/// highlight through it. It does not: the Button takes the touch, so the cell never learns a press
+/// happened and never lights. `.plain` means exactly what it says — no feedback of any kind.
+///
+/// ⚠️ THE RESET IS THE WHOLE PROBLEM HERE, and it is why the previous press style was deleted rather
+/// than fixed. Painting straight from `configuration.isPressed` strands the grey whenever a press
+/// never ends, and this list re-sorts on every incoming message — a row rebuilt under a resting
+/// finger never receives its release. So the fill is `isPressed` AND a watchdog: the moment a press
+/// begins, a task starts that takes the fill away by itself. A press that ends normally cancels it
+/// (the id flips), a press that never ends cannot outlive it. Nothing here can leave grey behind.
+struct RowPressFill: ButtonStyle {
+    /// The app's own highlight token — the same fill the custom menu paints its pressed row with,
+    /// and it adapts to light/dark on its own.
+    static let fill = Color(.secondarySystemFill)
+    /// Long enough that a long press keeps its grey while the context menu takes over (the menu
+    /// lifts the row at about half a second), short enough that a stranded press is never seen.
+    static let watchdog: UInt64 = 3_000_000_000
+
+    func makeBody(configuration: Configuration) -> some View { Body(configuration: configuration) }
+
+    // The state lives in a real View, not in makeBody: a ButtonStyle is a value that gets rebuilt.
+    private struct Body: View {
+        let configuration: ButtonStyleConfiguration
+        @State private var expired = false
+
+        var body: some View {
+            configuration.label
+                .background(configuration.isPressed && !expired ? RowPressFill.fill : .clear)
+                .task(id: configuration.isPressed) {
+                    guard configuration.isPressed else { expired = false; return }   // released: re-arm
+                    try? await Task.sleep(nanoseconds: RowPressFill.watchdog)
+                    guard !Task.isCancelled else { return }
+                    expired = true
+                }
+        }
+    }
+}
+
 struct AvatarView: View {
     let name: String
     var photoUrl: String?
