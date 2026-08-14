@@ -649,7 +649,9 @@ struct ChatsView: View {
     // Multi-select edit mode.
     @State private var selecting = false
     @State private var selection = Set<String>()
-    @State private var showArchived = false
+    // A page in the chat list's own stack. NavigationPath is type-erased, so one case is all the
+    // archive needs to become a destination.
+    enum ArchiveRoute: Hashable { case archive }
     @State private var showDeleteSelected = false
     @State private var showCompose = false
     @State private var showMyQR = false   // welcome empty-state → My QR Code sheet
@@ -1004,7 +1006,7 @@ struct ChatsView: View {
 
     @ViewBuilder private var archivedEntryRow: some View {
         if showsArchivedRow {
-            Button { showArchived = true } label: {
+            Button { path.append(ArchiveRoute.archive) } label: {
                 HStack(spacing: 8) {
                     // Centred in the 60pt column the avatars stand in, at the same 8pt gap, so
                     // "Archived" starts on the same left edge as every chat name under it.
@@ -1091,7 +1093,7 @@ struct ChatsView: View {
                 Button { chatFilter = 2 } label: { if chatFilter == 2 { Label("Groups", systemImage: "checkmark") } else { Text("Groups") } }
             }
             Divider()
-            Button { showArchived = true } label: {
+            Button { path.append(ArchiveRoute.archive) } label: {
                 Label { Text("Archive") } icon: { MenuIcon("ic_archive") }
             }
             // Stories off (Settings > Stories > Turn Off Stories) → no Add Story entry.
@@ -1550,6 +1552,13 @@ struct ChatsView: View {
             // keyed by cid via .id(...) so each conversation gets a fresh ThreadView
             // identity — a new chat can never inherit the previous chat's @State
             // (repo/cid), which was the cross-routing bug.
+            // THE ARCHIVE IS A PAGE OF THIS STACK, not a sheet over it (owner 2026-08-13: "make it
+            // like a sub page"). It rides the same path as a chat, so the back chevron is the system's
+            // and a chat opened from inside the archive lands on top of it — back returns to the
+            // archive, which is what both references do and what a sheet could never do.
+            .navigationDestination(for: ArchiveRoute.self) { _ in
+                ArchivedChatsView(pushed: true, onOpenChat: { t in path.append(t) })
+            }
             .navigationDestination(for: ChatTarget.self) { t in
                 // The official channel gets its own screen. ThreadView is built around a composer and
                 // an encrypted message pipeline, neither of which exists here.
@@ -1585,7 +1594,7 @@ struct ChatsView: View {
             .confirmationDialog(muteTitle, isPresented: mutePrompted,
                                 titleVisibility: .visible) { muteActions }
             .toolbar(selecting ? .hidden : .automatic, for: .tabBar)
-            .sheet(isPresented: $showArchived) { ArchivedChatsView() }
+            // (The archive is PUSHED now — see `archiveRoute` on the navigationDestination above.)
             .sheet(isPresented: $showMyQR) { MyQRView() }
             .sheet(item: pendingInvite) { item in
                 JoinGroupSheet(code: item.code).presentationDetents([.large])
@@ -1610,7 +1619,8 @@ struct ChatsView: View {
         // up, a notification tap looked like it did nothing — and the intent is consumed below, so
         // it never healed. This file's own comment already treats "opens somewhere hidden" as the
         // failure to prevent.
-        showArchived = false
+        // (No archive sheet to close any more: it is a page of this stack, and the chat is pushed
+        // on top of it — see the ArchiveRoute destination.)
         showNew = false
         showCompose = false
         // The story viewer is not a cover any more, so it cannot be dismissed by clearing a binding:
@@ -1633,6 +1643,17 @@ struct ChatsView: View {
 
 // Archived chats (reached from the avatar menu). Swipe to unarchive.
 struct ArchivedChatsView: View {
+    /// PUSHED, NOT PRESENTED (owner 2026-08-13, ours beside both references: "make it like a sub
+    /// page"). Both of them push the archive onto the chat list's own stack — back chevron top left,
+    /// the list sliding in from the right — and a drawer that slides up from the bottom reads as a
+    /// detour instead of a place inside the app.
+    ///
+    /// ⚠️ WHEN PUSHED IT MUST NOT BUILD ITS OWN NavigationStack, and it must not declare a
+    /// `navigationDestination` for ChatTarget either: it is INSIDE the chat list's stack, which
+    /// already has one, and two registrations for the same type in one stack is a fight over who
+    /// answers. So a pushed archive hands the tap up to its parent instead.
+    var pushed = false
+    var onOpenChat: ((ChatTarget) -> Void)? = nil
     private var repo = ConversationsRepository.shared
     private var storiesRepo = StoriesRepository.shared   // archived (hidden) stories appear at the top
     @Environment(\.dismiss) private var dismiss
@@ -1783,7 +1804,12 @@ struct ArchivedChatsView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        // Pushed: no stack of its own, and no ChatTarget destination — the parent owns both. See the
+        // note on `pushed`.
+        if pushed { content } else { NavigationStack(path: $path) { content } }
+    }
+
+    private var content: some View {
             Group {
                 if !hasAnyArchived && archivedStories.isEmpty {
                     EmptyStateView(title: "Nothing archived", icon: "archivebox",
@@ -1811,8 +1837,9 @@ struct ArchivedChatsView: View {
                                         }
                                         return
                                     }
-                                    path.append(ChatTarget(id: conv.id, name: conv.displayName(me),
-                                                           photo: conv.displayPhoto(me)))
+                                    let t = ChatTarget(id: conv.id, name: conv.displayName(me),
+                                                       photo: conv.displayPhoto(me))
+                                    if let onOpenChat { onOpenChat(t) } else { path.append(t) }
                                 } label: {
                                     ChatRow(conv: conv, me: me, dark: dark,
                                             draft: Drafts.shared.text(conv.id),
@@ -1859,8 +1886,13 @@ struct ArchivedChatsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always),
                         prompt: "Search archived")
+            // ⚠️ ONLY WHEN THIS VIEW OWNS THE STACK. Pushed, the chat list's stack already answers
+            // for ChatTarget, and a second registration for the same type in one stack is two views
+            // claiming the same destination.
             .navigationDestination(for: ChatTarget.self) { t in
-                if OfficialChannel.isOfficial(t.id) {
+                if pushed {
+                    EmptyView()
+                } else if OfficialChannel.isOfficial(t.id) {
                     OfficialChatView().id(t.id)
                 } else {
                     ThreadView(cid: t.id, title: t.name, photoUrl: t.photo).id(t.id)
@@ -1891,7 +1923,10 @@ struct ArchivedChatsView: View {
                     // Select moved off the left and into the menu, where the reference app keeps it —
                     // two doors into one mode is clutter. Done stays exactly where it was.
                     ToolbarItem(placement: .topBarTrailing) { archiveMenu }
-                    ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                    // Pushed, the back chevron is the way out and a Done beside it is a second one.
+                    if !pushed {
+                        ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                    }
                 }
             }
             .confirmationDialog("Delete \(selection.count) chat\(selection.count == 1 ? "" : "s")?",
