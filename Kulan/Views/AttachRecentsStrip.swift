@@ -102,10 +102,19 @@ struct AttachRecentsStrip: View {
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 3)   // 3 per row (user request)
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
+        // THE PHOTOS RUN UNDER THE HEADER (his reference, 2026-08-14: "make the white follow the
+        // photo… swipe down and it comes back"). It used to be the first row of a VStack, which is a
+        // slot: the grid started below it and the sheet's own white filled the strip, so the header
+        // was a lid rather than something the content passes beneath.
+        //
+        // As a top safe-area inset it reserves exactly its own height, so nothing is hidden at rest —
+        // and everything slides under it the moment you scroll, coming back as you scroll down. The
+        // header itself paints NOTHING now: the close button carries its own glass circle and the
+        // album title floats, which is what theirs does.
+        Group {
             if showAlbums { albumsList } else { grid }
         }
+        .safeAreaInset(edge: .top, spacing: 0) { header }
         // ≥1 selected → a caption + Send bar as a native bottom inset bar, so iOS pins it directly above
         // the keyboard (no home-indicator gap between the bar and the keyboard) and above the home
         // indicator when the keyboard is down — exactly like a composer.
