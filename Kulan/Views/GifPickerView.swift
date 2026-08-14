@@ -146,13 +146,16 @@ struct GifPickerView: View {
                     await refresh()
                 }
             }
-            .navigationTitle("GIF")
-            .navigationBarTitleDisplayMode(.inline)
-            // SOLID header (owner's 416 report: "can see scrolling the gifts" through the glass).
-            // iOS 26 glasses every title bar by default; on this sheet the grid slid visibly
-            // behind the X / title / chips, so the whole top reads as one opaque white card.
-            .toolbarBackground(Color(uiColor: .systemBackground), for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+            // NO WHITE BAND AT THE TOP (his 573 screenshot, crossed out four times). It was made
+            // opaque on his own 416 report — "can see scrolling the gifts" — but that report was
+            // about the CHIPS sliding against the grid behind them, and the chips left the bar
+            // tonight: they are a floating capsule now, over the GIFs on purpose.
+            //
+            // What is left up there is a close button that carries its own glass circle, so the bar
+            // itself has nothing to paint for. The title goes with the band: neither reference names
+            // its picker, and a word floating over moving GIFs is the very thing the 416 report was
+            // about.
+            .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
                 // Hide the toolbar's own glass so CloseXButton's circle isn't double-wrapped (iOS 26).
                 if #available(iOS 26.0, *) {
