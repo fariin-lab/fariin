@@ -491,8 +491,16 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             //
             // ⚠️ EXCEPT A ONE-TIME NOTE. Its bytes are thrown away the moment it finishes and it has
             // no second listen by design, so leaving a play button over it would be a lie.
+            //
+            // ⚠️ AND ONLY WHEN THE BAR IS ALREADY UP. His question, which caught this: what if it
+            // finishes while I am IN the chat and I leave afterwards? Keeping the note open there
+            // would raise a bar on the chat list for something that ended while he was watching it —
+            // a player appearing for a sound that is already over. The bar is for a note that was
+            // still going when he walked away, so a note that ends inside its own chat closes, and
+            // one that ends outside it stays for the replay.
             let oneTime = transientURL != nil
-            if oneTime { hasNote = false }
+            let insideItsChat = cid == (AppRouter.shared.activeChatId ?? "")
+            if oneTime || insideItsChat { hasNote = false }
             pausedByUser = false     // the note ended by itself; nobody pressed anything
             clearNowPlaying()
             disposeTransient()   // a finished one-time note's bytes do not outlive the listen
