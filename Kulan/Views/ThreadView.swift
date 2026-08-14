@@ -7397,7 +7397,7 @@ private struct RecordWaveform: View {
         // and carried a playback knob that means nothing while recording). The 10Hz liveWindow
         // sets a pace the eye can follow, and display()'s physics makes silence enter as dots.
         // The full note is still shown where it belongs: the review strip, after pause.
-        LiveWaveform(levels: recorder.liveWindow, color: color)
+        LiveWaveform(levels: recorder.liveWindow, color: color, stamp: recorder.liveStamp)
             .frame(maxWidth: .infinity, maxHeight: 22)
     }
 }

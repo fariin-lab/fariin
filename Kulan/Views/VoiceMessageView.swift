@@ -508,13 +508,43 @@ struct WaveformBars: View {
 // and he read it as lag. The scroll is the honest motion: sound arrives, sound passes.) Fed by
 // the recorder's 10Hz `liveWindow`, not the 30Hz meter — thirty bars a second was a stampede.
 // Heights go through WaveformBars.display, so silence enters as the same dots the bubble draws.
+// THE SECOND "IT STOPS MOVING" REPORT, and this one was never a freeze (owner 2026-08-13, timed by
+// him at 0:05). All the motion came from the array growing — a 4.5pt jump ten times a second — which
+// looks like travel only while the wave still has a FRONT crossing empty space. At 45pt a second the
+// front reaches the far edge at about five seconds; after that the strip is full, and a packed band
+// of same-height bars stepping in place reads as stopped until a loud or quiet patch passes.
+//
+// The row rides a clock now. Between two samples it slides continuously through exactly one slot, so
+// the step and the slide cancel and the strip travels at ONE speed whether it is full or not:
+//
+//   shift = slot × (1 − f), f = how far we are through the current 0.1s sample
+//   f = 0 → the newest bar sits one slot PAST the right edge (clipped, not yet arrived)
+//   f = 1 → it has slid exactly into place, and the next sample's step takes it from there
+//
+// ⚠️ NO spring on the layout any more. The old interpolatingSpring animated the same 4.5pt step this
+// offset now cancels, so leaving it in makes the two fight and the strip judders.
 struct LiveWaveform: View {
     let levels: [AudioRecorder.LiveBar]   // per-sample PERMANENT ids — see LiveBar's note: identity
     var color: Color                      // by offset froze the strip once the window filled
+    var stamp: Date = .distantPast        // when the newest bar landed (AudioRecorder.liveStamp)
 
     var body: some View {
         GeometryReader { geo in
             let slot: CGFloat = 4.5   // 2.5 bar + 2 gap — must match the HStack below
+            // .animation drives the redraw every frame; nothing here is animated by SwiftUI, the
+            // position IS the clock. A stale stamp (paused, or not recording) clamps f to 1, which
+            // is a shift of zero — exactly where the strip stood before this existed.
+            TimelineView(.animation) { ctx in
+                // CGFloat spelled out: an implicit Double↔CGFloat conversion here is legal and is
+                // also exactly the kind of thing this file's type-checker budget is spent on.
+                let f = CGFloat(min(1, max(0, ctx.date.timeIntervalSince(stamp) / AudioRecorder.liveInterval)))
+                strip(geo: geo, slot: slot, shift: slot * (1 - f))
+            }
+        }
+        .clipped()   // whatever survives the taper still dies AT the strip's edge, never outside the pill
+    }
+
+    private func strip(geo: GeometryProxy, slot: CGFloat, shift: CGFloat) -> some View {
             HStack(alignment: .center, spacing: 2) {
                 ForEach(Array(levels.enumerated()), id: \.element.id) { i, bar in
                     // A BAR IS WHAT WAS HEARD, THE WHOLE WAY ACROSS — his second report: the first
@@ -524,7 +554,10 @@ struct LiveWaveform: View {
                     // 2pt floor already is the dot), speech travels at full height, and only a
                     // tall bar touching the edge bows out. While the row is shorter than the strip
                     // nothing is near that edge, so young recordings are never shaped.
-                    let fromRight = CGFloat(levels.count - 1 - i) * slot
+                    // The bar's REAL distance from the right edge, the slide included — so the duck
+                    // below is as continuous as the travel is, instead of stepping three times on
+                    // the way out.
+                    let fromRight = CGFloat(levels.count - 1 - i) * slot - shift
                     let fromLeft = geo.size.width - fromRight
                     let taper = max(0, min(1, fromLeft / 14))
                     Capsule().fill(color)
@@ -533,16 +566,13 @@ struct LiveWaveform: View {
                         // A new bar ARRIVES at its true height — .identity kills the insertion
                         // grow-in the implicit animation gave it, which read as bars entering
                         // small and swelling into place ("it depends what wave heard, not fixed").
-                        // The spring below still animates the leftward travel.
                         .transition(.identity)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
-            // Light interpolating spring on top of the recorder's meter ballistics: each new bar
-            // eases in and the row's leftward step reads as travel rather than teleport.
-            .animation(.interpolatingSpring(stiffness: 260, damping: 26), value: levels)
-        }
-        .clipped()   // whatever survives the taper still dies AT the strip's edge, never outside the pill
+            // The travel itself. Every bar's position comes from here and from its index, and both
+            // are read fresh each frame, so there is no animation left for anything to interrupt.
+            .offset(x: shift)
     }
 }
 

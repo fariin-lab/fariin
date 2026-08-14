@@ -29,6 +29,19 @@ final class AudioRecorder {
     /// made the flow frantic; the whole-note compressed strip (tried 2026-08-11) re-bucketed on
     /// every tick and read as lag. This is the middle that looks alive.
     var liveWindow: [LiveBar] = []
+    /// WHEN the newest bar landed, and how far apart two of them are.
+    ///
+    /// The strip used to get its whole motion from the array growing: one bar arrives, everything
+    /// jumps 4.5pt left, ten times a second. That reads as travel only while the wave still has a
+    /// FRONT crossing empty space — once it reaches the far edge (about five seconds in, at 45pt a
+    /// second) the picture is full, and a packed band of same-height bars stepping in place looks
+    /// stopped until a loud or quiet patch happens to pass through. That is the owner's 2026-08-13
+    /// report, and it is the same complaint as the 531 one above with a different cause.
+    ///
+    /// With a stamp the strip can interpolate BETWEEN samples and travel at one constant speed, so
+    /// there is nothing left to stall — see LiveWaveform.
+    var liveStamp = Date.distantPast
+    static let liveInterval: TimeInterval = 0.1   // 10Hz — must match the `liveTick % 3` gate below
     private var liveTick = 0
     private var liveSeq = 0
     private var allLevels: [Float] = []
@@ -185,6 +198,7 @@ final class AudioRecorder {
             if self.liveTick % 3 == 0 {   // 10Hz into the visible strip
                 self.liveWindow.append(LiveBar(id: self.liveSeq, level: level))
                 self.liveSeq += 1
+                self.liveStamp = Date()   // the strip's clock: it slides from here to the next one
                 if self.liveWindow.count > self.waveWindow {
                     self.liveWindow.removeFirst(self.liveWindow.count - self.waveWindow)
                 }
