@@ -8,6 +8,27 @@ struct KulanApp: App {
     @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
     @Environment(\.scenePhase) private var scenePhase
 
+    /// ⚠️ THE UIKit HALF OF `.tint(.primary)` BELOW, AND WITHOUT IT THAT LINE IS ONLY HALF TRUE —
+    /// his 2026-08-16 report, with both long-press menus circled: "the context menu icons is blue…
+    /// restore the white color icons".
+    ///
+    /// `.tint()` is a SwiftUI ENVIRONMENT value. A long-press menu is not a SwiftUI view: SwiftUI
+    /// hands `.contextMenu` to UIKit, which builds a real `UIMenu`, and UIKit tints a menu's images
+    /// with the presenting view's `tintColor` — a thing the SwiftUI environment never reaches. That
+    /// is why those menus came out with white lettering and SYSTEM-BLUE glyphs: the text is drawn by
+    /// `label`, the icons by a tint nobody had set. Everywhere the app draws its OWN menu
+    /// (`CMContextMenu`) both are `.label`, which is what he is comparing them against.
+    ///
+    /// `.label` rather than white, so it is black on a light-mode phone — the ink, not a colour.
+    ///
+    /// ⚠️ IT IS THE WINDOW'S, SO IT REACHES EVERY UIKit CONTROL THAT HAS NOT SET ITS OWN: menus,
+    /// carets, the buttons of any system alert. That is the same rule the SwiftUI line already
+    /// states, and several places (`AuthFlowViews`, `NativeMessageList`) had already set `.label` by
+    /// hand for exactly this reason — this is that fix stopped being done one view at a time.
+    init() {
+        UIWindow.appearance().tintColor = .label
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
