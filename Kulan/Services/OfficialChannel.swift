@@ -426,6 +426,17 @@ final class OfficialChannelStore {
     /// and badge in `ChatsView` keeps working without learning about announcements — the list should
     /// not need a second code path just because one of its rows is ours.
     var listEntry: Conversation? {
+        // THE COLD-LAUNCH ROW. This entry exists only once three Firestore listeners have answered,
+        // so on every cold start the chat list was drawn WITHOUT it and the row then appeared a beat
+        // later and pushed the list around — the owner's report, and the reason the list's own
+        // `listSettled` grace exists at all ("the official channel then lands from its own store a
+        // moment later and flies in alone").
+        //
+        // ⚠️ The cached row is only ever used BEFORE the real answer arrives. The moment `hasLoaded`
+        // is true the live data decides alone, so an announcement that has been cleared, blocked or
+        // has expired removes the row exactly as it always did. A cache that could outlive its own
+        // contradiction would be worse than the flicker it replaces.
+        if !hasLoaded, let cached = Self.cachedEntry { return cached }
         guard isVisible, let latest, let uid = AuthService.shared.uid else { return nil }
         let at = latest.sortAt
         let conv = Conversation(id: OfficialChannel.cid, data: [
@@ -574,6 +585,65 @@ final class OfficialChannelStore {
         hasLoaded = true
         guard next != visible else { return }   // no-op snapshot, no re-render
         visible = next
+        // Keep the launch copy current. Written AFTER `visible`, so it records the row the list is
+        // actually showing, and cleared when there is no row — otherwise a person who blocked or
+        // cleared the channel would be handed it back on their next cold start.
+        Self.cacheEntry(listEntry)
+    }
+
+    // MARK: The launch copy
+
+    /// One row, on disk, read synchronously so the FIRST frame of the chat list can include it.
+    ///
+    /// Deliberately the finished row rather than the announcements behind it: rebuilding those means
+    /// re-running the audience, schedule, block and delete-for-me filters, and every one of those can
+    /// change while the app is closed. Storing the answer and throwing it away the instant the real
+    /// one arrives keeps this to one honest job — filling a gap, never deciding anything.
+    private static let entryDefaultsKey = "official.listEntry.v1"
+
+    private static var cachedEntry: Conversation? {
+        guard let uid = AuthService.shared.uid,
+              let box = UserDefaults.standard.dictionary(forKey: entryDefaultsKey),
+              // Per account. Without this the next person to sign in on this phone is handed the
+              // last one's unread count and pinned state on their first frame.
+              box["uid"] as? String == uid,
+              let body = box["doc"] as? [String: Any],
+              let millis = box["updatedAtMillis"] as? Double
+        else { return nil }
+        var doc = body
+        // `updatedAt` is a `Timestamp`, which no property list can hold, so it travels as a number
+        // and is rebuilt here. It is load-bearing: the chat list sorts on it, and a row arriving
+        // with no date sorts to the bottom of the list, which is not where this row lives.
+        doc["updatedAt"] = Timestamp(date: Date(timeIntervalSince1970: millis / 1000))
+        return Conversation(id: OfficialChannel.cid, data: doc)
+    }
+
+    private static func cacheEntry(_ entry: Conversation?) {
+        guard let uid = AuthService.shared.uid else { return }
+        guard let entry else {
+            UserDefaults.standard.removeObject(forKey: entryDefaultsKey)
+            return
+        }
+        let doc: [String: Any] = [
+            "users": entry.users,
+            "names": entry.names,
+            "photos": [String: String](),
+            "lastMessage": entry.lastMessageCipher,
+            "lastSender": entry.lastSender,
+            "unreadCount": entry.unreadCount,
+            "mutedBy": entry.mutedBy,
+            "pinnedBy": entry.pinnedBy,
+            "archivedBy": entry.archivedBy,
+            "clearedAt": entry.clearedAt,
+            "type": "",
+        ]
+        UserDefaults.standard.set(["uid": uid, "doc": doc, "updatedAtMillis": entry.updatedAtMillis],
+                                  forKey: entryDefaultsKey)
+    }
+
+    /// Signing out takes the launch copy with it — see SessionWipe.
+    static func clearCachedEntry() {
+        UserDefaults.standard.removeObject(forKey: entryDefaultsKey)
     }
 
     static var currentBuild: Int {

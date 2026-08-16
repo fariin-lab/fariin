@@ -17,6 +17,10 @@ enum SessionWipe {
         // the sharp one — their admin permissions, which would put a live Send Announcement screen in
         // a stranger's Settings until the listener caught up.
         OfficialChannelStore.shared.reset()
+        // Its launch copy is a separate key and `reset()` does not touch it — it is per-uid, but the
+        // next account should not inherit a row at all, not even for the frame before its own
+        // listeners answer.
+        OfficialChannelStore.clearCachedEntry()
         AdminStore.shared.reset()
         OfficialConfig.shared.stop()
         // The story audiences are a list of the last person's friends by name, mirrored to disk so
