@@ -29,8 +29,22 @@ final class GiphyService {
         return await fetch(path: trimmed.isEmpty ? "trending" : "search", query: trimmed.isEmpty ? nil : trimmed)
     }
 
-    private func fetch(path: String, query: String?) async -> [Gif] {
-        guard let key = await key(), var c = URLComponents(string: "https://api.giphy.com/v1/gifs/\(path)") else { return [] }
+    /// STICKERS, WHICH ARE A DIFFERENT ENDPOINT AND NOT A DIFFERENT SEARCH — `/v1/stickers/…` rather
+    /// than `/v1/gifs/…`.
+    ///
+    /// ⚠️ THE DIFFERENCE THAT MATTERS IS THE ALPHA CHANNEL. Everything under `stickers` is drawn on
+    /// transparency; everything under `gifs` is a rectangle, usually on white. Searching the GIF
+    /// endpoint for "sticker" returns pictures OF stickers with a white box round them, which on a
+    /// story is a white box on somebody's photograph. There is no way to get one from the other.
+    func searchStickers(_ q: String) async -> [Gif] {
+        let trimmed = q.trimmingCharacters(in: .whitespaces)
+        return await fetch(path: trimmed.isEmpty ? "trending" : "search",
+                           query: trimmed.isEmpty ? nil : trimmed, stickers: true)
+    }
+
+    private func fetch(path: String, query: String?, stickers: Bool = false) async -> [Gif] {
+        let kind = stickers ? "stickers" : "gifs"
+        guard let key = await key(), var c = URLComponents(string: "https://api.giphy.com/v1/\(kind)/\(path)") else { return [] }
         var items = [
             URLQueryItem(name: "api_key", value: key),
             URLQueryItem(name: "limit", value: "30"),

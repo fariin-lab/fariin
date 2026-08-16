@@ -28,14 +28,22 @@ enum GifBytesCache {
 // into an animated UIImage. Used in the GIF picker and in chat bubbles.
 struct AnimatedGifView: UIViewRepresentable {
     let url: String
+    /// ⚠️ A STICKER IS NOT A GIF IN A BOX, and these two parameters are the whole difference.
+    ///
+    /// A GIF in a chat is a rectangle: it fills its cell and wears a grey placeholder while it
+    /// downloads. A sticker is drawn on transparency and has to arrive with NOTHING behind it — a
+    /// placeholder fill would be a grey square around it, and `scaleAspectFill` would crop the very
+    /// edges the artwork was cut out to have. Defaults are exactly what every existing caller had.
+    var fill: Bool = true
+    var placeholder: UIColor = .secondarySystemFill
 
     private static let cache = NSCache<NSString, UIImage>()   // decoded animated GIFs, reused across instances
 
     func makeUIView(context: Context) -> UIImageView {
         let v = UIImageView()
-        v.contentMode = .scaleAspectFill
+        v.contentMode = fill ? .scaleAspectFill : .scaleAspectFit
         v.clipsToBounds = true
-        v.backgroundColor = UIColor.secondarySystemFill
+        v.backgroundColor = placeholder
         load(into: v, context.coordinator)
         return v
     }

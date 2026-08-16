@@ -4,6 +4,8 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import AVFoundation
 import PhotosUI
+import ImageIO   // CGImageSource: a sticker's first frame, which is the frame that posts
+import MapKit    // CLLocationCoordinate2D, carried by a place sticker
 import StoryUI   // StoryCanvas: the one sampler + drawer for a story's backdrop
 
 // Photo-story editor — matches the in-chat photo editor (image 212): the picked photo fits on a
@@ -239,6 +241,11 @@ struct StoryEditorView: View {
     @State private var guideV = false
     @State private var guideH = false
 
+    // Stickers. Their own list rather than a case inside `overlays`, because the two are edited by
+    // different tools and only ever meet at the bake — see `StickerOverlay`.
+    @State private var stickers: [StickerOverlay] = []
+    @State private var showStickers = false
+
     private static let ciContext = CIContext()
     private static let filters: [(name: String, ci: String?)] = [
         ("Original", nil), ("Vivid", "CIPhotoEffectChrome"), ("Mono", "CIPhotoEffectMono"),
@@ -278,6 +285,9 @@ struct StoryEditorView: View {
         var filterIndex = 0
         var drawing = PKDrawing()
         var overlays: [TextOverlay] = []
+        /// Held on the ITEM like everything else the tools own, so switching to another picture and
+        /// back finds the stickers where they were left. Same stash-move-restore as the rest.
+        var stickers: [StickerOverlay] = []
         /// ⚠️ ZERO MEANS "NOBODY HAS CHOSEN ONE YET", NOT "no zoom". The default depends on the shape
         /// of the picture AND on the size of the card, which the model cannot know — so the value is
         /// left unset here and resolved the first time this item is put on the tools
@@ -707,6 +717,20 @@ struct StoryEditorView: View {
         // trait everything else reads. The environment on its own left this screen's alerts and any
         // system sheet it raises resolving light on a light-mode phone — the same split he
         // photographed on the picker. See the note on `DarkPresentation`.
+        // THE STICKER TRAY. One sheet, and Link and Location are PUSHES INSIDE IT rather than sheets
+        // of their own — see the note at the top of `StoryStickerSheet`. 0.6 is his number; `.large`
+        // is there because the two pushed screens raise a keyboard and 60% of a phone with a keyboard
+        // over it is not a screen you can type on.
+        .sheet(isPresented: $showStickers) {
+            StoryStickerSheet(
+                onSticker: { g in Task { await addSticker(g) } },
+                onLink: { url in addLinkSticker(url) },
+                onPlace: { name, coord in addPlaceSticker(name, coord) })
+                .presentationDetents([.fraction(0.6), .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(.ultraThinMaterial)
+                .presentationCornerRadius(28)
+        }
         .storyAlwaysDark()
     }
 
@@ -1004,6 +1028,33 @@ struct StoryEditorView: View {
                 .frame(width: card.width, height: card.height)
 
             videoMark
+
+            // Stickers — above the photo, UNDER the text. A caption is the thing you want readable
+            // when the two land on each other, and the same order is baked in `flatten`.
+            ForEach($stickers) { $s in
+                StickerOverlayView(
+                    sticker: $s,
+                    canvasSize: canvasSize,
+                    interactive: !isDrawing && editingID == nil,
+                    onDragChange: { live in
+                        draggingID = s.id
+                        let hot = isOverTrash(live)
+                        if hot != trashHot { trashHot = hot; if hot { UIImpactFeedbackGenerator(style: .medium).impactOccurred() } }
+                    },
+                    onDragEnd: { live in
+                        // Dragged onto the bin, same as a caption. It is the only way to remove one:
+                        // a sticker has no selected state and no ✕, which is the reference behaviour
+                        // and is why the bin appears the moment anything is being dragged.
+                        if isOverTrash(live) { stickers.removeAll { $0.id == s.id } }
+                        draggingID = nil; trashHot = false; guideV = false; guideH = false
+                    },
+                    onSnap: { v, h in
+                        if v && !guideV { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+                        if h && !guideH { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+                        guideV = v; guideH = h
+                    }
+                )
+            }
 
             // Text overlays — above the photo, below the drawing canvas + controls.
             ForEach($overlays) { $o in
@@ -1324,6 +1375,13 @@ struct StoryEditorView: View {
                         capsuleTool("crop", active: croppedSource != nil) {
                             withAnimation(.easeInOut(duration: 0.28)) { showCrop = true }
                         }
+                    }
+                    // STICKERS — his 2026-08-16 request. One button, one sheet, one callback: the
+                    // tray hands back a sticker and the editor places it, so nothing else on this
+                    // screen had to change to gain the tool.
+                    capsuleTool("face.smiling", active: !stickers.isEmpty) {
+                        captionFocused = false
+                        showStickers = true
                     }
                     capsuleTool(isDrawing ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle", active: isDrawing) {
                         // The pen's ✕ undoes back to here, so the snapshot is taken on the way IN
@@ -1749,6 +1807,87 @@ struct StoryEditorView: View {
         selectedID = o.id
         editingID = o.id   // open the editor immediately
     }
+
+    // MARK: - Stickers
+
+    /// The middle of the card, which is where every sticker starts. Nothing clever: it is the one
+    /// place that is on screen whatever the picture is, and the first thing anybody does with a
+    /// sticker is drag it somewhere else.
+    private var canvasCentre: CGPoint {
+        let s = canvasSize == .zero ? UIScreen.main.bounds.size : canvasSize
+        return CGPoint(x: s.width / 2, y: s.height / 2)
+    }
+
+    /// A sticker chosen in the tray, placed.
+    ///
+    /// ⚠️ IT IS PLACED AS A STILL — see `StickerOverlay`. The tray animates, because a wall of frozen
+    /// stickers is a worse tray; the canvas does not, because a story photo is a JPEG and a story
+    /// clip is composited against one flat overlay, so an animation could not survive either export.
+    /// The editor showing something the file cannot hold is the one thing this screen refuses to do.
+    @MainActor private func addSticker(_ g: GiphyService.Gif) async {
+        guard let image = await Self.stickerStill(g.url) else { return }
+        let width = min(180, max(90, (canvasSize == .zero ? 390 : canvasSize.width) * 0.42))
+        stickers.append(StickerOverlay(image: image, center: canvasCentre, baseWidth: width))
+    }
+
+    /// The first frame of a sticker, from disk if it has ever been drawn before.
+    ///
+    /// `GifBytesCache` is the GIF picker's own store and it is deliberately shared: a sticker seen in
+    /// the tray is already on this phone by the time it is tapped, so placing one usually costs no
+    /// network at all.
+    private static func stickerStill(_ url: String) async -> UIImage? {
+        if let data = GifBytesCache.data(url) { return firstFrame(data) }
+        guard let u = URL(string: url),
+              let (data, _) = try? await URLSession.shared.data(from: u) else { return nil }
+        GifBytesCache.store(data, url)
+        return firstFrame(data)
+    }
+    private static func firstFrame(_ data: Data) -> UIImage? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceGetCount(src) > 0,
+              let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) else { return UIImage(data: data) }
+        return UIImage(cgImage: cg)
+    }
+
+    /// A LINK OR A PLACE IS A STICKER TOO, and this is the line that makes it one: the chip is drawn
+    /// once, here, into a `UIImage`, and from that moment the editor cannot tell it from a sticker
+    /// off the tray. It moves with the same gesture, bakes with the same line and rides the same
+    /// export. What is different about it is `action`, which nothing before the post ever reads.
+    @MainActor private func chipSticker<C: View>(action: StickerAction,
+                                                 @ViewBuilder _ chip: () -> C) {
+        let r = ImageRenderer(content: chip())
+        r.scale = 3        // it is text at sticker size; a 1x bake of that is a smudge
+        r.isOpaque = false
+        guard let img = r.uiImage else { return }
+        stickers.append(StickerOverlay(image: img, center: canvasCentre,
+                                       baseWidth: img.size.width, action: action))
+    }
+
+    @MainActor private func addLinkSticker(_ url: URL) {
+        chipSticker(action: .link(url)) {
+            stickerChip(symbol: "link", text: StoryLinkSticker.label(for: url))
+        }
+    }
+
+    @MainActor private func addPlaceSticker(_ name: String, _ coord: CLLocationCoordinate2D) {
+        chipSticker(action: .place(name: name, lat: coord.latitude, lon: coord.longitude)) {
+            stickerChip(symbol: "mappin.and.ellipse", text: name.uppercased())
+        }
+    }
+
+    /// Solid white with black on it, and that is a decision rather than a default: these two sit on
+    /// somebody's photograph and have to be legible on a snowfield and in a night club alike. Glass
+    /// takes its colour from what is behind it, which is exactly the wrong property here.
+    @ViewBuilder private func stickerChip(symbol: String, text: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: symbol).font(.system(size: 15, weight: .bold))
+            Text(text).font(.system(size: 15, weight: .bold)).lineLimit(1)
+        }
+        .foregroundStyle(.black)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(Color.white, in: Capsule())
+    }
     private func trimEmpty(_ id: UUID) {
         if let idx = overlays.firstIndex(where: { $0.id == id }),
            overlays[idx].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -1768,6 +1907,7 @@ struct StoryEditorView: View {
         items[index].filterIndex = filterIndex
         items[index].drawing = drawing
         items[index].overlays = overlays
+        items[index].stickers = stickers
         items[index].zoom = photoZoom
         items[index].offset = photoOffset
     }
@@ -1781,6 +1921,7 @@ struct StoryEditorView: View {
         filterIndex = it.filterIndex
         drawing = it.drawing
         overlays = it.overlays
+        stickers = it.stickers
         // ⚠️ RESOLVED ONCE, HERE, AND WRITTEN BACK. A zero is an item nobody has framed yet; from
         // this moment it has a number of its own and `defaultZoom` is never asked about it again.
         if it.zoom <= 0 {
@@ -1879,7 +2020,7 @@ struct StoryEditorView: View {
         if items.count > 1 { return true }
         if !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
         if croppedSource != nil || cropRect != nil || filterIndex != 0 { return true }
-        if !drawing.bounds.isEmpty || !overlays.isEmpty { return true }
+        if !drawing.bounds.isEmpty || !overlays.isEmpty || !stickers.isEmpty { return true }
         if let it = items.first, it.isTrimmed || it.muted { return true }
         // The same "has it been reframed" test `videoBurnIn` uses, so a pinch that counts as an edit
         // at post time counts as one here.
@@ -1969,13 +2110,24 @@ struct StoryEditorView: View {
         // resolves to the clip's own fitted rectangle, which is a crop that changes nothing, so the
         // zoom-out would have been quietly dropped between the editor and the file.
         let shrunk = photoZoom > 0 && photoZoom < 0.999
-        let hasArt = !drawing.bounds.isEmpty || !overlays.isEmpty
+        // ⚠️ STICKERS COUNT AS ART. Left off this line a clip with nothing but a sticker on it takes
+        // the untouched path and posts without it — the video half of the same trap `flatten`'s fast
+        // path carries a note about.
+        let hasArt = !drawing.bounds.isEmpty || !overlays.isEmpty || !stickers.isEmpty
         guard hasArt || cropRect != nil || reframed || shrunk else { return nil }
 
         var art: UIImage?
         if hasArt {
             let composed = ZStack(alignment: .bottom) {
                 Color.clear
+                // Stickers first, so a caption dropped on top of one still reads — the same order
+                // the canvas and the photo flatten both use.
+                ForEach(stickers) { s in
+                    storyStickerImage(s)
+                        .scaleEffect(s.scale)
+                        .rotationEffect(s.rotation)
+                        .position(s.center)
+                }
                 if !drawing.bounds.isEmpty {
                     Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: size), scale: UIScreen.main.scale))
                         .resizable()
@@ -2072,7 +2224,9 @@ struct StoryEditorView: View {
         // live backdrop is the thing that tore while he scrolled, and a file that fills the frame
         // never asks for one.
         let zoomed = abs(photoZoom - 1) > 0.001 || abs(photoOffset.width) > 0.5 || abs(photoOffset.height) > 0.5
-        if drawing.bounds.isEmpty && overlays.isEmpty && !zoomed && imageFillsCanvas(size) {
+        // ⚠️ `stickers.isEmpty` BELONGS IN THIS TEST. The fast path posts the photo untouched, so
+        // anything left off this line is a thing he placed and never sees again.
+        if drawing.bounds.isEmpty && overlays.isEmpty && stickers.isEmpty && !zoomed && imageFillsCanvas(size) {
             return base.jpegData(compressionQuality: quality) ?? Data()
         }
         // BAKED AT THE CARD'S OWN SIZE, which is the space the pen drew in and the text overlays are
@@ -2095,6 +2249,15 @@ struct StoryEditorView: View {
             Image(uiImage: base).resizable().scaledToFit()
                 .scaleEffect(photoZoom).offset(photoOffset)
                 .frame(width: size.width, height: size.height).clipped()
+            // Stickers, in the same order the canvas draws them: above the photo, under the pen and
+            // the text. Same builder (`storyStickerImage`) and same three transforms as on screen →
+            // WYSIWYG, which is the whole contract of this function.
+            ForEach(stickers) { s in
+                storyStickerImage(s)
+                    .scaleEffect(s.scale)
+                    .rotationEffect(s.rotation)
+                    .position(s.center)
+            }
             if !drawing.bounds.isEmpty {
                 Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: size), scale: UIScreen.main.scale)).resizable()
             }
@@ -2232,6 +2395,119 @@ func storyStyledText(_ o: TextOverlay, maxWidth: CGFloat) -> some View {
 }
 
 // One draggable / pinchable / rotatable / tappable text overlay.
+/// WHAT A STICKER DOES WHEN SOMEBODY TAPS IT IN THE VIEWER — nil for a plain one, which is most of
+/// them. It is the only part of a sticker that has to survive being posted, because everything else
+/// about it is already in the picture.
+enum StickerAction: Equatable {
+    case link(URL)
+    case place(name: String, lat: Double, lon: Double)
+}
+
+/// A sticker on the canvas.
+///
+/// ⚠️ ONE TYPE FOR ALL THREE KINDS, AND THE ARTWORK IS ALWAYS A `UIImage`. A downloaded sticker
+/// arrives as one; a Link or a Place chip is DRAWN to one the moment it is made. That is what keeps
+/// the rest of this screen from growing a second of everything: one view draws them, one gesture
+/// moves them, one line bakes them into the photo and the same line into a clip's burn-in. The
+/// difference between a picture and a button is `action`, and nothing before the export reads it.
+///
+/// ⚠️ AND IT IS A STILL, INCLUDING FOR AN ANIMATED STICKER. A story photo is a JPEG and a story clip
+/// is composited against one flat overlay image, so an animated sticker could not survive either
+/// export. Showing the frame that will actually post is the WYSIWYG rule this screen is built on —
+/// an editor that animates and a story that does not is a promise the file cannot keep.
+struct StickerOverlay: Identifiable, Equatable {
+    let id = UUID()
+    var image: UIImage
+    var center: CGPoint                 // in canvasSize coordinates → WYSIWYG with flatten
+    var scale: CGFloat = 1
+    var rotation: Angle = .zero
+    /// How wide it is drawn before the pinch, in canvas points. The height follows the artwork.
+    var baseWidth: CGFloat = 150
+    var action: StickerAction? = nil
+
+    var drawnSize: CGSize {
+        let s = image.size
+        guard s.width > 1, s.height > 1 else { return CGSize(width: baseWidth, height: baseWidth) }
+        return CGSize(width: baseWidth, height: baseWidth * s.height / s.width)
+    }
+
+    static func == (a: StickerOverlay, b: StickerOverlay) -> Bool {
+        a.id == b.id && a.center == b.center && a.scale == b.scale
+            && a.rotation == b.rotation && a.baseWidth == b.baseWidth
+    }
+}
+
+/// Shared sticker drawing — used BOTH on-screen and in `flatten()`, so what is exported is what was
+/// seen. Same contract as `storyStyledText` above it, for the same reason.
+@ViewBuilder
+func storyStickerImage(_ s: StickerOverlay) -> some View {
+    Image(uiImage: s.image)
+        .resizable()
+        .aspectRatio(contentMode: .fit)
+        .frame(width: s.drawnSize.width, height: s.drawnSize.height)
+}
+
+/// The moving, pinching, turning half. Deliberately the same gestures, the same snap and the same
+/// `0.3` floor as `TextOverlayView` — a sticker and a caption are the same object to the finger, and
+/// two implementations of that would drift the moment one of them was tuned.
+struct StickerOverlayView: View {
+    @Binding var sticker: StickerOverlay
+    let canvasSize: CGSize
+    let interactive: Bool
+    var onDragChange: (CGPoint) -> Void
+    var onDragEnd: (CGPoint) -> Void
+    var onSnap: (Bool, Bool) -> Void
+
+    @GestureState private var dragT: CGSize = .zero
+    @GestureState private var gScale: CGFloat = 1
+    @GestureState private var gRot: Angle = .zero
+
+    private func snappedPure(_ p: CGPoint) -> CGPoint {
+        let cx = canvasSize.width / 2, cy = canvasSize.height / 2, t: CGFloat = 12
+        var out = p
+        if abs(p.x - cx) < t { out.x = cx }
+        if abs(p.y - cy) < t { out.y = cy }
+        return out
+    }
+    private var liveCenter: CGPoint {
+        snappedPure(CGPoint(x: sticker.center.x + dragT.width, y: sticker.center.y + dragT.height))
+    }
+
+    var body: some View {
+        storyStickerImage(sticker)
+            .scaleEffect(max(0.3, sticker.scale * gScale))
+            .rotationEffect(sticker.rotation + gRot)
+            .position(liveCenter)
+            .allowsHitTesting(interactive)
+            .gesture(transform, including: interactive ? .all : .none)
+    }
+
+    private var transform: some Gesture {
+        let drag = DragGesture(minimumDistance: 2, coordinateSpace: .named("canvas"))
+            .updating($dragT) { v, s, _ in s = v.translation }
+            .onChanged { v in
+                let raw = CGPoint(x: sticker.center.x + v.translation.width,
+                                  y: sticker.center.y + v.translation.height)
+                let cx = canvasSize.width / 2, cy = canvasSize.height / 2, t: CGFloat = 12
+                onSnap(abs(raw.x - cx) < t, abs(raw.y - cy) < t)
+                onDragChange(snappedPure(raw))
+            }
+            .onEnded { v in
+                let nc = snappedPure(CGPoint(x: sticker.center.x + v.translation.width,
+                                             y: sticker.center.y + v.translation.height))
+                sticker.center = nc
+                onDragEnd(nc)
+            }
+        let mag = MagnifyGesture()
+            .updating($gScale) { v, s, _ in s = v.magnification }
+            .onEnded { v in sticker.scale = max(0.3, sticker.scale * v.magnification) }
+        let rot = RotateGesture()
+            .updating($gRot) { v, s, _ in s = v.rotation }
+            .onEnded { v in sticker.rotation += v.rotation }
+        return SimultaneousGesture(drag, SimultaneousGesture(mag, rot))
+    }
+}
+
 struct TextOverlayView: View {
     @Binding var overlay: TextOverlay
     let isSelected: Bool
