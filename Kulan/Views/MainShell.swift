@@ -1910,9 +1910,16 @@ struct ArchivedChatsView: View {
                                     Button { Task { await ChatService.setArchived(conv.id, false) } } label: {
                                         Label("Unarchive", systemImage: "tray.and.arrow.up")
                                     }.tint(.indigo)
+                                    // `.tint(.red)`, not left to `role: .destructive`. The role only
+                                    // colours a swipe action while the app has not tinted itself,
+                                    // and this one tints `.primary` app-wide — so the button took
+                                    // WHITE at night and drew a white glyph on it (owner 2026-08-16,
+                                    // screenshot: an empty white pill beside a purple Unarchive).
+                                    // The chat list's own Delete already forces red for this reason.
                                     Button(role: .destructive) { pendingDelete = conv } label: {
                                         Label { Text("Delete") } icon: { MenuIcon(system: "trash.fill") }
                                     }
+                                    .tint(.red)
                                 }
                                 // THERE WAS NO LONG-PRESS MENU HERE AT ALL, and that is both of his
                                 // reports about this list. The chat page has carried one since it was

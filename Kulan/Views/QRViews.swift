@@ -22,6 +22,8 @@ private func qrImage(from string: String) -> UIImage? {
 // My QR code — others scan it to start a chat with me.
 struct MyQRView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var scheme
+    private var dark: Bool { scheme == .dark }
     private var handle: String { ProfileStore.shared.me?.handle ?? "" }
     private var name: String { ProfileStore.shared.me?.name ?? "" }
 
@@ -45,10 +47,14 @@ struct MyQRView: View {
                     .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 Spacer()
                 ShareLink(item: fariinLink(handle)) {
+                    // The app tints itself `.primary` (KulanApp), so `Color.accentColor` here is
+                    // WHITE in dark mode and black in light. A hardcoded white label was therefore
+                    // invisible on its own capsule every night, and correct every day, which is why
+                    // it survived so long. `Theme.onAccent` is the inverse of that same colour.
                     Label("Share my link", systemImage: "square.and.arrow.up")
                         .frame(maxWidth: .infinity).frame(height: 50)
                         .background(Color.accentColor, in: Capsule())
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Theme.onAccent(dark))
                 }
                 .padding(.horizontal, 24)
             }

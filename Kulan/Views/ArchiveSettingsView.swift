@@ -49,6 +49,8 @@ struct ArchiveSettingsView: View {
 /// not mute, which is the one thing the app it is modelled on does and we do not.
 struct ArchiveHelpView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var scheme
+    private var dark: Bool { scheme == .dark }
     /// Straight to the switch, from the line that mentions it — the shortcut theirs puts in its
     /// opening sentence. Nobody reads an explainer and then goes hunting through Settings.
     @State private var showSettings = false
@@ -58,8 +60,10 @@ struct ArchiveHelpView: View {
             VStack(spacing: 0) {
                 ScrollView {
                     VStack(spacing: 18) {
+                        // `Color.accentColor` is the app's `.primary` tint, so it is WHITE at night.
+                        // Both this glyph and the Got it label below were hardcoded white on it.
                         MenuIcon("ic_archive", size: 34)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(Theme.onAccent(dark))
                             .frame(width: 76, height: 76)
                             .background(Circle().fill(Color.accentColor))
                             .padding(.top, 8)
@@ -88,7 +92,7 @@ struct ArchiveHelpView: View {
                     .frame(maxWidth: .infinity)
                 }
                 Button { dismiss() } label: {
-                    Text("Got it").font(.headline).foregroundStyle(.white)
+                    Text("Got it").font(.headline).foregroundStyle(Theme.onAccent(dark))
                         .frame(maxWidth: .infinity).frame(height: 50)
                         .background(Color.accentColor, in: Capsule())
                 }
