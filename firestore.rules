@@ -790,6 +790,24 @@ service cloud.firestore {
                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'edited']))
             || (request.auth.uid == resource.data.authorId
                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['album']))
+            // FINISHING AN UPLOAD. A photo message is now written the moment Send is tapped,
+            // carrying its blurhash and size but no media yet, so the recipient sees a real bubble
+            // immediately instead of nothing until the whole upload lands. This branch is how the
+            // author attaches the media afterwards.
+            //
+            // It is deliberately a ONE-WAY DOOR and cannot be used to edit a delivered message:
+            //   - only the author
+            //   - only while the stored doc still says uploading == true
+            //   - and the update must CLEAR that flag
+            // So it is usable exactly once, on a message that has been waiting for its media since
+            // the instant it was created. Swapping the picture on an old message is not reachable:
+            // that message's `uploading` is already gone, and nothing may set it back.
+            || (request.auth.uid == resource.data.authorId
+                && resource.data.get('uploading', false) == true
+                && request.resource.data.get('uploading', false) == false
+                && request.resource.data.diff(resource.data).affectedKeys()
+                     .hasOnly(['imageUrl', 'enc', 'album', 'uploading',
+                               'audioUrl', 'fileUrl', 'videoUrl', 'thumbUrl', 'thumbEnc']))
             // "Delete for Everyone": the AUTHOR may turn their own message into a tombstone -
             // deleted:true, text emptied, type back to 'text', every content field REMOVED.
             // The end state is pinned (no content key may remain and text/type are fixed), so
