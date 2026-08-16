@@ -105,6 +105,17 @@ struct Message: Identifiable, Equatable, Codable {
     var mentions: [String] = []       // uids @-mentioned in this message (groups)
     var viewOnce: Bool = false        // view-once photo (standard): recipient can open it exactly once
     var album: [AlbumItem] = []       // 2+ photos sent together = ONE album message (grid + one caption)
+    /// PER-TILE ASPECTS, WRITTEN BEFORE THE TILES EXIST.
+    ///
+    /// An album message is written the instant Send is tapped, like every other media type, but its
+    /// grid is SOLVED from each tile's aspect ratio — so a placeholder without them would lay out
+    /// differently from the album that replaces it and the whole bubble would jump. These are read
+    /// off the source images before anything is uploaded and cost no bytes worth counting.
+    ///
+    /// ⚠️ Deliberately NOT fake `album` entries. `AlbumItem` requires a url and real encryption
+    /// metadata, and inventing those to hold a shape would put meaningless crypto fields in the
+    /// database and make `isAlbum` true for a message with nothing behind it.
+    var albumSizes: [[Double]] = []
     var localAlbum: [Data] = []       // optimistic album previews shown before upload
     var localAlbumIsVideo: [Bool] = [] // per optimistic item: is it a video? (→ play badge before upload)
     var createdAt: Date
@@ -127,6 +138,18 @@ struct Message: Identifiable, Equatable, Codable {
     /// server-side and the media is deleted from Storage, so what remains is a few bytes of marker.
     var deleted: Bool = false
     var forwarded: Bool = false             // passed along from another chat (bubble shows the tag)
+    /// THE MESSAGE EXISTS, THE PICTURE DOES NOT YET.
+    ///
+    /// A photo message is written the instant Send is tapped, carrying its blurhash and its size but
+    /// no media, and the author attaches the media when the upload finishes. Before this, the
+    /// message was not written at all until the upload had completely finished — so the person being
+    /// sent a photo saw nothing whatsoever, no bubble and no progress, and then a picture.
+    ///
+    /// ⚠️ `isImage` deliberately stays FALSE while this is true. That property gates the media
+    /// gallery, the profile grid and All Media, and a message with no URL answering yes there is the
+    /// broken-tile bug the tombstone comment already warns about. The chat bubble asks
+    /// `isPendingImage` instead; nothing else needs to know.
+    var uploading: Bool = false
     var clientTs: Date? = nil               // sender's tap time (ms epoch on the wire) — display order is send order
 
     var isImage: Bool { (type == "image" && (imageUrl?.isEmpty == false)) || (localImageData != nil && type != "video") }
@@ -136,6 +159,33 @@ struct Message: Identifiable, Equatable, Codable {
     var isFile: Bool { type == "file" && (fileUrl?.isEmpty == false || localFile) }
     var isGif: Bool { type == "gif" && (imageUrl?.isEmpty == false) }   // public Giphy url (not E2EE)
     var isAlbum: Bool { type == "album" && (!album.isEmpty || !localAlbum.isEmpty) }
+    /// A photo whose bytes have not landed yet: draw the blurhash at the real aspect ratio, with a
+    /// spinner. Only ever true on the RECEIVING side — the sender keeps showing their own local copy
+    /// until the upload completes (see ThreadRepository.refreshItems).
+    var isPendingImage: Bool { pendingMediaKind == "image" }
+
+    /// THE MESSAGE EXISTS, THE BYTES DO NOT — which kind of placeholder to draw, or nil.
+    ///
+    /// Every media send writes its message the instant Send is tapped and attaches the media when
+    /// the upload finishes, so there is a window where a real message has no URL. The bubble needs
+    /// to know which shape to hold during it.
+    ///
+    /// ⚠️ Nil whenever local bytes are present, which is what keeps the SENDER out of here: their
+    /// optimistic bubble is the better picture and stays until the upload lands.
+    ///
+    /// ⚠️ And nil once the URL arrives, so this cannot outlive the upload even if the flag somehow
+    /// did. The URL is the fact; `uploading` is only the hint.
+    var pendingMediaKind: String? {
+        guard uploading, localImageData == nil, localAudioData == nil, !localFile else { return nil }
+        switch type {
+        case "image": return (imageUrl?.isEmpty ?? true) ? "image" : nil
+        case "audio": return (audioUrl?.isEmpty ?? true) ? "audio" : nil
+        case "video": return (videoUrl?.isEmpty ?? true) ? "video" : nil
+        case "file":  return (fileUrl?.isEmpty  ?? true) ? "file"  : nil
+        case "album": return album.isEmpty ? "album" : nil
+        default:      return nil
+        }
+    }
     var isCall: Bool { type == "call" }
     var isSystem: Bool { type == "system" }   // group event ("X added Y"), shown centered
 
@@ -362,7 +412,7 @@ struct Message: Identifiable, Equatable, Codable {
         case clientId, replyTo, reactions, mentions, viewOnce, album
         case createdAt, width, blurhash, height
         case callerUid, callOutcome, callVideo, callDuration
-        case edited, deleted, forwarded, clientTs, linkPreview, hasServerTime
+        case edited, deleted, forwarded, clientTs, linkPreview, hasServerTime, uploading, albumSizes
     }
 
     init(id: String, data: [String: Any], cid: String, crypto: Crypto) {
@@ -413,6 +463,8 @@ struct Message: Identifiable, Equatable, Codable {
         self.edited = data["edited"] as? Bool ?? false
         self.deleted = data["deleted"] as? Bool ?? false
         self.forwarded = data["forwarded"] as? Bool ?? false
+        self.uploading = data["uploading"] as? Bool ?? false
+        self.albumSizes = (data["albumSizes"] as? [[Double]]) ?? []
         self.clientId = data["clientId"] as? String
         self.enc = (data["enc"] as? [String: Any]).flatMap(EncMeta.init(map:))
         // Each reaction is sealed by ITS reactor (the map key), so decrypt with that uid as

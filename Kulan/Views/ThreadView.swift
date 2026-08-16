@@ -6521,6 +6521,124 @@ struct MessageBubble: View, Equatable {
             .padding(.horizontal, 13).padding(.vertical, 10)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+        } else if let pendingKind = message.pendingMediaKind, pendingKind != "image" {
+            // THE MESSAGE IS HERE, THE BYTES ARE STILL COMING. Only the recipient reaches this; the
+            // sender keeps their own local copy (ThreadRepository.refreshItems).
+            //
+            // Each shape is built from what the sender knew BEFORE uploading, which is why the first
+            // write carries it: a video's real poster frame and duration, a voice note's real
+            // waveform and length, a document's real name and size. So this is not a spinner
+            // standing in for a message — it is the message, waiting for its payload.
+            VStack(alignment: .leading, spacing: 4) {
+                replyQuote
+                switch pendingKind {
+                case "video":
+                    // The poster is already uploaded and sealed — only the clip is outstanding — so
+                    // this is the finished bubble with a spinner where the play button goes.
+                    ZStack {
+                        if let t = message.thumbUrl, !t.isEmpty {
+                            SecureImageView(imageUrl: t, enc: message.thumbEnc, cid: cid,
+                                            placeholderHash: message.blurhash)
+                        } else {
+                            Theme.received(dark)
+                        }
+                        ProgressView().tint(.white)
+                            .padding(10).background(.black.opacity(0.35), in: Circle())
+                    }
+                    .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
+                    .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                    .overlay(alignment: .bottomTrailing) {
+                        metaRow.padding(.horizontal, 7).padding(.vertical, 3)
+                            .background(.black.opacity(0.35), in: Capsule())
+                            .foregroundStyle(.white).padding(7)
+                    }
+                case "audio":
+                    // The true waveform and length, drawn at the real bubble width so nothing
+                    // resizes when the audio lands.
+                    HStack(spacing: VoiceMessageView.discGap) {
+                        ProgressView()
+                            .frame(width: VoiceMessageView.discSize, height: VoiceMessageView.discSize)
+                        WaveformBars(bars: message.waveform.isEmpty
+                                        ? Array(repeating: 12, count: 28) : message.waveform,
+                                     progress: 0,
+                                     played: Theme.accent(dark).opacity(0.35),
+                                     unplayed: Theme.accent(dark).opacity(0.35),
+                                     onSeek: { _ in })
+                            .frame(width: VoiceMessageView.waveWidth(for: message),
+                                   height: VoiceMessageView.waveHeight)
+                    }
+                    .padding(.horizontal, 13).padding(.vertical, 10)
+                    .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                    .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                case "album":
+                    // The SAME solver, the SAME aspects, the SAME width as the finished grid — see
+                    // `albumAspect`, which now reads `albumSizes` for exactly this. So the mosaic is
+                    // already in its final arrangement and the tiles simply fill in.
+                    let sizes = (0 ..< min(max(message.albumSizes.count, 2), 10))
+                        .map { CGSize(width: albumAspect($0), height: 1) }
+                    let solved = MediaGroupLayout.solve(itemSizes: sizes,
+                                                        maxSize: CGSize(width: albumWidth, height: albumWidth))
+                    ZStack(alignment: .topLeading) {
+                        ForEach(solved.tiles, id: \.index) { tile in
+                            Theme.received(dark)
+                                .frame(width: tile.rect.width, height: tile.rect.height)
+                                .offset(x: tile.rect.minX, y: tile.rect.minY)
+                        }
+                        ProgressView().tint(.white)
+                            .padding(10).background(.black.opacity(0.35), in: Circle())
+                            .offset(x: solved.size.width / 2 - 22, y: solved.size.height / 2 - 22)
+                    }
+                    .frame(width: solved.size.width, height: solved.size.height, alignment: .topLeading)
+                    .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                default:
+                    // A document: name and size are known from the first write, so only opening it
+                    // has to wait.
+                    HStack(spacing: 10) {
+                        ProgressView().frame(width: 26, height: 26)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(message.fileName ?? "Document")
+                                .font(.system(size: 15, weight: .medium)).lineLimit(1)
+                            Text(fileSizeLabel).font(.caption)
+                                .foregroundStyle(isMe ? onMyBubble.opacity(0.8) : .secondary)
+                        }
+                    }
+                    .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
+                    .padding(.horizontal, 13).padding(.vertical, 10)
+                    .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                    .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                }
+            }
+        } else if message.isPendingImage {
+            // THE PHOTO IS ON ITS WAY. Only the recipient ever reaches this: the sender keeps their
+            // own local copy until the upload lands (ThreadRepository.refreshItems).
+            //
+            // ⚠️ It uses `imageDisplaySize`, exactly like the finished bubble, and the sender writes
+            // the real pixel width and height in the FIRST write for that reason. The placeholder is
+            // therefore the same size and shape as the photo that replaces it, so nothing in the
+            // list moves or re-measures when the media arrives — which is the whole reason this is a
+            // sibling branch of the image bubble rather than a smaller stand-in.
+            VStack(alignment: .leading, spacing: 4) {
+                replyQuote
+                ZStack {
+                    if let hash = message.blurhash, !hash.isEmpty,
+                       let img = BlurHash.decode(hash) {
+                        Image(uiImage: img).resizable().scaledToFill()
+                    } else {
+                        // A view-once photo publishes no blurhash on purpose, so there is nothing to
+                        // sketch — a plain fill is the honest placeholder.
+                        Theme.received(dark)
+                    }
+                    ProgressView().tint(.white)
+                        .padding(8)
+                        .background(.black.opacity(0.28), in: Circle())
+                }
+                .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
+                .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                .overlay(alignment: .bottomTrailing) {
+                    metaRow.padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(.black.opacity(0.35), in: Capsule()).foregroundStyle(.white).padding(7)
+                }
+            }
         } else if message.isGif {
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
@@ -6950,6 +7068,14 @@ struct MessageBubble: View, Equatable {
     private func albumAspect(_ i: Int) -> CGFloat {
         if message.album.indices.contains(i), message.album[i].height > 0 {
             return CGFloat(message.album[i].width / message.album[i].height)
+        }
+        // AND THE RECEIVER'S ALBUM HAS NO `album` YET EITHER, while the tiles upload. It carries
+        // `albumSizes` instead — the same proportions, written before anything was uploaded, for
+        // exactly the reason described below: so the mosaic solves ONE arrangement and keeps it when
+        // the real tiles land.
+        if message.albumSizes.indices.contains(i),
+           message.albumSizes[i].count == 2, message.albumSizes[i][1] > 0 {
+            return CGFloat(message.albumSizes[i][0] / message.albumSizes[i][1])
         }
         // THE OPTIMISTIC ALBUM HAS NO `album` YET — it only has `localAlbum`, the preview JPEGs. Falling
         // through to 1 here meant every pending photo measured as a SQUARE, so the mosaic solved one

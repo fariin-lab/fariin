@@ -315,10 +315,27 @@ final class ThreadRepository {
     private(set) var indexById: [String: Int] = [:]
     private(set) var itemsVersion = 0
     private func refreshItems() {
-        let echoed = Set(messages.compactMap { $0.clientId })
+        // ⚠️ MY OWN PHOTO MUST NOT TURN INTO A BLUR WHILE IT UPLOADS.
+        //
+        // A photo message is written to the server the instant Send is tapped now, carrying its
+        // blurhash but no media yet — which is what lets the RECIPIENT see a bubble immediately.
+        // The echo of that write comes straight back to the sender too, and it carries the same
+        // clientId as the optimistic bubble, so the plain rule below would have dropped the local
+        // copy and rendered the placeholder in its place: the sender would watch their own picture
+        // dissolve into a blur for the length of the upload.
+        //
+        // While a server message is still `uploading` AND I am holding the real bytes for it, MY
+        // copy is the better one and the echo is hidden. When the media is attached the flag clears,
+        // this stops matching, and the server message takes over — by which point the plaintext is
+        // already in DiskImageCache under its URL, so the swap draws nothing new.
+        let myPendingIds = Set(pending.compactMap { $0.clientId })
+        let visible = messages.filter { m in
+            !(m.uploading && (m.clientId.map(myPendingIds.contains) ?? false))
+        }
+        let echoed = Set(visible.compactMap { $0.clientId })
         // Pending sends are MERGED by key, not appended: an uploading photo stays exactly where
         // it was sent even when later texts confirm first (order never shuffles on upload finish).
-        var merged = sortedOneTimeline(messages + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) })
+        var merged = sortedOneTimeline(visible + pending.filter { p in !(p.clientId.map(echoed.contains) ?? false) })
         merged.removeAll { HiddenMessages.isHidden($0.id) }   // drop messages the user deleted "for me"
 
         // ROW IDS MUST BE UNIQUE. `rowId` is `clientId ?? id`, and the list feeds it straight into a
