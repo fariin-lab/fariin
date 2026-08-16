@@ -451,6 +451,14 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// — their `if animateNextNavigationId == component.slice.item.id`. While it is set, the row
     /// refuses every other reason to move, because the only move it is waiting for is this one.
     private var animateNextStoryId: String?
+    /// TRUE for the window between `handleTap` recording a side-card tap and `apply` seating the
+    /// row on the arrived story. The host reads it (through `StoryRowLink`) at the moment
+    /// `onIndexChanged` lands, to tell a TAP'S navigation apart from a SCROLL'S: the report is the
+    /// same callback, but the sheet answers them differently — a tap pages the viewers list
+    /// sideways, the reference app's way, while a scroll swaps it in place, also the reference
+    /// app's way. The flag is already up when `handleTap` reports (it is set the line before), and
+    /// a finger on the row clears it, so a drag can never read as a tap.
+    var tapNavigationPending: Bool { animateNextStoryId != nil }
     /// The last index handed out through `onIndexChanged`, so the answer coming back around as an
     /// input cannot be mistaken for somebody else asking for a jump.
     private var reportedIndex = -1
@@ -1497,4 +1505,7 @@ struct StoryRow: UIViewControllerRepresentable {
     }
     func setFraction(_ v: CGFloat) { controller?.setFraction(v) }
     func commitPage(toStoryId id: String) { controller?.commitPage(toStoryId: id) }
+    /// Read at the instant the row reports an index change — see the note on the controller's
+    /// property. No controller yet = no tap, which is the honest answer.
+    var tapNavigationPending: Bool { controller?.tapNavigationPending ?? false }
 }

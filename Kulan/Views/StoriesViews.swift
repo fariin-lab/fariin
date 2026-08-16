@@ -352,6 +352,19 @@ struct StoryImage: View {
         if value != 0 { value = 0 }
     }
 
+    /// A TAP ON A SIDE CARD, ON ITS WAY TO THE SHEET — one-shot, direction only (+1 next, -1
+    /// previous). The reference app pages its viewers list to the tapped story's list on the same
+    /// transition the row springs on; ours needs the sheet to know the change of `sheetStoryId` it
+    /// is about to see came from a TAP rather than a scroll of the row, because a scroll swaps the
+    /// list in place (theirs too) and must not slide. Written by the carousel's `onIndexChanged`
+    /// in the same transaction as the id, consumed by the sheet's next `sync` — a class property
+    /// rather than `@State`, so the hand-off costs no extra SwiftUI pass and cannot arrive late.
+    var pendingSheetSlide: Int?
+    func takePendingSheetSlide() -> Int? {
+        defer { pendingSheetSlide = nil }
+        return pendingSheetSlide
+    }
+
     // ⚠️ `rowScroll` / `setRowScroll` / `forgetRowScroll` ARE DELETED — 2026-08-13.
     //
     // The row published its scroller position here so the HOST could rebuild the live story's frame
@@ -3755,7 +3768,10 @@ struct StoryViewer: View {
                               profileSheet = StoryGroup(authorUid: v.id, name: v.name,
                                                         photoUrl: v.photoUrl, stories: [],
                                                         lastViewedAt: nil, isMine: false)
-                          })
+                          },
+                          // The tap's slide hint rides the same box the page-drag does — see
+                          // `StorySheetPageDrag.pendingSheetSlide`.
+                          slideBox: pageDragBox)
             .ignoresSafeArea()
     }
 
@@ -4738,8 +4754,19 @@ struct MyStoriesCarousel: View {
                      // `scrollViewDidScroll` navigate. `activeId` is `sheetStoryId` on the host, so
                      // the viewers list and the story behind follow the card you are looking at.
                      onIndexChanged: { i in
+                         // Where the sheet currently is, read BEFORE the id moves — the tap's
+                         // direction is which side of it the tapped card sits on.
+                         let was = stories.firstIndex(where: { $0.id == activeId })
                          centredIndex = i
                          guard stories.indices.contains(i), stories[i].id != activeId else { return }
+                         // A TAP PAGES THE VIEWERS LIST, A SCROLL SWAPS IT — both the reference
+                         // app's behaviour. The row's pending-tap flag is up exactly while a tap's
+                         // navigation is in flight (and never during a drag), so it is the one
+                         // honest discriminator. The hint rides the box in the same transaction as
+                         // the id and is consumed once by the sheet's sync.
+                         if link.tapNavigationPending, let was, was != i {
+                             pageDrag.pendingSheetSlide = i > was ? 1 : -1
+                         }
                          activeId = stories[i].id
                      },
                      onActiveTap: { onActiveTap() })

@@ -136,8 +136,21 @@ final class StoryViewersSheetView: UIView {
     /// Where the story-viewers panels live and what the sheet knows about their order. The host
     /// calls this whenever the story on screen or either neighbour changes; slots are re-asserted
     /// from it, so the host always has the last word about which story is which.
-    func setStories(center: String, prev: String, next: String) {
+    ///
+    /// `slide` is the tap's one-shot direction hint (+1 the tapped card was to the right, -1 to the
+    /// left). With it, the change of centre PAGES — the old list slides out and the new one slides
+    /// in, the reference app's committed-navigation behaviour. Without it (a scroll of the row, the
+    /// sheet opening), the centre swaps in place, which is also the reference app's behaviour for
+    /// exactly those cases.
+    func setStories(center: String, prev: String, next: String, slide: Int? = nil) {
         guard center != centerId || prev != prevId || next != nextId else { return }
+        // A slide needs a real outgoing panel and a real screen to cross; anything short of that
+        // falls through to the swap, which is always safe.
+        if let dir = slide, dir != 0, center != centerId, !centerId.isEmpty,
+           panels[centerId] != nil, bounds.width > 1 {
+            slideToNewCenter(center: center, prev: prev, next: next, dir: dir > 0 ? 1 : -1)
+            return
+        }
         centerId = center
         prevId = prev
         nextId = next
@@ -149,6 +162,52 @@ final class StoryViewersSheetView: UIView {
         // (`viewListPanState != nil || isCompletingViewListPan` keeps every built list valid).
         if !pageActive { dropStalePanels() }
         setNeedsLayout()
+    }
+
+    /// A TAP ON A SIDE THUMBNAIL, ANSWERED THE WAY A COMMITTED PAGE IS — the reference app pages
+    /// its viewers list to the tapped story's list on the same 0.3s transition the row springs on;
+    /// this is that, built out of the page-commit's own moves so there is one choreography, not two.
+    ///
+    /// The rebase is `handlePagePan`'s, run from rest: the arriving panel is put one travel out on
+    /// the tapped side, every slot shifts by `-dir`, and the strip's displacement takes up the
+    /// difference — so no panel moves on screen in this pass — and the settle then carries the
+    /// displacement to zero on `StoryRowSettle.commit`, the same clock the row's own spring is on.
+    ///
+    /// ⚠️ THE FAR-SIDE PANELS JOIN AFTER THE ANIMATION HAS ITS VALUES, deliberately last. By then
+    /// `pageOffset`'s model value is already zero, so `ensurePanel`'s join-the-strip line does not
+    /// apply and they take their resting seats — offscreen — instead of riding the exit. On a tap
+    /// one card over that is a no-op (the new prev IS the old centre, already in place); on a far
+    /// tap it is what keeps the fresh side panel from covering the one sliding out: the reference
+    /// app clamps its `indexDistance` to ±1 for the same reason, every committed navigation is one
+    /// page of travel no matter how far the model jumped.
+    private func slideToNewCenter(center: String, prev: String, next: String, dir: Int) {
+        // A settle still in flight is landed, not reversed — the page-pan's `.began` rule, for the
+        // same reason: the resting layout is the committed one.
+        if pageActive {
+            for p in panels.values { p.layer.removeAllAnimations() }
+        }
+        pageCycle &+= 1
+        pageActive = true
+        pageOffset = 0
+        applyPageOffset()
+        ensurePanel(center, slot: CGFloat(dir))
+        for p in panels.values { p.slot -= CGFloat(dir) }
+        pageOffset += CGFloat(dir) * pageTravel
+        centerId = center
+        prevId = prev
+        nextId = next
+        setNeedsLayout()
+        layoutIfNeeded()               // slots are frames; land them before the spring
+        applyPageOffset()              // and hold the picture still across the rebase
+        let cycle = pageCycle
+        StoryRowSettle.commit.run({
+            self.pageOffset = 0
+            self.applyPageOffset()
+        }, completion: { [weak self] _ in
+            self?.endPageCycle(cycle)
+        })
+        ensurePanel(prev, slot: -1)
+        ensurePanel(next, slot: 1)
     }
 
     func setViewers(_ v: [StoryViewerInfo], for id: String) { panels[id]?.viewers = v }
@@ -1146,6 +1205,11 @@ struct StoryViewersSheet: UIViewRepresentable {
     var onPageDrag: (CGFloat) -> Void = { _ in }
     /// Tap a viewer row → show that person's profile. The host owns the presentation.
     var onOpenProfile: (StoryViewerInfo) -> Void = { _ in }
+    /// THE TAP'S ONE-SHOT SLIDE HINT — see `StorySheetPageDrag.pendingSheetSlide`. Consumed (not
+    /// just read) on every sync, so a hint can never outlive the change of story it was written
+    /// for. Nil box = no slides ever, which keeps every other construction of this sheet exactly
+    /// what it was.
+    var slideBox: StorySheetPageDrag? = nil
 
     func makeUIView(context: Context) -> StoryViewersSheetView {
         let v = StoryViewersSheetView()
@@ -1185,7 +1249,8 @@ struct StoryViewersSheet: UIViewRepresentable {
         }
         context.coordinator.view = v
         context.coordinator.audienceFor = audienceFor
-        context.coordinator.sync(active: activeStoryId, prev: prevStoryId, next: nextStoryId)
+        context.coordinator.sync(active: activeStoryId, prev: prevStoryId, next: nextStoryId,
+                                 slide: slideBox?.takePendingSheetSlide())
         return v
     }
 
@@ -1197,7 +1262,8 @@ struct StoryViewersSheet: UIViewRepresentable {
         // The closure is rebuilt on every render and closes over this pass's story array, so it is
         // replaced rather than kept — a stale one would answer for stories that have since moved.
         context.coordinator.audienceFor = audienceFor
-        context.coordinator.sync(active: activeStoryId, prev: prevStoryId, next: nextStoryId)
+        context.coordinator.sync(active: activeStoryId, prev: prevStoryId, next: nextStoryId,
+                                 slide: slideBox?.takePendingSheetSlide())
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -1223,10 +1289,10 @@ struct StoryViewersSheet: UIViewRepresentable {
         /// and without this each pass would start the same three reads again.
         private var tasks: [String: Task<Void, Never>] = [:]
 
-        func sync(active: String, prev: String, next: String) {
+        func sync(active: String, prev: String, next: String, slide: Int? = nil) {
             let moved = active != activeId || prev != prevId || next != nextId
             activeId = active; prevId = prev; nextId = next
-            if moved { view?.setStories(center: active, prev: prev, next: next) }
+            if moved { view?.setStories(center: active, prev: prev, next: next, slide: slide) }
             // Audience every pass, not only on a move: a story's own audience can be re-read by the
             // host (it comes from the live repository) without the neighbours changing.
             for id in [active, prev, next] where !id.isEmpty {
