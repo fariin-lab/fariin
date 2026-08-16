@@ -953,6 +953,7 @@ struct StoryEditorView: View {
             // Detents/drag-indicator are set INSIDE ShareStorySheet now, so both the photo and text
             // flows get the same compact fitted sheet.
             ShareStorySheet(image: s.data, caption: s.caption, video: s.video, extras: pendingExtras,
+                            stickers: s.stickers,
                             onPosted: { onPosted(); dismiss() })
         }
         .toolbar(.hidden, for: .navigationBar)
@@ -2041,7 +2042,8 @@ struct StoryEditorView: View {
         // being able to un-crop after switching costs: the work moves from "on the way out of an
         // item" to "once, when you actually post". `flatten` composes from the tool state rather
         // than from what is on screen, so restoring an item is enough to render it correctly.
-        var rendered: [(data: Data, video: URL?, burn: StoryBurnIn?, muted: Bool, trim: ClosedRange<Double>?)] = []
+        var rendered: [(data: Data, video: URL?, burn: StoryBurnIn?, muted: Bool,
+                        trim: ClosedRange<Double>?, taps: [StoryTapTarget])] = []
         for i in items.indices {
             index = i
             restoreCurrent()
@@ -2052,10 +2054,10 @@ struct StoryEditorView: View {
                 // export and are composited into the frames there — see VideoTranscoder.burnIn.
                 let burn = await videoBurnIn()
                 rendered.append((items[i].image.jpegData(compressionQuality: 0.72) ?? Data(), u, burn,
-                                 items[i].muted, items[i].trimRange))
+                                 items[i].muted, items[i].trimRange, tapTargets(crop: burn?.cropRect)))
                 continue
             }
-            rendered.append((await flatten(), nil, nil, false, nil))
+            rendered.append((await flatten(), nil, nil, false, nil, tapTargets(crop: nil)))
         }
         index = keep
         restoreCurrent()
@@ -2068,9 +2070,10 @@ struct StoryEditorView: View {
         for r in rendered.dropFirst() {
             if let u = r.video {
                 extras.append(StoryExtra(video: StoryVideoPayload(url: u, thumbnail: r.data,
-                                                                 muted: r.muted, trim: r.trim, burn: r.burn)))
+                                                                 muted: r.muted, trim: r.trim, burn: r.burn),
+                                         stickers: r.taps))
             } else {
-                extras.append(StoryExtra(photo: r.data))
+                extras.append(StoryExtra(photo: r.data, stickers: r.taps))
             }
         }
         // THE FIRST ITEM'S CLIP IS NO LONGER THROWN AWAY. `StoryShareData` carried only `data`, which
@@ -2084,8 +2087,51 @@ struct StoryEditorView: View {
         // baking it clipped the text when the image was cropped to fit.
         pendingShare = StoryShareData(data: data,
                                       caption: caption.trimmingCharacters(in: .whitespacesAndNewlines),
-                                      video: leadVideo)
+                                      video: leadVideo,
+                                      stickers: rendered.first?.taps ?? [])
         pendingExtras = extras
+    }
+
+    /// WHERE THE LINK AND PLACE STICKERS ARE, IN THE POSTED FRAME'S OWN TERMS — see `StoryTapTarget`.
+    ///
+    /// Plain stickers are not in here and never will be: they are already the picture, and a tap area
+    /// over one would be a button that does nothing but swallow the tap that advances the story.
+    ///
+    /// ⚠️ `crop` IS NOT OPTIONAL DECORATION. A zoomed clip posts a PIECE of the canvas, so a sticker
+    /// at the middle of the editor is not at the middle of the file. Projecting through the kept
+    /// rectangle is the difference between a link you can tap and a link somewhere off the edge of
+    /// the frame. Photos pass nil because `flatten` renders the whole canvas.
+    private func tapTargets(crop: CGRect?) -> [StoryTapTarget] {
+        let canvas = canvasSize == .zero ? UIScreen.main.bounds.size : canvasSize
+        guard canvas.width > 1, canvas.height > 1 else { return [] }
+        let keep = crop ?? CGRect(x: 0, y: 0, width: 1, height: 1)
+        guard keep.width > 0.01, keep.height > 0.01 else { return [] }
+        return stickers.compactMap { s -> StoryTapTarget? in
+            guard let action = s.action else { return nil }
+            let url: String
+            switch action {
+            case .link(let u):
+                url = u.absoluteString
+            case .place(let name, let lat, let lon):
+                // Apple Maps, which every iPhone has and which hands off to whatever the person has
+                // set as their maps app. `q` is what the pin is labelled; `ll` is where it is.
+                var c = URLComponents(string: "https://maps.apple.com/")
+                c?.queryItems = [URLQueryItem(name: "ll", value: "\(lat),\(lon)"),
+                                 URLQueryItem(name: "q", value: name)]
+                guard let built = c?.url?.absoluteString else { return nil }
+                url = built
+            }
+            let drawn = CGSize(width: s.drawnSize.width * s.scale, height: s.drawnSize.height * s.scale)
+            // Canvas space → 0-1 of the canvas → 0-1 of the piece that was kept.
+            let nx = (s.center.x / canvas.width - keep.minX) / keep.width
+            let ny = (s.center.y / canvas.height - keep.minY) / keep.height
+            let nw = (drawn.width / canvas.width) / keep.width
+            let nh = (drawn.height / canvas.height) / keep.height
+            // Cropped clean out of the posted frame — no tap area, rather than one nobody can reach.
+            guard nx > -0.05, nx < 1.05, ny > -0.05, ny < 1.05 else { return nil }
+            return StoryTapTarget(x: Double(nx), y: Double(ny), w: Double(nw), h: Double(nh),
+                                  rotation: s.rotation.radians, url: url)
+        }
     }
 
     /// Everything drawn on top of a VIDEO, in one transparent image the size of the canvas it was

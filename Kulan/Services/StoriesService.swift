@@ -47,6 +47,9 @@ struct Story: Identifiable, Hashable, Codable {
     /// A base64 JPEG about 30px wide, carried in the story document itself. See `blurThumbBase64`
     /// and `StoryUI.Story.blurThumb` — this is the cover that cannot be missing.
     var blurThumb: String = ""
+    /// The Link and Location stickers on this story, if any — see `StoryTapTarget`. The DRAWING of
+    /// them is already in the media; this is only where they are and what they open.
+    var stickers: [StoryTapTarget] = []
     /// Bytes of this clip worth fetching before it is watched, written at post time. Zero for
     /// anything posted before the field existed. See `StoryUI.Story.preloadPrefix`.
     var preloadPrefix: Int64 = 0
@@ -307,7 +310,7 @@ final class StoriesService {
     }
 
     // Fire-and-forget post: pop back to chat immediately, upload in the background, show progress.
-    @MainActor func postStoryBackground(image: Data, caption: String = "", excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends) {
+    @MainActor func postStoryBackground(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends) {
         // Don't cancel an in-flight post (that silently DESTROYED the 1st story when a 2nd was
         // posted) — QUEUE instead: the new task waits for the previous one, so both post in order.
         let previous = uploadTask
@@ -339,7 +342,7 @@ final class StoriesService {
             _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
-            do { try await postStory(image: image, caption: caption, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag) }
+            do { try await postStory(image: image, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag) }
             catch is CancellationError { cancelled = true }   // user hit cancel → postStory removed the doc
             catch { failure = error.localizedDescription }     // surface it instead of dying silently
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
@@ -437,7 +440,7 @@ final class StoriesService {
     /// Written only for `public` stories, and only once the media URL is known — a mirror pointing
     /// at an empty url is a black card on somebody else's profile.
     private func writePublicMirror(storyId: String, me: String, mediaUrl: String, thumbUrl: String,
-                                   blurThumb: String = "",
+                                   blurThumb: String = "", stickers: [StoryTapTarget] = [],
                                    type: String, caption: String, duration: Double,
                                    expiresAt: Date, allowsReplies: Bool) async {
         try? await db.collection("users").document(me)
@@ -453,6 +456,11 @@ final class StoriesService {
                 // nothing while a friend opening the very same story got a picture. See
                 // `blurThumbBase64`.
                 "blurThumb": blurThumb,
+                // ⚠️ THE KEY MUST BE ON THE RULE'S `hasOnly` LIST OR THIS WHOLE WRITE FAILS, and it
+                // fails silently — `try?` above swallows it and the story simply stops appearing on
+                // its author's public profile. That is exactly what `blurThumb` cost once already;
+                // `firestore.rules` names both.
+                "stickers": stickers.map(\.asDictionary),
                 "type": type,
                 "caption": caption,
                 "duration": duration,
@@ -467,7 +475,7 @@ final class StoriesService {
     }
 
     // Post a photo to "My Status": chosen audience can see it for 24h.
-    func postStory(image: Data, caption: String = "", expiryHours: Double = 24,
+    func postStory(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], expiryHours: Double = 24,
                    excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends) async throws {
         let me = uid
         guard !me.isEmpty else { return }
@@ -534,6 +542,9 @@ final class StoriesService {
                 // THE COVER THAT TRAVELS WITH THE STORY. See `blurThumbBase64`.
                 "blurThumb": cover,
                 "caption": caption,
+                // LINK AND LOCATION STICKERS. Empty for the great majority of stories, and an empty
+                // array costs nothing. See `StoryTapTarget` for why the picture cannot carry this.
+                "stickers": stickers.map(\.asDictionary),
                 "audience": ["mode": everyone ? "everyone" : mode, "listId": "my-story"],
                 // THE LABEL, and only the label. See StoryAudienceTag: the custom NAME never comes
                 // here, because a recipient reads this document.
@@ -559,7 +570,7 @@ final class StoriesService {
             // The stranger-facing copy, media only. See `writePublicMirror`.
             if everyone {
                 await writePublicMirror(storyId: storyId, me: me, mediaUrl: url, thumbUrl: "",
-                                        blurThumb: cover,
+                                        blurThumb: cover, stickers: stickers,
                                         type: "image", caption: caption, duration: 0,
                                         expiresAt: expiresAt,
                                         allowsReplies: allowsReplies)
@@ -594,6 +605,7 @@ final class StoriesService {
     @MainActor func postVideoStoryBackground(videoURL: URL, thumbnail: Data, muted: Bool = false,
                                              burn: StoryBurnIn? = nil,
                                              trim: ClosedRange<Double>? = nil, caption: String = "",
+                                             stickers: [StoryTapTarget] = [],
                                              excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends) {
         // Same queueing as postStoryBackground: never cancel an in-flight post, chain behind it.
         let previous = uploadTask
@@ -627,7 +639,7 @@ final class StoriesService {
             _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
-            do { try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag) }
+            do { try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag) }
             catch is CancellationError { cancelled = true }
             catch { failure = error.localizedDescription }
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
@@ -660,7 +672,7 @@ final class StoriesService {
     /// making somebody re-upload four minutes because the fifth chunk timed out is the opposite of
     /// what this feature is for.
     func postVideoStory(videoURL: URL, muted: Bool = false, trim: ClosedRange<Double>? = nil, burn: StoryBurnIn? = nil,
-                        caption: String = "", expiryHours: Double = 24,
+                        caption: String = "", stickers: [StoryTapTarget] = [], expiryHours: Double = 24,
                         excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends) async throws {
         let full = (try? await AVURLAsset(url: videoURL).load(.duration).seconds) ?? 0
         // A hand trim decides where the material starts and how much of it there is; the split then
@@ -676,6 +688,7 @@ final class StoriesService {
             }
             // Short enough to be one story: the ordinary path, no segmenting, no behaviour change.
             try await postVideoSegment(videoURL: videoURL, range: range, caption: caption, muted: muted, burn: burn,
+                                       stickers: stickers,
                                        expiryHours: expiryHours, excluded: excluded,
                                        included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag)
             return
@@ -696,6 +709,10 @@ final class StoriesService {
                 do {
                     try await postVideoSegment(videoURL: videoURL, range: range,
                                                caption: i == 0 ? caption : "", muted: muted, burn: burn,
+                                               // Only the FIRST segment of a long clip keeps them:
+                                               // the tap areas were placed against one frame, and a
+                                               // 90-second split posts several.
+                                               stickers: i == 0 ? stickers : [],
                                                expiryHours: expiryHours, excluded: excluded,
                                                included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag)
                     lastError = nil
@@ -721,6 +738,7 @@ final class StoriesService {
     // upload the poster thumb + the mp4, then fill both URLs atomically (the repository skips docs
     // with an empty mediaUrl, so nobody sees a half-uploaded story).
     private func postVideoSegment(videoURL: URL, range: CMTimeRange?, caption: String, muted: Bool, burn: StoryBurnIn? = nil,
+                                  stickers: [StoryTapTarget] = [],
                                   expiryHours: Double, excluded: Set<String>, included: Set<String>,
                                   everyone: Bool, allowsReplies: Bool, tag: StoryAudienceTag) async throws {
         let me = uid
@@ -772,6 +790,7 @@ final class StoriesService {
             // a single byte of media is uploaded, so a viewer reaching this story at any point after
             // it exists has a picture to show. See `blurThumbBase64`.
             "blurThumb": cover,
+            "stickers": stickers.map(\.asDictionary),   // see the photo path and `StoryTapTarget`
             "duration": prepared.duration,
             // ⚠️ THE CLIP'S OWN SHAPE AND SIZE, WHICH THIS DOCUMENT HAS NEVER CARRIED.
             //
@@ -833,7 +852,7 @@ final class StoriesService {
             if everyone {
                 await writePublicMirror(storyId: storyId, me: me, mediaUrl: videoUrl,
                                         thumbUrl: thumbUrl,
-                                        blurThumb: cover,
+                                        blurThumb: cover, stickers: stickers,
                                         type: "video", caption: caption,
                                         duration: prepared.duration,
                                         expiresAt: expiresAt,
@@ -1290,6 +1309,8 @@ final class StoriesRepository {
                          duration: data["duration"] as? Double ?? 0,
                          thumbUrl: data["thumbUrl"] as? String ?? "",
                          blurThumb: data["blurThumb"] as? String ?? "",
+                         // Absent on everything posted before stickers existed, which reads as none.
+                         stickers: (data["stickers"] as? [[String: Any]] ?? []).compactMap(StoryTapTarget.from),
                          // Written by the uploader since 2026-08-12; absent on everything older,
                          // which reads as zero and lets the lookahead use its own default.
                          preloadPrefix: (data["preloadPrefix"] as? NSNumber)?.int64Value ?? 0,

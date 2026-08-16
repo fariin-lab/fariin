@@ -81,11 +81,20 @@ public struct Story: Identifiable, Hashable {
     /// streaming is on; see `StoryVideoStream`.
     public var preloadPrefix: Int64 = 0
 
+    /// TAPPABLE AREAS OVER THE PICTURE — a Link or a Location sticker the author placed.
+    ///
+    /// ⚠️ THE LIBRARY IS NOT TOLD WHAT THEY ARE, ONLY WHERE AND WHAT THEY OPEN. The drawing is
+    /// already in the media: a story is a flat JPEG, or a clip with the art burned into its frames,
+    /// so by the time it reaches anybody a Link sticker is a photograph of a button. This is the one
+    /// thing the picture could not carry.
+    public var taps: [StoryTapArea] = []
+
     public init(id: String = UUID().uuidString,
                 mediaURL: String,
                 previewURL: String? = nil,
                 blurThumb: String = "",
                 preloadPrefix: Int64 = 0,
+                taps: [StoryTapArea] = [],
                 date: String,
                 isLiked: Bool = false,
                 isSeen: Bool = false,
@@ -99,6 +108,7 @@ public struct Story: Identifiable, Hashable {
         self.previewURL = previewURL
         self.blurThumb = blurThumb
         self.preloadPrefix = preloadPrefix
+        self.taps = taps
         self.date = date
         self.duration = duration
         self.config = config
@@ -111,3 +121,28 @@ public struct Story: Identifiable, Hashable {
     }
 }
 
+
+
+/// One tappable rectangle over a story, in the story frame's OWN terms.
+///
+/// ⚠️ NORMALISED 0-1, NEVER POINTS. The phone that placed it, the file it was baked into and the
+/// phone showing it are three different sizes; a rectangle in points would be right on exactly one
+/// of them. The centre and the size are fractions of the frame, and the turn is the one the author
+/// left the sticker at.
+public struct StoryTapArea: Identifiable, Hashable {
+    public let id: String
+    public var x: Double
+    public var y: Double
+    public var w: Double
+    public var h: Double
+    public var rotation: Double   // radians
+    public var url: URL
+
+    public init(id: String = UUID().uuidString, x: Double, y: Double, w: Double, h: Double,
+                rotation: Double, url: URL) {
+        self.id = id
+        self.x = x; self.y = y; self.w = w; self.h = h
+        self.rotation = rotation
+        self.url = url
+    }
+}

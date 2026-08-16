@@ -523,6 +523,10 @@ struct StoryDetailView: View {
                             // are the card's corners, which is the point. Radius zero while a
                             // flight mask is on, same rule as the card — the mask owns the corner
                             // and now truly crops these strips with everything else.
+                            // LINK AND LOCATION STICKERS. Under the caption and under the header, so
+                            // neither can be blocked by one; over the picture, which is where the
+                            // sticker it belongs to is already drawn. See `tapAreas`.
+                            .overlay(tapAreas(story))
                             .overlay(captionView(story.caption, plain: story.config.storyType == .plain())
                                         .modifier(SheetCaptionFade())
                                         .clipShape(RoundedRectangle(cornerRadius: flightMaskOn ? 0 : cardRadius,
@@ -1196,6 +1200,45 @@ private extension StoryDetailView {
             .frame(height: 90)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .allowsHitTesting(false)
+    }
+
+    /// THE STICKERS THAT STILL DO SOMETHING. Invisible rectangles laid over the picture exactly where
+    /// the author left them — the drawing is already in the media, so there is nothing to draw here.
+    ///
+    /// ⚠️ NOTHING IS HIT-TESTABLE EXCEPT THE RECTANGLES THEMSELVES. A full-size transparent layer
+    /// over a story is a layer that eats the tap which advances it, and this screen has paid for that
+    /// mistake twice already (the caption's expand target, the trim page's wash). The container is
+    /// `allowsHitTesting(false)` and each area turns its own touches back on, so a tap anywhere else
+    /// on the card reaches the story exactly as before.
+    ///
+    /// ⚠️ AND NOT WHILE THE CHROME IS DOWN. A hold pauses the story and the viewers sheet drags it
+    /// away; a link that fires from either would be a link nobody meant to press.
+    @ViewBuilder
+    func tapAreas(_ story: Story) -> some View {
+        if !story.taps.isEmpty {
+            GeometryReader { geo in
+                ZStack {
+                    ForEach(story.taps) { t in
+                        Color.clear
+                            .frame(width: max(24, geo.size.width * t.w),
+                                   height: max(24, geo.size.height * t.h))
+                            .contentShape(Rectangle())
+                            .rotationEffect(.radians(t.rotation))
+                            .position(x: geo.size.width * t.x, y: geo.size.height * t.y)
+                            .allowsHitTesting(true)
+                            .onTapGesture { openTapArea(t) }
+                    }
+                }
+            }
+            .allowsHitTesting(!isHolding && !chromeHidden && !flightActive)
+        }
+    }
+
+    /// Opening one. The library has no idea what is at the other end and does not need to: the URL
+    /// was already narrowed to http/https on the way in (see the host's `StoryTapTarget.from`), and a
+    /// place sticker is a maps URL, which is the same kind of thing.
+    private func openTapArea(_ t: StoryTapArea) {
+        UIApplication.shared.open(t.url)
     }
 
     // The caption component: 16pt regular white text with a soft shadow, left-aligned,

@@ -216,9 +216,15 @@ service cloud.firestore {
               // reaches contacts normally, and is simply absent from the author's public profile.
               // Safe to allow: it is a few hundred bytes of base64 JPEG derived from the media this
               // same document already publishes, so it discloses nothing the mirror did not.
+              // ⚠️ `stickers` IS ON THIS LIST FOR THE SAME REASON `blurThumb` IS. A story posted with
+              // a Link or a Location sticker carries the rectangle that sticker occupies and what it
+              // opens; leave the key off a `hasOnly` and the WHOLE mirror write fails, silently, so
+              // the story would simply stop appearing on its author's public profile. It discloses
+              // nothing new — the sticker is already drawn into the picture this document publishes,
+              // and the url is the one the author chose to show.
               || (request.resource.data.keys().hasOnly(
                     ['authorUid', 'createdAt', 'expiresAt', 'mediaUrl', 'thumbUrl',
-                     'type', 'caption', 'duration', 'allowsReplies', 'blurThumb'])
+                     'type', 'caption', 'duration', 'allowsReplies', 'blurThumb', 'stickers'])
                   && request.resource.data.authorUid == uid
                   && !isBanned()));
       }

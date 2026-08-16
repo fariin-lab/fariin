@@ -11,6 +11,51 @@ struct StoryShareData: Identifiable {
     let data: Data
     var caption: String = ""
     var video: StoryVideoPayload? = nil
+    /// The Link and Location stickers on this item — see `StoryTapTarget`.
+    var stickers: [StoryTapTarget] = []
+}
+
+/// A STICKER THAT STILL DOES SOMETHING AFTER IT HAS BEEN POSTED.
+///
+/// ⚠️ THE PICTURE CANNOT CARRY THIS AND THAT IS THE ENTIRE PROBLEM IT SOLVES. A story is a flat JPEG
+/// (or a clip with the art burned into its frames), so a Link sticker is, by the time it reaches
+/// anybody, a photograph of a button. What is missing is not the drawing — that survives perfectly —
+/// but WHERE it is and WHAT it opens. Those two facts travel beside the media, on the story document,
+/// and the viewer lays an invisible tap area over the picture from them.
+///
+/// ⚠️ EVERYTHING IS NORMALISED 0-1 AGAINST THE STORY'S OWN FRAME, never points. The author's card,
+/// the exported file and the viewer's card are three different sizes on three different phones; a
+/// rectangle in points would be right on exactly one of them.
+struct StoryTapTarget: Equatable {
+    var x: Double        // centre, 0-1 across the frame
+    var y: Double        // centre, 0-1 down the frame
+    var w: Double        // 0-1 of the frame's width
+    var h: Double        // 0-1 of the frame's height
+    var rotation: Double // radians, the same turn the sticker was left at
+    /// Where it goes. A link sticker carries what was typed; a place carries a maps url built from
+    /// its coordinates — ONE field, because "open this" is one behaviour and a second field would be
+    /// a second thing for the viewer to branch on.
+    var url: String
+
+    var asDictionary: [String: Any] {
+        ["x": x, "y": y, "w": w, "h": h, "rotation": rotation, "url": url]
+    }
+
+    /// ⚠️ ANYTHING THAT IS NOT A WEB OR MAPS URL IS DROPPED ON THE WAY IN, not on the way out. This
+    /// is a string another phone wrote, handed to `openURL` — so `tel:`, `sms:` and every custom
+    /// scheme some other app has registered are refused here, where the rule is written once, rather
+    /// than at each of the places that might one day open one.
+    static func from(_ raw: Any?) -> StoryTapTarget? {
+        guard let d = raw as? [String: Any],
+              let url = d["url"] as? String,
+              let scheme = URL(string: url)?.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let x = d["x"] as? Double, let y = d["y"] as? Double,
+              let w = d["w"] as? Double, let h = d["h"] as? Double,
+              w > 0, h > 0 else { return nil }
+        return StoryTapTarget(x: x, y: y, w: w, h: h,
+                              rotation: d["rotation"] as? Double ?? 0, url: url)
+    }
 }
 
 /// One more item posted behind the first, in the order the user arranged them. The audience sheet is
@@ -20,6 +65,9 @@ struct StoryExtra: Identifiable {
     let id = UUID()
     var photo: Data? = nil
     var video: StoryVideoPayload? = nil
+    /// Per ITEM, not per post: each picture in a post has its own stickers, and posting them all
+    /// against the first one is how a link ends up on somebody else's photograph.
+    var stickers: [StoryTapTarget] = []
 }
 
 // A picked video awaiting the audience sheet: the source file + the poster frame the editor
@@ -87,6 +135,9 @@ struct ShareStorySheet: View {
     var video: StoryVideoPayload? = nil   // set → posts a video story instead of the photo
     /// Everything after the first item, in order. They post behind it and share this audience.
     var extras: [StoryExtra] = []
+    /// The Link and Location stickers on the FIRST item. Each extra carries its own — see
+    /// `StoryTapTarget` and the note on `StoryExtra.stickers`.
+    var stickers: [StoryTapTarget] = []
     var onPosted: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -385,12 +436,12 @@ struct ShareStorySheet: View {
         if let video {
             StoriesService.shared.postVideoStoryBackground(
                 videoURL: video.url, thumbnail: video.thumbnail, muted: video.muted,
-                burn: video.burn, trim: video.trim, caption: caption,
+                burn: video.burn, trim: video.trim, caption: caption, stickers: stickers,
                 excluded: excluded, included: included, everyone: everyone, allowsReplies: replies,
                 tag: tag)
         } else {
             StoriesService.shared.postStoryBackground(
-                image: image, caption: caption,
+                image: image, caption: caption, stickers: stickers,
                 excluded: excluded, included: included, everyone: everyone, allowsReplies: replies,
                 tag: tag)
         }
@@ -404,11 +455,13 @@ struct ShareStorySheet: View {
             if let v = extra.video {
                 StoriesService.shared.postVideoStoryBackground(
                     videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim,
-                    caption: "", excluded: excluded, included: included, everyone: everyone,
+                    caption: "", stickers: extra.stickers,
+                    excluded: excluded, included: included, everyone: everyone,
                     allowsReplies: replies, tag: tag)
             } else if let p = extra.photo {
                 StoriesService.shared.postStoryBackground(
-                    image: p, caption: "", excluded: excluded, included: included, everyone: everyone,
+                    image: p, caption: "", stickers: extra.stickers,
+                    excluded: excluded, included: included, everyone: everyone,
                     allowsReplies: replies, tag: tag)
             }
         }

@@ -1464,6 +1464,14 @@ struct StoryViewer: View {
                         // watched. Zero for anything posted before the field existed, which the
                         // lookahead reads as "use your own default". See `Story.preloadPrefix`.
                         preloadPrefix: s.preloadPrefix,
+                        // The Link and Location stickers on this story. The library is handed only
+                        // where they are and what they open — the drawing of them is already in the
+                        // media it is about to show. See `StoryTapTarget` and `StoryTapArea`.
+                        taps: s.stickers.compactMap { t in
+                            guard let u = URL(string: t.url) else { return nil }
+                            return StoryUI.StoryTapArea(x: t.x, y: t.y, w: t.w, h: t.h,
+                                                        rotation: t.rotation, url: u)
+                        },
                         date: timeAgo(s.createdAt),
                         isLiked: StoryPrefs.isStoryLiked(s.id),   // heart stays red on reopen
                         // This flag decides WHERE THE VIEWER OPENS. The rule that reads it lives in
