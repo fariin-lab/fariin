@@ -729,8 +729,15 @@ struct StoryEditorView: View {
                 onTime: { addTimeSticker() })
                 .presentationDetents([.fraction(0.6), .large])
                 .presentationDragIndicator(.visible)
-                .presentationBackground(.ultraThinMaterial)
-                .presentationCornerRadius(28)
+                // ⚠️ NOTHING IS SAID ABOUT THE BACKGROUND OR THE CORNERS ON PURPOSE (his
+                // 2026-08-16: "make it real liquid glass for apple design"). iOS 26 gives a sheet
+                // its own Liquid Glass at a partial detent and turns it opaque as it reaches full
+                // height, and it rounds it to the radius that matches the phone it is running on.
+                // The two lines that used to be here — `.presentationBackground(.ultraThinMaterial)`
+                // and `.presentationCornerRadius(28)` — replaced both of those with a pre-26 blur
+                // and a number, which is how the tray ended up a flat grey panel in his screenshot.
+                // Overriding the system here is the definition of the custom look he keeps
+                // reporting; see [[kulan-prefer-native-not-custom]].
         }
         .storyAlwaysDark()
     }

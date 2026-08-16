@@ -14,6 +14,25 @@ import MapKit
 // while the one underneath it is still going down is the oldest way to get a screen that silently
 // never appears — this app has paid for it before (see `AddStorySheet`'s note on the picker). A push
 // cannot race a dismissal because nothing is dismissed.
+//
+// ⚠️ EVERY SURFACE IN HERE IS APPLE'S GLASS, NOT A GREY WE PAINTED (his 2026-08-16 note on the
+// shipped tray: "make it real liquid glass for apple design, bottom tabs real liquid capsule tabs").
+// The first build of this tray drew a `tertiarySystemFill` search well, solid white pills, and a
+// `.ultraThinMaterial` strip with `Circle().fill(.white.opacity(0.18))` behind the chosen category.
+// Every one of those is an OPAQUE WASH, which is the single thing Apple's material never is, and it
+// is the same mistake the camera's mode switch was reported for five times — the note above
+// `modePicker` in `StoryCameraView` is the long version and it is worth reading before touching
+// anything below.
+//
+// What that note settled, applied here:
+//   · the selected thing is a piece of glass, never a capsule drawn on glass;
+//   · one material per place — a glass track carrying a second glass pill is what resolves to flat
+//     grey and reads as moulded plastic, so the bottom row carries no track at all;
+//   · `GlassEffectContainer` + a shared `glassEffectID` is what makes the selection MELT from one
+//     category to the next instead of fading in place. That melt is the "liquid" in liquid glass.
+//
+// The app is iOS 26 only (`project.yml`), so none of this is fenced behind `#available` — the
+// legacy branches everywhere else in the app are dead weight this file does not inherit.
 
 /// The stickers this phone has reached for lately, newest first.
 ///
@@ -92,6 +111,9 @@ struct StoryStickerSheet: View {
     var onTime: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    /// The one namespace the bottom row's glass lives in. It has to be declared on the view that
+    /// OWNS both the container and the elements, or the selection has nothing to melt across.
+    @Namespace private var glass
     @State private var route: [Route] = []
     @State private var tab: StickerTab = .recent
     @State private var query = ""
@@ -145,11 +167,12 @@ struct StoryStickerSheet: View {
 
     /// ⚠️ THE SYSTEM'S OWN SEARCH FIELD, OUT OF THE SYSTEM'S OWN PARTS — and not `.searchable`.
     /// `.searchable` belongs to a navigation bar and this tray has none; asking for one would raise a
-    /// whole navigation chrome above the tray to hold a single field. `tertiarySystemFill` in a
-    /// capsule with `secondaryLabel` on it is what UIKit itself draws for a search bar, and NAMING
-    /// those colours rather than picking greys is the difference between following the system and
-    /// resembling it — it is also the reason this stays right in both appearances and at every
-    /// contrast setting.
+    /// whole navigation chrome above the tray to hold a single field.
+    ///
+    /// The well is real `glassEffect`, not the `tertiarySystemFill` it was. That fill is what UIKit
+    /// drew for a search bar BEFORE iOS 26; on 26 UIKit draws the same bar as glass, so naming the
+    /// old colour was following the system one release too late. Glass here also means the field
+    /// picks up the photograph behind the tray instead of sitting on it as a grey rectangle.
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
@@ -170,9 +193,9 @@ struct StoryStickerSheet: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 12)
-        .frame(height: 38)
-        .background(Color(.tertiarySystemFill), in: Capsule())
+        .padding(.horizontal, 14)
+        .frame(height: 40)
+        .glassEffect(.regular, in: Capsule())
         .padding(.horizontal, 16)
         .padding(.top, 16)
         .padding(.bottom, 14)
@@ -197,17 +220,33 @@ struct StoryStickerSheet: View {
     /// find every one of them by tapping it. What is here is what works. The LAYOUT is the
     /// reference's, so the row grows on its own as more is built, with nothing to rearrange.
     private var actions: some View {
-        StickerFlowLayout(spacing: 10, lineSpacing: 10) {
-            actionPill("mappin.and.ellipse", "Location", .red) { route.append(.place) }
-            actionPill("link", "Link", .blue) { route.append(.link) }
-            actionPill("clock", "Time", .orange) { dismiss(); onTime() }
+        // The three of them are ONE glass system, not three glass blobs that happen to be near each
+        // other — the same reason the chat composer wraps its `+` and its field in a container. The
+        // 4pt is deliberately well under the 10pt gap: a container's spacing is the distance at
+        // which shapes start to blend into one another, and three pills melting into a puddle is
+        // not what this row is.
+        GlassEffectContainer(spacing: 4) {
+            StickerFlowLayout(spacing: 10, lineSpacing: 10) {
+                actionPill("mappin.and.ellipse", "Location", .red) { route.append(.place) }
+                actionPill("link", "Link", .blue) { route.append(.link) }
+                actionPill("clock", "Time", .orange) { dismiss(); onTime() }
+            }
         }
         .padding(.horizontal, 16)
     }
 
-    /// White, with a coloured glyph and black lettering — the reference's own shape, and the only one
-    /// that stays legible whatever photograph is behind the tray. Glass takes its colour from what is
-    /// under it, which is exactly the wrong property for a control sitting over somebody's picture.
+    /// ⚠️ APPLE'S OWN BUTTON, NOT OURS WEARING APPLE'S MATERIAL. `.buttonStyle(.glass)` is the whole
+    /// control — the material, the capsule, the press-in highlight, the way it dims when the sheet
+    /// goes behind something — and none of it is ours to keep right.
+    ///
+    /// The previous version was a solid white capsule with black lettering, and the note here argued
+    /// for it: glass takes its colour from what is under it, which is the wrong property for a
+    /// control over somebody's photograph. That was a real point about a control sitting ON the
+    /// picture. These do not — they sit on the tray, which is itself glass, so what is under them is
+    /// a settled surface and the lettering only has to survive that. White lettering on it does.
+    ///
+    /// The glyph keeps its colour. A tint inside a glass button is Apple's own pattern (every row of
+    /// their share sheet does it) and it is the one thing that makes the three readable at a glance.
     private func actionPill(_ symbol: String, _ title: String,
                             _ tint: Color, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -217,14 +256,13 @@ struct StoryStickerSheet: View {
                     .foregroundStyle(tint)
                 Text(title)
                     .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(.black)
+                    .foregroundStyle(.white)
             }
-            .padding(.horizontal, 16)
-            .frame(height: 42)
-            .background(Color.white, in: Capsule())
-            .contentShape(Capsule())
+            .padding(.horizontal, 4)
+            .frame(height: 26)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.glass)
+        .buttonBorderShape(.capsule)
     }
 
     // MARK: The stickers
@@ -277,34 +315,63 @@ struct StoryStickerSheet: View {
 
     // MARK: The bottom row
 
+    /// ⚠️ THE CAPSULE TABS — his order, and the row where the old wash was worst.
+    ///
+    /// There is no track. The row is transparent and the tray's own glass shows through it, because
+    /// a glass strip carrying a second glass capsule is two materials over one place and both
+    /// resolve to flat grey — that is the moulded plastic he photographed on the camera switch five
+    /// times, and the answer there was Apple's own segmented glass: the track carries nothing, and
+    /// the selected segment is the single piece of glass that slides.
+    ///
+    /// So exactly one element is real glass — the chosen category — and it carries a CONSTANT
+    /// `glassEffectID`. Constant, not `t.id`: an id per tab makes eleven separate elements that can
+    /// only fade, while one id worn by whichever tab is chosen is ONE element that moves, and a
+    /// glass element moving inside a `GlassEffectContainer` melts out of where it was and into where
+    /// it is going. That melt is the whole request.
+    ///
+    /// The unselected ten still carry `.glassEffect(.identity)` rather than nothing, so the view
+    /// tree is the same shape whichever tab is on — `Theme.liquidGlass(enabled:)` takes the same
+    /// route and for the same reason. A branch that adds and removes the modifier would hand the
+    /// container a different set of elements every tap, which is the one thing that stops the melt.
     private var tabBar: some View {
         ScrollView(.horizontal) {
-            HStack(spacing: 8) {
-                ForEach(StickerTab.all) { t in
-                    Button {
-                        query = ""      // a tab is a different question from a search
-                        tab = t
-                    } label: {
-                        Group {
-                            if case .recent = t {
-                                Image(systemName: "clock").font(.system(size: 17, weight: .semibold))
-                            } else if case .term(let face, _) = t {
-                                Text(face).font(.system(size: 20))
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 6) {
+                    ForEach(StickerTab.all) { t in
+                        let on = tab == t && !searching
+                        Button {
+                            query = ""      // a tab is a different question from a search
+                            tab = t
+                        } label: {
+                            Group {
+                                if case .recent = t {
+                                    Image(systemName: "clock").font(.system(size: 17, weight: .semibold))
+                                } else if case .term(let face, _) = t {
+                                    Text(face).font(.system(size: 20))
+                                }
                             }
+                            .foregroundStyle(.white)
+                            .frame(width: 52, height: 40)
+                            .glassEffect(on ? Glass.regular.interactive() : Glass.identity, in: Capsule())
+                            .glassEffectID(on ? Self.selectionID : nil, in: glass)
+                            .contentShape(Capsule())
                         }
-                        .frame(width: 44, height: 44)
-                        .background { if tab == t && !searching { Circle().fill(Color.white.opacity(0.18)) } }
-                        .contentShape(Circle())
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
+                .padding(.horizontal, 14)
             }
-            .padding(.horizontal, 14)
         }
         .scrollIndicators(.hidden)
-        .frame(height: 60)
-        .background(.ultraThinMaterial)
+        .frame(height: 56)
+        // The glass follows the tap on a spring rather than a curve, because it is a physical thing
+        // arriving somewhere — the same feel Apple gives their own tab selection.
+        .animation(.spring(response: 0.34, dampingFraction: 0.82), value: tab)
+        .animation(.spring(response: 0.34, dampingFraction: 0.82), value: searching)
     }
+
+    /// One id, worn by whichever tab is selected. See `tabBar`.
+    private static let selectionID = "sticker.tab.selection"
 
     // MARK: Loading
 
@@ -416,7 +483,9 @@ private struct LinkStickerScreen: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16)
                 .frame(height: 52)
-                .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                // Glass, like the tray's own search well. `Color.white.opacity(0.10)` was a grey we
+                // painted, and it is the thing this whole pass exists to remove.
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 
             Button { if let u = resolved { onDone(u) } } label: {
                 Text("Add link")
@@ -467,7 +536,7 @@ private struct PlaceStickerScreen: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16)
                 .frame(height: 52)
-                .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
 
