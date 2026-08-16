@@ -62,7 +62,10 @@ private struct SheetCaptionFade: ViewModifier {
     /// the app's answer to "is the card in the air", posted on the FIRST frame of a pull (an exit
     /// hides the surround at once) and coming back over the last 18% of an arrival — so the caption
     /// now leaves with the reply bar and returns with it, which is one event instead of two.
-    @State private var flightActive = false
+    ///
+    /// ⚠️ SEEDED, NOT ASSUMED FALSE. A page mounted DURING an open has already missed the post that
+    /// hid the chrome — see `StoryCardMorph.flightChromeHidden`.
+    @State private var flightActive = StoryCardMorph.flightChromeHidden
 
     /// Linear, straight off the finger — but never visible once the chrome is down.
     ///
@@ -235,7 +238,14 @@ struct StoryDetailView: View {
     /// whole pull, and it is what makes a story card read as a card rather than a photo sliding
     /// about. The REPLY BAR does not: it is drawn below the card, it does not move, and it carries
     /// its own solid black footer, so it has to leave. One flag for the sheet, one for the flight.
-    @State private var flightActive = false
+    ///
+    /// ⚠️ SEEDED FROM THE FLIGHT RATHER THAN ASSUMED FALSE, AND THAT IS THE OWNER'S 2026-08-16
+    /// "the opening does not match the closing". This page is BORN during an open, after the post
+    /// that hid the chrome has already gone out to nobody — so it used to come up with its header
+    /// and footer at full opacity over a card still flying, and the "show" at 18% changed nothing to
+    /// animate. Starting hidden makes the arrival the exact reverse of the departure: same flag,
+    /// same 0.15s curve, opposite direction. See `StoryCardMorph.flightChromeHidden`.
+    @State private var flightActive = StoryCardMorph.flightChromeHidden
     /// A flight MASK is cutting the card (`StoryCardMorph` posts `storyFlightMask`): the card's own
     /// corner clip stands down so the mask is the only curve on it. The clip shrinks with the card,
     /// so during a drag it renders at a couple of points and capped every corner the flight could

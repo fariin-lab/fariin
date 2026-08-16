@@ -401,6 +401,21 @@ public final class StoryCardMorph {
         flightCard = view
     }
 
+    /// IS A FLIGHT CURRENTLY HIDING THE VIEWER'S SURROUND — the readable half of the host's
+    /// `storyFlightActive` notification.
+    ///
+    /// ⚠️ A NOTIFICATION IS NOT STICKY, AND ON AN OPEN ITS FIRST POST HAS NO LISTENER. The host
+    /// hides the chrome in the same breath that it seats the card, which is BEFORE the page that
+    /// draws the chrome has been mounted — so the page missed "hide", started visible, and the
+    /// later "show" was no change at all. The close was never affected because the page is already
+    /// on screen to hear it, which is exactly the asymmetry the owner reported: the top and bottom
+    /// fade away on the way out and simply exist on the way in.
+    ///
+    /// A page seeds its own state from this at mount, so a page born mid-flight starts hidden and
+    /// fades in with the same line of code the close fades out with. Cleared by `resetFlight`, which
+    /// is every arrival and every teardown, so it can never outlive the flight that raised it.
+    public static var flightChromeHidden = false
+
     /// Identity-checked for the same reason `detach` is: a teardown must never clear a successor's
     /// registration.
     public func detachFlight(_ view: UIView?) {
@@ -461,6 +476,11 @@ public final class StoryCardMorph {
         // ownership note in `applyCore`.) BEFORE the guard: the flag must never outlive a flight,
         // even one whose card has already gone, or the next viewer would render bare-cornered.
         setFlightMaskOwnsCorner(false)
+        // Same rule, same reason, same side of the guard: no flight is in the air after this, so
+        // nothing may still be reporting that one is hiding the chrome. A stale `true` here would
+        // mount the NEXT viewer with its header and footer invisible and nothing left to post the
+        // correction.
+        Self.flightChromeHidden = false
         guard let flightCard else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)

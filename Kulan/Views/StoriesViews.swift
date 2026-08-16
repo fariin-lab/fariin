@@ -2678,12 +2678,25 @@ struct StoryViewer: View {
         // it must be there at 85, 90 percent") and the open keeps it exactly. It is wrong for the
         // surround LEAVING, because the thing being faded out is an opaque wall standing between him
         // and the list he is pulling towards. So an exit takes it away on the first frame.
-        let hide = hero.exiting || f > Self.heroChromeSpan
-        if hero.chromeHidden != hide {
-            hero.chromeHidden = hide
-            if heroFlying != hide { heroFlying = hide }
-            NotificationCenter.default.post(name: .init("storyFlightActive"), object: hide)
-        }
+        setFlightChromeHidden(hero.exiting || f > Self.heroChromeSpan)
+    }
+
+    /// THE ONE WRITER OF "IS A FLIGHT HIDING THE CHROME" — the box, the readable flag and the
+    /// notification together, because they are one fact and were drifting apart.
+    ///
+    /// ⚠️ THE READABLE FLAG IS WHY THE OPEN NOW ANIMATES AT ALL (his 2026-08-16 report). This posted
+    /// a notification and nothing else, and on an OPEN the first post is made while the card is
+    /// being seated — before the page that draws the header and footer exists. Nobody heard "hide",
+    /// so the page came up with its chrome already visible over a card still out in the room, and
+    /// the "show" that arrives at 18% was no change and animated nothing. The close was always
+    /// correct because its page is on screen for both posts. `StoryCardMorph.flightChromeHidden`
+    /// is the same answer left where a page being born can read it.
+    private func setFlightChromeHidden(_ hide: Bool) {
+        guard hero.chromeHidden != hide else { return }
+        hero.chromeHidden = hide
+        if heroFlying != hide { heroFlying = hide }
+        StoryCardMorph.flightChromeHidden = hide
+        NotificationCenter.default.post(name: .init("storyFlightActive"), object: hide)
     }
 
     /// How much of the viewer's surround (reply bar, footers, the page's own black) is let through
@@ -3056,10 +3069,7 @@ struct StoryViewer: View {
                 hero.crop = 0
                 // Belt only: `applyHero` has already crossed both of these on the way in, at 0.18.
                 if heroFlying { heroFlying = false }
-                if hero.chromeHidden {
-                    hero.chromeHidden = false
-                    NotificationCenter.default.post(name: .init("storyFlightActive"), object: false)
-                }
+                setFlightChromeHidden(false)
                 StoryCardMorph.heroDismissActive = false
                 // `resetFlight`: identity, unmasked, cover off, and the presenter's wall opaque
                 // again. The sheet's own `reset` has no business here — the flight never touched
@@ -3403,10 +3413,7 @@ struct StoryViewer: View {
             hero.live = false
             hero.cover = false
             if heroFlying { heroFlying = false }     // belt: applyHero crossed this at 0.18
-            if hero.chromeHidden {
-                hero.chromeHidden = false
-                NotificationCenter.default.post(name: .init("storyFlightActive"), object: false)
-            }
+            setFlightChromeHidden(false)
             // Full screen, square, unmasked, and the wall behind opaque again. `resetFlight` is
             // what puts the container back exactly, rather than an `applyFlight(fraction: 0)` that
             // leaves a mask covering the whole card for every frame the story renders from here on.
