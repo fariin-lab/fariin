@@ -317,6 +317,13 @@ struct CallsView: View {
     private func deleteRun(_ r: CallRun) {
         Task { await repo.delete(ids: r.ids) }   // a grouped row deletes ALL calls in the run
     }
+    /// Is everything currently on screen already ticked? Drives the Select All button's two states.
+    /// ⚠️ Compared against `shownRuns`, the same list the button acts on, so filtering or searching
+    /// mid-selection cannot leave the button claiming "all" about rows that are no longer visible.
+    private var allShownSelected: Bool {
+        !shownRuns.isEmpty && shownRuns.allSatisfy { selection.contains($0.id) }
+    }
+
     private func deleteSelectedCalls() {
         // A run's id is its NEWEST entry's id, and runs are regrouped live — a call ending mid-
         // selection (recordCall force-reloads the repo), or a change of filter/search, gives that
@@ -430,6 +437,26 @@ struct CallsView: View {
                 if selecting {
                     ToolbarItem(placement: .topBarLeading) {
                         Button { withAnimation(.smooth(duration: 0.35)) { selecting = false; selection = [] } } label: { Image(systemName: "xmark") }.tint(.primary)
+                    }
+                    // SELECT ALL, which this list never had (owner 2026-08-16, comparing against two
+                    // other messengers). It is NOT a faster Delete All — that button is already
+                    // beside it. It is for the opposite job: take everything, then untick the two
+                    // you want to keep, instead of tapping forty rows by hand.
+                    //
+                    // ⚠️ It selects `shownRuns`, not the whole history: the All/Missed filter and the
+                    // search box are both live in selection mode, so "all" has to mean what is on
+                    // screen. Selecting hidden rows would delete calls the user cannot see.
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            withAnimation(.spring(response: 0.24, dampingFraction: 0.7)) {
+                                selection = allShownSelected ? [] : Set(shownRuns.map(\.id))
+                            }
+                        } label: {
+                            Image(systemName: allShownSelected ? "checkmark.circle.fill" : "checkmark.circle")
+                        }
+                        .tint(.primary)
+                        .disabled(shownRuns.isEmpty)
                     }
                     ToolbarItem(placement: .principal) {
                         Text(selection.isEmpty ? "Select Calls" : "\(selection.count) Selected").font(.headline)
