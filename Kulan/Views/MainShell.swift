@@ -1,6 +1,34 @@
 import SwiftUI
 import UIKit
 
+/// Ticking a row on or off, everywhere a list in this file has multi-select.
+///
+/// It exists because the three lists had drifted into three different answers: the chat list used
+/// `.smooth(0.2)`, the archive list repeated that by hand, and the calls list had NO animation at
+/// all, so its circle simply appeared. One function means a tick feels the same wherever you are.
+///
+/// The spring is deliberate. `.smooth` is a pure ease and reads as a fade; a light overshoot is what
+/// makes a tick feel like it LANDED. It is small on purpose (0.24s, damping 0.7): this fires on every
+/// row you touch while picking twenty of them, and anything bouncier becomes noise by the third tap.
+///
+/// ⚠️ The circle itself is Apple's, drawn by `List(selection:)` in edit mode, so the curve and the
+/// haptic are the whole of what we control here. A tick that draws its check on and scales from
+/// nothing needs our own view, which is a much larger change to this file — see the note on the
+/// row's structural identity in `chatListRow`.
+/// ⚠️ A `Binding`, NOT `inout`. `inout` on a `@State` property is copy-in/copy-out: the assignment
+/// inside `withAnimation` would land on a local temporary and only be written back to the real
+/// storage when this function RETURNS, which is after the transaction has closed. The tick would
+/// snap, the code would look correct, and nothing would say so. A Binding's setter runs at the point
+/// of assignment, so it is inside the transaction where it belongs.
+@MainActor func toggleTick(_ id: String, in selection: Binding<Set<String>>) {
+    // The system's own tick sound-and-feel. `.selectionChanged()` is the light one Apple uses for a
+    // picker detent, NOT an impact — an impact on every row of a twenty-row selection is a hammer.
+    UISelectionFeedbackGenerator().selectionChanged()
+    var next = selection.wrappedValue
+    if next.contains(id) { next.remove(id) } else { next.insert(id) }
+    withAnimation(.spring(response: 0.24, dampingFraction: 0.7)) { selection.wrappedValue = next }
+}
+
 // ⚠️ `StoryPresentation` IS GONE, AND SO IS THE FLAT WINDOW DIM IT DROVE (2026-08-07).
 //
 // It was one bool that switched a `Color.black.opacity(0.45)` over this whole shell — tab bar
@@ -335,8 +363,7 @@ struct CallsView: View {
                             .overlay {
                                 if selecting {
                                     Color.clear.contentShape(Rectangle()).onTapGesture {
-                                        if selection.contains(run.id) { selection.remove(run.id) }
-                                        else { selection.insert(run.id) }
+                                        toggleTick(run.id, in: $selection)
                                     }
                                 }
                             }
@@ -827,11 +854,7 @@ struct ChatsView: View {
     /// every chat row is a Button — so a tap on the avatar, the name, or the empty space was swallowed
     /// and pushed the chat instead of selecting it. Only the checkbox (outside the Button) worked.
     /// Route those taps here so the whole row toggles, like Mail and the reference app.
-    private func toggleSelection(_ id: String) {
-        withAnimation(.smooth(duration: 0.2)) {
-            if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
-        }
-    }
+    private func toggleSelection(_ id: String) { toggleTick(id, in: $selection) }
 
     @ViewBuilder private func chatListRow(_ conv: Conversation) -> some View {
         // A real NavigationLink, not a Button with a hand-rolled press style.
@@ -1879,10 +1902,7 @@ struct ArchivedChatsView: View {
                             ForEach(archived) { conv in
                                 Button {
                                     if selecting {   // whole row toggles in edit mode, not just the checkbox
-                                        withAnimation(.smooth(duration: 0.2)) {
-                                            if selection.contains(conv.id) { selection.remove(conv.id) }
-                                            else { selection.insert(conv.id) }
-                                        }
+                                        toggleTick(conv.id, in: $selection)
                                         return
                                     }
                                     let t = ChatTarget(id: conv.id, name: conv.displayName(me),
