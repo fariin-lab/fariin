@@ -732,6 +732,28 @@ enum ChatService {
         return out as Data
     }
 
+    /// FINISH A MEDIA MESSAGE that was written before its bytes existed.
+    ///
+    /// Every media send now writes its message the instant Send is tapped, so the recipient sees a
+    /// real bubble — the waveform, the file name, the blurred photo — while the upload runs. This is
+    /// the second write that attaches the media.
+    ///
+    /// ⚠️ Clearing `uploading` happens HERE, in the same write as the media, and that pairing is not
+    /// tidiness: the firestore.rules branch that permits this update requires both, which is what
+    /// makes it usable exactly once on a message still waiting for its bytes, and useless for
+    /// editing a delivered one.
+    private static func attachMedia(_ fields: [String: Any],
+                                    to msgRef: DocumentReference,
+                                    conv: [String: Any]? = nil,
+                                    convRef: DocumentReference? = nil) async throws {
+        var payload = fields
+        payload["uploading"] = FieldValue.delete()
+        let batch = db.batch()
+        batch.updateData(payload, forDocument: msgRef)
+        if let conv, let convRef, !conv.isEmpty { batch.updateData(conv, forDocument: convRef) }
+        try await batch.commit()
+    }
+
     static func sendImage(cid: String, data rawData: Data, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, viewOnce: Bool = false, caption: String = "", forwarded: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload — order is when send was tapped
         let data = sendJPEG(rawData)
@@ -866,12 +888,9 @@ enum ChatService {
         // Attaching the media also CLEARS `uploading`, and the rules branch requires both in the
         // same write — that pairing is what makes this a one-way door rather than a way to edit a
         // delivered photo.
-        let finish = db.batch()
-        finish.updateData(["imageUrl": url, "uploading": FieldValue.delete()], forDocument: msgRef)
-        if !viewOnce {
-            finish.updateData(["lastImageUrl": url, "lastImageEnc": meta.asDict], forDocument: convRef)
-        }
-        try await finish.commit()
+        try await attachMedia(["imageUrl": url], to: msgRef,
+                              conv: viewOnce ? nil : ["lastImageUrl": url, "lastImageEnc": meta.asDict],
+                              convRef: convRef)
     }
 
     /// Send 2+ photos as ONE album message (grid + one caption), as standard messengers do. Each photo is
@@ -1251,7 +1270,12 @@ enum ChatService {
             AudioCache.store(data, for: msgRef.documentID)
             if let clientId { AudioCache.store(data, for: clientId) }
         }
-        let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).m4a.enc")
+        // ⛔ UPLOAD STARTED, NOT AWAITED. The message goes out first — see the note in sendImage.
+        // A voice note is the one that matters most here: it is the main way this app is used, and
+        // the recipient can be shown a REAL voice bubble immediately, with the true waveform and the
+        // true length, because both are computed on the recorder before a byte is uploaded.
+        async let uploadedURL = uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).m4a.enc",
+                                                progressId: clientId)
 
         // Encrypt the reply snippet the same way as the conversation (group vs 1:1).
         var replyEnc: [String: Any]?
@@ -1267,9 +1291,9 @@ enum ChatService {
             // A one-time note carries NO waveform, the same instinct as the view-once photo
             // skipping its blurhash: the preview machinery must not keep a shape of something
             // meant to exist for one listen.
-            "type": "audio", "audioUrl": url, "duration": duration, "waveform": viewOnce ? [] : waveform,
+            "type": "audio", "duration": duration, "waveform": viewOnce ? [] : waveform,
             "enc": meta.asDict, "text": "", "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
-            "clientTs": clientTs,
+            "clientTs": clientTs, "uploading": true,
         ]
         if let clientId { msg["clientId"] = clientId }   // reconcile the optimistic bubble in place
         if let replyEnc { msg["replyTo"] = replyEnc }    // voice notes can be replies too (Bug 1)
@@ -1292,6 +1316,10 @@ enum ChatService {
         }
         batch.updateData(convUpdate, forDocument: convRef)
         try await batch.commit()
+
+        // Now the audio itself; the bubble has been on their screen since before this line.
+        let url = try await uploadedURL
+        try await attachMedia(["audioUrl": url], to: msgRef)
     }
 
     /// Encrypt + send a VIDEO message. Same E2EE pipeline as photos: the transcoded mp4
@@ -1342,7 +1370,12 @@ enum ChatService {
         // ring jump, which was the other half of the original reasoning and still holds.
         async let videoUp = uploadEncrypted(vidCipher, to: "chat/\(cid)/\(msgRef.documentID).mp4.enc", progressId: clientId)
         async let thumbUp = uploadEncrypted(thCipher, to: "chat/\(cid)/\(msgRef.documentID).thumb.enc")
-        let videoUrl = try await videoUp
+        // ⛔ ONLY THE POSTER IS AWAITED HERE. The video keeps uploading while the message goes out.
+        //
+        // This is the best case of the lot: the thumbnail is a fraction of the clip, so the
+        // recipient gets the REAL first frame, the true duration and the right bubble size
+        // immediately, and only pressing play has to wait. Before this they had nothing at all
+        // until an entire video had uploaded.
         let thumbUrl = try await thumbUp
         try await ensureConv?.value
         // Seed the cache so the optimistic bubble reconciles with no shimmer (photo parity).
@@ -1350,11 +1383,11 @@ enum ChatService {
 
         let batch = db.batch()
         var msg: [String: Any] = [
-            "type": "video", "videoUrl": videoUrl, "enc": vidMeta.asDict,
+            "type": "video", "enc": vidMeta.asDict,
             "thumbUrl": thumbUrl, "thumbEnc": thMeta.asDict,
             "duration": duration, "width": width, "height": height,
             "text": captionCipher, "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
-            "clientTs": clientTs,
+            "clientTs": clientTs, "uploading": true,
         ]
         // A BLURRED SKETCH OF THE POSTER, the same one a photo has carried since it was added.
         //
@@ -1390,6 +1423,8 @@ enum ChatService {
         // Mailman model: the SENDER's copy lives on their own device from day one — the
         // server object exists only to deliver, and the recipient deletes it on pickup.
         VideoCache.store(video, for: msgRef.documentID)
+        // And the clip itself, whenever it finishes.
+        try await attachMedia(["videoUrl": try await videoUp], to: msgRef)
     }
 
     /// Encrypt + send a document/file. Contents are E2EE (same pipeline as photos); the file
@@ -1433,13 +1468,20 @@ enum ChatService {
                       tCipher, to: "chat/\(cid)/\(msgRef.documentID).filethumb.enc") else { return [:] }
             return ["thumbUrl": tUrl, "thumbEnc": tMeta.asDict]
         }()
-        let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).file.enc", progressId: clientId)
+        // ⛔ STARTED, NOT AWAITED — the message goes out first. See the note in sendImage.
+        // A document is the easiest case of all: its name and its size are known before a single
+        // byte moves, so the recipient gets the finished-looking file row immediately and only the
+        // tap-to-open has to wait.
+        async let uploadedURL = uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).file.enc",
+                                                progressId: clientId)
+        // The preview tile is small and is what makes the row look real, so it IS awaited here
+        // rather than attached later — it costs a fraction of the document itself.
         let thumbFields: [String: Any] = await thumbTask
         let batch = db.batch()
         var msg: [String: Any] = [
-            "type": "file", "fileUrl": url, "fileName": fileName, "fileSize": rawData.count,
+            "type": "file", "fileName": fileName, "fileSize": rawData.count,
             "enc": meta.asDict, "text": "", "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
-            "clientTs": clientTs,
+            "clientTs": clientTs, "uploading": true,
         ]
         for (k, v) in thumbFields { msg[k] = v }
         if let clientId { msg["clientId"] = clientId }
@@ -1456,6 +1498,8 @@ enum ChatService {
         }
         batch.updateData(convUpdate, forDocument: convRef)
         try await batch.commit()
+
+        try await attachMedia(["fileUrl": try await uploadedURL], to: msgRef)
     }
 
     /// First-page render for a PDF, the pixels for an image file — nil for anything else

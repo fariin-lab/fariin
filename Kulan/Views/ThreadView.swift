@@ -6521,6 +6521,73 @@ struct MessageBubble: View, Equatable {
             .padding(.horizontal, 13).padding(.vertical, 10)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+        } else if let pendingKind = message.pendingMediaKind, pendingKind != "image" {
+            // THE MESSAGE IS HERE, THE BYTES ARE STILL COMING. Only the recipient reaches this; the
+            // sender keeps their own local copy (ThreadRepository.refreshItems).
+            //
+            // Each shape is built from what the sender knew BEFORE uploading, which is why the first
+            // write carries it: a video's real poster frame and duration, a voice note's real
+            // waveform and length, a document's real name and size. So this is not a spinner
+            // standing in for a message — it is the message, waiting for its payload.
+            VStack(alignment: .leading, spacing: 4) {
+                replyQuote
+                switch pendingKind {
+                case "video":
+                    // The poster is already uploaded and sealed — only the clip is outstanding — so
+                    // this is the finished bubble with a spinner where the play button goes.
+                    ZStack {
+                        if let t = message.thumbUrl, !t.isEmpty {
+                            SecureImageView(url: t, enc: message.thumbEnc, cid: cid,
+                                            placeholderHash: message.blurhash)
+                        } else {
+                            Theme.received(dark)
+                        }
+                        ProgressView().tint(.white)
+                            .padding(10).background(.black.opacity(0.35), in: Circle())
+                    }
+                    .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
+                    .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                    .overlay(alignment: .bottomTrailing) {
+                        metaRow.padding(.horizontal, 7).padding(.vertical, 3)
+                            .background(.black.opacity(0.35), in: Capsule())
+                            .foregroundStyle(.white).padding(7)
+                    }
+                case "audio":
+                    // The true waveform and length, drawn at the real bubble width so nothing
+                    // resizes when the audio lands.
+                    HStack(spacing: VoiceMessageView.discGap) {
+                        ProgressView()
+                            .frame(width: VoiceMessageView.discSize, height: VoiceMessageView.discSize)
+                        WaveformBars(bars: message.waveform.isEmpty
+                                        ? Array(repeating: 12, count: 28) : message.waveform,
+                                     progress: 0,
+                                     played: Theme.accent(dark).opacity(0.35),
+                                     unplayed: Theme.accent(dark).opacity(0.35),
+                                     onSeek: { _ in })
+                            .frame(width: VoiceMessageView.waveWidth(for: message),
+                                   height: VoiceMessageView.waveHeight)
+                    }
+                    .padding(.horizontal, 13).padding(.vertical, 10)
+                    .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                    .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                default:
+                    // A document: name and size are known from the first write, so only opening it
+                    // has to wait.
+                    HStack(spacing: 10) {
+                        ProgressView().frame(width: 26, height: 26)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(message.fileName ?? "Document")
+                                .font(.system(size: 15, weight: .medium)).lineLimit(1)
+                            Text(fileSizeLabel).font(.caption)
+                                .foregroundStyle(isMe ? onMyBubble.opacity(0.8) : .secondary)
+                        }
+                    }
+                    .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
+                    .padding(.horizontal, 13).padding(.vertical, 10)
+                    .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                    .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                }
+            }
         } else if message.isPendingImage {
             // THE PHOTO IS ON ITS WAY. Only the recipient ever reaches this: the sender keeps their
             // own local copy until the upload lands (ThreadRepository.refreshItems).

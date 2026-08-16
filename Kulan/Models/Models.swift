@@ -151,8 +151,28 @@ struct Message: Identifiable, Equatable, Codable {
     /// A photo whose bytes have not landed yet: draw the blurhash at the real aspect ratio, with a
     /// spinner. Only ever true on the RECEIVING side — the sender keeps showing their own local copy
     /// until the upload completes (see ThreadRepository.refreshItems).
-    var isPendingImage: Bool {
-        type == "image" && uploading && (imageUrl?.isEmpty ?? true) && localImageData == nil
+    var isPendingImage: Bool { pendingMediaKind == "image" }
+
+    /// THE MESSAGE EXISTS, THE BYTES DO NOT — which kind of placeholder to draw, or nil.
+    ///
+    /// Every media send writes its message the instant Send is tapped and attaches the media when
+    /// the upload finishes, so there is a window where a real message has no URL. The bubble needs
+    /// to know which shape to hold during it.
+    ///
+    /// ⚠️ Nil whenever local bytes are present, which is what keeps the SENDER out of here: their
+    /// optimistic bubble is the better picture and stays until the upload lands.
+    ///
+    /// ⚠️ And nil once the URL arrives, so this cannot outlive the upload even if the flag somehow
+    /// did. The URL is the fact; `uploading` is only the hint.
+    var pendingMediaKind: String? {
+        guard uploading, localImageData == nil, localAudioData == nil, !localFile else { return nil }
+        switch type {
+        case "image": return (imageUrl?.isEmpty ?? true) ? "image" : nil
+        case "audio": return (audioUrl?.isEmpty ?? true) ? "audio" : nil
+        case "video": return (videoUrl?.isEmpty ?? true) ? "video" : nil
+        case "file":  return (fileUrl?.isEmpty  ?? true) ? "file"  : nil
+        default:      return nil
+        }
     }
     var isCall: Bool { type == "call" }
     var isSystem: Bool { type == "system" }   // group event ("X added Y"), shown centered
