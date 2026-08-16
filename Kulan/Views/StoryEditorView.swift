@@ -804,9 +804,27 @@ struct StoryEditorView: View {
                         items = [DraftItem(image: Self.blackPoster, videoURL: v.url,
                                            duration: 0, assetID: v.assetID)]
                         index = 0
+                        restoreCurrent()   // the SAME door every other arrival uses — see below
                         Task { await resolveSourceVideo(v.url) }
                     } else if seedItems.isEmpty {
+                        // ⚠️ `restoreCurrent()`, NOT the bare `recomputeEdited()` below. THIS IS THE
+                        // WHOLE OF "the first picture does not get the default zoom".
+                        //
+                        // The tools live OUTSIDE the item and `restoreCurrent` is the only place an
+                        // item is ever put ON them — which is also where an unset zoom is resolved
+                        // into a real one (`defaultZoom`). Every other way into this screen went
+                        // through it: the + inside the editor (`appendPicked`), a batch from the
+                        // picker (`applyPickerChange`), the hand-off below, even a delete. The very
+                        // first item was the one exception — it was seeded straight into `items` and
+                        // the screen was only asked to redraw. So `items[0].zoom` stayed at its
+                        // "nobody has framed this yet" zero, `photoZoom` stayed at the 1 it is
+                        // declared with, and a portrait picture opened fitted instead of filling.
+                        //
+                        // The same trap `appendPicked` fell into and carries a note about; this is
+                        // the third and last door into the item list, closed the same way.
                         items = [DraftItem(image: source, assetID: sourceAssetID)]
+                        index = 0
+                        restoreCurrent()
                     } else {
                         // A hand-off from the video editor: the whole post arrives, the just-picked
                         // picture last — that is the one you continue on. restoreCurrent puts the
@@ -2490,6 +2508,21 @@ struct ZoomableImageView: UIViewRepresentable {
 
         let pinch = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePinch(_:)))
         let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
+        // ⚠️ TWO FINGERS OR IT IS NOT A PAN — owner 2026-08-16, and it is one line because the
+        // recogniser already had the ceiling and was only ever missing the floor.
+        //
+        // Framing a photo is a TWO-FINGER job in every mainstream photo and story editor: the
+        // fingers that set the scale are the fingers that set the position, so the two halves of
+        // one framing decision are made in one motion. A one-finger drag over the picture means
+        // nothing there, and it must mean nothing here — it was the sole reason a picture could
+        // slide off its own framing while somebody was just resting a thumb on it or reaching for
+        // the strip.
+        //
+        // It also frees the one finger for what this card already gives it: a tap (play, and
+        // dismissing the caption) and a flick (the next picture in the post, `handleSwipe`).
+        // Those two are one-touch recognisers, so with the floor at 2 the pan can no longer
+        // out-race them for a drag it should never have claimed.
+        pan.minimumNumberOfTouches = 2
         pan.maximumNumberOfTouches = 2
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
         // Left and right flicks, the same recogniser another mainstream messenger's camera uses to change mode. A discrete
@@ -2576,6 +2609,18 @@ struct ZoomableImageView: UIViewRepresentable {
             case .changed:
                 let t = g.translation(in: container)
                 g.setTranslation(.zero, in: container)
+                // A FITTED PICTURE HAS NOWHERE TO GO — and that is decided HERE, not by refusing to
+                // begin. It used to be a `gestureRecognizerShouldBegin` gate, and once the pan needs
+                // two fingers that gate turns into a bug: a two-finger motion that starts as a drag
+                // and becomes a pinch would have had the pan marked FAILED for the whole sequence
+                // before the zoom arrived, so the fingers that just zoomed in could not then move
+                // the picture without lifting off. Refusing the movement instead of refusing the
+                // gesture leaves the pan alive and waiting for the scale to cross.
+                //
+                // The translation is taken and thrown away above the guard on purpose: without
+                // that, everything the fingers travelled while still at 1x would be banked and
+                // land in one jump the instant the pinch crossed.
+                guard curScale > 1.01 else { break }
                 curOffset.x += t.x; curOffset.y += t.y
                 applyTransform()
             case .ended, .cancelled:
@@ -2593,23 +2638,12 @@ struct ZoomableImageView: UIViewRepresentable {
             parent.onSwipe(g.direction == .left ? 1 : -1)
         }
 
-        /// THE PAN IS WHY SWIPING DID NOTHING, and this one line is the fix.
-        ///
-        /// It was live at every zoom level, so a one-finger drag across the picture was always
-        /// claimed by it — and at 1x `clampOffset` pins the offset to zero, so the picture could not
-        /// move either. The drag was swallowed and then thrown away: you touched the screen and
-        /// nothing happened, exactly as reported.
-        ///
-        /// A pan only has work to do when the picture is bigger than its frame. Below that it does
-        /// not begin at all, and the swipe is free to recognise. Zoomed in, the pan begins as before
-        /// and the swipe stays out of the way, which is right — a drag on a zoomed photo is a pan.
-        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
-            guard g === pan else { return true }
-            // Zooming out from 1x and moving in the SAME motion still works: while the pinch is
-            // live the pan is let through regardless, or that one gesture would lose its second half.
-            if let p = pinch, p.state == .began || p.state == .changed { return true }
-            return curScale > 1.01
-        }
+        // THE PAN USED TO REFUSE TO BEGIN BELOW 1.01x (`gestureRecognizerShouldBegin`), because it
+        // was live at every zoom level on ONE finger and so ate the sideways flick to the next
+        // picture. The two-finger floor in `makeUIView` is a better answer to that same problem —
+        // the flick is one touch and the pan can no longer see it at all — and the old gate would
+        // now cost more than it saves, so the "is there anything to move" question moved into
+        // `handlePan`'s `.changed`. See the note there.
 
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool {
             !(g is UITapGestureRecognizer || o is UITapGestureRecognizer)
