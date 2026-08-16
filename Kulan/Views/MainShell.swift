@@ -387,25 +387,33 @@ struct CallsView: View {
                             }
                             // Long-press menu — every action is real.
                             // (Tick reposition lives in ChatRow; see chat list.)
+                            // ⚠️ EVERY GLYPH CARRIES ITS OWN INK — `MenuIcon(ink:)`, never a bare
+                            // `systemImage:`. A `.contextMenu` becomes a UIKit `UIMenu`, which tints
+                            // its images with the presenting view's `tintColor`, and the app's
+                            // `.tint(.primary)` is a SwiftUI value that never reaches it: white
+                            // lettering, system-blue glyphs. See `MenuIcon.ink`.
                             .contextMenu {
                                 Button {
                                     pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: false)
-                                } label: { Label("Voice Call", systemImage: "phone") }
+                                } label: { Label { Text("Voice Call") } icon: { MenuIcon(system: "phone", ink: .label) } }
                                 Button {
                                     pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: true)
-                                } label: { Label("Video Call", systemImage: "video") }
+                                } label: { Label { Text("Video Call") } icon: { MenuIcon(system: "video", ink: .label) } }
                                 Button {
                                     AppRouter.shared.pendingChatName = call.name
                                     AppRouter.shared.pendingChatPhoto = call.photoUrl
                                     AppRouter.shared.pendingChatId = call.cid
                                 } label: {
-                                    Label { Text("Chats") } icon: { MenuIcon("ic_menu_chat") }
+                                    Label { Text("Chats") } icon: { MenuIcon("ic_menu_chat", ink: .label) }
                                 }
                                 Button {
                                     withAnimation(.smooth(duration: 0.35)) { selecting = true; selection = [run.id] }
-                                } label: { Label("Select", systemImage: "checkmark.circle") }
+                                } label: { Label { Text("Select") } icon: { MenuIcon(system: "checkmark.circle", ink: .label) } }
                                 Divider()
-                                Button(role: .destructive) { deleteRun(run) } label: { Label("Delete", systemImage: "trash") }
+                                // Red, to match its own title — the one item whose ink is not the label's.
+                                Button(role: .destructive) { deleteRun(run) } label: {
+                                    Label { Text("Delete") } icon: { MenuIcon(system: "trash", ink: .systemRed) }
+                                }
                             }
                         }
                     }
@@ -1287,11 +1295,11 @@ struct ChatsView: View {
                 Task { await ChatService.resetUnread(conv.id); await ChatService.markRead(conv.id) }
                 NotificationCleaner.clear(cid: conv.id)
             } label: {
-                Label { Text("Read") } icon: { MenuIcon(system: "envelope.open") }
+                Label { Text("Read") } icon: { MenuIcon(system: "envelope.open", ink: .label) }
             }
         } else {
             Button { Task { await ChatService.markUnread(conv.id) } } label: {
-                Label { Text("Unread") } icon: { MenuIcon("ic_menu_unread") }
+                Label { Text("Unread") } icon: { MenuIcon("ic_menu_unread", ink: .label) }
             }
         }
         // The official channel's mute is a plain on/off, not a timer. A "Mute for 1 hour" that
@@ -1300,7 +1308,7 @@ struct ChatsView: View {
         if OfficialChannel.isOfficial(conv.id) {
             let quiet = conv.isMuted(me, now: Date().timeIntervalSince1970 * 1000)
             Button { Task { await ChatService.setMuted(conv.id, !quiet) } } label: {
-                Label { Text(quiet ? "Unmute" : "Mute") } icon: { MenuIcon(system: quiet ? "bell" : "bell.slash") }
+                Label { Text(quiet ? "Unmute" : "Mute") } icon: { MenuIcon(system: quiet ? "bell" : "bell.slash", ink: .label) }
             }
         } else {
         // Native submenu (clean popover) instead of a custom mute sheet.
@@ -1312,19 +1320,19 @@ struct ChatsView: View {
             Button("Mute for 8 hours") { Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(8)) } }
             Button("Mute for 1 week") { Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(168)) } }
             Button("Mute Always") { Task { await ChatService.setMute(conv.id, until: ChatService.muteUntil(nil)) } }
-        } label: { Label { Text("Mute") } icon: { MenuIcon(system: "bell.slash") } }
+        } label: { Label { Text("Mute") } icon: { MenuIcon(system: "bell.slash", ink: .label) } }
         }
         Button { Task { await ChatService.setPinned(conv.id, !conv.isPinned(me)) } } label: {
             Label { Text(conv.isPinned(me) ? "Unpin" : "Pin") } icon: {
-                    conv.isPinned(me) ? AnyView(MenuIcon(system: "pin.slash"))
-                                      : AnyView(MenuIcon("ic_pin_menu"))
+                    conv.isPinned(me) ? AnyView(MenuIcon(system: "pin.slash", ink: .label))
+                                      : AnyView(MenuIcon("ic_pin_menu", ink: .label))
                 }
         }
         Button { Task { await ChatService.setArchived(conv.id, true) } } label: {
-            Label { Text("Archive") } icon: { MenuIcon("ic_archive") }
+            Label { Text("Archive") } icon: { MenuIcon("ic_archive", ink: .label) }
         }
         Button(role: .destructive) { pendingDelete = conv } label: {
-            Label { Text("Delete") } icon: { MenuIcon(system: "trash") }
+            Label { Text("Delete") } icon: { MenuIcon(system: "trash", ink: .systemRed) }
         }
     }
     // Batch ops run the per-chat writes CONCURRENTLY (was sequential = N round-trips in series).

@@ -164,6 +164,24 @@ struct MenuIcon: View {
     var size: CGFloat = MenuIcon.standard
     /// An Apple symbol rather than one of ours. Same treatment: symbols carry the most air of all.
     var system = false
+    /// ⚠️ A COLOUR BAKED INTO THE BITMAP, INSTEAD OF A TEMPLATE THAT TAKES THE TINT — and nil, which
+    /// is every existing caller, is exactly the behaviour there has always been.
+    ///
+    /// It exists for the two LONG-PRESS MENUS (his 2026-08-16 report: "the context menu icons is
+    /// blue"). A SwiftUI `.contextMenu` is handed to UIKit, which builds a real `UIMenu` and tints
+    /// its images with the PRESENTING VIEW'S `tintColor` — somewhere the app's `.tint(.primary)`
+    /// never reaches, because that is a SwiftUI environment value. So those menus came out with
+    /// `label` lettering and system-blue glyphs. A non-template image has no tint to take.
+    ///
+    /// ⚠️ NOT SET ON SWIPE ACTIONS, and that is deliberate rather than an omission: a swipe button
+    /// paints its own background (`.tint(.orange)`, `.tint(.red)`) and draws its glyph white on top,
+    /// so baking the ink there would put black on orange in light mode.
+    ///
+    /// Resolved against the CURRENT SCHEME rather than handed a dynamic colour, because a bitmap
+    /// cannot be dynamic — reading `colorScheme` is what makes SwiftUI redraw it when the phone
+    /// changes appearance.
+    var ink: UIColor? = nil
+    @Environment(\.colorScheme) private var scheme
 
     /// The size of an SF Symbol's image box at body size. Menus and swipe buttons both use it, so
     /// our icons are the same size as each other as well as the same size as the system's.
@@ -182,15 +200,17 @@ struct MenuIcon: View {
     static let custom: CGFloat = 20
 
     /// Our own artwork. Defaults to `custom`, two points under a symbol's box — see the note there.
-    init(_ name: String, size: CGFloat = MenuIcon.custom) {
+    init(_ name: String, size: CGFloat = MenuIcon.custom, ink: UIColor? = nil) {
         self.name = name
         self.size = size
+        self.ink = ink
     }
 
-    init(system name: String, size: CGFloat = MenuIcon.standard) {
+    init(system name: String, size: CGFloat = MenuIcon.standard, ink: UIColor? = nil) {
         self.name = name
         self.size = size
         self.system = true
+        self.ink = ink
     }
 
     // A PRE-RENDERED UIImage at the target point size, NOT a frame-modified Image. Menus and
@@ -200,7 +220,13 @@ struct MenuIcon: View {
     // Archive / Add Story / swipe-Pin screenshots, the second time this symptom came back).
     // Baking the size into the bitmap is the one thing the conversion cannot ignore.
     var body: some View {
-        Image(uiImage: Self.rendered(name, size, system)).renderingMode(.template)
+        if let ink {
+            let traits = UITraitCollection(userInterfaceStyle: scheme == .dark ? .dark : .light)
+            Image(uiImage: Self.rendered(name, size, system)
+                    .withTintColor(ink.resolvedColor(with: traits), renderingMode: .alwaysOriginal))
+        } else {
+            Image(uiImage: Self.rendered(name, size, system)).renderingMode(.template)
+        }
     }
 
     private static var cache: [String: UIImage] = [:]
