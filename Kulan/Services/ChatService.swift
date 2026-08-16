@@ -1462,11 +1462,26 @@ enum ChatService {
     }
 
     /// Send a GIF (a public Giphy URL — public content, so NOT E2EE; we store the url directly).
-    static func sendGif(cid: String, url: String, width: Double, height: Double, clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
+    static func sendGif(cid: String, url: String, width: Double, height: Double, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
         var members = group
         if members == nil, !cid.contains("_") {
             let snap = try? await db.collection("conversations").document(cid).getDocument()
             members = snap?.data()?["users"] as? [String]
+        }
+        // The quote, sealed exactly the way the photo path seals it — group key when this is a
+        // group, conversation key otherwise. A GIF was the ONE message type that could not carry a
+        // reply: the bubble has always known how to draw one (`replyQuote` in the isGif branch), but
+        // nothing could ever produce a GIF that had one, so the composer's quote was built, dropped
+        // on the floor, and left sitting in the bar (owner 2026-08-16).
+        var replyEnc: [String: Any]?
+        if let r = replyTo {
+            let rc: Any
+            if let members { rc = try await Crypto.shared.encryptForGroup(r.text, members: members) }
+            else { rc = try await Crypto.shared.encryptForConversation(cid, r.text) }
+            var e: [String: Any] = ["id": r.id, "authorId": r.authorId, "text": rc]
+            if r.isStatus { e["isStatus"] = true }
+            if let thumb = r.storyThumbUrl, !thumb.isEmpty { e["storyThumb"] = thumb }   // plaintext story URL (not E2EE)
+            replyEnc = e
         }
         let convRef = db.collection("conversations").document(cid)
         if members == nil {
@@ -1482,6 +1497,7 @@ enum ChatService {
         ]
         if let clientId { msg["clientId"] = clientId }   // reconcile the optimistic bubble in place
         if forwarded { msg["forwarded"] = true }
+        if let replyEnc { msg["replyTo"] = replyEnc }
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
             "lastMessage": "GIF", "lastSender": uid, "updatedAt": FieldValue.serverTimestamp(),

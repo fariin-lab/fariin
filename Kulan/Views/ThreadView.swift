@@ -4828,11 +4828,22 @@ struct ThreadView: View {
     /// it only appeared on the server echo, which never scrolled.
     private func sendGif(_ gif: GiphyService.Gif) {
         let clientId = UUID().uuidString
-        repo.addPending(Message(localGifUrl: gif.url, width: gif.width, height: gif.height,
-                                authorId: me, clientId: clientId, sendState: .sending))
+        // A GIF sent while replying carries the reply and clears the bar, like text/photo/voice.
+        // It was the only send path that did neither: the quote was silently dropped and then LEFT
+        // IN THE COMPOSER, so the next message you typed was quietly a reply to something you
+        // thought you had already answered (owner 2026-08-16).
+        let reply = replyingTo.map {
+            ReplyRef(id: $0.id, authorId: $0.authorId,
+                     text: replyQuoteText($0))
+        }
+        var pending = Message(localGifUrl: gif.url, width: gif.width, height: gif.height,
+                              authorId: me, clientId: clientId, sendState: .sending)
+        pending.replyTo = reply
+        repo.addPending(pending)
+        withAnimation(.easeInOut(duration: 0.2)) { replyingTo = nil }
         Task {
             // Surface failures — the old try? made a failed send look like a dead tap.
-            do { try await ChatService.sendGif(cid: cid, url: gif.url, width: gif.width, height: gif.height, clientId: clientId, group: isGroup ? groupMembers : nil) }
+            do { try await ChatService.sendGif(cid: cid, url: gif.url, width: gif.width, height: gif.height, replyTo: reply, clientId: clientId, group: isGroup ? groupMembers : nil) }
             catch { await MainActor.run { repo.markFailed(clientId: clientId); sendError = "Couldn't send the GIF. Check your connection and try again." } }
         }
     }
