@@ -768,39 +768,35 @@ final class StoryViewersSheetView: UIView {
                 // panels finish theirs — one motion. Nothing reloads: the arriving panel has had
                 // this story's viewers in it since the sheet learned it was a neighbour.
                 onPage?(dir)
-                // `.allowUserInteraction`, OR THE INTERRUPTION PATH ABOVE CAN NEVER RUN. Without
-                // it, UIKit turns off touch delivery to the animating panels for the length of the
-                // settle — so a finger arriving inside the 0.28s (his 2026-08-09 "swipe back does
-                // not work until the first swipe completes") was dropped before the pan ever heard
-                // it. The flag is what every interruptible-gesture settle carries.
+                // THE INTERRUPTION PATH ABOVE MUST STAY REACHABLE. `UIView.animate` needed
+                // `.allowUserInteraction` for that (his 2026-08-09 "swipe back does not work until
+                // the first swipe completes"); `StoryRowSettle.run`'s property animator never turns
+                // touch delivery off, so the same guarantee holds without the flag.
                 //
                 // ⚠️ AND THE CURVE IS THE ROW'S OWN, NOT A FOURTH ONE. This was 0.28 ease-out while
                 // the cards it belongs to settled over a 0.3s spring, and the abandon below was a
                 // third number again — so the viewers list and the row arrived at different times on
                 // different curves for one gesture. Theirs runs both off ONE transition; both read
-                // `StoryRowSettle` now, which is where their 0.3 and 0.4 live.
-                // ⚠️ AND THE CURVE COMES FROM THERE TOO, NOT JUST THE LENGTH. It was a spring here
-                // and an ease-out on the story the cards belong to — see `StoryRowSettle.viewOptions`.
-                UIView.animate(withDuration: StoryRowSettle.commit.duration, delay: 0,
-                               options: [StoryRowSettle.commit.viewOptions, .allowUserInteraction]) {
+                // `StoryRowSettle` now, which is where their 0.3 and 0.4 live — and `run` is the one
+                // statement of the curve as well as the length. See the note on `timing`.
+                StoryRowSettle.commit.run({
                     self.pageOffset = 0
                     self.applyPageOffset()
-                } completion: { [weak self] _ in
+                }, completion: { [weak self] _ in
                     self?.endPageCycle(cycle)
-                }
+                })
             } else {
                 onPageDrag?(0)
                 // Their abandon is deliberately SLOWER than their commit — 0.4s against 0.3s — so a
                 // drag that undoes itself does not read as decisive as one that meant something.
                 // Ours was 0.3 at a different damping, i.e. neither their number nor our own commit's.
-                UIView.animate(withDuration: StoryRowSettle.abandon.duration, delay: 0,
-                               options: [StoryRowSettle.abandon.viewOptions,
-                                         .allowUserInteraction]) {   // same rule as the commit settle
+                // Same rule as the commit settle: `run` states the curve once, touches stay heard.
+                StoryRowSettle.abandon.run({
                     self.pageOffset = 0
                     self.applyPageOffset()
-                } completion: { [weak self] _ in
+                }, completion: { [weak self] _ in
                     self?.endPageCycle(cycle)
-                }
+                })
             }
         default: break
         }

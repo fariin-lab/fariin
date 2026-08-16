@@ -81,19 +81,58 @@ enum StoryRowSettle {
     /// animation… the incoming card appears to move over the outgoing card… the brightness briefly
     /// appears in the wrong position": three symptoms of one movement drawn on two clocks.
     ///
-    /// The old note said a 0.82 spring was "close enough to easeOut that the two read as one
-    /// movement". It is not, and it never was.
-    ///
-    /// Ease-out is the curve because it is the one both sides can state EXACTLY: `.curveEaseOut` and
-    /// `CAMediaTimingFunction(name: .easeOut)` are the same function, so the row's views and the
-    /// morph's layers cannot drift again. (Theirs is `kCAMediaTimingFunctionSpring`, a private curve
-    /// they pair with `UIView.AnimationOptions(rawValue: 7 << 16)`. A curve that can only be named
-    /// exactly on one of the two sides is how this happened in the first place.)
+    /// ⚠️ THE CURVE IS THE REFERENCE APP'S OWN SPRING NOW, AND IT IS A PLAIN BEZIER — READ OFF
+    /// THEIR SOURCE, 2026-08-16. Ease-out lived here because their spring looked unnameable: a
+    /// private timing constant paired with `UIView.AnimationOptions(rawValue: 7 << 16)`, and a
+    /// curve that can only be stated exactly on one of the two faces is how the 2026-08-14 bug
+    /// happened in the first place. Their animation utilities say otherwise: that constant is a
+    /// DISPATCHER, not a curve. At 0.5s it builds a real `CASpringAnimation`; at one magic
+    /// OS-specific duration a system spring; and at EVERY OTHER DURATION — their 0.3 commit and
+    /// their 0.4 abandon included — a plain `CABasicAnimation` on the cubic bezier
+    /// (0.38, 0.70, 0.125, 1.0). Fast out of the seat, a long gentle landing. So the spring CAN be
+    /// stated exactly on both faces, and `run` below is the only place it is stated: view
+    /// properties ride a `UIViewPropertyAnimator` built from the same two control points, and the
+    /// bare layers written inside the block (the tints, the morph's transaction) ride `timing`.
     ///
     /// ⚠️ WHOEVER ADDS A THIRD SURFACE TO THIS MOVEMENT READS BOTH OF THESE. Neither a duration nor
-    /// a curve may be written anywhere else.
-    var viewOptions: UIView.AnimationOptions { .curveEaseOut }
-    var timing: CAMediaTimingFunction { CAMediaTimingFunction(name: .easeOut) }
+    /// a curve may be written anywhere else, and nobody calls `UIView.animate` with a curve option
+    /// on this movement again — that is a SECOND statement of the curve, which is the bug.
+    private static let cp1 = CGPoint(x: 0.38, y: 0.70)
+    private static let cp2 = CGPoint(x: 0.125, y: 1.0)
+    var timing: CAMediaTimingFunction {
+        CAMediaTimingFunction(controlPoints: Float(Self.cp1.x), Float(Self.cp1.y),
+                              Float(Self.cp2.x), Float(Self.cp2.y))
+    }
+
+    /// THE ONE WAY A SETTLE IS ANIMATED. A property animator rather than `UIView.animate` because
+    /// only `UICubicTimingParameters` can carry the bezier above for view properties — the options
+    /// mask cannot name it. What the old options bought is still here: a property animator never
+    /// turns touch delivery off (`.allowUserInteraction`), and an interrupting write lands additively
+    /// on the presentation value (`.beginFromCurrentState`'s job since iOS 8).
+    ///
+    /// The explicit `CATransaction` inside the block is for the BARE layers written alongside the
+    /// views — the tints. They used to inherit the `UIView.animate` block's ambient transaction;
+    /// a property animator's block makes no such promise, so the duration and curve are stated
+    /// rather than inherited. Same numbers, one clock, nothing implicit.
+    func run(_ animations: @escaping () -> Void, completion: ((Bool) -> Void)? = nil) {
+        let animator = UIViewPropertyAnimator(
+            duration: duration,
+            timingParameters: UICubicTimingParameters(controlPoint1: Self.cp1,
+                                                      controlPoint2: Self.cp2))
+        let duration = self.duration
+        let timing = self.timing
+        animator.addAnimations {
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(duration)
+            CATransaction.setAnimationTimingFunction(timing)
+            animations()
+            CATransaction.commit()
+        }
+        if let completion {
+            animator.addCompletion { completion($0 == .end) }
+        }
+        animator.startAnimation()
+    }
 }
 
 // MARK: - The picture on one card
@@ -1025,13 +1064,11 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             item.updateMedia(story: story, slotW: geometry.slotW, slotH: geometry.slotH)
             if willAnimate {
                 // Their `.curve(duration: 0.3, curve: .spring)` for a movement that did not come from
-                // the finger. `.allowUserInteraction` so an interrupting swipe is heard during it,
-                // and `.beginFromCurrentState` so an interrupting one starts where this one got to.
+                // the finger. `run` is the one statement of that spring, and it keeps what the old
+                // options bought: an interrupting swipe is still heard during it, and an interrupting
+                // write starts where this one got to.
                 let curve = settle ?? .commit
-                UIView.animate(withDuration: curve.duration,
-                               delay: 0,
-                               options: [curve.viewOptions, .allowUserInteraction, .beginFromCurrentState],
-                               animations: write)
+                curve.run(write)
             } else {
                 // A bare `CALayer`'s frame, cornerRadius and opacity are all implicitly animated, so
                 // outside a deliberate animation they must be written with actions off or the tint
@@ -1147,7 +1184,7 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// The row's own curve for a movement that did not come from a finger, in the form the morph
     /// takes it. ⚠️ BOTH NUMBERS COME OUT OF `StoryRowSettle` AND NEITHER IS WRITTEN HERE — the
     /// duration always did; the curve is the one that used to be stated twice, differently, and
-    /// that was his 2026-08-14 report. Read the note on `viewOptions`.
+    /// that was his 2026-08-14 report. Read the note on `timing`.
     static func settleAnimation(_ settle: StoryRowSettle) -> StoryCardMorph.Animation {
         StoryCardMorph.Animation(duration: settle.duration, timing: settle.timing)
     }
