@@ -1350,6 +1350,12 @@ final class StoriesRepository {
         #endif
         guard let me = Auth.auth().currentUser?.uid else { return }
         if listeningUid != me {
+            // ⚠️ THE PAINT COMES FIRST, BEFORE THE HOUSEKEEPING BELOW. It used to come after, and
+            // `purgeExpired` walks two directories before it returns — so on the async path the row
+            // waited on a disk sweep that has nothing to do with drawing it. The view now seeds
+            // synchronously through `seedRowFromDisk` and never gets here first, but the order still
+            // matters for every other caller (a pull-to-refresh, a story just posted, a sign-in).
+            await MainActor.run { seedFromDisk(me) }
             // ⚠️ THE OTHER HALF OF KEEPING STORY MEDIA PERMANENTLY. Its files moved out of `Caches`
             // so the OS stops deleting them (his "when i update the app story chache i loss"), and a
             // permanent directory with no lifetime rule is a leak. This is his "after Expired
@@ -1364,12 +1370,30 @@ final class StoriesRepository {
             // two share a file but not a type.
             Task.detached { await StoriesService.shared.sweepExpiredMirrors() }
             await MainActor.run {
-                seedFromDisk(me)   // last-known row paints NOW; the listeners reconcile it silently
                 start(me)          // first call, or the signed-in user changed
             }
         } else {
             await rebuild()
         }
+    }
+
+    /// THE SYNCHRONOUS DOOR, and the reason it had to exist.
+    ///
+    /// `seedFromDisk` has been right all along, and the row still popped in. The order is why: every
+    /// caller reaches it through `await load(force:)`, so the seed cannot run until after the first
+    /// frame — and inside `load` it sat behind `StoryStorage.purgeExpired()`, which walks two
+    /// directories on disk before returning. The last-known row was on the phone the whole time,
+    /// waiting behind housekeeping.
+    ///
+    /// This is called the way the chat list calls `repo.start()`: straight from the view, on the main
+    /// thread, before anything is drawn. Re-entry is free — `seedFromDisk` refuses to do anything
+    /// once the row has content.
+    @MainActor func seedRowFromDisk() {
+        #if DEBUG
+        if DemoMode.active { return }   // demo stories are injected; a disk row would fight them
+        #endif
+        guard let me = Auth.auth().currentUser?.uid else { return }
+        seedFromDisk(me)
     }
 
     // Cold-start seed: re-publish the persisted row (expired stories dropped) before the first

@@ -1589,7 +1589,10 @@ struct ChatsView: View {
             // erased at its own boundary. No behaviour changes; the same views render.
             AnyView(homeStackC)
         }
-        .onAppear { repo.start(); openPendingChat() }
+        // Both stores seeded from disk on the SAME line, synchronously, before the first frame.
+        // The stories row had a persisted copy all along; it just could not reach the screen in
+        // time, because every path to it went through `await load(force:)`. See `seedRowFromDisk`.
+        .onAppear { repo.start(); StoriesRepository.shared.seedRowFromDisk(); openPendingChat() }
         .onChange(of: router.pendingChatId) { _, _ in openPendingChat() }
         .onChange(of: repo.conversations.count) { _, _ in openPendingChat() }   // retry once chats load
     }
