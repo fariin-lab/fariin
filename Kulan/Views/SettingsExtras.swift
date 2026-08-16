@@ -230,7 +230,12 @@ struct DevicesView: View {
                     ForEach(others) { s in
                         row(s)
                             .swipeActions(edge: .trailing) {
+                                // `.tint(.red)` explicitly. `role: .destructive` only colours a
+                                // swipe action while the app has not tinted itself, and this one
+                                // tints `.primary`, so the button took white at night and drew
+                                // white text on it. Same trap as the archive list's Delete.
                                 Button("Sign out", role: .destructive) { pendingSignOut = s }
+                                    .tint(.red)
                             }
                     }
                 }

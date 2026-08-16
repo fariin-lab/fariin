@@ -1623,9 +1623,14 @@ struct StoryCameraView: View {
                         onTextStory(data)
                     }
                 } label: {
+                    // Two different backgrounds, so two different arrows. The idle disc is a
+                    // translucent white over the camera and wants a white arrow; the ACTIVE one is
+                    // `Color.accentColor`, which is the app's `.primary` tint and therefore white
+                    // at night — so the arrow disappeared at the exact moment it became tappable.
+                    // `Color(.systemBackground)` is that accent's inverse and needs no plumbing.
                     Image(systemName: "arrow.right")
                         .font(.system(size: 17, weight: .bold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(hasText ? Color(.systemBackground) : .white)
                         .frame(width: 40, height: 40)
                         .background(hasText ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color.white.opacity(0.18)),
                                     in: Circle())

@@ -4288,7 +4288,10 @@ struct ThreadView: View {
                             .frame(maxWidth: .infinity).frame(height: 44)
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.white)
+                    // The glass is tinted with the accent, which is white at night, and on the
+                    // pre-26 fallback that tint is laid down at 0.85 opacity — so a hardcoded white
+                    // "Accept" was white on near-white. `onAccent` tracks the tint in both modes.
+                    .foregroundStyle(Theme.onAccent(dark))
                     // TINTED GLASS, not a flat accent fill. Beside a glass Delete, a solid capsule
                     // read as a different material from a different app — and in light mode it
                     // photographed as a hard black slab. Apple's own tint keeps it clearly the
@@ -4996,8 +4999,10 @@ struct ThreadView: View {
                     .scaleEffect(1 + 0.40 * lvl)
                 Circle().fill(Theme.accent(dark))
                     .frame(width: 56, height: 56)
+                // The disc is `Theme.accent(dark)`, which IS white at night — so a hardcoded white
+                // mic drew nothing at all while recording, on the one control you are watching.
                 Image("ic_mic").renderingMode(.template).resizable().scaledToFit()
-                    .frame(width: 24, height: 28).foregroundStyle(.white)
+                    .frame(width: 24, height: 28).foregroundStyle(Theme.onAccent(dark))
             }
             .animation(.easeOut(duration: 0.12), value: recorder.levels.last ?? 0)
             .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: micPulse)

@@ -345,9 +345,13 @@ struct LockScreen: View {
                 Image(systemName: "lock.fill").font(.system(size: 44)).foregroundStyle(.secondary)
                 Text("Fariin is locked").font(.headline)
                 Button { onUnlock() } label: {
+                    // `Color.accentColor` is the app's `.primary` tint, so this capsule is WHITE at
+                    // night. A hardcoded white label left the lock screen showing an empty pill,
+                    // which is the worst screen in the app to lose a button on.
                     Label("Unlock", systemImage: "faceid").font(.body.weight(.semibold))
                         .padding(.horizontal, 24).frame(height: 48)
-                        .background(Color.accentColor, in: Capsule()).foregroundStyle(.white)
+                        .background(Color.accentColor, in: Capsule())
+                        .foregroundStyle(Theme.onAccent(scheme == .dark))
                 }
             }
         }

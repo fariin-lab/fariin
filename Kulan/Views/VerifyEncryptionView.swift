@@ -136,7 +136,9 @@ struct VerifyEncryptionView: View {
                 .font(.body.weight(.semibold))
                 .frame(maxWidth: .infinity).frame(height: 50)
                 .background(Color.accentColor, in: Capsule())
-                .foregroundStyle(.white)
+                // Accent IS `.primary` app-wide, so this capsule is white at night and a hardcoded
+                // white label vanished into it. `onAccent` is that colour's declared inverse.
+                .foregroundStyle(Theme.onAccent(dark))
         }
     }
 
