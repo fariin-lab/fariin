@@ -677,8 +677,16 @@ struct StoryEditorView: View {
                 TextEditorOverlay(
                     draft: $overlays[idx],
                     onCancel: { trimEmpty(id); editingID = nil },
-                    onDone: { trimEmpty(id); editingID = nil }
+                    // ⚠️ ANIMATED, AND IT IS THE OTHER HALF OF `TextEditorOverlay.finish()`. The
+                    // editor drops focus and waits out the keyboard before calling this; the fade
+                    // here is what stops the last frame being a cut. Without a transition on the
+                    // view, `withAnimation` has nothing to animate — a removal is not a property.
+                    onDone: {
+                        trimEmpty(id)
+                        withAnimation(.easeInOut(duration: 0.2)) { editingID = nil }
+                    }
                 )
+                .transition(.opacity)
                 .zIndex(30)
             }
             // Above the bars, and keyboard-proof: neither cropping nor trimming has a keyboard, and
@@ -1138,7 +1146,7 @@ struct StoryEditorView: View {
                 if guideH { Rectangle().fill(.yellow.opacity(0.9)).frame(height: 1).frame(maxWidth: .infinity).position(x: card.width / 2, y: card.height / 2) }
                 Image(systemName: "trash.fill")
                     .font(.system(size: 20, weight: .semibold)).foregroundStyle(.white)
-                    .frame(width: 56, height: 56)
+                    .frame(width: trashDiameter, height: trashDiameter)
                     .background(trashHot ? Color.red : .black.opacity(0.5), in: Circle())
                     .scaleEffect(trashHot ? 1.25 : 1)
                     .animation(.spring(response: 0.25, dampingFraction: 0.6), value: trashHot)
@@ -1840,8 +1848,23 @@ struct StoryEditorView: View {
     }
 
     // MARK: - Text overlays
-    private var trashCenter: CGPoint { CGPoint(x: canvasSize.width / 2, y: canvasSize.height - 110) }
-    private func isOverTrash(_ p: CGPoint) -> Bool { hypot(p.x - trashCenter.x, p.y - trashCenter.y) < 64 }
+    /// Bottom centre of the card, his 2026-08-16 placement. 60pt up from the bottom edge leaves a
+    /// 52pt bin sitting clear of it with room for the grown state.
+    private var trashCenter: CGPoint { CGPoint(x: canvasSize.width / 2, y: canvasSize.height - 60) }
+    /// His size, and the hit area is the BUTTON rather than a zone around it.
+    private let trashDiameter: CGFloat = 52
+    /// ⚠️ THE FINGER HAS TO BE ON THE BIN — his 2026-08-16 "dragging the text downward deletes it".
+    ///
+    /// This was a 64pt radius around the bin, tested against the TEXT'S OWN CENTRE, and the two
+    /// together made the whole bottom of the picture a delete zone: park a caption near the bottom
+    /// edge, which is where captions go, and its centre lands inside the circle without the finger
+    /// ever being near the bin. Signal deletes on the drag POINT being inside the control, which is
+    /// what "drag it onto the bin" means and what the caller now passes.
+    ///
+    /// A little larger than the glyph so a thumb that covers it still counts, and no larger.
+    private func isOverTrash(_ p: CGPoint) -> Bool {
+        hypot(p.x - trashCenter.x, p.y - trashCenter.y) < trashDiameter / 2 + 12
+    }
     private func addTextOverlay() {
         captionFocused = false
         let o = TextOverlay(center: CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2))
@@ -2476,11 +2499,28 @@ struct TextOverlay: Identifiable, Equatable {
 
 // Shared styled text — used BOTH on-screen and in flatten() so export == screen.
 @ViewBuilder
+/// THE INK THAT STAYS READABLE ON A SOLID BADGE OF THIS COLOUR — his 2026-08-16 report: black text
+/// on a black badge is a black rectangle.
+///
+/// The badge is filled with the text's own colour, so the ink cannot also be that colour. It used to
+/// be hardcoded to black, which is right for the light half of the palette and invisible for the
+/// dark half — white on white worked only because white happens to be light.
+///
+/// Rec. 709 luminance, which weights green far above blue because the eye does: it is why pure blue
+/// (0.07) takes white ink and pure green (0.72) takes black, and why a mid-grey threshold on the raw
+/// channels would get both wrong. `getRed` fails on a non-RGB colour space, and black is the honest
+/// answer there because it is what this has always returned.
+func storyBadgeInk(on c: Color) -> Color {
+    var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+    guard UIColor(c).getRed(&r, green: &g, blue: &b, alpha: &a) else { return .black }
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) > 0.5 ? .black : .white
+}
+
 func storyStyledText(_ o: TextOverlay, maxWidth: CGFloat) -> some View {
     Text(o.text.isEmpty ? " " : o.text)
         .font(.system(size: o.baseSize, weight: .semibold, design: o.font.design))
         .multilineTextAlignment(o.alignment)
-        .foregroundStyle(o.background == .solid ? Color.black : o.color)
+        .foregroundStyle(o.background == .solid ? storyBadgeInk(on: o.color) : o.color)
         .padding(.horizontal, o.background == .plain ? 6 : 14)
         .padding(.vertical, o.background == .plain ? 2 : 8)
         .background {
@@ -2591,13 +2631,17 @@ struct StickerOverlayView: View {
                                   y: sticker.center.y + v.translation.height)
                 let cx = canvasSize.width / 2, cy = canvasSize.height / 2, t: CGFloat = 12
                 onSnap(abs(raw.x - cx) < t, abs(raw.y - cy) < t)
-                onDragChange(snappedPure(raw))
+                // The finger, for the same reason and by the same rule as a caption's — one bin,
+                // one question, one kind of answer. It is not optional here: the bin's hit area is
+                // the control itself now, and a sticker still reporting its own centre would be
+                // nearly impossible to drop on it.
+                onDragChange(v.location)
             }
             .onEnded { v in
                 let nc = snappedPure(CGPoint(x: sticker.center.x + v.translation.width,
                                              y: sticker.center.y + v.translation.height))
                 sticker.center = nc
-                onDragEnd(nc)
+                onDragEnd(v.location)
             }
         let mag = MagnifyGesture()
             .updating($gScale) { v, s, _ in s = v.magnification }
@@ -2615,6 +2659,10 @@ struct TextOverlayView: View {
     let canvasSize: CGSize
     let interactive: Bool
     var onTap: () -> Void
+    /// ⚠️ THE FINGER'S POSITION, NOT THE TEXT'S CENTRE. The caller asks one question of this point —
+    /// "is it on the bin" — and answering it with the text's centre made the whole bottom of the
+    /// picture delete on contact (his 2026-08-16 report). The text's own position is not the
+    /// caller's business: this view writes it to the binding itself.
     var onDragChange: (CGPoint) -> Void
     var onDragEnd: (CGPoint) -> Void
     var onSnap: (Bool, Bool) -> Void
@@ -2654,12 +2702,14 @@ struct TextOverlayView: View {
                 let raw = CGPoint(x: overlay.center.x + v.translation.width, y: overlay.center.y + v.translation.height)
                 let cx = canvasSize.width / 2, cy = canvasSize.height / 2, t: CGFloat = 12
                 onSnap(abs(raw.x - cx) < t, abs(raw.y - cy) < t)
-                onDragChange(snappedPure(raw))
+                // The finger, in the canvas's own space — the bin is placed in that space too, so
+                // the two are directly comparable.
+                onDragChange(v.location)
             }
             .onEnded { v in
                 let nc = snappedPure(CGPoint(x: overlay.center.x + v.translation.width, y: overlay.center.y + v.translation.height))
                 overlay.center = nc
-                onDragEnd(nc)
+                onDragEnd(v.location)
             }
         let mag = MagnifyGesture()
             .updating($gScale) { v, s, _ in s = v.magnification }
@@ -2672,14 +2722,11 @@ struct TextOverlayView: View {
 }
 
 // Full-screen text editor: focused field + font/color/align/bg controls.
-/// The width the draft's words actually occupy, reported by an invisible `Text` laid out exactly as
-/// the finished overlay will be. A `TextField` cannot answer this: offered a width it takes all of
-/// it, which is why the editing box used to be wider than the words inside it.
-private struct DraftTextWidthKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
-}
-
+//
+// ⚠️ `DraftTextWidthKey` IS DELETED, AND ITS DELETION IS THE FIX rather than a tidy-up. It carried
+// the measured text width out to a `@State` so the field could be framed to it — a round trip that
+// is by construction one layout pass late, which is the per-keystroke shift the field now avoids by
+// being an `.overlay` on the measuring text. See the note there.
 struct TextEditorOverlay: View {
     @Binding var draft: TextOverlay
     /// ⚠️ KEPT, AND DELIBERATELY UNUSED BY THE CHROME. The Cancel button is gone on his instruction
@@ -2692,9 +2739,21 @@ struct TextEditorOverlay: View {
     /// Is the font row open? Shut at rest: the Aa in the bar is its door, and it draws itself in
     /// whichever font is currently chosen.
     @State private var showFonts = false
-    /// What the finished overlay's own `Text` measures at, which is what the editing box is sized
-    /// to. See the note beside the field.
-    @State private var textWidth: CGFloat = 0
+
+    /// LEAVING, WITH THE KEYBOARD RATHER THAN AHEAD OF IT — his 2026-08-16 "tapping Done jumps".
+    ///
+    /// Done used to hand straight back to the parent, which cleared `editingID` in the same runloop
+    /// turn: this whole screen was removed on the spot while the keyboard was only beginning its own
+    /// slide, and the words reappeared on the canvas in one cut. Two motions, one of them instant.
+    ///
+    /// Dropping focus FIRST starts the keyboard down, and the hand-back is then made on the
+    /// keyboard's own clock — 0.25s, the duration UIKit animates it with — so the field, the badge
+    /// and the keyboard travel together and the canvas takes the words at the end of it rather than
+    /// during. The parent animates the removal; this decides when it begins.
+    private func finish() {
+        focused = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { onDone() }
+    }
 
     private let palette: [Color] = [.white, .black, .red, .orange, .yellow, .green, .blue, .purple, .pink]
     private func nextAlign(_ a: TextAlignment) -> TextAlignment { a == .leading ? .center : a == .center ? .trailing : .leading }
@@ -2703,7 +2762,7 @@ struct TextEditorOverlay: View {
 
     var body: some View {
         ZStack {
-            Color.black.opacity(0.5).ignoresSafeArea().onTapGesture { onDone() }
+            Color.black.opacity(0.5).ignoresSafeArea().onTapGesture { finish() }
             VStack {
                 // ⚠️ NO TOP BAR AT ALL, AND THAT IS THE WHOLE OF THE REDESIGN he asked for: "the
                 // current UI looks confusing… make it clean, minimal and easy to understand."
@@ -2732,27 +2791,45 @@ struct TextEditorOverlay: View {
                 // this block is sized by. The field is fitted into that width rather than asked for
                 // its own opinion. It costs one hidden layout pass and it cannot drift from the
                 // result, because it IS the result's own view type.
-                ZStack {
-                    Text(draft.text.isEmpty ? "Type…" : draft.text)
-                        .font(.system(size: draft.baseSize, weight: .semibold, design: draft.font.design))
-                        .multilineTextAlignment(draft.alignment)
-                        .background(GeometryReader { g in
-                            Color.clear.preference(key: DraftTextWidthKey.self, value: g.size.width)
-                        })
-                        .frame(maxWidth: 320)
-                        .opacity(0)
-                        .accessibilityHidden(true)
-                    TextField("", text: $draft.text,
-                              prompt: Text("Type…").foregroundColor(.white.opacity(0.5)), axis: .vertical)
-                        .focused($focused)
-                        .multilineTextAlignment(draft.alignment)
-                        .font(.system(size: draft.baseSize, weight: .semibold, design: draft.font.design))
-                        .foregroundStyle(draft.background == .solid ? Color.black : draft.color)
-                        .tint(.white)
-                        .frame(width: max(24, textWidth))
-                }
-                .onPreferenceChange(DraftTextWidthKey.self) { textWidth = $0 }
-                .padding(draft.background == .plain ? 6 : 14)
+                // ⚠️ THE FIELD IS AN OVERLAY ON THE MEASURING TEXT, NOT ITS SIBLING IN A ZSTACK, AND
+                // THAT ONE WORD IS HIS "type two characters and the text makes a small jump".
+                //
+                // The measuring idea was right and the delivery lagged. The width travelled
+                // Text → PreferenceKey → `onPreferenceChange` → `@State` → `.frame(width:)`, and a
+                // preference is read AFTER the layout pass that produced it — so on every keystroke
+                // the invisible Text was already the new width while the field was still wearing the
+                // previous one, and the words inside it shifted for a frame. One character is too
+                // narrow a change to see; two is not.
+                //
+                // An `.overlay` is proposed its parent's size in the SAME pass, so the field is
+                // exactly as wide as the text it is typing with nothing in between to be a frame
+                // late. The measurement is still the finished overlay's own `Text`, in the same font
+                // at the same wrap width, which is what stopped the box being field-shaped.
+                Text(draft.text.isEmpty ? "Type…" : draft.text)
+                    .font(.system(size: draft.baseSize, weight: .semibold, design: draft.font.design))
+                    .multilineTextAlignment(draft.alignment)
+                    .frame(maxWidth: 320)
+                    .opacity(0)
+                    .accessibilityHidden(true)
+                    .overlay {
+                        TextField("", text: $draft.text,
+                                  prompt: Text("Type…").foregroundColor(.white.opacity(0.5)), axis: .vertical)
+                            .focused($focused)
+                            .multilineTextAlignment(draft.alignment)
+                            .font(.system(size: draft.baseSize, weight: .semibold, design: draft.font.design))
+                            .foregroundStyle(draft.background == .solid ? storyBadgeInk(on: draft.color)
+                                                                       : draft.color)
+                            .tint(.white)
+                    }
+                // ⚠️ THE SAME TWO PADDINGS THE FINISHED TEXT USES, SPLIT BY AXIS — his 2026-08-16
+                // report that the badge is fat while the keyboard is up and correct after Done.
+                //
+                // This was one uniform `.padding(14)`, so the badge was 14pt tall above and below the
+                // words while `storyStyledText` gives them 8 — six points at each end, which is the
+                // whole of the resize he photographed. The horizontal figures always agreed. Read
+                // both from the same place as the display or they will drift again.
+                .padding(.horizontal, draft.background == .plain ? 6 : 14)
+                .padding(.vertical, draft.background == .plain ? 2 : 8)
                 .background {
                     switch draft.background {
                     case .plain: Color.clear
@@ -2825,7 +2902,7 @@ struct TextEditorOverlay: View {
                         }
                         .frame(height: 46)
 
-                        Button { onDone() } label: {
+                        Button { finish() } label: {
                             Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold))
                                 .foregroundStyle(.white)
                                 .frame(width: 44, height: 44)
