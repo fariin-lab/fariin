@@ -100,7 +100,7 @@ struct NewGroupView: View {
                                 VerifiedMark(uid: p.id, size: 13)
                                 Spacer()
                                 Image(systemName: selected[p.id] != nil ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(selected[p.id] != nil ? Color.accentColor : .secondary)
+                                    .foregroundStyle(selected[p.id] != nil ? Color.primary : .secondary)
                             }
                         }
                     }

@@ -177,7 +177,14 @@ struct ForwardPicker: View {
                             Spacer()
                             Image(systemName: selected.contains(c.id) ? "checkmark.circle.fill" : "circle")
                                 .font(.system(size: 20))
-                                .foregroundStyle(selected.contains(c.id) ? Color.accentColor : Color.secondary)
+                                // `Color.primary`, NOT `Color.accentColor`. Both are black by day and
+                                // white by night, but the accent reads the environment's TINT, which
+                                // anything up the tree can change — and did: StoryAudienceViews
+                                // records it resolving near-grey, which is why that one screen was
+                                // hardcoded to blue on 2026-08-09. `primary` follows the colour
+                                // scheme only and cannot be pulled grey. Owner's rule, 2026-08-16:
+                                // black in light, whatever reads in dark.
+                                .foregroundStyle(selected.contains(c.id) ? Color.primary : Color.secondary)
                         }
                     }
                     .listRowSeparator(.hidden)

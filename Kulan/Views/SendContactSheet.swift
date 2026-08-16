@@ -32,7 +32,7 @@ struct SendContactSheet: View {
                                 Spacer()
                                 Image(systemName: selected.contains(c.id) ? "checkmark.circle.fill" : "circle")
                                     .font(.system(size: 22))
-                                    .foregroundStyle(selected.contains(c.id) ? Color.accentColor : Color.secondary)
+                                    .foregroundStyle(selected.contains(c.id) ? Color.primary : Color.secondary)
                             }
                         }
                     }

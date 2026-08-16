@@ -533,7 +533,7 @@ struct MediaGalleryView: View {
     private func checkbox(_ selected: Bool) -> some View {
         Image(systemName: selected ? "checkmark.circle.fill" : "circle")
             .font(.system(size: 22))
-            .foregroundStyle(selected ? Color.accentColor : .secondary)
+            .foregroundStyle(selected ? Color.primary : .secondary)
     }
 
     // MARK: - Files list (documents shared in this chat)

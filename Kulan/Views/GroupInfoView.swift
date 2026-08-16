@@ -620,7 +620,7 @@ struct AddMembersSheet: View {
                 VerifiedMark(uid: id, size: 13)
                 Spacer()
                 Image(systemName: selected.contains(id) ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(selected.contains(id) ? Color.accentColor : .secondary)
+                    .foregroundStyle(selected.contains(id) ? Color.primary : .secondary)
             }
         }
     }

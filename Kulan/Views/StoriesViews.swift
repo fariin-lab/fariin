@@ -4849,7 +4849,7 @@ struct StoryForwardSheet: View {
                         Text(c.displayName(me)).font(.body)
                         Spacer()
                         Image(systemName: selected.contains(c.id) ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(selected.contains(c.id) ? Color.accentColor : .secondary)
+                            .foregroundStyle(selected.contains(c.id) ? Color.primary : .secondary)
                     }
                 }
                 .buttonStyle(.plain)
