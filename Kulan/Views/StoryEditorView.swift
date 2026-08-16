@@ -961,25 +961,27 @@ struct StoryEditorView: View {
             // re-render mid-pinch -> butter smooth, anchored between the fingers). The final
             // scale/offset sync back to photoZoom/photoOffset on release for the WYSIWYG flatten.
             // The UIKit container clips to its own bounds, so a zoomed photo never leaves the card.
-            ZoomableImageView(image: edited, scale: $photoZoom, offset: $photoOffset,
+            ZoomableImageView(image: edited, player: currentIsVideo ? previewPlayer : nil,
+                              scale: $photoZoom, offset: $photoOffset,
                               maxScale: 4, interactive: !isDrawing && editingID == nil,
                               onTap: {
                                   captionFocused = false; selectedID = nil
-                                  // ⚠️ AND PLAY IS THE WHOLE FRAME TOO — his 2026-08-14 report:
-                                  // "pause is working all frame video, play must work all the frame
-                                  // like how it works [for] pause."
+                                  // ⚠️ PLAY AND PAUSE ARE BOTH THE WHOLE FRAME, AND BOTH BELONG TO
+                                  // THIS ONE RECOGNISER — his 2026-08-14 report ("pause is working
+                                  // all frame video, play must work all the frame like how it works
+                                  // [for] pause") and his 2026-08-16 one ("I can only zoom the video
+                                  // when it is paused") are the same line of code.
                                   //
-                                  // It could not be the same clear layer the PAUSE uses. That layer
-                                  // is put over the picture while the clip runs, which is safe
-                                  // because nobody frames a moving clip; over a STOPPED one it
-                                  // would sit on top of the pinch, the pan and the sideways strip
-                                  // swipe, which is exactly when those are wanted. So the play tap
-                                  // is given to the view that already owns all three — its own tap
-                                  // recogniser, alongside its own pinch and pan, with nothing new
-                                  // laid over anything.
+                                  // Pause used to be a clear SwiftUI layer laid over the card while
+                                  // the clip ran. A full-card `onTapGesture` is not a picture, it is
+                                  // a surface: it took the touches for the whole frame, so the pinch
+                                  // and the pan underneath it were unreachable for as long as the
+                                  // video was playing. Nobody frames a moving clip was the
+                                  // assumption, and he frames a moving clip.
                                   //
-                                  // The circle stays as the thing that SAYS it can be played.
-                                  if currentIsVideo, !previewPlaying, !isDrawing, editingID == nil {
+                                  // One view owns tap, pinch and pan now, at every moment, and the
+                                  // circle stays as the thing that SAYS it can be played.
+                                  if currentIsVideo, !isDrawing, editingID == nil {
                                       togglePreview()
                                   }
                               },
@@ -1001,7 +1003,6 @@ struct StoryEditorView: View {
                               })
                 .frame(width: card.width, height: card.height)
 
-            clipPreview(size: card)
             videoMark
 
             // Text overlays — above the photo, below the drawing canvas + controls.
@@ -1100,13 +1101,13 @@ struct StoryEditorView: View {
             // video editor answers this the same way — the whole frame stops it — and that target
             // cannot be missed.
             //
-            // The layer exists ONLY while the clip runs, so the pinch, the pan and the sideways
-            // strip swipe are untouched at rest, which is when framing actually happens.
-            if previewPlaying {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture { togglePreview() }
-            } else {
+            // ⚠️ AND STOPPING IS NO LONGER A LAYER OVER THE PICTURE. It was a clear full-card
+            // `onTapGesture` raised while the clip ran, and a surface like that takes the whole
+            // frame's touches: the pinch and the pan under it were dead for as long as the video was
+            // playing, which is his 2026-08-16 "I can only zoom the video when it is paused". The
+            // stop tap lives in the canvas's own tap recogniser now, beside its pinch and pan, so
+            // one view owns all three at every moment. Nothing is laid over anything.
+            if !previewPlaying {
                 Button { togglePreview() } label: {
                     Image(systemName: "play.fill")
                         .font(.system(size: 26))
@@ -1121,22 +1122,13 @@ struct StoryEditorView: View {
         }
     }
 
-    /// The clip itself, over its poster, once there is something to play. Absent for a photo and
-    /// absent before the first press, so nothing is decoded until it is wanted.
-    @ViewBuilder private func clipPreview(size: CGSize) -> some View {
-        if currentIsVideo, let p = previewPlayer {
-            ClipPreviewLayer(player: p)
-                .frame(width: size.width, height: size.height)
-                // THE MOVING PICTURE SITS EXACTLY WHERE THE POSTER SITS. The poster carries the
-                // pinch's transform in UIKit; without the same one here, pressing play on a
-                // zoomed clip visibly snapped back to 1x — a preview of a framing that was not
-                // the one being posted. Same scale-then-offset order as the poster's transform.
-                .scaleEffect(photoZoom)
-                .offset(photoOffset)
-                .allowsHitTesting(false)   // the play/pause button and the canvas keep their taps
-                .transition(.opacity)
-        }
-    }
+    // `clipPreview` lived here: the player layer as a SwiftUI SIBLING of the canvas, wearing
+    // `.scaleEffect(photoZoom).offset(photoOffset)` to keep it on top of the poster. It could only
+    // ever be a frame behind — photoZoom is written on RELEASE, because writing it per touch is what
+    // shakes — so through every pinch the poster followed the fingers and the moving picture did
+    // not, then jumped. The clip is a subview of `ZoomableImageView` now, under the same UIKit
+    // transform as the poster, which is the only way the two can be in the same place at the same
+    // time. See the note on its `player` parameter.
 
     /// The player for the clip on screen, built on first need. Returns nil for a photo.
     ///
@@ -1440,8 +1432,13 @@ struct StoryEditorView: View {
                     // Reserve the slot rather than let a late filmstrip shove the layout up.
                     .opacity(trimThumbs.isEmpty ? 0 : 1)
             }
-            // ⚠️ ALMOST NOTHING, AND IT USED TO BE 0.55. His 2026-08-14 report: "the trim page video
-            // brightness is going low, I can't see what I'm trimming."
+            // ⚠️ NOTHING AT ALL NOW. IT WAS 0.55, THEN 0.18, AND HIS 2026-08-16 INSTRUCTION IS THAT
+            // THE TRIM PAGE SHOWS THE CLIP AT ITS OWN BRIGHTNESS "IN ALL CASES". The history below
+            // is why there was ever a number here; there is no longer one to defend. The surface
+            // stays, because it is also the tap target — see the second note.
+            //
+            // His 2026-08-14 report: "the trim page video brightness is going low, I can't see what
+            // I'm trimming."
             //
             // The wash is over the WHOLE screen and the clip is underneath it, so it was taking
             // nearly half the light out of the one picture this screen exists to let him look at.
@@ -1459,7 +1456,7 @@ struct StoryEditorView: View {
             // swallowing the only control on the screen. The strip and the two buttons are children
             // of this stack and sit above it, so they keep their own touches.
             .background(
-                Color.black.opacity(0.18).ignoresSafeArea()
+                Color.clear.ignoresSafeArea()
                     .contentShape(Rectangle())
                     .onTapGesture { togglePreview() }
             )
@@ -1487,6 +1484,28 @@ struct StoryEditorView: View {
         trimEnd = items[index].trimEnd > 0 ? items[index].trimEnd : items[index].duration
         trimOpenedStart = trimStart
         trimOpenedEnd = trimEnd
+        // ⚠️ EVERY CLIP IS SHOWN BY THE PLAYER HERE, AND THAT IS THE WHOLE OF HIS 2026-08-16
+        // "the video becomes noticeably darker/dimmer… only videos added later through the +".
+        //
+        // The canvas has two ways to show a clip and they do not look the same. One is the live
+        // `AVPlayerLayer`, which renders the file's own colours; the other is the POSTER, a still
+        // pulled with `AVAssetImageGenerator`, which tone-maps an HDR clip down to SDR — flatter and
+        // visibly darker, and every clip off an iPhone camera in a dark room is HDR.
+        //
+        // Which one you got was decided by whether a player happened to exist. The first clip of a
+        // post keeps whatever player it built and is normally watched before it is trimmed; picking
+        // a later one goes through `select(_:)`, which calls `stopPreview()` because a player
+        // belongs to the clip you were on — so that clip arrived at the trim page with nothing but
+        // its poster, and the trim page is exactly where the difference is worth noticing.
+        //
+        // Building it here takes the choice away: the trim screen renders through the player for
+        // every clip, first or fifth. It also seeks to the cut's own start, so the frame you are
+        // cutting on is on screen the moment the screen opens rather than after the first drag.
+        if let p = ensurePreviewPlayer() {
+            p.pause()
+            p.seek(to: CMTime(seconds: trimStart, preferredTimescale: 600),
+                   toleranceBefore: .zero, toleranceAfter: .zero)
+        }
         withAnimation(.easeInOut(duration: 0.28)) { showTrim = true }
     }
 
@@ -1943,8 +1962,15 @@ struct StoryEditorView: View {
         // displays the original, unedited frame." The zoom becomes the transcoder's crop rectangle
         // below, which is the mechanism it has always had for exactly this.
         let reframed = photoZoom > 1.001 || abs(photoOffset.width) > 0.5 || abs(photoOffset.height) > 0.5
+        // ⚠️ SHRUNK IS NOT REFRAMED, AND IT CANNOT BE A CROP. A zoom in keeps a piece of the frame,
+        // which a rectangle describes exactly; a zoom out is the clip drawn SMALLER with canvas
+        // around it, and there is no rectangle inside the frame that says that. It travels as
+        // `contentScale` instead, and the maths below is skipped for it — run on a scale under 1 it
+        // resolves to the clip's own fitted rectangle, which is a crop that changes nothing, so the
+        // zoom-out would have been quietly dropped between the editor and the file.
+        let shrunk = photoZoom > 0 && photoZoom < 0.999
         let hasArt = !drawing.bounds.isEmpty || !overlays.isEmpty
-        guard hasArt || cropRect != nil || reframed else { return nil }
+        guard hasArt || cropRect != nil || reframed || shrunk else { return nil }
 
         var art: UIImage?
         if hasArt {
@@ -1969,7 +1995,7 @@ struct StoryEditorView: View {
         }
 
         var crop = cropRect   // legacy path: the tool that could set this is no longer offered on video
-        if reframed {
+        if reframed, !shrunk {
             // The same maths the photo flatten uses, ending in the transcoder's terms. The export
             // canvas is geometrically similar to this card (same aspect travels below) and fits the
             // clip exactly as scaledToFit does, so the poster's fitted rect here IS the clip's
@@ -2007,7 +2033,27 @@ struct StoryEditorView: View {
             }
         }
         return StoryBurnIn(overlay: art, cropRect: crop,
-                           canvasAspect: size.height > 0 ? size.width / size.height : nil)
+                           canvasAspect: size.height > 0 ? size.width / size.height : nil,
+                           contentScale: shrunk ? photoZoom : 1,
+                           backdrop: shrunk ? canvasBackdrop(size: size) : nil)
+    }
+
+    /// The story's own canvas as a picture, for the export to put behind a clip that has been pinched
+    /// smaller than the frame.
+    ///
+    /// ⚠️ THE SAME GRADIENT `flatten` BAKES AND THE SAME ONE THE VIEWER DRAWS, from the same two
+    /// sampled colours through the same renderer. That is the one-sampler rule this screen lives by:
+    /// a second way of drawing the same backdrop is a second answer to what colour it is, and the
+    /// difference only ever shows up on somebody's phone.
+    @MainActor private func canvasBackdrop(size: CGSize) -> UIImage? {
+        guard size.width > 1, size.height > 1 else { return nil }
+        let c = canvasColours
+        let r = ImageRenderer(content:
+            LinearGradient(colors: [Color(uiColor: c.top), Color(uiColor: c.bottom)],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(width: size.width, height: size.height))
+        r.scale = 1   // it is a two-colour ramp; a retina copy of it is three times the memory for nothing
+        return r.uiImage
     }
 
     @MainActor private func flatten() async -> Data {
@@ -2088,9 +2134,17 @@ struct StoryEditorView: View {
         return CGSize(width: iw * s, height: ih * s)
     }
     // Edge-to-edge photos keep the plain full-bleed canvas (no backdrop, no rounding).
+    //
+    // ⚠️ AT THE SIZE IT IS ACTUALLY DRAWN, WHICH INCLUDES THE PINCH. This asked whether the FITTED
+    // picture covered the card and ignored `photoZoom` entirely, which was harmless only while the
+    // zoom could not go below 1. It can now, so a 9:16 photo pinched smaller would have reported
+    // itself as still filling the frame: no gradient in the editor, black around it — while
+    // `flatten` takes the composed path for any zoom at all and bakes the gradient into the file.
+    // The screen and the post would have disagreed about the one thing this editor promises.
     private func imageFillsCanvas(_ canvas: CGSize) -> Bool {
         let f = photoFitSize(in: canvas)
-        return f.width >= canvas.width - 1 && f.height >= canvas.height - 1
+        let z = photoZoom > 0 ? photoZoom : 1        // 0 = an item nobody has framed yet
+        return f.width * z >= canvas.width - 1 && f.height * z >= canvas.height - 1
     }
 
     // MARK: - Image ops
@@ -2475,10 +2529,30 @@ struct StoryPressStyle: ButtonStyle {
 // and syncs the final scale/offset back to the bindings so the WYSIWYG flatten matches exactly.
 struct ZoomableImageView: UIViewRepresentable {
     let image: UIImage
+    /// ⚠️ THE CLIP RIDES INSIDE THIS VIEW, IT IS NOT A LAYER OVER IT — his 2026-08-16 report, "the
+    /// video does not properly follow my fingers during the pinch".
+    ///
+    /// The `AVPlayerLayer` used to be a SwiftUI sibling wearing `.scaleEffect(photoZoom)`, and
+    /// photoZoom is only written on RELEASE — the whole reason the pinch is done in UIKit is that a
+    /// SwiftUI state write per touch re-renders the screen and shakes. So the poster underneath
+    /// followed the fingers and the moving picture on top of it did not move at all, then jumped to
+    /// its new size when the fingers came off. Two pictures of the same clip disagreeing for the
+    /// length of every gesture.
+    ///
+    /// Here they are one view with one transform, so a clip is framed exactly like a photograph and
+    /// there is nothing left to keep in step.
+    var player: AVPlayer? = nil
     @Binding var scale: CGFloat
     @Binding var offset: CGSize
     var maxScale: CGFloat = 4
-    var minScale: CGFloat = 1
+    /// ⚠️ BELOW 1 IS A REAL FRAMING, NOT A BOUNCE — his 2026-08-16 report: "zoom out only works
+    /// after I have already zoomed in… I cannot zoom out from the default state."
+    ///
+    /// 1 is the picture FITTED, so a floor of 1 means the only way to shrink anything was to undo a
+    /// zoom you had already made, and from the default state a pinch-out was simply dead. Below it
+    /// the media sits smaller on the story's own gradient, which is a composition both this editor
+    /// and the export can already draw.
+    var minScale: CGFloat = 0.4
     var interactive: Bool = true
     var onTap: () -> Void = {}
     /// SWIPE TO THE NEXT PICTURE, +1 forward and -1 back (owner 2026-08-04: "when i swipe touching
@@ -2503,8 +2577,29 @@ struct ZoomableImageView: UIViewRepresentable {
             iv.topAnchor.constraint(equalTo: container.topAnchor),
             iv.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
+        // The clip, over its own poster, in the SAME container and under the SAME transform. Both
+        // are aspect-fit into the card, so the moving picture lands exactly on the still one.
+        // A view-backed layer on purpose (`layerClass`), not a bare sublayer: UIKit turns implicit
+        // animations off for those, and a loose AVPlayerLayer would quarter-second-lag every frame
+        // of the pinch behind the poster it is supposed to be sitting on.
+        let clip = ClipPreviewLayer.LayerView()
+        clip.backgroundColor = .clear
+        clip.playerLayer.videoGravity = .resizeAspect
+        clip.isUserInteractionEnabled = false
+        clip.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(clip)
+        NSLayoutConstraint.activate([
+            clip.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            clip.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            clip.topAnchor.constraint(equalTo: container.topAnchor),
+            clip.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+        clip.playerLayer.player = player
+        clip.isHidden = player == nil
+
         context.coordinator.container = container
         context.coordinator.imageView = iv
+        context.coordinator.clipView = clip
 
         let pinch = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePinch(_:)))
         let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
@@ -2542,6 +2637,10 @@ struct ZoomableImageView: UIViewRepresentable {
         let c = context.coordinator
         c.parent = self
         if c.imageView?.image !== image { c.imageView?.image = image }
+        if c.clipView?.playerLayer.player !== player { c.clipView?.playerLayer.player = player }
+        // Hidden rather than removed: a photo item has no clip and must not have an empty player
+        // layer sitting over its picture, but the view stays so the constraints never rebuild.
+        c.clipView?.isHidden = player == nil
         c.pinch?.isEnabled = interactive
         c.pan?.isEnabled = interactive
         if !c.active {   // adopt external scale/offset (e.g. a reset) only when not mid-gesture
@@ -2557,6 +2656,7 @@ struct ZoomableImageView: UIViewRepresentable {
         var parent: ZoomableImageView
         weak var container: UIView?
         weak var imageView: UIImageView?
+        weak var clipView: ClipPreviewLayer.LayerView?
         var pinch: UIPinchGestureRecognizer?
         var pan: UIPanGestureRecognizer?
         var curScale: CGFloat
@@ -2570,7 +2670,9 @@ struct ZoomableImageView: UIViewRepresentable {
         }
 
         func applyTransform() {
-            imageView?.transform = CGAffineTransform(translationX: curOffset.x, y: curOffset.y).scaledBy(x: curScale, y: curScale)
+            let t = CGAffineTransform(translationX: curOffset.x, y: curOffset.y).scaledBy(x: curScale, y: curScale)
+            imageView?.transform = t
+            clipView?.transform = t
         }
 
         private func clampOffset() {

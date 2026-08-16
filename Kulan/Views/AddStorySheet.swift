@@ -448,7 +448,10 @@ struct StoryLibraryPicker: View {
             }
             // Asked for HERE, not on the camera: opening the camera should not raise a photo-library
             // permission prompt for a screen that is not showing the library yet.
-            .task { store.load(); store.loadAlbums(); seedFromPost() }
+            // ⚠️ `loadAlbums()` IS NOT CALLED HERE ANY MORE. It used to start beside `load()` and
+            // race it through PhotoKit for the tab nobody is looking at; `load()` chains it once the
+            // grid has its list. See both.
+            .task { store.load(); seedFromPost() }
         }
         // ALWAYS DARK, like every story surface (owner's standing rule). On the picker itself so
         // every presentation — the camera's library button and both editors' + — is dark without
@@ -844,10 +847,13 @@ struct StoryThumb: View {
                 Color(.systemGray6)
                 if let image { Image(uiImage: image).resizable().scaledToFill() }
             }
+            // Two pictures, not one: PhotoKit's cached thumbnail lands more or less at once and the
+            // sharp resize replaces it a moment later. See `PhotoGridStore.thumbnails`.
             .task {
-                if image == nil {
-                    let side = geo.size.width * UIScreen.main.scale
-                    image = await store.thumbnail(asset, size: CGSize(width: side, height: side))
+                guard image == nil else { return }
+                let side = max(1, geo.size.width) * UIScreen.main.scale
+                for await img in store.thumbnails(asset, size: CGSize(width: side, height: side)) {
+                    image = img
                 }
             }
         }
@@ -933,34 +939,92 @@ final class PhotoGridStore: ObservableObject {
         format: "mediaType == %d OR mediaType == %d",
         PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue)
 
+    /// ⚠️ THE GRID IS EMPTY UNTIL THIS PUBLISHES, AND IT USED TO PUBLISH ONCE, AT THE END — his
+    /// 2026-08-16 report, with a photograph of the picker showing nothing but its two tabs.
+    ///
+    /// Three things were between the sheet opening and the first tile, and the first two of them are
+    /// pure waiting:
+    ///
+    /// 1. **Permission was asked for again every single time.** `requestAuthorization` is a round
+    ///    trip to another process even when the answer has been yes since the day the app was
+    ///    installed, and nothing could start until it came back. It is only asked now when the
+    ///    answer is not already on hand.
+    /// 2. **The albums fetch ran at the same moment.** `loadAlbums` runs a separate `fetchAssets`
+    ///    for EVERY album on the phone to get its count and its cover, and those queue up against
+    ///    this one inside PhotoKit — so the screen you are looking at waited behind the counting of
+    ///    a screen you are not. It is chained behind the first page now (see `loadAlbums`).
+    /// 3. **Nothing was shown until everything was counted.** `enumerateObjects` faults in every
+    ///    asset in the library, and then the whole array arrives at SwiftUI in one write — on a
+    ///    library of tens of thousands, `ForEach` builds that many identities before it can lay out
+    ///    the first row. The first screenful is published on its own now and the rest follows a beat
+    ///    later, which is the whole difference between "instant" and "broken".
+    ///
+    /// ⚠️ STILL THE WHOLE LIBRARY (owner 2026-08-04: "mediapicker is showing small media only, it's
+    /// not showing all media in my phone"). The cap is not back; the list is delivered in two pieces
+    /// rather than one, and both pieces are in the same order they always were.
     func load() {
-        PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
-            guard status == .authorized || status == .limited else { return }
+        guard assets.isEmpty else { return }   // a re-opened sheet already has its list
+        Self.authorized { ok in
+            guard ok else { return }
             let opts = PHFetchOptions()
             opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
             opts.predicate = Self.mediaPredicate
             let result = PHAsset.fetchAssets(with: opts)
-            // THE WHOLE LIBRARY (owner 2026-08-04: "mediapicker is showing small media only, it's
-            // not showing all media in my phone"). It used to stop at 300, which is a couple of
-            // months for most people and reads as the picker being broken rather than capped.
-            //
-            // Safe to take them all: a PHAsset is a lightweight reference, not an image, and the
-            // grid is lazy — only the tiles on screen ever ask PhotoKit for pixels. The old cap was
-            // guarding a cost that the grid was already avoiding.
-            var arr: [PHAsset] = []
-            arr.reserveCapacity(result.count)
-            result.enumerateObjects { a, _, _ in arr.append(a) }
-            Task { @MainActor in self.assets = arr }
+            // ENOUGH TO FILL THE SCREEN, AND NOT ONE MORE. Three columns of square tiles is about
+            // eighteen rows on the tallest phone; sixty is comfortably past the fold with room for
+            // a flick before the rest lands.
+            let head = min(60, result.count)
+            var first: [PHAsset] = []
+            first.reserveCapacity(head)
+            for i in 0..<head { first.append(result.object(at: i)) }
+            Task { @MainActor in self.assets = first }
+
+            // The rest on this same background queue — a `PHAsset` is a lightweight reference and
+            // the grid is lazy, so holding them all costs nothing to DRAW. It was only ever the
+            // faulting and SwiftUI's identity pass that had to get out of the first frame's way.
+            var all: [PHAsset] = []
+            all.reserveCapacity(result.count)
+            result.enumerateObjects { a, _, _ in all.append(a) }
+            Task { @MainActor in
+                if all.count > first.count { self.assets = all }
+                self.loadAlbums()   // …and only now, with the grid already on screen
+            }
         }
+    }
+
+    /// Permission, without paying for it twice. `authorizationStatus` is a local read; the REQUEST is
+    /// the round trip to another process, and it is only worth making when nobody has answered yet.
+    ///
+    /// ⚠️ THE ANSWER NEVER COMES BACK ON THE CALLER'S THREAD. Both callers do PhotoKit fetches
+    /// inside it and both are called from the main actor, so answering inline would put the whole
+    /// library scan on the thread that has to draw the sheet — which is the opposite of the bug this
+    /// is here to fix.
+    private static func authorized(_ done: @escaping @Sendable (Bool) -> Void) {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status != .notDetermined else {
+            PHPhotoLibrary.requestAuthorization(for: .readWrite) { s in   // already off-main
+                done(s == .authorized || s == .limited)
+            }
+            return
+        }
+        let ok = status == .authorized || status == .limited
+        DispatchQueue.global(qos: .userInitiated).async { done(ok) }
     }
 
     /// RECENTS AND FAVOURITES COME OUT SEPARATELY, because the Collections screen pins them above
     /// everything else the way Apple's Photos does — see `collectionsTab`. They used to arrive in
     /// the same flat list as every other album, which is why the screen could only ever be one long
     /// undifferentiated list.
+    ///
+    /// ⚠️ CALLED BY `load()` ONCE THE PHOTOS GRID HAS ITS LIST, NOT BESIDE IT. `info(_:)` runs a
+    /// fetch per album — every smart album and every one the person made — and those go through the
+    /// same PhotoKit machinery the grid is waiting on. Started together, the tab nobody is looking
+    /// at delays the tab they are. Collections is one tap away and this is finished long before that
+    /// tap; the Photos grid is on screen the instant the sheet opens.
     func loadAlbums() {
-        PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in
-            guard status == .authorized || status == .limited else { return }
+        guard pinned.isEmpty, albums.isEmpty else { return }
+        Self.authorized { ok in
+            guard ok else { return }
             let imgOpts = PHFetchOptions()
             imgOpts.predicate = Self.mediaPredicate
             // An album with nothing this picker can post is not shown at all — the count and the
@@ -1005,15 +1069,39 @@ final class PhotoGridStore: ObservableObject {
         return arr
     }
 
-    func thumbnail(_ asset: PHAsset, size: CGSize) async -> UIImage? {
-        let opts = PHImageRequestOptions()
-        opts.deliveryMode = .highQualityFormat
-        opts.resizeMode = .fast
-        opts.isNetworkAccessAllowed = true
-        return await withCheckedContinuation { cont in
-            manager.requestImage(for: asset, targetSize: size, contentMode: .aspectFill, options: opts) { img, _ in
-                cont.resume(returning: img)
+    /// A TILE'S PICTURE, AS SOON AS THERE IS ONE AND THEN AGAIN WHEN IT IS SHARP.
+    ///
+    /// ⚠️ IT USED TO ASK FOR `.highQualityFormat`, WHICH MEANS "DO NOT SHOW ME ANYTHING UNTIL IT IS
+    /// PERFECT" — and that is the second half of his 2026-08-16 "the images take too long to
+    /// appear". PhotoKit keeps a small thumbnail for every asset and can hand it back more or less
+    /// instantly; high quality declines it and waits for a fresh resize instead, per tile, dozens at
+    /// a time. On anything living in iCloud it is worse than a wait, it is a DOWNLOAD before the
+    /// tile draws anything at all.
+    ///
+    /// `.opportunistic` is the mode that fits a grid: the cached one first, the sharp one after. It
+    /// calls back more than once, which is why this is a stream and not one `await` — resuming a
+    /// checked continuation twice is a crash, and taking only the first would leave every tile
+    /// blurry for good.
+    ///
+    /// Cancelling the stream cancels the request, so tiles flicked past stop competing with the ones
+    /// that are actually on screen.
+    func thumbnails(_ asset: PHAsset, size: CGSize) -> AsyncStream<UIImage> {
+        let manager = self.manager   // captured once, so neither closure below reaches back for self
+        return AsyncStream { cont in
+            let opts = PHImageRequestOptions()
+            opts.deliveryMode = .opportunistic
+            opts.resizeMode = .fast
+            opts.isNetworkAccessAllowed = true
+            let id = manager.requestImage(for: asset, targetSize: size,
+                                          contentMode: .aspectFill, options: opts) { img, info in
+                if let img { cont.yield(img) }
+                // Degraded means "a better one is still coming". Anything else — the sharp image, a
+                // cancellation, an error — is the end of it, and finishing on an error matters:
+                // without it a tile that cannot load would hold its task open forever.
+                let more = (info?[PHImageResultIsDegradedKey] as? Bool) ?? false
+                if !more { cont.finish() }
             }
+            cont.onTermination = { _ in manager.cancelImageRequest(id) }
         }
     }
 

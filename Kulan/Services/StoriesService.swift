@@ -737,6 +737,8 @@ final class StoriesService {
         guard let prepared = await VideoTranscoder.prepare(videoURL, maxSeconds: Double(Limits.storyVideoSeconds), stripAudio: muted, range: range,
                                                            overlay: burn?.overlay, cropRect: burn?.cropRect,
                                                            canvasAspect: burn?.canvasAspect,
+                                                           contentScale: burn?.contentScale ?? 1,
+                                                           backdrop: burn?.backdrop,
                                                            storyBackdrop: true) else {
             throw NSError(domain: "Fariin", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Couldn't process this video"])

@@ -50,9 +50,20 @@ struct StoryBurnIn {
     var cropRect: CGRect? = nil
     /// The canvas's own width/height, so the export can rebuild the exact frame he drew against.
     var canvasAspect: CGFloat? = nil
+    /// HOW BIG THE CLIP IS ON THAT CANVAS, 1 being the fitted size the crop rectangle assumes.
+    ///
+    /// ⚠️ A ZOOM-OUT CANNOT BE A CROP, which is why this exists at all: `cropRect` says which piece
+    /// of the frame to keep, and there is no piece of a frame that means "the clip, smaller, with
+    /// canvas around it". Only ever below 1 — a zoom IN is still expressed as a crop, because that
+    /// is exactly what it is.
+    var contentScale: CGFloat = 1
+    /// What sits BEHIND a clip that does not cover the canvas, rendered by the editor from the same
+    /// two sampled colours it draws on screen, so the surround he framed against is the surround
+    /// that lands.
+    var backdrop: UIImage? = nil
 
     /// Nothing to do — so the caller can hand back nil and keep the untouched path.
-    var isEmpty: Bool { overlay == nil && cropRect == nil }
+    var isEmpty: Bool { overlay == nil && cropRect == nil && backdrop == nil && contentScale == 1 }
 }
 
 // MARK: - Share Story

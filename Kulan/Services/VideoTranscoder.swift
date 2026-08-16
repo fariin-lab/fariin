@@ -67,11 +67,15 @@ enum VideoTranscoder {
     static func prepare(_ url: URL, maxSeconds: Double? = nil, stripAudio: Bool = false,
                         hd: Bool = false, range: CMTimeRange? = nil,
                         overlay: UIImage? = nil, cropRect: CGRect? = nil,
-                        canvasAspect: CGFloat? = nil, storyBackdrop: Bool = false) async -> Prepared? {
+                        canvasAspect: CGFloat? = nil, contentScale: CGFloat = 1,
+                        backdrop: UIImage? = nil, storyBackdrop: Bool = false) async -> Prepared? {
         let asset = AVURLAsset(url: url)
         guard let fullTime = try? await asset.load(.duration), fullTime.seconds > 0 else { return nil }
         var duration = fullTime.seconds
-        let composing = overlay != nil || cropRect != nil
+        // ⚠️ A SHRUNKEN CLIP IS COMPOSING TOO, and forgetting that would be a silent one: with no
+        // overlay and no crop it would have taken the fast copy path and posted the clip at full
+        // size, so the framing he pinched would simply not be in the file.
+        let composing = overlay != nil || cropRect != nil || backdrop != nil || contentScale < 0.999
 
         // Does this clip need the baked backdrop? Only a story asks, only when nothing else is
         // being burned in (an edited clip goes down `burnIn`, whose canvas rules already own that
@@ -168,6 +172,7 @@ enum VideoTranscoder {
         if composing {
             session.videoComposition = await burnIn(asset: exportAsset, overlay: overlay,
                                                     cropRect: cropRect, canvasAspect: canvasAspect,
+                                                    contentScale: contentScale, backdrop: backdrop,
                                                     hd: hd)
         } else if let ba = backdropAspect {
             // ⚠️ THIS `if let` IS THE OLD SILENT FALL-THROUGH, and it is why he reported black bars
@@ -326,7 +331,8 @@ enum VideoTranscoder {
     /// ONLY REACHED WHEN THERE IS SOMETHING TO BURN IN. A plain video still exports down the original
     /// path, untouched, so nothing that works today can be broken by what happens in here.
     private static func burnIn(asset: AVAsset, overlay: UIImage?, cropRect: CGRect?,
-                               canvasAspect: CGFloat?, hd: Bool) async -> AVVideoComposition? {
+                               canvasAspect: CGFloat?, contentScale: CGFloat = 1,
+                               backdrop: UIImage? = nil, hd: Bool) async -> AVVideoComposition? {
         guard let track = try? await asset.loadTracks(withMediaType: .video).first,
               let natural = try? await track.load(.naturalSize),
               let transform = try? await track.load(.preferredTransform) else { return nil }
@@ -357,7 +363,14 @@ enum VideoTranscoder {
 
         // 3. Place the clip: fit inside the canvas, centred, then shifted so the crop's corner is
         //    the new origin. `scaledToFit` plus a pan, written as one transform.
+        //
+        // ⚠️ `contentScale` IS THE ONE THING A CROP CANNOT SAY. A zoom IN is a crop — keep this
+        // piece of the frame — but a zoom OUT is the clip drawn SMALLER with canvas around it, and
+        // no rectangle inside the frame describes that. It multiplies the fit, so 1 is exactly the
+        // behaviour every existing caller had, and the clip stays centred because a shrunken one is
+        // pinned to the middle (`clampOffset` in the editor gives it nowhere to go).
         let fit = min(canvas.width / shown.width, canvas.height / shown.height)
+            * min(1, max(0.05, contentScale))
         let scaled = CGSize(width: shown.width * fit, height: shown.height * fit)
         let place = CGAffineTransform(scaleX: fit, y: fit)
             .concatenating(CGAffineTransform(
@@ -376,24 +389,54 @@ enum VideoTranscoder {
         comp.frameDuration = CMTime(value: 1, timescale: 30)
         comp.instructions = [instruction]
 
-        if let overlay, let cg = overlay.cgImage {
+        // WHAT SITS AROUND A SHRUNKEN CLIP. Only for `contentScale`, and deliberately only for that:
+        // a plain square/landscape story still gets its gradient from `gradientComposition`, and an
+        // edited one still keeps its black letterbox — that gap is old, it is written up below, and
+        // widening it is not this change's business.
+        //
+        // ⚠️ IT GOES OVER THE VIDEO WITH A HOLE IN IT, NOT UNDERNEATH IT. A layer below cannot be
+        // seen: the composition renders onto its own opaque background, so the video layer arrives
+        // already carrying black everywhere the clip does not reach. Punching the clip's own
+        // rectangle out of the canvas and laying that over the top needs nothing from the renderer
+        // and cannot half-work.
+        var surround: UIImage? = nil
+        if let backdrop, contentScale < 0.999 {
+            let placed = CGRect(x: (canvas.width - shown.width * fit) / 2,
+                                y: (canvas.height - shown.height * fit) / 2,
+                                width: shown.width * fit, height: shown.height * fit)
+            let fmt = UIGraphicsImageRendererFormat(); fmt.scale = 1; fmt.opaque = false
+            surround = UIGraphicsImageRenderer(size: canvas, format: fmt).image { ctx in
+                backdrop.draw(in: CGRect(origin: .zero, size: canvas))
+                ctx.cgContext.setBlendMode(.clear)
+                // Half a point INSIDE the clip: a hole a hair too small leaves a hairline of
+                // gradient over the picture, a hole a hair too big leaves one of black beside it.
+                ctx.cgContext.fill(placed.insetBy(dx: 0.5, dy: 0.5))
+            }
+        }
+
+        if overlay != nil || surround != nil {
             let parent = CALayer(); parent.frame = CGRect(origin: .zero, size: render)
             let video = CALayer(); video.frame = parent.frame
-            let art = CALayer()
-            // (The story's gradient canvas does NOT ride this path — see `gradientComposition`.
-            // An edited clip keeps its black letterbox for now; the plain square/landscape story,
-            // which is the reported case, gets the gradient.)
-            // Core Animation composes video with the origin at the BOTTOM left, so the overlay's
-            // rectangle is converted into that space and its contents flipped about its own centre.
-            // Flipping the parent instead would turn the video upside down with it, which is the
-            // classic way this ends up shipping inverted.
-            art.frame = CGRect(x: -crop.minX,
-                               y: render.height + crop.minY - canvas.height,
-                               width: canvas.width, height: canvas.height)
-            art.contents = cg
-            art.contentsGravity = .resize
-            art.transform = CATransform3DMakeScale(1, -1, 1)
-            parent.addSublayer(video); parent.addSublayer(art)
+            // Core Animation composes video with the origin at the BOTTOM left, so a canvas-sized
+            // picture's rectangle is converted into that space and its contents flipped about its
+            // own centre. Flipping the parent instead would turn the video upside down with it,
+            // which is the classic way this ends up shipping inverted.
+            func canvasLayer(_ image: UIImage) -> CALayer? {
+                guard let cg = image.cgImage else { return nil }
+                let l = CALayer()
+                l.frame = CGRect(x: -crop.minX,
+                                 y: render.height + crop.minY - canvas.height,
+                                 width: canvas.width, height: canvas.height)
+                l.contents = cg
+                l.contentsGravity = .resize
+                l.transform = CATransform3DMakeScale(1, -1, 1)
+                return l
+            }
+            parent.addSublayer(video)
+            // The surround first, then the text and the pen: he drew those ON the canvas, so the
+            // canvas can never be the thing on top of them.
+            if let s = surround, let l = canvasLayer(s) { parent.addSublayer(l) }
+            if let o = overlay, let l = canvasLayer(o) { parent.addSublayer(l) }
             comp.animationTool = AVVideoCompositionCoreAnimationTool(
                 postProcessingAsVideoLayer: video, in: parent)
         }
