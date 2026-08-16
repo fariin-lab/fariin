@@ -563,24 +563,21 @@ struct LiveWaveform: View {
             HStack(alignment: .center, spacing: 2) {
                 ForEach(Array(levels.enumerated()), id: \.element.id) { i, bar in
                     // A BAR IS WHAT WAS HEARD, THE WHOLE WAY ACROSS — his second report: the first
-                    // exit treatment was a 36pt HEIGHT taper, so tall bars began shrinking in the
-                    // MIDDLE of the strip and the picture stopped being true. Cutting it to 14pt
-                    // made it honest but it was still the wrong property: a bar that shrinks is
-                    // reporting a quieter moment than the one that was recorded, right at the
-                    // point the eye is leaving it.
-                    // Voice Memos and the system audio message fade instead — the bar keeps its
-                    // true height until the instant it is gone. So the 14pt band drives OPACITY
-                    // now and the height is untouched the whole way across.
-                    // The bar's REAL distance from the right edge, the slide included — so the
-                    // fade is as continuous as the travel is, instead of stepping three times on
+                    // taper was 36pt wide, so tall bars began shrinking in the MIDDLE of the strip
+                    // and the picture stopped being true. The duck is 14pt now, the bar's own last
+                    // breath at the exit and nothing more: silence travels as dots untouched (the
+                    // 2pt floor already is the dot), speech travels at full height, and only a
+                    // tall bar touching the edge bows out. While the row is shorter than the strip
+                    // nothing is near that edge, so young recordings are never shaped.
+                    // The bar's REAL distance from the right edge, the slide included — so the duck
+                    // below is as continuous as the travel is, instead of stepping three times on
                     // the way out.
                     let fromRight = CGFloat(levels.count - 1 - i) * slot - shift
                     let fromLeft = geo.size.width - fromRight
-                    let fade = max(0, min(1, fromLeft / 14))
+                    let taper = max(0, min(1, fromLeft / 14))
                     Capsule().fill(color)
                         .frame(width: 2.5,
-                               height: max(2, WaveformBars.display(Int(bar.level * 100)) * geo.size.height))
-                        .opacity(fade)
+                               height: max(2, WaveformBars.display(Int(bar.level * 100)) * geo.size.height * taper))
                         // A new bar ARRIVES at its true height — .identity kills the insertion
                         // grow-in the implicit animation gave it, which read as bars entering
                         // small and swelling into place ("it depends what wave heard, not fixed").
