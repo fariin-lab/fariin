@@ -343,17 +343,35 @@ struct CallsView: View {
                     EmptyStateView(title: "No Calls Yet", icon: "phone",
                                    text: "Your call history will appear here.")
                 } else {
-                    List(selection: $selection) {   // stable binding (Set selects only in edit mode) -> smooth edit transition
+                    // NO `selection:` binding and NO edit mode on this list any more. Those two gave
+                    // us the circle AND the indent for free, but the circle is UIKit's and exposes
+                    // nothing but a tint — see SelectionTick for why that was not enough. Both are
+                    // drawn here now: the tick is the leading item in the row, and the indent is
+                    // that item's own width opening from zero.
+                    List {
                         ForEach(shownRuns) { run in
                             let call = run.latest
-                            CallHistoryRow(
-                                call: call,
-                                count: run.entries.count,
-                                onProfile: { profileTarget = call },
-                                onCall: {   // call back the same way (video stays video) — after a confirm
-                                    pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: call.video)
-                                }
-                            )
+                            HStack(spacing: 0) {
+                                // ⚠️ ALWAYS PRESENT, never inside an `if selecting`. A conditional
+                                // here changes the row's structural identity, and SwiftUI answers
+                                // that by cross-fading two copies of every row instead of sliding
+                                // one — a real report on the chat list, which is why that list is
+                                // built the way it is. Width and opacity carry the whole entrance.
+                                SelectionTick(selected: selection.contains(run.id),
+                                              fill: Theme.defaultBubble(dark),
+                                              ring: Color.secondary.opacity(0.55))
+                                    .frame(width: selecting ? 34 : 0)
+                                    .opacity(selecting ? 1 : 0)
+                                    .clipped()
+                                CallHistoryRow(
+                                    call: call,
+                                    count: run.entries.count,
+                                    onProfile: { profileTarget = call },
+                                    onCall: {   // call back the same way (video stays video) — after a confirm
+                                        pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: call.video)
+                                    }
+                                )
+                            }
                             // In edit mode the row's own buttons stayed live, so tapping the name or
                             // avatar pushed a profile and the round button dialled — instead of
                             // selecting the row. The chat list got this exact fix; this list didn't.
@@ -369,7 +387,6 @@ struct CallsView: View {
                                     }
                                 }
                             }
-                            .tag(run.id)
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
                             .swipeActions(edge: .trailing) {
@@ -413,15 +430,13 @@ struct CallsView: View {
                     // history at all, simply show their answer.
                     .animation(.spring(response: 0.38, dampingFraction: 0.86), value: repo.calls.count)
                     .environment(\.defaultMinListRowHeight, 56)   // tight, compact rows
-                    .environment(\.editMode, .constant(selecting ? .active : .inactive))
-                    // THE SELECTION TICK. Edit mode draws its circle in the TINT, and this app tints
-                    // itself `.primary` — so the filled tick was a white disc with a white check
-                    // inside it, on a dark phone. Selected and unselected looked identical; the only
-                    // way to know was the "4 Selected" title (owner 2026-08-16, calls page).
-                    // Apple's own systemBlue, the same value and for the same reason as the unread
-                    // count on the scroll-to-bottom button in ThreadView. Every swipe action in this
-                    // list already names its own colour, so nothing else here moves.
-                    .tint(Theme.defaultBubble(dark))
+                    // ⚠️ NO `.environment(\.editMode, ...)` HERE ANY MORE, ON PURPOSE. Edit mode is
+                    // what drew the old circle, and its tick colour is the tint — which in this app
+                    // is `.primary`, so a selected row was a white disc with a white check inside it
+                    // and looked exactly like an unselected one (owner 2026-08-16, "4 Selected" over
+                    // four blank white circles). Putting the tint right only fixed the colour; the
+                    // circle still had no animation we could reach. The row draws its own tick now.
+                    // If edit mode ever comes back here, BOTH circles will show.
                 }
             }
             .navigationTitle("Calls")
