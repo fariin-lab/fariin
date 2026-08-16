@@ -380,8 +380,13 @@ struct MediaGalleryView: View {
                 if selecting {
                     ZStack {
                         Color.black.opacity(selected ? 0.25 : 0.001)
+                        // Selected was `Color.accentColor`, which is the app's `.primary` tint and so
+                        // WHITE at night — the same white as the unselected ring right beside it. The
+                        // only thing carrying the state over a photo was the glyph's shape and a 0.25
+                        // dim. Blue makes the colour carry it, which is what a tick is for.
                         Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 22)).foregroundStyle(selected ? Color.accentColor : .white)
+                            .font(.system(size: 22))
+                            .foregroundStyle(selected ? Theme.defaultBubble(dark) : .white)
                             .padding(6).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     }
                 }

@@ -274,6 +274,8 @@ struct PendingCall: Identifiable {
 // search, rows with avatar, name (red if missed), direction, time, and an info button.
 // Tap a row to call back; (i) opens the contact. Indigo brand kept.
 struct CallsView: View {
+    @Environment(\.colorScheme) private var scheme
+    private var dark: Bool { scheme == .dark }
     @State private var repo = CallsRepository.shared
     @State private var filter = 0            // 0 = All, 1 = Missed
     @State private var profileTarget: CallEntry?
@@ -412,6 +414,14 @@ struct CallsView: View {
                     .animation(.spring(response: 0.38, dampingFraction: 0.86), value: repo.calls.count)
                     .environment(\.defaultMinListRowHeight, 56)   // tight, compact rows
                     .environment(\.editMode, .constant(selecting ? .active : .inactive))
+                    // THE SELECTION TICK. Edit mode draws its circle in the TINT, and this app tints
+                    // itself `.primary` — so the filled tick was a white disc with a white check
+                    // inside it, on a dark phone. Selected and unselected looked identical; the only
+                    // way to know was the "4 Selected" title (owner 2026-08-16, calls page).
+                    // Apple's own systemBlue, the same value and for the same reason as the unread
+                    // count on the scroll-to-bottom button in ThreadView. Every swipe action in this
+                    // list already names its own colour, so nothing else here moves.
+                    .tint(Theme.defaultBubble(dark))
                 }
             }
             .navigationTitle("Calls")
@@ -1054,7 +1064,10 @@ struct ChatsView: View {
                     if !archivedChats.isEmpty {
                         Text("\(archivedChats.count)")
                             .font(.system(size: 15))
-                            .foregroundStyle(archivedUnread ? Color.accentColor : Color.secondary)
+                            // `Theme.accent(dark)`, which is the SAME colour `Color.accentColor` was
+                            // giving here, spelled so it cannot drift: the List now sets a tint of
+                            // its own for the selection tick, and accentColor would have followed it.
+                            .foregroundStyle(archivedUnread ? Theme.accent(dark) : Color.secondary)
                     }
                 }
                 .padding(.vertical, 11)
@@ -1437,6 +1450,9 @@ struct ChatsView: View {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { listSettled = true }
                         }
                         .environment(\.editMode, .constant(selecting ? .active : .inactive))
+                        // The selection tick, same as the calls list — the app's `.primary` tint made
+                        // it a white check on a white disc. See the note there.
+                        .tint(Theme.defaultBubble(dark))
                         // Rows start below the stories row; as the list scrolls, the row above is
                         // offset by the same amount, so both move as ONE scroll surface.
                         .contentMargins(.top, storiesOptedOut ? 8 : storiesRowHeight, for: .scrollContent)
@@ -1962,6 +1978,8 @@ struct ArchivedChatsView: View {
                         }
                         .listStyle(.plain)
                         .environment(\.editMode, .constant(selecting ? .active : .inactive))
+                        // The selection tick, same as the calls list. See the note there.
+                        .tint(Theme.defaultBubble(dark))
                     }
                 }
             }
