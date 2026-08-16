@@ -1038,7 +1038,26 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             // Only when it is BECOMING live. While it already is, its position is the pull's and
             // seeding would fight it.
             if willAnimate, isLive, !item.isLive {
-                let wasScale = item.transform.a
+                // ⚠️ THE PRESENTATION LAYER, NOT THE MODEL — AND THE DIFFERENCE IS THE WHOLE OF HIS
+                // "the thumbnail coming into the centre appears extremely large" ON THE SHEET-PAGE
+                // PATH.
+                //
+                // The point of this seed is to start the journey where the picture VISUALLY is. On
+                // the tap path the row is at rest when the flip lands, so the model and the pixels
+                // agree and reading `item.transform` was accidentally right. On the sheet's page
+                // path the flip lands INSIDE the commit's 0.3s settle — and an animation sets the
+                // MODEL to its destination the moment it starts, so `transform.a` answered 1.0 (the
+                // centre, full slot size) while the card on screen was still half-way out at side
+                // scale. The seed then put the live layer at the centre, full size, unanimated, in
+                // the middle of the flight: the enormous card arriving from the side in his
+                // screenshot. Same seed, same arithmetic — fed a destination instead of a position.
+                //
+                // `presentation()` is the pixels' own answer and exists exactly while an animation
+                // is in flight; at rest it is nil and the model is the truth, so the tap path is
+                // unchanged by construction. The side test and the leaving dim read the same way,
+                // for the same reason.
+                let pres = item.layer.presentation()
+                let wasScale = pres?.transform.m11 ?? item.transform.a
                 if wasScale > 0.0001 {
                     // ⚠️ THE SEED IS BUILT BY `placement`, THE SAME FUNCTION EVERY OTHER CARD IS
                     // BUILT BY. MEASURED OFF HIS SCREEN RECORDING, FRAME BY FRAME:
@@ -1063,7 +1082,8 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
                     // journey rather than two different calculations.
                     let span = max(0.0001, 1 - geometry.sideRelScale)
                     let mag = min(1, max(0, (1 - wasScale) / span))
-                    let cfBefore = item.center.x < view.bounds.midX ? -mag : mag
+                    let visualCenterX = pres?.position.x ?? item.center.x
+                    let cfBefore = visualCenterX < view.bounds.midX ? -mag : mag
                     let from = geometry.placement(combinedFraction: cfBefore,
                                                   rest: rest, containerMidX: midX)
                     // ⚠️ THE DIM IS SEEDED AT THE VALUE IT IS LEAVING, NOT THE ONE IT IS GOING TO,
@@ -1078,8 +1098,11 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
                     // exactly the difference he reported.
                     //
                     // The tint layer this item is already wearing knows what it is leaving, so it is
-                    // asked rather than recomputed.
-                    let leavingDim = tints[story.id].map { CGFloat($0.opacity) } ?? from.dim
+                    // asked rather than recomputed — and asked for its PRESENTATION, the same rule
+                    // as the scale above: a tint mid-animation has already written its destination
+                    // into the model.
+                    let leavingDim = tints[story.id]
+                        .map { CGFloat(($0.presentation() ?? $0).opacity) } ?? from.dim
                     self.placeLiveStory(
                         StoryRowPlacement(center: from.center,
                                           size: from.size,
