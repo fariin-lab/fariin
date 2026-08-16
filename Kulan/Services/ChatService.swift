@@ -732,6 +732,21 @@ enum ChatService {
         return out as Data
     }
 
+    /// Pixel size WITHOUT decoding the image.
+    ///
+    /// An album writes its tile aspects before uploading anything, and `UIImage(data:)` on every
+    /// picture just to measure them would decode the whole batch twice. `CGImageSource` reads the
+    /// header only. The resize that happens later preserves aspect, so these are the same ratios the
+    /// finished grid is solved from.
+    static func pixelSize(_ data: Data) -> CGSize? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let w = props[kCGImagePropertyPixelWidth] as? Double,
+              let h = props[kCGImagePropertyPixelHeight] as? Double,
+              w > 0, h > 0 else { return nil }
+        return CGSize(width: w, height: h)
+    }
+
     /// FINISH A MEDIA MESSAGE that was written before its bytes existed.
     ///
     /// Every media send now writes its message the instant Send is tapped, so the recipient sees a
@@ -929,7 +944,19 @@ enum ChatService {
         //
         // Re-sorted by index afterwards: a task group finishes in whatever order the network feels
         // like, and an album that arrives shuffled is worse than a slow one.
-        let tiles: [AlbumTile] = try await withThrowingTaskGroup(of: AlbumTile?.self) { group in
+        // ⛔ THE MESSAGE GOES OUT BEFORE THE TILES DO — the last of the five media paths, and the
+        // one that gained the most. Every tile had to finish before anything was written, so ONE
+        // slow photo held up the whole set and the recipient saw nothing until the last byte of the
+        // last picture landed.
+        //
+        // Aspects are read off the source images first (header only, no decode) so the placeholder
+        // grid is solved by the SAME layout, with the SAME ratios, as the album that replaces it.
+        let earlySizes: [[Double]] = images.map {
+            guard let sz = pixelSize($0) else { return [1, 1] }
+            return [Double(sz.width), Double(sz.height)]
+        }
+
+        let tileWork: Task<[AlbumTile], Error> = Task { try await withThrowingTaskGroup(of: AlbumTile?.self) { group in
             for (i, raw) in images.enumerated() {
                 group.addTask {
                     // A whole-message Cancel cancels the group; each tile lands on it here.
@@ -967,17 +994,8 @@ enum ChatService {
             }
             var acc: [AlbumTile] = []
             for try await tile in group { if let tile { acc.append(tile) } }
-            return acc
-        }
-        .sorted { $0.index < $1.index }
-
-        // NO "kind" KEY, deliberately. This path predates mixed albums and the reader treats a tile
-        // without one as a photo; adding it here would be a silent format change.
-        let items: [[String: Any]] = tiles.map {
-            ["imageUrl": $0.imageUrl, "enc": $0.imageEnc.asDict, "width": $0.width, "height": $0.height]
-        }
-        // Every tile was X'd → there is no album left to send.
-        guard !items.isEmpty else { throw CancellationError() }
+            return acc.sorted { $0.index < $1.index }
+        } }
 
         // Caption sealed like a text body (one body for the album).
         var captionCipher = ""
@@ -989,7 +1007,7 @@ enum ChatService {
 
         let batch = db.batch()
         var msg: [String: Any] = [
-            "type": "album", "album": items, "text": captionCipher,
+            "type": "album", "albumSizes": earlySizes, "text": captionCipher, "uploading": true,
             "authorId": uid, "createdAt": FieldValue.serverTimestamp(), "clientTs": clientTs,
         ]
         // The album's FIRST tile, blurred, for the same reason a photo and now a video carry one:
@@ -1007,15 +1025,9 @@ enum ChatService {
         try Task.checkCancellation()
         batch.setData(msg, forDocument: msgRef)
         var convUpdate: [String: Any] = [
-            "lastMessage": "📷 \(items.count) Photos", "lastSender": uid,
+            "lastMessage": "📷 \(images.count) Photos", "lastSender": uid,
             "updatedAt": FieldValue.serverTimestamp(),
         ]
-        // Refresh the chat-list thumbnail (photo parity with sendImage) — without this the list
-        // kept showing a PREVIOUS photo's thumb next to "N Photos".
-        if let first = items.first, let u = first["imageUrl"], let e = first["enc"] {
-            convUpdate["lastImageUrl"] = u
-            convUpdate["lastImageEnc"] = e
-        }
         if let members { for m in members where m != uid { convUpdate["unreadCount.\(m)"] = FieldValue.increment(Int64(1)) } }
         else {
             let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
@@ -1023,6 +1035,28 @@ enum ChatService {
         }
         batch.updateData(convUpdate, forDocument: convRef)
         try await batch.commit()
+
+        // NO "kind" KEY, deliberately. This path predates mixed albums and the reader treats a tile
+        // without one as a photo; adding it here would be a silent format change.
+        let tiles = try await tileWork.value
+        let items: [[String: Any]] = tiles.map {
+            ["imageUrl": $0.imageUrl, "enc": $0.imageEnc.asDict, "width": $0.width, "height": $0.height]
+        }
+        // ⚠️ EVERY TILE WAS X'd, so there is no album left — and unlike before, one has already been
+        // written. The per-tile Cancel is a real feature of this screen, so the message that was
+        // sent to make the send visible has to be taken back rather than left as an empty grid.
+        guard !items.isEmpty else {
+            try? await msgRef.delete()
+            throw CancellationError()
+        }
+        // Refresh the chat-list thumbnail (photo parity with sendImage) — without this the list
+        // kept showing a PREVIOUS photo's thumb next to "N Photos".
+        var convThumb: [String: Any] = [:]
+        if let first = items.first, let u = first["imageUrl"], let e = first["enc"] {
+            convThumb["lastImageUrl"] = u
+            convThumb["lastImageEnc"] = e
+        }
+        try await attachMedia(["album": items], to: msgRef, conv: convThumb, convRef: convRef)
     }
 
     // One item to send inside a MIXED album (photos + videos in ONE message group).

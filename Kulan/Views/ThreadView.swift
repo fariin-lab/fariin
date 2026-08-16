@@ -6537,7 +6537,7 @@ struct MessageBubble: View, Equatable {
                     // this is the finished bubble with a spinner where the play button goes.
                     ZStack {
                         if let t = message.thumbUrl, !t.isEmpty {
-                            SecureImageView(url: t, enc: message.thumbEnc, cid: cid,
+                            SecureImageView(imageUrl: t, enc: message.thumbEnc, cid: cid,
                                             placeholderHash: message.blurhash)
                         } else {
                             Theme.received(dark)
@@ -6569,6 +6569,26 @@ struct MessageBubble: View, Equatable {
                     }
                     .padding(.horizontal, 13).padding(.vertical, 10)
                     .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                    .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                case "album":
+                    // The SAME solver, the SAME aspects, the SAME width as the finished grid — see
+                    // `albumAspect`, which now reads `albumSizes` for exactly this. So the mosaic is
+                    // already in its final arrangement and the tiles simply fill in.
+                    let sizes = (0 ..< min(max(message.albumSizes.count, 2), 10))
+                        .map { CGSize(width: albumAspect($0), height: 1) }
+                    let solved = MediaGroupLayout.solve(itemSizes: sizes,
+                                                        maxSize: CGSize(width: albumWidth, height: albumWidth))
+                    ZStack(alignment: .topLeading) {
+                        ForEach(solved.tiles, id: \.index) { tile in
+                            Theme.received(dark)
+                                .frame(width: tile.frame.width, height: tile.frame.height)
+                                .offset(x: tile.frame.minX, y: tile.frame.minY)
+                        }
+                        ProgressView().tint(.white)
+                            .padding(10).background(.black.opacity(0.35), in: Circle())
+                            .offset(x: solved.size.width / 2 - 22, y: solved.size.height / 2 - 22)
+                    }
+                    .frame(width: solved.size.width, height: solved.size.height, alignment: .topLeading)
                     .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
                 default:
                     // A document: name and size are known from the first write, so only opening it
@@ -7048,6 +7068,14 @@ struct MessageBubble: View, Equatable {
     private func albumAspect(_ i: Int) -> CGFloat {
         if message.album.indices.contains(i), message.album[i].height > 0 {
             return CGFloat(message.album[i].width / message.album[i].height)
+        }
+        // AND THE RECEIVER'S ALBUM HAS NO `album` YET EITHER, while the tiles upload. It carries
+        // `albumSizes` instead — the same proportions, written before anything was uploaded, for
+        // exactly the reason described below: so the mosaic solves ONE arrangement and keeps it when
+        // the real tiles land.
+        if message.albumSizes.indices.contains(i),
+           message.albumSizes[i].count == 2, message.albumSizes[i][1] > 0 {
+            return CGFloat(message.albumSizes[i][0] / message.albumSizes[i][1])
         }
         // THE OPTIMISTIC ALBUM HAS NO `album` YET — it only has `localAlbum`, the preview JPEGs. Falling
         // through to 1 here meant every pending photo measured as a SQUARE, so the mosaic solved one

@@ -105,6 +105,17 @@ struct Message: Identifiable, Equatable, Codable {
     var mentions: [String] = []       // uids @-mentioned in this message (groups)
     var viewOnce: Bool = false        // view-once photo (standard): recipient can open it exactly once
     var album: [AlbumItem] = []       // 2+ photos sent together = ONE album message (grid + one caption)
+    /// PER-TILE ASPECTS, WRITTEN BEFORE THE TILES EXIST.
+    ///
+    /// An album message is written the instant Send is tapped, like every other media type, but its
+    /// grid is SOLVED from each tile's aspect ratio — so a placeholder without them would lay out
+    /// differently from the album that replaces it and the whole bubble would jump. These are read
+    /// off the source images before anything is uploaded and cost no bytes worth counting.
+    ///
+    /// ⚠️ Deliberately NOT fake `album` entries. `AlbumItem` requires a url and real encryption
+    /// metadata, and inventing those to hold a shape would put meaningless crypto fields in the
+    /// database and make `isAlbum` true for a message with nothing behind it.
+    var albumSizes: [[Double]] = []
     var localAlbum: [Data] = []       // optimistic album previews shown before upload
     var localAlbumIsVideo: [Bool] = [] // per optimistic item: is it a video? (→ play badge before upload)
     var createdAt: Date
@@ -171,6 +182,7 @@ struct Message: Identifiable, Equatable, Codable {
         case "audio": return (audioUrl?.isEmpty ?? true) ? "audio" : nil
         case "video": return (videoUrl?.isEmpty ?? true) ? "video" : nil
         case "file":  return (fileUrl?.isEmpty  ?? true) ? "file"  : nil
+        case "album": return album.isEmpty ? "album" : nil
         default:      return nil
         }
     }
@@ -400,7 +412,7 @@ struct Message: Identifiable, Equatable, Codable {
         case clientId, replyTo, reactions, mentions, viewOnce, album
         case createdAt, width, blurhash, height
         case callerUid, callOutcome, callVideo, callDuration
-        case edited, deleted, forwarded, clientTs, linkPreview, hasServerTime, uploading
+        case edited, deleted, forwarded, clientTs, linkPreview, hasServerTime, uploading, albumSizes
     }
 
     init(id: String, data: [String: Any], cid: String, crypto: Crypto) {
@@ -452,6 +464,7 @@ struct Message: Identifiable, Equatable, Codable {
         self.deleted = data["deleted"] as? Bool ?? false
         self.forwarded = data["forwarded"] as? Bool ?? false
         self.uploading = data["uploading"] as? Bool ?? false
+        self.albumSizes = (data["albumSizes"] as? [[Double]]) ?? []
         self.clientId = data["clientId"] as? String
         self.enc = (data["enc"] as? [String: Any]).flatMap(EncMeta.init(map:))
         // Each reaction is sealed by ITS reactor (the map key), so decrypt with that uid as
