@@ -132,7 +132,10 @@ struct StoryTextCard: View {
     @Binding var typing: Bool
     var onClose: () -> Void
 
-    @FocusState private var focused: Bool
+    /// ⚠️ PLAIN `@State`, NOT `@FocusState`. The words are a `UITextView` now (`StoryTextEditor`), and
+    /// focus there is `becomeFirstResponder` rather than SwiftUI's focus system — one of the two has
+    /// to be the truth and it cannot be the one that does not own the keyboard.
+    @State private var focused = false
     @State private var showDiscard = false
     /// The page no longer resizes for the keyboard, so the card has to lift its own contents over it.
     /// Measured rather than guessed: a hardware keyboard, a floating one and a language bar are all
@@ -203,24 +206,32 @@ struct StoryTextCard: View {
                         .multilineTextAlignment(.center)
                         .allowsHitTesting(false)
                 }
-                TextField("", text: $text, axis: .vertical)
-                    .onChange(of: text) { _, v in if v.count > charLimit { text = String(v.prefix(charLimit)) } }
-                    .focused($focused)
-                    .multilineTextAlignment(.center)
-                    // SIZED TO FIT AS HE TYPES — see `TextStoryStyles.fittedSize`. It was a fixed 30,
-                    // so a long status simply ran off the bottom of the card while the render
-                    // underneath it quietly shrank to a size he had never seen.
-                    .font(TextStoryStyles.font(fontIndex, size: fontSize))
-                    .foregroundStyle(style.ink)
-                    .tint(style.ink)
-                    .textFieldStyle(.plain)          // prevents the system white-box background
-                    .background(Color.clear)
+                // SIZED TO FIT — see `TextStoryStyles.fittedSize` — and SCROLLING, which is the
+                // other half. See `StoryTextEditor`.
+                StoryTextEditor(text: $text, focused: $focused,
+                                font: TextStoryStyles.uiFont(fontIndex, size: fontSize),
+                                color: UIColor(style.ink),
+                                limit: charLimit)
                     .padding(.horizontal, 28)
             }
-            // HALF the covered part, because the words are CENTRED: lifting them by the whole
-            // overlap would put them as far above the middle as they were below it. Half keeps them
-            // centred in the part of the card you can still see.
-            .offset(y: -keyboardOverlap / 2)
+            // ⚠️ THE KEYBOARD IS TAKEN OUT OF THE WORDS' BOX, NOT SUBTRACTED FROM THEIR POSITION —
+            // his 2026-08-16 report: "text typing is entering under keyboard, i can't see what i am
+            // writing."
+            //
+            // This was `.offset(y: -keyboardOverlap / 2)`: the words kept the whole card's height and
+            // were slid up by half of what the keyboard covered. For a short status that is the same
+            // thing and it looked right for months. For a long one it is not: the text was TALLER
+            // than the space left above the keys, so sliding it moved the overflow from the bottom to
+            // both ends at once — the line being typed is the last line, and the last line was always
+            // the one furthest under the keyboard.
+            //
+            // Making it the box's own bottom inset is what the note on `keyboardOverlap` says the
+            // reference composer does: the keyboard becomes part of this view's OWN geometry, and
+            // whatever is left is where the words live. Short text still centres in it, exactly as
+            // before; long text now scrolls inside it with the caret in view.
+            //
+            // The extra 68 clears the Aa / colour / ✓ row, which rides just above the keys.
+            .padding(.bottom, keyboardOverlap > 0 ? keyboardOverlap + 68 : 0)
 
             VStack(spacing: 0) {
                 HStack {
@@ -339,6 +350,95 @@ struct StoryTextCard: View {
             .frame(width: 46, height: 46)
             .liquidGlass(Circle())      // non-interactive: its touch tracking intermittently ate the tap
             .contentShape(Circle())
+    }
+}
+
+/// THE WORDS THEMSELVES.
+///
+/// ⚠️ A `UITextView`, NOT `TextField(axis: .vertical)`, AND THAT SWAP IS HIS 2026-08-16 REPORT: "text
+/// typing is entering under keyboard, i can't see what i am writing."
+///
+/// A vertical `TextField` GROWS. It has no scrolling of any kind — the view simply gets taller as you
+/// type, and once it is taller than the room above the keys there is nowhere for the extra to go and
+/// no way to reach it. Every arrangement of a growing view has the same hole in it, because the line
+/// being typed is always the LAST line, which is always the one furthest out of sight. Only a view
+/// that scrolls can keep a caret visible, and `UITextView` scrolls to its own caret for nothing.
+///
+/// ⚠️ AND IT CENTRES ITSELF VERTICALLY WHILE THE TEXT STILL FITS. That is what the card has always
+/// looked like and what most statuses are — a line or two in the middle of a colour. A scroll view
+/// pins its content to the top by default, so without this every short status would have jumped to
+/// the top of the card the moment this landed. It is done as a content inset in `layoutSubviews`,
+/// where the real height is known, rather than guessed from the font.
+struct StoryTextEditor: UIViewRepresentable {
+    @Binding var text: String
+    @Binding var focused: Bool
+    let font: UIFont
+    let color: UIColor
+    let limit: Int
+
+    /// Vertically centred until it overflows, top-aligned and scrolling after that.
+    final class CentringTextView: UITextView {
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            let fits = sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude)).height
+            let inset = max(0, (bounds.height - fits) / 2)
+            // The threshold is what stops this from being a layout loop: writing `contentInset`
+            // triggers another layout pass, so it must settle rather than merely converge.
+            if abs(contentInset.top - inset) > 0.5 { contentInset.top = inset }
+        }
+    }
+
+    func makeUIView(context: Context) -> UITextView {
+        let v = CentringTextView()
+        v.delegate = context.coordinator
+        v.backgroundColor = .clear
+        v.isScrollEnabled = true
+        v.showsVerticalScrollIndicator = false
+        v.alwaysBounceVertical = false
+        v.textContainerInset = .zero
+        v.textContainer.lineFragmentPadding = 0
+        v.textAlignment = .center
+        v.font = font
+        v.textColor = color
+        v.tintColor = color
+        v.text = text
+        return v
+    }
+
+    func updateUIView(_ v: UITextView, context: Context) {
+        context.coordinator.parent = self
+        // Only when it actually differs: assigning `text` moves the caret to the end, so doing it on
+        // every update would fight the person typing in the middle of their own status.
+        if v.text != text { v.text = text }
+        if v.font != font { v.font = font; v.setNeedsLayout() }
+        if v.textColor != color { v.textColor = color }
+        v.tintColor = color
+        v.textAlignment = .center
+        if focused, !v.isFirstResponder { v.becomeFirstResponder() }
+        if !focused, v.isFirstResponder { v.resignFirstResponder() }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: StoryTextEditor
+        init(_ p: StoryTextEditor) { parent = p }
+
+        func textViewDidChange(_ v: UITextView) {
+            if v.text.count > parent.limit { v.text = String(v.text.prefix(parent.limit)) }
+            parent.text = v.text
+            // The size is fitted to the text, so the text changing can change the size — and a
+            // changed size changes where the middle is.
+            v.setNeedsLayout()
+        }
+        // The flag is the card's, and the card hangs its ✓ button and its close confirmation off it,
+        // so it has to hear about a keyboard raised or dropped by any route — including the system's.
+        func textViewDidBeginEditing(_ v: UITextView) {
+            if !parent.focused { parent.focused = true }
+        }
+        func textViewDidEndEditing(_ v: UITextView) {
+            if parent.focused { parent.focused = false }
+        }
     }
 }
 

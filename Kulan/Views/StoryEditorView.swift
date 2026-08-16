@@ -963,7 +963,6 @@ struct StoryEditorView: View {
     /// flatten renders, the pen bakes against and the text overlays position in. One space for the
     /// seen and the posted picture is the whole WYSIWYG contract of this screen.
     @ViewBuilder private func cardContent(card: CGSize) -> some View {
-        let boxed = !imageFillsCanvas(card)
         ZStack {
             Color.black
             // ⚠️ THE CANVAS THE POST WILL BAKE, not a blur of the photo. WYSIWYG is the whole
@@ -974,13 +973,28 @@ struct StoryEditorView: View {
             //
             // Same sampler and same drawer as `flatten` and as the story viewer — `StoryCanvas` —
             // so what he frames here is the file that lands.
-            if boxed {
-                LinearGradient(colors: [Color(uiColor: canvasColours.top),
-                                        Color(uiColor: canvasColours.bottom)],
-                               startPoint: .top, endPoint: .bottom)
-                    .frame(width: card.width, height: card.height)
-                    .allowsHitTesting(false)
-            }
+            // ⚠️ ALWAYS DRAWN, NEVER CONDITIONAL, AND THAT IS HIS 2026-08-16 "when i start zoom in
+            // for fast seconds it be like black, when i remove my fingers after that the blur is
+            // coming". MY OWN REGRESSION, from this morning.
+            //
+            // It used to be `if !imageFillsCanvas(card)`, and I made that test zoom-aware so a
+            // shrunken picture would show its canvas. The two halves then ran on different clocks:
+            // the PICTURE follows the fingers live through a UIKit transform — which is the whole
+            // reason a pinch on this screen does not shake — while `photoZoom` is only written when
+            // the fingers come off. So the condition was answering with the size the picture had
+            // BEFORE the gesture. Pinch out from a filling photo and it shrank away from a canvas
+            // that was still being told it was covered: black behind it for the length of the
+            // gesture, and the gradient arriving a beat after the fingers left.
+            //
+            // A condition that lags the thing it describes cannot be corrected, only removed. The
+            // gradient costs nothing to draw and is invisible under a picture that covers it — which
+            // is exactly what `flatten` does, unconditionally, and has always done. One less thing
+            // that can disagree with the picture.
+            LinearGradient(colors: [Color(uiColor: canvasColours.top),
+                                    Color(uiColor: canvasColours.bottom)],
+                           startPoint: .top, endPoint: .bottom)
+                .frame(width: card.width, height: card.height)
+                .allowsHitTesting(false)
             // Photo: full card width, aspect-fit on the wash. Zoom/pan applied DIRECTLY to a
             // UIImageView's transform in UIKit (no SwiftUI @State write per touch -> zero
             // re-render mid-pinch -> butter smooth, anchored between the fingers). The final
