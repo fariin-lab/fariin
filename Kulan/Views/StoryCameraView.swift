@@ -893,7 +893,19 @@ struct StoryCameraView: View {
                     bottomTrailingRadius: typing ? 0 : previewCorner,
                     topTrailingRadius: previewCorner,
                     style: .continuous))
-                .padding(.horizontal, typing ? 0 : 6)
+                // ⚠️ NO SIDE MARGINS AT ALL NOW — his 2026-08-16 report on both pages: "camera page
+                // and text page left and right is not tucking… i see space."
+                //
+                // This was 6pt of black down each side at rest, dropped only while the keyboard was
+                // up. That was his OWN 2026-08-03 fix ("left and right i see empty black") applied to
+                // the state he was in when he reported it, and the same complaint has come back for
+                // the state he was not: a card that floats 6pt in from the screen also holds its
+                // rounded corners 6pt in from the phone's, so the two curves never meet and the
+                // corner shows a black wedge between them. Second report, so the margin goes rather
+                // than the state it applies to.
+                //
+                // The TOP keeps its 6pt: that edge sits under the status bar and is not against
+                // anything, which is the one place a gap is the design rather than a leak.
                 .padding(.top, 6)
                 // ⚠️ THE KEYBOARD'S OWN CURVE AND DURATION, MATCHING THE CARD'S. It was
                 // `.easeInOut(duration: 0.2)` against the card's `.easeOut(duration: 0.22)`, and

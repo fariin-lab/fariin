@@ -44,6 +44,84 @@ enum TextStoryStyles {
     }
 
     static func style(_ index: Int) -> TextStoryStyle { all[abs(index) % all.count] }
+
+    // MARK: - How big the words are
+
+    /// THE TEXT'S BOX IS A SHAPE, NOT A SIZE — `width × width * boxAspect`, centred — and every
+    /// number below is a RATIO of that width.
+    ///
+    /// ⚠️ THIS IS THE ONLY REASON THE CARD AND THE POSTED PICTURE AGREE. The card is about 370pt
+    /// wide and the render is 920, so a rule written in points would start shrinking the words at
+    /// two different lengths and what he composed would not be what posts. Written as ratios the
+    /// rule is scale-free: the same text picks the same size RELATIVE to its box in both places, and
+    /// the two pictures match by construction rather than by a constant somebody kept in step.
+    ///
+    /// 1.6 is a little shorter than the card's own 9:16, which is what leaves room for the X above
+    /// the words and the Aa row below them. The render's frame is far taller than that (2.5:1, so it
+    /// fills any viewer full-bleed), and the extra is deliberate over-bleed that gets cropped — the
+    /// words are held to this shape in the middle of it, where every phone shows them.
+    static let boxAspect: CGFloat = 1.6
+    /// 0.081 of the box width is ~30pt on the card, which is the size this screen has always opened
+    /// at, so nothing about a short status changes.
+    static let maxSizeRatio: CGFloat = 0.081
+    /// ...and ~12pt, which is where it stops. 720 characters land at about 15, so the floor is a
+    /// backstop rather than the working end of the range.
+    static let minSizeRatio: CGFloat = 0.032
+
+    /// The measuring twin of `font(_:size:)`. SwiftUI's `Font` cannot be asked how tall a paragraph
+    /// set in it would be; `UIFont` can, and these two must describe the same typeface or the fit
+    /// would be measured in one face and drawn in another.
+    static func uiFont(_ index: Int, size: CGFloat) -> UIFont {
+        let weight: UIFont.Weight
+        let design: UIFontDescriptor.SystemDesign
+        switch abs(index) % 4 {
+        case 1:  weight = .black;    design = .rounded
+        case 2:  weight = .semibold; design = .serif
+        case 3:  weight = .semibold; design = .monospaced
+        default: weight = .bold;     design = .default
+        }
+        let base = UIFont.systemFont(ofSize: size, weight: weight)
+        guard let d = base.fontDescriptor.withDesign(design) else { return base }
+        return UIFont(descriptor: d, size: size)
+    }
+
+    /// THE BIGGEST SIZE THIS TEXT STILL FITS AT — the reference app's behaviour, and his 2026-08-16
+    /// instruction: "when the text becomes longer, the text should automatically zoom out so that
+    /// all text fits properly inside the story frame… do not let it get cut off."
+    ///
+    /// Measured, not bucketed by character count. Buckets are what most apps do and they are wrong
+    /// twice over for this audience: they cannot know that a Somali word is longer than an English
+    /// one, and they cannot know that this card has four faces of very different widths — the
+    /// monospaced one needs about a third more room than the rounded one for the same sentence. The
+    /// question "does this paragraph fit in this box in this face" has an exact answer, so it is
+    /// asked rather than guessed.
+    ///
+    /// Steps down rather than binary-searching: a short status answers on the first measurement,
+    /// which is the case that runs on every keystroke.
+    static func fittedSize(for text: String, boxWidth w: CGFloat, fontIndex: Int) -> CGFloat {
+        let maxSize = w * maxSizeRatio
+        guard w > 1, !text.isEmpty else { return maxSize }
+        let minSize = w * minSizeRatio
+        // 0.98 of the box, because SwiftUI's line metrics and UIKit's differ by a hair and the hair
+        // must fall on the side of fitting.
+        let maxHeight = w * boxAspect * 0.98
+        let para = NSMutableParagraphStyle()
+        para.alignment = .center
+        para.lineBreakMode = .byWordWrapping
+        let ns = text as NSString
+        let step = max(0.5, maxSize * 0.03)
+        var size = maxSize
+        while size > minSize {
+            let h = ns.boundingRect(
+                with: CGSize(width: w, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: uiFont(fontIndex, size: size), .paragraphStyle: para],
+                context: nil).height
+            if h <= maxHeight { return size }
+            size -= step
+        }
+        return minSize
+    }
 }
 
 struct StoryTextCard: View {
@@ -63,6 +141,9 @@ struct StoryTextCard: View {
 
     /// THE CARD'S OWN BOTTOM EDGE ON SCREEN, and the whole keyboard problem is solved in its terms.
     @State private var cardMaxY: CGFloat = 0
+    /// ...and its width, which is what the words are sized against. Measured from the same place for
+    /// the same reason: a card that is told how wide it is cannot disagree with the one on screen.
+    @State private var cardWidth: CGFloat = 0
 
     /// HOW MUCH OF THIS CARD THE KEYBOARD ACTUALLY COVERS — Signal's number, not ours.
     ///
@@ -88,9 +169,24 @@ struct StoryTextCard: View {
         max(0, cardMaxY - keyboard.topOnScreen)
     }
 
-    private let charLimit = 700
+    /// 720, his 2026-08-16 number, up from 700. The words shrink to fit now, so the limit is no
+    /// longer standing in for "past this it stops looking like a status" — it is only a ceiling.
+    private let charLimit = 720
     private var style: TextStoryStyle { TextStoryStyles.style(styleIndex) }
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    /// The words' own box: the card less the 28pt breathing room down each side.
+    ///
+    /// ⚠️ NOT NARROWED WHILE THE KEYBOARD IS UP, and that is deliberate. The size is fitted against a
+    /// box that never changes, so opening the keyboard cannot resize the words under his hand — a
+    /// paragraph that jumps a size smaller the moment you tap it reads as a glitch, and the picture
+    /// he is composing is the one with the keyboard DOWN.
+    private var textBoxWidth: CGFloat {
+        max(1, (cardWidth > 1 ? cardWidth : UIScreen.main.bounds.width) - 56)
+    }
+    private var fontSize: CGFloat {
+        TextStoryStyles.fittedSize(for: text, boxWidth: textBoxWidth, fontIndex: fontIndex)
+    }
 
     var body: some View {
         ZStack {
@@ -102,7 +198,7 @@ struct StoryTextCard: View {
             ZStack {
                 if text.isEmpty {
                     Text("Type something…")
-                        .font(TextStoryStyles.font(fontIndex, size: 30))
+                        .font(TextStoryStyles.font(fontIndex, size: fontSize))
                         .foregroundStyle(style.ink.opacity(0.45))
                         .multilineTextAlignment(.center)
                         .allowsHitTesting(false)
@@ -111,7 +207,10 @@ struct StoryTextCard: View {
                     .onChange(of: text) { _, v in if v.count > charLimit { text = String(v.prefix(charLimit)) } }
                     .focused($focused)
                     .multilineTextAlignment(.center)
-                    .font(TextStoryStyles.font(fontIndex, size: 30))
+                    // SIZED TO FIT AS HE TYPES — see `TextStoryStyles.fittedSize`. It was a fixed 30,
+                    // so a long status simply ran off the bottom of the card while the render
+                    // underneath it quietly shrank to a size he had never seen.
+                    .font(TextStoryStyles.font(fontIndex, size: fontSize))
                     .foregroundStyle(style.ink)
                     .tint(style.ink)
                     .textFieldStyle(.plain)          // prevents the system white-box background
@@ -194,8 +293,9 @@ struct StoryTextCard: View {
         .background(
             GeometryReader { g in
                 Color.clear
-                    .onAppear { cardMaxY = g.frame(in: .global).maxY }
+                    .onAppear { cardMaxY = g.frame(in: .global).maxY; cardWidth = g.size.width }
                     .onChange(of: g.frame(in: .global).maxY) { _, v in cardMaxY = v }
+                    .onChange(of: g.size.width) { _, v in cardWidth = v }
             }
         )
         // ⚠️ ONE ANIMATION FOR THE WHOLE CARD, DRIVEN BY ONE VALUE, AND THAT IS THE OTHER HALF OF
@@ -254,14 +354,23 @@ struct StoryTextCard: View {
     guard !trimmed.isEmpty else { return nil }
     let style = TextStoryStyles.style(styleIndex)
     let renderW: CGFloat = 1080
+    let pad: CGFloat = 80
+    // THE SAME RULE THE CARD USED, ASKED AT THIS SIZE. It was a flat 64pt with
+    // `minimumScaleFactor(0.4)` underneath it, which is SwiftUI shrinking the words on its own terms
+    // at its own moment — so the posted picture and the card he composed on could pick different
+    // sizes for the same status, and neither knew about the other. One function answers for both now;
+    // the ratios in it are what make the answer come out the same. See `fittedSize`.
+    let size = TextStoryStyles.fittedSize(for: trimmed, boxWidth: renderW - pad * 2, fontIndex: fontIndex)
     let card = ZStack {
         style.bg
         Text(trimmed)
-            .font(TextStoryStyles.font(fontIndex, size: 64))
+            .font(TextStoryStyles.font(fontIndex, size: size))
             .foregroundStyle(style.ink)
             .multilineTextAlignment(.center)
-            .minimumScaleFactor(0.4)
-            .padding(80)
+            // A belt, not the mechanism: the fit above is measured in UIKit's metrics and drawn in
+            // SwiftUI's, and the last line must never be the one that gets clipped.
+            .minimumScaleFactor(0.85)
+            .padding(pad)
     }
     .frame(width: renderW, height: renderW * 2.5)
 

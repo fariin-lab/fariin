@@ -814,25 +814,27 @@ struct StoryDetailView: View {
             syncVideoMode()   // composing a reply pauses; resumes on dismiss
         }
         .onChange(of: scenePhase) { phase in
-            // Pause when the app leaves the foreground; resume on return (the timer also
-            // naturally suspends with the run loop, this coordinates video too). Only undo a
-            // pause WE created: a Control Center peek fires .inactive→.active mid-hold, and
-            // blindly clearing isPaused resumed the story under the user's finger.
-            if phase == .active {
-                if scenePaused { scenePaused = false; isPaused = false; syncVideoMode() }
-            } else {
-                // ⚠️ RECORDED EVEN WHEN A FINGER ALREADY PAUSED IT. This was `if !isPaused`, so a
-                // scene pause arriving DURING a hold was anonymous — nothing remembered that the app
-                // had left the foreground. The gesture's release then cleared `isPaused` and played
-                // the story behind Control Centre, with the 0.05s timer still running in `.inactive`,
-                // so the bar advanced and you came back one or two stories further on. And because
-                // `scenePaused` was never set, returning to `.active` had nothing to undo.
-                //
-                // Recording it unconditionally is safe precisely because `.active` is the only thing
-                // that clears it, and the release now refuses while it stands.
-                scenePaused = true
-                isPaused = true; syncVideoMode()
-            }
+            setSceneActive(phase == .active)
+        }
+        // ⚠️ AND THE SAME ANSWER FROM UIKIT, WHICH IS THE ONE THAT ACTUALLY ARRIVES HERE — his
+        // 2026-08-16 report: "when I am watching a Story and completely leave the app, the Story
+        // continues playing in the background and I can still hear the audio."
+        //
+        // `scenePhase` is injected by the SwiftUI App into ITS OWN root view, and this view is not
+        // under it: every page is a `StoryPageHostVC` — a `UIHostingController` built by hand inside
+        // a UIKit pager, inside a UIKit presenter. A hosting controller made that way keeps its own
+        // environment, so the value read above can sit at `.active` for the whole life of the
+        // viewer. The handler was right and was simply never called, which is why nothing about it
+        // looked wrong.
+        //
+        // These two notifications are posted by UIKit to the whole process and cannot be missed. The
+        // app also carries the `audio` background mode for calls and voice notes, so a story left
+        // playing does not merely keep running, it keeps SOUNDING — which is what he heard.
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            setSceneActive(false)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            setSceneActive(true)
         }
         // Host shows/hides a sheet over the viewer (viewers list, share, menu) → freeze/resume.
         .onReceive(NotificationCenter.default.publisher(for: .pauseStory)) { _ in
@@ -2106,6 +2108,36 @@ private extension StoryDetailView {
     /// former `playVideo()` / `pauseVideo()` call site now calls this instead.
     func syncVideoMode() {
         video.setMode(videoMode)
+    }
+
+    /// Leaving the app and coming back, from whichever of the two sources reports it first.
+    ///
+    /// Pause when the app leaves the foreground; resume on return (the timer also naturally suspends
+    /// with the run loop — this coordinates the video too). Only undo a pause WE created: a Control
+    /// Centre peek fires inactive→active mid-hold, and blindly clearing `isPaused` resumed the story
+    /// under the user's finger.
+    ///
+    /// ⚠️ THE LEAVING IS RECORDED EVEN WHEN A FINGER ALREADY PAUSED IT. This used to be `if
+    /// !isPaused`, so a scene pause arriving DURING a hold was anonymous — nothing remembered that
+    /// the app had left the foreground. The gesture's release then cleared `isPaused` and played the
+    /// story behind Control Centre, with the 0.05s timer still running, so the bar advanced and you
+    /// came back one or two stories further on. And because `scenePaused` was never set, coming back
+    /// had nothing to undo. Recording it unconditionally is safe precisely because becoming active
+    /// is the only thing that clears it, and the release refuses while it stands.
+    ///
+    /// Idempotent on purpose: `scenePhase` and UIKit's own notifications both call this, they can
+    /// arrive in either order or twice, and the same answer twice must mean the same as once.
+    func setSceneActive(_ active: Bool) {
+        if active {
+            guard scenePaused else { return }
+            scenePaused = false
+            isPaused = false
+        } else {
+            guard !scenePaused else { return }
+            scenePaused = true
+            isPaused = true
+        }
+        syncVideoMode()
     }
     
     func configureTapScreen() {
