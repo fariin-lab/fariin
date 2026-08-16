@@ -553,31 +553,41 @@ struct LiveWaveform: View {
                 // CGFloat spelled out: an implicit Double↔CGFloat conversion here is legal and is
                 // also exactly the kind of thing this file's type-checker budget is spent on.
                 let f = CGFloat(min(1, max(0, ctx.date.timeIntervalSince(stamp) / AudioRecorder.liveInterval)))
-                strip(geo: geo, slot: slot, shift: slot * (1 - f))
+                strip(geo: geo, shift: slot * (1 - f))
             }
         }
         .clipped()   // whatever survives the taper still dies AT the strip's edge, never outside the pill
     }
 
-    private func strip(geo: GeometryProxy, slot: CGFloat, shift: CGFloat) -> some View {
+    // `slot` is gone from here: it existed only to work out each bar's distance from the edge for
+    // the taper. The travel still uses it, but that is computed by the caller as `shift`.
+    private func strip(geo: GeometryProxy, shift: CGFloat) -> some View {
             HStack(alignment: .center, spacing: 2) {
                 ForEach(Array(levels.enumerated()), id: \.element.id) { i, bar in
-                    // A BAR IS WHAT WAS HEARD, THE WHOLE WAY ACROSS — his second report: the first
-                    // taper was 36pt wide, so tall bars began shrinking in the MIDDLE of the strip
-                    // and the picture stopped being true. The duck is 14pt now, the bar's own last
-                    // breath at the exit and nothing more: silence travels as dots untouched (the
-                    // 2pt floor already is the dot), speech travels at full height, and only a
-                    // tall bar touching the edge bows out. While the row is shorter than the strip
-                    // nothing is near that edge, so young recordings are never shaped.
-                    // The bar's REAL distance from the right edge, the slide included — so the duck
-                    // below is as continuous as the travel is, instead of stepping three times on
-                    // the way out.
-                    let fromRight = CGFloat(levels.count - 1 - i) * slot - shift
-                    let fromLeft = geo.size.width - fromRight
-                    let taper = max(0, min(1, fromLeft / 14))
+                    // ⛔ NO TAPER, NO FADE. A BAR IS WHAT WAS HEARD UNTIL THE EDGE CUTS IT.
+                    //
+                    // Two attempts to shape the exit are now both reverted, and the third report is
+                    // what explains the first two. His words: the small waves "goes right" out, but
+                    // where there is a big wave "something bugs back", as if it "acted like some
+                    // filtering the big waves".
+                    //
+                    // That is literally what the taper did, and only because of the 2pt floor beside
+                    // it. Height was `max(2, display(level) * h * taper)`. A silence bar is already
+                    // AT the floor, so multiplying it by the taper changes nothing and it sails out
+                    // whole. A speech bar gets multiplied down to that same floor, so it collapses
+                    // from full height to a dot. Same 14pt band, opposite behaviour, decided by how
+                    // loud the moment was — so the exit looked like it was sorting the voice.
+                    //
+                    // Fading instead of shrinking (acec998d) failed for a related reason: a faded
+                    // full-height bar loses its thin tips first and reads as shrinking anyway.
+                    //
+                    // The edge cuts them now, which is what the reference app does — it clips and
+                    // shapes nothing. Loud and quiet leave identically because neither is touched.
+                    // `.clipped()` on the strip is what performs the exit; do not reintroduce a
+                    // per-bar height rule here to "soften" it.
                     Capsule().fill(color)
                         .frame(width: 2.5,
-                               height: max(2, WaveformBars.display(Int(bar.level * 100)) * geo.size.height * taper))
+                               height: max(2, WaveformBars.display(Int(bar.level * 100)) * geo.size.height))
                         // A new bar ARRIVES at its true height — .identity kills the insertion
                         // grow-in the implicit animation gave it, which read as bars entering
                         // small and swelling into place ("it depends what wave heard, not fixed").
