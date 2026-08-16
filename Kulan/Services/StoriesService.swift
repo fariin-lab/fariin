@@ -173,38 +173,77 @@ struct StoryViewSummary {
 /// it is `@State` and dies with the screen; the FIRST open after every launch paid the round trip
 /// with a zero painted over it.
 ///
-/// Two integers per story, so the number that was true when he last looked is on screen in the first
-/// frame and the network only ever corrects it.
+/// Two integers and three uids per story, so what was true when he last looked is on screen in the
+/// first frame and the network only ever corrects it.
 ///
-/// ⚠️ NOT THE VIEWERS THEMSELVES. Names and photographs of other people are worth more room than
-/// they save here, and the eye icon they fall back to is not a wrong answer the way a 0 is.
+/// ⚠️ UIDS, NOT NAMES OR PHOTOGRAPHS, AND THAT IS WHAT MAKES CACHING THE FACES CHEAP ENOUGH TO DO.
 ///
-/// ⚠️ THIS IS A CACHE, NOT A COUNTER. The real fix is the count travelling down WITH the story, the
+/// This used to keep the two integers alone, and said so: "names and photographs of other people are
+/// worth more room than they save here, and the eye icon they fall back to is not a wrong answer the
+/// way a 0 is." The objection was right and the conclusion did not follow — because a face is not
+/// stored, it is RESOLVED. `fetchViewSummary` never downloads a name or a photograph either: it
+/// reads uids off the counter document and looks them up in the chat list that is already in memory.
+/// So the only thing the network was buying was the uids, and three of those per story is nothing.
+/// Nobody's name or photograph is written to disk by this, which is the same privacy answer the old
+/// note wanted, arrived at without the delay it cost.
+///
+/// That delay is the owner's 2026-08-16 report: the count appeared instantly (it was cached) while
+/// the avatars beside it waited a Firestore round trip every single time.
+///
+/// ⚠️ THIS IS A CACHE, NOT A COUNTER. The real fix is the summary travelling down WITH the story, the
 /// way the reference app's own story object carries it — a denormalised field on the story document,
 /// which is a server change and the owner's call (it is item 3B of the open season). Until then the
-/// number can be one visit stale for the moment the fetch takes, which is what he asked for.
+/// first ever look at a story still pays one round trip, and every look after it is instant.
 enum StoryCountCache {
-    private static let key = "storyViewCounts.v1"
+    /// ⚠️ v2 BECAUSE THE ENTRY GAINED THE UIDS. The v1 key is abandoned rather than migrated: it
+    /// holds two integers per story that the next fetch replaces anyway, and stories live 24 hours,
+    /// so there is nothing in it worth carrying across.
+    private static let key = "storyViewCounts.v2"
+    private static let orderKey = "storyViewCounts.v2.order"
     /// Stories live 24h; this is generous enough that nothing he can still open has been dropped.
     private static let capacity = 300
 
-    /// `[storyId: [count, reactions]]`, plus the order they were written in so the oldest go first.
-    private static var store: [String: [Int]] {
-        get { UserDefaults.standard.dictionary(forKey: key) as? [String: [Int]] ?? [:] }
-        set { UserDefaults.standard.set(newValue, forKey: key) }
+    private struct Entry: Codable {
+        var count: Int
+        var reactions: Int
+        /// Up to three viewer UIDS, newest first — see the note on the type for why it is these and
+        /// not the faces themselves.
+        var recent: [String]
     }
-    private static let orderKey = "storyViewCounts.v1.order"
 
+    /// JSON rather than a plist dictionary because the entry is no longer all one type. Read and
+    /// written whole, which is what it always did — this runs on a story change, not in a loop.
+    private static var store: [String: Entry] {
+        get {
+            guard let d = UserDefaults.standard.data(forKey: key),
+                  let s = try? JSONDecoder().decode([String: Entry].self, from: d) else { return [:] }
+            return s
+        }
+        set {
+            guard let d = try? JSONEncoder().encode(newValue) else { return }
+            UserDefaults.standard.set(d, forKey: key)
+        }
+    }
+
+    /// ⚠️ THE FACES ARE REBUILT HERE, FROM MEMORY, AND THAT IS WHY THIS IS INSTANT. The chat list is
+    /// seeded synchronously from its own disk cache at launch (`ConversationsDiskCache`), so by the
+    /// time a story can be opened the names and photo urls are already in hand — and `AvatarView`
+    /// seeds its image synchronously from the image cache in its initialiser. Uid on disk to a face
+    /// on screen therefore costs no network and no frame.
+    ///
+    /// A uid that is not in the chat list resolves to "Someone" with a letter, exactly as the
+    /// network path resolves it — the two cannot disagree, because they are the same function.
     static func summary(for storyId: String) -> StoryViewSummary? {
-        guard let v = store[storyId], v.count == 2 else { return nil }
-        return StoryViewSummary(count: v[0], reactionCount: v[1], recent: [])
+        guard let e = store[storyId] else { return nil }
+        return StoryViewSummary(count: e.count, reactionCount: e.reactions,
+                                recent: StoriesService.faces(for: e.recent))
     }
 
-    static func put(_ storyId: String, count: Int, reactions: Int) {
+    static func put(_ storyId: String, count: Int, reactions: Int, recent: [String]) {
         var s = store
         var order = UserDefaults.standard.stringArray(forKey: orderKey) ?? []
         if s[storyId] == nil { order.append(storyId) }
-        s[storyId] = [count, reactions]
+        s[storyId] = Entry(count: count, reactions: reactions, recent: recent)
         // Oldest first, and only ever a few at a time — this runs on a story change, not in a loop.
         while order.count > capacity {
             let dropped = order.removeFirst()
@@ -972,6 +1011,29 @@ final class StoriesService {
     /// Nil means "no counter for this story", which is a normal answer rather than an error: every
     /// story posted before the trigger existed has none, and the caller falls back to counting the
     /// receipts as it always did.
+    /// A UID TURNED INTO A FACE, FROM WHAT IS ALREADY IN MEMORY — the one place that mapping lives.
+    ///
+    /// Pure, and takes the chat list rather than reading it, so the same function serves the network
+    /// path (which hops to the main actor to collect its arguments) and the cache's rehydration
+    /// (which is already there). `viewedAt` is not carried: the footer never shows a time, and
+    /// inventing one here would put a wrong time on the sheet if these ever merged.
+    static func face(uid: String, convs: [Conversation], me: String) -> StoryViewerInfo {
+        let c = convs.first { $0.otherUid(me) == uid }
+        return StoryViewerInfo(id: uid, name: c?.name(for: me) ?? "Someone",
+                               photoUrl: c?.photoUrl(for: me), viewedAt: Date(), reaction: nil)
+    }
+
+    /// The same mapping for a caller that holds nothing but uids — the footer's remembered faces.
+    /// Reading the chat list here is a synchronous look at memory, which is the whole point: it is
+    /// what makes a cached face cost no frame. Not actor-annotated, which is how the rest of the app
+    /// reads this repository from synchronous code (`ThreadRepository`, `CallService`, `ChatService`
+    /// all do exactly this); the callers are the story footer's own main-thread paths.
+    static func faces(for uids: [String]) -> [StoryViewerInfo] {
+        let convs = ConversationsRepository.shared.conversations
+        let me = Auth.auth().currentUser?.uid ?? ""
+        return uids.map { face(uid: $0, convs: convs, me: me) }
+    }
+
     func fetchViewSummary(storyId: String) async -> StoryViewSummary? {
         guard !uid.isEmpty else { return nil }
         // Reciprocal, exactly as `fetchViewers` is: with receipts off you do not see who watched
@@ -983,13 +1045,9 @@ final class StoriesService {
         let recentUids = (data["recent"] as? [String] ?? []).prefix(3)
         let (convs, me) = await MainActor.run { (ConversationsRepository.shared.conversations, uid) }
         // Same resolution as `fetchViewers`, so a face in the footer and the same face in the sheet
-        // cannot come out differently named. `viewedAt` is not carried: the footer never shows a
-        // time, and inventing one here would put a wrong time on the sheet if these ever merged.
-        let recent = recentUids.map { u -> StoryViewerInfo in
-            let c = convs.first { $0.otherUid(me) == u }
-            return StoryViewerInfo(id: u, name: c?.name(for: me) ?? "Someone",
-                                   photoUrl: c?.photoUrl(for: me), viewedAt: Date(), reaction: nil)
-        }
+        // cannot come out differently named — and the same one the CACHE rehydrates through, so a
+        // remembered face and a fetched one cannot disagree either.
+        let recent = recentUids.map { Self.face(uid: $0, convs: convs, me: me) }
         return StoryViewSummary(count: count,
                                 reactionCount: data["reactionCount"] as? Int ?? 0,
                                 recent: Array(recent))

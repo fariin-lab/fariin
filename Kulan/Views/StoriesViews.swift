@@ -4180,8 +4180,9 @@ struct StoryViewer: View {
                     viewersByStory[id] = v
                     // Every one of them, not just the one on screen: this sweep is the cheapest
                     // chance the cache gets to be right about the stories he has not reached yet,
-                    // so the NEXT visit opens on a number for all of them.
-                    StoryCountCache.put(id, count: v.count, reactions: v.reactionCount)
+                    // so the NEXT visit opens on a number AND on faces for all of them.
+                    StoryCountCache.put(id, count: v.count, reactions: v.reactionCount,
+                                        recent: v.recent.map(\.id))
                     // The one on screen paints as soon as ITS answer lands, whichever order they
                     // arrive in — the group is not awaited as a batch for exactly that reason.
                     if id == currentStoryId { barViewers = v; publishOwnerBar() }
@@ -4224,16 +4225,22 @@ struct StoryViewer: View {
             // the count that was true when he last looked is on screen in the first frame and the
             // fetch below only ever corrects it.
             //
-            // The faces are not cached and still arrive with the fetch. That is deliberate: they are
-            // names and photographs of other people, they are worth more room than they save, and
-            // the eye icon they fall back to is not a wrong answer the way a 0 is.
+            // ⚠️ AND THE FACES COME WITH IT NOW — his 2026-08-16 report, "the viewers' profile
+            // avatars appear late". They used to be left out of the cache on purpose, because
+            // storing other people's names and photographs was not worth the room. What that missed
+            // is that a face is never STORED, it is RESOLVED: the fetch reads uids off the counter
+            // document and looks them up in the chat list already in memory. So the cache keeps the
+            // three uids, resolves them through the same function the network path uses, and the
+            // avatars are on screen in the first frame with nothing written to disk that was not
+            // there before. See `StoryCountCache`.
             barViewers = viewersByStory[id] ?? StoryCountCache.summary(for: id)
             publishOwnerBar()
         }
         Task {
             let v = await Self.viewSummary(storyId: id)
             viewersByStory[id] = v
-            StoryCountCache.put(id, count: v.count, reactions: v.reactionCount)
+            StoryCountCache.put(id, count: v.count, reactions: v.reactionCount,
+                                recent: v.recent.map(\.id))
             if id == currentStoryId { barViewers = v; publishOwnerBar() }
         }
     }
