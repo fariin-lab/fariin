@@ -570,6 +570,26 @@ struct StoryDetailView: View {
                         if let ownerBar, model.isMine, ownerBarHeight > 0 {
                             ownerBar(model.id)
                                 .frame(height: ownerBarHeight)
+                                // ⚠️ AND IT LEAVES ON THE FLIGHT, EXACTLY LIKE A FRIEND'S REPLY BAR
+                                // — his 2026-08-16 report, with the bottom of the screen circled:
+                                // "when other people story i scroll down to close the buttom reply
+                                // bar disappearing correctly, but… my owner story… views and trash
+                                // bar is gone late."
+                                //
+                                // Moving this bar into the page (2026-08-14) was so it would TRAVEL
+                                // with the card through the cube, and it does. But it sits BELOW the
+                                // card and does not move with it, which is the reply bar's situation
+                                // to the letter — so on a pull-to-close the card flew home and the
+                                // Views and trash stayed sitting at the bottom of the chat list
+                                // until the whole viewer was torn down. That is the "late".
+                                //
+                                // Same flag, same curve, same line of code as `messageView`'s, and
+                                // deliberately the same line so the two can never drift: one bar
+                                // per page, one rule for both. `flightActive` is the hero open and
+                                // close only — a cube turn does not raise it, so nothing is taken
+                                // away from the swipe this bar was moved here for.
+                                .opacity(flightActive ? 0 : 1)
+                                .animation(.easeOut(duration: 0.15), value: flightActive)
                         }
                     }
                     .padding(.top, winInsets.top)
