@@ -77,8 +77,24 @@ private struct SheetCaptionFade: ViewModifier {
     /// construction. This is the reference app's `captionAlpha *= (1.0 - contentScaleFraction)` translated
     /// into a view that cannot be handed its alpha directly — same guarantee, same number, same
     /// reason it cannot be told a lie.
+    /// ⚠️ `chromeHidden` IS NOT IN HERE ANY MORE, AND THAT IS HIS 2026-08-16 REPORT: "the caption and
+    /// bottom shadow disappear too abruptly… make them gradually disappear as the story scrolls up."
+    ///
+    /// The ramp below was never running for a pull-up. `storyChromeHidden` is posted TRUE at the
+    /// moment the swipe engages — `onSwipeUpChanged`'s `if !showViewers` branch, before the finger
+    /// has moved a single point — because the header and the top scrim leave in one step and want
+    /// telling at once. Reading that boolean here meant the caption was slammed to zero on frame one
+    /// and the whole 32% fade underneath it was dead code. There was no gradual anything to see.
+    ///
+    /// A boolean cannot be half-told, which is exactly why it cannot describe a fade. The end state
+    /// is still guaranteed, and by the better of the two sources: `StoryCardMorph.sheetFraction` is
+    /// written by the one call that actually shrinks the card, so unlike a message about what was
+    /// requested it describes what is ON SCREEN, and it is continuous — every path that ends with the
+    /// sheet open ends with the card shrunk, so every one of them ends with this at zero.
+    ///
+    /// `chromeHidden` still resets the ramp when it goes false; see `onReceive` below.
     private var opacity: Double {
-        if chromeHidden || flightActive { return 0 }
+        if flightActive { return 0 }
         let shrink = max(progress, StoryCardMorph.shared.sheetFraction)
         let t = min(1, max(0, shrink / Self.goneAt))
         return Double(1 - t)

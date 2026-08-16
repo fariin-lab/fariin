@@ -26,7 +26,10 @@ struct StoryShareData: Identifiable {
 /// ⚠️ EVERYTHING IS NORMALISED 0-1 AGAINST THE STORY'S OWN FRAME, never points. The author's card,
 /// the exported file and the viewer's card are three different sizes on three different phones; a
 /// rectangle in points would be right on exactly one of them.
-struct StoryTapTarget: Equatable {
+/// `Codable` and `Hashable` because `Story` is both and carries an array of these. All six members
+/// are plain values, so both are synthesised — but leaving them off does not fail here, it fails on
+/// `Story`, several hundred lines away, saying only that `Story` no longer conforms.
+struct StoryTapTarget: Equatable, Codable, Hashable {
     var x: Double        // centre, 0-1 across the frame
     var y: Double        // centre, 0-1 down the frame
     var w: Double        // 0-1 of the frame's width
