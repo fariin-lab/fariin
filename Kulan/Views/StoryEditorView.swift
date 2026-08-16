@@ -1506,24 +1506,6 @@ struct StoryEditorView: View {
         if showTrim, items.indices.contains(index), items[index].isVideo {
             let dur = max(0.1, items[index].duration)
             VStack {
-                HStack {
-                    // X puts the handles back where they were; Done keeps them. Neither may leave
-                    // half a cut behind, which is the rule the video editor's trim already follows.
-                    Button { closeTrim(keep: false) } label: {
-                        Image(systemName: "xmark").font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(.white).frame(width: 44, height: 44)
-                            .contentShape(Circle()).liquidGlass(Circle())
-                    }
-                    Spacer()
-                    Button { closeTrim(keep: true) } label: {
-                        Image(systemName: "checkmark").font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(.white).frame(width: 44, height: 44)
-                            .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
-                            .contentShape(Circle())
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, max(windowSafeTop - 22, 10))
                 Spacer()
                 // REAL BINDINGS NOW, not `.constant`. Dragging a handle seeks the clip, so you can
                 // see the frame you are cutting on — which is the whole reason a trim screen has a
@@ -1534,9 +1516,19 @@ struct StoryEditorView: View {
                                playing: $previewPlaying, draggingPlayhead: $trimDragging)
                     .frame(height: 56)
                     .padding(.horizontal, 16)
-                    .padding(.bottom, 28)
                     // Reserve the slot rather than let a late filmstrip shove the layout up.
                     .opacity(trimThumbs.isEmpty ? 0 : 1)
+                // ✕ · one tool group · ✓ — HIS 2026-08-16 REDESIGN, and it is the same three-part
+                // bar the pen and the crop screen already wear rather than a fourth arrangement.
+                //
+                // The two that end the session used to sit in the TOP corners with the strip alone
+                // at the bottom, so the screen was worked from both ends: the thumb reads the strip,
+                // then travels the height of the picture to accept it. Everything this screen does
+                // is at the bottom now, in the order the other two editors put it.
+                trimBar
+                    .padding(.horizontal, 16)
+                    .padding(.top, 14)
+                    .padding(.bottom, 28)
             }
             // ⚠️ NOTHING AT ALL NOW. IT WAS 0.55, THEN 0.18, AND HIS 2026-08-16 INSTRUCTION IS THAT
             // THE TRIM PAGE SHOWS THE CLIP AT ITS OWN BRIGHTNESS "IN ALL CASES". The history below
@@ -1578,6 +1570,73 @@ struct StoryEditorView: View {
                 p.seek(to: CMTime(seconds: t, preferredTimescale: 600),
                        toleranceBefore: .zero, toleranceAfter: .zero)
             }
+        }
+    }
+
+    /// THE TRIM PAGE'S OWN BAR: ✕ · a glass capsule of tools · Done.
+    ///
+    /// ⚠️ THE CAPSULE HOLDS THE TOOLS THAT EXIST, AND NOTHING ELSE. He listed five —
+    /// undo, sound, delete, speed, cut — and two of those are not controls, they are engines this
+    /// screen does not have: `cut` in his sense splits the clip into SEGMENTS (which is also what
+    /// makes `delete` mean anything: "delete only works when I cut the video, then select the part
+    /// I cut"), and `speed` re-times the export. Our clip model is one pair of handles,
+    /// `trimStart`/`trimEnd`, and the export composes from exactly that pair.
+    ///
+    /// A button that is drawn and does nothing is the one thing this project does not ship, so the
+    /// bar is built for the tools that are real today and has room for the rest: undo, which is a
+    /// genuine question this screen could never answer before, and sound, which was stranded on the
+    /// composer's top bar — hidden for the whole of the trim, so the clip you are cutting could not
+    /// be silenced while you cut it.
+    private var trimBar: some View {
+        HStack(spacing: 12) {
+            // X puts the handles back where they were; Done keeps them. Neither may leave half a
+            // cut behind, which is the rule the video editor's trim already follows.
+            Button { closeTrim(keep: false) } label: {
+                Image(systemName: "xmark").font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(.white).frame(width: 44, height: 44)
+                    .liquidGlass(Circle(), interactive: true).contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 22) {
+                // UNDO IS THE HANDLES, NOT THE SCREEN. It puts this sitting's cut back to where the
+                // page opened, which is the only edit the page makes — so it is the pen's undo with
+                // this screen's one kind of change, and it lights only when there is something to
+                // undo. Leaving is still ✕'s job.
+                capsuleTool("arrow.uturn.backward",
+                            active: trimStart != trimOpenedStart || trimEnd != trimOpenedEnd,
+                            tint: Color(hex: 0x3DA1FD)) {
+                    trimStart = trimOpenedStart
+                    trimEnd = trimOpenedEnd
+                    if let p = ensurePreviewPlayer() {
+                        p.pause(); previewPlaying = false
+                        p.seek(to: CMTime(seconds: trimStart, preferredTimescale: 600),
+                               toleranceBefore: .zero, toleranceAfter: .zero)
+                    }
+                }
+                // The composer's mute, reachable from the screen that needs it. Same two lines as
+                // the top bar's copy, including the one that tells the PLAYER — a flag that only
+                // reaches the export is a button that looks dead while you are listening to it.
+                capsuleTool(items[index].muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                            active: items[index].muted, tint: Color(hex: 0x3DA1FD)) {
+                    items[index].muted.toggle()
+                    previewPlayer?.isMuted = items[index].muted
+                }
+            }
+            .padding(.horizontal, 20).frame(height: 46)
+            .liquidGlass(Capsule())
+
+            Spacer(minLength: 8)
+
+            Button { closeTrim(keep: true) } label: {
+                Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.white).frame(width: 44, height: 44)
+                    .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
         }
     }
 
