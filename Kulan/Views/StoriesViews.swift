@@ -1764,6 +1764,14 @@ struct StoryViewer: View {
         // see the note on `onItemChanged` versus the seen receipt.
         .onChange(of: sheetStoryId) { _, id in
             guard showViewers, !id.isEmpty, id != currentStoryId else { return }
+            // ⚠️ NOT WHILE THE ROW IS MOVING — the crossing is a report, not a destination. The
+            // viewers list and the count row follow this id mid-drag exactly as before; what waits
+            // is the PAGER, because swapping the full-screen story on every crossing of a fling is
+            // work the live layer draws in the wrong slot while it loads (his double-brightness at
+            // the half-card and the wrong-cover flash are that window, photographed). The reference
+            // app can navigate mid-scroll because its navigation redraws nothing in the row. The
+            // row's `onIndexSettled` posts this jump once, at rest — see `MyStoriesCarousel`.
+            guard pageDragBox.rowLink?.isRowMoving != true else { return }
             NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: id)
             // ⚠️ THE ANCHOR IS NOT WRITTEN HERE ANY MORE, AND THAT DELETION IS THE TAP FIX.
             //
@@ -1929,6 +1937,8 @@ struct StoryViewer: View {
             // moment my bucket joined the paged set, so it had to become the first-frame fallback
             // rather than a second reading of the same thing — see `showingMine`.)
             guard showViewers, showingMine, !id.isEmpty else { return }
+            // Same deferral as the first handler — a crossing mid-movement is not a destination.
+            guard pageDragBox.rowLink?.isRowMoving != true else { return }
             NotificationCenter.default.post(name: .init("jumpToStoryItem"), object: id)
             // ⚠️ THE ANCHOR IS NOT WRITTEN HERE EITHER, AND THIS IS THE SECOND OF THE TWO.
             //
@@ -3616,6 +3626,17 @@ struct StoryViewer: View {
                               // same way it works it out for every other one.
                               liveStoryId: targetStoryId,
                               onActiveTap: { closeViewers() },
+                              // THE DEFERRED PAGER JUMP IS SPENT HERE — the row is still now, so
+                              // the one story swap the whole movement owes happens at rest. Same
+                              // guards as the onChange posts; `sheetStoryId` may have moved past
+                              // `id` on a newer gesture, in which case that gesture's own settle
+                              // will pay its own debt.
+                              onIndexSettled: { id in
+                                  guard showViewers, !id.isEmpty, id != currentStoryId,
+                                        id == sheetStoryId else { return }
+                                  NotificationCenter.default.post(name: .init("jumpToStoryItem"),
+                                                                  object: id)
+                              },
                               pageDrag: pageDragBox)
                 .padding(.top, blockTop)
                 .opacity(Double(carIn))
@@ -4625,6 +4646,9 @@ struct MyStoriesCarousel: View {
     /// reference app's rule and the reason they have none of these bugs to fix.
     let liveStoryId: String
     var onActiveTap: () -> Void = {}    // tap the centred card → collapse back to full screen
+    /// The row's scroll came fully to rest on this story — the host spends the DEFERRED pager jump
+    /// here. See `StoryRowController.onIndexSettled`.
+    var onIndexSettled: (String) -> Void = { _ in }
     /// The sheet's sideways page-drag, ALREADY IN CARD UNITS — a fraction of the panel's journey,
     /// and one panel journey is one card. It is their `viewListPanState.fraction`, which they add to
     /// the same `offsetFraction` the scroller feeds, and it must not be divided by anything: see the
@@ -4713,12 +4737,15 @@ struct MyStoriesCarousel: View {
     }
 
     init(stories: [Story], activeId: Binding<String>, row: StoryRowGeometry, liveStoryId: String,
-         onActiveTap: @escaping () -> Void = {}, pageDrag: StorySheetPageDrag) {
+         onActiveTap: @escaping () -> Void = {},
+         onIndexSettled: @escaping (String) -> Void = { _ in },
+         pageDrag: StorySheetPageDrag) {
         self.stories = stories
         self._activeId = activeId
         self.row = row
         self.liveStoryId = liveStoryId
         self.onActiveTap = onActiveTap
+        self.onIndexSettled = onIndexSettled
         self._pageDrag = ObservedObject(wrappedValue: pageDrag)
         // Seeded to the opened-on story so the big count row underneath is right on the first frame.
         // The ROW seeds itself from `activeIndex`, which is the same expression — see `StoryRow`.
@@ -4768,6 +4795,10 @@ struct MyStoriesCarousel: View {
                              pageDrag.pendingSheetSlide = i > was ? 1 : -1
                          }
                          activeId = stories[i].id
+                     },
+                     onIndexSettled: { i in
+                         guard stories.indices.contains(i) else { return }
+                         onIndexSettled(stories[i].id)
                      },
                      onActiveTap: { onActiveTap() })
                 .frame(maxWidth: .infinity)

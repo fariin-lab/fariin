@@ -396,6 +396,20 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
 
     /// The rounded index changed while the row was scrolling — their `scrollViewDidScroll` navigate.
     var onIndexChanged: (Int) -> Void = { _ in }
+    /// A finger-driven movement has fully ended — the drag, its deceleration and the snap included —
+    /// and this is the index the row came to rest on. Fired exactly once per movement, from every
+    /// way a scroll can end.
+    ///
+    /// ⚠️ WHY IT EXISTS: the host defers the PAGER's jump to this moment. The crossings still report
+    /// through `onIndexChanged` (the viewers list and the count row follow the card mid-drag, which
+    /// is the reference app's behaviour) — but telling the full-screen pager to swap stories on
+    /// every crossing of a fling meant the live layer's CONTENT changed owners while the row was
+    /// moving, and the pager loads a story slower than a finger crosses a card. Everything drawn in
+    /// that lag is a picture in the wrong slot at the wrong brightness: his double-brightness at the
+    /// half-card and his wrong-cover flash are both that window. The reference app can navigate
+    /// mid-scroll because its navigation redraws nothing in the row; ours redraws the live layer,
+    /// so the honest equivalent is to move the redraw to the one moment the row is still.
+    var onIndexSettled: (Int) -> Void = { _ in }
     /// The centred card was tapped: collapse the sheet.
     var onActiveTap: () -> Void = {}
 
@@ -459,6 +473,13 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// app's way. The flag is already up when `handleTap` reports (it is set the line before), and
     /// a finger on the row clears it, so a drag can never read as a tap.
     var tapNavigationPending: Bool { animateNextStoryId != nil }
+    /// TRUE for the whole of a finger-driven movement: the drag, its deceleration, and our own snap
+    /// animation (which reports itself as none of the three — that is what `isSnapping` exists for).
+    /// One statement of the question `apply`'s outside-jump gate and the host's pager-jump deferral
+    /// both ask; two copies of this list is how `isDecelerating` went missing the first time.
+    var isRowMoving: Bool {
+        scroller.isDragging || scroller.isTracking || scroller.isDecelerating || isSnapping
+    }
     /// The last index handed out through `onIndexChanged`, so the answer coming back around as an
     /// input cannot be mistaken for somebody else asking for a jump.
     private var reportedIndex = -1
@@ -582,8 +603,7 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         // has not finished leaving before the next one arrives".
         //
         // Deceleration and our own snap animation are as much the row's own movement as a finger is.
-        let rowIsStill = !scroller.isDragging && !scroller.isTracking
-            && !scroller.isDecelerating && !isSnapping
+        let rowIsStill = !isRowMoving
         var seatedByTap = false
         if let pending = animateNextStoryId {
             // A TAP IS WAITING FOR ITS OWN STORY TO ARRIVE. Theirs, at the top of the update pass:
@@ -1361,19 +1381,40 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
         isSnapping = false
         updateScrolling()
+        reportScrollSettled()
     }
 
     /// Their `snapScrolling`, which we only ever had half of: the `willEndDragging` rounding is the
     /// belt for a FLICK and never fires for a drag released too slowly to decelerate.
+    ///
+    /// ⚠️ EVERY WAY OUT OF THIS FUNCTION THAT DOES NOT START AN ANIMATION IS A SETTLE, and each of
+    /// them reports it. The edge return is a movement that ENDED at the first or last story (the
+    /// scroller is at rest against the rubber band's home); the small-delta return is a drag that
+    /// ended already on the grid. Only the animated snap defers the report, to
+    /// `scrollViewDidEndScrollingAnimation` — miss any of the three and the pager's deferred jump
+    /// never fires for that movement, which strands the full-screen story on the card the swipe left.
     private func snapScrolling() {
         guard geometry.fullDist > 0.5 else { return }
         let off = scroller.contentOffset.x
         let maxOff = max(0, scroller.contentSize.width - scroller.bounds.width)
-        guard off > 0, off < maxOff else { return }
+        guard off > 0, off < maxOff else {
+            reportScrollSettled()
+            return
+        }
         let target = (off / geometry.fullDist).rounded() * geometry.fullDist
-        guard abs(target - off) > 0.5 else { return }
+        guard abs(target - off) > 0.5 else {
+            reportScrollSettled()
+            return
+        }
         isSnapping = true
         scroller.setContentOffset(CGPoint(x: target, y: 0), animated: true)
+    }
+
+    /// The one report that a movement is OVER, with the index it rests on. `centredIndex` is already
+    /// the clamped rounded offset, so the number reported is the number the row is showing.
+    private func reportScrollSettled() {
+        guard geometry.fraction >= 1.0 - 0.0001, stories.indices.contains(centredIndex) else { return }
+        onIndexSettled(centredIndex)
     }
 
     // MARK: Tap — theirs
@@ -1470,11 +1511,13 @@ struct StoryRow: UIViewControllerRepresentable {
     let link: StoryRowLink
 
     var onIndexChanged: (Int) -> Void = { _ in }
+    var onIndexSettled: (Int) -> Void = { _ in }
     var onActiveTap: () -> Void = {}
 
     func makeUIViewController(context: Context) -> StoryRowController {
         let c = StoryRowController()
         c.onIndexChanged = { i in onIndexChanged(i) }
+        c.onIndexSettled = { i in onIndexSettled(i) }
         c.onActiveTap = { onActiveTap() }
         link.controller = c
         c.apply(stories: stories, liveStoryId: liveStoryId, geometry: geometry,
@@ -1485,6 +1528,7 @@ struct StoryRow: UIViewControllerRepresentable {
     func updateUIViewController(_ c: StoryRowController, context: Context) {
         // The closures are re-installed because they capture this frame's host state.
         c.onIndexChanged = { i in onIndexChanged(i) }
+        c.onIndexSettled = { i in onIndexSettled(i) }
         c.onActiveTap = { onActiveTap() }
         link.controller = c
         c.apply(stories: stories, liveStoryId: liveStoryId, geometry: geometry,
@@ -1508,4 +1552,7 @@ struct StoryRow: UIViewControllerRepresentable {
     /// Read at the instant the row reports an index change — see the note on the controller's
     /// property. No controller yet = no tap, which is the honest answer.
     var tapNavigationPending: Bool { controller?.tapNavigationPending ?? false }
+    /// The host's pager-jump deferral asks this in its `sheetStoryId` onChange: a change that lands
+    /// while the row is moving is a crossing, not a destination. No controller = not moving.
+    var isRowMoving: Bool { controller?.isRowMoving ?? false }
 }
