@@ -1173,17 +1173,34 @@ struct StoryEditorView: View {
             // playing, which is his 2026-08-16 "I can only zoom the video when it is paused". The
             // stop tap lives in the canvas's own tap recogniser now, beside its pinch and pan, so
             // one view owns all three at every moment. Nothing is laid over anything.
+            // ⚠️ AND IT IS A PICTURE AGAIN — `allowsHitTesting(false)` — WHICH IS HIS 2026-08-16
+            // "when i click play video is not running". MY OWN REGRESSION.
+            //
+            // ONE TOUCH WAS BEING COUNTED TWICE. This was a real `Button`, and the canvas underneath
+            // it is a `UIViewRepresentable` whose container is a genuine subview of the hosting view
+            // — so SwiftUI's own tap recogniser sits on an ANCESTOR of it, and an ancestor's
+            // recogniser sees every touch that lands on a descendant. Tapping the circle therefore
+            // fired the button AND the canvas's tap: play, then pause, in the same instant. Nothing
+            // moved, and the circle never went away because `previewPlaying` came back false.
+            //
+            // ⚠️ IT WAS NOT A LATENT BUG THAT I EXPOSED — IT WAS BEING HELD SHUT BY AN ACCIDENT. The
+            // canvas's tap used to read `if currentIsVideo, !previewPlaying`, so the second call
+            // found the flag already true and did nothing. Taking that guard out to make the frame
+            // able to PAUSE is what turned a harmless double-fire into a cancellation.
+            //
+            // Two owners of one action cannot be timed apart; there has to be one. The frame is the
+            // right one — it is the target that cannot be missed, and it is already where the pinch
+            // and the pan live. So the circle goes back to being what it says it is: a sign that
+            // this can be played. (It was `allowsHitTesting(false)` once before and that WAS a bug,
+            // because back then nothing else took the tap. Now the frame does.)
             if !previewPlaying {
-                Button { togglePreview() } label: {
-                    Image(systemName: "play.fill")
-                        .font(.system(size: 26))
-                        .foregroundStyle(.white.opacity(0.9))
-                        .frame(width: 72, height: 72)
-                        .background(.black.opacity(0.35), in: Circle())
-                        .contentShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .transition(.opacity)
+                Image(systemName: "play.fill")
+                    .font(.system(size: 26))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .frame(width: 72, height: 72)
+                    .background(.black.opacity(0.35), in: Circle())
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
             }
         }
     }
@@ -1528,11 +1545,13 @@ struct StoryEditorView: View {
             // full-screen background is not a picture, it is a surface, and it was silently
             // swallowing the only control on the screen. The strip and the two buttons are children
             // of this stack and sit above it, so they keep their own touches.
-            .background(
-                Color.clear.ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture { togglePreview() }
-            )
+            // ⚠️ AND IT TAKES NO TOUCHES OF ITS OWN ANY MORE, FOR THE REASON WRITTEN ON THE PLAY
+            // CIRCLE. This carried `contentShape` + `onTapGesture { togglePreview() }` so the trim
+            // page could be tapped to play — and that is a SwiftUI surface over the canvas, so one
+            // touch reached both it and the canvas's own tap recogniser: play, then pause, nothing.
+            // The canvas already answers a tap on a clip anywhere on the frame, trim page included,
+            // so there is nothing left for this to do but get out of the way.
+            .background(Color.clear.ignoresSafeArea())
             .transition(.opacity)
             .task(id: items[index].id) { await loadTrimThumbs() }
             // The strip reports where the finger is; the clip goes there. `.zero` tolerance because a
