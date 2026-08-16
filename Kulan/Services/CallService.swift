@@ -244,9 +244,51 @@ final class CallService: NSObject {
     // server-side, never in this public repo). Read on every new peer connection.
     private var fetchedIceServers: [RTCIceServer]?
 
+    /// WHO IS ALLOWED TO SEE MY IP ADDRESS.
+    ///
+    /// A WebRTC call that connects directly, phone to phone, tells each side the other's IP — which
+    /// gives away roughly where somebody is and who their provider is. We set no transport policy at
+    /// all before this, so EVERY call could go direct, including a call from somebody who found this
+    /// account by QR code or username and has never met its owner.
+    ///
+    /// Relaying everything is not the answer either: relayed media runs through our TURN server, so
+    /// it costs real bandwidth per minute and adds a hop. The rule the established messengers use,
+    /// and the one here, is to spend that only where the risk is: people you have an ACCEPTED chat
+    /// with connect directly, strangers are relayed.
+    ///
+    /// `accepted` is exactly the right question — it means this account replied, which is the moment
+    /// a stranger stops being one. A chat that predates message requests reads accepted, which is
+    /// correct: those are people already being talked to.
+    /// Answered ONCE per call, when the peer becomes known, and stored.
+    ///
+    /// ⚠️ Not computed at connection time. `config` is read while building the peer connection, which
+    /// is not guaranteed to be the main thread, and the answer would then depend on reaching into
+    /// another observable object's array from there. Deciding at the one moment `otherUid` is set
+    /// makes it deterministic for the whole call.
+    private(set) var peerIsEstablishedContact = false
+
+    private func resolvePeerTrust() {
+        guard !otherUid.isEmpty, !me.isEmpty else { peerIsEstablishedContact = false; return }
+        let cid = [me, otherUid].sorted().joined(separator: "_")
+        // No chat at all → a stranger, which is the safe reading: it is exactly the QR-code and
+        // username case, where two people who have never spoken are connecting.
+        peerIsEstablishedContact =
+            ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.accepted ?? false
+    }
+
     private var config: RTCConfiguration {
         let c = RTCConfiguration()
-        c.iceServers = fetchedIceServers ?? Self.fallbackIceServers
+        let servers = fetchedIceServers ?? Self.fallbackIceServers
+        c.iceServers = servers
+        // ⚠️ RELAY ONLY IF WE ACTUALLY HAVE A RELAY, and a relay means a `turn:` URL specifically.
+        // `.relay` against a STUN-only list is not a private call, it is NO call: nothing will ever
+        // produce a relay candidate and the connection can never come up. A failed TURN fetch, or a
+        // server that hands back STUN only, must therefore fall back to `.all` — connecting beats
+        // failing silently, and the call then behaves exactly as it did before this existed.
+        let haveTurn = servers.contains { $0.urlStrings.contains { url in
+            url.hasPrefix("turn:") || url.hasPrefix("turns:")
+        } }
+        c.iceTransportPolicy = (haveTurn && !peerIsEstablishedContact) ? .relay : .all
         c.sdpSemantics = .unifiedPlan
         // Connect faster (shorter "Connecting…"): pre-gather ICE candidates so they're ready the
         // instant the offer/answer is set, keep gathering continuously, and bundle all media on ONE
@@ -1364,6 +1406,7 @@ final class CallService: NSObject {
         noteVideo()
         isCaller = true
         otherUid = uid
+        resolvePeerTrust()   // decide direct-vs-relay now, while we are off the WebRTC threads
         otherName = Self.displayName(for: uid, fallback: name)
         otherPhotoUrl = photo
         state = .outgoing
@@ -1576,6 +1619,7 @@ final class CallService: NSObject {
                     guard self.state == .idle else { return }
                     self.callId = doc.documentID
                     self.otherUid = caller
+                    self.resolvePeerTrust()
                     self.otherName = Self.displayName(for: caller,
                                                       fallback: d["callerName"] as? String ?? "Caller")
                     let photo = d["callerPhoto"] as? String ?? ""
@@ -1625,6 +1669,7 @@ final class CallService: NSObject {
         self.callId = callId
         self.otherName = Self.displayName(for: uid, fallback: name)
         self.otherUid = uid
+        self.resolvePeerTrust()
         self.otherPhotoUrl = (photo?.isEmpty == false) ? photo : nil
         self.isCaller = false
         self.state = .incoming   // so the UI can present once answered
@@ -2105,6 +2150,7 @@ final class CallService: NSObject {
         pc = nil
         callId = nil
         otherUid = ""
+        peerIsEstablishedContact = false   // never inherited by the next call
         isCaller = false
 
         // Feedback tone for the non-initiating side / system-ended calls. Keep the audio
