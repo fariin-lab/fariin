@@ -6581,8 +6581,8 @@ struct MessageBubble: View, Equatable {
                     ZStack(alignment: .topLeading) {
                         ForEach(solved.tiles, id: \.index) { tile in
                             Theme.received(dark)
-                                .frame(width: tile.frame.width, height: tile.frame.height)
-                                .offset(x: tile.frame.minX, y: tile.frame.minY)
+                                .frame(width: tile.rect.width, height: tile.rect.height)
+                                .offset(x: tile.rect.minX, y: tile.rect.minY)
                         }
                         ProgressView().tint(.white)
                             .padding(10).background(.black.opacity(0.35), in: Circle())

@@ -732,6 +732,18 @@ enum ChatService {
         return out as Data
     }
 
+    /// HOW MANY UPLOADS MAY RUN AT ONCE inside one album.
+    ///
+    /// Nothing stops a person selecting thirty photos — the grid draws ten and puts "+20" on the
+    /// last tile, which is the right behaviour and stays. But thirty simultaneous uploads on mobile
+    /// data do not go faster than ten; they share one pipe and make every one of them slower, which
+    /// is the opposite of what releasing them together was for.
+    ///
+    /// ⚠️ The comment beside the album's task group already asserted "our album caps at ten, so
+    /// releasing them together sits inside their number". That was an assumption, not a rule —
+    /// nothing enforced it anywhere. This is the rule, so the sentence is now true.
+    static let maxAlbumUploadsInFlight = 10
+
     /// Pixel size WITHOUT decoding the image.
     ///
     /// An album writes its tile aspects before uploading anything, and `UIImage(data:)` on every
@@ -957,7 +969,11 @@ enum ChatService {
         }
 
         let tileWork: Task<[AlbumTile], Error> = Task { try await withThrowingTaskGroup(of: AlbumTile?.self) { group in
-            for (i, raw) in images.enumerated() {
+            // BOUNDED. Start at most `maxAlbumUploadsInFlight`, then add one more each time a tile
+            // finishes, so a thirty-photo album still uploads ten at a time instead of thirty.
+            var started = 0
+            func startTile(_ i: Int) {
+                let raw = images[i]
                 group.addTask {
                     // A whole-message Cancel cancels the group; each tile lands on it here.
                     try Task.checkCancellation()
@@ -991,9 +1007,15 @@ enum ChatService {
                                      width: Double(sz.width), height: Double(sz.height),
                                      videoUrl: nil, videoEnc: nil, duration: 0)
                 }
+                started += 1
             }
+            // Prime the pipe, then top it up as each one lands.
+            while started < images.count && started < maxAlbumUploadsInFlight { startTile(started) }
             var acc: [AlbumTile] = []
-            for try await tile in group { if let tile { acc.append(tile) } }
+            for try await tile in group {
+                if let tile { acc.append(tile) }
+                if started < images.count { startTile(started) }
+            }
             return acc.sorted { $0.index < $1.index }
         } }
 
