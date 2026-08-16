@@ -725,7 +725,8 @@ struct StoryEditorView: View {
             StoryStickerSheet(
                 onSticker: { g in Task { await addSticker(g) } },
                 onLink: { url in addLinkSticker(url) },
-                onPlace: { name, coord in addPlaceSticker(name, coord) })
+                onPlace: { name, coord in addPlaceSticker(name, coord) },
+                onTime: { addTimeSticker() })
                 .presentationDetents([.fraction(0.6), .large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(.ultraThinMaterial)
@@ -1887,7 +1888,7 @@ struct StoryEditorView: View {
     /// once, here, into a `UIImage`, and from that moment the editor cannot tell it from a sticker
     /// off the tray. It moves with the same gesture, bakes with the same line and rides the same
     /// export. What is different about it is `action`, which nothing before the post ever reads.
-    @MainActor private func chipSticker<C: View>(action: StickerAction,
+    @MainActor private func chipSticker<C: View>(action: StickerAction?,
                                                  @ViewBuilder _ chip: () -> C) {
         let r = ImageRenderer(content: chip())
         r.scale = 3        // it is text at sticker size; a 1x bake of that is a smudge
@@ -1906,6 +1907,20 @@ struct StoryEditorView: View {
     @MainActor private func addPlaceSticker(_ name: String, _ coord: CLLocationCoordinate2D) {
         chipSticker(action: .place(name: name, lat: coord.latitude, lon: coord.longitude)) {
             stickerChip(symbol: "mappin.and.ellipse", text: name.uppercased())
+        }
+    }
+
+    /// The time it is, stamped. ⚠️ `action: nil` — it is a picture, not a button, and that is the
+    /// whole difference between it and the two above. It is also why it is a STILL of the clock at
+    /// the moment it was placed rather than a live one: what posts is a photograph, so a ticking
+    /// sticker could only ever be a lie about the file. The time somebody posted at is the useful
+    /// fact anyway.
+    @MainActor private func addTimeSticker() {
+        let f = DateFormatter()
+        f.locale = Locale.current
+        f.setLocalizedDateFormatFromTemplate("jmm")   // 12- or 24-hour, per the phone's own setting
+        chipSticker(action: nil) {
+            stickerChip(symbol: "clock", text: f.string(from: Date()))
         }
     }
 

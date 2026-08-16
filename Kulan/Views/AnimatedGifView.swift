@@ -44,6 +44,15 @@ struct AnimatedGifView: UIViewRepresentable {
         v.contentMode = fill ? .scaleAspectFill : .scaleAspectFit
         v.clipsToBounds = true
         v.backgroundColor = placeholder
+        // ⚠️ IT MUST ACCEPT THE SIZE IT IS OFFERED, AND THIS IS HIS "stickers are overlapping each
+        // other". A `UIImageView` has an INTRINSIC content size — its image's own pixel size — and a
+        // representable that insists on one is a representable that grows past the cell SwiftUI laid
+        // out for it. A 480px sticker in a 90pt grid square therefore drew five times its square,
+        // straight over its neighbours. Dropping both priorities makes the offered size win.
+        for axis in [NSLayoutConstraint.Axis.horizontal, .vertical] {
+            v.setContentHuggingPriority(.defaultLow, for: axis)
+            v.setContentCompressionResistancePriority(.defaultLow, for: axis)
+        }
         load(into: v, context.coordinator)
         return v
     }

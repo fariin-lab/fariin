@@ -1,14 +1,14 @@
 import SwiftUI
 import MapKit
 
-// The story editor's STICKER TRAY — his 2026-08-16 request, with the reference tray photographed
-// beside it: a sheet at about 60% of the screen, Featured actions across the top, a grid of stickers
-// under them, and a row of categories along the bottom with Recent first.
+// The story editor's STICKER TRAY — his 2026-08-16 request, redesigned the same day against the
+// reference tray he photographed: a search field across the top, a wrapping cloud of actions under
+// it, the stickers below that, and a row of categories along the bottom with Recent first.
 //
 // IT IS A TRAY, NOT A SCREEN. Everything it does hands one finished thing back to the editor and
 // closes; it owns no editing state and never touches the canvas. That is what keeps the promise he
 // attached to the request — "do not redesign or change the existing Story Editor UI" — enforceable
-// rather than merely intended: the editor gained one button and three callbacks.
+// rather than merely intended: the editor gained one button and four callbacks.
 //
 // ⚠️ LINK AND LOCATION ARE PUSHED INSIDE THIS SHEET, NOT RAISED AS A SECOND ONE. Asking for a sheet
 // while the one underneath it is still going down is the oldest way to get a screen that silently
@@ -89,26 +89,41 @@ struct StoryStickerSheet: View {
     var onSticker: (GiphyService.Gif) -> Void
     var onLink: (URL) -> Void
     var onPlace: (String, CLLocationCoordinate2D) -> Void
+    var onTime: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var route: [Route] = []
     @State private var tab: StickerTab = .recent
+    @State private var query = ""
     @State private var stickers: [GiphyService.Gif] = []
     @State private var loading = false
+    @State private var searchTask: Task<Void, Never>?
     /// The trending page, held for the life of the app. It is the first thing most trays show and
     /// re-fetching it on every open is a network round trip in front of a screen already seen.
     @MainActor private static var trendingCache: [GiphyService.Gif] = []
 
     private enum Route: Hashable { case link, place }
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 4)
+    private var searching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
 
     var body: some View {
         NavigationStack(path: $route) {
             VStack(spacing: 0) {
-                featured
-                Divider().overlay(Color.white.opacity(0.12))
-                grid
+                searchField
+                ScrollView {
+                    VStack(spacing: 18) {
+                        // The actions stand down while you are searching, exactly as the reference
+                        // does: a search is a search FOR A STICKER, and a row of things that are not
+                        // stickers is only in front of the results.
+                        if !searching { actions }
+                        grid
+                    }
+                    .padding(.top, 4)
+                    .padding(.bottom, 12)
+                }
+                .scrollIndicators(.hidden)
+                .scrollDismissesKeyboard(.immediately)
                 tabBar
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -123,43 +138,90 @@ struct StoryStickerSheet: View {
         // photograph and turns pale on a light-mode phone is the same complaint he photographed on
         // the picker.
         .storyAlwaysDark()
-        .task(id: tab.id) { await load() }
+        .task(id: tab.id) { if !searching { await load() } }
     }
 
-    // MARK: Featured
+    // MARK: Search
 
-    /// LINK and LOCATION, which are the two he asked for by name.
-    ///
-    /// ⚠️ NO WEATHER CHIP. His words were "Weather (if already supported by the existing design)",
-    /// and it is not: a temperature means a location permission, a weather provider and an Apple
-    /// entitlement, none of which this app has. A chip reading 26°C without any of that would be a
-    /// picture of a feature.
-    private var featured: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Featured")
+    /// ⚠️ THE SYSTEM'S OWN SEARCH FIELD, OUT OF THE SYSTEM'S OWN PARTS — and not `.searchable`.
+    /// `.searchable` belongs to a navigation bar and this tray has none; asking for one would raise a
+    /// whole navigation chrome above the tray to hold a single field. `tertiarySystemFill` in a
+    /// capsule with `secondaryLabel` on it is what UIKit itself draws for a search bar, and NAMING
+    /// those colours rather than picking greys is the difference between following the system and
+    /// resembling it — it is also the reason this stays right in both appearances and at every
+    /// contrast setting.
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(.secondary)
-            HStack(spacing: 10) {
-                featureChip("link", "LINK") { route.append(.link) }
-                featureChip("mappin.and.ellipse", "LOCATION") { route.append(.place) }
-                Spacer(minLength: 0)
+            TextField("", text: $query, prompt: Text("Search").foregroundStyle(.secondary))
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .font(.system(size: 16))
+                .foregroundStyle(.primary)
+                .submitLabel(.search)
+            if searching {
+                Button { query = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 18)
-        .padding(.bottom, 16)
+        .padding(.horizontal, 12)
+        .frame(height: 38)
+        .background(Color(.tertiarySystemFill), in: Capsule())
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
+        .padding(.bottom, 14)
+        // Debounced for the same reason every other search in this app is: a request per keystroke
+        // is a request per keystroke.
+        .onChange(of: query) { _, _ in
+            searchTask?.cancel()
+            searchTask = Task {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                if Task.isCancelled { return }
+                await load()
+            }
+        }
     }
 
-    private func featureChip(_ symbol: String, _ title: String, _ action: @escaping () -> Void) -> some View {
+    // MARK: The actions
+
+    /// ⚠️ THREE PILLS, NOT FIFTEEN, AND THE MISSING TWELVE ARE MISSING ON PURPOSE. The tray he
+    /// photographed carries Music, Poll, Questions, Countdown, Add Yours, Frames, Photostrip,
+    /// Cutouts, Avatar, a hashtag and a mention. Not one of those exists in this app. A pill that
+    /// opens nothing is worse than no pill — it is a promise the screen cannot keep, and he would
+    /// find every one of them by tapping it. What is here is what works. The LAYOUT is the
+    /// reference's, so the row grows on its own as more is built, with nothing to rearrange.
+    private var actions: some View {
+        StickerFlowLayout(spacing: 10, lineSpacing: 10) {
+            actionPill("mappin.and.ellipse", "Location", .red) { route.append(.place) }
+            actionPill("link", "Link", .blue) { route.append(.link) }
+            actionPill("clock", "Time", .orange) { dismiss(); onTime() }
+        }
+        .padding(.horizontal, 16)
+    }
+
+    /// White, with a coloured glyph and black lettering — the reference's own shape, and the only one
+    /// that stays legible whatever photograph is behind the tray. Glass takes its colour from what is
+    /// under it, which is exactly the wrong property for a control sitting over somebody's picture.
+    private func actionPill(_ symbol: String, _ title: String,
+                            _ tint: Color, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: symbol).font(.system(size: 15, weight: .semibold))
-                Text(title).font(.system(size: 15, weight: .semibold))
+            HStack(spacing: 7) {
+                Image(systemName: symbol)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(tint)
+                Text(title)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(.black)
             }
-            .foregroundStyle(.white)
             .padding(.horizontal, 16)
-            .frame(height: 44)
-            .liquidGlass(Capsule())
+            .frame(height: 42)
+            .background(Color.white, in: Capsule())
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -168,36 +230,38 @@ struct StoryStickerSheet: View {
     // MARK: The stickers
 
     private var grid: some View {
-        ScrollView {
+        VStack(spacing: 0) {
             if stickers.isEmpty {
-                // Recent is empty on the first day and that is not an error, so it says so rather
-                // than spinning at something that will never arrive.
-                if !loading, tab == .recent {
+                if loading {
+                    ProgressView().tint(.white).frame(maxWidth: .infinity).padding(.vertical, 40)
+                } else if searching {
+                    Text("No stickers found.")
+                        .font(.system(size: 14)).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity).padding(.vertical, 40)
+                } else if tab == .recent {
                     Text("Stickers you use will show up here.")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 48)
-                } else if loading {
-                    ProgressView().tint(.white).frame(maxWidth: .infinity).padding(.top, 48)
+                        .font(.system(size: 14)).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity).padding(.vertical, 40)
                 }
             }
-            LazyVGrid(columns: columns, spacing: 10) {
+            LazyVGrid(columns: columns, spacing: 12) {
                 ForEach(stickers) { s in cell(s) }
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 12)
         }
-        .scrollIndicators(.hidden)
     }
 
     private func cell(_ s: GiphyService.Gif) -> some View {
         Color.clear
             .aspectRatio(1, contentMode: .fit)
-            // `fill: false` and no placeholder — a sticker is cut out, so anything behind it is a
-            // box around it and anything cropped off it is the shape it was cut into. See
-            // `AnimatedGifView`.
+            // `fill: false` and no placeholder — a sticker is cut out, so anything behind it is a box
+            // around it and anything cropped off it is the shape it was cut into. See
+            // `AnimatedGifView`, which also has to be told to accept the size it is offered.
             .overlay { AnimatedGifView(url: s.url, fill: false, placeholder: .clear) }
+            // ⚠️ THE SECOND HALF OF "the stickers are overlapping each other". An overlay is NOT
+            // clipped to what it overlays, so a representable reporting more than its square drew
+            // exactly what it asked for — over its neighbours.
+            .clipped()
             // The tap lives on a pure-SwiftUI layer ABOVE the animated view: a gesture on the
             // UIKit-backed view itself can silently never fire, because the touch lands in its
             // UIImageView. Same reason the GIF picker does it this way.
@@ -217,7 +281,10 @@ struct StoryStickerSheet: View {
         ScrollView(.horizontal) {
             HStack(spacing: 8) {
                 ForEach(StickerTab.all) { t in
-                    Button { tab = t } label: {
+                    Button {
+                        query = ""      // a tab is a different question from a search
+                        tab = t
+                    } label: {
                         Group {
                             if case .recent = t {
                                 Image(systemName: "clock").font(.system(size: 17, weight: .semibold))
@@ -226,7 +293,7 @@ struct StoryStickerSheet: View {
                             }
                         }
                         .frame(width: 44, height: 44)
-                        .background { if tab == t { Circle().fill(Color.white.opacity(0.18)) } }
+                        .background { if tab == t && !searching { Circle().fill(Color.white.opacity(0.18)) } }
                         .contentShape(Circle())
                     }
                     .buttonStyle(.plain)
@@ -242,6 +309,14 @@ struct StoryStickerSheet: View {
     // MARK: Loading
 
     private func load() async {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        if !q.isEmpty {
+            loading = true
+            let found = await GiphyService.shared.searchStickers(q)
+            loading = false
+            stickers = found
+            return
+        }
         if case .recent = tab {
             stickers = StickerRecents.all()
             return
@@ -253,6 +328,62 @@ struct StoryStickerSheet: View {
         loading = false
         if isTrending { Self.trendingCache = found }
         stickers = found
+    }
+}
+
+/// THE PILLS WRAP, AND EACH ROW IS CENTRED — the reference's tag cloud, as a real layout rather than
+/// a stack of `HStack`s with hand-counted contents.
+///
+/// A `Layout` and not a grid, because these are all different widths: "Link" and "Location" cannot
+/// share a column without one of them being padded out to the other's size, and that padding is
+/// exactly what makes a hand-built version look built. This measures each pill, fills a row until the
+/// next one will not fit, and centres what it has — so it rearranges itself on a narrow phone, at a
+/// larger text size, and again when a fourth action is added, with nothing to update.
+struct StickerFlowLayout: Layout {
+    var spacing: CGFloat = 10
+    var lineSpacing: CGFloat = 10
+
+    private struct Row { var indices: [Int] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
+
+    private func rows(_ subviews: Subviews, _ maxWidth: CGFloat) -> [Row] {
+        var out: [Row] = []
+        var row = Row()
+        for i in subviews.indices {
+            let size = subviews[i].sizeThatFits(.unspecified)
+            let widthWithIt = row.indices.isEmpty ? size.width : row.width + spacing + size.width
+            if !row.indices.isEmpty, widthWithIt > maxWidth {
+                out.append(row)
+                row = Row(indices: [i], width: size.width, height: size.height)
+            } else {
+                row.indices.append(i)
+                row.width = widthWithIt
+                row.height = max(row.height, size.height)
+            }
+        }
+        if !row.indices.isEmpty { out.append(row) }
+        return out
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
+        let rs = rows(subviews, maxWidth)
+        let height = rs.reduce(0) { $0 + $1.height } + CGFloat(max(0, rs.count - 1)) * lineSpacing
+        return CGSize(width: proposal.width ?? (rs.map(\.width).max() ?? 0), height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize,
+                       subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in rows(subviews, bounds.width) {
+            var x = bounds.minX + (bounds.width - row.width) / 2
+            for i in row.indices {
+                let size = subviews[i].sizeThatFits(.unspecified)
+                subviews[i].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2),
+                                  proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += row.height + lineSpacing
+        }
     }
 }
 
@@ -292,8 +423,7 @@ private struct LinkStickerScreen: View {
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(resolved == nil ? Color.white.opacity(0.4) : .black)
                     .frame(maxWidth: .infinity).frame(height: 50)
-                    .background(resolved == nil ? Color.white.opacity(0.12) : Color.white,
-                                in: Capsule())
+                    .background(resolved == nil ? Color.white.opacity(0.12) : Color.white, in: Capsule())
             }
             .buttonStyle(.plain)
             .disabled(resolved == nil)
@@ -311,13 +441,13 @@ private struct LinkStickerScreen: View {
 
 /// Search for a place and pick it.
 ///
-/// `MKLocalSearch` rather than `MKLocalSearchCompleter`: the completer returns strings that then
-/// need a second search to turn into coordinates, and a sticker with no coordinates is a label. This
-/// asks the question whose answer is the thing being placed.
+/// `MKLocalSearch` rather than `MKLocalSearchCompleter`: the completer returns strings that then need
+/// a second search to turn into coordinates, and a sticker with no coordinates is a label. This asks
+/// the question whose answer is the thing being placed.
 ///
-/// ⚠️ NO LOCATION PERMISSION IS ASKED FOR. A search works without one — results are simply not
-/// sorted by how near they are — and raising the system prompt to put a name on a photograph is a
-/// price nobody agreed to pay. If he wants "places near me" it is a permission and its own decision.
+/// ⚠️ NO LOCATION PERMISSION IS ASKED FOR. A search works without one — results are simply not sorted
+/// by how near they are — and raising the system prompt to put a name on a photograph is a price
+/// nobody agreed to pay. "Places near me" is a permission and its own decision.
 private struct PlaceStickerScreen: View {
     var onDone: (String, CLLocationCoordinate2D) -> Void
 
@@ -362,15 +492,13 @@ private struct PlaceStickerScreen: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .overlay {
-                if searching, results.isEmpty { ProgressView().tint(.white) }
-            }
+            .overlay { if searching, results.isEmpty { ProgressView().tint(.white) } }
         }
         .navigationTitle("Location")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { focused = true }
-        // Debounced, for the same reason the GIF search is: a request per keystroke is a request per
-        // keystroke, and MapKit rate-limits.
+        // Debounced, for the same reason the sticker search is: a request per keystroke is a request
+        // per keystroke, and MapKit rate-limits.
         .onChange(of: query) { _, q in
             task?.cancel()
             task = Task {
