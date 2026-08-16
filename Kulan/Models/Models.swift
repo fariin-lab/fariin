@@ -71,7 +71,7 @@ struct UserProfile: Identifiable, Equatable {
     }
 }
 
-struct ReplyRef: Equatable {
+struct ReplyRef: Equatable, Codable {
     var id: String
     var authorId: String
     var text: String          // decrypted snippet
@@ -83,7 +83,7 @@ struct ReplyRef: Equatable {
 // (its receipt is derived from the other person's lastRead instead).
 enum MessageSendState: Equatable { case sending, failed }
 
-struct Message: Identifiable, Equatable {
+struct Message: Identifiable, Equatable, Codable {
     let id: String
     var authorId: String
     var text: String          // DECRYPTED for display
@@ -177,7 +177,7 @@ struct Message: Identifiable, Equatable {
     /// A link preview that TRAVELLED WITH THE MESSAGE (the reference app's model): the sender fetched it, sealed
     /// it, and the recipient renders it without ever contacting the site. All text fields arrive
     /// decrypted here; the image is an encrypted storage blob exactly like a photo's.
-    struct LinkPreviewData: Equatable {
+    struct LinkPreviewData: Equatable, Codable {
         let url: String
         let title: String
         let desc: String
@@ -324,7 +324,7 @@ struct Message: Identifiable, Equatable {
 
     // One item inside an album message — a photo OR a video (mixed media grouping, as standard messengers do).
     // For a video, `imageUrl`/`enc` are its POSTER thumbnail; `videoUrl`/`videoEnc`/`duration` are the clip.
-    struct AlbumItem: Equatable {
+    struct AlbumItem: Equatable, Codable {
         let imageUrl: String
         let enc: EncMeta
         let width: Double
@@ -334,6 +334,35 @@ struct Message: Identifiable, Equatable {
         var videoEnc: EncMeta? = nil
         var duration: Double = 0
         var isVideo: Bool { kind == "video" }
+    }
+
+    /// WHAT SURVIVES BEING WRITTEN DOWN, and what deliberately does not.
+    ///
+    /// `Codable` exists here for one reason: `ThreadMessageCache` keeps the last screen of a chat on
+    /// disk so opening it after the app was killed paints the conversation instead of an empty
+    /// wallpaper. Everything listed below is part of that picture.
+    ///
+    /// ⚠️ THE SEVEN THAT ARE MISSING ARE MISSING ON PURPOSE:
+    ///
+    /// `localImageData`, `localAudioData`, `localAlbum`, `localAlbumIsVideo`, `localFile` and
+    /// `localMediaURL` are the RAW BYTES of something still being sent — a photo held in memory
+    /// until the upload finishes. Writing those would put whole images into a cache meant to hold a
+    /// screen of text, for messages that are by definition not finished.
+    ///
+    /// `sendState` is left out for a different reason: it is `.sending` or `.failed`, both of which
+    /// describe a moment, not a message. Restored from disk it would draw a spinner on a message
+    /// that was delivered hours ago and has nothing left to wait for. In-flight messages have their
+    /// own home (`storePending`), which is where that state belongs.
+    ///
+    /// All seven carry defaults, so decoding without them is not a special case.
+    enum CodingKeys: String, CodingKey {
+        case id, authorId, text, type
+        case imageUrl, audioUrl, videoUrl, thumbUrl, thumbEnc
+        case fileUrl, fileName, fileSize, duration, waveform, enc
+        case clientId, replyTo, reactions, mentions, viewOnce, album
+        case createdAt, width, blurhash, height
+        case callerUid, callOutcome, callVideo, callDuration
+        case edited, deleted, forwarded, clientTs, linkPreview, hasServerTime
     }
 
     init(id: String, data: [String: Any], cid: String, crypto: Crypto) {
