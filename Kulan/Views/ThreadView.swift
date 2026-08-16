@@ -2562,9 +2562,11 @@ struct ThreadView: View {
 
     // MARK: - Message selection
 
-    private func toggleSelect(_ id: String) {
-        if selectedIds.contains(id) { selectedIds.remove(id) } else { selectedIds.insert(id) }
-    }
+    /// The SAME function the three lists in MainShell use, so a tick feels identical wherever you
+    /// are in the app. This one had no animation and no haptic at all: it added to a Set and the
+    /// checkbox changed between one frame and the next (owner 2026-08-16, comparing it against the
+    /// chat list, which he had just called good).
+    private func toggleSelect(_ id: String) { toggleTick(id, in: $selectedIds) }
 
     private func exitSelection() {
         withAnimation(.easeInOut(duration: 0.2)) { selecting = false; selectedIds = [] }
@@ -5448,11 +5450,15 @@ struct SelectableRow: ViewModifier {
                     Circle()
                         .strokeBorder(Color.white.opacity(selected ? 0 : 0.92), lineWidth: 1.5)
                         .frame(width: 24, height: 24)
-                    if selected {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(.white)
-                    }
+                    // ⚠️ ALWAYS PRESENT, never inside `if selected`. A conditional inserts and removes
+                    // the glyph, and an insertion cannot be animated from a state it was never in —
+                    // which is why this tick popped while the chat list's grew. Scale and opacity
+                    // carry it now, so it lands with the same spring the toggle sets.
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white)
+                        .scaleEffect(selected ? 1 : 0.4)
+                        .opacity(selected ? 1 : 0)
                 }
                 .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
                 .transition(.move(edge: .leading).combined(with: .opacity))
