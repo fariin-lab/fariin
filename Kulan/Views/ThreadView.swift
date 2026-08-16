@@ -6521,6 +6521,37 @@ struct MessageBubble: View, Equatable {
             .padding(.horizontal, 13).padding(.vertical, 10)
             .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+        } else if message.isPendingImage {
+            // THE PHOTO IS ON ITS WAY. Only the recipient ever reaches this: the sender keeps their
+            // own local copy until the upload lands (ThreadRepository.refreshItems).
+            //
+            // ⚠️ It uses `imageDisplaySize`, exactly like the finished bubble, and the sender writes
+            // the real pixel width and height in the FIRST write for that reason. The placeholder is
+            // therefore the same size and shape as the photo that replaces it, so nothing in the
+            // list moves or re-measures when the media arrives — which is the whole reason this is a
+            // sibling branch of the image bubble rather than a smaller stand-in.
+            VStack(alignment: .leading, spacing: 4) {
+                replyQuote
+                ZStack {
+                    if let hash = message.blurhash, !hash.isEmpty,
+                       let img = BlurHash.decode(hash) {
+                        Image(uiImage: img).resizable().scaledToFill()
+                    } else {
+                        // A view-once photo publishes no blurhash on purpose, so there is nothing to
+                        // sketch — a plain fill is the honest placeholder.
+                        Theme.received(dark)
+                    }
+                    ProgressView().tint(.white)
+                        .padding(8)
+                        .background(.black.opacity(0.28), in: Circle())
+                }
+                .frame(width: imageDisplaySize.width, height: imageDisplaySize.height)
+                .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                .overlay(alignment: .bottomTrailing) {
+                    metaRow.padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(.black.opacity(0.35), in: Capsule()).foregroundStyle(.white).padding(7)
+                }
+            }
         } else if message.isGif {
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote

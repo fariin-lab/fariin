@@ -803,16 +803,26 @@ enum ChatService {
                 : (try? await Crypto.shared.encryptForConversation(cid, hash))
         }
 
-        // Now collect the upload, and the conversation touch the message write depends on.
-        let url = try await uploadedURL
+        // ⛔ THE MESSAGE IS WRITTEN NOW, BEFORE THE UPLOAD IS COLLECTED.
+        //
+        // It used to be written after `try await uploadedURL`, which meant the person being sent a
+        // photo had NOTHING until the sender's entire upload had finished — no bubble, no blurred
+        // preview, no progress, and then suddenly a picture. On a slow connection with a large photo
+        // that is many seconds of them not knowing anything was sent (owner, 2026-08-16).
+        //
+        // Everything the recipient needs to draw a real bubble already existed by this line: the
+        // blurhash, the caption, the reply, and the exact pixel size. It was simply being held back
+        // behind the bytes. So the message goes out here carrying all of it and `uploading: true`,
+        // and the media is attached below when the upload lands.
+        //
+        // ⚠️ THIS REQUIRES THE MATCHING firestore.rules BRANCH TO BE DEPLOYED FIRST. The message
+        // update rule is a `hasOnly` allow-list, and without the new branch the second write is
+        // refused by the database — every photo would stay a permanent blur.
         try await ensureConv?.value
-        // Seed the cache with the plaintext image under its URL so when the optimistic bubble
-        // reconciles to the server message, SecureImageView renders instantly (no shimmer / re-download).
-        if let ui = UIImage(data: rawData) { DiskImageCache.shared.store(ui, for: url, owned: true) }
 
         let batch = db.batch()
         var imgMsg: [String: Any] = [
-            "type": "image", "imageUrl": url, "enc": meta.asDict, "text": captionCipher,
+            "type": "image", "enc": meta.asDict, "text": captionCipher, "uploading": true,
             "authorId": uid, "createdAt": FieldValue.serverTimestamp(), "clientTs": clientTs,
         ]
         if let replyEnc { imgMsg["replyTo"] = replyEnc }
@@ -835,10 +845,9 @@ enum ChatService {
             "lastSender": uid,
             "updatedAt": FieldValue.serverTimestamp(),
         ]
-        if !viewOnce {
-            convUpdate["lastImageUrl"] = url
-            convUpdate["lastImageEnc"] = meta.asDict
-        }
+        // The chat-list thumbnail needs the URL, which does not exist yet — it is attached in the
+        // same update as the message's own, below. The row shows "📷 Photo" until then, which is
+        // what it showed for the whole upload before this change anyway.
         if let members {
             for m in members where m != uid { convUpdate["unreadCount.\(m)"] = FieldValue.increment(Int64(1)) }
         } else {
@@ -847,6 +856,22 @@ enum ChatService {
         }
         batch.updateData(convUpdate, forDocument: convRef)
         try await batch.commit()
+
+        // NOW the bytes. Everything above is already on the recipient's screen.
+        let url = try await uploadedURL
+        // Seed the cache with the plaintext image under its URL so when the optimistic bubble
+        // reconciles to the server message, SecureImageView renders instantly (no shimmer / re-download).
+        if let ui = UIImage(data: rawData) { DiskImageCache.shared.store(ui, for: url, owned: true) }
+
+        // Attaching the media also CLEARS `uploading`, and the rules branch requires both in the
+        // same write — that pairing is what makes this a one-way door rather than a way to edit a
+        // delivered photo.
+        let finish = db.batch()
+        finish.updateData(["imageUrl": url, "uploading": FieldValue.delete()], forDocument: msgRef)
+        if !viewOnce {
+            finish.updateData(["lastImageUrl": url, "lastImageEnc": meta.asDict], forDocument: convRef)
+        }
+        try await finish.commit()
     }
 
     /// Send 2+ photos as ONE album message (grid + one caption), as standard messengers do. Each photo is
