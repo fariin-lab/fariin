@@ -20,7 +20,16 @@ import Foundation
 /// anybody is being attacked, and nothing is blocked. Signal's own wording is the same shape.
 enum SafetyKeyLog {
     private static let seenDefaultsKey = "crypto.seenPeerKeys.v1"
+    /// The PENDING notice — cleared the moment the user has seen it.
     private static let changedDefaultsKey = "crypto.peerKeyChangedAt.v1"
+    /// THE RECORD ITSELF, which `acknowledge` must never touch.
+    ///
+    /// These were one key, and dismissing the bar deleted the only evidence the change had ever
+    /// happened — so a safety number could be replaced, the notice tapped away in a second, and
+    /// afterwards nothing anywhere in the app could say it had occurred. A warning you can erase by
+    /// acknowledging it is not a record. Every other messenger writes the event permanently into the
+    /// conversation for exactly this reason.
+    private static let lastChangedDefaultsKey = "crypto.peerKeyLastChangedAt.v1"
 
     /// Record the key we just fetched. Returns true only when it REPLACES a different key we had
     /// already seen — the first sighting of a person is never a change.
@@ -37,10 +46,32 @@ enum SafetyKeyLog {
         guard previous != b64 else { return false }
         seen[uid] = b64
         UserDefaults.standard.set(seen, forKey: seenDefaultsKey)
+        let now = Date().timeIntervalSince1970
         var changed = (UserDefaults.standard.dictionary(forKey: changedDefaultsKey) as? [String: Double]) ?? [:]
-        changed[uid] = Date().timeIntervalSince1970
+        changed[uid] = now
         UserDefaults.standard.set(changed, forKey: changedDefaultsKey)
+        // The permanent half. Written together, cleared apart.
+        var lastChanged = (UserDefaults.standard.dictionary(forKey: lastChangedDefaultsKey) as? [String: Double]) ?? [:]
+        lastChanged[uid] = now
+        UserDefaults.standard.set(lastChanged, forKey: lastChangedDefaultsKey)
         return true
+    }
+
+    /// When this person's key last changed, whether or not the notice was dismissed. Survives
+    /// `acknowledge` on purpose — this is the answer to "did this ever happen", which the bar alone
+    /// could not give once it had been tapped away. Cleared only by signing out.
+    static func lastChangedAt(_ uid: String) -> Date? {
+        guard !uid.isEmpty,
+              let last = UserDefaults.standard.dictionary(forKey: lastChangedDefaultsKey) as? [String: Double],
+              let t = last[uid] else { return nil }
+        return Date(timeIntervalSince1970: t)
+    }
+
+    /// Which of these people have a notice still waiting to be seen. A group chat has no single
+    /// "other person", so the bar there has to ask about every member at once.
+    static func pendingAmong(_ uids: [String]) -> [String] {
+        guard let changed = UserDefaults.standard.dictionary(forKey: changedDefaultsKey) as? [String: Double] else { return [] }
+        return uids.filter { changed[$0] != nil }
     }
 
     /// When this person's key last changed, if the notice has not been dismissed.
@@ -63,6 +94,7 @@ enum SafetyKeyLog {
     static func wipe() {
         UserDefaults.standard.removeObject(forKey: seenDefaultsKey)
         UserDefaults.standard.removeObject(forKey: changedDefaultsKey)
+        UserDefaults.standard.removeObject(forKey: lastChangedDefaultsKey)
     }
 }
 

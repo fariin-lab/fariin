@@ -294,18 +294,25 @@ struct ThreadView: View {
     /// too, and that is by far the commonest cause — so the line states the fact, offers the number,
     /// and blocks nothing. Tapping through to the verify screen counts as having seen it.
     @ViewBuilder private var keyChangeNotice: some View {
-        if keyChanged, !isGroup {
+        if keyChanged {
             Button {
-                SafetyKeyLog.acknowledge(otherUid)
+                // A group dismisses every member's notice at once: the bar named them all, so
+                // seeing it IS having seen all of them.
+                for uid in keyChangedUids { SafetyKeyLog.acknowledge(uid) }
                 keyChanged = false
-                showEncryptionInfo = true
+                // A group has no single safety number, so there is nothing to open. The bar in a
+                // group states the fact and stops there; the per-person number lives on each
+                // member's own profile.
+                if !isGroup { showEncryptionInfo = true }
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "lock.rotation").font(.system(size: 13, weight: .semibold))
-                    Text("\(title)'s safety number changed")
+                    Text(keyChangeText)
                         .font(.system(size: 13, weight: .medium)).lineLimit(1)
                     Spacer(minLength: 4)
-                    Text("Verify").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.accentColor)
+                    if !isGroup {
+                        Text("Verify").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.accentColor)
+                    }
                 }
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 14).padding(.vertical, 9)
@@ -313,6 +320,28 @@ struct ThreadView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+        }
+    }
+
+    /// Who the pending notice is about. One person in a 1:1; in a group, every member whose key has
+    /// been replaced since we last looked — ⚠️ a GROUP WAS PREVIOUSLY EXCLUDED ENTIRELY (`!isGroup`),
+    /// so a member changing phone was silent, which is the one place it matters most: a group has
+    /// more people in it and you know each of them less well.
+    private var keyChangedUids: [String] {
+        isGroup ? SafetyKeyLog.pendingAmong(groupMembers.filter { $0 != me })
+                : (SafetyKeyLog.changedAt(otherUid) != nil ? [otherUid] : [])
+    }
+
+    /// ⚠️ IT ACCUSES NOBODY, and that is deliberate — see the note above. A reinstall or a new phone
+    /// changes a key too, and that is by far the commonest cause.
+    private var keyChangeText: String {
+        guard isGroup else { return "\(title)'s safety number changed" }
+        let names = conversation?.names ?? [:]
+        let changed = keyChangedUids
+        switch changed.count {
+        case 0:  return "A safety number changed"
+        case 1:  return "\(names[changed[0]] ?? "A member")'s safety number changed"
+        default: return "\(changed.count) members' safety numbers changed"
         }
     }
 
@@ -398,7 +427,11 @@ struct ThreadView: View {
             // A key that changes WHILE the chat is open (their reinstall lands mid-conversation) has
             // to say so there and then, not on the next open.
             .onReceive(NotificationCenter.default.publisher(for: .peerKeyChanged)) { note in
-                guard let uid = note.object as? String, uid == otherUid, !isGroup else { return }
+                // In a group the uid that changed is any MEMBER, not `otherUid` (which is empty
+                // there) — the old test could therefore never pass for a group.
+                guard let uid = note.object as? String, uid != me else { return }
+                let mine = isGroup ? groupMembers.contains(uid) : uid == otherUid
+                guard mine else { return }
                 withAnimation(.easeInOut(duration: 0.2)) { keyChanged = true }
             }
             // Per-chat wallpaper behind the messages (extends under the bars).
@@ -1283,7 +1316,7 @@ struct ThreadView: View {
             settled = false
             if isGroup || !cid.contains("_") { startGroupCallListener() }
             AppRouter.shared.activeChatId = cid          // suppress this chat's own banners
-            keyChanged = !isGroup && SafetyKeyLog.changedAt(otherUid) != nil
+            keyChanged = !keyChangedUids.isEmpty   // groups included now, one member is enough
             // A note of THIS chat's that is sitting paused on the bar has nothing to say once you are
             // in here looking at its bubble — see chatOpened. One that is still playing is left alone.
             VoiceNotePlayer.shared.chatOpened(cid)

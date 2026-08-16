@@ -88,6 +88,24 @@ struct VerifyEncryptionView: View {
                 .font(.footnote).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+            // THE RECORD, and it does not go away. The chat's bar can be tapped once and is then
+            // gone for good, so before this there was no answer anywhere to "has this person's
+            // number ever changed?" — the only trace was the Verified badge quietly not being
+            // there, which reads identically to never having verified in the first place.
+            // ⚠️ Stated as a fact with a date and nothing more. A new phone or a reinstall does
+            // this too, and is much the likelier reason.
+            if let changed = SafetyKeyLog.lastChangedAt(peerUid) {
+                Label {
+                    Text("Safety number last changed \(changed.formatted(date: .abbreviated, time: .shortened))")
+                } icon: {
+                    Image(systemName: "lock.rotation")
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 2)
+            }
         }
     }
 
