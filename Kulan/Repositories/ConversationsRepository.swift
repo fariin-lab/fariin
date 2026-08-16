@@ -3,8 +3,14 @@ import Observation
 import FirebaseAuth
 import FirebaseFirestore
 
-/// Live chat list. Native Firestore disk persistence handles offline/cold-start,
-/// so there is no manual AsyncStorage cache to maintain.
+/// Live chat list.
+///
+/// ⚠️ This used to say that Firestore's own disk persistence handled cold start "so there is no
+/// manual cache to maintain". That was wrong in one specific way that mattered: Firestore's cache is
+/// on disk, but it answers through a CALLBACK, and a callback cannot land in the first frame. The
+/// list was therefore empty for the first frames of every cold launch no matter how warm the cache
+/// was — which is what the splash and the shimmer were covering. `ConversationsDiskCache` is read
+/// synchronously in `start()` for exactly that window; Firestore still owns everything after it.
 @Observable
 final class ConversationsRepository {
     static let shared = ConversationsRepository()
@@ -52,6 +58,23 @@ final class ConversationsRepository {
             self.skeletonArmed = true
         }
         guard let uid = Auth.auth().currentUser?.uid else { return }
+        // THE FIRST FRAME, BEFORE ANY CALLBACK. Read straight off disk, on this thread, right here.
+        //
+        // Everything below is asynchronous — the listener, and Firestore's own persistent cache with
+        // it. A callback cannot land in the first frame no matter how quick it is, so before this
+        // there was always a moment with no chats in it, and the splash and the shimmer existed to
+        // cover that moment. This fills it with the real list instead. The snapshot that arrives a
+        // beat later replaces this, and `publish` skips it outright if nothing actually changed.
+        //
+        // ⚠️ `hasLoaded` is set here as well, which is what disarms the skeleton: having chats on
+        // screen IS being loaded, and the shimmer must never appear over rows that are already there.
+        if conversations.isEmpty {
+            let cached = ConversationsDiskCache.shared.load(uid: uid)
+            if !cached.isEmpty {
+                conversations = cached
+                hasLoaded = true
+            }
+        }
         stop()
         // Attach the listener IMMEDIATELY — never block the chat list behind ensureReady.
         // Cached chats render instantly (hasLoaded flips on the first non-empty snapshot);
@@ -72,7 +95,12 @@ final class ConversationsRepository {
                 // .estimate: an offline send leaves updatedAt as a PENDING server timestamp,
                 // which plain data() reads as nil → updatedAtMillis 0 → isCleared() treats the
                 // chat as delete-for-me and it vanishes from the list until the server acks.
-                let convs = snap.documents.map { Conversation(id: $0.documentID, data: $0.data(with: .estimate)) }
+                let docs = snap.documents.map { (id: $0.documentID, data: $0.data(with: .estimate)) }
+                let convs = docs.map { Conversation(id: $0.id, data: $0.data) }
+                // Keep the launch cache current. The RAW documents go in, so the cache is rebuilt by
+                // the same initializer the live path uses and cannot drift from it as fields are
+                // added. Written off the main thread; see ConversationsDiskCache.
+                ConversationsDiskCache.shared.store(docs, uid: uid)
                 // "Automatically Archive new chats from unknown users" (Settings > Chats). Here
                 // rather than inside publish() because publish coalesces and can skip a snapshot
                 // outright — this must see every one, since the request it has to catch may arrive
