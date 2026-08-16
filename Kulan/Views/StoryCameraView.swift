@@ -790,6 +790,14 @@ struct StoryCameraView: View {
     /// How close the finger is to locking the recording, 0 to 1. Drives the lock's own growth so the
     /// gesture can be FELT before it completes.
     @State private var lockProgress: CGFloat = 0
+    /// THE LOCK WAS SET BY THE TOUCH THAT IS ENDING RIGHT NOW — his 2026-08-16 report, "slide onto
+    /// the lock, let go, and it stops anyway".
+    ///
+    /// A release over the shutter means two opposite things depending on how it got there, and the
+    /// only thing that tells them apart is whether THIS touch is the one that locked: the tail of a
+    /// hold-and-slide must leave the recording running, while a fresh tap on the same control is the
+    /// stop button being pressed. Raised where the slide latches, lowered when that touch ends.
+    @State private var lockedByThisTouch = false
 
     private let previewCorner: CGFloat = 40
     private let barHeight: CGFloat = 88
@@ -1453,7 +1461,22 @@ struct StoryCameraView: View {
         // Recording → this is the stop button, which is the whole point of the lock. Not recording →
         // an ordinary shutter. One control, two jobs, decided by what is happening.
         Button {
-            if cam.recording { cam.stopRecording() } else { captureWithScreenFlashIfNeeded() }
+            // ⚠️ THE PHOTO ONLY. STOPPING BELONGS TO THE DRAG, AND THAT MOVE IS HIS 2026-08-16
+            // "slide to lock, let go, and the recording stops anyway".
+            //
+            // This used to read `if cam.recording { cam.stopRecording() }`, which is the one stop on
+            // the release path that never asked whether the recording had just been LOCKED. A
+            // SwiftUI button fires its action on touch-up within a generous slop region around
+            // itself, and the lock sits about 96pt from this button's centre — comfortably inside
+            // it. So the slide latched the lock (the control went yellow, exactly as he described)
+            // and then the same release fired this action and stopped the clip regardless. The
+            // drag's own `onEnded` was already correct and was simply not the only stopper.
+            //
+            // One owner now: the drag ends every recording, because it is the only place that knows
+            // where the finger travelled. This keeps the shutter's other job, which the drag has no
+            // opinion about.
+            guard !cam.recording else { return }
+            captureWithScreenFlashIfNeeded()
         } label: {
             ZStack {
                 Circle().stroke(.white.opacity(0.55), lineWidth: 3).frame(width: 84, height: 84)
@@ -1477,6 +1500,7 @@ struct StoryCameraView: View {
                 .onEnded { _ in
                     guard !cam.recording else { return }
                     locked = false
+                    lockedByThisTouch = false
                     // THE FLAG GOES UP HERE, not in the capture callback. It used to wait for
                     // `didStartRecordingTo`, which lands after the pipeline has actually opened a
                     // file — so the red square, the clock and the lock all appeared well after the
@@ -1508,6 +1532,8 @@ struct StoryCameraView: View {
                     // Far enough right, hands free. 60pt is past anything a thumb wobbles.
                     if cam.recording, !locked, v.translation.width > 60 {
                         locked = true
+                        // This touch is now the tail of a lock, not a press of the stop button.
+                        lockedByThisTouch = true
                         lockProgress = 1
                         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
                     }
@@ -1537,7 +1563,15 @@ struct StoryCameraView: View {
                     // A slide that did NOT reach the lock relaxes it back rather than leaving the
                     // control part-grown over a recording that is ending anyway.
                     if !locked { withAnimation(.easeOut(duration: 0.18)) { lockProgress = 0 } }
-                    if cam.recording, !locked { cam.stopRecording() }
+                    // EVERY WAY A RECORDING ENDS IS HERE, because this is the only place that knows
+                    // what the finger did:
+                    //
+                    //   not locked            → an ordinary hold, and letting go is the stop.
+                    //   locked by THIS touch  → the tail of the slide onto the lock. Hands free; it
+                    //                           must keep running, which is the whole feature.
+                    //   locked earlier        → a fresh press on what is now the stop button.
+                    if cam.recording, !locked || !lockedByThisTouch { cam.stopRecording() }
+                    lockedByThisTouch = false
                 }
         )
         .accessibilityLabel(cam.recording ? "Stop recording" : "Take photo, hold to record")
@@ -1557,6 +1591,11 @@ struct StoryCameraView: View {
     /// as a sign: slide onto it, or tap it, and the recording keeps going without your finger.
     private var lockButton: some View {
         Button {
+            // Only when this tap is what latched it: the shutter may be held by another finger, and
+            // that finger's release must then be read as the tail of a lock rather than as a press
+            // of the stop button — the same rule the slide sets. Tapping a lock that is already
+            // locked changes nothing and must not disarm the next stop.
+            if !locked { lockedByThisTouch = true }
             locked = true
             lockProgress = 1
             UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
