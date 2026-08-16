@@ -583,11 +583,17 @@ final class OfficialChannelStore {
             .sorted { $0.sortAt == $1.sortAt ? $0.id < $1.id : $0.sortAt < $1.sortAt }
 
         hasLoaded = true
-        guard next != visible else { return }   // no-op snapshot, no re-render
-        visible = next
-        // Keep the launch copy current. Written AFTER `visible`, so it records the row the list is
-        // actually showing, and cleared when there is no row — otherwise a person who blocked or
-        // cleared the channel would be handed it back on their next cold start.
+        if next != visible { visible = next }   // assign only on a real change: no needless re-render
+        // ⚠️ THE CACHE IS REFRESHED EVEN WHEN THE ANNOUNCEMENTS DID NOT CHANGE, and that is the
+        // whole point. This used to sit behind `guard next != visible else { return }`, so it only
+        // ran when the LIST changed — but the unread count, the mute flag and the pin come from
+        // `state`, which has its own listener and leaves the list untouched. Reading the channel
+        // therefore never rewrote the cache, and the next cold start dealt out the old badge:
+        // "3" on the first frame and nothing a moment later, which is exactly what the owner
+        // photographed frame by frame (2026-08-16).
+        //
+        // A cache that is only refreshed when part of its content changes is a cache that lies about
+        // the rest of it.
         Self.cacheEntry(listEntry)
     }
 
