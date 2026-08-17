@@ -829,51 +829,40 @@ struct StoryEditorView: View {
         // system sheet it raises resolving light on a light-mode phone — the same split he
         // photographed on the picker. See the note on `DarkPresentation`.
         // THE STICKER TRAY. One sheet, and Link and Location are PUSHES INSIDE IT rather than sheets
-        // of their own — see the note at the top of `StoryStickerSheet`. 0.6 is his number; `.large`
-        // is there because the two pushed screens raise a keyboard and 60% of a phone with a keyboard
-        // over it is not a screen you can type on.
-        .sheet(isPresented: $showStickers) {
+        // of their own — see the note at the top of `StoryStickerSheet`. 0.8 is his number, and the
+        // keyboard grows the tray to full because the two pushed screens type and 80% of a phone
+        // with a keyboard over it is not a screen you can type on.
+        // ⚠️ OUR OWN TRAY, NOT A SYSTEM SHEET, AND THE ONLY REASON IS THE GAP DOWN EACH SIDE.
+        //
+        // His 2026-08-17, three times: "no space left and right". On iOS 26 a sheet at a partial
+        // detent is presented as a FLOATING PANEL inset from the screen edges, drawn by the
+        // presentation controller — so no background, corner radius or content of ours can reach it.
+        // `.presentationSizing(.page)` is the documented way to ask for the full-width presentation
+        // instead; it shipped, and the gap survived. He then named the fallback himself: "you can
+        // Make custom sheet but same ui like now".
+        //
+        // ⚠️ THE TRAY ITSELF IS UNTOUCHED — same view, same search field, same pills, same grid,
+        // same glass tab row, same black, same 80%. `StoryTraySheet` replaces the PRESENTATION and
+        // nothing else, and it carries the detent, the drag indicator, the background, the dim, the
+        // tap-outside and the drag-to-dismiss across one for one. See its header.
+        .storyTray(isPresented: $showStickers, heightFraction: 0.8) {
             StoryStickerSheet(
                 onSticker: { g in Task { await addSticker(g) } },
                 onLink: { url in addLinkSticker(url) },
                 onPlace: { name, coord in addPlaceSticker(name, coord) },
-                onTime: { addTimeSticker() })
-                // 0.8, his 2026-08-17 number, up from 0.6. At six tenths the grid showed barely two
-                // rows under the search field and the actions, so the tray had to be dragged before
-                // it was a sticker picker at all.
-                .presentationDetents([.fraction(0.8), .large])
-                .presentationDragIndicator(.visible)
-                // ⚠️ BLACK, AND THIS REVERSES HIS 2026-08-16 INSTRUCTION ON PURPOSE. Recorded rather
-                // than quietly swapped, because the note that used to be here argued the opposite
-                // case and argued it correctly for what he asked for then.
-                //
-                // Then: "make it real liquid glass for apple design", and the answer was to say
-                // nothing at all and let iOS 26 draw the sheet's own glass — the two lines before
-                // that (`.ultraThinMaterial` + a hand-picked corner radius) were replacing the
-                // system's glass with a pre-26 blur, which is what made it a flat grey panel.
-                //
-                // Now, 2026-08-17, having seen the real thing over a photograph: "sticker sheet make
-                // black". The glass is doing its job — the picture behind it reads straight through
-                // the stickers, which are themselves cut-outs with no background of their own, so
-                // every sticker in the grid is competing with whatever the story happens to be. A
-                // solid ground is the right call for this particular tray and it is his to make.
-                //
-                // ⚠️ DO NOT "RESTORE" THE GLASS ON THE STRENGTH OF THE OLDER NOTE. Both instructions
-                // are real, they are about different things, and this one is later.
-                .presentationBackground(Color.black)
-                // ⚠️ EDGE TO EDGE — his 2026-08-17, twice: "no space left and right and bottom".
-                //
-                // The gap is not a background and not a corner radius. iOS 26 presents a sheet at a
-                // partial detent as a FLOATING panel inset from the screen, and nothing about the
-                // background can reach that. `presentationSizing(.page)` is the documented way to ask
-                // for the full-width page presentation instead of the fitted, floating one.
-                //
-                // ⚠️ I CANNOT VERIFY THIS FROM HERE and it is the one line in this change that is a
-                // best-supported reading rather than something measured. If the gap survives on
-                // device, the answer is that the tray stops being a system sheet at all and becomes
-                // our own layer, the way the viewers sheet already is — which is a real piece of work
-                // and not a modifier.
-                .presentationSizing(.page)
+                onTime: { addTimeSticker() },
+                // The tray has no system sheet to dismiss itself out of any more, so the close is
+                // handed in. Same slide-down whichever way it is asked for.
+                onClose: { StoryTrayPresenter.dismiss() })
+            // ⚠️ THE BLACK GROUND IS THE PANEL'S NOW, NOT `.presentationBackground` — the modifier
+            // only ever spoke to a system sheet and there is none here. It is still BLACK, and that
+            // reverses his 2026-08-16 "make it real liquid glass" on purpose: on 2026-08-17, having
+            // seen the real thing over a photograph, he asked for "sticker sheet make black". The
+            // glass was doing its job — the picture read straight through it, and every sticker in
+            // the grid (a cut-out with no ground of its own) was competing with the story behind.
+            // Both instructions are real, they are about different things, and this one is later.
+            // ⚠️ DO NOT "RESTORE" THE GLASS ON THE STRENGTH OF THE OLDER NOTE. See
+            // `StoryTrayContainerVC.panel`, which is where the colour lives.
         }
         .storyAlwaysDark()
     }

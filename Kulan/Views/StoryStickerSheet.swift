@@ -125,10 +125,25 @@ struct StoryStickerSheet: View {
     var onPlace: (String, CLLocationCoordinate2D) -> Void
     var onTime: () -> Void
 
+    /// HOW THIS TRAY CLOSES ITSELF, handed in by whoever put it up.
+    ///
+    /// ⚠️ `@Environment(\.dismiss)` IS NOT ENOUGH ANY MORE AND THIS IS NOT A STYLE CHOICE. The tray
+    /// is no longer a system `.sheet` — it is `StoryTraySheet`'s own panel, hosted inside a
+    /// container we present — and the dismiss action in that arrangement has no sheet of its own to
+    /// take down. Nil keeps the old behaviour exactly, so this view is still correct in a `.sheet`
+    /// if it is ever put back in one.
+    var onClose: (() -> Void)? = nil
+
     @Environment(\.dismiss) private var dismiss
     /// The one namespace the bottom row's glass lives in. It has to be declared on the view that
     /// OWNS both the container and the elements, or the selection has nothing to melt across.
     @Namespace private var glass
+
+    /// Every "I am finished, take me away" in this file goes through here, so there is one answer to
+    /// how the tray closes rather than five call sites each guessing.
+    private func close() {
+        if let onClose { onClose() } else { dismiss() }
+    }
     @State private var route: [Route] = []
     /// ⚠️ ALWAYS POPULAR, NOT "RECENT IF THERE IS ONE" — his 2026-08-17 correction, second time of
     /// asking: "always default tab is popular".
@@ -174,8 +189,8 @@ struct StoryStickerSheet: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: Route.self) { r in
                 switch r {
-                case .link:  LinkStickerScreen { url in dismiss(); onLink(url) }
-                case .place: PlaceStickerScreen { name, coord in dismiss(); onPlace(name, coord) }
+                case .link:  LinkStickerScreen { url in close(); onLink(url) }
+                case .place: PlaceStickerScreen { name, coord in close(); onPlace(name, coord) }
                 }
             }
         }
@@ -252,7 +267,7 @@ struct StoryStickerSheet: View {
             StickerFlowLayout(spacing: 10, lineSpacing: 10) {
                 actionPill("mappin.and.ellipse", "Location", .red) { route.append(.place) }
                 actionPill("link", "Link", .blue) { route.append(.link) }
-                actionPill("clock", "Time", .orange) { dismiss(); onTime() }
+                actionPill("clock", "Time", .orange) { close(); onTime() }
             }
         }
         .padding(.horizontal, 16)
@@ -330,7 +345,7 @@ struct StoryStickerSheet: View {
                 Color.clear.contentShape(Rectangle())
                     .onTapGesture {
                         StickerRecents.note(s)
-                        dismiss()
+                        close()
                         onSticker(s)
                     }
             }
