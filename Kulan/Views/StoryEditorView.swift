@@ -3013,6 +3013,56 @@ struct TextEditorOverlay: View {
                 .contentShape(Rectangle())          // tap anywhere on the text block, not just the glyphs
                 .onTapGesture { focused = true }
                 Spacer()
+            }
+        }
+        // ⚠️ THE BAR IS THE KEYBOARD'S OWN ACCESSORY VIEW NOW, AND THAT IS THEIR MECHANISM RATHER
+        // THAN A BETTER GUESS AT A CURVE.
+        //
+        // His report: tapping Done drops the controls to the bottom before the keyboard has finished
+        // closing. Every attempt to answer that by timing an animation against the keyboard is a
+        // guess, and their own source says so in a comment — `ImageEditorViewController+Text`, where
+        // they explain that "animations of textViewContainer.frame don't match animations of the
+        // keyboard" and work around the gap by extending a background 300pt below rather than trying
+        // to chase it.
+        //
+        // What they actually rely on is that the styling bar is not chasing the keyboard at all:
+        //
+        //     textView.inputAccessoryView = textViewAccessoryToolbar
+        //
+        // An accessory view IS part of the keyboard. It cannot lead it or lag it, on any curve, on
+        // any iOS version, because there is no second animation to disagree with. Their text-story
+        // composer does the identical thing (`TextStoryComposerView.init`), so both of their text
+        // editors put the same bar in the same place.
+        //
+        // `ToolbarItemGroup(placement: .keyboard)` is SwiftUI's door to that same accessory view.
+        //
+        // ⚠️ AND IT CHANGES HOW THE BAR LOOKS, WHICH IS THE PRICE HE ACCEPTED WHEN HE ASKED FOR THIS
+        // "exactly like Signal". It sat in glass floating over the photograph; it now sits on the
+        // keyboard's own bar above the keys, which is where theirs sits. The controls, their order
+        // and their sizes are untouched — only the surface under them moved.
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                textToolBar
+            }
+        }
+        // ⚠️ NOTHING HERE MOVES THIS SCREEN FOR THE KEYBOARD, AND THE ATTEMPT TO IS REVERTED.
+        //
+        // Answering his "the keyboard closes too fast" by turning off SwiftUI's own avoidance and
+        // padding the bottom by the keyboard's height BROKE THE SCREEN: padding the outer stack
+        // shortens it, so the dim, the text and the bar were all laid out inside a box the height of
+        // the space above the keys — his screenshot, with the whole editor squeezed into a band at
+        // the top and the photo showing underneath it.
+        //
+        // The automatic avoidance is correct about WHERE this screen goes, and with the bar gone from
+        // this stack it is now the ONLY thing between the words and the keyboard — which is their
+        // `textViewContainer.bottomAnchor.constraint(equalTo: keyboardLayoutGuide.topAnchor)` with
+        // the words centred inside it.
+        .onAppear { focused = true }
+    }
+
+    /// THE TOOL BAR, LIFTED OUT OF THE STACK SO IT CAN RIDE THE KEYBOARD. Same controls, same order,
+    /// same sizes as when it floated; see the note at the `toolbar` that installs it.
+    private var textToolBar: some View {
                 VStack(spacing: 12) {
                     // THE FONTS, BEHIND THE Aa THAT NAMES THEM. A permanent row of four for a choice
                     // made once per caption is a row spent on nothing most of the time; the button
@@ -3086,21 +3136,6 @@ struct TextEditorOverlay: View {
                     }
                     .padding(.horizontal, 16)
                 }
-                .padding(.bottom, 14)
-            }
-        }
-        // ⚠️ NOTHING HERE MOVES THIS SCREEN FOR THE KEYBOARD, AND THE ATTEMPT TO IS REVERTED.
-        //
-        // Answering his "the keyboard closes too fast" by turning off SwiftUI's own avoidance and
-        // padding the bottom by the keyboard's height BROKE THE SCREEN: padding the outer stack
-        // shortens it, so the dim, the text and the bar were all laid out inside a box the height of
-        // the space above the keys — his screenshot, with the whole editor squeezed into a band at
-        // the top and the photo showing underneath it.
-        //
-        // The automatic avoidance is correct about WHERE this screen goes; it is only its curve on
-        // the way down that he can feel. Whatever answers that has to move the BAR, not the screen,
-        // and it is not worth a broken editor to find out. Left alone.
-        .onAppear { focused = true }
     }
 
     /// A plain icon inside the tool capsule — the capsule is its background, exactly as on the crop
