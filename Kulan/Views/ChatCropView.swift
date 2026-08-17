@@ -75,6 +75,7 @@ struct ChatCropView: View {
         // start already arrived, which is every caller that hands nothing in.
         _entryScale = State(initialValue: initialContentRect == nil ? 1 : 0.0001)
         _chrome = State(initialValue: initialContentRect == nil ? 1 : 0)
+        _frameChrome = State(initialValue: initialContentRect == nil ? 1 : 0)
     }
 
     /// THE ENTRY, WHICH IS A RESIZE AND NOT A CROSS-FADE.
@@ -95,10 +96,24 @@ struct ChatCropView: View {
     /// see `runEntry`. Zero whenever the fitted picture could be seated on the card's own centre,
     /// which is most of the time; a tall card is the case that needs it.
     @State private var entryOffset: CGSize = .zero
-    /// The crop frame, the dim and both bars, faded in over the same window. Theirs is
-    /// `footerView.alpha`, `toolbar.setControlsHidden` and `cropView.setState(.initial)`, all inside
-    /// the one animation block.
+    /// STAGE ONE: the black behind, the Reset button and the bottom button row, faded in over the
+    /// 0.3s the picture is moving. That is `_buttonsWrapperView.alpha` in
+    /// `TGPhotoCropController.transitionIn`, on their duration.
     @State private var chrome: CGFloat
+    /// STAGE TWO: the crop frame, the grid, the corner brackets, the dim outside the frame and the
+    /// straighten ruler — AFTER the picture has finished moving, not with it.
+    ///
+    /// ⚠️ THIS SPLIT IS HIS "just original image make zoom out, after that appearing crop controls",
+    /// AND IT IS LITERALLY WHAT THEIR CODE DOES. `TGPhotoCropView.animateTransitionIn` sets
+    /// `_areaView.alpha`, `_rotationView.alpha` and the scroll view to ZERO for the whole flight —
+    /// the frame and the ruler are not on screen while the picture is moving. They come back in
+    /// `transitionInFinishedAnimated:`, which the tab controller calls from the COMPLETION BLOCK of
+    /// the 0.3s move, over **0.35s ease-in-out** of their own.
+    ///
+    /// One number for both stages is what made this read as a page arriving: the frame drawn around a
+    /// picture that is still travelling announces the new screen before the picture has become part
+    /// of it.
+    @State private var frameChrome: CGFloat
 
     // Inline: close via onClose only (dismiss() would pop the whole editor to the chat). Cover: dismiss().
     private func close() { if inline { onClose() } else { dismiss() } }
@@ -202,12 +217,13 @@ struct ChatCropView: View {
                 Path { p in p.addRect(CGRect(origin: .zero, size: geo.size)); p.addRect(crop) }
                     .fill(Color.black.opacity(0.5), style: FillStyle(eoFill: true))
                     .allowsHitTesting(false)
-                    .opacity(chrome)
+                    .opacity(frameChrome)
 
-                // The frame arrives WITH the picture rather than over it — theirs hides the whole
-                // crop view for the initial state and brings it back in the same animation block.
-                gridAndBorder.opacity(chrome)
-                brackets.opacity(chrome)
+                // ⚠️ THE FRAME ARRIVES AFTER THE PICTURE HAS LANDED, NOT WITH IT. See `frameChrome`:
+                // theirs holds `_areaView` at alpha 0 for the whole of the move and brings it back
+                // from the move's completion block.
+                gridAndBorder.opacity(frameChrome)
+                brackets.opacity(frameChrome)
                 // Move the whole frame by dragging inside it.
                 Color.clear.frame(width: crop.width, height: crop.height).position(x: crop.midX, y: crop.midY)
                     .contentShape(Rectangle())
@@ -313,6 +329,12 @@ struct ChatCropView: View {
             entryScale = 1
             entryOffset = .zero
             chrome = 1
+        }
+        // AND ONLY THEN THE FRAME. Their completion block, expressed as a delay: `.delay(0.3)` is the
+        // move's own duration, and 0.35 is the figure `transitionInFinishedAnimated:` animates the
+        // area view and the rotation view back with.
+        withAnimation(.easeInOut(duration: 0.35).delay(0.3)) {
+            frameChrome = 1
         }
     }
 
@@ -438,7 +460,9 @@ struct ChatCropView: View {
     // and the tap is on the icon that means shape.
     private var bottomControls: some View {
         VStack(spacing: 14) {
-            straightenWheel
+            // The ruler is their `_rotationView`, which is held at zero for the whole of the move and
+            // comes back with the crop frame — not with the buttons beside it. See `frameChrome`.
+            straightenWheel.opacity(frameChrome)
             HStack(spacing: 12) {
                 // Leave with the picture untouched.
                 Button { close() } label: {
