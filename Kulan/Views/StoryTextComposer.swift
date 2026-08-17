@@ -11,6 +11,16 @@ import UIKit
 // the other thing the same page can show, so this draws only the card and `StoryCameraView` keeps
 // the bar underneath it.
 
+/// ONE CAP FOR EVERY STORY TEXT FIELD, because it was written twice and the two copies disagreed.
+///
+/// The text composer capped at 720 and the editor's caption at 700 — and the caption's own comment
+/// says "cap like the text composer", so 700 was not a number anybody chose, it was a copy that
+/// drifted. Nothing on the server bounds either field, so the two only ever had each other to agree
+/// with. One constant now, so they cannot part again.
+enum StoryText {
+    static let charLimit = 720
+}
+
 /// One background and the ink that stays legible on it. Paired deliberately: a palette that only
 /// stored colours would eventually put dark text on a dark card.
 struct TextStoryStyle {
@@ -174,7 +184,7 @@ struct StoryTextCard: View {
 
     /// 720, his 2026-08-16 number, up from 700. The words shrink to fit now, so the limit is no
     /// longer standing in for "past this it stops looking like a status" — it is only a ceiling.
-    private let charLimit = 720
+    private let charLimit = StoryText.charLimit
     private var style: TextStoryStyle { TextStoryStyles.style(styleIndex) }
     private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
 

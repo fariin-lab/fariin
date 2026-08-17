@@ -1242,15 +1242,32 @@ final class StoriesService {
     /// Only the author can write here, so only the author can clean it. Run once per session, off
     /// the critical path, bounded, and failures are ignored — the reader already filters by expiry,
     /// so this is housekeeping rather than correctness.
+    /// ⚠️ PAGED UNTIL IT DRAINS, BECAUSE ONE PAGE OF 40 NEVER DID.
+    ///
+    /// This asked for 40 expired mirrors, deleted them and stopped. It runs once per session, so an
+    /// account that ever got more than 40 behind — a stretch of posting to Everyone, a few days
+    /// without opening the app — could never catch up: every session cleared 40 and left the rest,
+    /// and every expired mirror left behind is a story still readable by any signed-in stranger long
+    /// after it should have gone.
+    ///
+    /// No cursor is needed and using one would be wrong: the page just deleted is gone, so asking the
+    /// same query again returns the NEXT forty. The loop ends on a short page, which is the normal
+    /// exit, and `maxPages` is a backstop against a page whose deletes all failed handing back the
+    /// same documents for ever — not a budget. A thousand mirrors is far past any real backlog.
     func sweepExpiredMirrors() async {
         let me = uid
         guard !me.isEmpty else { return }
-        guard let snap = try? await db.collection("users").document(me)
-            .collection("publicStories")
-            .whereField("expiresAt", isLessThan: Timestamp(date: Date()))
-            .limit(to: 40)
-            .getDocuments() else { return }
-        for d in snap.documents { try? await d.reference.delete() }
+        let pageSize = 40
+        let maxPages = 25
+        for _ in 0..<maxPages {
+            guard let snap = try? await db.collection("users").document(me)
+                .collection("publicStories")
+                .whereField("expiresAt", isLessThan: Timestamp(date: Date()))
+                .limit(to: pageSize)
+                .getDocuments(), !snap.documents.isEmpty else { return }
+            for d in snap.documents { try? await d.reference.delete() }
+            if snap.documents.count < pageSize { return }
+        }
     }
 
     func deleteAllMine() async {

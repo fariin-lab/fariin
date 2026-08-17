@@ -1713,7 +1713,9 @@ struct StoryEditorView: View {
                 // line is then 34 tall, under the 40 the + pins, so the resting bar is exactly
                 // 40 and a long caption still grows from there.
                 .padding(.vertical, 6)
-                .onChange(of: caption) { _, v in if v.count > 700 { caption = String(v.prefix(700)) } }  // cap like the text composer
+                .onChange(of: caption) { _, v in if v.count > StoryText.charLimit { caption = String(v.prefix(StoryText.charLimit)) } }
+                // ⚠️ ONE CONSTANT, and it used to be a hand-copied 700 beside a comment
+                // saying "cap like the text composer" — which caps at 720. See `StoryText`.
         }
         // EXACTLY 40 AT REST (owner spec). It was 50: the + is a 32pt square and the bar
         // added 9pt of its own padding above and below it, so `minHeight: 40` never bit —
