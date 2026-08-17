@@ -909,9 +909,15 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
         // so the two never argue about the middle of the screen — one owns the centre, one owns the
         // edge. Its length is a share of the area rather than a constant, or it would run off a short
         // screen once the keyboard is up.
-        let barHeight = min(240, max(120, container.bounds.height * 0.34))
-        colorBar.bounds = CGRect(x: 0, y: 0, width: 44, height: barHeight)
-        colorBar.center = CGPoint(x: 16 + 22, y: container.bounds.midY)
+        //
+        // ⚠️ HIS 2026-08-17 SIZING: SHORTER, AND HARD AGAINST THE EDGE. At 0.34 of the editing area it
+        // stood over 200pt tall on his phone and its gutter was 16pt, which is a strip of the picture
+        // the width of a thumb spent on a control that is touched for a second at a time. 0.24 and a
+        // 4pt gutter keep the same shape at the size he drew — the whole 44pt control is the grab
+        // area, so moving it out to the margin costs nothing a finger can feel.
+        let barLength = min(180, max(110, container.bounds.height * 0.24))
+        colorBar.bounds = CGRect(x: 0, y: 0, width: 44, height: barLength)
+        colorBar.center = CGPoint(x: 4 + 22, y: container.bounds.midY)
     }
 
     // MARK: Styling
