@@ -258,11 +258,24 @@ final class StoryTrayContainerVC: UIViewController {
         leaving = true
         view.endEditing(true)
         let remaining = max(1, currentHeight - panelOffset)
-        // A flicked tray leaves at the speed it was flicked at, capped so a hard flick is quick
-        // rather than instant.
-        let duration = min(0.35, max(0.18, Double(remaining / max(600, velocity))))
+        // ⚠️ IT LEAVES AT THE SPEED THE FINGER LEFT IT AT, AND IT USED TO START AGAIN FROM STILL.
+        //
+        // His "when I scroll down to close it is slow". The panel followed the finger 1:1 and then the
+        // release handed it to an EASE-IN over as much as 0.35s — a curve that begins at zero speed.
+        // So a tray being pushed down at four hundred points a second stopped dead at the moment it
+        // was let go and crept off from there. The motion was not the wrong length so much as the
+        // wrong shape: the one frame the eye is most certain about is the one where the finger lifts.
+        //
+        // A critically damped spring handed the finger's own speed continues that movement instead of
+        // restarting it, and the distances here are short enough that damping 1 never overshoots. The
+        // ceiling comes down with it: a tray let go from rest, and a tap outside, are 0.24s now.
+        let duration = min(0.24, max(0.12, Double(remaining / max(1600, velocity))))
+        // UIKit wants this as a fraction of the distance still to go, per second, not points per second.
+        let launch = max(0, velocity / remaining)
         isAnimatingPanel = true
-        UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseIn]) {
+        UIView.animate(withDuration: duration, delay: 0, usingSpringWithDamping: 1,
+                       initialSpringVelocity: launch,
+                       options: [.beginFromCurrentState, .allowUserInteraction]) {
             self.layoutPanel(height: self.currentHeight, offset: self.currentHeight)
             self.dimView.backgroundColor = UIColor.black.withAlphaComponent(0)
         } completion: { _ in
@@ -288,6 +301,15 @@ final class StoryTrayContainerVC: UIViewController {
     /// Where the finger was when the panel took over, so the panel starts moving from ZERO rather
     /// than jumping by however far the grid had already been scrolled up to its top.
     private var dragHandoverTranslation: CGFloat = 0
+
+    /// How far a flick at `velocity` would carry on its own, on the deceleration a scroll view uses.
+    /// `d/(1-d)` with the normal rate is a shade under half a second's worth of the release speed,
+    /// which is why a hard flick commits from almost anywhere and a slow slide does not.
+    private static func coastingDistance(_ velocity: CGFloat) -> CGFloat {
+        guard velocity > 0 else { return 0 }
+        let d = UIScrollView.DecelerationRate.normal.rawValue
+        return (velocity / 1000) * d / (1 - d)
+    }
 
     private var scrollIsAtTop: Bool {
         guard let sv = trackedScroll else { return true }
@@ -332,9 +354,14 @@ final class StoryTrayContainerVC: UIViewController {
             defer { dragOwnsPanel = false }
             guard dragOwnsPanel else { return }
             let velocity = g.velocity(in: view).y
-            // A quarter of the way down, or thrown. The same two-part rule every dismissable panel
-            // in this app uses, so the tray answers a flick the way the story viewer does.
-            if panelOffset > currentHeight * 0.25 || velocity > 900 {
+            // ⚠️ WHERE THE THROW WAS GOING, NOT WHERE THE FINGER STOPPED. A quarter of the way down
+            // commits, as it always has — but the panel is asked where it would COAST to rather than
+            // where it is, on the same projection UIKit's own scroll views decelerate along. A short
+            // fast flick is the gesture the old rule was worst at: it left the panel high, the fixed
+            // 900pt/s bar was above where a thumb-flick actually lands, and the tray sprang back up
+            // into a face that had already dismissed it. Being made to do it twice is most of what
+            // "slow" means here.
+            if panelOffset + Self.coastingDistance(velocity) > currentHeight * 0.25 {
                 animateOutAndFinish(velocity: velocity)
             } else {
                 isAnimatingPanel = true
