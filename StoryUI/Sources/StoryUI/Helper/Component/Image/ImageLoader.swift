@@ -379,6 +379,41 @@ final class ImageLoader: UIView {
             return
         }
 
+        // ⚠️ THE APP IS USUALLY DRAWING THIS EXACT PICTURE ALREADY, AND NOT ASKING IT FOR THE REAL
+        // THING — ONLY FOR A VEIL — WAS HIS "the centre thumbnail turns dark for a moment on every
+        // swipe".
+        //
+        // For a photo story `previewUrl` IS `mediaUrl` (see `Story.previewUrl` in the app), so the
+        // poster the app's own cache holds is not a stand-in for this story's media, it is this
+        // story's media: the same url, the same bytes, decoded once when the row's card drew it. The
+        // moment the viewers-sheet hand-over reveals this page, that card is ON SCREEN showing the
+        // full picture — and this view, asked for the identical url, would put up
+        // `loadingVeil` (the picture at 1/8 size under 45% black) while it went off to download and
+        // decode the same bytes a second time into its own caches. A sharp card replaced by a
+        // darkened smear of itself for the length of a decode is exactly the flash he photographed,
+        // and it is why the flash was on EVERY arrival: the lookahead warms `URLCache` (bytes), never
+        // `StoryMemoryCache` (pixels), so the synchronous branch above misses for every story not
+        // already visited this session.
+        //
+        // The video path has followed this rule since the cover ranks were built ("a real frame of
+        // this clip goes up AS IT IS, so the hand-over to the live layer is invisible" — its own
+        // words): only the ~30px embedded thumbnail is ever blurred. This is that rule for photos.
+        //
+        // ⚠️ KEYED BY THE RAW STRING, not `imageURL.absoluteString`: the app stores under the string
+        // it was handed (`DiskImageCache` is a `String`-keyed store), and a round trip through
+        // `URL(string:)` is allowed to re-encode. The raw string is the one key both sides share.
+        //
+        // Stored into `StoryMemoryCache` so the next arrival of this story takes the branch above,
+        // and marked loaded because it IS the media, not a placeholder for it — the progress bar
+        // should run.
+        if let warm = StoryPosterSource.provider?(validatedUrl) {
+            showShimmer(false)
+            StoryMemoryCache.store(warm, for: imageURL)
+            apply(warm)
+            imageIsLoaded()
+            return
+        }
+
         // ⚠️ THE STORY WE JUST LEFT IS STILL ON SCREEN AT THIS LINE, AND TAKING IT DOWN HERE — BEFORE
         // THE FIRST AWAIT — IS HIS "the previous story's image flashes inside the new centre
         // thumbnail".
