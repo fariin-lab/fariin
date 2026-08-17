@@ -416,6 +416,18 @@ public final class StoryCardMorph {
     /// is every arrival and every teardown, so it can never outlive the flight that raised it.
     public static var flightChromeHidden = false
 
+    /// ⚠️ IS THIS FLIGHT AN OPENING? Read beside `flightChromeHidden`, and it exists so the bottom
+    /// bars can ARRIVE the way theirs do without touching the way they leave.
+    ///
+    /// Their `animateIn` slides every bottom panel up from the screen's edge; his instruction is that
+    /// the scroll-down dismiss must not change at all. One flag cannot serve both, because
+    /// `flightChromeHidden` is raised by the open and the close alike. A page reads this to decide
+    /// whether the bar it is about to fade in should also travel: opening yes, closing no, and the
+    /// close keeps the fade it has always had, on the curve it has always had.
+    ///
+    /// Seeded at mount like its neighbour, and cleared by `resetFlight` for the same reason.
+    public static var flightIsOpening = false
+
     /// Identity-checked for the same reason `detach` is: a teardown must never clear a successor's
     /// registration.
     public func detachFlight(_ view: UIView?) {
@@ -481,6 +493,7 @@ public final class StoryCardMorph {
         // mount the NEXT viewer with its header and footer invisible and nothing left to post the
         // correction.
         Self.flightChromeHidden = false
+        Self.flightIsOpening = false
         guard let flightCard else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
