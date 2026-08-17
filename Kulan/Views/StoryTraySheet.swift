@@ -183,10 +183,29 @@ final class StoryTrayContainerVC: UIViewController {
     /// layout pass stands down while a flight is in progress rather than overwriting it.
     private var isAnimatingPanel = false
 
+    /// ⚠️ AND THE FIRST LAYOUT IS BEFORE THE FLIGHT, NOT INSIDE IT — WHICH IS HIS "a different sheet
+    /// briefly flashes, then the correct sheet opens normally".
+    ///
+    /// The flag above only guards a layout pass landing DURING an animation. The order UIKit runs is
+    /// `present` → `viewDidLoad` → `viewDidLayoutSubviews` → the presentation's completion →
+    /// `animateIn`, so the very first layout happens with nothing animating and `panelOffset` at its
+    /// initial 0 — which means "seated", so the tray was drawn FULLY OPEN for a frame or two before
+    /// `animateIn` pushed it back off the bottom and slid it up. A sheet appearing whole, vanishing
+    /// and then arriving properly is not read as one sheet. It is read as two.
+    ///
+    /// Nothing about the panel's resting position is knowable before `animateIn` anyway, so until it
+    /// has run the only correct place for the panel is off the bottom of the screen.
+    private var hasAnimatedIn = false
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         if currentHeight <= 0 { currentHeight = restHeight }
         guard !isAnimatingPanel else { return }
+        guard hasAnimatedIn else {
+            // Not arrived yet: fully out of frame, whatever else this pass was called for.
+            layoutPanel(height: currentHeight, offset: currentHeight)
+            return
+        }
         // Only the height is re-derived on a rotation; a panel mid-drag keeps where the finger has
         // put it, which is what stops a keyboard animation from snapping it home.
         layoutPanel(height: currentHeight, offset: panelOffset)
@@ -216,7 +235,10 @@ final class StoryTrayContainerVC: UIViewController {
         currentHeight = restHeight
         // Seated fully out of frame, and `panelOffset` now says so — see `layoutPanel`.
         layoutPanel(height: currentHeight, offset: currentHeight)
+        // ⚠️ BEFORE `hasAnimatedIn` IS RAISED, so this pass takes the not-arrived branch and cannot
+        // seat the panel behind our back. See the note on that flag.
         view.layoutIfNeeded()
+        hasAnimatedIn = true
         isAnimatingPanel = true
         // The sheet's own arrival, near enough: a firm spring with no bounce to speak of, and the
         // dim coming up with it rather than after it.
