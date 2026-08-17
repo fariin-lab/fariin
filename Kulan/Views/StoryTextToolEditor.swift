@@ -211,6 +211,16 @@ private final class StoryColorPreviewView: UIView {
 /// waiting to happen.
 final class StoryTextColorPickerBar: UIControl {
 
+    /// ⚠️ VERTICAL IS HIS 2026-08-17 REDESIGN, and it is a deliberate move away from the reference
+    /// app, whose bar is horizontal in the keyboard's accessory row. He drew it standing at the left
+    /// edge of the picture instead, which is where the story editors he compares us against put it:
+    /// the words own the middle of the screen and the colours own the margin.
+    ///
+    /// White is at the TOP in that drawing, which is phase 1 — so the spectrum is drawn from the
+    /// bottom up and the thumb's travel is inverted. Nothing else about the control changes.
+    enum Axis { case horizontal, vertical }
+    private let axis: Axis
+
     private enum Metrics {
         static let thumbSize: CGFloat = 24
         static let barHeight: CGFloat = 16
@@ -233,14 +243,15 @@ final class StoryTextColorPickerBar: UIControl {
     private let thumb = ThumbView(frame: .zero)
     private let preview = StoryColorPreviewView()
 
-    init(value: StoryTextColorValue) {
+    init(value: StoryTextColorValue, axis: Axis = .horizontal) {
         self.value = value
+        self.axis = axis
         super.init(frame: .zero)
 
         // The teardrop is drawn outside this control's own bounds.
         clipsToBounds = false
 
-        barImageView.image = Self.gradientImage()
+        barImageView.image = Self.gradientImage(for: axis)
         barImageView.clipsToBounds = true
         barImageView.contentMode = .scaleToFill
         addSubview(barImageView)
@@ -258,24 +269,42 @@ final class StoryTextColorPickerBar: UIControl {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override var intrinsicContentSize: CGSize {
-        CGSize(width: UIView.noIntrinsicMetric, height: Metrics.thumbSize)
+        switch axis {
+        case .horizontal: CGSize(width: UIView.noIntrinsicMetric, height: Metrics.thumbSize)
+        case .vertical:   CGSize(width: Metrics.thumbSize, height: UIView.noIntrinsicMetric)
+        }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        barImageView.frame = CGRect(x: 0, y: (bounds.height - Metrics.barHeight) / 2,
-                                    width: bounds.width, height: Metrics.barHeight)
-        barImageView.layer.cornerRadius = Metrics.barHeight / 2
-
-        let x = barImageView.frame.minX + barImageView.frame.width * min(1, max(0, value.phase))
+        let p = min(1, max(0, value.phase))
         thumb.bounds = CGRect(x: 0, y: 0, width: Metrics.thumbSize, height: Metrics.thumbSize)
-        thumb.center = CGPoint(x: x, y: bounds.midY)
-
         preview.bounds = CGRect(x: 0, y: 0,
                                 width: StoryColorPreviewView.boxSize, height: StoryColorPreviewView.boxSize)
-        preview.center = CGPoint(x: x,
-                                 y: barImageView.frame.minY - Metrics.previewGap - StoryColorPreviewView.boxSize / 2)
+        switch axis {
+        case .horizontal:
+            barImageView.frame = CGRect(x: 0, y: (bounds.height - Metrics.barHeight) / 2,
+                                        width: bounds.width, height: Metrics.barHeight)
+            barImageView.layer.cornerRadius = Metrics.barHeight / 2
+            let x = barImageView.frame.minX + barImageView.frame.width * p
+            thumb.center = CGPoint(x: x, y: bounds.midY)
+            preview.transform = .identity
+            preview.center = CGPoint(x: x,
+                                     y: barImageView.frame.minY - Metrics.previewGap - StoryColorPreviewView.boxSize / 2)
+        case .vertical:
+            barImageView.frame = CGRect(x: (bounds.width - Metrics.barHeight) / 2, y: 0,
+                                        width: Metrics.barHeight, height: bounds.height)
+            barImageView.layer.cornerRadius = Metrics.barHeight / 2
+            // Phase 1 is WHITE and white is at the top, so the travel runs the other way.
+            let y = barImageView.frame.minY + barImageView.frame.height * (1 - p)
+            thumb.center = CGPoint(x: bounds.midX, y: y)
+            // The teardrop's tip points down as drawn; a quarter turn clockwise points it left, at
+            // the bar it belongs to, and the preview floats out to the right where the hand is not.
+            preview.transform = CGAffineTransform(rotationAngle: .pi / 2)
+            preview.center = CGPoint(x: barImageView.frame.maxX + Metrics.previewGap + StoryColorPreviewView.boxSize / 2,
+                                     y: y)
+        }
     }
 
     @objc private func didTouch(_ gesture: UIGestureRecognizer) {
@@ -289,23 +318,35 @@ final class StoryTextColorPickerBar: UIControl {
             return
         }
 
-        // Only `x` matters — theirs says the same, and for the same reason: the bar is 16pt tall and
-        // a finger is not.
-        let width = barImageView.bounds.width
-        guard width > 0 else { return }
-        let x = gesture.location(in: barImageView).x
-        value = StoryTextColorValue.value(atPhase: min(1, max(0, x / width)))
+        // Only the axis the bar runs along matters — theirs says the same, and for the same reason:
+        // the bar is 16pt across and a finger is not.
+        let point = gesture.location(in: barImageView)
+        let phase: CGFloat
+        switch axis {
+        case .horizontal:
+            guard barImageView.bounds.width > 0 else { return }
+            phase = point.x / barImageView.bounds.width
+        case .vertical:
+            guard barImageView.bounds.height > 0 else { return }
+            phase = 1 - point.y / barImageView.bounds.height
+        }
+        value = StoryTextColorValue.value(atPhase: min(1, max(0, phase)))
         sendActions(for: .valueChanged)
     }
 
-    private static func gradientImage() -> UIImage {
-        let size = CGSize(width: 512, height: Metrics.barHeight)
+    private static func gradientImage(for axis: Axis) -> UIImage {
+        let long: CGFloat = 512
+        let size = axis == .horizontal ? CGSize(width: long, height: Metrics.barHeight)
+                                       : CGSize(width: Metrics.barHeight, height: long)
         let colors = StoryTextColorValue.gradient.map { $0.cgColor }
         return UIGraphicsImageRenderer(size: size).image { ctx in
             guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
                                             colors: colors as CFArray, locations: nil) else { return }
-            ctx.cgContext.drawLinearGradient(gradient, start: .zero,
-                                             end: CGPoint(x: size.width, y: 0), options: [])
+            // Vertical runs bottom to top, so stop 0 (black) is at the foot and stop 8 (white) at the
+            // head — which is the way round he drew it.
+            let start = axis == .horizontal ? CGPoint.zero : CGPoint(x: 0, y: size.height)
+            let end = axis == .horizontal ? CGPoint(x: size.width, y: 0) : CGPoint.zero
+            ctx.cgContext.drawLinearGradient(gradient, start: start, end: end, options: [])
         }
     }
 
@@ -361,22 +402,15 @@ final class StoryTextToolbar: UIControl {
     var alignment: TextAlignment { didSet { updateAlignButton() } }
     var background: TextOverlay.BgStyle { didSet { updateBackgroundButton() } }
 
-    var colorValue: StoryTextColorValue {
-        get { colorPickerBar.value }
-        set { colorPickerBar.value = newValue }
-    }
-
     /// One callback per thing that can change, rather than a delegate: this bar has exactly one owner
     /// and it lives ten lines away.
     var onStyleChange: (() -> Void)?
-    var onColorChange: (() -> Void)?
     var onDone: (() -> Void)?
 
     private let fontButton = UIButton(configuration: .plain())
     private let alignButton = UIButton(configuration: .plain())
     private let backgroundButton = UIButton(configuration: .plain())
     private let doneButton = UIButton(configuration: .glass())
-    private let colorPickerBar: StoryTextColorPickerBar
     private let glassPanel = UIVisualEffectView(effect: {
         let effect = UIGlassEffect(style: .regular)
         effect.isInteractive = true
@@ -384,14 +418,15 @@ final class StoryTextToolbar: UIControl {
     }())
     private let stack = UIStackView()
 
+    /// ⚠️ NO COLOUR BAR IN HERE ANY MORE — his 2026-08-17 redesign moved it to the left edge of the
+    /// picture, standing up, where the story editors he compares us against put it. The reference app
+    /// keeps it in this row; he does not want it here. See `StoryTextColorPickerBar.Axis`.
     init(fontStyle: TextOverlay.FontStyle,
          alignment: TextAlignment,
-         background: TextOverlay.BgStyle,
-         color: StoryTextColorValue) {
+         background: TextOverlay.BgStyle) {
         self.fontStyle = fontStyle
         self.alignment = alignment
         self.background = background
-        self.colorPickerBar = StoryTextColorPickerBar(value: color)
 
         super.init(frame: .zero)
 
@@ -426,13 +461,6 @@ final class StoryTextToolbar: UIControl {
             panelStack.bottomAnchor.constraint(equalTo: glassPanel.bottomAnchor),
         ])
 
-        colorPickerBar.translatesAutoresizingMaskIntoConstraints = false
-        // The bar is the one thing in the row that gives: the four controls beside it are fixed 44pt
-        // squares, so it takes whatever width is left.
-        colorPickerBar.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        colorPickerBar.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        colorPickerBar.addAction(UIAction { [weak self] _ in self?.onColorChange?() }, for: .valueChanged)
-
         fontButton.addAction(UIAction { [weak self] _ in
             guard let self else { return }
             self.fontStyle = self.fontStyle.next()
@@ -454,8 +482,13 @@ final class StoryTextToolbar: UIControl {
         doneButton.addAction(UIAction { [weak self] _ in self?.onDone?() },
                              for: .primaryActionTriggered)
 
+        // The tools sit at the leading edge and Done at the trailing one, with nothing but air
+        // between them — the shape he drew once the colours left this row.
+        let spacer = UIView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         stack.addArrangedSubview(glassPanel)
-        stack.addArrangedSubview(colorPickerBar)
+        stack.addArrangedSubview(spacer)
         stack.addArrangedSubview(doneButton)
         stack.alignment = .center
         stack.spacing = Metrics.stackSpacing
@@ -674,9 +707,13 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
     private var currentFont: UIFont = .systemFont(ofSize: 34, weight: .semibold)
     private lazy var toolbar = StoryTextToolbar(fontStyle: overlay.font,
                                                 alignment: overlay.alignment,
-                                                background: overlay.background,
-                                                color: StoryTextColorValue(color: UIColor(overlay.color),
-                                                                           phase: overlay.colorPhase))
+                                                background: overlay.background)
+    /// THE COLOURS, STANDING AT THE LEFT EDGE OF THE PICTURE — his 2026-08-17 redesign. It used to be
+    /// a horizontal bar inside the keyboard's accessory row, which is where the reference app keeps
+    /// it; he drew it here instead, and it belongs to this screen rather than to the keyboard now.
+    private lazy var colorBar = StoryTextColorPickerBar(
+        value: StoryTextColorValue(color: UIColor(overlay.color), phase: overlay.colorPhase),
+        axis: .vertical)
 
     private var toolbarInstalled = false
     private var didBeginEditing = false
@@ -750,8 +787,12 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
         container.addGestureRecognizer(tap)
 
         toolbar.onStyleChange = { [weak self] in self?.styleDidChange() }
-        toolbar.onColorChange = { [weak self] in self?.styleDidChange() }
         toolbar.onDone = { [weak self] in self?.finishTextEditing() }
+
+        // Above the dim and above the words, because it is the only control on this screen that is
+        // not on the keyboard and it has to be reachable while the words are being typed.
+        container.addSubview(colorBar)
+        colorBar.addAction(UIAction { [weak self] _ in self?.styleDidChange() }, for: .valueChanged)
 
         applyTextViewAttributes()
     }
@@ -851,8 +892,30 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
             badgeHeight = max(badgeHeight, 36 * s)
         }
 
+        // ⚠️ THE ALIGNMENT MOVES THE BLOCK, AND THAT IS HIS "the alignment button is not working".
+        //
+        // It was wired correctly all along and it still could not show anything: the badge HUGS its
+        // words, so on a single line there is no slack inside it for left or right to mean anything.
+        // Only a wrapped caption showed the effect, and he tested with one word — so the control
+        // promised something it could not deliver, which is a bug whatever the wiring says.
+        //
+        // The band below is the widest the block could ever be, which is the same wrap width the
+        // canvas uses. Leading parks the block against its left edge, trailing against its right, and
+        // centre leaves it where it has always been. The lines inside the badge keep aligning to each
+        // other exactly as before, so a wrapped caption now answers the button twice over.
+        //
+        // ⚠️ AND IT SURVIVES DONE WITHOUT TOUCHING THE RENDERER: the editor hands back the BADGE's
+        // centre on screen and the canvas draws the badge at that centre, so a block parked left is
+        // reported left. `storyStyledText` is byte for byte what it was.
+        let blockWidth = maxTextWidth + 2 * hPad
+        let bandMinX = container.bounds.midX - blockWidth / 2
+        let centreX: CGFloat = switch toolbar.alignment {
+        case .leading:  bandMinX + badgeWidth / 2
+        case .trailing: bandMinX + blockWidth - badgeWidth / 2
+        default:        container.bounds.midX
+        }
         badge.bounds = CGRect(x: 0, y: 0, width: badgeWidth, height: badgeHeight)
-        badge.center = CGPoint(x: container.bounds.midX, y: container.bounds.midY)
+        badge.center = CGPoint(x: centreX, y: container.bounds.midY)
         badge.layer.cornerRadius = overlay.background == .plain ? 0 : 10 * s
 
         // ⚠️ `frame`, NOT `bounds` + `center`, AND THE DIFFERENCE IS NOT STYLE. A `UITextView` is a
@@ -862,6 +925,14 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
         textView.frame = CGRect(x: (badgeWidth - textWidth) / 2,
                                 y: (badgeHeight - textHeight) / 2,
                                 width: textWidth, height: textHeight)
+
+        // THE COLOURS, DOWN THE LEFT MARGIN. Vertically centred on the editing area like the words,
+        // so the two never argue about the middle of the screen — one owns the centre, one owns the
+        // edge. Its length is a share of the area rather than a constant, or it would run off a short
+        // screen once the keyboard is up.
+        let barHeight = min(240, max(120, container.bounds.height * 0.34))
+        colorBar.bounds = CGRect(x: 0, y: 0, width: 44, height: barHeight)
+        colorBar.center = CGPoint(x: 16 + 22, y: container.bounds.midY)
     }
 
     // MARK: Styling
@@ -869,7 +940,7 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
     /// Their `updateTextViewAttributes(using:)`, reading from the same three rules `storyStyledText`
     /// reads from so the editor and the canvas cannot disagree about ink, badge or shadow.
     private func applyTextViewAttributes() {
-        let color = toolbar.colorValue.color
+        let color = colorBar.value.color
         let ink: UIColor = overlay.background == .solid
             ? UIColor(storyBadgeInk(on: Color(uiColor: color)))
             : color
@@ -952,6 +1023,7 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
                            shouldReceive touch: UITouch) -> Bool {
         guard gestureRecognizer is UITapGestureRecognizer else { return true }
         guard let touched = touch.view else { return true }
+        if touched === colorBar || touched.isDescendant(of: colorBar) { return false }
         return !(touched === badge || touched.isDescendant(of: badge))
     }
 
@@ -1013,8 +1085,8 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
         overlay.font = toolbar.fontStyle
         overlay.alignment = toolbar.alignment
         overlay.background = toolbar.background
-        overlay.color = Color(uiColor: toolbar.colorValue.color)
-        overlay.colorPhase = toolbar.colorValue.phase
+        overlay.color = Color(uiColor: colorBar.value.color)
+        overlay.colorPhase = colorBar.value.phase
         // The editor owns the size the words are drawn at on screen; the canvas multiplies by the
         // overlay's own scale, so the base size is that screen size divided back out. Their editor
         // writes `textView.font.pointSize` straight onto the item for the same reason — the size you
