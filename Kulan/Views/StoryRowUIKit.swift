@@ -1,5 +1,9 @@
 import SwiftUI
 import UIKit
+// The one sink this row keeps: `StoryFrameTick`, so a generated card frame reaches ONE card instead
+// of invalidating every card's SwiftUI body. See `frameToken`. (The chat-list row next door has
+// imported this for its own token since it was written — a different file, which is what I misread.)
+import Combine
 // `StoryVideoFrames` and `StoryFrameTick` live in the story library. ⚠️ The library also declares its
 // own `Story`, and the one this file means is the app's — the module-local type wins, which is the
 // same resolution StoriesViews.swift has always relied on.
