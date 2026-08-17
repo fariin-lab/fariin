@@ -682,14 +682,36 @@ struct StoryEditorView: View {
             if let id = editingID, let idx = overlays.firstIndex(where: { $0.id == id }) {
                 TextEditorOverlay(
                     draft: $overlays[idx],
-                    onCancel: { trimEmpty(id); editingID = nil },
+                    onCancel: { trimEmpty(id); editingID = nil; newOverlayID = nil },
                     // ⚠️ ANIMATED, AND IT IS THE OTHER HALF OF `TextEditorOverlay.finish()`. The
                     // editor drops focus and waits out the keyboard before calling this; the fade
                     // here is what stops the last frame being a cut. Without a transition on the
                     // view, `withAnimation` has nothing to animate — a removal is not a property.
                     onDone: {
                         trimEmpty(id)
+                        newOverlayID = nil
                         withAnimation(.easeInOut(duration: 0.2)) { editingID = nil }
+                    },
+                    // ⚠️ THE CONTINUITY LINE, AND IT IS WHY THERE IS NO ANIMATION HERE.
+                    //
+                    // His report: tap Done and the words move down toward the centre, then correct
+                    // themselves. Both halves are the same fact. A brand-new text is created at the
+                    // canvas's centre, the editor draws it above the keyboard, and the canvas then
+                    // draws it at the centre it was created with — so the cross-fade at the end shows
+                    // two different places and reads as a jump.
+                    //
+                    // Theirs does not animate that gap, it removes it: `applyTextEdits` takes the
+                    // text view's centre AS IT APPEARS IN THE EDITOR, turns it into a canvas unit and
+                    // writes it onto the item. The canvas then draws it exactly where the editor was
+                    // drawing it and there is nothing left to travel.
+                    //
+                    // Only for a text that has never been placed, which is their `isNewItem`: one he
+                    // has already dragged somewhere has a position he chose.
+                    onFinishGeometry: { screenPoint in
+                        guard newOverlayID == id,
+                              let c = canvasCenter(fromScreen: screenPoint),
+                              let i = overlays.firstIndex(where: { $0.id == id }) else { return }
+                        overlays[i].center = c
                     }
                 )
                 .transition(.opacity)
@@ -2029,6 +2051,35 @@ struct StoryEditorView: View {
         overlays.append(o)
         selectedID = o.id
         editingID = o.id   // open the editor immediately
+        // THEIR `currentTextItem.isNewItem`. The continuity rule only applies to a text that has
+        // never been placed: one the person has already dragged somewhere has a position they chose,
+        // and moving it to wherever the editor happened to centre it would be taking that away.
+        newOverlayID = o.id
+    }
+
+    /// A text overlay that has been created but never placed. See `addTextOverlay` and the geometry
+    /// hand-back at the editor's call site.
+    @State private var newOverlayID: UUID?
+
+    /// WHERE THE EDITOR LEFT THE WORDS, TURNED INTO THE CANVAS'S OWN COORDINATES.
+    ///
+    /// Theirs, in `applyTextEdits`:
+    ///
+    ///     let locationInView = view.convert(textView.bounds.center, from: textView).clamp(view.bounds)
+    ///     let textCenterImageUnit = ImageEditorCanvasView.locationImageUnit(forLocationInView: ...)
+    ///     textItem = textItem.with(unitCenter: textCenterImageUnit)
+    ///
+    /// The point is measured on screen, expressed as a UNIT of the canvas, and written onto the item —
+    /// so the canvas draws it where the editor was drawing it and there is nothing left to animate.
+    /// That is the whole of their continuity: no matched geometry, no second motion, no timing.
+    /// `clamp` is theirs too — a text dragged to the very edge of the editor must still land on the
+    /// canvas.
+    private func canvasCenter(fromScreen p: CGPoint) -> CGPoint? {
+        guard cardRect.width > 1, cardRect.height > 1,
+              canvasSize.width > 1, canvasSize.height > 1 else { return nil }
+        let unitX = min(1, max(0, (p.x - cardRect.minX) / cardRect.width))
+        let unitY = min(1, max(0, (p.y - cardRect.minY) / cardRect.height))
+        return CGPoint(x: unitX * canvasSize.width, y: unitY * canvasSize.height)
     }
 
     // MARK: - Stickers
@@ -2908,7 +2959,21 @@ struct TextEditorOverlay: View {
     /// way). Nothing on screen calls it today.
     var onCancel: () -> Void
     var onDone: () -> Void
+    /// WHERE THE WORDS WERE ON SCREEN WHEN EDITING ENDED, in global coordinates.
+    ///
+    /// Their `applyTextEdits`, and their comment names the job: "Ensure continuity of the new text
+    /// item's location with its apparent location in this text editor."
+    ///
+    ///     let locationInView = view.convert(textView.bounds.center, from: textView).clamp(view.bounds)
+    ///     let textCenterImageUnit = ImageEditorCanvasView.locationImageUnit(forLocationInView: ...)
+    ///     textItem = textItem.with(unitCenter: textCenterImageUnit)
+    ///
+    /// Read at the instant editing ends, before the keyboard has moved anything.
+    var onFinishGeometry: (CGPoint) -> Void = { _ in }
     @FocusState private var focused: Bool
+    /// The text block's centre on screen, kept current while editing so `finish()` can report it
+    /// without measuring during a dismissal that is already moving the layout.
+    @State private var blockCenter: CGPoint = .zero
     /// Is the font row open? Shut at rest: the Aa in the bar is its door, and it draws itself in
     /// whichever font is currently chosen.
     @State private var showFonts = false
@@ -2924,6 +2989,13 @@ struct TextEditorOverlay: View {
     /// and the keyboard travel together and the canvas takes the words at the end of it rather than
     /// during. The parent animates the removal; this decides when it begins.
     private func finish() {
+        // ⚠️ REPORTED BEFORE THE FOCUS DROPS, WHICH IS THE ORDER THEIRS READS IT IN.
+        //
+        // Theirs takes the position inside `applyTextEdits`, which runs off the end of editing while
+        // the editing layout is still the layout — not after the keyboard has begun taking the words
+        // with it. One line earlier or later is the difference between the canvas landing where the
+        // words were and landing where they were on their way to.
+        onFinishGeometry(blockCenter)
         focused = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { onDone() }
     }
@@ -3035,6 +3107,12 @@ struct TextEditorOverlay: View {
                 .frame(maxWidth: 320)
                 .contentShape(Rectangle())          // tap anywhere on the text block, not just the glyphs
                 .onTapGesture { focused = true }
+                // Their `view.convert(textView.bounds.center, from: textView)` — the words' centre in
+                // a space the canvas can be asked about. Kept current rather than measured on the way
+                // out, because on the way out the keyboard is already moving it.
+                .onGeometryChange(for: CGPoint.self,
+                                  of: { CGPoint(x: $0.frame(in: .global).midX,
+                                                y: $0.frame(in: .global).midY) }) { blockCenter = $0 }
                 Spacer()
             }
         }
