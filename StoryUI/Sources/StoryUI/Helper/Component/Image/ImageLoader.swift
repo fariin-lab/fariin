@@ -355,6 +355,32 @@ final class ImageLoader: UIView {
             return
         }
 
+        // ⚠️ THE STORY WE JUST LEFT IS STILL ON SCREEN AT THIS LINE, AND TAKING IT DOWN HERE — BEFORE
+        // THE FIRST AWAIT — IS HIS "the previous story's image flashes inside the new centre
+        // thumbnail".
+        //
+        // This view is reused between stories, and nothing above ever cleared the picture in it. The
+        // url was replaced, the blurred poster was hidden, the download was cancelled — and
+        // `imageView.image`, the one thing the eye can actually see, was left holding story A while
+        // story B's lookup went away and came back. The only line that took it down, `apply(nil)`,
+        // lived in `loadFromNetwork`, which is TWO awaits further on: past the async memory lookup and
+        // past the disk read. So every arrival that was not already decoded in memory drew story A,
+        // sharp and full size, for as long as story B took to find itself.
+        //
+        // ⚠️ IT IS WORST ON EXACTLY THE GESTURE HE REPORTED IT ON. The lookahead only ever warms the
+        // NEXT story, so a flick that skips one lands on a story with nothing decoded — the slow path,
+        // every time — while a story stepped through one at a time is usually already in memory and
+        // takes the synchronous branch above, where the swap happens inside this turn and there is no
+        // gap to see. That is why it reads as a fast-swipe bug and not as a bug in every open.
+        //
+        // The loading state moves up with it, unsplit: the take-down and what replaces it are one
+        // decision and were never two. Below this line the view shows this story's own blurred poster
+        // (or the shimmer, if we do not even hold that yet) and nothing else — which is what it shows
+        // at the end of a real download too, so the arrival looks the same however the picture got
+        // here.
+        apply(nil)
+        if !seedPreviewBlur(previewURL) { showShimmer(true) }
+
         // 2) URLCache or disk, with the read AND the decode off the main thread. This used to be two
         //    synchronous branches right here, which is why "cached" still cost a stutter.
         let wanted = imageURL
@@ -367,18 +393,18 @@ final class ImageLoader: UIView {
                 return
             }
             guard let self, self.imageURL == wanted else { return }
-            self.loadFromNetwork(wanted, previewURL: previewURL, imageIsLoaded: imageIsLoaded)
+            self.loadFromNetwork(wanted, imageIsLoaded: imageIsLoaded)
         }
     }
 
     /// Nothing is held for this url, so it has to come down. Split out of `loadImageWithUrl` because
     /// the cache lookup above it is asynchronous now and this is what happens when it misses.
-    private func loadFromNetwork(_ imageURL: URL, previewURL: String?, imageIsLoaded: @escaping () -> Void) {
-        // 3) Network — the blurred poster while it downloads, and the shimmer only if we have not
-        //    even got that yet.
-        apply(nil)
-        if !seedPreviewBlur(previewURL) { showShimmer(true) }
-
+    private func loadFromNetwork(_ imageURL: URL, imageIsLoaded: @escaping () -> Void) {
+        // 3) Network. ⚠️ THE BLURRED POSTER IS ALREADY UP AND THE OLD PICTURE IS ALREADY DOWN — both
+        //    happened in `loadImageWithUrl`, before its first await, because a view still wearing the
+        //    last story is not something to fix after two hops. Seeding the poster a second time here
+        //    would start a second fetch for it; putting `apply(nil)` here again would clear a photo
+        //    the disk branch may have just landed.
         let requestedURL = imageURL   // capture: if the view is reused mid-download, drop this stale result
         // HELD, so moving on can cancel it. See the note at the top of `loadImageWithUrl`.
         loadTask = URLSession.shared.dataTask(
