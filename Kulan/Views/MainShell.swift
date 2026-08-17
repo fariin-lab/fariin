@@ -2698,7 +2698,21 @@ private struct ChatPeekPreview: View {
         .frame(width: size.width, height: size.height)
         .clipped()
         .task {
-            guard !loaded, !OfficialChannel.isOfficial(cid) else { return }
+            // ⚠️ ALWAYS REFRESH — `guard !loaded` used to sit here, so a chat with anything cached
+            // never asked the server and the peek showed the conversation as it stood the last time
+            // it was OPENED. Messages that arrived since were simply absent (owner 2026-08-16).
+            //
+            // The cache is still what draws first, instantly, and that is the point of it. It just
+            // is not the answer any more. Same shape as the chat list: paint what we know, then
+            // correct it.
+            //
+            // ⚠️ AND THIS GOT WORSE THE DAY THE CACHE MOVED TO DISK. While it lived in memory a cold
+            // launch had nothing to serve, so the peek fetched; now it can answer with something days
+            // old and the fetch never ran. A cache that gains reach needs its readers re-checked.
+            //
+            // Still no listener, deliberately: a peek must stay cheap and side-effect free — no read
+            // receipts, nothing marked seen. One fetch is the whole cost.
+            guard !OfficialChannel.isOfficial(cid) else { return }
             // Newest-first fetch → ascending for display.
             let fetched = await ChatService.galleryContent(cid, limit: 14)
             msgs = Array(fetched.reversed()).filter { !$0.isSystem }
