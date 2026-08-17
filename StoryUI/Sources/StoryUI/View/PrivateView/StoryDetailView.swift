@@ -9,6 +9,22 @@ import SwiftUI
 import AVKit
 
 // Bottom-two-corners rounded rectangle (iOS 14 safe — UnevenRoundedRectangle is iOS 16+).
+/// The reply bar's own laid-out height, carried up from a background reader. See the note at its use:
+/// a preference is the iOS 15 way to do what `onGeometryChange` does, and this package is built for
+/// 15 even though the app is 26.
+///
+/// ⚠️ A preference is read one layout pass AFTER the pass that produced it. That is fatal for a value
+/// driving something per keystroke — it is why the story text badge is an `.overlay` and not this —
+/// and harmless here: this height changes when the bar is built or the safe area moves, and it is
+/// spent only when a flight begins, which is never in the same pass.
+struct StoryReplyBarHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        let next = nextValue()
+        if next > 0 { value = next }
+    }
+}
+
 struct BottomRoundedShape: Shape {
     var radius: CGFloat
     func path(in rect: CGRect) -> Path {
@@ -1229,7 +1245,18 @@ private extension StoryDetailView {
         // Its own laid-out height, which for a bar flush on the bottom IS their
         // `bounds.height - frame.minY`. Read before the offset below, so the entry cannot measure
         // itself. See `replyBarHeight`.
-        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { replyBarHeight = $0 }
+        //
+        // ⚠️ A `GeometryReader` IN A BACKGROUND, NOT `onGeometryChange`. This package is built for
+        // iOS 15 (`Package.swift`: "v15 unlocks @FocusState") while the app itself is 26, so the
+        // newer geometry API compiles in `MainShell` and not in here. A background reader is the
+        // idiom this file already uses and it costs nothing: `Color.clear` proposes nothing and
+        // draws nothing, and a background never affects the size of what it is behind.
+        .background(
+            GeometryReader { g in
+                Color.clear.preference(key: StoryReplyBarHeightKey.self, value: g.size.height)
+            }
+        )
+        .onPreferenceChange(StoryReplyBarHeightKey.self) { replyBarHeight = $0 }
         // THEIR `animateIn` FOR THE INPUT PANEL — the same two animations, the same two durations and
         // the same curve as the owner bar above, deliberately written the same way so the two bars
         // can never drift. Theirs gives the input panel and the footer panel the identical 0.48s
