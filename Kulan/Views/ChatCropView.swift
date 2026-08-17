@@ -73,7 +73,7 @@ struct ChatCropView: View {
         _img = State(initialValue: Self.normalized(image))
         // Opened FROM a picture already on screen → start folded onto it. Opened any other way →
         // start already arrived, which is every caller that hands nothing in.
-        _entryScale = State(initialValue: initialContentRect == nil ? 1 : 0.0001)
+        _entryProgress = State(initialValue: initialContentRect == nil ? 1 : 0)
         _chrome = State(initialValue: initialContentRect == nil ? 1 : 0)
         _frameChrome = State(initialValue: initialContentRect == nil ? 1 : 0)
     }
@@ -91,11 +91,43 @@ struct ChatCropView: View {
     /// "Seamlessness is achieved when image center stays the same in both screens" — so nothing has
     /// to travel. `layout(_:canvasOrigin:)` seats the fitted picture on the handed-in rect's centre
     /// for the same reason, which leaves exactly one number between the two states.
-    @State private var entryScale: CGFloat
+    /// HOW FAR THROUGH THE FLIGHT WE ARE, 0 on the card and 1 arrived. The ONE animated number.
+    ///
+    /// ⚠️ IT USED TO BE A SCALE AND A CAPTURED OFFSET, AND THAT IS HIS "the image goes down first,
+    /// then starts the zoom".
+    ///
+    /// Both were computed ONCE, against the `imageFrame` that existed at `onAppear`, and then
+    /// animated to their finished values. But `layout` runs again whenever the canvas is re-measured
+    /// — and it is, right after appearing, because the top bar and the bottom controls are
+    /// `safeAreaInset`s whose heights are not known until they have been laid out. The second pass
+    /// moves `imageFrame`; the picture is positioned FROM `imageFrame`, while the delta it was flying
+    /// along had been measured against the old one. So the picture jumped to its new seat and only
+    /// then travelled: a drop, and then the zoom.
+    ///
+    /// Derived per render from the LIVE `imageFrame` instead, so a re-measurement moves the
+    /// destination and the flight simply keeps pointing at it. There is nothing left to go stale.
+    @State private var entryProgress: CGFloat
+    /// The card this screen was opened from, in THIS canvas's coordinates. Written by `layout`,
+    /// which is the one place that knows where the canvas sits on the screen.
+    @State private var entryFrom: CGRect = .zero
+
+    /// The scale that puts the fitted picture back at the card's size, eased out by the progress.
+    private var entryScale: CGFloat {
+        guard entryProgress < 1, entryFrom.width > 1, imageFrame.width > 1 else { return 1 }
+        let startScale = max(0.05, entryFrom.width / imageFrame.width)
+        return startScale + (1 - startScale) * entryProgress
+    }
+    /// ...and what is left of the difference between the two centres. Zero on arrival by
+    /// construction rather than by having been animated to it.
+    private var entryOffset: CGSize {
+        guard entryProgress < 1, entryFrom.width > 1, imageFrame.width > 1 else { return .zero }
+        let rest = 1 - entryProgress
+        return CGSize(width: (entryFrom.midX - imageFrame.midX) * rest,
+                      height: (entryFrom.midY - imageFrame.midY) * rest)
+    }
     /// What is left of the difference between the two rectangles once the scale has taken the size —
     /// see `runEntry`. Zero whenever the fitted picture could be seated on the card's own centre,
     /// which is most of the time; a tall card is the case that needs it.
-    @State private var entryOffset: CGSize = .zero
     /// STAGE ONE: the black behind, the Reset button and the bottom button row, faded in over the
     /// 0.3s the picture is moving. That is `_buttonsWrapperView.alpha` in
     /// `TGPhotoCropController.transitionIn`, on their duration.
@@ -302,6 +334,15 @@ struct ChatCropView: View {
             y = min(max(12, wanted), max(12, size.height - h - 12))
         }
         imageFrame = CGRect(x: (size.width - w) / 2, y: y, width: w, height: h)
+        // ⚠️ RE-RECORDED ON EVERY PASS, IN THIS CANVAS'S OWN COORDINATES. The flight is derived from
+        // this and `imageFrame` together (see `entryProgress`), so when the canvas is re-measured
+        // — which it is, right after appearing, once the two `safeAreaInset` bars know their own
+        // heights — both ends move together and the picture keeps travelling to the right place
+        // instead of jumping to a new seat first.
+        if let r = initialContentRect {
+            entryFrom = CGRect(x: r.minX - canvasOrigin.x, y: r.minY - canvasOrigin.y,
+                               width: r.width, height: r.height)
+        }
         setAspect(aspect, animated: false)
     }
 
@@ -322,18 +363,10 @@ struct ChatCropView: View {
     /// other app's figure and it is half as long as this screen's own canvas step-back, so even when
     /// it did move, two halves of one motion ran on two clocks.
     private func runEntry(canvasOrigin: CGPoint) {
-        guard let r = initialContentRect, imageFrame.width > 1, entryScale < 1 else { return }
-        entryScale = max(0.05, r.width / imageFrame.width)
-        // ⚠️ AND THE TRANSLATION, BECAUSE THE SHARED CENTRE IS NOT ALWAYS AVAILABLE. `layout` seats
-        // the fitted picture on the handed-in rect's centre when it can, but it clamps that to keep
-        // the picture on this canvas — and on a tall card the clamp wins, which leaves the two rects
-        // sharing nothing. Theirs animates a FRAME from one rectangle to the other and so has no
-        // opinion about centres; this is that, expressed as the scale plus what is left over.
-        entryOffset = CGSize(width: r.midX - (imageFrame.midX + canvasOrigin.x),
-                             height: r.midY - (imageFrame.midY + canvasOrigin.y))
+        guard initialContentRect != nil, imageFrame.width > 1, entryProgress < 1,
+              entryFrom.width > 1 else { return }
         withAnimation(.easeInOut(duration: 0.3)) {
-            entryScale = 1
-            entryOffset = .zero
+            entryProgress = 1
             chrome = 1
         }
         // AND ONLY THEN THE FRAME. Their completion block, expressed as a delay: `.delay(0.3)` is the
