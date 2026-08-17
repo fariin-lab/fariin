@@ -20,6 +20,19 @@ struct ChatCropView: View {
     /// cropped picture; a video cannot be cropped into an image, so it needs the rectangle instead and
     /// applies it during its export. Optional, so nothing that only wants the picture has to care.
     var onRect: ((CGRect) -> Void)? = nil
+    /// WHERE THE PICTURE ALREADY IS ON SCREEN, in GLOBAL coordinates, so this screen can open as a
+    /// continuation of it rather than as a new page.
+    ///
+    /// Their `ImageEditorCropViewController.initialContentInsets`, and their comment says what it is
+    /// for in one line: "Presenting view controller will set those before presenting. The intent is
+    /// to position image in the same position and with the same size as in the review screen."
+    ///
+    /// Nil = the old behaviour, byte for byte: the chat editor and the media approval screen hand
+    /// nothing in and get the layout and the entry they already had.
+    var initialContentRect: CGRect? = nil
+    /// The corner radius the picture is wearing at `initialContentRect`. Theirs animates from
+    /// `ImageEditorView.defaultCornerRadius` to 0 over the same window as the resize.
+    var initialCornerRadius: CGFloat = 0
     @Environment(\.dismiss) private var dismiss
 
     @State private var img: UIImage
@@ -50,11 +63,38 @@ struct ChatCropView: View {
     @State private var angleStart: Double = 0
 
     init(image: UIImage, inline: Bool = false, onClose: @escaping () -> Void = {},
-         onRect: ((CGRect) -> Void)? = nil, onDone: @escaping (UIImage) -> Void) {
+         onRect: ((CGRect) -> Void)? = nil,
+         initialContentRect: CGRect? = nil, initialCornerRadius: CGFloat = 0,
+         onDone: @escaping (UIImage) -> Void) {
         self.image = image; self.inline = inline; self.onClose = onClose
         self.onRect = onRect; self.onDone = onDone
+        self.initialContentRect = initialContentRect
+        self.initialCornerRadius = initialCornerRadius
         _img = State(initialValue: Self.normalized(image))
+        // Opened FROM a picture already on screen → start folded onto it. Opened any other way →
+        // start already arrived, which is every caller that hands nothing in.
+        _entryScale = State(initialValue: initialContentRect == nil ? 1 : 0.0001)
+        _chrome = State(initialValue: initialContentRect == nil ? 1 : 0)
     }
+
+    /// THE ENTRY, WHICH IS A RESIZE AND NOT A CROSS-FADE.
+    ///
+    /// ⚠️ THIS IS THEIRS, AND THE PART WORTH WRITING DOWN IS HOW LITTLE OF IT THERE IS. There is no
+    /// transition object, no snapshot and no dissolve anywhere in `ImageEditorCropViewController`.
+    /// The screen is laid out at the review screen's own rect with its controls hidden
+    /// (`transitionUI(toState: .initial, animated: false)` in `viewDidLoad`), and then in
+    /// `viewDidAppear` it animates itself to the crop layout over 0.15s while a `CABasicAnimation`
+    /// takes the picture's corner radius to zero. One picture, resizing.
+    ///
+    /// ⚠️ AND THE REASON IT CAN BE A PURE SCALE: their two layout guides share a centre —
+    /// "Seamlessness is achieved when image center stays the same in both screens" — so nothing has
+    /// to travel. `layout(_:canvasOrigin:)` seats the fitted picture on the handed-in rect's centre
+    /// for the same reason, which leaves exactly one number between the two states.
+    @State private var entryScale: CGFloat
+    /// The crop frame, the dim and both bars, faded in over the same window. Theirs is
+    /// `footerView.alpha`, `toolbar.setControlsHidden` and `cropView.setState(.initial)`, all inside
+    /// the one animation block.
+    @State private var chrome: CGFloat
 
     // Inline: close via onClose only (dismiss() would pop the whole editor to the chat). Cover: dismiss().
     private func close() { if inline { onClose() } else { dismiss() } }
@@ -130,6 +170,17 @@ struct ChatCropView: View {
                     .offset(x: pan.width, y: pan.height)
                     .frame(width: imageFrame.width, height: imageFrame.height)
                     .clipped()
+                    // ⚠️ THE CORNER IS DIVIDED BY THE SCALE, so what is on screen is the radius the
+                    // card was actually wearing at every point of the flight rather than a number
+                    // shrinking with the picture. Theirs animates the layer's own `cornerRadius`
+                    // against an untransformed view, which is the same on-screen result.
+                    .clipShape(RoundedRectangle(cornerRadius: initialCornerRadius * (1 - chrome)
+                                                / max(entryScale, 0.05), style: .continuous))
+                    // ONE NUMBER, ABOUT THE SHARED CENTRE. See `runEntry`: the rect we were opened
+                    // from and the fitted rect have the same centre and the same aspect, so a
+                    // uniform scale is the entire difference between them. Nothing translates, which
+                    // is why this cannot drift the way a hand-built path would.
+                    .scaleEffect(entryScale)
                     .position(x: imageFrame.midX, y: imageFrame.midY)
                 // Slide the picture: in the dimmed part, because inside the frame a one-finger drag
                 // belongs to the frame and always has. Below the crop's own views in this stack, so
@@ -142,9 +193,12 @@ struct ChatCropView: View {
                 Path { p in p.addRect(CGRect(origin: .zero, size: geo.size)); p.addRect(crop) }
                     .fill(Color.black.opacity(0.5), style: FillStyle(eoFill: true))
                     .allowsHitTesting(false)
+                    .opacity(chrome)
 
-                gridAndBorder
-                brackets
+                // The frame arrives WITH the picture rather than over it — theirs hides the whole
+                // crop view for the initial state and brings it back in the same animation block.
+                gridAndBorder.opacity(chrome)
+                brackets.opacity(chrome)
                 // Move the whole frame by dragging inside it.
                 Color.clear.frame(width: crop.width, height: crop.height).position(x: crop.midX, y: crop.midY)
                     .contentShape(Rectangle())
@@ -162,24 +216,75 @@ struct ChatCropView: View {
             // magnification never competes with the frame's one-finger drags.
             .simultaneousGesture(pinchGesture)
             .coordinateSpace(name: "cropCanvas")
-            .onAppear { layout(geo.size) }
-            .onChange(of: geo.size) { _, s in layout(s) }
+            .onAppear {
+                // `.global` because the rect we were handed is the presenter's, measured on the
+                // screen. This canvas sits under a bar it does not know the height of.
+                let origin = geo.frame(in: .global).origin
+                layout(geo.size, canvasOrigin: origin)
+                runEntry(canvasOrigin: origin)
+            }
+            .onChange(of: geo.size) { _, s in layout(s, canvasOrigin: geo.frame(in: .global).origin) }
         }
-        .background(Color.black.ignoresSafeArea())
-        .safeAreaInset(edge: .top, spacing: 0) { topBar }
-        .safeAreaInset(edge: .bottom, spacing: 0) { bottomControls }
+        // ⚠️ THE ONE PLACE THIS DIVERGES FROM THEIRS, AND IT IS A UIKit-VERSUS-SwiftUI DIFFERENCE
+        // RATHER THAN A CHOICE.
+        //
+        // Their crop screen's background is opaque black from the first frame, and it can be: the
+        // picture is constrained to the review screen's rect in `viewDidLoad`, before the view is
+        // ever on screen, so there is no frame where the black is up and the picture is not.
+        //
+        // Ours cannot lay out until a `GeometryReader` has reported a size, which is at least one
+        // render. Opaque black would therefore paint a full-screen black frame over the editor
+        // before the picture arrived — the pop this whole change exists to remove, moved one frame
+        // earlier. Fading it with the rest of the chrome means that frame shows the editor's own
+        // card instead, which is the same picture in the same place.
+        //
+        // Callers that hand no rect in keep the opaque background exactly as before.
+        .background(Color.black.opacity(initialContentRect == nil ? 1 : chrome).ignoresSafeArea())
+        // The bars ride the same fade as the frame. Theirs is `footerView.alpha` and
+        // `toolbar.setControlsHidden(_:)` inside the one animation block, for the same reason: a
+        // control that is already there while the picture is still the size it was on the last
+        // screen announces the new screen before the picture has become part of it.
+        .safeAreaInset(edge: .top, spacing: 0) { topBar.opacity(chrome) }
+        .safeAreaInset(edge: .bottom, spacing: 0) { bottomControls.opacity(chrome) }
     }
 
     // MARK: Layout — fit the photo into the canvas area (already inset by the safe-area bars).
 
-    private func layout(_ size: CGSize) {
+    private func layout(_ size: CGSize, canvasOrigin: CGPoint = .zero) {
         container = size
         let availW = size.width - 32
         let availH = size.height - 24
         let s = min(availW / img.size.width, availH / img.size.height)
         let w = img.size.width * s, h = img.size.height * s
-        imageFrame = CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h)
+        // ⚠️ THE CENTRE COMES FROM WHERE THE PICTURE ALREADY IS, WHEN WE ARE TOLD.
+        //
+        // Their `finalStateContentLayoutGuide` is constrained `centerYAnchor == initialState...
+        // centerYAnchor`: the crop layout picks its own width and its own height, and inherits the
+        // review screen's vertical centre. That is what makes the opening a pure resize with nothing
+        // travelling, and it is the whole of "seamless" in their comment.
+        //
+        // Clamped so a card sitting high or low on its own screen cannot push the fitted picture off
+        // this one. With nothing handed in this is the centred rect it always was.
+        var y = (size.height - h) / 2
+        if let r = initialContentRect {
+            let wanted = (r.midY - canvasOrigin.y) - h / 2
+            y = min(max(12, wanted), max(12, size.height - h - 12))
+        }
+        imageFrame = CGRect(x: (size.width - w) / 2, y: y, width: w, height: h)
         setAspect(aspect, animated: false)
+    }
+
+    /// Fold onto the picture we were opened from, then unfold. Called once, on the first layout pass
+    /// that knows where this canvas is.
+    private func runEntry(canvasOrigin: CGPoint) {
+        guard let r = initialContentRect, imageFrame.width > 1, entryScale < 1 else { return }
+        // The two rects share a centre and an aspect, so one number describes the whole difference.
+        entryScale = max(0.05, min(1, r.width / imageFrame.width))
+        // Their 0.15s, and their order: the resize, the corner and the controls are one animation.
+        withAnimation(.easeInOut(duration: 0.15)) {
+            entryScale = 1
+            chrome = 1
+        }
     }
 
     // Reset the crop to a centered rect of `ratio` (or the whole image if free) within imageFrame.

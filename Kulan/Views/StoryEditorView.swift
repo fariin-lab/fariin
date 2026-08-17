@@ -125,6 +125,9 @@ struct StoryEditorView: View {
     @State private var filterIndex = 0
     @State private var croppedSource: UIImage?   // result of the interactive crop (nil = uncropped)
     @State private var showCrop = false
+    /// The story card's rectangle on screen, so Crop can open as a resize of the picture already
+    /// there instead of as a second picture fading in over it. See `cropOverlay`.
+    @State private var cardRect: CGRect = .zero
     // Trim's working state for the video item on screen, mirrored back into the item on Done. It
     // lives here rather than in a pushed screen because trimming is a mode of this editor, the same
     // call he made on the video editor.
@@ -776,6 +779,11 @@ struct StoryEditorView: View {
                     // own card exactly like this.
                     .clipShape(RoundedRectangle(cornerRadius: 40, style: .continuous))
                     .position(x: geo.size.width / 2, y: cardTop + cardH / 2)
+                    // WHERE THE PICTURE IS ON SCREEN, for the crop screen to open out of. Their
+                    // presenter sets `initialContentInsets` before presenting for exactly this; see
+                    // `ChatCropView.initialContentRect`. Read in global coordinates because the crop
+                    // canvas sits under a bar whose height it is not told.
+                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { cardRect = $0 }
 
                 // Top controls — stay put when the keyboard opens (don't ride up with it).
                 VStack {
@@ -1770,21 +1778,33 @@ struct StoryEditorView: View {
                              } else {
                                  cropRect = r
                              }
-                         }) { cropped in
+                         },
+                         // THE PICTURE THIS SCREEN IS OPENING OUT OF, and the corner it is wearing
+                         // while it does. Their presenter hands the same two things over before it
+                         // presents; see the note on `ChatCropView.initialContentRect`.
+                         initialContentRect: cardRect == .zero ? nil : cardRect,
+                         initialCornerRadius: 40) { cropped in
                 croppedSource = cropped
                 recomputeEdited()
             }
-            // THE SECOND HALF OF THE MOVE: the controls arrive AFTER the picture has started
-            // getting out of the way. The delay is what makes it read as one gesture instead of two
-            // things happening at once — 0.10s in, which is a third of the zoom, so the crop frame
-            // lands while the canvas is still settling rather than after it has stopped.
+            // ⚠️ NO CROSS-FADE ON THE WAY IN ANY MORE, AND ITS REMOVAL IS THE FIX.
             //
-            // Asymmetric on purpose: closing has nothing to wait for, so it goes at once and the
-            // canvas grows back underneath it.
-            .transition(.asymmetric(
-                insertion: .opacity.combined(with: .scale(scale: 0.97, anchor: .center))
-                    .animation(.easeOut(duration: 0.26).delay(0.10)),
-                removal: .opacity.animation(.easeIn(duration: 0.16))))
+            // It was `.opacity + .scale(0.97)` over 0.26s after a 0.10s delay, which is two
+            // renderings of one photograph at two different sizes dissolving into each other. That
+            // is his "the image is suddenly replaced with a new screen" in as many words: however
+            // well timed, a dissolve says these are two pictures.
+            //
+            // Theirs never fades anything. `ImageEditorCropViewController` is laid out at the review
+            // screen's own rect with its controls hidden and then resizes itself into the crop
+            // layout over 0.15s — one picture, one motion, no transition object anywhere in the
+            // file. `ChatCropView` does that itself now, off `initialContentRect`, so the job here
+            // is to get out of its way: the screen appears at once, already matching, and the
+            // animation belongs to the thing that knows both rectangles.
+            //
+            // The removal keeps its fade. Closing has no picture to be continuous with — the canvas
+            // underneath is already where it was — and he reported nothing about the way out.
+            .transition(.asymmetric(insertion: .identity,
+                                    removal: .opacity.animation(.easeIn(duration: 0.16))))
             .zIndex(20)
         }
     }
