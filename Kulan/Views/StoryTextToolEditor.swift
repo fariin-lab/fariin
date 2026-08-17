@@ -384,9 +384,10 @@ final class StoryTextColorPickerBar: UIControl {
 
 // MARK: - The bar that rides the keyboard
 
-/// Their `TextStylingToolbar`, with our three style controls in place of their two. One horizontal
-/// stack — style buttons on a glass panel, the colour bar, Done — installed as the text view's
-/// `inputAccessoryView`.
+/// The reference app's `TextStylingToolbar`. One horizontal stack — the two style buttons on a glass
+/// panel at the leading edge, Done at the trailing one — installed as the text view's
+/// `inputAccessoryView`. (The colour bar left this row for the picture's left margin, and the
+/// alignment button was removed outright; both are his 2026-08-17 calls.)
 final class StoryTextToolbar: UIControl {
 
     /// Theirs: 44pt round controls, and on iOS 26 the leading buttons share ONE glass panel instead of
@@ -399,7 +400,11 @@ final class StoryTextToolbar: UIControl {
     }
 
     var fontStyle: TextOverlay.FontStyle { didSet { updateFontButton() } }
-    var alignment: TextAlignment { didSet { updateAlignButton() } }
+    /// ⚠️ NO LONGER A CONTROL — HIS 2026-08-17 CALL, "remove Text Alignment Button". It stays as a
+    /// value because the editor and the canvas both lay the words out against it; it is simply the
+    /// one the caption was created with (centre) for the whole session now, so nothing downstream
+    /// changes. A `let`, so it cannot be quietly turned back into a control by an assignment.
+    let alignment: TextAlignment
     var background: TextOverlay.BgStyle { didSet { updateBackgroundButton() } }
 
     /// One callback per thing that can change, rather than a delegate: this bar has exactly one owner
@@ -408,7 +413,6 @@ final class StoryTextToolbar: UIControl {
     var onDone: (() -> Void)?
 
     private let fontButton = UIButton(configuration: .plain())
-    private let alignButton = UIButton(configuration: .plain())
     private let backgroundButton = UIButton(configuration: .plain())
     private let doneButton = UIButton(configuration: .glass())
     private let glassPanel = UIVisualEffectView(effect: {
@@ -436,7 +440,7 @@ final class StoryTextToolbar: UIControl {
         directionalLayoutMargins = NSDirectionalEdgeInsets(top: 8, leading: Metrics.hMargin,
                                                            bottom: 0, trailing: Metrics.hMargin)
 
-        for button in [fontButton, alignButton, backgroundButton, doneButton] {
+        for button in [fontButton, backgroundButton, doneButton] {
             button.translatesAutoresizingMaskIntoConstraints = false
             button.configuration?.cornerStyle = .capsule
             button.configuration?.baseForegroundColor = .white
@@ -447,7 +451,7 @@ final class StoryTextToolbar: UIControl {
             ])
         }
 
-        let panelStack = UIStackView(arrangedSubviews: [fontButton, alignButton, backgroundButton])
+        let panelStack = UIStackView(arrangedSubviews: [fontButton, backgroundButton])
         panelStack.spacing = Metrics.panelSpacing
         panelStack.alignment = .center
         panelStack.translatesAutoresizingMaskIntoConstraints = false
@@ -464,12 +468,6 @@ final class StoryTextToolbar: UIControl {
         fontButton.addAction(UIAction { [weak self] _ in
             guard let self else { return }
             self.fontStyle = self.fontStyle.next()
-            self.onStyleChange?()
-        }, for: .primaryActionTriggered)
-
-        alignButton.addAction(UIAction { [weak self] _ in
-            guard let self else { return }
-            self.alignment = self.alignment.storyNext()
             self.onStyleChange?()
         }, for: .primaryActionTriggered)
 
@@ -504,7 +502,6 @@ final class StoryTextToolbar: UIControl {
         doneButton.configuration?.image = UIImage(systemName: "checkmark",
                                                   withConfiguration: UIImage.SymbolConfiguration(pointSize: 17, weight: .semibold))
         updateFontButton()
-        updateAlignButton()
         updateBackgroundButton()
     }
 
@@ -564,16 +561,6 @@ final class StoryTextToolbar: UIControl {
         fontButton.titleLabel?.numberOfLines = 1
     }
 
-    private func updateAlignButton() {
-        let name = switch alignment {
-        case .leading: "text.alignleft"
-        case .center: "text.aligncenter"
-        default: "text.alignright"
-        }
-        alignButton.configuration?.image = UIImage(systemName: name,
-                                                   withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .medium))
-    }
-
     private func updateBackgroundButton() {
         let name = background == .plain ? "a.square" : "a.square.fill"
         backgroundButton.configuration?.image = UIImage(systemName: name,
@@ -624,14 +611,8 @@ extension TextOverlay.BgStyle {
 }
 
 extension TextAlignment {
-    func storyNext() -> TextAlignment {
-        switch self {
-        case .leading: .center
-        case .center: .trailing
-        case .trailing: .leading
-        }
-    }
-
+    /// (`storyNext()` lived here to cycle the alignment button. The button is gone — his call — and a
+    /// cycle with nothing to cycle it is a control's stump, so it went with it.)
     var storyNSAlignment: NSTextAlignment {
         switch self {
         case .leading: .left
@@ -892,21 +873,19 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
             badgeHeight = max(badgeHeight, 36 * s)
         }
 
-        // ⚠️ THE ALIGNMENT MOVES THE BLOCK, AND THAT IS HIS "the alignment button is not working".
+        // THE ALIGNMENT MOVES THE BLOCK. The badge HUGS its words, so on a single line there is no
+        // slack inside it and aligning the lines to each other shows nothing at all; the band below is
+        // the widest the block could ever be — the same wrap width the canvas uses — and leading parks
+        // the block against its left edge, trailing against its right, centre where it has always been.
         //
-        // It was wired correctly all along and it still could not show anything: the badge HUGS its
-        // words, so on a single line there is no slack inside it for left or right to mean anything.
-        // Only a wrapped caption showed the effect, and he tested with one word — so the control
-        // promised something it could not deliver, which is a bug whatever the wiring says.
+        // ⚠️ NOTHING SETS IT TO ANYTHING BUT CENTRE TODAY: the button that cycled it was removed on his
+        // instruction (see `StoryTextToolbar.alignment`). This is kept whole rather than folded away
+        // because it is what makes a caption's alignment mean something the day it comes back, and
+        // because the value still travels out to the canvas and the post.
         //
-        // The band below is the widest the block could ever be, which is the same wrap width the
-        // canvas uses. Leading parks the block against its left edge, trailing against its right, and
-        // centre leaves it where it has always been. The lines inside the badge keep aligning to each
-        // other exactly as before, so a wrapped caption now answers the button twice over.
-        //
-        // ⚠️ AND IT SURVIVES DONE WITHOUT TOUCHING THE RENDERER: the editor hands back the BADGE's
-        // centre on screen and the canvas draws the badge at that centre, so a block parked left is
-        // reported left. `storyStyledText` is byte for byte what it was.
+        // AND IT SURVIVES DONE WITHOUT TOUCHING THE RENDERER: the editor hands back the BADGE's centre
+        // on screen and the canvas draws the badge at that centre, so a block parked left is reported
+        // left. `storyStyledText` is byte for byte what it was.
         let blockWidth = maxTextWidth + 2 * hPad
         let bandMinX = container.bounds.midX - blockWidth / 2
         let centreX: CGFloat = switch toolbar.alignment {
