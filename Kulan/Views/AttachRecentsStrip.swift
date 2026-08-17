@@ -190,6 +190,16 @@ struct AttachRecentsStrip: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
+        // ⚠️ A SURFACE UNDER THE HEADER. Owner 2026-08-17, with the sheet open: "Recents ▾" and the
+        // X sat directly on the photo grid, so the title and its chevron dissolved into whatever
+        // pictures happened to be behind them — and the way into Albums is that chevron, so a
+        // control nobody can see is a door nobody can find.
+        //
+        // The page's own background, not white: this sheet follows the colour scheme, and a
+        // hardcoded white bar would be a bright slab across a dark picker. Same reasoning as the
+        // rest of the app — see the accent-is-white-at-night note. Extended under the top safe area
+        // so it reads as the sheet's own header rather than a stripe floating in it.
+        .background(Color(.systemBackground).ignoresSafeArea(edges: .top))
     }
 
     // Caption + Send bar shown while items are selected (replaces the source row). The selected COUNT is
