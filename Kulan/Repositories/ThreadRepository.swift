@@ -761,7 +761,19 @@ final class ThreadRepository {
         }
         trimWindowIfNeeded()
         rebuild()
-        let echoed = Set(byId.values.compactMap { $0.clientId })
+        // ⚠️ `!$0.uploading` — THE SECOND PLACE THAT DROPS A PENDING, and it has to agree with the
+        // one in `refreshItems`.
+        //
+        // A media message is written to the server the instant Send is tapped now, carrying no bytes
+        // yet. Its echo comes straight back with the same clientId, and this line deleted the
+        // sender's optimistic bubble on sight — the copy that actually HAS the picture. `refreshItems`
+        // then correctly hid the still-uploading server message, found no local copy left to show in
+        // its place, and drew the recipient's placeholder instead. The owner saw exactly that on a
+        // video (2026-08-16): the upload ring finished, then a spinner started, and his own video
+        // was unplayable until a relaunch — by which time the upload had long finished.
+        //
+        // A message that is still uploading is not an echo yet. It is a promise.
+        let echoed = Set(byId.values.filter { !$0.uploading }.compactMap { $0.clientId })
         pending.removeAll { p in p.clientId.map(echoed.contains) ?? false }
     }
 
