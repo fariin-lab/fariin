@@ -2702,12 +2702,6 @@ struct StoryViewer: View {
         guard hero.chromeHidden != hide else { return }
         hero.chromeHidden = hide
         if heroFlying != hide { heroFlying = hide }
-        // WHICH KIND OF FLIGHT THIS IS, recorded only when the chrome GOES, which is the start of one.
-        // Left standing when the chrome comes back, because that is the moment a page reads it to
-        // decide how its bottom bar should arrive — clearing it there would answer the question after
-        // it had been asked. `resetFlight` clears it once the flight is over. See
-        // `StoryCardMorph.flightIsOpening`.
-        if hide { StoryCardMorph.flightIsOpening = !hero.exiting }
         StoryCardMorph.flightChromeHidden = hide
         NotificationCenter.default.post(name: .init("storyFlightActive"), object: hide)
     }

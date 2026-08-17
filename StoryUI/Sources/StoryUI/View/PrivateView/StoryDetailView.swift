@@ -9,22 +9,6 @@ import SwiftUI
 import AVKit
 
 // Bottom-two-corners rounded rectangle (iOS 14 safe — UnevenRoundedRectangle is iOS 16+).
-/// The reply bar's own laid-out height, carried up from a background reader. See the note at its use:
-/// a preference is the iOS 15 way to do what `onGeometryChange` does, and this package is built for
-/// 15 even though the app is 26.
-///
-/// ⚠️ A preference is read one layout pass AFTER the pass that produced it. That is fatal for a value
-/// driving something per keystroke — it is why the story text badge is an `.overlay` and not this —
-/// and harmless here: this height changes when the bar is built or the safe area moves, and it is
-/// spent only when a flight begins, which is never in the same pass.
-struct StoryReplyBarHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        let next = nextValue()
-        if next > 0 { value = next }
-    }
-}
-
 struct BottomRoundedShape: Shape {
     var radius: CGFloat
     func path(in rect: CGRect) -> Path {
@@ -262,15 +246,6 @@ struct StoryDetailView: View {
     /// animate. Starting hidden makes the arrival the exact reverse of the departure: same flag,
     /// same 0.15s curve, opposite direction. See `StoryCardMorph.flightChromeHidden`.
     @State private var flightActive = StoryCardMorph.flightChromeHidden
-    /// HOW FAR THE REPLY BAR HAS TO TRAVEL TO BE OFF THE SCREEN — their
-    /// `self.bounds.height - inputPanelView.frame.minY`, which for a bar sitting flush on the bottom
-    /// is exactly its own laid-out height. Measured rather than assumed because this bar's height
-    /// moves with the safe-area inset it already carries and with the pill's own content.
-    ///
-    /// The HEIGHT is measured, not the position, and that is deliberate: the entry animates `offset`,
-    /// and a reader of the position would feed its own animation back into itself.
-    @State private var replyBarHeight: CGFloat = 0
-    private var replyBarTravel: CGFloat { max(1, replyBarHeight) }
     /// A flight MASK is cutting the card (`StoryCardMorph` posts `storyFlightMask`): the card's own
     /// corner clip stands down so the mask is the only curve on it. The clip shrinks with the card,
     /// so during a drag it renders at a couple of points and capped every corner the flight could
@@ -643,42 +618,25 @@ struct StoryDetailView: View {
                                 // per page, one rule for both. `flightActive` is the hero open and
                                 // close only — a cube turn does not raise it, so nothing is taken
                                 // away from the swipe this bar was moved here for.
-                                // ⚠️ AND ON THE WAY IN IT TRAVELS, WHICH IS THEIR `animateIn`.
+                                // ⚠️ IT FADES AND IT DOES NOT TRAVEL — HIS WORD, 2026-08-17, AFTER
+                                // SEEING THE TRAVEL ON A DEVICE: "the bottom now is coming down, i
+                                // want my old type… only restore the Reply and Views/Trash bars'
+                                // original appearing".
                                 //
-                                // Every bottom panel of theirs is animated additively from
-                                // `CGPoint(x: 0, y: bounds.height - panel.frame.minY)` to `.zero` —
-                                // that is the panel starting with its top edge on the bottom of the
-                                // screen, so it is entirely below it — over 0.48s on
-                                // `kCAMediaTimingFunctionSpring`, with a SEPARATE alpha 0 → 1 over
-                                // 0.28s. The input panel and the footer panel both take 0.48; only
-                                // the caption and the view lists are quicker.
+                                // `871a3fff` had both bars slide up from below the screen on the way
+                                // in — the reference app's own `animateIn`, every number read from
+                                // their source (0.48s position on cubic bezier
+                                // (0.380, 0.700, 0.125, 1.000), a separate 0.28s alpha). It is a
+                                // faithful port and he does not want it. His judgement about his own
+                                // app decides this, so both bars are back to the plain 0.15s fade
+                                // that shipped before it, at both sites, written the same way so the
+                                // pair still cannot drift.
                                 //
-                                // Two durations on purpose, and it is what makes it read as fluid:
-                                // the bar is fully opaque at 0.28 while it still has a fifth of a
-                                // second of travel left, and the content flight beside it is 0.3 —
-                                // so the card lands and the bar is still arriving. Ours faded in
-                                // over 0.15s and did not move at all, which is his report.
-                                //
-                                // ⚠️ THE CURVE IS NOT A SPRING. `kCAMediaTimingFunctionSpring` is a
-                                // dispatcher in their `CAAnimationUtils`: at duration 0.5 it makes a
-                                // real `CASpringAnimation`, at one magic iOS-26 duration it uses the
-                                // system spring, and at EVERY other duration — 0.48 and 0.3 included
-                                // — it is a plain `CABasicAnimation` on cubic bezier
-                                // (0.380, 0.700, 0.125, 1.000). Read from their source, not assumed.
-                                //
-                                // ⚠️ OPENING ONLY. His instruction is that the scroll-down dismiss
-                                // must not change, so the close keeps its own 0.15s fade and never
-                                // travels: `flightIsOpening` is the discriminator, because
-                                // `flightActive` is raised by both.
+                                // ⚠️ DO NOT RE-PORT IT ON THE STRENGTH OF THE REFERENCE. The
+                                // mechanism is recorded in `871a3fff` if it is ever asked for again;
+                                // it was not wrong, it was unwanted.
                                 .opacity(flightActive ? 0 : 1)
-                                .animation(StoryCardMorph.flightIsOpening
-                                           ? .easeInOut(duration: 0.28)
-                                           : .easeOut(duration: 0.15),
-                                           value: flightActive)
-                                .offset(y: flightActive && StoryCardMorph.flightIsOpening
-                                        ? ownerBarHeight + winInsets.bottom : 0)
-                                .animation(.timingCurve(0.380, 0.700, 0.125, 1.000, duration: 0.48),
-                                           value: flightActive)
+                                .animation(.easeOut(duration: 0.15), value: flightActive)
                         }
                     }
                     .padding(.top, winInsets.top)
@@ -1242,33 +1200,11 @@ private extension StoryDetailView {
         // footer would be a bar of black across the bottom of the chat list while the story flew home.
         // Another mainstream messenger does the same: at rest there is a reply bar, and the instant the pull starts it
         // is not there. See `flightActive`.
-        // Its own laid-out height, which for a bar flush on the bottom IS their
-        // `bounds.height - frame.minY`. Read before the offset below, so the entry cannot measure
-        // itself. See `replyBarHeight`.
-        //
-        // ⚠️ A `GeometryReader` IN A BACKGROUND, NOT `onGeometryChange`. This package is built for
-        // iOS 15 (`Package.swift`: "v15 unlocks @FocusState") while the app itself is 26, so the
-        // newer geometry API compiles in `MainShell` and not in here. A background reader is the
-        // idiom this file already uses and it costs nothing: `Color.clear` proposes nothing and
-        // draws nothing, and a background never affects the size of what it is behind.
-        .background(
-            GeometryReader { g in
-                Color.clear.preference(key: StoryReplyBarHeightKey.self, value: g.size.height)
-            }
-        )
-        .onPreferenceChange(StoryReplyBarHeightKey.self) { replyBarHeight = $0 }
-        // THEIR `animateIn` FOR THE INPUT PANEL — the same two animations, the same two durations and
-        // the same curve as the owner bar above, deliberately written the same way so the two bars
-        // can never drift. Theirs gives the input panel and the footer panel the identical 0.48s
-        // position and 0.28s alpha; see the long note at the owner bar for where those come from and
-        // why the curve is a bezier rather than a spring. Opening only — the dismiss is untouched.
+        // ⚠️ THE FADE ONLY, NO TRAVEL — his 2026-08-17 word. The same line as the owner bar above,
+        // deliberately, so one bar can never arrive differently from the other; the long version of
+        // why the entry animation went away is at that site.
         .opacity(flightActive ? 0 : 1)
-        .animation(StoryCardMorph.flightIsOpening
-                   ? .easeInOut(duration: 0.28)
-                   : .easeOut(duration: 0.15),
-                   value: flightActive)
-        .offset(y: flightActive && StoryCardMorph.flightIsOpening ? replyBarTravel : 0)
-        .animation(.timingCurve(0.380, 0.700, 0.125, 1.000, duration: 0.48), value: flightActive)
+        .animation(.easeOut(duration: 0.15), value: flightActive)
         // Ride the keyboard's own timing (critically-damped spring keyed to the keyboard duration):
         // front-loaded like the keyboard, so the reply pill stays just above the keyboard's top edge
         // the whole way up instead of trailing behind it and popping in at the end (user: "bar comes
