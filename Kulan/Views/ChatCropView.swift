@@ -37,6 +37,8 @@ struct ChatCropView: View {
 
     @State private var img: UIImage
     @State private var container: CGSize = .zero
+    /// Where this canvas sits on the screen, as of the last pass that measured it — see `layout`.
+    @State private var canvasTopLeft: CGPoint = .zero
     @State private var imageFrame: CGRect = .zero   // displayed (aspect-fit) image rect in the container
     @State private var crop: CGRect = .zero         // crop frame in container coords
     @State private var start: CGRect = .zero        // crop at gesture-begin
@@ -110,6 +112,25 @@ struct ChatCropView: View {
     /// The card this screen was opened from, in THIS canvas's coordinates. Written by `layout`,
     /// which is the one place that knows where the canvas sits on the screen.
     @State private var entryFrom: CGRect = .zero
+    /// ⚠️ RAISED ONLY WHILE THE 0.3s FLIGHT IS RUNNING, AND ITS ABSENCE IS THE SECOND HALF OF HIS
+    /// "the picture drops a little, and only then starts to zoom out".
+    ///
+    /// Deriving the scale and the offset from the live `imageFrame` made the FIRST frame right, and it
+    /// is not enough on its own: `withAnimation` interpolates the values body reported when the
+    /// transaction opened towards the values body reports now, and the seat itself —
+    /// `.position(imageFrame.mid)` — is not one of those values. It is a plain state write. So a
+    /// layout pass landing after the flight had begun re-seated the picture in ONE FRAME while the
+    /// scale carried on easing: the drop, and then the zoom, one step further back than it was.
+    ///
+    /// Two halves to the repair. The flight now waits a runloop turn for the canvas to stop moving
+    /// (see `onAppear`), which is what UIKit gives theirs for nothing — `viewDidLoad` seats the
+    /// picture and the whole layout has settled before `viewDidAppear` starts the animation. And if a
+    /// pass lands inside the flight anyway, `layout` MOVES the seat on the flight's own curve instead
+    /// of snapping to it, so there is no frame at which the picture is anywhere it was not travelling.
+    @State private var entryInFlight = false
+    /// One number for the move, so the seat correction above cannot run on a different clock from the
+    /// thing it is correcting.
+    private static let entryDuration: Double = 0.3
 
     /// The scale that puts the fitted picture back at the card's size, eased out by the progress.
     private var entryScale: CGFloat {
@@ -282,11 +303,26 @@ struct ChatCropView: View {
             .onAppear {
                 // `.global` because the rect we were handed is the presenter's, measured on the
                 // screen. This canvas sits under a bar it does not know the height of.
-                let origin = geo.frame(in: .global).origin
-                layout(geo.size, canvasOrigin: origin)
-                runEntry(canvasOrigin: origin)
+                layout(geo.size, canvasOrigin: geo.frame(in: .global).origin)
+                // ⚠️ ONE RUNLOOP TURN LATER, WHICH IS THE ORDERING UIKit HANDS THEIRS FOR NOTHING.
+                // `viewDidLoad` seats their picture on the rect it was handed and the whole layout is
+                // settled by the time `viewDidAppear` starts the animation. Ours is asked to fly on
+                // the first pass, and the canvas is still moving then: the two `safeAreaInset` bars
+                // do not know their own heights until they have been laid out, so the pass after this
+                // one is a different rectangle. Flying from a geometry that is about to change is the
+                // drop he is reporting — see `entryInFlight`. Every state read below goes through the
+                // property wrapper's storage, so this closure sees the settled numbers, not the ones
+                // captured with it.
+                DispatchQueue.main.async { runEntry() }
             }
-            .onChange(of: geo.size) { _, s in layout(s, canvasOrigin: geo.frame(in: .global).origin) }
+            // ⚠️ THE WHOLE FRAME, NOT JUST THE SIZE. The canvas can be re-seated without being
+            // resized — a bar above it growing and one below it shrinking by the same amount moves
+            // the origin and nothing else — and `entryFrom` is expressed in this canvas's own
+            // coordinates, so an origin nobody told us about puts the card's rect in the wrong place
+            // by exactly the distance the canvas moved.
+            .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { f in
+                layout(f.size, canvasOrigin: f.origin)
+            }
         }
         // ⚠️ THE ONE PLACE THIS DIVERGES FROM THEIRS, AND IT IS A UIKit-VERSUS-SwiftUI DIFFERENCE
         // RATHER THAN A CHOICE.
@@ -313,7 +349,15 @@ struct ChatCropView: View {
 
     // MARK: Layout — fit the photo into the canvas area (already inset by the safe-area bars).
 
-    private func layout(_ size: CGSize, canvasOrigin: CGPoint = .zero) {
+    /// ⚠️ THE ORIGIN IS REMEMBERED, AND `.zero` USED TO BE THE DEFAULT FOR CALLERS WHO SIMPLY DID NOT
+    /// HAVE IT. Rotate, flip and Reset all re-seat the picture through here long after the geometry
+    /// callback that knew where this canvas sits, and they passed nothing — so the seat was computed
+    /// as if the canvas began at the very top of the phone, `wanted` came out a bar's height too
+    /// large, and the clamp walked the picture down. One turn of the picture, one step down the
+    /// screen. Handed an origin, this records it; handed none, it uses the one it was last told.
+    private func layout(_ size: CGSize, canvasOrigin: CGPoint? = nil) {
+        let canvasOrigin = canvasOrigin ?? canvasTopLeft
+        canvasTopLeft = canvasOrigin
         container = size
         let availW = size.width - 32
         let availH = size.height - 24
@@ -333,15 +377,27 @@ struct ChatCropView: View {
             let wanted = (r.midY - canvasOrigin.y) - h / 2
             y = min(max(12, wanted), max(12, size.height - h - 12))
         }
-        imageFrame = CGRect(x: (size.width - w) / 2, y: y, width: w, height: h)
+        let seat = CGRect(x: (size.width - w) / 2, y: y, width: w, height: h)
         // ⚠️ RE-RECORDED ON EVERY PASS, IN THIS CANVAS'S OWN COORDINATES. The flight is derived from
         // this and `imageFrame` together (see `entryProgress`), so when the canvas is re-measured
         // — which it is, right after appearing, once the two `safeAreaInset` bars know their own
         // heights — both ends move together and the picture keeps travelling to the right place
         // instead of jumping to a new seat first.
-        if let r = initialContentRect {
-            entryFrom = CGRect(x: r.minX - canvasOrigin.x, y: r.minY - canvasOrigin.y,
-                               width: r.width, height: r.height)
+        let from: CGRect? = initialContentRect.map {
+            CGRect(x: $0.minX - canvasOrigin.x, y: $0.minY - canvasOrigin.y,
+                   width: $0.width, height: $0.height)
+        }
+        // ⚠️ AND A PASS THAT LANDS INSIDE THE FLIGHT MOVES THE SEAT RATHER THAN SNAPPING TO IT. See
+        // `entryInFlight`: the seat is a plain state write that `.position` follows immediately, so
+        // outside a transaction it is a jump — his drop — however right the scale beside it is.
+        if entryInFlight, seat != imageFrame {
+            withAnimation(.easeInOut(duration: Self.entryDuration)) {
+                imageFrame = seat
+                if let from { entryFrom = from }
+            }
+        } else {
+            imageFrame = seat
+            if let from { entryFrom = from }
         }
         setAspect(aspect, animated: false)
     }
@@ -362,12 +418,15 @@ struct ChatCropView: View {
     /// **0.3s** alongside it — one picture moving, the controls arriving on top of it. 0.15s was the
     /// other app's figure and it is half as long as this screen's own canvas step-back, so even when
     /// it did move, two halves of one motion ran on two clocks.
-    private func runEntry(canvasOrigin: CGPoint) {
+    private func runEntry() {
         guard initialContentRect != nil, imageFrame.width > 1, entryProgress < 1,
               entryFrom.width > 1 else { return }
-        withAnimation(.easeInOut(duration: 0.3)) {
+        entryInFlight = true
+        withAnimation(.easeInOut(duration: Self.entryDuration)) {
             entryProgress = 1
             chrome = 1
+        } completion: {
+            entryInFlight = false
         }
         // AND ONLY THEN THE FRAME. Their completion block, expressed as a delay: `.delay(0.3)` is the
         // move's own duration, and 0.35 is the figure `transitionInFinishedAnimated:` animates the
