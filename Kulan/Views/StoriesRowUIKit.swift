@@ -431,6 +431,27 @@ final class StoryCoverUIView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
+        // ⚠️ THE COVER CARRIES THE CARD'S OWN CORNER TOO, AND THIS IS THE WHITE-CORNER FIX.
+        //
+        // His report, 2026-08-17, on MY card and — once he checked — on a friend's as well: white
+        // square corners behind the card's rounded ones, only on a card that HAS a picture. Measured
+        // off his screenshot rather than argued: pure 253-255 in the corner wedge against a card body
+        // of 70, in the exact shape of "square minus a 24pt rounded rect", on all four corners.
+        //
+        // ⚠️ AND THE EARLIER NOTE IN THIS FILE BLAMING THE SHIMMER IS WRONG. It pinned the colour to
+        // `systemGray5`, which is about 44 in dark mode; the artifact measures 255. That note was
+        // measured in LIGHT mode, where `systemGray5` is ~229, which is why it looked like a match.
+        // Do not follow it.
+        //
+        // What is left is a child of this view painting outside the card's rounded shape. `clip` above
+        // has `clipsToBounds` and the radius, and that note gave up on how anything could escape it —
+        // so this stops asking which child and closes the whole family: the cover is EXACTLY
+        // `clip.bounds`, so giving it the same corner and its own clip changes nothing about what it
+        // draws and leaves nothing of it outside the curve. A picture, a shimmer, or a transition's
+        // snapshot are all inside this view.
+        layer.cornerRadius = StoryRowMetrics.radius
+        layer.cornerCurve = .continuous
+        clipsToBounds = true
         addSubview(skeleton)
         imageView.contentMode = .scaleAspectFill
         imageView.clipsToBounds = true
@@ -464,10 +485,36 @@ final class StoryCoverUIView: UIView {
             return
         }
         // `.animation(.easeOut(duration: 0.25), value: image != nil)`
-        UIView.transition(with: self, duration: 0.25,
-                          options: [.transitionCrossDissolve, .curveEaseOut]) {
-            self.imageView.isHidden = image == nil
-            self.skeleton.isHidden = image != nil
+        //
+        // ⚠️ A PLAIN ALPHA CROSS-FADE, NOT `UIView.transition`, AND THAT IS THE SECOND HALF OF THE
+        // WHITE-CORNER FIX.
+        //
+        // `.transitionCrossDissolve` works by RENDERING THIS VIEW INTO A SNAPSHOT and fading between
+        // two of them. A snapshot is a new view UIKit inserts for the length of the transition, and it
+        // is the one thing here that is not simply a child of this view laid out at `bounds` — which
+        // makes it the one candidate that could paint outside an ancestor's rounded clip. Fading the
+        // two subviews directly needs no snapshot at all: same 0.25s, same ease-out, same result,
+        // nothing added to the hierarchy.
+        //
+        // It also stops a full-size render of every card at the moment its picture lands, which is
+        // work the row was paying on every scroll into view.
+        // Both on screen for the length of the fade, whichever way it is going: a view that is still
+        // hidden cannot animate its alpha, and a reused card can arrive at this line from either
+        // state.
+        let showImage = image != nil
+        imageView.alpha = showImage ? 0 : 1
+        skeleton.alpha = showImage ? 1 : 0
+        imageView.isHidden = false
+        skeleton.isHidden = false
+        UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseOut]) {
+            self.imageView.alpha = showImage ? 1 : 0
+            self.skeleton.alpha = showImage ? 0 : 1
+        } completion: { _ in
+            self.imageView.isHidden = !showImage
+            self.skeleton.isHidden = showImage
+            // Left ready for the next time this reused view swaps the other way.
+            self.imageView.alpha = 1
+            self.skeleton.alpha = 1
         }
     }
 

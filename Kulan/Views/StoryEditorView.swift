@@ -1567,7 +1567,12 @@ struct StoryEditorView: View {
     /// scrub as well, that means an AVPlayer on this screen, which is a bigger piece and is worth
     /// asking about rather than assuming.
     @ViewBuilder private var trimOverlay: some View {
-        if showTrim, items.indices.contains(index), items[index].isVideo {
+        // ⚠️ `!showCrop`, BECAUSE THIS LAYER IS ABOVE THE CROP ONE IN THE STACK. Adjust is opened from
+        // the trim bar, and without this the crop screen would come up UNDERNEATH the page that asked
+        // for it. Standing down rather than reordering the stack: the order below is what every other
+        // overlay on this screen was built against, and `showTrim` staying true is also what brings
+        // him back to the trim page — with the handles where he left them — when Adjust closes.
+        if showTrim, !showCrop, items.indices.contains(index), items[index].isVideo {
             let dur = max(0.1, items[index].duration)
             VStack {
                 Spacer()
@@ -1687,6 +1692,24 @@ struct StoryEditorView: View {
                             active: items[index].muted, tint: Color(hex: 0x3DA1FD)) {
                     items[index].muted.toggle()
                     previewPlayer?.isMuted = items[index].muted
+                }
+                // ⚠️ ADJUST, AND ONLY ADJUST — his 2026-08-17: "only add an Adjust option, I don't
+                // need the Cut/Delete/Speed segment model right now."
+                //
+                // It opens the crop screen this editor already has rather than a second one. A clip
+                // cannot be cropped into a picture, so that screen hands back a normalised RECTANGLE
+                // (`onRect`) and the transcoder applies it at export — which is the path
+                // `croppedSource`/`cropRect` were built with and the reason crop was never
+                // photo-only. So this is a door, not a feature: nothing new is applied, stored or
+                // exported that a photo's crop did not already do.
+                //
+                // The trim is left where it stands. Coming back from Adjust lands on this page with
+                // the handles untouched, because `showCrop` is a layer over the editor and `openTrim`
+                // is not run again.
+                capsuleTool("crop.rotate", active: cropRect != nil, tint: Color(hex: 0x3DA1FD)) {
+                    previewPlayer?.pause()
+                    previewPlaying = false
+                    withAnimation(.easeInOut(duration: 0.28)) { showCrop = true }
                 }
             }
             .padding(.horizontal, 20).frame(height: 46)
