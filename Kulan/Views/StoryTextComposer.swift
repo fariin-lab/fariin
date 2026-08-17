@@ -195,7 +195,27 @@ struct StoryTextCard: View {
         ZStack {
             style.bg
                 .contentShape(Rectangle())
-                .onTapGesture { focused = true }
+                // ⚠️ A TAP ON THE CARD TOGGLES EDITING. IT USED TO ONLY EVER RAISE THE KEYBOARD.
+                //
+                // Signal's text-story composer has exactly one gesture on the whole card, and it is
+                // the same one both ways round (`PhotoCaptureViewController`, `placeholderTapped`):
+                //
+                //     if textView.isFirstResponder {
+                //         textView.acceptAutocorrectSuggestion()
+                //         textView.resignFirstResponder()
+                //     } else {
+                //         textView.becomeFirstResponder()
+                //     }
+                //
+                // Ours was `focused = true`, which is that with the first half missing — so the only
+                // way out of typing was the ✓ button, and tapping the card did nothing at all once
+                // the keyboard was up. That is his report.
+                //
+                // Their "outside the text" is real estate we did not have: their text view is sized
+                // to the words (min 48pt tall) and centred, so the card ABOVE and BELOW it is bare
+                // and the tap lands here. Ours filled the card, so this gesture was unreachable
+                // wherever it mattered. `CentringTextView.point(inside:)` is the other half.
+                .onTapGesture { focused.toggle() }
                 .animation(.easeInOut(duration: 0.3), value: styleIndex)
 
             ZStack {
@@ -378,13 +398,50 @@ struct StoryTextEditor: UIViewRepresentable {
 
     /// Vertically centred until it overflows, top-aligned and scrolling after that.
     final class CentringTextView: UITextView {
+        /// The words' own height, measured in the layout pass that already needed it. Kept because
+        /// `point(inside:)` is asked on every touch and `sizeThatFits` on a text view is a layout.
+        private var fittedHeight: CGFloat = 0
+
         override func layoutSubviews() {
             super.layoutSubviews()
             let fits = sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude)).height
+            fittedHeight = fits
             let inset = max(0, (bounds.height - fits) / 2)
             // The threshold is what stops this from being a layout loop: writing `contentInset`
             // triggers another layout pass, so it must settle rather than merely converge.
             if abs(contentInset.top - inset) > 0.5 { contentInset.top = inset }
+        }
+
+        /// ⚠️ THIS VIEW ONLY CLAIMS THE BAND ITS WORDS ARE ON, AND THAT IS WHAT GIVES THE CARD AN
+        /// "OUTSIDE THE TEXT" TO TAP.
+        ///
+        /// Signal's composer does not need this because its text view IS the size of the text: it is
+        /// laid out at the content width and at the height the words fit in, with a 48pt floor, and
+        /// centred in the card. Everything above and below it is bare card, so a tap there reaches
+        /// their one gesture and ends editing.
+        ///
+        /// Ours fills the card — the words are centred by a content inset instead of by the view's
+        /// own height, which is what lets a long status scroll with the caret in view (see the note
+        /// on this type). The side effect is that the view swallowed every touch on the card, so the
+        /// composer's own tap could never fire and there was no way out of the keyboard but the ✓.
+        ///
+        /// Full WIDTH is claimed, not a box round the glyphs, because theirs is full width too
+        /// (`withHorizontalFittingPriority: .required` against the content guide) — the bare card is
+        /// above and below the words, never beside them. Once the text overflows, the inset is zero
+        /// and the band is taller than the view, so the whole thing claims touches again and
+        /// scrolling and selection are untouched.
+        override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+            guard super.point(inside: point, with: event) else { return false }
+            // Their `max(textViewSize.height, 48)`, and the slop is one comfortable finger edge.
+            let band = max(fittedHeight, 48) + 16
+            // ⚠️ WHERE THE WORDS START ON SCREEN IS `-contentOffset.y`, NOT THE INSET. A scroll view
+            // draws content at `contentY - contentOffset.y`, and a top inset does its work by moving
+            // the offset to `-inset` rather than by shifting the drawing — so reading the inset here
+            // as well would count the centring twice and put the band a whole inset too low. With
+            // the text overflowing the inset is zero, the offset is positive, and this is negative,
+            // which is exactly right: the band starts above the view and covers all of it.
+            let top = -contentOffset.y - 8
+            return point.y >= top && point.y <= top + band
         }
     }
 
@@ -415,7 +472,22 @@ struct StoryTextEditor: UIViewRepresentable {
         v.tintColor = color
         v.textAlignment = .center
         if focused, !v.isFirstResponder { v.becomeFirstResponder() }
-        if !focused, v.isFirstResponder { v.resignFirstResponder() }
+        if !focused, v.isFirstResponder {
+            // ⚠️ WHAT THE KEYBOARD IS STILL HOLDING IS COMMITTED FIRST — Signal's
+            // `acceptAutocorrectSuggestion`, which it calls on both of its ways out of editing (the
+            // card tap and the Done button) and never on the way in.
+            //
+            // A suggestion the person has not accepted, and marked text in a two-stage input, live
+            // in the keyboard rather than in the text view. Resigning without asking for them drops
+            // the last word of a status typed in Somali or in any language that composes.
+            //
+            // The empty round trip through the input delegate is the whole trick: telling the system
+            // the selection is about to move makes it flush what it is holding, and nothing else here
+            // moves the selection.
+            v.inputDelegate?.selectionWillChange(v)
+            v.inputDelegate?.selectionDidChange(v)
+            v.resignFirstResponder()
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
