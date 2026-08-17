@@ -2191,9 +2191,24 @@ struct StoryEditorView: View {
         if croppedSource != nil || cropRect != nil || filterIndex != 0 { return true }
         if !drawing.bounds.isEmpty || !overlays.isEmpty || !stickers.isEmpty { return true }
         if let it = items.first, it.isTrimmed || it.muted { return true }
-        // The same "has it been reframed" test `videoBurnIn` uses, so a pinch that counts as an edit
-        // at post time counts as one here.
-        return photoZoom > 1.001 || abs(photoOffset.width) > 0.5 || abs(photoOffset.height) > 0.5
+        // ⚠️ MEASURED AGAINST THE ZOOM THIS SCREEN APPLIED ITSELF, NOT AGAINST 1 — his 2026-08-17
+        // report: open a picture, touch nothing, tap X, and it asks whether to discard.
+        //
+        // `restoreCurrent` frames a portrait photo on arrival (`defaultZoom`, their fill rule), so a
+        // picture that has never been touched sits at 1.35 or thereabouts before the screen has even
+        // drawn. Asking `photoZoom > 1.001` therefore asked "is this picture taller than it is wide",
+        // and for every such picture the X went through the prompt this method exists to skip.
+        //
+        // The baseline is recomputed rather than remembered because it is a pure function of the
+        // picture and this asks it the same way `restoreCurrent` does. A crop or a filter has already
+        // returned true above, so `cropped` here is the same input that answer was derived from.
+        //
+        // The post path is deliberately untouched: `videoBurnIn`'s own `reframed` test still counts a
+        // default zoom as framing to burn in, because it IS the framing the picture is posted with.
+        // The two questions are different — "what does this look like" and "did he do anything".
+        let base = items.first.map { $0.isVideo ? 1 : defaultZoom(for: $0.cropped ?? $0.image) } ?? 1
+        return abs(photoZoom - base) > 0.001
+            || abs(photoOffset.width) > 0.5 || abs(photoOffset.height) > 0.5
     }
 
     private func closeEditor() {
@@ -2895,10 +2910,29 @@ struct TextEditorOverlay: View {
                 // exactly as wide as the text it is typing with nothing in between to be a frame
                 // late. The measurement is still the finished overlay's own `Text`, in the same font
                 // at the same wrap width, which is what stopped the box being field-shaped.
+                // ⚠️ THE WIDTH CAP IS THE LAST MODIFIER, NOT THE FIRST, AND THAT ORDERING IS THE
+                // WHOLE OF HIS 2026-08-17 "the background is much wider than it should be while the
+                // keyboard is open, and corrects itself after Done".
+                //
+                // `.frame(maxWidth: 320)` is GREEDY: offered the screen's width it returns 320,
+                // whatever is inside it. Sitting HERE, above the padding and the background, it made
+                // the measured block 320pt wide before either of them ran — so the badge was drawn
+                // round a 320pt box and the measuring Text was only centring inside it. The word
+                // "Test" in a badge nearly the width of the phone is that, exactly.
+                //
+                // `storyStyledText`, which draws the finished overlay, has the same modifier and puts
+                // it AFTER the background (`:2639-2640`). There it does the other job: it caps what
+                // the Text is PROPOSED, so long text still wraps at 320, while the background sizes
+                // to what the Text actually used and hugs it. That is why the badge was right the
+                // moment Done handed over — the two views were never drawing the same box.
+                //
+                // Same two modifiers as the display now, in the display's order, so the editing badge
+                // and the posted one cannot disagree. `fixedSize` vertical is theirs too: it is what
+                // stops a multi-line block being squeezed by whatever height it is proposed.
                 Text(draft.text.isEmpty ? "Type…" : draft.text)
                     .font(.system(size: draft.baseSize, weight: .semibold, design: draft.font.design))
                     .multilineTextAlignment(draft.alignment)
-                    .frame(maxWidth: 320)
+                    .fixedSize(horizontal: false, vertical: true)
                     .opacity(0)
                     .accessibilityHidden(true)
                     .overlay {
@@ -2927,6 +2961,10 @@ struct TextEditorOverlay: View {
                     case .solid: RoundedRectangle(cornerRadius: 10).fill(draft.color)
                     }
                 }
+                // The cap, in the display's position: it bounds what the Text above is PROPOSED, so
+                // long text wraps at 320 exactly as the posted overlay does, and the background has
+                // already sized itself to the words by the time this runs. See the note above.
+                .frame(maxWidth: 320)
                 .contentShape(Rectangle())          // tap anywhere on the text block, not just the glyphs
                 .onTapGesture { focused = true }
                 Spacer()
