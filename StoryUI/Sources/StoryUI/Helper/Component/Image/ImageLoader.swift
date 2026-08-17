@@ -276,6 +276,30 @@ final class ImageLoader: UIView {
     /// before the network request goes out.
     private func seedPreviewBlur(_ previewURL: String?) -> Bool {
         guard let previewURL, let url = URL(string: previewURL) else { return false }
+        // ⚠️ THE APP'S OWN CACHE IS ASKED FIRST, AND ITS ABSENCE HERE WAS HIS "the thumbnail turns
+        // black for a fraction of a second".
+        //
+        // The two caches below are the LIBRARY'S. The app draws the stories row and the viewers
+        // carousel through `DiskImageCache`, a different store in a different folder — so the poster
+        // that is on screen in the row at this very moment is invisible to both of them. They miss,
+        // the poster becomes a network fetch, and the loading state falls through to the shimmer.
+        //
+        // `StoryPosterSource` is the seam that was built for exactly this, and its own note names
+        // this symptom: "there is nothing to hold the frame — which is the black." It was wired into
+        // the VIDEO poster path and never into this one, so the photo path kept the hole the seam
+        // exists to close. Synchronous and memory-only, so it costs a dictionary lookup and can only
+        // ever make a poster arrive sooner.
+        //
+        // ⚠️ AND IT MATTERS NOW IN A WAY IT DID NOT BEFORE. Until the take-down above was moved ahead
+        // of the first await, this branch was reached with the PREVIOUS story still on screen, so a
+        // missing poster was invisible — you saw the wrong picture rather than no picture. Correcting
+        // that is what put this path in front of him. The shimmer it falls back to is pinned to
+        // `systemGray5`, which is ~44 in dark mode: on a black screen that reads as a black card,
+        // which is what he photographed.
+        if let warm = StoryPosterSource.provider?(previewURL) {
+            showPreviewBlur(warm)
+            return true
+        }
         if let cached = URLCache.shared.cachedResponse(for: .init(url: url)),
            let img = UIImage(data: cached.data) {
             showPreviewBlur(img); return true
