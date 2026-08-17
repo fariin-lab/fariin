@@ -1214,6 +1214,10 @@ struct StoryViewersSheet: UIViewRepresentable {
     /// for. Nil box = no slides ever, which keeps every other construction of this sheet exactly
     /// what it was.
     var slideBox: StorySheetPageDrag? = nil
+    /// BUMPED EVERY TIME THE SERVER'S VIEW COUNTER FOR THE STORY ON SCREEN MOVES. The host owns the
+    /// listener (`observeViewCount`); this is the whole of what the sheet needs to know about it.
+    /// Defaulted, so every other construction of this sheet is unchanged.
+    var refreshTick: Int = 0
 
     func makeUIView(context: Context) -> StoryViewersSheetView {
         let v = StoryViewersSheetView()
@@ -1285,6 +1289,8 @@ struct StoryViewersSheet: UIViewRepresentable {
 
     func updateUIView(_ v: StoryViewersSheetView, context: Context) {
         if !context.coordinator.applying { v.setProgress(progress) }
+        // A view landed on the story on screen: ask its list again. See `Coordinator.refresh`.
+        context.coordinator.refresh(active: activeStoryId, tick: refreshTick)
         v.carouselBand = carouselBand
         v.hasPrev = hasPrev
         v.hasNext = hasNext
@@ -1333,24 +1339,55 @@ struct StoryViewersSheet: UIViewRepresentable {
         }
 
         /// Put a story's people in that story's own panel, fetching them once if they are not held.
-        private func fill(_ id: String) {
-            if let hit = cache[id] {
+        ///
+        /// - Parameter force: ask again even when a list is already held. Used when the story's own
+        ///   view COUNT has moved under an open sheet — see `refreshIfCountMoved`.
+        private func fill(_ id: String, force: Bool = false) {
+            if !force, let hit = cache[id] {
                 view?.setViewers(hit, for: id)
                 view?.setLoading(false, for: id)
                 return
             }
             guard tasks[id] == nil else { return }
-            view?.setLoading(true, for: id)
+            // A forced re-ask keeps the list that is already on screen rather than emptying it behind
+            // a spinner: the people who watched are still the people who watched, plus whoever is new.
+            if cache[id] == nil { view?.setLoading(true, for: id) }
             tasks[id] = Task { [weak self] in
                 let people = await StoriesService.shared.fetchViewers(storyId: id)
                 await MainActor.run {
                     guard let self else { return }
                     self.tasks[id] = nil
+                    self.view?.setLoading(false, for: id)
+                    // ⚠️ A FAILED READ IS NEVER REMEMBERED, AND THAT IS HIS "No views yet" UNDER A
+                    // CARD READING ONE VIEW.
+                    //
+                    // `fetchViewers` answers nil when the request itself failed. This used to take
+                    // `[]` for that and write it into `cache[id]` — so one dropped request showed
+                    // "nobody watched this" AND made sure the panel never asked again for the whole
+                    // sitting, beside a count that had been fetched successfully a moment earlier.
+                    guard let people else { return }
                     self.cache[id] = people
                     self.view?.setViewers(people, for: id)
-                    self.view?.setLoading(false, for: id)
                 }
             }
         }
+
+        /// ⚠️ THE LIST FOLLOWS THE STORY WHILE THE SHEET IS OPEN — it used to be fetched once and
+        /// never again, so somebody watching his story while he had the sheet up did not appear until
+        /// he closed it and opened it again. Theirs updates in place.
+        ///
+        /// The signal is the host's live view-count listener (`observeViewCount`), which only fires
+        /// when the server's counter actually moves — so this costs nothing until there is real news,
+        /// and one re-ask per change is the whole of it. The panel keeps the list it is showing while
+        /// the re-ask runs.
+        func refresh(active: String, tick: Int) {
+            guard tick != lastTick else { return }
+            let first = lastTick == nil
+            lastTick = tick
+            // The first tick is the listener attaching, which tells us nothing we did not just fetch.
+            guard !first, !active.isEmpty, cache[active] != nil else { return }
+            fill(active, force: true)
+        }
+        private var lastTick: Int?
     }
 }

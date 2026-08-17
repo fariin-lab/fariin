@@ -421,7 +421,17 @@ final class StoriesService {
     // 1:1 contacts only (a group's otherUid is an arbitrary member → leak). Exclude anyone I've
     // BLOCKED — `isBlockedByMe`, NOT `leaksBlocked`: the latter is a chat-list freeze test (true only
     // if they messaged AFTER the block), so a quietly-blocked contact was slipping into the audience.
-    private func resolveAudience(me: String, excluded: Set<String>, included: Set<String>) async -> (Set<String>, String) {
+    /// WHY A POST WAS REFUSED, in words the composer can show. A story that reaches nobody is worse
+    /// than a story that did not go: `recipientUids` is pinned immutable by the rules, so there is no
+    /// repair afterwards and no way for him to find out. See `resolveAudience`.
+    enum PostRefusal: LocalizedError {
+        case audienceUnavailable
+        var errorDescription: String? {
+            "Couldn't load your chats, so this story would reach nobody. Check your connection and try again."
+        }
+    }
+
+    private func resolveAudience(me: String, excluded: Set<String>, included: Set<String>) async throws -> (Set<String>, String) {
         // BLOCKING IS SYMMETRIC FOR BROADCAST CONTENT, and it was not.
         //
         // This filtered `isBlockedByMe` — chats where I blocked THEM — and never asked the other
@@ -448,6 +458,28 @@ final class StoriesService {
             if await MainActor.run(body: { ConversationsRepository.shared.hasLoaded }) { break }
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
+        // ⚠️ AND `hasLoaded` IS NOT PROOF THAT A LIST ARRIVED, WHICH IS THE HOLE THE LOOP ABOVE LEFT
+        // OPEN. The repository raises it after 3 seconds "whether or not a snapshot arrived"
+        // (`ConversationsRepository.start`), precisely so the chat list's skeleton can never spin for
+        // ever — so offline, or on a blocked realtime channel, the wait ends with an EMPTY list and
+        // every branch below resolves an empty audience. The story then uploads, wears a normal ring
+        // on his own row, and reaches nobody; `recipientUids` is pinned immutable by the rules, so
+        // there is no repair and nothing tells him.
+        //
+        // The account's own history is what separates the two empties, and the repository already
+        // keeps that answer for its own skeleton: `expectsChats` is the per-uid "this account has
+        // shown a non-empty chat list on this device before" flag, written the first time a real list
+        // lands and never cleared. So:
+        //   · no history + empty list  = a genuinely new account, which is the case the "empty
+        //     recipients is OK" rule was written for. Allowed, unchanged.
+        //   · history + empty list     = the list did not load. Refused, with a message.
+        // Both readings of "empty" used to take the first branch, which is why this could only ever
+        // be found by somebody noticing that a story had gone a whole day with no views.
+        let listMissing = await MainActor.run {
+            ConversationsRepository.shared.conversations.isEmpty
+                && ConversationsRepository.shared.expectsChats
+        }
+        if listMissing { throw PostRefusal.audienceUnavailable }
         let allContacts = await MainActor.run {
             Set(ConversationsRepository.shared.conversations
                 .filter { c in
@@ -550,13 +582,23 @@ final class StoriesService {
         // copy is already complete — so the ring comes down here, not at the end.
         await markSending()
 
+        // ⚠️ THE AUDIENCE IS RESOLVED BEFORE THE FIRST BYTE MOVES, AND THE ORDER IS DELIBERATE.
+        //
+        // It used to sit AFTER the `async let` below, so the two overlapped. That was free while this
+        // could not fail — and it can now: an account whose chat list did not load is refused here
+        // rather than posting to nobody (see `resolveAudience`). A throw from inside the overlap
+        // escapes BEFORE the `do`/`catch` that cleans Storage up, so the refusal would have left the
+        // uploaded bytes behind with no document to own them, and nothing ever deletes an orphan.
+        //
+        // What the old order bought was one main-actor hop of overlap on the warm path (the wait loop
+        // does not run when the list is already there), which is not worth an orphaned file.
+        let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included)
+
         async let uploadedJPEG: Void = {
             try Task.checkCancellation()
             let meta = StorageMetadata(); meta.contentType = "image/jpeg"
             _ = try await ref.putDataAsync(jpeg, metadata: meta)
         }()
-
-        let (recipients, mode) = await resolveAudience(me: me, excluded: excluded, included: included)
         // Made once and used twice — the document and, for an "Everyone" story, the public mirror.
         // It is a resize and a JPEG encode, so asking for it twice is real work for one string.
         let cover = Self.blurThumbBase64(image)
@@ -809,7 +851,7 @@ final class StoriesService {
         let storyId = UUID().uuidString
         let videoPath = "stories/\(storyId)/video.mp4"
         let thumbPath = "stories/\(storyId)/thumb.jpg"
-        let (recipients, mode) = await resolveAudience(me: me, excluded: excluded, included: included)
+        let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included)
         // Made once and used twice — the document and, for an "Everyone" story, the public mirror.
         let cover = Self.blurThumbBase64(prepared.thumbnail)
         // ONE DEADLINE, EVALUATED ONCE — see the photo path for what two of them cost.
@@ -1054,15 +1096,60 @@ final class StoriesService {
     }
 
     // Who viewed a story I posted (author-only per rules) → for the "Seen by" sheet.
-    func fetchViewers(storyId: String) async -> [StoryViewerInfo] {
+    /// WATCH ONE STORY'S VIEW COUNTER WHILE ITS OWNER IS LOOKING AT IT.
+    ///
+    /// ⚠️ THE NUMBERS USED TO BE A SNAPSHOT FROM THE MOMENT THE SHEET OPENED. The footer's count, the
+    /// preview cards' counts and the viewers list were all fetched once; somebody watching his story
+    /// while he had the sheet up appeared nowhere until he closed it and opened it again. Theirs
+    /// updates in place, which for a story you have just posted is most of what the screen is for.
+    ///
+    /// One listener on ONE small document — the counter the server already keeps
+    /// (`stories/{id}/meta/views`, author-readable) — rather than a listener on the receipts, so a
+    /// story with two hundred viewers costs the same as one with two. The caller attaches it for the
+    /// story on screen and drops it when the sheet closes.
+    ///
+    /// Returns nil when there is nothing to watch (signed out, or receipts off — the same reciprocal
+    /// rule the one-shot reads follow).
+    func observeViewCount(storyId: String, onChange: @escaping (StoryViewSummary) -> Void) -> ListenerRegistration? {
+        guard !uid.isEmpty, !storyId.isEmpty, !Self.isPending(storyId) else { return nil }
+        guard UserDefaults.standard.object(forKey: "storyViewReceipts") as? Bool ?? true else { return nil }
+        return db.collection("stories").document(storyId)
+            .collection("meta").document("views")
+            .addSnapshotListener { snap, _ in
+                guard let data = snap?.data(), let count = data["count"] as? Int else { return }
+                // The same resolution the one-shot read uses, so a face that arrives live and the
+                // same face fetched a moment earlier cannot come out differently named.
+                let recent = (data["recent"] as? [String] ?? []).prefix(3).map { Self.faces(for: [$0])[0] }
+                onChange(StoryViewSummary(count: count,
+                                          reactionCount: data["reactionCount"] as? Int ?? 0,
+                                          recent: Array(recent)))
+            }
+    }
+
+    /// NIL means the read failed and the question is still open; `[]` means nobody has watched it.
+    /// See the note inside — one dropped request used to be indistinguishable from an empty list, and
+    /// the sheet remembered it.
+    func fetchViewers(storyId: String) async -> [StoryViewerInfo]? {
         guard !uid.isEmpty else { return [] }
         // RECIPROCAL, as the Stories settings footer promises ("If disabled, you won't see when
         // others view your stories"). The gate existed only on the SENDING half — your views were
         // hidden from others while their full Seen-by list, timestamps and reactions still showed
         // to you (audit). the reference app's rule, and the one the copy already claims.
         guard UserDefaults.standard.object(forKey: "storyViewReceipts") as? Bool ?? true else { return [] }
-        let snap = try? await db.collection("stories").document(storyId).collection("views").getDocuments()
-        let docs = snap?.documents ?? []
+        // ⚠️ A FAILED READ IS NOT AN EMPTY LIST, AND TREATING IT AS ONE IS WHY HE SAW "No views yet"
+        // UNDER A CARD READING ONE VIEW.
+        //
+        // This was `try?` into `snap?.documents ?? []`, so a blip returned the same value as a story
+        // nobody has watched — and the sheet's coordinator then CACHED that empty answer for the rest
+        // of the session (`cache[id] = people`), so the panel never asked again. One dropped request
+        // showed "nobody watched this" for as long as the sheet stayed open, beside a count that had
+        // been fetched successfully a moment earlier.
+        //
+        // Nil now means "ask again". The callers decide what to draw for it; what they may not do is
+        // remember it.
+        guard let snap = try? await db.collection("stories").document(storyId)
+            .collection("views").getDocuments() else { return nil }
+        let docs = snap.documents
         let (convs, me) = await MainActor.run { (ConversationsRepository.shared.conversations, uid) }
         return docs.map { d in
             let u = d.documentID
@@ -1077,26 +1164,57 @@ final class StoriesService {
         }.sorted { $0.viewedAt > $1.viewedAt }
     }
 
-    func deleteStory(_ id: String) async {
+    /// Delete one of my stories. TRUE when the DOCUMENT is really gone.
+    ///
+    /// ⚠️ IT REPORTS NOW, AND EVERY CALLER HAS TO READ THE ANSWER. This used to swallow every error
+    /// with `try?` and remove the story from the row regardless — so an offline delete looked like it
+    /// worked, the document survived, and the next `load(force:)` brought the story back with no
+    /// explanation. A delete that cannot be done has to say so; the row is only allowed to forget a
+    /// story the server has actually forgotten.
+    @discardableResult
+    func deleteStory(_ id: String) async -> Bool {
         // Delete the Storage media FIRST (while the doc still exists, so rules pass), then the
         // doc — else an early delete (before expiry) leaks the media forever (cleanup only
         // handles EXPIRED docs). Read the doc's REAL mediaPath: videos live at video.mp4 +
         // thumb.jpg — the old hardcoded photo.jpg leaked both files on every video delete.
         let data = (try? await db.collection("stories").document(id).getDocument())?.data()
-        let path = data?["mediaPath"] as? String ?? "stories/\(id)/photo.jpg"
+        // ⚠️ A READ THAT FAILED IS NOT A PHOTO, AND GUESSING THAT IT WAS LEAKED EVERY VIDEO.
+        //
+        // `data` is nil whenever that one read fails — offline, a blip, a rules hiccup — and the old
+        // fallback then guessed `photo.jpg`, which for a video is a path that does not exist: the
+        // mp4 and its thumb stayed in Storage for ever, and `authorUid` being nil meant the PUBLIC
+        // MIRROR was never deleted either, so an "Everyone" story he had just deleted went on
+        // playing on his own profile to every stranger who opened it.
+        //
+        // Nothing here needs the document. Only my own stories can be deleted (the rules say so, and
+        // every caller is the owner), so the author is `me`; and the three paths a story's media can
+        // occupy are known from its id. Deleting a path that does not exist is a no-op, so asking for
+        // all three costs one round trip each and cannot leave anything behind.
+        let me = uid
+        let knownPaths = data.flatMap { $0["mediaPath"] as? String }.map { [$0] }
+            ?? ["stories/\(id)/photo.jpg", "stories/\(id)/video.mp4"]
         // The public mirror goes with it, or a deleted story keeps playing on the author's profile
-        // to every stranger who opens it. No-op when there never was one.
-        if let author = data?["authorUid"] as? String {
-            await deletePublicMirror(storyId: id, authorUid: author)
-        }
-        try? await Storage.storage().reference().child(path).delete()
-        if data?["type"] as? String == "video" {
+        // to every stranger who opens it. `me` rather than the document's author for the same reason
+        // as above: a failed read must not cost the mirror its deletion.
+        let author = (data?["authorUid"] as? String) ?? me
+        if !author.isEmpty { await deletePublicMirror(storyId: id, authorUid: author) }
+        for p in knownPaths { try? await Storage.storage().reference().child(p).delete() }
+        // The poster sits beside the mp4 for a video, and for a photo this path simply does not
+        // exist. Asked unconditionally when the type is unknown, for the same reason.
+        if data == nil || data?["type"] as? String == "video" {
             try? await Storage.storage().reference().child("stories/\(id)/thumb.jpg").delete()
         }
-        try? await db.collection("stories").document(id).delete()
+        do {
+            try await db.collection("stories").document(id).delete()
+        } catch {
+            // ⚠️ THE ROW KEEPS THE STORY. Removing it locally here is what made a failed delete look
+            // like a successful one until the next refresh put it back.
+            return false
+        }
         // Drop it from the live row immediately — callers check "was that my last story?"
         // right after this, which must not race the listener's delete event.
         await StoriesRepository.shared.removeLocally(id)
+        return true
     }
 
     /// Flag a story for review (App Store 1.2 — abuse reporting).

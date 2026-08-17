@@ -1603,10 +1603,26 @@ struct StoryViewer: View {
         // my last story, close the viewer (Case 3). Otherwise leave the (captured) viewer untouched — no re-feed.
         .onReceive(NotificationCenter.default.publisher(for: .init("storyItemDeleted"))) { note in
             guard let id = note.object as? String, !id.isEmpty else { return }
+            // ⚠️ WAS IT THE LAST ONE — ASKED BEFORE, NOT AFTER. This used to force a reload and then
+            // read `mine`, which is a race against the server: if the delete had not propagated when
+            // the reload answered, the story came back, the test said "more remain", and the viewer
+            // sat open on a story that no longer exists. The bucket in hand already knows, and the
+            // count cannot change under a modal viewer.
+            let wasLast = (StoriesRepository.shared.mine?.stories.count ?? 0) <= 1
             Task {
-                await StoriesService.shared.deleteStory(id)
+                let gone = await StoriesService.shared.deleteStory(id)
+                guard gone else {
+                    // ⚠️ THE STORY IS STILL THERE, SO SAY SO AND PUT IT BACK. The viewer has already
+                    // slid it out of the bucket (that is what makes the delete look seamless), and
+                    // the repository still holds it — a reload restores the item, and the toast is
+                    // the only thing that tells him the delete did not happen. Silently leaving it
+                    // deleted-looking is how an offline delete came back by itself hours later.
+                    await StoriesRepository.shared.load(force: true)
+                    await MainActor.run { flashSentToast("Couldn't delete — check your connection") }
+                    return
+                }
                 await StoriesRepository.shared.load(force: true)
-                if StoriesRepository.shared.mine?.stories.isEmpty ?? true { onClose() }
+                if wasLast { onClose() }
             }
         }
         // "…" dropdown menu actions (posted from the library header Menu) — run on LIVE state here.
@@ -4191,9 +4207,11 @@ struct StoryViewer: View {
         let mine = myStories
         guard !mine.isEmpty else { return }
         Task {
-            await withTaskGroup(of: (String, StoryViewSummary).self) { group in
+            await withTaskGroup(of: (String, StoryViewSummary?).self) { group in
                 for s in mine { group.addTask { (s.id, await Self.viewSummary(storyId: s.id)) } }
-                for await (id, v) in group {
+                for await (id, answer) in group {
+                    // No answer leaves whatever the cache already knows on screen. See `viewSummary`.
+                    guard let v = answer else { continue }
                     viewersByStory[id] = v
                     // Every one of them, not just the one on screen: this sweep is the cheapest
                     // chance the cache gets to be right about the stories he has not reached yet,
@@ -4254,7 +4272,8 @@ struct StoryViewer: View {
             publishOwnerBar()
         }
         Task {
-            let v = await Self.viewSummary(storyId: id)
+            // Nil = the read failed; the cached number stays rather than being overwritten with 0.
+            guard let v = await Self.viewSummary(storyId: id) else { return }
             viewersByStory[id] = v
             StoryCountCache.put(id, count: v.count, reactions: v.reactionCount,
                                 recent: v.recent.map(\.id))
@@ -4268,9 +4287,21 @@ struct StoryViewer: View {
     /// app's story object carries down with the story rather than fetching. Every story posted before
     /// that trigger existed has none, and those still count their receipts the old way — so this
     /// answers correctly during the whole changeover and there is no migration to run.
-    private static func viewSummary(storyId: String) async -> StoryViewSummary {
+    /// The same question from outside this view — the preview row asks it for every card. One
+    /// definition of "how many watched this", so the row's number and the footer's cannot disagree.
+    static func viewSummaryPublic(storyId: String) async -> StoryViewSummary? {
+        await viewSummary(storyId: storyId)
+    }
+
+    /// ⚠️ NIL IS "NO ANSWER", NOT "NO VIEWS" — see the guard inside. A caller that cannot tell the
+    /// two apart writes a zero over a number that was right.
+    private static func viewSummary(storyId: String) async -> StoryViewSummary? {
         if let s = await StoriesService.shared.fetchViewSummary(storyId: storyId) { return s }
-        return .counted(from: await StoriesService.shared.fetchViewers(storyId: storyId))
+        // ⚠️ A FAILED RECEIPT READ IS NOT A ZERO. `fetchViewers` answers nil when the request itself
+        // failed, and counting nil as an empty list is what wrote "0 views" over a story that had
+        // been read correctly a moment before. No answer leaves the previous number where it is.
+        guard let receipts = await StoriesService.shared.fetchViewers(storyId: storyId) else { return nil }
+        return .counted(from: receipts)
     }
 
 }
@@ -4574,7 +4605,9 @@ struct SeenBySheet: View {
         }
         .presentationDetents([.medium, .large])
         .task {
-            viewers = await StoriesService.shared.fetchViewers(storyId: storyId)
+            // Nil is a failed read, not an empty list: leave the list alone and stop the spinner, so
+            // the sheet says nothing rather than saying nobody watched. See `fetchViewers`.
+            if let v = await StoriesService.shared.fetchViewers(storyId: storyId) { viewers = v }
             loading = false
         }
     }
@@ -4885,13 +4918,27 @@ struct MyStoriesCarousel: View {
         return "\(n)"
     }
 
+    /// ⚠️ THE COUNTER DOCUMENT, NOT EVERY RECEIPT — and the old way was reading the entire viewer
+    /// list of EVERY story just to show two integers under each card.
+    ///
+    /// `stories/{id}/meta/views` is one small document the server keeps for exactly this, and the
+    /// story footer has been reading it since it was built (`viewSummary`). This row was still doing
+    /// it the pre-counter way: one whole `views` subcollection per story, in parallel, on every open
+    /// — and then the sheet's own panel fetched the same subcollections a second time for the list.
+    /// For five stories with fifty viewers that is five hundred documents to draw ten digits.
+    ///
+    /// The receipts remain the fallback for a story posted before the trigger existed, which is what
+    /// `viewSummary` already arranges — so this is the same answer, asked the cheap way first.
+    ///
+    /// ⚠️ AND A FAILED READ LEAVES THE OLD NUMBER ALONE. Nil is "no answer" (see `viewSummary`);
+    /// writing a zero for it is how a card that had been counted correctly went back to 0.
     private func loadAll() async {
-        await withTaskGroup(of: (String, [StoryViewerInfo]).self) { group in
-            for s in stories { group.addTask { (s.id, await StoriesService.shared.fetchViewers(storyId: s.id)) } }
+        await withTaskGroup(of: (String, StoryViewSummary?).self) { group in
+            for s in stories { group.addTask { (s.id, await StoryViewer.viewSummaryPublic(storyId: s.id)) } }
             // Reduced to numbers HERE, once per fetch, rather than in `body` once per frame.
-            for await (id, v) in group {
-                counts[id] = StoryRowCounts(views: v.count,
-                                            likes: v.filter { !($0.reaction ?? "").isEmpty }.count)
+            for await (id, answer) in group {
+                guard let v = answer else { continue }
+                counts[id] = StoryRowCounts(views: v.count, likes: v.reactionCount)
             }
         }
     }
