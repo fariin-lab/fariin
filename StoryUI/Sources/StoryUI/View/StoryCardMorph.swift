@@ -148,6 +148,18 @@ public final class StoryCardMorph {
     /// where the mask's radius equals the clip it replaces, so the swap cannot show — and lowered
     /// by `resetFlight`, in the same main-thread turn that restores the clip.
     private var flightMaskOwnsCorner = false
+
+    /// WHAT THE SURROUND'S CUTOUT WAS LAST BUILT FROM. See the note where it is used.
+    ///
+    /// ⚠️ THE COST THIS EXISTS FOR IS NOT THE ARITHMETIC, IT IS `CAShapeLayer.path`. Assigning a path
+    /// makes the render server re-rasterise that layer, and this one is a mask on a layer that is
+    /// itself the mask on the whole story tree. Building an identical path again is the most
+    /// expensive no-op in the flight.
+    private var lastCutKey: (bounds: CGSize, hole: CGRect, radius: CGFloat, circular: Bool)?
+    /// The last wall colour, so a flight does not allocate a `UIColor` sixty times a second to say
+    /// the same thing. Quantised: the eye cannot read a thousandth of an alpha and CoreAnimation
+    /// cannot draw one.
+    private var lastWallAlpha: CGFloat = -1
     private func setFlightMaskOwnsCorner(_ on: Bool) {
         guard flightMaskOwnsCorner != on else { return }
         flightMaskOwnsCorner = on
@@ -482,6 +494,10 @@ public final class StoryCardMorph {
     /// be solid black, or a friend's full-bleed story would show the chat list through its own
     /// letterbox.
     public func resetFlight() {
+        // The flight is over: nothing the caches describe is on screen any more, and a stale key
+        // would let the next flight skip a rebuild it needs. See `lastCutKey`.
+        lastCutKey = nil
+        lastWallAlpha = -1
         // The card's own clip comes back in the same main-thread turn the mask leaves in, so both
         // land in one render commit and there is no bare-cornered frame between them. (And even if
         // SwiftUI ever slipped a frame, at rest the two curves are the same 12pt — see the
@@ -737,7 +753,18 @@ public final class StoryCardMorph {
         let f = max(0, min(1, fraction))
         // The dim is written before the early-out: a drag that has begun but not yet moved is still a
         // drag, and the surface behind should already be answering to it.
-        if let dim { superview.backgroundColor = UIColor.black.withAlphaComponent(max(0, min(1, dim))) }
+        // ⚠️ QUANTISED, AND NOT RE-ALLOCATED TO SAY THE SAME THING. This runs on every frame of every
+        // flight and every frame of a drag; `withAlphaComponent` builds a new `UIColor` each time,
+        // and assigning a background colour is a layer write CoreAnimation has to pick up. A
+        // thousandth of an alpha is neither visible nor drawable, so a step of 1/255 is the honest
+        // resolution and everything finer is work spent on nothing.
+        if let dim {
+            let a = (max(0, min(1, dim)) * 255).rounded() / 255
+            if a != lastWallAlpha {
+                lastWallAlpha = a
+                superview.backgroundColor = UIColor.black.withAlphaComponent(a)
+            }
+        }
         // A hero drag begins at fraction 0 and moves the card by translation alone for the first
         // few points, so "nothing to do" cannot be decided from the fraction on its own any more.
         guard f > 0.001 || centerOverride != nil else {
@@ -1115,6 +1142,8 @@ public final class StoryCardMorph {
 
     /// Back to full screen, square, unmasked. Called when the sheet is fully shut.
     public func reset() {
+        lastCutKey = nil
+        lastWallAlpha = -1
         // BEFORE the guard: the card is back at full size whether or not there is still a card to
         // put back, and a `sheetFraction` left at 1 would hold the caption invisible for the next
         // story. This is the one number the caption trusts, so it must never outlive the shrink.
@@ -1196,6 +1225,8 @@ public final class StoryCardMorph {
             surround = s
             hole = h
         } else {
+            // A mask built from scratch has no cutout yet, so nothing may claim one is current.
+            lastCutKey = nil
             existing?.removeFromSuperlayer()   // an old single-sublayer mask cannot be reused
             layer = CALayer()
             let s = CALayer()
@@ -1259,7 +1290,20 @@ public final class StoryCardMorph {
         surround.opacity = Float(o)
         if o > 0.001 {
             surround.frame = CGRect(origin: .zero, size: card.bounds.size)
-            if let cut = surround.mask as? CAShapeLayer {
+            // ⚠️ ONLY WHEN THE SHAPE ACTUALLY CHANGED. Everything below builds a `CGMutablePath` and
+            // assigns it to a `CAShapeLayer`, which makes the render server re-rasterise a layer that
+            // is the mask on the mask on the whole story tree — and it was being done on every frame
+            // of every flight, including the long tail of the open's spring where the crop moves by
+            // less than a pixel per frame and the resulting path is byte-for-byte the one already
+            // there. The inputs are the only things that can change the shape, so they are the key.
+            let cutKey = (bounds: surround.bounds.size, hole: local,
+                          radius: holeRadius, circular: circularHole)
+            let cutChanged = lastCutKey.map {
+                $0.bounds != cutKey.bounds || $0.hole != cutKey.hole
+                    || $0.radius != cutKey.radius || $0.circular != cutKey.circular
+            } ?? true
+            if cutChanged, let cut = surround.mask as? CAShapeLayer {
+                lastCutKey = cutKey
                 cut.frame = surround.bounds
                 let path = CGMutablePath()
                 path.addRect(surround.bounds)
