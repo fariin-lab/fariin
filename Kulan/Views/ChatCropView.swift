@@ -241,6 +241,12 @@ struct ChatCropView: View {
             // magnification never competes with the frame's one-finger drags.
             .simultaneousGesture(pinchGesture)
             .coordinateSpace(name: "cropCanvas")
+            // ⚠️ NOTHING ON THIS CANVAS ANSWERS A FINGER UNTIL THE FLIGHT HAS LANDED. Theirs does
+            // this by construction — `animateTransitionIn` sets `_scrollView.hidden = true` and the
+            // area view to alpha 0, and a hidden UIKit view takes no touches. A SwiftUI view at
+            // `.opacity(0)` still does, so a pan, a pinch or a grab at a corner during the 0.3s move
+            // would be fighting the animation that is placing the picture.
+            .allowsHitTesting(frameChrome > 0.01)
             .onAppear {
                 // `.global` because the rect we were handed is the presenter's, measured on the
                 // screen. This canvas sits under a bar it does not know the height of.
@@ -462,7 +468,13 @@ struct ChatCropView: View {
         VStack(spacing: 14) {
             // The ruler is their `_rotationView`, which is held at zero for the whole of the move and
             // comes back with the crop frame — not with the buttons beside it. See `frameChrome`.
-            straightenWheel.opacity(frameChrome)
+            straightenWheel
+                .opacity(frameChrome)
+                // ⚠️ AND DEAF WHILE IT IS INVISIBLE. A SwiftUI view at `.opacity(0)` still takes
+                // touches; a UIKit view at `alpha = 0` does not, which is why theirs needs no such
+                // line. Without it a finger already resting where the ruler will be could straighten
+                // the picture during a flight that has not put the ruler on screen yet.
+                .allowsHitTesting(frameChrome > 0.01)
             HStack(spacing: 12) {
                 // Leave with the picture untouched.
                 Button { close() } label: {
