@@ -3750,12 +3750,15 @@ struct StoryViewer: View {
                               // the pictures are not, which is the only way round that is smooth.
                               // `StoryRowController.setPageDrag` starts that spring when it sees the
                               // drag return to zero.
-                              // ⚠️ THE ROW IS RE-SEATED AND THE DRAG ZEROED IN ONE CALL. Zeroing the
-                              // drag on its own sprang the cards back to the OLD story's centre, and
-                              // the new id then reached the row a turn later and sprang them again to
-                              // the new one — two springs over the same cards half a frame apart.
-                              // `commitPage` does both before a single layout pass runs, which is
-                              // what theirs does by construction.
+                              // ⚠️ `commitPage` NO LONGER MOVES THE ROW, AND THAT IS THE 2026-08-17
+                              // FIX. It records the story the row is waiting for — theirs is
+                              // `animateNextNavigationId = nextItem.id` in the committed branch of
+                              // `viewListPanGesture`, which drops neither the pan fraction nor the
+                              // scroll offset — and the row seats itself on the ONE pass where that
+                              // story's model arrives, which is the same block a tap goes through.
+                              // Re-seating here sprang every card once while the live layer was still
+                              // the story being left, and the arriving id sprang them again a turn
+                              // later: two springs over one set of views for one gesture.
                               let arriving = live[i + d].id
                               pageDragBox.commitPage(toStoryId: arriving)
                               sheetStoryId = arriving

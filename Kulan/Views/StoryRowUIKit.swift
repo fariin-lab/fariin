@@ -642,13 +642,31 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             // exists to close.
             if liveStoryId == pending, let i = stories.firstIndex(where: { $0.id == pending }) {
                 animateNextStoryId = nil
+                // ⚠️ THE SHEET'S PAN CONTRIBUTION IS DROPPED HERE, IN THIS BLOCK, AND THAT IS WHAT
+                // MAKES A SHEET PAGE AND A TAP THE SAME MOVEMENT.
+                //
+                // Theirs sets `viewListPanState = nil` inside the `animateNextNavigationId` block
+                // (`:2751`), one statement above `resetScrollingOffsetWithItemTransition = true`.
+                // So the fraction and the offset become their new values in the SAME update, and the
+                // 0.3s spring that pass installs is the only animation any of these views get.
+                //
+                // On the tap path this is already zero and the line changes nothing, which is the
+                // point: one path, and the sheet's page stops being a special case with a spring of
+                // its own. Before `navigate`, because `navigate` lays out.
+                pageDrag = 0
                 navigate(to: i, animated: true)
                 seatedByTap = true
             } else if !stories.contains(where: { $0.id == pending }) {
                 // The story went away before it could arrive — deleted under the sheet. Waiting for
                 // it forever would leave the row unable to accept any jump for the rest of the
-                // sitting, which is a worse failure than a missed animation.
+                // sitting, which is a worse failure than a missed animation. The drag goes with the
+                // flag: a cleared wait with a live page-drag leaves the row parked off centre with
+                // nothing left coming to move it.
                 animateNextStoryId = nil
+                if pageDrag != 0 {
+                    pageDrag = 0
+                    updateScrolling(settle: .commit)
+                }
             }
             // ⚠️ AND THE THIRD CASE IS DELIBERATELY NOT HANDLED HERE: a story this row HAS that the
             // library's own bucket does not, so the jump is refused and `liveStoryId` never becomes
@@ -749,6 +767,20 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     ///   threshold is an abandon and takes their slower 0.4s; anything else is a commit at 0.3s.
     ///   Ignored on the frames of a live drag, which are the finger's and are never animated.
     func setPageDrag(_ v: CGFloat, settle: StoryRowSettle = .commit) {
+        // ⚠️ A PAGE COMMIT WAITING FOR ITS STORY FREEZES THE DRAG WHERE THE FINGER LEFT IT.
+        //
+        // Theirs never touches `viewListPanState` at the release of a committed page: it survives
+        // untouched until the new item's model arrives and is dropped inside the same block that
+        // clears `animateNextNavigationId` (`:2750-2764`). Ours has to refuse the zero the box sends
+        // itself at the commit, or the row would move on the release and again on the arrival.
+        //
+        // A NON-zero here is a new finger on the sheet, which supersedes the wait for the same
+        // reason `scrollViewWillBeginDragging` does: something is driving the row directly now, and
+        // a navigation that never lands must not be able to lock this out for the sitting.
+        if animateNextStoryId != nil {
+            if v == 0 { return }
+            animateNextStoryId = nil
+        }
         guard v.isFinite, v != pageDrag else { return }
         let completing = v == 0 && pageDrag != 0
         pageDrag = v
@@ -767,12 +799,37 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// same update, so their layout runs once with one transition. This is that — the drag returns
     /// to zero and the scroller is re-seated before a single layout pass runs.
     func commitPage(toStoryId id: String) {
-        pageDrag = 0
-        guard let i = stories.firstIndex(where: { $0.id == id }) else {
+        // ⚠️ THIS IS THE TAP'S PATH NOW, AND NOT A SECOND ONE. Read off theirs, `viewListPanGesture`
+        // `:1092-1112`: the committed branch does exactly two things —
+        //
+        //     self.animateNextNavigationId = nextItem.id
+        //     component.navigate(.id(nextItem.id))
+        //
+        // It does NOT drop the pan fraction and it does NOT re-seat the scroller. Both of those
+        // happen later, in the single update where the new item's model ARRIVES (`:2750-2764`), and
+        // that block is shared with the tap: same flag, same 0.3s spring, same
+        // `resetScrollingOffsetWithItemTransition`. One page swipe, ONE animated pass.
+        //
+        // ⚠️ OURS WAS DOING AT THE RELEASE WHAT THEIRS DOES AT THE ARRIVAL, AND THAT IS THE WHOLE OF
+        // HIS "the thumbnail coming into the centre arrives enormous, from the side, at the wrong
+        // scale". `pageDrag = 0` plus `navigate(animated: true)` here sprang every card once while
+        // the live layer was still the story being LEFT; the arriving story's id then reached the row
+        // a turn or two later and `liveChanged` sprang the same cards a second time, with the live
+        // layer seeded into the middle of the first spring. Two 0.3s property animators over one set
+        // of views, and a hand-over between them — which is why the card can render at a size neither
+        // end of either animation ever asked for, and why the tap, which waits, has never done it.
+        //
+        // The row now waits for the story exactly as it waits for a tapped one. `apply`'s pending
+        // block is where the drag is dropped and the offset re-seated, in that order, before a single
+        // layout pass runs.
+        guard stories.contains(where: { $0.id == id }) else {
+            // Not in this row at all: there is no arrival to wait for, so the drag cannot be left
+            // holding the row off centre.
+            pageDrag = 0
             updateScrolling(settle: .commit)
             return
         }
-        navigate(to: i, animated: true)
+        animateNextStoryId = id
     }
 
     /// Put the row on this story. `animated` runs their 0.3s spring over the layout while the offset
@@ -1446,7 +1503,13 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         // so seating it on a story tapped a moment ago would fight the drag — and this is also the
         // release valve for a navigation that never lands, which would otherwise leave the row
         // unable to accept any jump for the rest of the sitting.
+        //
+        // The sheet's page-drag comes down with it. It is frozen while a page commit waits for its
+        // story (see `setPageDrag`), and a finger arriving in that window ends the wait — a drag
+        // measured against a row still displaced by somebody else's gesture is measured against the
+        // wrong place.
         animateNextStoryId = nil
+        pageDrag = 0
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
