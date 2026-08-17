@@ -754,6 +754,31 @@ struct StoryEditorView: View {
                 .offset(y: showTrim ? 10 : 0)
                 .animation(.easeInOut(duration: 0.3), value: showTrim)
                 .animation(.easeInOut(duration: 0.3), value: showCrop)
+                // ⚠️ ONE PHOTOGRAPH ON SCREEN FOR THE WHOLE CROP FLIGHT, AND THIS IS THE HALF OF
+                // THEIR MECHANISM THAT WAS MISSING.
+                //
+                // His screenshot: the editor's card at full size behind, the crop screen's picture
+                // smaller and sharper on top of it, both visible at once through a black that is
+                // still fading in. Holding the canvas still (`720df49a`) stopped the two SLIDING
+                // across each other; it did not stop there being two.
+                //
+                // Theirs never has two. `TGPhotoEditorTabController` gives the flight the REAL view
+                // when it can — `if (_transitionView == nil) { _transitionView = referenceView; }` —
+                // and `TGPhotoCropView.animateTransitionIn` sets `_scrollView.hidden = true` for the
+                // whole flight so the crop screen's own copy is not drawn until
+                // `transitionInFinishedAnimated:` reveals it. One picture travels; nothing else of
+                // that picture exists anywhere on screen.
+                //
+                // SwiftUI cannot reparent this card into the crop screen, so the equivalent is to
+                // stand it down for exactly as long as the crop screen is drawing it: the crop
+                // picture starts at this card's rect wearing this card's corner, so the hand-over is
+                // invisible and what travels is the only copy there is.
+                //
+                // ⚠️ INSTANT, AND OUTSIDE BOTH ANIMATIONS ABOVE ON PURPOSE. Faded, this would be a
+                // cross-dissolve between two renderings of one photograph — which is the thing being
+                // removed, spelled differently.
+                .opacity(showCrop ? 0 : 1)
+                .animation(nil, value: showCrop)
             // Bottom chrome. While DRAWING, our pen bar takes the bottom instead; it stays pinned
             // because a drawing screen has no keyboard and the canvas must not move under a stroke.
             if isDrawing {
