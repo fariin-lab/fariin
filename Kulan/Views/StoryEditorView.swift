@@ -726,15 +726,32 @@ struct StoryEditorView: View {
                 // TRIM ZOOMS THE MEDIA OUT, exactly as the single-video editor does — same 0.9,
                 // same top anchor, same 10pt nudge, same 0.3 curve.
                 //
-                // CROP DOES IT TOO NOW (owner 2026-08-06: "the story image should smoothly zoom out
-                // first, then the crop controls and buttons should fade or slide into view"). It was
-                // a bare cross-fade between two full screens, which is the "sudden jump" — nothing
-                // connected the picture he was looking at to the picture he landed on. This is the
-                // motion trim already uses and that he already signed off ("user never feel new
-                // page… just zoom out then trim appearing"), so the two tools in the same bar now
-                // open the same way as each other.
-                .scaleEffect(showTrim || showCrop ? 0.9 : 1, anchor: .top)
-                .offset(y: showTrim || showCrop ? 10 : 0)
+                // ⚠️ AND CROP DOES *NOT*, ANY MORE — TWO COPIES OF ONE PHOTOGRAPH AT TWO SIZES IS HIS
+                // "when i click crop my image are overlapping other image i can see".
+                //
+                // The crop screen fades its own black ground in over the same 0.3s (see the note in
+                // `ChatCropView.body`, which says in as many words that the frames before it are meant
+                // to show "the editor's own card — the same picture in the same place"). That was true
+                // when the crop screen replaced the picture in one step. It stopped being true the
+                // moment the crop screen's picture started TRAVELLING from the card: the canvas was
+                // stepping back to 0.9 and down 10pt at the same time, so for the whole flight there
+                // were two renderings of the same photo behind a half-transparent black, at different
+                // sizes, sliding across each other. That is the overlap he circled, and the top-left
+                // chrome showing through it is the same window.
+                //
+                // The step-back was written when the crop entry did not move, as the thing that made
+                // it feel like a zoom. `06236258` gave the picture itself the whole journey — the
+                // reference app's `animateTransitionIn` moving one picture's frame from the rect it
+                // was handed — and their review screen underneath never moves a pixel while it
+                // happens. So this now holds still for a crop, which makes that note's claim true
+                // instead of nearly true, and there is one photograph on screen at every moment.
+                //
+                // ⚠️ TRIM KEEPS IT, and the difference is not an inconsistency. The trim page has no
+                // travelling copy of the picture: its filmstrip arrives over a canvas that has to get
+                // out of the way, which is the motion he signed off ("user never feel new page… just
+                // zoom out then trim appearing").
+                .scaleEffect(showTrim ? 0.9 : 1, anchor: .top)
+                .offset(y: showTrim ? 10 : 0)
                 .animation(.easeInOut(duration: 0.3), value: showTrim)
                 .animation(.easeInOut(duration: 0.3), value: showCrop)
             // Bottom chrome. While DRAWING, our pen bar takes the bottom instead; it stays pinned
@@ -982,7 +999,12 @@ struct StoryEditorView: View {
                 // AND WHILE THE PEN IS OPEN, for the same reason one step further on: the pen's bar
                 // now has its own ✕, and this one closes the WHOLE editor. Two ✕ on one screen
                 // meaning two different things is worse than one extra tap to get out.
-                .opacity(draggingID == nil && editingID == nil && !strokeInFlight && !showTrim && !isDrawing ? 1 : 0)
+                // AND DURING A CROP, WHICH IS THE OTHER HALF OF HIS OVERLAP REPORT. The crop screen
+                // carries its own ✕ at the bottom-left and its black ground fades in over 0.3s, so
+                // this button sat in the top-left corner of the picture for the whole entry — his
+                // screenshot, circled, half-cut by the card's corner. `showTrim` is here for exactly
+                // the same reason and the crop screen was simply missed when it grew a bar of its own.
+                .opacity(draggingID == nil && editingID == nil && !strokeInFlight && !showTrim && !showCrop && !isDrawing ? 1 : 0)
                 .ignoresSafeArea(.keyboard, edges: .bottom)
 
                 // The bottom bars and the crop overlay are siblings of the canvas, in `body`,
