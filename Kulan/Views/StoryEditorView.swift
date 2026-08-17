@@ -668,11 +668,19 @@ struct StoryEditorView: View {
                     // the screen the canvas is measured against, and the canvas has to stay exactly
                     // where it is or the line lands somewhere other than the finger.
                     .opacity(strokeInFlight ? 0 : 1)
-            } else if !showTrim {
+            } else if !showTrim, !showCrop {
                 // TWO SEPARATE LAYERS, because they answer to different masters. The tool row is
                 // pinned to the screen bottom and never moves for the keyboard; the caption pill
                 // sits ON the card (the reference layout) and rides the keyboard when focused.
                 // GONE DURING A TRIM, not merely faded — the filmstrip lands where they were.
+                //
+                // ⚠️ AND GONE DURING A CROP FOR THE SAME REASON, WHICH IS HIS "the bottom buttons
+                // change to crop buttons". The crop screen's black now fades in over 0.3s rather
+                // than 0.15, so leaving these underneath it meant the editor's tools and the crop
+                // bar were both half-visible for a fifth of a second — two sets of buttons at once,
+                // which is the thing this screen already refuses to do while a stroke is in flight.
+                // The other app does not fade its old toolbar out either: the tab swaps and the new
+                // buttons fade in on their own.
                 toolRowLayer.opacity(chromeIn ? 1 : 0)
                 captionLayer.opacity(chromeIn ? 1 : 0)
             }
@@ -1517,7 +1525,7 @@ struct StoryEditorView: View {
                         capsuleTool("scissors", active: items[index].isTrimmed) { openTrim() }
                     } else {
                         capsuleTool("crop", active: croppedSource != nil) {
-                            withAnimation(.easeInOut(duration: 0.28)) { showCrop = true }
+                            withAnimation(.easeInOut(duration: 0.3)) { showCrop = true }
                         }
                     }
                     // STICKERS — his 2026-08-16 request. One button, one sheet, one callback: the
@@ -1741,7 +1749,7 @@ struct StoryEditorView: View {
                 capsuleTool("crop.rotate", active: cropRect != nil, tint: Color(hex: 0x3DA1FD)) {
                     previewPlayer?.pause()
                     previewPlaying = false
-                    withAnimation(.easeInOut(duration: 0.28)) { showCrop = true }
+                    withAnimation(.easeInOut(duration: 0.3)) { showCrop = true }
                 }
             }
             .padding(.horizontal, 20).frame(height: 46)
@@ -1842,7 +1850,7 @@ struct StoryEditorView: View {
             // From the CURRENT cropped result when there is one, so re-opening crop refines instead
             // of resetting to the original.
             ChatCropView(image: croppedSource ?? current, inline: true,
-                         onClose: { withAnimation(.easeInOut(duration: 0.28)) { showCrop = false } },
+                         onClose: { withAnimation(.easeInOut(duration: 0.3)) { showCrop = false } },
                          onRect: { r in
                              // Re-cropping refines the crop you already have, so the new rectangle is
                              // read INSIDE the old one rather than against the original — otherwise a
@@ -1864,19 +1872,26 @@ struct StoryEditorView: View {
                 croppedSource = cropped
                 recomputeEdited()
             }
-            // ⚠️ NO CROSS-FADE ON THE WAY IN ANY MORE, AND ITS REMOVAL IS THE FIX.
+            // ⚠️ NO CROSS-FADE ON THE WAY IN, AND THE ONE MOTION IS 0.3s EASE-IN-OUT — THE SAME
+            // CLOCK THE CANVAS BEHIND IT STEPS BACK ON.
             //
             // It was `.opacity + .scale(0.97)` over 0.26s after a 0.10s delay, which is two
             // renderings of one photograph at two different sizes dissolving into each other. That
             // is his "the image is suddenly replaced with a new screen" in as many words: however
             // well timed, a dissolve says these are two pictures.
             //
-            // Theirs never fades anything. `ImageEditorCropViewController` is laid out at the review
-            // screen's own rect with its controls hidden and then resizes itself into the crop
-            // layout over 0.15s — one picture, one motion, no transition object anywhere in the
-            // file. `ChatCropView` does that itself now, off `initialContentRect`, so the job here
-            // is to get out of its way: the screen appears at once, already matching, and the
-            // animation belongs to the thing that knows both rectangles.
+            // Neither reference app fades anything. The one this screen was first built against
+            // resizes its own picture into the crop layout over 0.15s with no transition object at
+            // all; the one he asked for on 2026-08-17 animates the picture's FRAME from where it was
+            // to the crop layout over **0.3s ease-in-out** (`TGPhotoEditorTabController`) while the
+            // crop controls fade in over **0.3s** on top of it (`TGPhotoCropController.transitionIn`).
+            // 0.3 is also what the canvas underneath already uses, so the picture that shrinks and the
+            // editor that steps back behind it now finish together instead of one at half time.
+            //
+            // `ChatCropView` owns the whole flight, off `initialContentRect`; the job here is to get
+            // out of its way. See `runEntry` — and in particular the `min(1, …)` that used to sit in
+            // it and made the zoom-out, which is the ONLY direction this screen is ever entered in,
+            // the one direction that could not happen.
             //
             // The removal keeps its fade. Closing has no picture to be continuous with — the canvas
             // underneath is already where it was — and he reported nothing about the way out.

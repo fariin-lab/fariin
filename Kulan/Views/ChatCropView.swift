@@ -91,6 +91,10 @@ struct ChatCropView: View {
     /// to travel. `layout(_:canvasOrigin:)` seats the fitted picture on the handed-in rect's centre
     /// for the same reason, which leaves exactly one number between the two states.
     @State private var entryScale: CGFloat
+    /// What is left of the difference between the two rectangles once the scale has taken the size —
+    /// see `runEntry`. Zero whenever the fitted picture could be seated on the card's own centre,
+    /// which is most of the time; a tall card is the case that needs it.
+    @State private var entryOffset: CGSize = .zero
     /// The crop frame, the dim and both bars, faded in over the same window. Theirs is
     /// `footerView.alpha`, `toolbar.setControlsHidden` and `cropView.setState(.initial)`, all inside
     /// the one animation block.
@@ -181,6 +185,11 @@ struct ChatCropView: View {
                     // uniform scale is the entire difference between them. Nothing translates, which
                     // is why this cannot drift the way a hand-built path would.
                     .scaleEffect(entryScale)
+                    // The leftover translation, after `.scaleEffect` so it is read in canvas points
+                    // rather than in the scaled picture's own. `.offset` draws, it does not lay out,
+                    // so the `.position` below still seats the picture on its true crop rect and this
+                    // only moves what is drawn there back onto the card for the length of the flight.
+                    .offset(entryOffset)
                     .position(x: imageFrame.midX, y: imageFrame.midY)
                 // Slide the picture: in the dimmed part, because inside the frame a one-finger drag
                 // belongs to the frame and always has. Below the crop's own views in this stack, so
@@ -276,13 +285,33 @@ struct ChatCropView: View {
 
     /// Fold onto the picture we were opened from, then unfold. Called once, on the first layout pass
     /// that knows where this canvas is.
+    ///
+    /// ⚠️ `min(1, …)` USED TO BE ON THAT FIRST LINE AND IT IS WHY NOTHING EVER MOVED. The card is the
+    /// full width of the screen and the fitted picture is narrower than it — the crop canvas is inset
+    /// and the bars eat the height — so the ratio is ALWAYS above 1 here. Clamped to 1 it meant
+    /// "already arrived": the picture appeared at its final size in one frame and only the chrome
+    /// faded, which is his "the page is suddenly replaced". A zoom OUT is the only direction this
+    /// screen is ever entered in, and it was the one direction the clamp forbade.
+    ///
+    /// ⚠️ AND THE NUMBERS ARE THE OTHER APP'S NOW, NOT THE FIRST ONE'S. `TGPhotoEditorTabController`
+    /// animates the picture's frame from where it was to where the crop layout wants it over
+    /// **0.3s, ease-in-out**, and `TGPhotoCropController.transitionIn` fades the crop controls in over
+    /// **0.3s** alongside it — one picture moving, the controls arriving on top of it. 0.15s was the
+    /// other app's figure and it is half as long as this screen's own canvas step-back, so even when
+    /// it did move, two halves of one motion ran on two clocks.
     private func runEntry(canvasOrigin: CGPoint) {
         guard let r = initialContentRect, imageFrame.width > 1, entryScale < 1 else { return }
-        // The two rects share a centre and an aspect, so one number describes the whole difference.
-        entryScale = max(0.05, min(1, r.width / imageFrame.width))
-        // Their 0.15s, and their order: the resize, the corner and the controls are one animation.
-        withAnimation(.easeInOut(duration: 0.15)) {
+        entryScale = max(0.05, r.width / imageFrame.width)
+        // ⚠️ AND THE TRANSLATION, BECAUSE THE SHARED CENTRE IS NOT ALWAYS AVAILABLE. `layout` seats
+        // the fitted picture on the handed-in rect's centre when it can, but it clamps that to keep
+        // the picture on this canvas — and on a tall card the clamp wins, which leaves the two rects
+        // sharing nothing. Theirs animates a FRAME from one rectangle to the other and so has no
+        // opinion about centres; this is that, expressed as the scale plus what is left over.
+        entryOffset = CGSize(width: r.midX - (imageFrame.midX + canvasOrigin.x),
+                             height: r.midY - (imageFrame.midY + canvasOrigin.y))
+        withAnimation(.easeInOut(duration: 0.3)) {
             entryScale = 1
+            entryOffset = .zero
             chrome = 1
         }
     }
