@@ -1860,24 +1860,18 @@ struct StoryEditorView: View {
                     items[index].muted.toggle()
                     previewPlayer?.isMuted = items[index].muted
                 }
-                // ⚠️ ADJUST, AND ONLY ADJUST — his 2026-08-17: "only add an Adjust option, I don't
-                // need the Cut/Delete/Speed segment model right now."
+                // ⚠️ THE ADJUST (CROP) DOOR IS GONE FROM THIS PAGE — his 2026-08-17, with the button
+                // circled: "in story trim page plz remove crop view feature".
                 //
-                // It opens the crop screen this editor already has rather than a second one. A clip
-                // cannot be cropped into a picture, so that screen hands back a normalised RECTANGLE
-                // (`onRect`) and the transcoder applies it at export — which is the path
-                // `croppedSource`/`cropRect` were built with and the reason crop was never
-                // photo-only. So this is a door, not a feature: nothing new is applied, stored or
-                // exported that a photo's crop did not already do.
+                // It was added the same day on his own "only add an Adjust option, I don't need the
+                // Cut/Delete/Speed segment model right now", and he has now seen it on the page and
+                // does not want it there. Only the DOOR is removed: `showCrop`, `ChatCropView`,
+                // `cropRect` and the transcoder's use of it are all untouched, so cropping a clip
+                // still works from the editor's own tool row and anything already cropped keeps its
+                // rectangle. This page is the trim again — undo, mute, and the two ends.
                 //
-                // The trim is left where it stands. Coming back from Adjust lands on this page with
-                // the handles untouched, because `showCrop` is a layer over the editor and `openTrim`
-                // is not run again.
-                capsuleTool("crop.rotate", active: cropRect != nil, tint: Color(hex: 0x3DA1FD)) {
-                    previewPlayer?.pause()
-                    previewPlaying = false
-                    withAnimation(.easeInOut(duration: 0.3)) { showCrop = true }
-                }
+                // ⚠️ DO NOT PUT IT BACK ON THE STRENGTH OF THE EARLIER INSTRUCTION. Both are his,
+                // this one is later, and it is about where the control lives rather than what it does.
             }
             .padding(.horizontal, 20).frame(height: 46)
             .liquidGlass(Capsule())

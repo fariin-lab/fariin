@@ -1217,7 +1217,32 @@ struct StoryViewersSheet: UIViewRepresentable {
 
     func makeUIView(context: Context) -> StoryViewersSheetView {
         let v = StoryViewersSheetView()
-        v.onProgress = { p in
+        v.onProgress = { [slideBox] p in
+            // ⚠️ THE ROW IS MOVED HERE, IN THE SHEET'S OWN CALLBACK, AND NOT IN THE SwiftUI PASS THE
+            // BINDING BELOW SCHEDULES. THAT ONE HOP IS HIS "the sheet returns smoothly but the top
+            // preview's centre item jumps or snaps back".
+            //
+            // The sheet lays ITSELF out inside `setProgress` — `setNeedsLayout` + `layoutIfNeeded`,
+            // synchronously, in the same runloop turn the finger or the release spring wrote. The
+            // live story did not: it went `progress` → `@State viewersProgress` → `.onChange` →
+            // `driveMorph` → `setFraction`, which is at best one render later and at worst several
+            // of the spring's frames folded into one pass, because SwiftUI is free to coalesce
+            // writes that arrive between two of its renders. So the panel travelled every frame and
+            // the card travelled in fewer, larger steps — one movement, two clocks, and the card
+            // arriving in jumps is exactly what that looks like.
+            //
+            // The sideways page-drag already learned this and says so on `StorySheetPageDrag.deliver`
+            // ("the row is moved inside this callback rather than inside the SwiftUI pass the write
+            // schedules"). This is the same hop for the vertical one, which was the half that never
+            // got it.
+            //
+            // ⚠️ IDEMPOTENT, SO THE OLD PATH IS LEFT ALONE RATHER THAN CUT. `driveMorph` still calls
+            // `setFraction` with this same number on its own pass, and `setFraction` returns at once
+            // when the fraction has not changed — so the SwiftUI route keeps every other thing it
+            // does (the watchdog, the caption's progress, the latched content rect) and simply finds
+            // the row already where it should be. Nothing here decides anything: the clamp is the
+            // whole of `sheetSizeFraction`, whose own note explains why the two are one number.
+            slideBox?.rowLink?.setFraction(max(0, min(1, p)))
             // `applying` guards the loop: without it, writing the binding here would come straight
             // back through updateUIView and fight the finger.
             context.coordinator.applying = true
