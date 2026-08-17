@@ -156,12 +156,27 @@ struct StoryRowCardMedia: View {
     // directly now (`StoryRowItemView.setLive`), which is one property on a view that already
     // exists, decided in the same loop that decides everything else about this item.
 
-    /// ⚠️ A REDRAW NUDGE, NOT DATA, and it belongs to THIS card now rather than to the whole row.
-    /// `StoryVideoFrames.card` answers nil the first time and generates the frame off the main
-    /// thread; without something to observe, the better picture would sit in the cache until an
-    /// unrelated change happened to redraw. It used to be observed by the row, so one clip's frame
-    /// arriving rebuilt every card in it. Observed here, it rebuilds one.
-    @ObservedObject private var frameTick = StoryFrameTick.shared
+    /// THE GENERATED FRAME FOR THIS CLIP, HANDED IN. Nil for a photo, and for a video nobody has
+    /// watched this session; both fall through to the poster.
+    ///
+    /// ⚠️ IT IS NOT ASKED FOR HERE ANY MORE, AND THE OBSERVER THAT USED TO DRIVE IT IS GONE.
+    ///
+    /// This view held `@ObservedObject var frameTick = StoryFrameTick.shared` and asked
+    /// `StoryVideoFrames.card` inside its own body. The note above it said that observing the tick
+    /// HERE rather than on the row meant "it rebuilds one" — that was not true. The tick is a
+    /// singleton with one published counter, so every mounted card observed the same object and one
+    /// clip's frame landing invalidated all of them. A per-frame-arrival rebuild of every card in the
+    /// row is the exact cost this file was written to remove.
+    ///
+    /// ⚠️ AND ASKING AT DRAW TIME MEANT THE PICTURE COULD CHANGE MID-SWIPE. The lookup returns nil
+    /// until the frame has been made off the main thread, so a card draws the poster and then swaps
+    /// to the generated frame whenever that lands — including in the middle of a movement, which is a
+    /// thumbnail changing its picture while it travels. Theirs never swaps a cover during a
+    /// transition; a cover is decided when the item is laid out and holds for that layout.
+    ///
+    /// The row asks now, once per card per pass, and holds a new answer until the row is still. See
+    /// `cardShot(for:)` and `frameArrived()`.
+    let shot: UIImage?
 
     var body: some View {
         media
@@ -170,15 +185,7 @@ struct StoryRowCardMedia: View {
     }
 
     @ViewBuilder private var media: some View {
-        // ⚠️ ASKED FOR BY STORY, AT DRAW TIME. There is no capture here, no timing and no moment to
-        // get right — this card asks for a picture of ITS OWN clip, and the answer is generated from
-        // that clip's own file at the second its own player is paused on.
-        //
-        // Nil is the normal answer for a photo (nothing is ever banked for one, and a photo's poster
-        // IS the photo) and for a video nobody has watched this session. Both fall through to the
-        // poster below.
-        if story.isVideo, let u = URL(string: story.mediaUrl),
-           let shot = StoryVideoFrames.card(u, storyId: story.id, width: slotW) {
+        if let shot {
             // ⚠️ PINNED TO THE SLOT. `Color.clear` is size-NEUTRAL: it accepts whatever size it is
             // proposed, and a bare `scaledToFill` would report its own oversized layout and have the
             // stack adopt it — which is how the cards once stopped agreeing about their own width and
@@ -294,7 +301,11 @@ final class StoryRowItemView: UIView {
     /// half-card, so it was the one member of this tuple that moved at scroll speed — which made a
     /// SwiftUI rebuild of two cards part of the cost of every swipe. It is a view property now, set
     /// by `setLive`, and nothing in this tuple changes faster than the sheet's own slot.
-    private var applied: (mediaUrl: String, previewUrl: String, w: CGFloat, h: CGFloat)?
+    private var applied: (mediaUrl: String, previewUrl: String, w: CGFloat, h: CGFloat,
+                          shot: ObjectIdentifier?)?
+    /// The frame this card is currently DRAWING, so the row can hand it back to itself rather than
+    /// let a newly generated one replace the picture mid-movement. See `cardShot(for:current:)`.
+    private(set) var appliedShot: UIImage?
 
     /// THE ONE ITEM WHOSE PIXELS COME FROM SOMEWHERE ELSE.
     ///
@@ -350,13 +361,18 @@ final class StoryRowItemView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     /// Rebuild the hosted picture only if something it is drawn from moved.
-    func updateMedia(story: Story, slotW: CGFloat, slotH: CGFloat) {
+    func updateMedia(story: Story, slotW: CGFloat, slotH: CGFloat, shot: UIImage?) {
         // Labelled to match the stored tuple exactly: `==` on tuples wants the same labels, not just
-        // the same types.
-        let want = (mediaUrl: story.mediaUrl, previewUrl: story.previewUrl, w: slotW, h: slotH)
+        // the same types. The frame joins it by IDENTITY — a generated card frame is a cached object,
+        // so the same picture is the same pointer and a changed one is a different pointer. That is
+        // what turns "a frame landed somewhere in the row" into "this one card's picture changed",
+        // which is the rebuild the old shared observer could not express.
+        let want = (mediaUrl: story.mediaUrl, previewUrl: story.previewUrl, w: slotW, h: slotH,
+                    shot: shot.map { ObjectIdentifier($0) })
         if let applied, applied == want { return }
         applied = want
-        host.rootView = StoryRowCardMedia(story: story, slotW: slotW, slotH: slotH)
+        appliedShot = shot
+        host.rootView = StoryRowCardMedia(story: story, slotW: slotW, slotH: slotH, shot: shot)
     }
 
     override func layoutSubviews() {
@@ -459,6 +475,19 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// takes the live layer away seats the tint at what the morph was showing and lets the settle
     /// carry it the rest of the way, like every other card.
     private var lastLiveDim: CGFloat = 0
+    /// The stories this pass could actually SEE, as against the ones it holds a place for. Their
+    /// `trulyValidIds`: a card animating out of the window stays in `items` and is missing from this,
+    /// and its own animation's completion asks this set whether it is still gone. Re-asked rather than
+    /// captured, so a card that came back during the glide is not removed underneath itself.
+    private var trulyValidIds: Set<String> = []
+    /// The story the row last told the player store was central, so the "only the central one plays"
+    /// rule can be re-asserted per pass without asking the store on every frame of a drag.
+    private var lastCentralTold: String = ""
+    /// A generated frame landed while the row was moving and has not been spent. See `frameArrived`.
+    private var framesPending = false
+    /// THE ONE OBSERVER OF THE FRAME TICK FOR THE WHOLE ROW. It used to be one per card, on a shared
+    /// singleton, which meant every card rebuilt whenever any clip's frame landed.
+    private var frameToken: AnyCancellable?
     /// Their `ignoreScrolling` fence. A programmatic offset must not be mistaken for a finger.
     private var ignoreScrolling = false
 
@@ -547,6 +576,11 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         tap.delegate = self
         view.addGestureRecognizer(tap)
+
+        // See `frameToken`. One sink, and the row decides per card whether the answer changed.
+        frameToken = StoryFrameTick.shared.$n
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.frameArrived() }
     }
 
     override func viewDidLayoutSubviews() {
@@ -730,7 +764,43 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// is only scrollable once it has finished becoming a row.
     private func syncScrollEnabled() {
         let enabled = geometry.fraction >= 1.0 - 0.0001
-        if scroller.isScrollEnabled != enabled { scroller.isScrollEnabled = enabled }
+        guard scroller.isScrollEnabled != enabled else { return }
+        // ⚠️ A ROW SHUT DOWN MID-FLIGHT STILL OWES ITS SETTLE, AND THAT DEBT WAS BEING WRITTEN OFF.
+        //
+        // Disabling a scroll view that is decelerating stops it dead and UIKit delivers NO
+        // `didEndDecelerating` for it. So a flick followed straight away by a pull on the sheet ended
+        // the row's movement through a door that reports nothing — and since the pager jump was
+        // deferred to the settle, the settle is now the ONLY thing that posts it for a flick. The
+        // full-screen story was left on the card the flick started from while the row showed the one
+        // it landed on, for as long as the sheet stayed open. It corrected itself at the close, which
+        // is why it reads as "the thumbnail is showing the wrong story" rather than as a stuck story.
+        //
+        // Theirs cannot have this: `scrollViewDidScroll` navigates on the rounded index as the finger
+        // moves, so there is never a report owed at the end. Ours defers because our navigation
+        // redraws the row, so the deferral has to be honoured on every way out — this was the fourth
+        // way out, and the one nothing was watching.
+        let interrupted = !enabled && isRowMoving
+        scroller.isScrollEnabled = enabled
+        guard interrupted, geometry.fullDist > 0.5 else { return }
+        isSnapping = false
+        let i = centredIndex
+        guard stories.indices.contains(i) else { return }
+        // The crossings that happened before the fraction dropped were reported; the rest of the
+        // deceleration was not. Say where it actually stopped before saying that it stopped.
+        if i != reportedIndex {
+            reportedIndex = i
+            onIndexChanged(i)
+        }
+        // ⚠️ AND SEAT IT ON THE GRID. A halted scroller keeps whatever offset it froze at, which is
+        // between two cards; nothing snaps it, because every snap path hangs off a delegate callback
+        // that this shutdown skipped. Let the sheet come back up and the row would sit off-centre for
+        // the rest of the sitting.
+        navigate(to: i, animated: false)
+        // ⚠️ CALLED DIRECTLY, NOT THROUGH `reportScrollSettled`, AND DELIBERATELY. That one refuses to
+        // report below full fraction — right for every other caller, and exactly wrong here, because
+        // the fraction dropping is the reason this movement ended.
+        onIndexSettled(i)
+        flushPendingFrames()
     }
 
     /// HOW FAR THE SHEET IS UP, once per frame of the pull, straight off the finger.
@@ -957,12 +1027,38 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         // card. The pass's question is "what was the live card wearing when this pass began".
         let previousLiveDim = lastLiveDim
         var valid = Set<String>()
+        var trulyValid = Set<String>()
         for (i, story) in stories.enumerated() {
             let cf = geometry.combinedFraction(index: i, rowPosition: rowPos)
             // THEIR VISIBILITY WINDOW (`:1541-1546`), measured on the LOGICAL distances rather than
             // the scaled ones — the same split they keep everywhere: logical for arithmetic, scaled
             // for anything that positions a pixel.
-            guard geometry.isVisible(combinedFraction: cf, containerWidth: containerW) else { continue }
+            // ⚠️ A CARD THAT IS LEAVING IS KEPT UNTIL IT HAS FINISHED LEAVING — their `validIds` vs
+            // `trulyValidIds` (`:1553-1575`), which we had the first half of and not the second:
+            //
+            //     if !itemVisible {
+            //         if transition.animation.isImmediate { continue }
+            //         else if self.visibleItems[item.id] == nil { continue }
+            //         else { reevaluateVisibilityOnCompletion = true }
+            //     }
+            //
+            // Ours dropped every invisible card on every pass, animated or not. On a finger that is
+            // right and it is what they do too. On an ANIMATED pass it is not: the card is mid-spring
+            // toward the place it is going, and removing it there makes it vanish instead of glide.
+            // That is a card popping out of existence during a tap's settle or a sheet page.
+            //
+            // Three cases, theirs exactly: no animation → drop it now; never existed → do not build
+            // one just to animate it away; exists and we are animating → keep it, lay it out, and let
+            // the completion below decide.
+            let visible = geometry.isVisible(combinedFraction: cf, containerWidth: containerW)
+            var leaving = false
+            if visible {
+                trulyValid.insert(story.id)
+            } else {
+                if settle == nil { continue }
+                guard items[story.id] != nil else { continue }
+                leaving = true
+            }
             valid.insert(story.id)
 
             // THE ONE PLACEMENT, FOR THIS STORY, WHATEVER DRAWS IT. See `StoryRowGeometry.placement`.
@@ -1251,14 +1347,24 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
                 CATransaction.commit()
             }
             item.setLive(isLive)
-            item.updateMedia(story: story, slotW: geometry.slotW, slotH: geometry.slotH)
+            item.updateMedia(story: story, slotW: geometry.slotW, slotH: geometry.slotH,
+                             shot: cardShot(for: story, current: item))
             if willAnimate {
                 // Their `.curve(duration: 0.3, curve: .spring)` for a movement that did not come from
                 // the finger. `run` is the one statement of that spring, and it keeps what the old
                 // options bought: an interrupting swipe is still heard during it, and an interrupting
                 // write starts where this one got to.
                 let curve = settle ?? .commit
-                curve.run(write)
+                // Their `reevaluateVisibilityOnCompletion`, hung on the same position animation
+                // (`:1701-1712`): when the glide is over, if this card is STILL not one the row can
+                // see, it goes. Re-asked rather than remembered, because a later pass may well have
+                // brought it back — which is why theirs tests `trulyValidIds` in the completion and
+                // not a boolean captured when the animation started.
+                curve.run(write, completion: leaving ? { [weak self] _ in
+                    guard let self, !self.trulyValidIds.contains(story.id),
+                          let it = self.items[story.id] else { return }
+                    self.removeItem(story.id, it)
+                } : nil)
             } else {
                 // A bare `CALayer`'s frame, cornerRadius and opacity are all implicitly animated, so
                 // outside a deliberate animation they must be written with actions off or the tint
@@ -1270,9 +1376,11 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             }
         }
 
-        // Anything outside the window goes. Theirs defers removal to the end of an animation when one
-        // is running; ours has nothing mid-flight to protect because a culled card is, by definition,
-        // a container width off the side of the screen.
+        // Published BEFORE the removals, because the completions above read it — theirs assigns
+        // `self.trulyValidIds` at the end of its own pass for the same reason.
+        trulyValidIds = trulyValid
+        // Anything the row does not even hold a place for goes now. A card that is only LEAVING is
+        // in `valid` and is not touched here; its own animation's completion removes it.
         for (id, item) in items where !valid.contains(id) {
             removeItem(id, item)
         }
@@ -1309,6 +1417,14 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         // open the sheet, swipe to B then C, and coming back to A found nothing and started a new
         // player at zero. See `StoryVideoHost.previewWindow`.
         StoryVideoHost.previewWindow(valid)
+        // ⚠️ AND THE SAME LOOP SAYS WHICH ONE MAY PLAY. Theirs pauses every item whose index is not
+        // the central one, inside this loop, on every pass — see `StoryVideoHost.central`. Told only
+        // when the answer changes, because the answer is a string and the alternative is walking a
+        // weak table on every frame of a drag for a value that moves once a card.
+        if lastCentralTold != liveStoryId {
+            lastCentralTold = liveStoryId
+            StoryVideoHost.central(liveStoryId)
+        }
     }
 
     /// WHAT AN ITEM IS AT FRACTION 0 — the story content's own rectangle, full screen, in window
@@ -1448,10 +1564,44 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
                                     animated: settle.map { Self.settleAnimation($0) })
     }
 
+    /// THE CARD FRAME FOR THIS CLIP, AND WHETHER THE ROW IS WILLING TO CHANGE IT YET.
+    ///
+    /// The lookup is the same one the card used to make in its own body; what is new is where it is
+    /// made and when it is allowed to take effect. `StoryVideoFrames.card` answers nil until the
+    /// frame has been generated off the main thread, so its answer changes at a moment nobody chose —
+    /// and if that moment lands mid-swipe, a travelling thumbnail changes its picture.
+    ///
+    /// Theirs decides a cover when it lays an item out and holds it for that layout; a cover never
+    /// changes during a transition. So while the row is moving, a card that already has a picture
+    /// keeps it, and `frameArrived()` re-runs the pass once the row is still.
+    private func cardShot(for story: Story, current: StoryRowItemView) -> UIImage? {
+        guard story.isVideo, let u = URL(string: story.mediaUrl) else { return nil }
+        let shot = StoryVideoFrames.card(u, storyId: story.id, width: geometry.slotW)
+        if isRowMoving || isSettling, let held = current.appliedShot { return held }
+        return shot
+    }
+
+    /// A frame finished generating. ONE sink for the whole row, not one observer per card.
+    private func frameArrived() {
+        guard !isRowMoving, !isSettling else { framesPending = true; return }
+        framesPending = false
+        updateScrolling()
+    }
+
+    /// Spend a frame that landed while the row was moving. Called from every place a movement ends.
+    private func flushPendingFrames() {
+        guard framesPending else { return }
+        framesPending = false
+        updateScrolling()
+    }
+
     private func addItem(_ story: Story) -> StoryRowItemView {
         let media = StoryRowCardMedia(story: story,
                                       slotW: geometry.slotW,
-                                      slotH: geometry.slotH)
+                                      slotH: geometry.slotH,
+                                      shot: story.isVideo ? URL(string: story.mediaUrl).flatMap {
+                                          StoryVideoFrames.card($0, storyId: story.id, width: geometry.slotW)
+                                      } : nil)
         let item = StoryRowItemView(storyId: story.id, media: media)
         addChild(item.host)
         view.addSubview(item)
@@ -1552,7 +1702,7 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
         isSnapping = false
         updateScrolling()
-        reportScrollSettled()
+        reportScrollSettled()   // flushes any held frame itself
     }
 
     /// Their `snapScrolling`, which we only ever had half of: the `willEndDragging` rounding is the
@@ -1584,6 +1734,9 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// The one report that a movement is OVER, with the index it rests on. `centredIndex` is already
     /// the clamped rounded offset, so the number reported is the number the row is showing.
     private func reportScrollSettled() {
+        // A movement is over whether or not the row is in a state to report it, so a frame held back
+        // during that movement is spent either way.
+        flushPendingFrames()
         guard geometry.fraction >= 1.0 - 0.0001, stories.indices.contains(centredIndex) else { return }
         onIndexSettled(centredIndex)
     }

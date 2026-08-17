@@ -1084,6 +1084,8 @@ struct StoryViewer: View {
     /// drag's own value for the row, and the row's position for the live story, and neither of those
     /// is a reason to re-render anything.
     @State private var pageDragBox = StorySheetPageDrag()
+    /// The freeze re-assert's clock, made ONCE. See the note at its `onReceive`.
+    @State private var pausePulse = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
     /// Which story the owner footer's viewers belong to, so a story change empties it instead of
     /// leaving the previous one's count and faces up during the fetch. See `loadBarViewers`.
     @State private var lastBarViewersStoryId: String = ""
@@ -1884,7 +1886,12 @@ struct StoryViewer: View {
         // story can NEVER creep forward and auto-advance/auto-close the sheet, even if some other event
         // resumed it meanwhile (the "sheet forcefully dismissed while reading it" bug). pauseStory just
         // sets hostPaused=true; re-setting a true @State is a no-op — no re-render, no gesture fights.
-        .onReceive(Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()) { _ in
+        // ⚠️ THE PUBLISHER IS `@State`, NOT BUILT INLINE. `Timer.publish(...).autoconnect()` written
+        // in the body makes a NEW timer object on every evaluation of this view, and this body is
+        // evaluated on every frame of a pull; `onReceive` then tears down its subscription and
+        // subscribes to the new one each time. Held in state it is made once and outlives the
+        // evaluations. Same tick, same guard, none of the churn.
+        .onReceive(pausePulse) { _ in
             // > 0.01 (not > 0.5): the freeze must hold through the ENTIRE close drag too — a story
             // resuming mid-collapse re-renders behind the moving sheet every tick and fights the
             // drag frame-by-frame (the violent "two views shaking" close). Resume still happens

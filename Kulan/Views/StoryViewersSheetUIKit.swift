@@ -110,11 +110,15 @@ final class StoryViewersSheetView: UIView {
     /// `screen − sheetH − topInset`, so the sheet growing is the cards shrinking, and nothing has
     /// to be kept in step by hand.
     ///
-    /// 0.60 → 0.64. On an 852pt screen that is ~34pt more sheet (the empty band he drew a line
-    /// through, between the count row and the sheet's top edge) and a card that goes 200pt → 172pt.
-    /// Deliberately small: 0.66 was tried on paper and takes a fifth off the card, which is a
-    /// resize rather than the nudge he asked for. If he wants more, move THIS and nothing else.
-    static let heightFraction: CGFloat = 0.64
+    /// 0.60 → 0.64 (2026-08-09) → 0.58 (2026-08-17, his number). The middle value came from "make
+    /// the sheet slightly taller"; this one reverses past where it started, which is his call and is
+    /// why it is written down rather than tuned quietly.
+    ///
+    /// On a 926pt screen 0.58 is ~537pt of sheet against 0.64's 593, so the card block above it gains
+    /// about 56pt and every thumbnail grows with it — `cardSlot` lays the cards out in what is LEFT
+    /// (`screen − sheetH − topInset`), so the sheet shrinking IS the cards growing and nothing has to
+    /// be kept in step by hand. Still the only number to move.
+    static let heightFraction: CGFloat = 0.58
 
     private(set) var progress: CGFloat = 0
 

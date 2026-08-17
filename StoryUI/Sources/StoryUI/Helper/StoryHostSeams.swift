@@ -85,6 +85,30 @@ public enum StoryVideoHost {
         StoryItemViewStore.setWindow(storyIds)
     }
 
+    /// ⚠️ ONLY THE CENTRAL STORY MAY PLAY, RE-ASSERTED BY THE THING THAT DECIDES WHAT CENTRAL MEANS.
+    ///
+    /// Theirs settles this inside the layout loop, per item, on every pass:
+    ///
+    ///     var itemProgressMode = self.itemProgressMode()
+    ///     if index != centralIndex { itemProgressMode = .pause }
+    ///     view.setProgressMode(mode: itemProgressMode, isCentral: index == centralIndex && ...)
+    ///
+    /// So "which one is playing" is a pure function of the row's own centre, recomputed with the
+    /// positions rather than reacted to afterwards.
+    ///
+    /// Ours had it as an EVENT — `StoryDetailView` calls `pauseAllExcept` when the library's item
+    /// changes — and since the pager jump was deferred to the row settling, that event now fires only
+    /// at rest. Anything that moved the centre without changing the library's item left a retained
+    /// player un-re-paused. Belt in most states, because the sheet pauses everything anyway; it stops
+    /// being belt the moment a state change misses, and half a second is the window a poll leaves.
+    ///
+    /// The row calls this whenever its answer changes, which is the same invariant without the
+    /// per-frame cost of walking the table sixty times a second.
+    public static func central(_ storyId: String) {
+        guard !storyId.isEmpty else { return }
+        StoryItemViewStore.pauseAllExcept(storyId)
+    }
+
     public static func viewerClosed() {
         StoryItemViewStore.retainDismounted = false
         // ⚠️ AND EXPLICITLY, NOT ONLY THROUGH THE FLAG. The flag's own `didSet` releases on a
