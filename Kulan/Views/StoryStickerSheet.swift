@@ -70,12 +70,24 @@ enum StickerRecents {
 /// call site is what stops "recent" ever being sent to Giphy as a word.
 enum StickerTab: Identifiable, Equatable {
     case recent
-    case term(String, String)   // the chip's face, the query behind it
+    /// ⚠️ THE FIRST VALUE IS AN SF SYMBOL NAME NOW, NOT AN EMOJI — his 2026-08-17 "use real sticker
+    /// icons, don't use emoji".
+    ///
+    /// Emoji in a tab row are somebody else's artwork rendered at somebody else's weight: they do not
+    /// take the tint, they do not match the clock beside them, and they read as content rather than
+    /// as controls. A symbol is drawn by the system in the app's own weight and sits beside `clock`
+    /// as one set, which is what the row was always trying to be.
+    ///
+    /// ⚠️ AND THEY ARE NOT PACK THUMBNAILS, WHICH IS WHAT HIS REFERENCE SHOWS. That row draws the
+    /// first sticker of each installed PACK, and we have no packs — the tray is a search endpoint,
+    /// so a category has no artwork of its own to show. Real pack icons need the sticker system he
+    /// has to supply the drawings for; symbols are what is honest until then.
+    case term(String, String)   // SF Symbol name, the query behind it
 
     var id: String {
         switch self {
         case .recent: return "recent"
-        case .term(let face, _): return face
+        case .term(let icon, _): return icon
         }
     }
     var query: String? {
@@ -85,20 +97,23 @@ enum StickerTab: Identifiable, Equatable {
         }
     }
 
+    /// The endpoint's own trending, which is what "popular" means here — an empty query.
+    static let popular: StickerTab = .term("flame.fill", "")
+
     /// Trending leads the searched tabs, because a tray that opens on somebody's own history is
     /// empty on the first day and full of one joke by the third.
     static let all: [StickerTab] = [
         .recent,
-        .term("🔥", ""),            // empty query = the endpoint's own trending
-        .term("😂", "laughing"),
-        .term("❤️", "love"),
-        .term("🎉", "party"),
-        .term("👋", "hello"),
-        .term("🙏", "thank you"),
-        .term("😴", "tired"),
-        .term("✨", "sparkle"),
-        .term("👍", "yes"),
-        .term("😭", "crying"),
+        popular,
+        .term("face.smiling.fill", "laughing"),
+        .term("heart.fill", "love"),
+        .term("party.popper.fill", "party"),
+        .term("hand.wave.fill", "hello"),
+        .term("hands.sparkles.fill", "thank you"),
+        .term("moon.zzz.fill", "tired"),
+        .term("sparkles", "sparkle"),
+        .term("hand.thumbsup.fill", "yes"),
+        .term("drop.fill", "crying"),
     ]
 }
 
@@ -115,7 +130,14 @@ struct StoryStickerSheet: View {
     /// OWNS both the container and the elements, or the selection has nothing to melt across.
     @Namespace private var glass
     @State private var route: [Route] = []
-    @State private var tab: StickerTab = .recent
+    /// ⚠️ RECENT ONLY WHEN THERE IS A RECENT — his 2026-08-17 "do not select recent by default, that
+    /// is not good if the recent is empty".
+    ///
+    /// The tray opened on the one tab that can be empty, so a first-time open was a chip row over the
+    /// words "stickers you use will show up here" and nothing to tap. Popular is the endpoint's own
+    /// trending and is never empty. The recents are a synchronous read of `UserDefaults`, so this can
+    /// be answered before the first frame rather than corrected after it.
+    @State private var tab: StickerTab = StickerRecents.all().isEmpty ? .popular : .recent
     @State private var query = ""
     @State private var stickers: [GiphyService.Gif] = []
     @State private var loading = false
@@ -346,8 +368,10 @@ struct StoryStickerSheet: View {
                             Group {
                                 if case .recent = t {
                                     Image(systemName: "clock").font(.system(size: 17, weight: .semibold))
-                                } else if case .term(let face, _) = t {
-                                    Text(face).font(.system(size: 20))
+                                } else if case .term(let icon, _) = t {
+                                    // The same size and weight as the clock beside it: one row of
+                                    // controls drawn by the system, not a clock and ten pictures.
+                                    Image(systemName: icon).font(.system(size: 17, weight: .semibold))
                                 }
                             }
                             .foregroundStyle(.white)
@@ -483,9 +507,16 @@ private struct LinkStickerScreen: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16)
                 .frame(height: 52)
-                // Glass, like the tray's own search well. `Color.white.opacity(0.10)` was a grey we
-                // painted, and it is the thing this whole pass exists to remove.
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                // ⚠️ APPLE'S OWN FIELD, NOT GLASS — his 2026-08-17 "follow Apple's guide, rounded,
+                // no glass, a normal input bar".
+                //
+                // Glass is a material for something floating OVER content. This field is content: it
+                // sits on a plain page inside the tray with nothing behind it to refract, so the
+                // effect had nothing to do and resolved to the grey slab he photographed. Apple's
+                // own text entry is a fill in a rounded shape, and `tertiarySystemFill` is the fill
+                // they use for exactly this — it is also what a search field wears, so this page and
+                // the tray's own search bar are the same object at last.
+                .background(Color(.tertiarySystemFill), in: Capsule())
 
             Button { if let u = resolved { onDone(u) } } label: {
                 Text("Add link")
@@ -536,7 +567,8 @@ private struct PlaceStickerScreen: View {
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16)
                 .frame(height: 52)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                // The same field as the Link screen, and for the same reason — see the note there.
+                .background(Color(.tertiarySystemFill), in: Capsule())
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
 

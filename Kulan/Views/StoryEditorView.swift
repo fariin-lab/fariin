@@ -738,7 +738,10 @@ struct StoryEditorView: View {
                 onLink: { url in addLinkSticker(url) },
                 onPlace: { name, coord in addPlaceSticker(name, coord) },
                 onTime: { addTimeSticker() })
-                .presentationDetents([.fraction(0.6), .large])
+                // 0.8, his 2026-08-17 number, up from 0.6. At six tenths the grid showed barely two
+                // rows under the search field and the actions, so the tray had to be dragged before
+                // it was a sticker picker at all.
+                .presentationDetents([.fraction(0.8), .large])
                 .presentationDragIndicator(.visible)
                 // ⚠️ NOTHING IS SAID ABOUT THE BACKGROUND OR THE CORNERS ON PURPOSE (his
                 // 2026-08-16: "make it real liquid glass for apple design"). iOS 26 gives a sheet

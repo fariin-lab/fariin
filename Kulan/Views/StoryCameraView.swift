@@ -1479,7 +1479,19 @@ struct StoryCameraView: View {
             captureWithScreenFlashIfNeeded()
         } label: {
             ZStack {
-                Circle().stroke(.white.opacity(0.55), lineWidth: 3).frame(width: 84, height: 84)
+                // ⚠️ THE RING IS GLASS, NOT A PAINTED STROKE — his 2026-08-17 "make the recording
+                // button liquid glass".
+                //
+                // It was `Circle().stroke(.white.opacity(0.55))`: a white line over whatever the
+                // camera happened to be pointing at, which is the flat look this app keeps replacing.
+                // A glass ring takes its brightness from the scene behind it, so it reads on a white
+                // wall and on a night sky without either being chosen. `interactive` because it is a
+                // control and the press should be felt in the material, the same call the zoom pill
+                // and the flip button next door already make. Nothing is painted underneath it —
+                // that is the rule this file learned five times on the camera switch.
+                Color.clear
+                    .frame(width: 84, height: 84)
+                    .liquidGlass(Circle(), interactive: true)
                 if cam.recording {
                     RoundedRectangle(cornerRadius: locked ? 8 : 36, style: .continuous)
                         .fill(Color.red)
@@ -1606,8 +1618,12 @@ struct StoryCameraView: View {
                 // the shape of a small glyph.
                 .foregroundStyle(locked ? Color.yellow : .white)
                 .frame(width: 48, height: 48)
-                .background(.ultraThinMaterial, in: Circle())
-                .environment(\.colorScheme, .dark)
+                // ⚠️ REAL GLASS, NOT `.ultraThinMaterial` — the same swap, and the same reason as the
+                // ring above. A material is a blur we ask for; on iOS 26 the system draws glass for a
+                // floating control and takes the scene's light with it. `.environment(\.colorScheme,
+                // .dark)` went with the material: it existed to stop that blur resolving light over a
+                // bright camera feed, and glass has no light and dark to choose between.
+                .liquidGlass(Circle(), interactive: true)
                 // The ring FILLS as the thumb approaches — the continuous half of the feedback, so
                 // the gesture is legible before it completes rather than only after.
                 .overlay(
