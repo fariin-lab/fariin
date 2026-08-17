@@ -1266,6 +1266,11 @@ struct ThreadView: View {
         .onAppear {
             cachedConv = ConversationsRepository.shared.conversations.first { $0.id == cid }
             repo.start()
+            // PAY THE GIF KEY'S ROUND TRIP NOW, quietly, instead of on the first tap of the button.
+            // Opening a chat is the moment we learn a GIF might be sent, and it is a moment with
+            // nothing else competing for the network. No-op once the key is on the phone, which is
+            // now permanent — so in practice this runs once, ever, per install.
+            Task { await GiphyService.shared.warmKey() }
             // ONE drain per chat open (audit S5): onAppear also fires returning from an in-chat push,
             // and a re-drive racing the still-in-flight original produced a duplicate server doc and
             // over-counted the recipient's unread badge.

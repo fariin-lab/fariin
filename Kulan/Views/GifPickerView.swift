@@ -106,7 +106,30 @@ struct GifPickerView: View {
 
     // The last trending page, kept for the app's lifetime: the picker PAINTS INSTANTLY on reopen
     // (user: "when I tap GIF it takes a bit late to load") and refreshes quietly behind it.
-    @MainActor static var trendingCache: [GiphyService.Gif] = []
+    //
+    // ⚠️ AND ACROSS LAUNCHES NOW, on disk. Kept only in memory it died with the app, so the FIRST
+    // tap of every session was the slow one all over again — which is the tap people actually
+    // notice. It is a list of public Giphy urls and sizes: nothing private, nothing that needs
+    // decrypting, and it is stale-safe because the refresh below overwrites it every time.
+    @MainActor static var trendingCache: [GiphyService.Gif] = loadTrendingFromDisk()
+
+    private static let trendingDefault = "giphy.trending.v1"
+
+    private static func loadTrendingFromDisk() -> [GiphyService.Gif] {
+        guard let raw = UserDefaults.standard.array(forKey: trendingDefault) as? [[String: Any]] else { return [] }
+        return raw.compactMap { d in
+            guard let id = d["id"] as? String, let url = d["url"] as? String,
+                  let w = d["w"] as? Double, let h = d["h"] as? Double else { return nil }
+            return GiphyService.Gif(id: id, url: url, width: w, height: h)
+        }
+    }
+
+    /// Bounded on purpose: one screen's worth is what "paints instantly" needs, and the refresh
+    /// behind it brings the rest.
+    private static func saveTrendingToDisk(_ gifs: [GiphyService.Gif]) {
+        let raw = gifs.prefix(40).map { ["id": $0.id, "url": $0.url, "w": $0.width, "h": $0.height] }
+        UserDefaults.standard.set(Array(raw), forKey: trendingDefault)
+    }
 
     var body: some View {
         NavigationStack {
@@ -180,6 +203,7 @@ struct GifPickerView: View {
                 let fresh = await GiphyService.shared.search("")
                 if !fresh.isEmpty {
                     Self.trendingCache = fresh
+                    Self.saveTrendingToDisk(fresh)
                     if query.trimmingCharacters(in: .whitespaces).isEmpty, category == .trending { gifs = fresh }
                 }
             }

@@ -15,14 +15,34 @@ final class GiphyService {
         let height: Double
     }
 
-    private var apiKey: String?
+    /// ⚠️ KEPT ACROSS LAUNCHES, not just for the session.
+    ///
+    /// This was memory-only, so the FIRST tap on GIF after every launch paid a Cloud Function round
+    /// trip before Giphy was even contacted — and only then a second round trip for the pictures.
+    /// Two waits, in series, every launch, for a key that does not change.
+    ///
+    /// It is a Giphy content key, not a user secret: it is rate-limit scoped, carries nothing about
+    /// anybody, and is already handed to every client that opens the picker. The Cloud Function
+    /// exists to keep it out of a public repo, and it still does — this only stops us asking for the
+    /// same answer on every launch.
+    private static let keyDefault = "giphy.key.v1"
+
+    private var apiKey: String? {
+        get { UserDefaults.standard.string(forKey: Self.keyDefault) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.keyDefault) }
+    }
 
     private func key() async -> String? {
-        if let apiKey { return apiKey }
+        if let apiKey, !apiKey.isEmpty { return apiKey }
         let res = try? await Functions.functions(region: "me-central1").httpsCallable("giphyKey").call()
-        apiKey = (res?.data as? [String: Any])?["key"] as? String
-        return apiKey
+        let fetched = (res?.data as? [String: Any])?["key"] as? String
+        if let fetched, !fetched.isEmpty { apiKey = fetched }
+        return fetched
     }
+
+    /// Fetch the key WITHOUT asking for any pictures, so the composer can pay that cost quietly
+    /// before the GIF button is ever pressed. No-op once it is on the phone.
+    func warmKey() async { _ = await key() }
 
     func search(_ q: String) async -> [Gif] {
         let trimmed = q.trimmingCharacters(in: .whitespaces)
