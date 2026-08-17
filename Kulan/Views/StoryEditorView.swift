@@ -680,40 +680,50 @@ struct StoryEditorView: View {
             // keyboard avoidance the canvas must never have. Its own dim backdrop covers the
             // screen; the card underneath does not move a pixel.
             if let id = editingID, let idx = overlays.firstIndex(where: { $0.id == id }) {
-                TextEditorOverlay(
-                    draft: $overlays[idx],
-                    onCancel: { trimEmpty(id); editingID = nil; newOverlayID = nil },
-                    // ⚠️ ANIMATED, AND IT IS THE OTHER HALF OF `TextEditorOverlay.finish()`. The
-                    // editor drops focus and waits out the keyboard before calling this; the fade
-                    // here is what stops the last frame being a cut. Without a transition on the
-                    // view, `withAnimation` has nothing to animate — a removal is not a property.
-                    onDone: {
-                        trimEmpty(id)
-                        newOverlayID = nil
-                        withAnimation(.easeInOut(duration: 0.2)) { editingID = nil }
-                    },
+                // ⚠️ THE WHOLE EDITOR IS UIKit NOW, AND EVERY REASON IS IN
+                // `StoryTextToolEditor.swift`'s header. The short version: the bar is the keyboard's
+                // own `inputAccessoryView`, the editing area is bounded by `keyboardLayoutGuide`, and
+                // Done is `resignFirstResponder`. None of those three has a SwiftUI equivalent that
+                // behaves the same way, which is why the SwiftUI editor kept losing its controls and
+                // moving its words.
+                StoryTextToolEditor(
+                    overlay: overlays[idx],
+                    // What `TextOverlayView` offers `storyStyledText` on the canvas. The editor lays
+                    // the words out at this width so the line breaks — and therefore the block's whole
+                    // shape — are already the canvas's before Done is pressed.
+                    wrapWidth: canvasSize.width * 0.9
+                ) { edited, screenCenter in
+                    guard let i = overlays.firstIndex(where: { $0.id == id }) else { return }
+                    var o = edited
                     // ⚠️ THE CONTINUITY LINE, AND IT IS WHY THERE IS NO ANIMATION HERE.
                     //
                     // His report: tap Done and the words move down toward the centre, then correct
-                    // themselves. Both halves are the same fact. A brand-new text is created at the
-                    // canvas's centre, the editor draws it above the keyboard, and the canvas then
-                    // draws it at the centre it was created with — so the cross-fade at the end shows
-                    // two different places and reads as a jump.
+                    // themselves. A brand-new text is created at the canvas's centre, the editor draws
+                    // it above the keyboard, and the canvas then draws it at the centre it was created
+                    // with — so the hand-over shows two different places and reads as a jump.
                     //
-                    // Theirs does not animate that gap, it removes it: `applyTextEdits` takes the
-                    // text view's centre AS IT APPEARS IN THE EDITOR, turns it into a canvas unit and
+                    // Theirs does not animate that gap, it removes it: `applyTextEdits` takes the text
+                    // view's centre AS IT APPEARS IN THE EDITOR, turns it into a canvas unit and
                     // writes it onto the item. The canvas then draws it exactly where the editor was
                     // drawing it and there is nothing left to travel.
                     //
                     // Only for a text that has never been placed, which is their `isNewItem`: one he
                     // has already dragged somewhere has a position he chose.
-                    onFinishGeometry: { screenPoint in
-                        guard newOverlayID == id,
-                              let c = canvasCenter(fromScreen: screenPoint),
-                              let i = overlays.firstIndex(where: { $0.id == id }) else { return }
-                        overlays[i].center = c
+                    if newOverlayID == id, let c = canvasCenter(fromScreen: screenCenter) {
+                        o.center = c
                     }
-                )
+                    overlays[i] = o
+                    trimEmpty(id)
+                    newOverlayID = nil
+                    // Theirs fades its editing layer out over 0.2s and un-hides the canvas copy in the
+                    // same breath. Same shape here: the canvas draws the words immediately, at the
+                    // place the editor left them, while the editor fades off the top of them.
+                    withAnimation(.easeInOut(duration: 0.2)) { editingID = nil }
+                }
+                // NOTHING MOVES THIS SCREEN FOR THE KEYBOARD. The editor is bounded by the keyboard
+                // from the inside, by their own layout guide; SwiftUI shrinking the host as well would
+                // count the keyboard twice, which is the squeezed-into-a-band screenshot from 08-16.
+                .ignoresSafeArea()
                 .transition(.opacity)
                 .zIndex(30)
             }
@@ -2702,6 +2712,13 @@ struct TextOverlay: Identifiable, Equatable {
     var scale: CGFloat = 1
     var rotation: Angle = .zero
     var color: Color = .white
+    /// WHERE `color` SITS ON THE PICKER'S SPECTRUM, 0 (black) to 1 (white).
+    ///
+    /// The reference app stores the same pair for the same stated reason: "so that we can consistently
+    /// restore palette view state". A colour alone cannot put the thumb back — two points on the bar
+    /// can resolve to nearly the same colour, and a caption reopened for editing has to find the
+    /// control where it was left.
+    var colorPhase: CGFloat = 1
     var alignment: TextAlignment = .center
     var font: FontStyle = .rounded
     var background: BgStyle = .plain
@@ -2945,311 +2962,16 @@ struct TextOverlayView: View {
     }
 }
 
-// Full-screen text editor: focused field + font/color/align/bg controls.
+// ⚠️ `TextEditorOverlay` IS DELETED, AND THE DELETION IS THE FIX rather than a tidy-up.
 //
-// ⚠️ `DraftTextWidthKey` IS DELETED, AND ITS DELETION IS THE FIX rather than a tidy-up. It carried
-// the measured text width out to a `@State` so the field could be framed to it — a round trip that
-// is by construction one layout pass late, which is the per-keystroke shift the field now avoids by
-// being an `.overlay` on the measuring text. See the note there.
-struct TextEditorOverlay: View {
-    @Binding var draft: TextOverlay
-    /// ⚠️ KEPT, AND DELIBERATELY UNUSED BY THE CHROME. The Cancel button is gone on his instruction
-    /// — "only remove cancel text cuz user can use done button" — and this stays because a caller
-    /// may still need a way to abandon an overlay (an empty one is trimmed on the way out either
-    /// way). Nothing on screen calls it today.
-    var onCancel: () -> Void
-    var onDone: () -> Void
-    /// WHERE THE WORDS WERE ON SCREEN WHEN EDITING ENDED, in global coordinates.
-    ///
-    /// Their `applyTextEdits`, and their comment names the job: "Ensure continuity of the new text
-    /// item's location with its apparent location in this text editor."
-    ///
-    ///     let locationInView = view.convert(textView.bounds.center, from: textView).clamp(view.bounds)
-    ///     let textCenterImageUnit = ImageEditorCanvasView.locationImageUnit(forLocationInView: ...)
-    ///     textItem = textItem.with(unitCenter: textCenterImageUnit)
-    ///
-    /// Read at the instant editing ends, before the keyboard has moved anything.
-    var onFinishGeometry: (CGPoint) -> Void = { _ in }
-    @FocusState private var focused: Bool
-    /// The text block's centre on screen, kept current while editing so `finish()` can report it
-    /// without measuring during a dismissal that is already moving the layout.
-    @State private var blockCenter: CGPoint = .zero
-    /// Is the font row open? Shut at rest: the Aa in the bar is its door, and it draws itself in
-    /// whichever font is currently chosen.
-    @State private var showFonts = false
-
-    /// LEAVING, WITH THE KEYBOARD RATHER THAN AHEAD OF IT — his 2026-08-16 "tapping Done jumps".
-    ///
-    /// Done used to hand straight back to the parent, which cleared `editingID` in the same runloop
-    /// turn: this whole screen was removed on the spot while the keyboard was only beginning its own
-    /// slide, and the words reappeared on the canvas in one cut. Two motions, one of them instant.
-    ///
-    /// Dropping focus FIRST starts the keyboard down, and the hand-back is then made on the
-    /// keyboard's own clock — 0.25s, the duration UIKit animates it with — so the field, the badge
-    /// and the keyboard travel together and the canvas takes the words at the end of it rather than
-    /// during. The parent animates the removal; this decides when it begins.
-    private func finish() {
-        // ⚠️ REPORTED BEFORE THE FOCUS DROPS, WHICH IS THE ORDER THEIRS READS IT IN.
-        //
-        // Theirs takes the position inside `applyTextEdits`, which runs off the end of editing while
-        // the editing layout is still the layout — not after the keyboard has begun taking the words
-        // with it. One line earlier or later is the difference between the canvas landing where the
-        // words were and landing where they were on their way to.
-        onFinishGeometry(blockCenter)
-        focused = false
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { onDone() }
-    }
-
-    private let palette: [Color] = [.white, .black, .red, .orange, .yellow, .green, .blue, .purple, .pink]
-    private func nextAlign(_ a: TextAlignment) -> TextAlignment { a == .leading ? .center : a == .center ? .trailing : .leading }
-    private func alignIcon(_ a: TextAlignment) -> String { a == .leading ? "text.alignleft" : a == .center ? "text.aligncenter" : "text.alignright" }
-    private func nextBg(_ b: TextOverlay.BgStyle) -> TextOverlay.BgStyle { b == .plain ? .semi : b == .semi ? .solid : .plain }
-
-    var body: some View {
-        ZStack {
-            Color.black.opacity(0.5).ignoresSafeArea().onTapGesture { finish() }
-            VStack {
-                // ⚠️ NO TOP BAR AT ALL, AND THAT IS THE WHOLE OF THE REDESIGN he asked for: "the
-                // current UI looks confusing… make it clean, minimal and easy to understand."
-                //
-                // It had a bar at the top with four controls and two more rows at the bottom, so the
-                // one thing this screen exists for — the words — was hemmed in from both ends while
-                // the eye had three places to look. Everything lives in ONE bar above the keyboard
-                // now, which is where the thumb already is and where the reference he sent puts it.
-                //
-                // Cancel is gone on his instruction ("user can use done button"). Nothing else is:
-                // all four fonts, all nine colours, the three alignments and the three backgrounds
-                // are still here, and the two that were rows are the two that are used least.
-                Spacer()
-                // ⚠️ THE BOX IS THE TEXT'S WIDTH, NOT THE FIELD'S — his 2026-08-14 report: the white
-                // background is far wider than the words while the keyboard is up, and exactly
-                // right once Done is pressed.
-                //
-                // Both of those are the same fact seen twice. A `TextField` is GREEDY: offered 320pt
-                // it takes 320pt, whether it has two words in it or none, so a background attached
-                // to the field is 320pt wide. The finished overlay is drawn with a `Text`, which
-                // takes only what it needs — so the box changed size at Done because the two are
-                // different views with different appetites, and only one of them was ever wrong.
-                //
-                // The invisible `Text` below is the same string in the same font at the same wrap
-                // width, so it lays out to exactly what the finished overlay will, and it is what
-                // this block is sized by. The field is fitted into that width rather than asked for
-                // its own opinion. It costs one hidden layout pass and it cannot drift from the
-                // result, because it IS the result's own view type.
-                // ⚠️ THE FIELD IS AN OVERLAY ON THE MEASURING TEXT, NOT ITS SIBLING IN A ZSTACK, AND
-                // THAT ONE WORD IS HIS "type two characters and the text makes a small jump".
-                //
-                // The measuring idea was right and the delivery lagged. The width travelled
-                // Text → PreferenceKey → `onPreferenceChange` → `@State` → `.frame(width:)`, and a
-                // preference is read AFTER the layout pass that produced it — so on every keystroke
-                // the invisible Text was already the new width while the field was still wearing the
-                // previous one, and the words inside it shifted for a frame. One character is too
-                // narrow a change to see; two is not.
-                //
-                // An `.overlay` is proposed its parent's size in the SAME pass, so the field is
-                // exactly as wide as the text it is typing with nothing in between to be a frame
-                // late. The measurement is still the finished overlay's own `Text`, in the same font
-                // at the same wrap width, which is what stopped the box being field-shaped.
-                // ⚠️ THE WIDTH CAP IS THE LAST MODIFIER, NOT THE FIRST, AND THAT ORDERING IS THE
-                // WHOLE OF HIS 2026-08-17 "the background is much wider than it should be while the
-                // keyboard is open, and corrects itself after Done".
-                //
-                // `.frame(maxWidth: 320)` is GREEDY: offered the screen's width it returns 320,
-                // whatever is inside it. Sitting HERE, above the padding and the background, it made
-                // the measured block 320pt wide before either of them ran — so the badge was drawn
-                // round a 320pt box and the measuring Text was only centring inside it. The word
-                // "Test" in a badge nearly the width of the phone is that, exactly.
-                //
-                // `storyStyledText`, which draws the finished overlay, has the same modifier and puts
-                // it AFTER the background (`:2639-2640`). There it does the other job: it caps what
-                // the Text is PROPOSED, so long text still wraps at 320, while the background sizes
-                // to what the Text actually used and hugs it. That is why the badge was right the
-                // moment Done handed over — the two views were never drawing the same box.
-                //
-                // Same two modifiers as the display now, in the display's order, so the editing badge
-                // and the posted one cannot disagree. `fixedSize` vertical is theirs too: it is what
-                // stops a multi-line block being squeezed by whatever height it is proposed.
-                Text(draft.text.isEmpty ? "Type…" : draft.text)
-                    .font(.system(size: draft.baseSize, weight: .semibold, design: draft.font.design))
-                    .multilineTextAlignment(draft.alignment)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .opacity(0)
-                    .accessibilityHidden(true)
-                    .overlay {
-                        TextField("", text: $draft.text,
-                                  prompt: Text("Type…").foregroundColor(.white.opacity(0.5)), axis: .vertical)
-                            .focused($focused)
-                            .multilineTextAlignment(draft.alignment)
-                            .font(.system(size: draft.baseSize, weight: .semibold, design: draft.font.design))
-                            .foregroundStyle(draft.background == .solid ? storyBadgeInk(on: draft.color)
-                                                                       : draft.color)
-                            .tint(.white)
-                    }
-                // ⚠️ THE SAME TWO PADDINGS THE FINISHED TEXT USES, SPLIT BY AXIS — his 2026-08-16
-                // report that the badge is fat while the keyboard is up and correct after Done.
-                //
-                // This was one uniform `.padding(14)`, so the badge was 14pt tall above and below the
-                // words while `storyStyledText` gives them 8 — six points at each end, which is the
-                // whole of the resize he photographed. The horizontal figures always agreed. Read
-                // both from the same place as the display or they will drift again.
-                .padding(.horizontal, draft.background == .plain ? 6 : 14)
-                .padding(.vertical, draft.background == .plain ? 2 : 8)
-                .background {
-                    switch draft.background {
-                    case .plain: Color.clear
-                    case .semi:  RoundedRectangle(cornerRadius: 10).fill(.black.opacity(0.38))
-                    case .solid: RoundedRectangle(cornerRadius: 10).fill(draft.color)
-                    }
-                }
-                // The cap, in the display's position: it bounds what the Text above is PROPOSED, so
-                // long text wraps at 320 exactly as the posted overlay does, and the background has
-                // already sized itself to the words by the time this runs. See the note above.
-                .frame(maxWidth: 320)
-                .contentShape(Rectangle())          // tap anywhere on the text block, not just the glyphs
-                .onTapGesture { focused = true }
-                // Their `view.convert(textView.bounds.center, from: textView)` — the words' centre in
-                // a space the canvas can be asked about. Kept current rather than measured on the way
-                // out, because on the way out the keyboard is already moving it.
-                .onGeometryChange(for: CGPoint.self,
-                                  of: { CGPoint(x: $0.frame(in: .global).midX,
-                                                y: $0.frame(in: .global).midY) }) { blockCenter = $0 }
-                Spacer()
-            }
-        }
-        // ⚠️ THE BAR IS THE KEYBOARD'S OWN ACCESSORY VIEW NOW, AND THAT IS THEIR MECHANISM RATHER
-        // THAN A BETTER GUESS AT A CURVE.
-        //
-        // His report: tapping Done drops the controls to the bottom before the keyboard has finished
-        // closing. Every attempt to answer that by timing an animation against the keyboard is a
-        // guess, and their own source says so in a comment — `ImageEditorViewController+Text`, where
-        // they explain that "animations of textViewContainer.frame don't match animations of the
-        // keyboard" and work around the gap by extending a background 300pt below rather than trying
-        // to chase it.
-        //
-        // What they actually rely on is that the styling bar is not chasing the keyboard at all:
-        //
-        //     textView.inputAccessoryView = textViewAccessoryToolbar
-        //
-        // An accessory view IS part of the keyboard. It cannot lead it or lag it, on any curve, on
-        // any iOS version, because there is no second animation to disagree with. Their text-story
-        // composer does the identical thing (`TextStoryComposerView.init`), so both of their text
-        // editors put the same bar in the same place.
-        //
-        // `ToolbarItemGroup(placement: .keyboard)` is SwiftUI's door to that same accessory view.
-        //
-        // ⚠️ AND IT CHANGES HOW THE BAR LOOKS, WHICH IS THE PRICE HE ACCEPTED WHEN HE ASKED FOR THIS
-        // "exactly like Signal". It sat in glass floating over the photograph; it now sits on the
-        // keyboard's own bar above the keys, which is where theirs sits. The controls, their order
-        // and their sizes are untouched — only the surface under them moved.
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                textToolBar
-            }
-        }
-        // ⚠️ NOTHING HERE MOVES THIS SCREEN FOR THE KEYBOARD, AND THE ATTEMPT TO IS REVERTED.
-        //
-        // Answering his "the keyboard closes too fast" by turning off SwiftUI's own avoidance and
-        // padding the bottom by the keyboard's height BROKE THE SCREEN: padding the outer stack
-        // shortens it, so the dim, the text and the bar were all laid out inside a box the height of
-        // the space above the keys — his screenshot, with the whole editor squeezed into a band at
-        // the top and the photo showing underneath it.
-        //
-        // The automatic avoidance is correct about WHERE this screen goes, and with the bar gone from
-        // this stack it is now the ONLY thing between the words and the keyboard — which is their
-        // `textViewContainer.bottomAnchor.constraint(equalTo: keyboardLayoutGuide.topAnchor)` with
-        // the words centred inside it.
-        .onAppear { focused = true }
-    }
-
-    /// THE TOOL BAR, LIFTED OUT OF THE STACK SO IT CAN RIDE THE KEYBOARD. Same controls, same order,
-    /// same sizes as when it floated; see the note at the `toolbar` that installs it.
-    private var textToolBar: some View {
-                VStack(spacing: 12) {
-                    // THE FONTS, BEHIND THE Aa THAT NAMES THEM. A permanent row of four for a choice
-                    // made once per caption is a row spent on nothing most of the time; the button
-                    // that opens it draws itself in the font it would give you, so the row is not
-                    // the only way to know what is selected.
-                    if showFonts {
-                        HStack(spacing: 12) {
-                            ForEach(TextOverlay.FontStyle.allCases, id: \.self) { fs in
-                                Text("Aa").font(.system(size: 16, weight: .semibold, design: fs.design))
-                                    .foregroundStyle(draft.font == fs ? Color.black : .white)
-                                    .frame(width: 46, height: 32)
-                                    .background(draft.font == fs ? Color.white : Color.white.opacity(0.16),
-                                                in: Capsule())
-                                    .contentShape(Capsule())
-                                    .onTapGesture { draft.font = fs }
-                            }
-                        }
-                        .transition(.opacity)
-                    }
-                    // ONE BAR: the tools, the colours, and the way out.
-                    HStack(spacing: 10) {
-                        HStack(spacing: 18) {
-                            // Aa is a door, not a cycle, so nothing is chosen by accident — and it
-                            // wears the font it currently holds.
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.18)) { showFonts.toggle() }
-                            } label: {
-                                Text("Aa")
-                                    .font(.system(size: 17, weight: .semibold, design: draft.font.design))
-                                    .foregroundStyle(showFonts ? Color(hex: 0x3DA1FD) : .white)
-                                    .frame(width: 32, height: 32).contentShape(Rectangle())
-                            }
-                            .buttonStyle(StoryPressStyle())
-                            barIcon(alignIcon(draft.alignment), active: false) {
-                                draft.alignment = nextAlign(draft.alignment)
-                            }
-                            barIcon("a.square", active: draft.background != .plain) {
-                                draft.background = nextBg(draft.background)
-                            }
-                        }
-                        .padding(.horizontal, 16).frame(height: 46)
-                        .liquidGlass(Capsule())
-
-                        // THE NINE COLOURS, STILL ALL NINE. They scroll rather than wrap, because
-                        // white and black have to stay one tap away and a wrapped second row is the
-                        // band this redesign is removing. The reference puts a spectrum here
-                        // instead; a spectrum cannot be tapped for exactly white or exactly black,
-                        // which is what a caption on a photograph needs most.
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 10) {
-                                ForEach(palette, id: \.self) { c in
-                                    Circle().fill(c).frame(width: 24, height: 24)
-                                        .overlay(Circle().strokeBorder(.white,
-                                                                       lineWidth: draft.color == c ? 3 : 1))
-                                        .contentShape(Circle())
-                                        .onTapGesture { draft.color = c }
-                                }
-                            }
-                            .padding(.horizontal, 4)
-                        }
-                        .frame(height: 46)
-
-                        Button { finish() } label: {
-                            Image(systemName: "checkmark").font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 44, height: 44)
-                                .liquidGlass(Circle(), interactive: true, tint: Color(.systemBlue))
-                                .contentShape(Circle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(.horizontal, 16)
-                }
-    }
-
-    /// A plain icon inside the tool capsule — the capsule is its background, exactly as on the crop
-    /// and pen bars, so the editor's three tool screens are laid out the same way.
-    private func barIcon(_ name: String, active: Bool, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: name).font(.system(size: 18, weight: .medium))
-                .foregroundStyle(active ? Color(hex: 0x3DA1FD) : .white)
-                .frame(width: 32, height: 32).contentShape(Rectangle())
-        }
-        .buttonStyle(StoryPressStyle())
-    }
-}
+// It was a SwiftUI screen that tried to reach three UIKit mechanisms through SwiftUI doors: a
+// keyboard toolbar for the controls, automatic keyboard avoidance for the centring, and a timer for
+// the hand-back. Each door is a near-miss, and the near-misses are exactly his six reports — the bar
+// that never appeared, the words that were not centred, the block that moved after Done.
+//
+// The replacement is `StoryTextToolEditor.swift`, which is the reference app's own editor: an
+// `inputAccessoryView` for the bar, `keyboardLayoutGuide` for the editing area, and
+// `resignFirstResponder` for Done. Its header holds all four mechanisms and where each was read from.
 
 // Springy press feedback for the story-editor controls.
 /// An AVPlayerLayer sized to its view. Deliberately tiny: the composer needs to SEE the clip, and a
