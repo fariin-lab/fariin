@@ -746,15 +746,24 @@ struct StoryEditorView: View {
                 // it was a sticker picker at all.
                 .presentationDetents([.fraction(0.8), .large])
                 .presentationDragIndicator(.visible)
-                // ⚠️ NOTHING IS SAID ABOUT THE BACKGROUND OR THE CORNERS ON PURPOSE (his
-                // 2026-08-16: "make it real liquid glass for apple design"). iOS 26 gives a sheet
-                // its own Liquid Glass at a partial detent and turns it opaque as it reaches full
-                // height, and it rounds it to the radius that matches the phone it is running on.
-                // The two lines that used to be here — `.presentationBackground(.ultraThinMaterial)`
-                // and `.presentationCornerRadius(28)` — replaced both of those with a pre-26 blur
-                // and a number, which is how the tray ended up a flat grey panel in his screenshot.
-                // Overriding the system here is the definition of the custom look he keeps
-                // reporting; see [[kulan-prefer-native-not-custom]].
+                // ⚠️ BLACK, AND THIS REVERSES HIS 2026-08-16 INSTRUCTION ON PURPOSE. Recorded rather
+                // than quietly swapped, because the note that used to be here argued the opposite
+                // case and argued it correctly for what he asked for then.
+                //
+                // Then: "make it real liquid glass for apple design", and the answer was to say
+                // nothing at all and let iOS 26 draw the sheet's own glass — the two lines before
+                // that (`.ultraThinMaterial` + a hand-picked corner radius) were replacing the
+                // system's glass with a pre-26 blur, which is what made it a flat grey panel.
+                //
+                // Now, 2026-08-17, having seen the real thing over a photograph: "sticker sheet make
+                // black". The glass is doing its job — the picture behind it reads straight through
+                // the stickers, which are themselves cut-outs with no background of their own, so
+                // every sticker in the grid is competing with whatever the story happens to be. A
+                // solid ground is the right call for this particular tray and it is his to make.
+                //
+                // ⚠️ DO NOT "RESTORE" THE GLASS ON THE STRENGTH OF THE OLDER NOTE. Both instructions
+                // are real, they are about different things, and this one is later.
+                .presentationBackground(Color.black)
         }
         .storyAlwaysDark()
     }

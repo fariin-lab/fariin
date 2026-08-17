@@ -130,14 +130,15 @@ struct StoryStickerSheet: View {
     /// OWNS both the container and the elements, or the selection has nothing to melt across.
     @Namespace private var glass
     @State private var route: [Route] = []
-    /// ⚠️ RECENT ONLY WHEN THERE IS A RECENT — his 2026-08-17 "do not select recent by default, that
-    /// is not good if the recent is empty".
+    /// ⚠️ ALWAYS POPULAR, NOT "RECENT IF THERE IS ONE" — his 2026-08-17 correction, second time of
+    /// asking: "always default tab is popular".
     ///
-    /// The tray opened on the one tab that can be empty, so a first-time open was a chip row over the
-    /// words "stickers you use will show up here" and nothing to tap. Popular is the endpoint's own
-    /// trending and is never empty. The recents are a synchronous read of `UserDefaults`, so this can
-    /// be answered before the first frame rather than corrected after it.
-    @State private var tab: StickerTab = StickerRecents.all().isEmpty ? .popular : .recent
+    /// The first pass at this opened on Recent whenever the phone had any history at all, which is
+    /// still a tray that opens on a handful of stickers already used rather than on something to
+    /// choose from. Recent is one tap away and it is where you go deliberately. Popular is the
+    /// endpoint's own trending, it is never empty, and it is cached for the life of the app — so this
+    /// is also the only opening tab that costs no round trip on a second open.
+    @State private var tab: StickerTab = .popular
     @State private var query = ""
     @State private var stickers: [GiphyService.Gif] = []
     @State private var loading = false
@@ -533,7 +534,23 @@ private struct LinkStickerScreen: View {
         .padding(20)
         .navigationTitle("Link")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { focused = true }
+        // ⚠️ THE KEYBOARD WAITS FOR THE PUSH TO FINISH — his 2026-08-17 "when I click Location or
+        // Link the page comes in laggy".
+        //
+        // `onAppear` raised it on the same frame the push started, and inside a sheet that is three
+        // motions at once: the page slides in, the keyboard slides up, and the sheet itself has to
+        // grow from its 0.8 detent to make room for the keyboard. The stutter is those three
+        // fighting for the same frames, not the page being slow to build — there is one text field
+        // on it.
+        //
+        // 0.35s is the push's own length, so the field takes focus as the page lands and the sheet
+        // then resizes on its own. Two motions in sequence read as faster than three at once even
+        // though this finishes later. `task` and not `asyncAfter` so a page left before it lands
+        // cancels instead of raising a keyboard on the screen behind.
+        .task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            focused = true
+        }
     }
 }
 
@@ -597,7 +614,12 @@ private struct PlaceStickerScreen: View {
         }
         .navigationTitle("Location")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { focused = true }
+        // The same wait as the Link page, and this one has more to build behind it — see the note
+        // there. The list is empty until a search lands, so nothing is delayed but the keyboard.
+        .task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            focused = true
+        }
         // Debounced, for the same reason the sticker search is: a request per keystroke is a request
         // per keystroke, and MapKit rate-limits.
         .onChange(of: query) { _, q in
