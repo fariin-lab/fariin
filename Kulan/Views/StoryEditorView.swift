@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine   // NotificationCenter.publisher, for the keyboard's own didHide
 import PencilKit
 import CoreImage
 import CoreImage.CIFilterBuiltins
@@ -299,6 +300,26 @@ struct StoryEditorView: View {
     @State private var overlays: [TextOverlay] = []
     @State private var selectedID: UUID?
     @State private var editingID: UUID?
+    /// ⚠️ THE Aa EDITOR'S KEYBOARD IS NOT THE CAPTION BAR'S, AND THE CAPTION BAR WAS RIDING IT.
+    ///
+    /// His report: "Aa feature is working good but only one bug — when i close keyboard caption bar is
+    /// doing movement". The caption bar is not part of the Aa editor and is not even visible while it
+    /// is up (`captionLayer`'s opacity is 0 for `editingID != nil`) — but it is a sibling that respects
+    /// the keyboard on purpose, so SwiftUI's avoidance lifted it a few hundred points along with
+    /// everything else the Aa keyboard pushed. Done then made it visible again while it was still up
+    /// there, and it rode the keyboard back down in front of him. Nothing was mispositioned at either
+    /// end; it was travelling a distance it had no business travelling at all.
+    ///
+    /// So the caption layer ignores the keyboard for as long as the Aa editor owns one. It cannot be
+    /// keyed on `editingID` directly: that clears when Done is pressed, which is the START of the
+    /// keyboard's dismissal, so the bar would snap down (or up) mid-flight — the same bug wearing a
+    /// different sign. This is raised when the editor opens and lowered on `keyboardDidHide`, by which
+    /// time the inset is already zero and the flip costs no movement at all.
+    ///
+    /// ⚠️ THE CAPTION'S OWN FOCUS IS UNTOUCHED BY THIS. When the caption field is the first responder
+    /// there is no Aa editor, so this is false and the bar rides its own keyboard exactly as it did —
+    /// including the animated padding below it, which is a separate fix and still needed.
+    @State private var textToolKeyboardUp = false
     @State private var draggingID: UUID?
     @State private var trashHot = false
     @State private var guideV = false
@@ -804,6 +825,18 @@ struct StoryEditorView: View {
         // rather than as a cross-fade where both sets of buttons are half-visible at once.
         .onAppear {
             withAnimation(.easeOut(duration: 0.28).delay(0.04)) { chromeIn = true }
+        }
+        // ⚠️ RAISED WHEN THE Aa EDITOR OPENS AND LOWERED ONLY WHEN ITS KEYBOARD HAS GONE. Both halves
+        // matter; see `textToolKeyboardUp`, which is where the reason is written down.
+        .onChange(of: editingID) { _, id in
+            if id != nil { textToolKeyboardUp = true }
+        }
+        // `keyboardDidHide`, not `willHide`: this must flip on the far side of the animation, when the
+        // safe-area inset is already back to nothing, so the flip itself moves the caption bar by
+        // exactly zero points. `editingID` is re-checked because a second Aa session can begin inside
+        // the dismissal of the first (tap another text block), and that one still owns the keyboard.
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
+            if editingID == nil { textToolKeyboardUp = false }
         }
         // Closing the composer must not leave a decoder and an audio session running behind it.
         .onDisappear { stopPreview() }
@@ -1551,6 +1584,10 @@ struct StoryEditorView: View {
         //
         // Both numbers now come off the notification itself. See `KeyboardWatcher.systemAnimation`.
         .animation(keyboard.systemAnimation, value: captionFocused)
+        // ⚠️ NOT FOR THE Aa EDITOR'S KEYBOARD. `edges: []` is "ignore nothing", so this is one
+        // modifier with one identity rather than a branch that would rebuild the layer. See
+        // `textToolKeyboardUp` for why it is latched rather than read off `editingID`.
+        .ignoresSafeArea(.keyboard, edges: textToolKeyboardUp ? .bottom : [])
         .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // trash owns the bottom while dragging text
     }
 

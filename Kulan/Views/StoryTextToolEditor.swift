@@ -501,6 +501,20 @@ final class StoryTextToolbar: UIControl {
 
     /// The Aa wears the font it would give you — theirs does the same with a per-style glyph, which is
     /// what makes a cycling button readable: the control IS the preview.
+    ///
+    /// ⚠️ ONE LINE, AND IT HAD BROKEN INTO TWO — his report, with the button circled: "in story Aa
+    /// icon now is like 2 line, fix plz, one line like Aa, not A / a".
+    ///
+    /// The button is a fixed 44pt square, and a `.plain()` configuration keeps its own content insets
+    /// (8pt each side on this metric). That leaves about 28pt for the title, which "Aa" fits at the
+    /// system font and does NOT fit in the wider of the cycling styles — so UIKit did what it is
+    /// supposed to do with a title that will not fit on one line and wrapped it. The glyph the control
+    /// exists to preview was the thing that made it wrap, which is why it looked like a rendering bug
+    /// rather than a layout one.
+    ///
+    /// Both halves are said explicitly: the insets go, so the title has the whole 44pt, and the line
+    /// break mode is clipping, so a style wider even than that is trimmed at the edges instead of
+    /// folding in half. Nothing about the size, the spacing or the font changes.
     private func updateFontButton() {
         // Built through `NSAttributedString` rather than an `AttributeContainer`: with both SwiftUI
         // and UIKit in scope, `container.font` is ambiguous between `Font` and `UIFont`.
@@ -509,6 +523,12 @@ final class StoryTextToolbar: UIControl {
             .foregroundColor: UIColor.white,
         ])
         fontButton.configuration?.attributedTitle = AttributedString(attributed)
+        fontButton.configuration?.contentInsets = .zero
+        fontButton.configuration?.titleLineBreakMode = .byClipping
+        // ⚠️ THE LABEL IS TOLD AS WELL AS THE CONFIGURATION. A configuration-based button rebuilds its
+        // label whenever the configuration is updated, and this is re-run on every style change — so
+        // the belt is re-applied each time rather than set once at init and lost.
+        fontButton.titleLabel?.numberOfLines = 1
     }
 
     private func updateAlignButton() {
