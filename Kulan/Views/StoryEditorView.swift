@@ -36,20 +36,70 @@ final class KeyboardWatcher: ObservableObject {
     /// A view can subtract this from its own `maxY` and get exactly the overlap it has to clear.
     /// `.infinity` while the keyboard is down means "nothing overlaps", with no special case.
     @Published var topOnScreen: CGFloat = .infinity
+
+    /// THE KEYBOARD'S OWN CLOCK, TAKEN OFF THE NOTIFICATION RATHER THAN GUESSED AT.
+    ///
+    /// The reference app reads exactly these two keys in its `keyboardWillChangeFrame` handler and
+    /// builds one transition out of them, which every frame it moves is then set inside:
+    ///
+    ///     var duration = userInfo[keyboardAnimationDurationUserInfoKey] ?? 0.0
+    ///     if duration > .ulpOfOne { if #available(iOS 26.0, *) {} else { duration = 0.5 } }
+    ///     let curve = userInfo[keyboardAnimationCurveUserInfoKey] ?? 7
+    ///     transitionCurve = (curve == 7) ? .spring : .easeInOut
+    ///
+    /// ⚠️ Note what the version check says: below iOS 26 they THROW THE REPORTED DURATION AWAY and use
+    /// 0.5; on 26 they keep it. We are 26-only, so the reported number is the one to use.
+    @Published private(set) var animationDuration: Double = 0.25
+    /// UIKit's curve constant. 7 is the keyboard's own private curve and is what it reports in
+    /// practice; theirs maps 7 to a spring and everything else to ease-in-out.
+    @Published private(set) var animationCurve: UInt = 7
+
+    /// The notification's clock as something SwiftUI can animate with.
+    ///
+    /// ⚠️ 0.23, 1.0, 0.32, 1.0 IS THEIR OWN BEZIER FOR CURVE 7, not a shape picked to look right.
+    /// `springAnimationSolver` in `ListViewAnimation.swift` samples `kCAMediaTimingFunctionSpring`
+    /// where it can and falls back to `bezierPoint(0.23, 1.0, 0.32, 1.0, t)` where it cannot — and
+    /// `UIView.AnimationOptions(rawValue: 7 << 16)` is how they hand the same curve to UIKit. SwiftUI
+    /// has no door to `7 << 16`, so their own written-out form of it is the closest honest thing.
+    var systemAnimation: Animation {
+        let d = animationDuration > .ulpOfOne ? animationDuration : 0.25
+        return animationCurve == 7 ? .timingCurve(0.23, 1.0, 0.32, 1.0, duration: d)
+                                   : .easeInOut(duration: d)
+    }
+
     private var tokens: [NSObjectProtocol] = []
     init() {
+        // ⚠️ `queue: nil`, WHICH IS THEIRS, AND `.main` IS NOT THE SAME THING. With a queue handed
+        // in, the block is ENQUEUED — even `.main` runs it in a later runloop turn than the post. The
+        // keyboard is already moving by then, so anything driven off this was a turn behind it every
+        // single time. `nil` runs the block synchronously on the posting thread, which is the main
+        // thread, which is where the keyboard posts from.
         tokens.append(NotificationCenter.default.addObserver(
-            forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { [weak self] n in
+            forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: nil) { [weak self] n in
+                guard let self else { return }
+                self.readClock(from: n)
                 guard let f = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
-                self?.height = max(0, UIScreen.main.bounds.height - f.origin.y)
-                self?.topOnScreen = f.origin.y
+                self.height = max(0, UIScreen.main.bounds.height - f.origin.y)
+                self.topOnScreen = f.origin.y
         })
         tokens.append(NotificationCenter.default.addObserver(
-            forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { [weak self] _ in
-                self?.height = 0
-                self?.topOnScreen = .infinity
+            forName: UIResponder.keyboardWillHideNotification, object: nil, queue: nil) { [weak self] n in
+                guard let self else { return }
+                self.readClock(from: n)
+                self.height = 0
+                self.topOnScreen = .infinity
         })
     }
+
+    private func readClock(from n: Notification) {
+        if let d = (n.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue {
+            animationDuration = d
+        }
+        if let c = (n.userInfo?[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.uintValue {
+            animationCurve = c
+        }
+    }
+
     deinit { tokens.forEach { NotificationCenter.default.removeObserver($0) } }
 }
 
@@ -217,8 +267,15 @@ struct StoryEditorView: View {
     @State private var pendingShare: StoryShareData?
     @State private var pendingExtras: [StoryExtra] = []
     @FocusState private var captionFocused: Bool
-    // No KeyboardWatcher here any more: the bottom bar is a sibling of the canvas and SwiftUI's own
-    // avoidance lifts it. The class stays because the video editor and the text composer still use it.
+    /// ⚠️ FOR THE KEYBOARD'S CLOCK, NOT FOR ITS HEIGHT. Nothing on this screen computes a keyboard
+    /// height and that rule stands — the bottom bar is a sibling of the canvas and SwiftUI's own
+    /// avoidance lifts it, which is the system moving it on the system's curve.
+    ///
+    /// What was missing is that the caption's OWN change — the pill dropping from the card's bottom
+    /// edge to just above the keys, about 70pt — was being animated at `.easeOut(0.25)` beside it.
+    /// Two motions of one bar on two curves is his "not smooth". The watcher now carries the
+    /// notification's duration and curve so the second motion can be run on the first one's clock.
+    @StateObject private var keyboard = KeyboardWatcher()
     // Adaptive control contrast: dark icons over a light photo region, light over dark (so buttons are
     // never invisible on a white background). Sampled per-region (top = X, bottom = tools).
     @State private var topIconDark = false
@@ -1492,10 +1549,19 @@ struct StoryEditorView: View {
         // "two state changes, two moments, neither animated with the keyboard" — surviving in the one
         // number that still switches on focus.
         //
-        // Nothing here measures a keyboard, and that rule stands: this is a DURATION, not a height.
+        // Nothing here measures a keyboard, and that rule stands: this is a CLOCK, not a height.
         // Resigning first responder starts the keyboard's animation in the same runloop turn as the
         // focus flip, so matching its length is enough to make the two one motion.
-        .animation(.easeOut(duration: 0.25), value: captionFocused)
+        //
+        // ⚠️ AND MATCHING ITS LENGTH WAS NOT ENOUGH, BECAUSE `.easeOut(0.25)` IS NOT THE CURVE THE
+        // KEYBOARD TRAVELS ON. The keyboard reports curve 7, its own private one; the reference app
+        // maps 7 to a spring and hands UIKit `UIView.AnimationOptions(rawValue: 7 << 16)`, and where
+        // it cannot sample that it writes the same shape out as `bezierPoint(0.23, 1.0, 0.32, 1.0)`.
+        // Ease-out is a much lazier curve than that, so the pill and the keys left together and
+        // arrived apart — which is the whole of "it does not look smooth".
+        //
+        // Both numbers now come off the notification itself. See `KeyboardWatcher.systemAnimation`.
+        .animation(keyboard.systemAnimation, value: captionFocused)
         .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // trash owns the bottom while dragging text
     }
 
@@ -1581,6 +1647,19 @@ struct StoryEditorView: View {
         // the content was already taller than the floor it was being held to. The + now
         // measures 40 itself, which sets the height and keeps a full-height touch target.
         .padding(.leading, 6).padding(.trailing, 18).frame(minHeight: 40)
+        // ⚠️ THE WHOLE PILL TAKES THE TAP, AND THIS IS THE OTHER HALF OF "the keyboard opens late".
+        //
+        // A SwiftUI `TextField` only claims its own text rectangle. Inside a 40pt pill that leaves
+        // the 18pt trailing gutter, the 6pt above and below the text, and everything to the right of
+        // a short caption as dead glass — tap there and NOTHING happens, so the keyboard arrives on
+        // whichever later tap happens to land on the words. That is not a slow keyboard, it is a
+        // missed one, and it reads identically.
+        //
+        // Their input panel puts the activation on the panel, not on the text view
+        // (`MessageInputPanelComponent` activates the input from a tap anywhere in it), which is what
+        // makes theirs feel instant: there is no way to miss.
+        .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .onTapGesture { captionFocused = true }
         // LIQUID GLASS, TINTED DARK (owner 2026-08-03: "in story caption bar make it liquid
         // glass"). Plain glass was here once and came back off: on a bright photo it went pale
         // and the white placeholder disappeared into it, which he photographed. `tint` is
