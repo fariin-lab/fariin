@@ -398,14 +398,9 @@ struct StoryTextEditor: UIViewRepresentable {
 
     /// Vertically centred until it overflows, top-aligned and scrolling after that.
     final class CentringTextView: UITextView {
-        /// The words' own height, measured in the layout pass that already needed it. Kept because
-        /// `point(inside:)` is asked on every touch and `sizeThatFits` on a text view is a layout.
-        private var fittedHeight: CGFloat = 0
-
         override func layoutSubviews() {
             super.layoutSubviews()
             let fits = sizeThatFits(CGSize(width: bounds.width, height: .greatestFiniteMagnitude)).height
-            fittedHeight = fits
             let inset = max(0, (bounds.height - fits) / 2)
             // The threshold is what stops this from being a layout loop: writing `contentInset`
             // triggers another layout pass, so it must settle rather than merely converge.
@@ -427,38 +422,41 @@ struct StoryTextEditor: UIViewRepresentable {
         ///
         /// Full WIDTH is claimed, not a box round the glyphs, because theirs is full width too
         /// (`withHorizontalFittingPriority: .required` against the content guide) — the bare card is
-        /// above and below the words, never beside them. Once the text overflows, the inset is zero
-        /// and the band is taller than the view, so the whole thing claims touches again and
-        /// scrolling and selection are untouched.
+        /// above and below the words, never beside them.
+        ///
+        /// ⚠️ THE BAND IS ASKED FOR, NOT DERIVED, AND THE DERIVING IS WHAT HIS "sometimes touching the
+        /// text closes the keyboard" WAS.
+        ///
+        /// It used to be built out of `sizeThatFits` and `contentOffset`, which meant reasoning about
+        /// where a scroll view has decided to put its content: a top inset centres the words by moving
+        /// the offset, EXCEPT in the states where UIKit leaves the offset alone, and the band was then
+        /// a whole inset away from the words. Blank lines inside a status move it further, because the
+        /// fitted height counts them and the eye does not. I got that arithmetic wrong twice in one
+        /// day, which is the real argument against it.
+        ///
+        /// `caretRect(for:)` is UIKit's own answer, in THIS VIEW'S coordinates, already accounting for
+        /// the inset, the offset, the line heights and the container. The caret at the start of the
+        /// document and the caret at the end bracket every line between them, blank ones included —
+        /// so the region is the text as drawn, whatever the scroll view did to get it there. It is
+        /// also TextKit-agnostic, which reading the layout manager is not: touching `layoutManager` on
+        /// a TextKit 2 view silently drops it back to TextKit 1.
         override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
             guard super.point(inside: point, with: event) else { return false }
-            // ⚠️ ONE LINE OF AIR ABOVE AND BELOW THE WORDS, NOT A FINGER EDGE — his 2026-08-17
-            // drawing, a ring around the words with real space in it: "if I touch that area don't
-            // close the keyboard".
-            //
-            // It was `+ 16`, eight points each side, which is the slop you give a BUTTON. This is not
-            // a button — it is the thing being written, and the area a person reads as "the text" is
-            // the words plus the space they are sitting in. Eight points meant a tap a thumb's width
-            // under the last line ended the editing he was in the middle of.
-            //
-            // A line height is the unit because it is the only one that stays right at every size:
-            // the composer's font runs from 20-odd points up to the full status size, and a fixed
-            // number is either mean at the top of that range or swallows the card at the bottom.
-            // The floor keeps a one-word status reachable when the fitted height is the 48 below.
-            //
-            // What it must NOT become is the whole card. The way out of the keyboard is a tap on the
-            // card, so the bare space has to survive: at the largest text this leaves the top of the
-            // card and the strip above the bar, which is where a thumb goes to finish anyway.
-            let air = max(24, (font?.lineHeight ?? 24))
-            let band = max(fittedHeight, 48) + air * 2
-            // ⚠️ WHERE THE WORDS START ON SCREEN IS `-contentOffset.y`, NOT THE INSET. A scroll view
-            // draws content at `contentY - contentOffset.y`, and a top inset does its work by moving
-            // the offset to `-inset` rather than by shifting the drawing — so reading the inset here
-            // as well would count the centring twice and put the band a whole inset too low. With
-            // the text overflowing the inset is zero, the offset is positive, and this is negative,
-            // which is exactly right: the band starts above the view and covers all of it.
-            let top = -contentOffset.y - air
-            return point.y >= top && point.y <= top + band
+            let first = caretRect(for: beginningOfDocument)
+            let last = caretRect(for: endOfDocument)
+            // A caret can legitimately be unavailable for a frame — mid-relayout, or before the first
+            // layout pass. Keeping the touch is the safe answer to a question we cannot yet answer,
+            // because the failure it avoids is the one he is reporting.
+            // `CGRect.null` and infinities are both real answers from `caretRect(for:)` before the
+            // first layout pass.
+            guard !first.isNull, !last.isNull, first.minY.isFinite, last.maxY.isFinite else { return true }
+            // One line of air above and below, his 2026-08-17 drawing: a ring around the words with
+            // real space in it. A line height rather than a fixed number because the composer's font
+            // runs from about twenty points to the full status size, so any constant is either mean
+            // at the top of that range or swallows the card at the bottom.
+            let air = max(24, font?.lineHeight ?? 24)
+            return point.y >= min(first.minY, last.minY) - air
+                && point.y <= max(first.maxY, last.maxY) + air
         }
     }
 

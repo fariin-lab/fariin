@@ -764,6 +764,19 @@ struct StoryEditorView: View {
                 // ⚠️ DO NOT "RESTORE" THE GLASS ON THE STRENGTH OF THE OLDER NOTE. Both instructions
                 // are real, they are about different things, and this one is later.
                 .presentationBackground(Color.black)
+                // ⚠️ EDGE TO EDGE — his 2026-08-17, twice: "no space left and right and bottom".
+                //
+                // The gap is not a background and not a corner radius. iOS 26 presents a sheet at a
+                // partial detent as a FLOATING panel inset from the screen, and nothing about the
+                // background can reach that. `presentationSizing(.page)` is the documented way to ask
+                // for the full-width page presentation instead of the fitted, floating one.
+                //
+                // ⚠️ I CANNOT VERIFY THIS FROM HERE and it is the one line in this change that is a
+                // best-supported reading rather than something measured. If the gap survives on
+                // device, the answer is that the tray stops being a system sheet at all and becomes
+                // our own layer, the way the viewers sheet already is — which is a real piece of work
+                // and not a modifier.
+                .presentationSizing(.page)
         }
         .storyAlwaysDark()
     }
