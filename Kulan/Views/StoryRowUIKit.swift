@@ -440,10 +440,25 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
     /// something inside one.
     ///
     /// A sibling because it must be able to dim a card it knows nothing about — which is precisely
-    /// how their central, playing item is dimmed by the same code path as a thumbnail, and how ours
-    /// dims the live story, which is not in this view hierarchy at all. The row's own view sits ABOVE
-    /// the live layer, so a black layer in it covers the story the same way it covers a card.
+    /// how their central, playing item is dimmed by the same code path as a thumbnail.
+    ///
+    /// ⚠️ ONE EXCEPTION, AND IT IS WRITTEN HERE BECAUSE THE OPPOSITE CLAIM STOOD IN THIS COMMENT FOR
+    /// FOUR DAYS AND COST A REPORT. This view IS above the live layer — `coreLayers` is
+    /// `ZStack { storyLayer; viewersBackdrop }` and the row is inside the second — so a tint here
+    /// reaches the live story perfectly well. It just must not, because that story is ALREADY
+    /// wearing `StoryCardMorph.contentTint` at the same number, and two black layers compound. The
+    /// live item's tint is therefore written at zero; see the note beside the write.
     private var tints: [String: CALayer] = [:]
+    /// THE DIM THE MORPH IS CURRENTLY DRAWING OVER THE LIVE CARD — remembered so the card can take it
+    /// back at the instant the live layer leaves.
+    ///
+    /// A card that stops being live has had its own tint at zero for as long as it was live, and the
+    /// brightness the eye was reading came from the morph. Hand it the placement's number instead and
+    /// it steps to the DESTINATION on the spot: on a tap that is the centre card going dark before it
+    /// has moved anywhere, the same shape as the 2026-08-16 arriving-card report. So the pass that
+    /// takes the live layer away seats the tint at what the morph was showing and lets the settle
+    /// carry it the rest of the way, like every other card.
+    private var lastLiveDim: CGFloat = 0
     /// Their `ignoreScrolling` fence. A programmatic offset must not be mistaken for a finger.
     private var ignoreScrolling = false
 
@@ -879,6 +894,11 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         let midX = view.convert(CGPoint(x: view.bounds.midX, y: 0), to: nil).x
         let rest = restContentWindowRect(midX: midX)
 
+        // ⚠️ READ ONCE, BEFORE THE LOOP. `placeLiveStory` rewrites `lastLiveDim`, and on a backward
+        // move the arriving story is laid out BEFORE the leaving one — so a handover reading the
+        // property directly would be handed the value this same pass had just written for the other
+        // card. The pass's question is "what was the live card wearing when this pass began".
+        let previousLiveDim = lastLiveDim
         var valid = Set<String>()
         for (i, story) in stories.enumerated() {
             let cf = geometry.combinedFraction(index: i, rowPosition: rowPos)
@@ -934,6 +954,12 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             // pass is placed without the animation (see the note above), so "is this pass animated"
             // is per item, not per pass.
             let willAnimate = settle != nil && existing != nil
+            // ⚠️ WHOSE BLACK LAYER IS THIS CARD'S BRIGHTNESS, AND IS THIS THE PASS IT CHANGES HANDS.
+            //
+            // Read `item.isLive` while it is still the PREVIOUS answer — `setLive` is called further
+            // down, after the seed, and the seed needs the old tint to read its leaving dim off.
+            let tintOpacity: Float = isLive ? 0 : Float(p.dim)
+            let handover = item.isLive != isLive
             let write = {
                 item.center = centre
                 item.transform = CGAffineTransform(scaleX: scale, y: scale)
@@ -969,7 +995,41 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
                     // be multiplied by. `p.cornerRadius` is already the number this is meant to READ
                     // as on screen, so dividing by the scale lands exactly on it at every fraction.
                     tint.cornerRadius = p.cornerRadius / max(scale, 0.0001)
-                    tint.opacity = Float(p.dim)
+                    // ⚠️ THE LIVE CARD IS DIMMED BY THE MORPH, NOT BY THIS LAYER, AND WRITING BOTH IS
+                    // HIS "the thumbnails on the left go far too dark while my finger is still down".
+                    //
+                    // Two tints were being drawn over one card. This one — `tints[storyId]`, a sibling
+                    // in the ROW's view — and `StoryCardMorph.contentTint`, a sublayer of the live
+                    // card itself. Both black, both handed the same `p.dim`, and black over black
+                    // does not average, it COMPOUNDS: `1 - (1 - d)²`. A card one slot out asks for
+                    // 0.333 and renders 0.556; two slots out asks for 0.667 and renders 0.889.
+                    //
+                    // ⚠️ AND IT WAS INVISIBLE FOR FOUR DAYS BECAUSE THE LIVE CARD USED TO SIT AT THE
+                    // CENTRE, WHERE `d` IS 0 AND TWICE NOTHING IS STILL NOTHING. The morph's tint was
+                    // added while the live story had no item in this row at all (it was pinned at the
+                    // slot centre by the old architecture), so at the time it really was the one card
+                    // nothing dimmed. The one-item ruling then gave that story a real item here — and
+                    // a real tint with it — and nobody could see the second one, because the only
+                    // place the live card ever went was the middle.
+                    //
+                    // What made it visible is the deferred pager jump: the live story now keeps its
+                    // id for the WHOLE swipe and only hands over at rest, so the doubly-dimmed card
+                    // travels a full slot off centre in front of him and snaps back to the honest
+                    // number the instant the settle moves the live layer on. That is the whole of his
+                    // "as soon as I release my finger the brightness returns to normal" — nothing
+                    // brightens at the release, the second tint simply stops having anywhere to show.
+                    //
+                    // The morph's is the one kept, because it is a sublayer of the card: it rides the
+                    // card's own transform and its own crop mask, so it cannot be a frame or a pixel
+                    // out of step with the thing it is darkening, and it still covers the live story
+                    // in the states where this row has culled that story's item.
+                    //
+                    // On a handover pass this is still written, and it is still right: the unanimated
+                    // seat below has already put the layer where the eye last saw it, so what this
+                    // line does there is carry it to the destination with the movement — zero for the
+                    // card taking the live layer on (which is where the seat already put it, so the
+                    // animation is a no-op) and the honest cover-flow dim for the card giving it up.
+                    tint.opacity = tintOpacity
                 }
                 // ⚠️ INSIDE THE SAME WRITE AS THE CARDS, AND ON THE ANIMATED PASS THAT IS THE POINT.
                 //
@@ -1110,6 +1170,28 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
                                           dim: leavingDim),
                         settle: nil)
                 }
+            }
+            // ⚠️ THE BRIGHTNESS CHANGES OWNER HERE, IN ONE UNANIMATED STEP, AND AFTER THE SEED.
+            //
+            // After, because the seed above reads this exact layer's presentation opacity to learn
+            // what the arriving story is LEAVING — zero it first and the live layer would be seeded
+            // bright and then darken on the spot, which is the 2026-08-16 "the brightness does not
+            // follow the card" report arriving from the other side.
+            //
+            // Unanimated, and seated at what the eye is ALREADY reading rather than at where this
+            // card is going: the one becoming live gives its tint up to zero at the same instant the
+            // morph is seeded with what that tint was showing, and the one giving the live layer up
+            // takes back `previousLiveDim`, which is the number the morph had over it on the pass
+            // that just ended. Either way the black over that rectangle does not change at the swap;
+            // the settle then carries both to their destinations on the movement's own curve.
+            //
+            // On a curve instead, the two owners overlap for 0.3s and compound through the middle of
+            // it — the same doubling this whole note is about, just shorter and harder to name.
+            if handover, let tint {
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                tint.opacity = isLive ? 0 : Float(previousLiveDim)
+                CATransaction.commit()
             }
             item.setLive(isLive)
             item.updateMedia(story: story, slotW: geometry.slotW, slotH: geometry.slotH)
@@ -1300,6 +1382,9 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         //
         // One number, computed once by `StoryRowGeometry.placement` for every card including this,
         // and handed to whoever draws it. Nothing here works out a second dim of its own.
+        // What the live card is wearing, for the pass that takes the live layer off it. See
+        // `lastLiveDim`.
+        lastLiveDim = p.dim
         StoryCardMorph.shared.place(contentCenter: p.center, contentSize: p.size,
                                     cornerRadius: p.cornerRadius, fraction: geometry.fraction,
                                     dim: p.dim,
