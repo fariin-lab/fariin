@@ -1645,7 +1645,7 @@ struct StoryEditorView: View {
                     // STICKERS — his 2026-08-16 request. One button, one sheet, one callback: the
                     // tray hands back a sticker and the editor places it, so nothing else on this
                     // screen had to change to gain the tool.
-                    capsuleTool("face.smiling", active: !stickers.isEmpty) {
+                    capsuleTool(asset: "ic_sticker", active: !stickers.isEmpty) {
                         captionFocused = false
                         showStickers = true
                     }
@@ -2123,6 +2123,29 @@ struct StoryEditorView: View {
                              _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon).font(.system(size: 20, weight: .medium))
+                .foregroundStyle(active ? tint : .white)
+                .frame(width: 32, height: 32).contentShape(Rectangle())
+        }
+        .buttonStyle(StoryPressStyle())
+    }
+
+    /// The same control for an icon we draw ourselves rather than one of Apple's.
+    ///
+    /// The sticker tool is the only one of the four that has no SF Symbol worth using — `face.smiling`
+    /// is a smiley, not a sticker, and it said the wrong thing beside three tools that all name what
+    /// they do. `ic_sticker` is the shape everyone draws for this: a disc with one corner peeled.
+    /// Template-rendered from the catalogue, so it takes the same tint as its three neighbours.
+    private func capsuleTool(asset: String, active: Bool, tint: Color = .green,
+                             _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(asset)
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                // 22, not the 20 the symbols use: an SF Symbol at `.font(size: 20)` draws well past
+                // its nominal box, and matching the number rather than the drawn size would leave
+                // this one visibly the smallest thing in the capsule.
+                .frame(width: 22, height: 22)
                 .foregroundStyle(active ? tint : .white)
                 .frame(width: 32, height: 32).contentShape(Rectangle())
         }

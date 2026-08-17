@@ -138,11 +138,16 @@ final class StoryTrayContainerVC: UIViewController {
 
         addChild(hosting)
         hosting.view.backgroundColor = .clear
-        // ⚠️ NO SAFE-AREA INSETTING FROM THE CONTAINER. The panel is positioned by hand; letting the
-        // hosted content inset itself against the SCREEN's safe area would put the tab row 34pt up
-        // from the bottom of a panel that already ends at the screen's edge. SwiftUI still insets
-        // for the keyboard, which is what carries the two pushed screens.
-        hosting.safeAreaRegions = []
+        // ⚠️ NO CONTAINER INSETTING, BUT THE KEYBOARD ONE STAYS. The panel is positioned by hand;
+        // letting the hosted content inset itself against the SCREEN's safe area would put the tab
+        // row 34pt up from the bottom of a panel that already ends at the screen's edge.
+        //
+        // ⚠️ IT WAS `[]`, AND `[]` IS BOTH REGIONS, NOT ONE. `SafeAreaRegions` is an option set of
+        // `.container` and `.keyboard`, so the empty set turned the keyboard avoidance off as well —
+        // and the note here claimed the opposite. The Link and Location screens each have a text
+        // field near the bottom of what is left of the panel, so with avoidance off they type
+        // underneath the keys. `.keyboard` is the half that was meant.
+        hosting.safeAreaRegions = .keyboard
         panel.addSubview(hosting.view)
         hosting.didMove(toParent: self)
 
@@ -163,9 +168,25 @@ final class StoryTrayContainerVC: UIViewController {
                                                name: UIResponder.keyboardWillHideNotification, object: nil)
     }
 
+    /// ⚠️ RAISED FOR AS LONG AS AN ANIMATION OWNS THE PANEL, AND ITS ABSENCE WAS A REAL BUG.
+    ///
+    /// `viewDidLayoutSubviews` runs for every reason UIKit has to lay out — the hosted SwiftUI content
+    /// settling, a keyboard, a rotation, a trait change — and it re-seated the panel from
+    /// `panelOffset` every time. During a flight that number is NOT where the panel is: `animateIn`
+    /// laid the panel out at `offset: currentHeight` without ever writing it to `panelOffset`, and
+    /// `animateOutAndFinish` animated to `currentHeight` without writing it either. So any layout pass
+    /// landing inside either flight snapped the panel straight to `panelOffset` — fully open — with no
+    /// animation. That is one frame of the tray open before it slides up, and it is a tray that
+    /// appears to shut and come back when a layout lands mid-dismissal.
+    ///
+    /// Two halves to the repair: the offset is written EVERY time the panel is placed (below), and a
+    /// layout pass stands down while a flight is in progress rather than overwriting it.
+    private var isAnimatingPanel = false
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         if currentHeight <= 0 { currentHeight = restHeight }
+        guard !isAnimatingPanel else { return }
         // Only the height is re-derived on a rotation; a panel mid-drag keeps where the finger has
         // put it, which is what stops a keyboard animation from snapping it home.
         layoutPanel(height: currentHeight, offset: panelOffset)
@@ -177,8 +198,12 @@ final class StoryTrayContainerVC: UIViewController {
     /// take it back to zero or all the way out.
     private var panelOffset: CGFloat = 0
 
+    /// ⚠️ THE OFFSET IS RECORDED HERE AND NOWHERE ELSE. Every caller used to pass a number and leave
+    /// `panelOffset` saying something different, which is what let a stray layout pass put the panel
+    /// somewhere the animation never asked for. One writer, so the field and the frame cannot disagree.
     private func layoutPanel(height: CGFloat, offset: CGFloat) {
         let h = max(120, height)
+        panelOffset = offset
         panel.frame = CGRect(x: 0, y: view.bounds.height - h + offset,
                              width: view.bounds.width, height: h)
         hosting.view.frame = panel.bounds
@@ -189,14 +214,18 @@ final class StoryTrayContainerVC: UIViewController {
 
     func animateIn() {
         currentHeight = restHeight
+        // Seated fully out of frame, and `panelOffset` now says so — see `layoutPanel`.
         layoutPanel(height: currentHeight, offset: currentHeight)
+        view.layoutIfNeeded()
+        isAnimatingPanel = true
         // The sheet's own arrival, near enough: a firm spring with no bounce to speak of, and the
         // dim coming up with it rather than after it.
         UIView.animate(withDuration: 0.42, delay: 0, usingSpringWithDamping: 0.9,
                        initialSpringVelocity: 0, options: [.allowUserInteraction]) {
-            self.panelOffset = 0
             self.layoutPanel(height: self.currentHeight, offset: 0)
             self.dimView.backgroundColor = UIColor.black.withAlphaComponent(Self.dimAlpha)
+        } completion: { _ in
+            self.isAnimatingPanel = false
         }
     }
 
@@ -210,10 +239,12 @@ final class StoryTrayContainerVC: UIViewController {
         // A flicked tray leaves at the speed it was flicked at, capped so a hard flick is quick
         // rather than instant.
         let duration = min(0.35, max(0.18, Double(remaining / max(600, velocity))))
+        isAnimatingPanel = true
         UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseIn]) {
             self.layoutPanel(height: self.currentHeight, offset: self.currentHeight)
             self.dimView.backgroundColor = UIColor.black.withAlphaComponent(0)
         } completion: { _ in
+            self.isAnimatingPanel = false
             let finish = self.onDismissed
             self.dismiss(animated: false)
             finish()
@@ -224,31 +255,73 @@ final class StoryTrayContainerVC: UIViewController {
 
     // MARK: The drag
 
+    /// THE SCROLL VIEW THE DRAG IS CURRENTLY ARGUING WITH, learned from the simultaneous-recognition
+    /// callback rather than by hunting the view tree. Nil when the finger is on the search field, the
+    /// pills or the tab row, none of which scroll — and nil is treated as "at the top", so a drag
+    /// there moves the panel at once, exactly as it did when the drag lived only in the top strip.
+    private weak var trackedScroll: UIScrollView?
+    /// Raised the moment the panel takes the drag over from the scroll view. Until then a downward
+    /// finger belongs to the grid.
+    private var dragOwnsPanel = false
+    /// Where the finger was when the panel took over, so the panel starts moving from ZERO rather
+    /// than jumping by however far the grid had already been scrolled up to its top.
+    private var dragHandoverTranslation: CGFloat = 0
+
+    private var scrollIsAtTop: Bool {
+        guard let sv = trackedScroll else { return true }
+        return sv.contentOffset.y <= -sv.adjustedContentInset.top + 0.5
+    }
+
     @objc private func handlePan(_ g: UIPanGestureRecognizer) {
         let translation = g.translation(in: view).y
         switch g.state {
+        case .began:
+            dragOwnsPanel = false
+            dragHandoverTranslation = 0
+
         case .changed:
-            // Downwards only. Pulling UP on a tray that is already at its height is not a gesture
-            // this tray has — the system sheet had a second detent to grow into and this one grows
-            // for the keyboard instead.
-            panelOffset = max(0, translation)
-            layoutPanel(height: currentHeight, offset: panelOffset)
+            // ⚠️ THE HAND-OVER, AND IT IS WHY THE DRAG NO LONGER LIVES IN A 64pt STRIP.
+            //
+            // The tray is mostly grid, so restricting the drag to the top 64pt meant that swiping
+            // down anywhere a thumb naturally lands did nothing at all — his "it does not follow my
+            // finger and does not dismiss". The rule every real bottom sheet uses instead is the one
+            // below: the grid keeps every drag while it still has somewhere to scroll, and the panel
+            // takes over the moment the grid is at its top and the finger is still going down.
+            if !dragOwnsPanel {
+                guard scrollIsAtTop, translation > 0 else { return }
+                dragOwnsPanel = true
+                dragHandoverTranslation = translation
+            }
+            // 1:1 with the finger from the hand-over point. Downwards only — pulling UP on a tray
+            // already at its height is not a gesture this tray has; it grows for the keyboard instead.
+            let offset = max(0, translation - dragHandoverTranslation)
+            layoutPanel(height: currentHeight, offset: offset)
+            // The grid must not scroll under a panel that is following the finger, or the two move at
+            // once and the sheet feels loose.
+            if let sv = trackedScroll, offset > 0 {
+                sv.contentOffset.y = -sv.adjustedContentInset.top
+            }
             // The dim lets go with the panel, so the editor behind is already coming back by the
             // time the tray is half gone.
-            let p = 1 - min(1, panelOffset / max(1, currentHeight))
+            let p = 1 - min(1, offset / max(1, currentHeight))
             dimView.backgroundColor = UIColor.black.withAlphaComponent(Self.dimAlpha * p)
+
         case .ended, .cancelled, .failed:
+            defer { dragOwnsPanel = false }
+            guard dragOwnsPanel else { return }
             let velocity = g.velocity(in: view).y
             // A quarter of the way down, or thrown. The same two-part rule every dismissable panel
             // in this app uses, so the tray answers a flick the way the story viewer does.
             if panelOffset > currentHeight * 0.25 || velocity > 900 {
                 animateOutAndFinish(velocity: velocity)
             } else {
+                isAnimatingPanel = true
                 UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.86,
                                initialSpringVelocity: 0, options: [.allowUserInteraction]) {
-                    self.panelOffset = 0
                     self.layoutPanel(height: self.currentHeight, offset: 0)
                     self.dimView.backgroundColor = UIColor.black.withAlphaComponent(Self.dimAlpha)
+                } completion: { _ in
+                    self.isAnimatingPanel = false
                 }
             }
         default: break
@@ -284,17 +357,30 @@ final class StoryTrayContainerVC: UIViewController {
 }
 
 extension StoryTrayContainerVC: UIGestureRecognizerDelegate {
-    /// ⚠️ THE DRAG ONLY LIVES IN THE TOP STRIP, AND THAT IS WHAT KEEPS THE GRID SCROLLING.
+    /// ⚠️ THE DRAG LIVES ON THE WHOLE PANEL NOW, AND THE 64pt STRIP IT USED TO LIVE IN WAS THE BUG.
     ///
-    /// A pan across the whole panel would be in competition with the sticker grid's own scroll view
-    /// for every vertical flick in it — and the tray is mostly grid. Beginning only in the top 64pt
-    /// (the grabber and the search field's band, which is where a sheet is dragged from anyway)
-    /// means the two gestures never meet, so neither has to yield to the other.
+    /// The old rule was that a pan across the whole panel would compete with the sticker grid, so it
+    /// was allowed to begin only in the top 64pt — the grabber and the search field's band. The tray
+    /// is mostly grid, so in practice that meant swiping down anywhere a thumb naturally falls did
+    /// nothing whatsoever: his "it does not follow my finger and does not dismiss".
+    ///
+    /// Competing was never the problem to avoid. Both recognisers run, and `handlePan` decides which
+    /// one the movement belongs to: the grid keeps it while it still has somewhere to scroll, and the
+    /// panel takes over the instant the grid is at its top and the finger is still going down. That is
+    /// the same hand-over the system sheet performs and it is why a system sheet can be dragged shut
+    /// from anywhere inside it.
     func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
         guard let pan = g as? UIPanGestureRecognizer else { return true }
         let v = pan.velocity(in: panel)
-        guard abs(v.y) > abs(v.x) else { return false }   // a sideways swipe is not ours
-        return pan.location(in: panel).y <= 64
+        return abs(v.y) > abs(v.x)   // a sideways swipe is not ours
+    }
+
+    /// Running alongside the grid is what makes the hand-over possible at all — and the callback is
+    /// also where the grid introduces itself, so nothing has to go hunting for a scroll view.
+    func gestureRecognizer(_ g: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        if let scroll = other.view as? UIScrollView { trackedScroll = scroll }
+        return true
     }
 }
 

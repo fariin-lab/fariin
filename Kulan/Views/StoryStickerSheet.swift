@@ -501,6 +501,45 @@ struct StickerFlowLayout: Layout {
 /// ⚠️ IT COMPLETES THE SCHEME RATHER THAN DEMANDING ONE. Nobody types `https://`, and refusing
 /// `fariin.com` because of it would be an error message about punctuation. `NSDataDetector` is the
 /// same judge the caption already uses for links, so what counts as a link is one answer app-wide.
+/// THE HEADER THE TWO PUSHED PAGES WEAR, IN PLACE OF THE NAVIGATION BAR THEY USED TO GET.
+///
+/// ⚠️ HIS 2026-08-17 SCREENSHOT, WITH THE WHOLE TOP OF THE PAGE CIRCLED. The tray hosts its content
+/// with no container safe area — it has to, or the tab row would float 34pt up from a panel that
+/// already ends at the screen's edge — so a real navigation bar was laid out at the panel's literal
+/// top edge. That is underneath the grabber, which the tray draws OVER the content at y=8, and inside
+/// the panel's own 32pt corner, which cut the back button in half.
+///
+/// The root page never showed the problem because it hides the navigation bar and its search field
+/// carries `.padding(.top, 16)` — enough to clear the grabber. This is that same 16, so the two pages
+/// and the root all start their content on the same line.
+private struct TrayPushHeader: View {
+    let title: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack {
+            Text(title)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
+            HStack {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(Color.white.opacity(0.12), in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                Spacer(minLength: 0)
+            }
+        }
+        .frame(height: 44)
+        .padding(.horizontal, 16)
+        .padding(.top, 16)
+    }
+}
+
 private struct LinkStickerScreen: View {
     var onDone: (URL) -> Void
 
@@ -510,6 +549,16 @@ private struct LinkStickerScreen: View {
     private var resolved: URL? { StoryLinkSticker.url(from: text) }
 
     var body: some View {
+        VStack(spacing: 0) {
+            TrayPushHeader(title: "Link")
+            linkForm
+        }
+        // The bar this replaces. Hidden on the pushed pages for the same reason it is hidden on the
+        // root: it has nowhere to be laid out inside a panel with no safe area of its own.
+        .toolbar(.hidden, for: .navigationBar)
+    }
+
+    private var linkForm: some View {
         VStack(spacing: 18) {
             TextField("", text: $text,
                       prompt: Text("Enter link").foregroundStyle(.white.opacity(0.4)))
@@ -547,8 +596,6 @@ private struct LinkStickerScreen: View {
             Spacer(minLength: 0)
         }
         .padding(20)
-        .navigationTitle("Link")
-        .navigationBarTitleDisplayMode(.inline)
         // ⚠️ THE KEYBOARD WAITS FOR THE PUSH TO FINISH — his 2026-08-17 "when I click Location or
         // Link the page comes in laggy".
         //
@@ -591,6 +638,7 @@ private struct PlaceStickerScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            TrayPushHeader(title: "Location")
             TextField("", text: $query,
                       prompt: Text("Search location").foregroundStyle(.white.opacity(0.4)))
                 .focused($focused)
@@ -627,8 +675,7 @@ private struct PlaceStickerScreen: View {
             .scrollContentBackground(.hidden)
             .overlay { if searching, results.isEmpty { ProgressView().tint(.white) } }
         }
-        .navigationTitle("Location")
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         // The same wait as the Link page, and this one has more to build behind it — see the note
         // there. The list is empty until a search lands, so nothing is delayed but the keyboard.
         .task {
