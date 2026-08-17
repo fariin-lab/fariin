@@ -71,6 +71,8 @@ struct StoryExtra: Identifiable {
     /// Per ITEM, not per post: each picture in a post has its own stickers, and posting them all
     /// against the first one is how a link ends up on somebody else's photograph.
     var stickers: [StoryTapTarget] = []
+    /// ⚠️ AND SO IS THE CAPTION, which used to be posted as `""` on every extra. See below.
+    var caption: String = ""
 }
 
 // A picked video awaiting the audience sheet: the source file + the poster frame the editor
@@ -452,18 +454,22 @@ struct ShareStorySheet: View {
         // cancel each other, so this queues instead of racing — which is what keeps a multi-item
         // post in the order the user arranged it.
         //
-        // NO CAPTION ON THE EXTRAS: it belongs to the post, and repeating it on every item reads as
-        // a stutter — the same rule the 90-second split follows.
+        // ⚠️ EACH EXTRA CARRIES ITS OWN CAPTION NOW. This used to send `""` on every one of them,
+        // on the reasoning that a caption "belongs to the post" and repeating it would read as a
+        // stutter. His 2026-08-17 report is that the premise was wrong: each picked picture becomes
+        // its own story in the viewer, so a caption written on the third one had nowhere to go and
+        // the field showed the first one's words whichever thumbnail was selected. The editor holds
+        // one per item now, beside the crop and the drawing and the stickers.
         for extra in extras {
             if let v = extra.video {
                 StoriesService.shared.postVideoStoryBackground(
                     videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim,
-                    caption: "", stickers: extra.stickers,
+                    caption: extra.caption, stickers: extra.stickers,
                     excluded: excluded, included: included, everyone: everyone,
                     allowsReplies: replies, tag: tag)
             } else if let p = extra.photo {
                 StoriesService.shared.postStoryBackground(
-                    image: p, caption: "", stickers: extra.stickers,
+                    image: p, caption: extra.caption, stickers: extra.stickers,
                     excluded: excluded, included: included, everyone: everyone,
                     allowsReplies: replies, tag: tag)
             }
@@ -517,15 +523,21 @@ struct ShareStorySheet: View {
                 excluded: excluded, included: included, everyone: false, allowsReplies: replies,
                 tag: tag)
         }
+        // ⚠️ AND `stickers:` WAS NOT BEING PASSED AT ALL ON THIS PATH OR THE ONE-TIME ONE — only on
+        // the first of the three. So a Link or Location sticker on the second picture of a post to a
+        // custom list was silently dropped at post time, while the same post to friends kept it.
+        // `StoryExtra`'s own note says why they are per item; two of the three callers never read it.
         for extra in extras {
             if let v = extra.video {
                 StoriesService.shared.postVideoStoryBackground(
                     videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim,
-                    caption: "", excluded: excluded, included: included, everyone: false,
+                    caption: extra.caption, stickers: extra.stickers,
+                    excluded: excluded, included: included, everyone: false,
                     allowsReplies: replies, tag: tag)
             } else if let p = extra.photo {
                 StoriesService.shared.postStoryBackground(
-                    image: p, caption: "", excluded: excluded, included: included, everyone: false,
+                    image: p, caption: extra.caption, stickers: extra.stickers,
+                    excluded: excluded, included: included, everyone: false,
                     allowsReplies: replies, tag: tag)
             }
         }
@@ -568,11 +580,13 @@ struct ShareStorySheet: View {
             if let v = extra.video {
                 StoriesService.shared.postVideoStoryBackground(
                     videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim,
-                    caption: "", excluded: store.hiddenFrom, included: people, everyone: false,
+                    caption: extra.caption, stickers: extra.stickers,
+                    excluded: store.hiddenFrom, included: people, everyone: false,
                     allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"))
             } else if let p = extra.photo {
                 StoriesService.shared.postStoryBackground(
-                    image: p, caption: "", excluded: store.hiddenFrom, included: people,
+                    image: p, caption: extra.caption, stickers: extra.stickers,
+                    excluded: store.hiddenFrom, included: people,
                     everyone: false, allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"))
             }
         }

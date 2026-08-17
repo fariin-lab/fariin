@@ -372,6 +372,17 @@ struct StoryEditorView: View {
         /// Held on the ITEM like everything else the tools own, so switching to another picture and
         /// back finds the stickers where they were left. Same stash-move-restore as the rest.
         var stickers: [StickerOverlay] = []
+        /// ⚠️ THE CAPTION IS THE ITEM'S, NOT THE SCREEN'S — his 2026-08-17 report: "I can't give each
+        /// one their own caption… only one story I can give a caption, and if I select another one it
+        /// still shows the old caption."
+        ///
+        /// It was one `@State` on the editor, so every picture in a post shared the field: typing on
+        /// item one wrote item two's caption as well, switching thumbnails did not change what the
+        /// pill said, and at post time only the FIRST item's story carried it — the rest went up with
+        /// `caption: ""` on the reasoning that "it belongs to the post". It does not; each picture is
+        /// its own story in the viewer, and this is the one thing the tools own that was not stashed
+        /// beside the item like the crop, the drawing, the stickers and the zoom already are.
+        var caption: String = ""
         /// ⚠️ ZERO MEANS "NOBODY HAS CHOSEN ONE YET", NOT "no zoom". The default depends on the shape
         /// of the picture AND on the size of the card, which the model cannot know — so the value is
         /// left unset here and resolved the first time this item is put on the tools
@@ -1073,7 +1084,10 @@ struct StoryEditorView: View {
                         // arriving item's own state on the tools (a fresh picture: clean tools).
                         items = seedItems
                         index = max(0, items.count - 1)
-                        caption = seedCaption
+                        // ⚠️ ONTO THE ITEM, NOT ONTO THE SCREEN. `restoreCurrent` one line below now
+                        // puts the item's own caption on the tools, so a seed written to `caption`
+                        // here would be overwritten by the empty one before it was ever seen.
+                        if items.indices.contains(index) { items[index].caption = seedCaption }
                         restoreCurrent()
                         // The clips that came across unresolved join in tap order, each one on this
                         // screen rather than in front of it. See `seedVideos`. Sequential for the
@@ -2394,6 +2408,7 @@ struct StoryEditorView: View {
         items[index].stickers = stickers
         items[index].zoom = photoZoom
         items[index].offset = photoOffset
+        items[index].caption = caption
     }
 
     /// The mirror image: put an item's edits back on the tools.
@@ -2406,6 +2421,7 @@ struct StoryEditorView: View {
         drawing = it.drawing
         overlays = it.overlays
         stickers = it.stickers
+        caption = it.caption
         // ⚠️ RESOLVED ONCE, HERE, AND WRITTEN BACK. A zero is an item nobody has framed yet; from
         // this moment it has a number of its own and `defaultZoom` is never asked about it again.
         if it.zoom <= 0 {
@@ -2503,6 +2519,10 @@ struct StoryEditorView: View {
     private var hasWork: Bool {
         if items.count > 1 { return true }
         if !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        // …and one parked on an item that is not on screen. Only reachable with a single item, where
+        // the live caption above has already answered — kept so the two cannot disagree if the
+        // one-item shortcut at the top of this method ever changes.
+        if items.contains(where: { !$0.caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) { return true }
         if croppedSource != nil || cropRect != nil || filterIndex != 0 { return true }
         if !drawing.bounds.isEmpty || !overlays.isEmpty || !stickers.isEmpty { return true }
         if let it = items.first, it.isTrimmed || it.muted { return true }
@@ -2541,7 +2561,7 @@ struct StoryEditorView: View {
         // item" to "once, when you actually post". `flatten` composes from the tool state rather
         // than from what is on screen, so restoring an item is enough to render it correctly.
         var rendered: [(data: Data, video: URL?, burn: StoryBurnIn?, muted: Bool,
-                        trim: ClosedRange<Double>?, taps: [StoryTapTarget])] = []
+                        trim: ClosedRange<Double>?, taps: [StoryTapTarget], caption: String)] = []
         for i in items.indices {
             index = i
             restoreCurrent()
@@ -2552,10 +2572,12 @@ struct StoryEditorView: View {
                 // export and are composited into the frames there — see VideoTranscoder.burnIn.
                 let burn = await videoBurnIn()
                 rendered.append((items[i].image.jpegData(compressionQuality: 0.72) ?? Data(), u, burn,
-                                 items[i].muted, items[i].trimRange, tapTargets(crop: burn?.cropRect)))
+                                 items[i].muted, items[i].trimRange, tapTargets(crop: burn?.cropRect),
+                                 items[i].caption.trimmingCharacters(in: .whitespacesAndNewlines)))
                 continue
             }
-            rendered.append((await flatten(), nil, nil, false, nil, tapTargets(crop: nil)))
+            rendered.append((await flatten(), nil, nil, false, nil, tapTargets(crop: nil),
+                             items[i].caption.trimmingCharacters(in: .whitespacesAndNewlines)))
         }
         index = keep
         restoreCurrent()
@@ -2569,9 +2591,9 @@ struct StoryEditorView: View {
             if let u = r.video {
                 extras.append(StoryExtra(video: StoryVideoPayload(url: u, thumbnail: r.data,
                                                                  muted: r.muted, trim: r.trim, burn: r.burn),
-                                         stickers: r.taps))
+                                         stickers: r.taps, caption: r.caption))
             } else {
-                extras.append(StoryExtra(photo: r.data, stickers: r.taps))
+                extras.append(StoryExtra(photo: r.data, stickers: r.taps, caption: r.caption))
             }
         }
         // THE FIRST ITEM'S CLIP IS NO LONGER THROWN AWAY. `StoryShareData` carried only `data`, which
@@ -2584,7 +2606,10 @@ struct StoryEditorView: View {
         // Caption travels as TEXT (rendered as an overlay in the viewer), NOT baked into the photo —
         // baking it clipped the text when the image was cropped to fit.
         pendingShare = StoryShareData(data: data,
-                                      caption: caption.trimmingCharacters(in: .whitespacesAndNewlines),
+                                      // The FIRST ITEM's caption, which is not necessarily the one in
+                                      // the pill: `send` walks every item and leaves the tools on
+                                      // whichever was on screen.
+                                      caption: rendered.first?.caption ?? "",
                                       video: leadVideo,
                                       stickers: rendered.first?.taps ?? [])
         pendingExtras = extras
