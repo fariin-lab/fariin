@@ -795,7 +795,18 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
         didBeginEditing = true
         installToolbarIfNeeded()
         UIView.animate(withDuration: 0.2) { self.container.alpha = 1 }
-        textView.becomeFirstResponder()
+        // ⚠️ AND IT IS ASKED TWICE IF THE FIRST ANSWER IS NO. `becomeFirstResponder` RETURNS a Bool
+        // and the honest reasons it can be false are all timing — the window not key yet, another
+        // responder still resigning, a presentation still settling. One more turn is the standard
+        // remedy and costs nothing when the first ask succeeded, which is nearly always. The exit in
+        // `finishTextEditing` is what makes a second `false` survivable rather than fatal; this is
+        // what makes it rare.
+        if !textView.becomeFirstResponder() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.finished else { return }
+                _ = self.textView.becomeFirstResponder()
+            }
+        }
     }
 
     /// THE BLOCK, DRAWN THE WAY `storyStyledText` DRAWS IT.
@@ -949,8 +960,25 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
     /// MECHANISM 4. Done is `resignFirstResponder` and nothing else — the work happens off the end of
     /// editing, in `textViewDidEndEditing`, which is the one moment when the editing layout is still
     /// the layout and the keyboard has not yet begun taking the words with it.
+    /// ⚠️ `textView.isFirstResponder` USED TO BE A GUARD ON THIS AND IT COULD LOCK HIM IN THE APP.
+    ///
+    /// Theirs carries that guard, and theirs can afford it: their text mode is one state of a screen
+    /// that still has its own bottom bar, its ✕ and its ✓ underneath. Ours is a full-screen editor
+    /// whose ONLY two exits — the Done button and the tap on the dim — both ran through this function,
+    /// and the composer's own ✕ is hidden for as long as `editingID` is set. So a field that never
+    /// took the keyboard (a first responder refused, a race with another responder, anything at all)
+    /// left every door locked and killing the app as the only way out.
+    ///
+    /// Ending editing and BEING first responder are two different questions. If the keyboard is up,
+    /// hand back through it exactly as before — `resignFirstResponder` is what carries the autocorrect
+    /// commit and the keyboard's own dismissal. If it is not, there is nothing to resign and no
+    /// `textViewDidEndEditing` will ever arrive, so finish directly. The work is the same either way.
     private func finishTextEditing() {
-        guard !finished, textView.isFirstResponder else { return }
+        guard !finished else { return }
+        guard textView.isFirstResponder else {
+            completeEditing()
+            return
+        }
         textView.acceptAutocorrectSuggestion()
         textView.resignFirstResponder()
     }
@@ -960,6 +988,13 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
     }
 
     func textViewDidEndEditing(_ textView: UITextView) {
+        completeEditing()
+    }
+
+    /// The hand-back, in one place because it has two callers now: the keyboard giving up first
+    /// responder, and `finishTextEditing` finding there was no keyboard to give up. See the note
+    /// there — an editor with no exit is worse than any of the six bugs this screen was built to fix.
+    private func completeEditing() {
         guard !finished else { return }
         finished = true
 
