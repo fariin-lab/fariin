@@ -1042,7 +1042,27 @@ public final class StoryCardMorph {
         // Only the card path is held. A CIRCULAR door is a different shape by design — capping it
         // to a 12pt rounded rectangle for a frame would be a visible square, which is worse than
         // what it is guarding against, and the circle is not what he is reporting.
-        let unconfirmed = !circular && !sheet && !cardClipIsDown
+        // ⚠️ AN OPAQUE COVER RELEASES THE CAP, AND NOT RELEASING IT WAS HIS "white square corners
+        // behind the card when I tap a story open" — white with a light story, black with a dark
+        // one, which is what told on it: the wedge was STORY PIXELS, not a colour.
+        //
+        // The cap below holds the mask at the card's own rendered corner (`cardCornerRadius *
+        // scale` — about 2.6pt at the row seat) until the card acknowledges its clip is down. That
+        // is right when the mask is the only thing cutting the page. But on a TAP the open seats
+        // the flight at the row card's rectangle wearing the photographed cover, opaque, rounded at
+        // the full row radius — over a mask still capped nearly SQUARE. Between the mask's
+        // near-square corner and the cover's 24pt curve, the mask shows whatever the flight
+        // contains UNDER the cover: the full-screen story page, whose pixels at the card-rect
+        // corners are the story itself. A white story paints white wedges on a dark chat list; a
+        // dark story paints black ones on a light list — both of his screenshots, one mechanism.
+        //
+        // While the cover is OPAQUE nothing beneath it can legitimately show, so the cap protects
+        // nothing and only draws the crescent. Released exactly then, and only then: the drag pins
+        // the cover at 0 (`his spec`) so the drag's first frames keep the cap and `cardClipIsDown`'s
+        // whole reason stands; by the time an open's cover has started dissolving, the ack has long
+        // since landed and `capped == wanted` anyway.
+        let coverIsOpaque = !sheet && (flightCover.map { !$0.isHidden && $0.alpha >= 0.999 } ?? false)
+        let unconfirmed = !circular && !sheet && !cardClipIsDown && !coverIsOpaque
         let capped = unconfirmed ? min(wanted, cardCornerRadius * scale) : wanted
         let flightRadius = capped * (circular ? scale : 1)
         applyMask(on: card, sheet: sheet, rect: cropRect,
