@@ -147,6 +147,9 @@ struct StoryEditorView: View {
     /// the AVPlayer and this view. Throwing the token away leaked one of each per clip previewed, for
     /// the whole life of the app. `stopPreview()` removes it.
     @State private var previewEndObserver: NSObjectProtocol?
+    /// The playback clock behind the trim strip's white line. Removed from the PLAYER in
+    /// `stopPreview()`, which is why it is held rather than discarded — see `ensurePreviewPlayer`.
+    @State private var trimTimeObserver: Any?
     @State private var trimPlayhead: Double = 0
     @State private var trimScrub: Double?
     @State private var trimDragging = false
@@ -1253,6 +1256,29 @@ struct StoryEditorView: View {
                 p.seek(to: .zero)
                 previewPlaying = false
             }
+        // ⚠️ AND THE PLAYHEAD IS REPORTED FROM HERE, BECAUSE NOTHING WAS REPORTING IT AT ALL.
+        //
+        // His report: the white line on the trim strip does not move while the clip plays.
+        // `trimPlayhead` was declared, handed to `VideoTrimStrip` and written by exactly one thing —
+        // the strip's own scrub gesture, through the binding. There was no clock behind it, so the
+        // line could only ever be where a finger had last put it. `VideoApprovalView`, the chat's
+        // trimmer, has had the observer this is copied from since it was written; the story trimmer
+        // was built later and never got one.
+        //
+        // Same 0.05s the chat trimmer uses. A periodic observer only delivers while time is actually
+        // moving, so a paused screen costs nothing, and the `showTrim` guard keeps a playing clip on
+        // the ordinary editor from re-evaluating this body twenty times a second for a line that is
+        // not on screen. `trimDragging` is the other half: while his finger owns the line, the
+        // player is the one following, and writing back would fight the drag.
+        //
+        // It is attached HERE for the reason the note above gives about the end observer — one place
+        // builds the player, and a player built by trim's own scrub must arrive with everything a
+        // player needs.
+        trimTimeObserver = p.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main) { t in
+                guard showTrim, !trimDragging else { return }
+                trimPlayhead = t.seconds
+            }
         return p
     }
 
@@ -1270,6 +1296,11 @@ struct StoryEditorView: View {
         // a strong reference to both it and this view until it is removed by name.
         if let t = previewEndObserver { NotificationCenter.default.removeObserver(t) }
         previewEndObserver = nil
+        // The same rule, and it has to happen while the player it was added to is still here: a
+        // periodic observer is removed from the player, not by name, so dropping the reference first
+        // would leak it and the block that retains this view with it.
+        if let t = trimTimeObserver { previewPlayer?.removeTimeObserver(t) }
+        trimTimeObserver = nil
         previewPlayer = nil
         previewPlaying = false
     }
