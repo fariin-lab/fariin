@@ -738,6 +738,11 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        // ⚠️ ALSO TRIED HERE, NOT ONLY BEFORE THE FIELD TAKES THE KEYBOARD. The install needs a real
+        // width to measure the bar against, and a view hosted by SwiftUI can reach `viewDidAppear`
+        // before it has one — in which case the one chance to attach the bar would be spent on a
+        // zero-width measurement and the keyboard would come up bare.
+        installToolbarIfNeeded()
         layoutBlock()
     }
 
@@ -759,6 +764,9 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
         toolbar.bounds.size = size
         textView.inputAccessoryView = toolbar
         toolbarInstalled = true
+        // If the field somehow took the keyboard first, the accessory view is not picked up until it
+        // is asked for again. Cheap, and it is the difference between a bar and no bar.
+        if textView.isFirstResponder { textView.reloadInputViews() }
     }
 
     /// Theirs: fade the editing layer in over 0.2s and take the keyboard.
@@ -816,8 +824,13 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
         badge.center = CGPoint(x: container.bounds.midX, y: container.bounds.midY)
         badge.layer.cornerRadius = overlay.background == .plain ? 0 : 10 * s
 
-        textView.bounds = CGRect(x: 0, y: 0, width: textWidth, height: textHeight)
-        textView.center = CGPoint(x: badgeWidth / 2, y: badgeHeight / 2)
+        // ⚠️ `frame`, NOT `bounds` + `center`, AND THE DIFFERENCE IS NOT STYLE. A `UITextView` is a
+        // scroll view, and a scroll view's `bounds.origin` IS its `contentOffset` — writing a
+        // zero-origin bounds on every layout pass would scroll a long caption back to the top under
+        // the person's own finger.
+        textView.frame = CGRect(x: (badgeWidth - textWidth) / 2,
+                                y: (badgeHeight - textHeight) / 2,
+                                width: textWidth, height: textHeight)
     }
 
     // MARK: Styling
