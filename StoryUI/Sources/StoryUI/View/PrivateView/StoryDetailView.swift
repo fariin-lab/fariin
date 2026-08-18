@@ -559,7 +559,7 @@ struct StoryDetailView: View {
                             // whole flight (see `flightMaskOn`); the rectangle clip itself stays, it is
                             // what cuts the blur backdrop's spill.
                             .clipShape(RoundedRectangle(cornerRadius: flightMaskOn ? 0 : cardRadius,
-                                                        style: .circular))
+                                                        style: .continuous))
                             .overlay(
                                 tapStory()
                                     .offset(
@@ -586,7 +586,7 @@ struct StoryDetailView: View {
                             .overlay(captionView(story.caption, plain: story.config.storyType == .plain())
                                         .modifier(SheetCaptionFade())
                                         .clipShape(RoundedRectangle(cornerRadius: flightMaskOn ? 0 : cardRadius,
-                                                                    style: .circular)),
+                                                                    style: .continuous)),
                                      alignment: .bottom)
                             // Top dark scrim so the username/avatar/close stay readable on white/bright photos.
                             // Fades with the chrome (it's part of the chrome look) — the PHOTO must stay
@@ -595,7 +595,7 @@ struct StoryDetailView: View {
                             .overlay(topScrim.opacity(chromeHidden ? 0 : 1)
                                         .animation(.linear(duration: 0.18), value: chromeHidden)
                                         .clipShape(RoundedRectangle(cornerRadius: flightMaskOn ? 0 : cardRadius,
-                                                                    style: .circular)),
+                                                                    style: .continuous)),
                                      alignment: .top)
                             // THE BARS AND THE HEADER LIVE INSIDE THE CARD, over the picture, which is
                             // where the reference app puts them (`contentInsets.top = 54`). They used to be

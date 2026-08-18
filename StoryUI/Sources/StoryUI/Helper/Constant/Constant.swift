@@ -31,14 +31,25 @@ enum Constant {
     /// clip showed 12 all round, which is his "small".
     ///
     /// ⚠️ MEASURED OFF HIS SCREENSHOTS, NOT CHOSEN. Fitting the arc down the left edge of the panel
-    /// in both of them gives a CIRCLE of 41.7px against a panel 1183px wide, sub-pixel error over
-    /// fifty rows — so it is a plain circular corner, not a squircle, or the fit would have drifted
-    /// at the ends. 41.7/1183 = 3.5% of the width, which on a 428pt phone is 15pt.
+    /// in both of them gives 41.7px against a panel 1183px wide — 3.5% of the width, which on a
+    /// 428pt phone is 15pt, and 16 after the second measurement below. (That fit was read as proof
+    /// the reference corner was CIRCULAR rather than a squircle; a 3x screenshot of one arc cannot
+    /// settle that, and he has since said plainly which shape he wants. The number survives the
+    /// correction because it was measured; the conclusion drawn about the style did not.)
     ///
-    /// ⚠️ AND THE STYLE IS PART OF THE NUMBER. `.continuous` at 15 spreads its curve about 1.5×
-    /// further along each edge than a circle at 15, so it reads as the "more rounded" he asked
-    /// against. Every corner of this card is circular now: the SwiftUI clips say so explicitly and
-    /// `layer.cornerRadius` already meant it.
+    /// ⚠️ THE STYLE IS PART OF THE NUMBER, AND IT IS `.continuous` NOW — his 2026-08-18 report
+    /// with both bottom corners circled: "not feeling smooth rounded corners, use apple, don't
+    /// change my size, same size just looks smooth".
+    ///
+    /// A circular corner is an arc bolted onto two straight edges: curvature goes from nothing to
+    /// its full value in one step, and the eye reads that step as a crease however clean the pixels
+    /// are. Apple's `.continuous` corner — the shape every icon, sheet and card on the system wears
+    /// — eases curvature in and out instead, which is the whole of what "smooth" means here.
+    ///
+    /// ⚠️ THE NUMBER IS UNTOUCHED, ON HIS INSTRUCTION, and it is worth knowing what that costs: a
+    /// continuous corner at a given radius spreads its curve about 1.5× further along each edge than
+    /// a circle at the same radius, so the same 16 reads a little more generous. That is the trade he
+    /// asked for. If it ever reads as too big, the fix is this number and not the style.
     ///
     /// ⚠️ 16, NOT 15, AND IT WAS MEASURED AGAIN. He put his own card beside theirs — "not smooth
     /// like snapchat" — and the two photographs settle it: ours fits a circle of 38.4px against
