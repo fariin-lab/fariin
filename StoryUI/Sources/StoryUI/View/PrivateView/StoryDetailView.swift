@@ -66,6 +66,9 @@ private struct SheetCaptionFade: ViewModifier {
     /// ⚠️ SEEDED, NOT ASSUMED FALSE. A page mounted DURING an open has already missed the post that
     /// hid the chrome — see `StoryCardMorph.flightChromeHidden`.
     @State private var flightActive = StoryCardMorph.flightChromeHidden
+    /// The dismiss drag's own progress, per frame, so the caption fades on the way DOWN exactly as it
+    /// does on the way up. See `opacity`.
+    @State private var flightProgress: CGFloat = 0
 
     /// Linear, straight off the finger — but never visible once the chrome is down.
     ///
@@ -96,9 +99,25 @@ private struct SheetCaptionFade: ViewModifier {
     /// sheet open ends with the card shrunk, so every one of them ends with this at zero.
     ///
     /// `chromeHidden` still resets the ramp when it goes false; see `onReceive` below.
+    /// ⚠️ AND THE FLIGHT IS A FADE NOW, NOT A SWITCH — his 2026-08-18 report: pulling the sheet UP
+    /// fades the caption and its shadow away "very well", swiping DOWN to close makes them
+    /// "disappear one time". Two gestures that look the same to him, and only one had a continuous
+    /// value behind it: the pull posts `storySheetProgress` every frame, while the dismiss posted the
+    /// BOOLEAN `storyFlightActive` — and the line here read it and returned 0. One frame, no fade,
+    /// which is the whole of what he is describing.
+    ///
+    /// `StoryCardMorph.flightFraction` is the twin of `sheetFraction`, written by the one call that
+    /// moves a flight, so the dismiss fades off the finger through the same 32% window as the pull.
+    /// An OPEN runs the same number backwards, 1 → 0, so the caption fades IN as the story arrives
+    /// rather than appearing — which is what the note above always meant by "comes back over the last
+    /// 18% of an arrival".
+    ///
+    /// `flightActive` stays as the floor for the one case a fraction cannot cover: a page that mounts
+    /// mid-flight and has seen no frame of it yet. The next frame replaces it with a real number.
     private var opacity: Double {
-        if flightActive { return 0 }
-        let shrink = max(progress, StoryCardMorph.shared.sheetFraction)
+        let flight = max(StoryCardMorph.shared.flightFraction, flightProgress)
+        if flightActive, flight == 0 { return 0 }
+        let shrink = max(progress, StoryCardMorph.shared.sheetFraction, flight)
         let t = min(1, max(0, shrink / Self.goneAt))
         return Double(1 - t)
     }
@@ -123,6 +142,14 @@ private struct SheetCaptionFade: ViewModifier {
                 guard p < Self.goneAt || progress < Self.goneAt else { return }
                 progress = p
             }
+            .onReceive(NotificationCenter.default.publisher(for: .init("storyFlightProgress"))) { note in
+                let raw = (note.object as? NSNumber)?.doubleValue ?? 0
+                let p = min(1, max(0, CGFloat(raw)))
+                // Same economy as the pull above: past the fade window there is nothing left to
+                // change, so the rest of the flight does not invalidate this node.
+                guard p < Self.goneAt || flightProgress < Self.goneAt else { return }
+                flightProgress = p
+            }
             .onReceive(NotificationCenter.default.publisher(for: .init("storyChromeHidden"))) { note in
                 let hidden = (note.object as? Bool) ?? false
                 guard chromeHidden != hidden else { return }
@@ -139,8 +166,9 @@ private struct SheetCaptionFade: ViewModifier {
                 flightActive = active
                 // Same reset as above, and for the same reason: a drag that was cancelled mid-fade
                 // leaves a stale progress behind, and the flight's own end is a reliable moment to
-                // clear it.
-                if !active { progress = 0 }
+                // clear it. The flight's own number goes too, for the same reason and by the same
+                // rule the morph follows in `resetFlight`.
+                if !active { progress = 0; flightProgress = 0 }
             }
     }
 }

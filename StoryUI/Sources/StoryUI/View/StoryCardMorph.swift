@@ -470,6 +470,13 @@ public final class StoryCardMorph {
                             centerOverride: CGPoint? = nil, alpha: CGFloat = 1, dim: CGFloat? = nil,
                             chrome: CGFloat = 0, crop: CGFloat = 1, exiting: Bool = false) {
         guard let flightCard else { return }
+        // Per frame, exactly as the sheet pull already does for its own progress. The caption reads
+        // it; see `flightFraction` and `SheetCaptionFade`.
+        let clamped = max(0, min(1, fraction))
+        if flightFraction != clamped {
+            flightFraction = clamped
+            NotificationCenter.default.post(name: .init("storyFlightProgress"), object: NSNumber(value: Double(clamped)))
+        }
         applyCore(on: flightCard, sheet: false, fraction: fraction, targetSize: targetSize,
                   targetCenter: targetCenter, cornerRadius: cornerRadius,
                   centerOverride: centerOverride, sizeOverride: nil,
@@ -721,6 +728,18 @@ public final class StoryCardMorph {
     /// walked the fade window all leave it holding a stale number, and a stale number is his
     /// screenshot. Reading THIS instead cannot be stale: if the card is in the slot, this is 1.
     public private(set) var sheetFraction: CGFloat = 0
+
+    /// ⛔ THE SAME NUMBER FOR A FLIGHT, AND IT EXISTS BECAUSE THE CAPTION HAD NOTHING TO FADE ON.
+    ///
+    /// His 2026-08-18 report: pulling the sheet UP fades the caption and its shadow out beautifully,
+    /// and swiping DOWN to close makes them "disappear one time" — in a single frame. Both look like
+    /// the same gesture to him and only one of them had a continuous value behind it. The pull posts
+    /// `storySheetProgress` every frame; the dismiss posted a BOOLEAN, `storyFlightActive`, and a
+    /// boolean cannot describe a fade — the caption read it and went straight to zero.
+    ///
+    /// Written from `applyFlight`, which is the one call that moves a flight, so like `sheetFraction`
+    /// it describes what is ON SCREEN rather than what was requested. Reset by `resetFlight`.
+    public private(set) var flightFraction: CGFloat = 0
 
     /// The one copy of the interpolation, serving both targets. `sheet` picks the mask slot and the
     /// reset that runs on the early-out, nothing else differs.
@@ -1181,6 +1200,11 @@ public final class StoryCardMorph {
         // put back, and a `sheetFraction` left at 1 would hold the caption invisible for the next
         // story. This is the one number the caption trusts, so it must never outlive the shrink.
         sheetFraction = 0
+        // The flight's own number goes with it, or a caption stays hidden for the next story.
+        if flightFraction != 0 {
+            flightFraction = 0
+            NotificationCenter.default.post(name: .init("storyFlightProgress"), object: NSNumber(value: 0.0))
+        }
         guard let card else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
