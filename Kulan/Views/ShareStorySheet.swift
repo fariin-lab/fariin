@@ -194,7 +194,8 @@ struct ShareStorySheet: View {
             + 44                      // "Who can see your story" + the New button
             + 76                      // Post Story and its padding
             + Self.bottomSafeInset    // the home indicator, which the button sits above
-        let wanted = chrome + footerHeight + rowH * CGFloat(max(2, store.all.count))
+        let wanted = chrome + footerHeight + Self.captureSectionHeight
+            + rowH * CGFloat(max(2, store.all.count))
         return min(wanted, UIScreen.main.bounds.height * 0.88)
     }
 
@@ -236,6 +237,28 @@ struct ShareStorySheet: View {
                 attributes: [.font: font], context: nil).height
         }.max() ?? 40
         return ceil(tallest) + 22   // the footer's own top and bottom padding
+    }
+
+    /// One line, and it is a `static let` for the same reason `footerHeight` measures its own
+    /// strings: the height budget below reads THIS, so the sheet cannot be sized against a sentence
+    /// the screen is no longer showing.
+    static let captureFooter = "Screenshots and screen recordings come out blank."
+
+    /// What the Block-screenshots section costs the sheet — his "I can't see it without scrolling".
+    ///
+    /// ⚠️ IT WAS NOT IN THE BUDGET AT ALL. `sheetHeight` is measured from its pieces rather than
+    /// guessed, and a whole new section was added to the list without adding it here, so the detent
+    /// came up exactly one section too short and the switch sat below the fold. Same measured rule as
+    /// the footer: the real string, the real font, the real width.
+    private static var captureSectionHeight: CGFloat {
+        let width = max(120, UIScreen.main.bounds.width - 72)
+        let h = (captureFooter as NSString).boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: UIFont.preferredFont(forTextStyle: .footnote)], context: nil).height
+        return 44                    // the switch's own row
+            + 18                     // the gap a grouped list puts between two sections
+            + ceil(h) + 14           // the footer and its padding
     }
 
     /// The home indicator's strip. `postButton` is a bottom safe-area inset, so it sits ABOVE this
@@ -284,12 +307,19 @@ struct ShareStorySheet: View {
                              : "Only the people in this list can watch it.")
                     }
                 }
+                // ⚠️ NO ICON AND ONE SHORT LINE, both on his 2026-08-18 order with the row and the
+                // paragraph circled. The eye-slash was the only glyph in a sheet whose other rows
+                // carry a photograph of a person, so it read as a broken avatar rather than a symbol;
+                // and three sentences of caveat under a switch is a warning label, not a subtitle.
+                //
+                // The honesty survives the cut, which was the condition on this string: it says the
+                // capture comes out blank rather than that it cannot happen. What is gone is the
+                // sentence about photographing the screen with another phone — true, and not
+                // something to spend three lines of a posting sheet on.
                 Section {
-                    Toggle(isOn: $captureProtected) {
-                        Label("Block screenshots", systemImage: "eye.slash")
-                    }
+                    Toggle("Block screenshots", isOn: $captureProtected)
                 } footer: {
-                    Text("Screenshots and screen recordings of this story come out blank. Someone can still photograph the screen with another phone.")
+                    Text(Self.captureFooter)
                 }
             }
             .safeAreaInset(edge: .bottom) { postButton }
