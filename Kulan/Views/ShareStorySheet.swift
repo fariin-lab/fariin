@@ -202,7 +202,10 @@ struct ShareStorySheet: View {
     /// fits inside 88% on every phone we support — but the clamp stays, because a number that only
     /// happens to fit is a number waiting to stop fitting.
     private var sheetHeight: CGFloat {
-        let rowH: CGFloat = 68        // badge 40 + two lines + vertical padding
+        // Badge 40 + the row's own 2pt above and below + `audienceRowInsets`. It followed the list's
+        // default padding before and has to follow ours now, or the detent budgets for a row taller
+        // than the one it is drawing.
+        let rowH: CGFloat = 60
         let chrome: CGFloat = 56      // the inline navigation bar
             + 44                      // "Who can see your story" + the New button
             + 76                      // Post Story and its padding
@@ -282,6 +285,18 @@ struct ShareStorySheet: View {
             + ceil(h) + 14           // the footer and its padding
     }
 
+    /// ⚠️ TIGHTER THAN THE LIST'S OWN, ON HIS 2026-08-18 "each one has more space, cut slightly".
+    ///
+    /// The row's CONTENT was never the problem: a 40pt badge and two lines with 2pt around them. What
+    /// he circled is the grouped list's default padding, which measures about 15pt above and below
+    /// every row — a 44pt row sitting in a 74pt slot. 8 leaves the touch target well over Apple's
+    /// minimum and takes 14pt off each one, which on six audiences is most of a row's worth of sheet.
+    ///
+    /// ⚠️ HORIZONTAL IS MEASURED OFF HIS SCREENSHOT, NOT GUESSED AT THE DEFAULT. `listRowInsets`
+    /// replaces all four, so naming only the vertical pair would shift every avatar and every tick
+    /// sideways. 16 is where they already sit.
+    private static let audienceRowInsets = EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
+
     /// The home indicator's strip. `postButton` is a bottom safe-area inset, so it sits ABOVE this
     /// and the sheet needs the room for both.
     private static var bottomSafeInset: CGFloat {
@@ -296,13 +311,14 @@ struct ShareStorySheet: View {
                 Section {
                     // Only while it exists. A one-time story is this post and no other, so an empty
                     // row sitting here between posts would be an audience you cannot pick.
-                    if oneTimeActive { oneTimeRow }
+                    if oneTimeActive { oneTimeRow.listRowInsets(Self.audienceRowInsets) }
                     ForEach(store.all) { a in
                         Button { tapAudience(a) } label: {
                             StoryAudienceRow(audience: a, contacts: contactIds) {
                                 StoryTick(on: tickOn(a))
                             }
                         }
+                        .listRowInsets(Self.audienceRowInsets)
                     }
                 } header: {
                     HStack {
