@@ -33,6 +33,23 @@ struct ChatCropView: View {
     /// The corner radius the picture is wearing at `initialContentRect`. Theirs animates from
     /// `ImageEditorView.defaultCornerRadius` to 0 over the same window as the resize.
     var initialCornerRadius: CGFloat = 0
+    /// ⛔ "THE PICTURE HAS LEFT THE CARD" — the moment the presenter may stand its own copy down, and
+    /// not one frame before it. His FOURTH report on this transition is what it exists for.
+    ///
+    /// The flight cannot start until the canvas has stopped moving (see `armEntry`), and the editor
+    /// hid its card the instant `showCrop` went true. So between those two moments the only thing on
+    /// screen was this screen's picture parked at `entryProgress == 0` — which is the card's rect at
+    /// the card's size, chrome still down. The note on `armEntry` called that free to look at because
+    /// it is drawn exactly where the card was. It is, and it is still wrong: it is HELD there for the
+    /// whole settle, so what he sees is a full-size picture standing still and only then beginning to
+    /// shrink. That is "it will be full screen, after that start zoom out", in those words.
+    ///
+    /// UIKit never shows it because the seat happens in `viewDidLoad`, before the controller is on
+    /// screen at all; the first frame anybody sees is already moving. This callback is that ordering:
+    /// the presenter keeps its card until the flight actually leaves, and this screen draws nothing
+    /// until then. The swap is invisible by construction — at `entryProgress == 0` the picture is the
+    /// card's rect wearing the card's corner, which is the whole design of the hand-over.
+    var onFlightStart: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
 
     @State private var img: UIImage
@@ -65,10 +82,12 @@ struct ChatCropView: View {
     @State private var angleStart: Double = 0
 
     init(image: UIImage, inline: Bool = false, onClose: @escaping () -> Void = {},
+         onFlightStart: (() -> Void)? = nil,
          onRect: ((CGRect) -> Void)? = nil,
          initialContentRect: CGRect? = nil, initialCornerRadius: CGFloat = 0,
          onDone: @escaping (UIImage) -> Void) {
         self.image = image; self.inline = inline; self.onClose = onClose
+        self.onFlightStart = onFlightStart
         self.onRect = onRect; self.onDone = onDone
         self.initialContentRect = initialContentRect
         self.initialCornerRadius = initialCornerRadius
@@ -78,6 +97,7 @@ struct ChatCropView: View {
         _entryProgress = State(initialValue: initialContentRect == nil ? 1 : 0)
         _chrome = State(initialValue: initialContentRect == nil ? 1 : 0)
         _frameChrome = State(initialValue: initialContentRect == nil ? 1 : 0)
+        _flightLeft = State(initialValue: initialContentRect == nil)
     }
 
     /// THE ENTRY, WHICH IS A RESIZE AND NOT A CROSS-FADE.
@@ -109,6 +129,11 @@ struct ChatCropView: View {
     /// Derived per render from the LIVE `imageFrame` instead, so a re-measurement moves the
     /// destination and the flight simply keeps pointing at it. There is nothing left to go stale.
     @State private var entryProgress: CGFloat
+    /// ⚠️ HAS THE PICTURE ACTUALLY LEFT YET. False only during the settle wait between this screen
+    /// appearing and `runEntry` firing — see `onFlightStart` for why that window was visible. True
+    /// from the first frame for every caller that hands no rect in, which is the chat editor and the
+    /// media approval screen, and their behaviour is untouched.
+    @State private var flightLeft: Bool
     /// The card this screen was opened from, in THIS canvas's coordinates. Written by `layout`,
     /// which is the one place that knows where the canvas sits on the screen.
     ///
@@ -345,6 +370,14 @@ struct ChatCropView: View {
                     .offset(x: entryOffset.width + exitOffset.width,
                             y: entryOffset.height + exitOffset.height)
                     .position(x: flightWindow.midX, y: flightWindow.midY)
+                    // ⚠️ NOT DRAWN UNTIL THE FLIGHT LEAVES — see `onFlightStart`. The presenter still
+                    // has its card up until then, so this is the only copy standing down rather than a
+                    // gap: there is a picture on screen at every single frame, it is simply the other
+                    // one. Instant, never faded, for the reason the presenter's own hide is instant —
+                    // a cross-dissolve between two renderings of one photograph is the thing being
+                    // removed, spelled differently.
+                    .opacity(flightLeft ? 1 : 0)
+                    .animation(nil, value: flightLeft)
                 // Slide the picture: in the dimmed part, because inside the frame a one-finger drag
                 // belongs to the frame and always has. Below the crop's own views in this stack, so
                 // it can only ever get what they did not want.
@@ -529,6 +562,13 @@ struct ChatCropView: View {
     private func runEntry() {
         guard initialContentRect != nil, imageFrame.width > 1, entryProgress < 1,
               entryFrom.width > 1 else { return }
+        // ⚠️ THE HAND-OVER, AND IT HAPPENS IN THE SAME TURN AS THE FIRST MOVING FRAME. Before this
+        // line the editor's own card is what is on screen and this screen draws nothing; after it,
+        // this screen's picture is drawn at the card's rect wearing the card's corner and is already
+        // easing away from it. Nothing is ever held at rest in either place, which is his report.
+        // Both writes are outside the animation below: neither is a thing to interpolate.
+        flightLeft = true
+        onFlightStart?()
         withAnimation(.easeInOut(duration: Self.entryDuration)) {
             entryProgress = 1
             chrome = 1

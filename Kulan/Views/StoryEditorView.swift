@@ -176,6 +176,10 @@ struct StoryEditorView: View {
     @State private var filterIndex = 0
     @State private var croppedSource: UIImage?   // result of the interactive crop (nil = uncropped)
     @State private var showCrop = false
+    /// The crop screen's picture has left the card, so this card may stand down. See the note beside
+    /// the canvas's own `.opacity` and `ChatCropView.onFlightStart`. Reset on close, or the next crop
+    /// would open with the card already hidden and show the held frame all over again.
+    @State private var cropFlying = false
     /// The story card's rectangle on screen, so Crop can open as a resize of the picture already
     /// there instead of as a second picture fading in over it. See `cropOverlay`.
     @State private var cardRect: CGRect = .zero
@@ -853,8 +857,22 @@ struct StoryEditorView: View {
                 // ⚠️ INSTANT, AND OUTSIDE BOTH ANIMATIONS ABOVE ON PURPOSE. Faded, this would be a
                 // cross-dissolve between two renderings of one photograph — which is the thing being
                 // removed, spelled differently.
-                .opacity(showCrop ? 0 : 1)
-                .animation(nil, value: showCrop)
+                // ⛔ AND IT STANDS DOWN WHEN THE FLIGHT LEAVES, NOT WHEN THE DOOR OPENS. FOURTH
+                // REPORT ON THIS TRANSITION; the note above is right about WHY this hide exists and
+                // was wrong about WHEN.
+                //
+                // The crop screen cannot start its flight until the canvas has stopped moving (its
+                // `armEntry` re-arms on every geometry report), and this hid the card the instant
+                // `showCrop` went true. So for the whole settle the only thing on screen was the crop
+                // screen's picture parked at progress 0 — the card's rect, at the card's size, chrome
+                // still down. Correct geometry, held still. That is his "it will be full screen, after
+                // that start zoom out".
+                //
+                // `cropFlying` is the crop screen telling us its picture is away, in the same turn as
+                // its first moving frame. Until then this card is what he is looking at, exactly as
+                // theirs keeps its review screen until `animateTransitionIn` runs.
+                .opacity(showCrop && cropFlying ? 0 : 1)
+                .animation(nil, value: cropFlying)
             // Bottom chrome. While DRAWING, our pen bar takes the bottom instead; it stays pinned
             // because a drawing screen has no keyboard and the canvas must not move under a stroke.
             if isDrawing {
@@ -2334,7 +2352,13 @@ struct StoryEditorView: View {
             // From the CURRENT cropped result when there is one, so re-opening crop refines instead
             // of resetting to the original.
             ChatCropView(image: croppedSource ?? current, inline: true,
-                         onClose: { withAnimation(.easeInOut(duration: 0.3)) { showCrop = false } },
+                         onClose: {
+                             withAnimation(.easeInOut(duration: 0.3)) { showCrop = false }
+                             // The card is back the instant the crop screen goes, and the next crop
+                             // must start from "the card is up" again.
+                             cropFlying = false
+                         },
+                         onFlightStart: { cropFlying = true },
                          onRect: { r in
                              // Re-cropping refines the crop you already have, so the new rectangle is
                              // read INSIDE the old one rather than against the original — otherwise a
