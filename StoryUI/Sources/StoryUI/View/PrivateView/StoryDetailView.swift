@@ -1148,7 +1148,14 @@ private extension StoryDetailView {
                         selectedEmoji: $selectedEmoji,
                         userClosure: userClosure
                     )
-                    .animation(.spring(response: keyboardManager.animationDuration, dampingFraction: 1.0), value: messageViewPosition)
+                    // ⛔ THE KEYBOARD'S OWN CURVE, NOT A SPRING — his "the reply bar is coming late, it
+                    // is going under the keyboard". A spring's `response` is its NATURAL PERIOD, not
+                    // its arrival time, so a critically damped one handed the keyboard's 0.25 is
+                    // still moving well after the keyboard has stopped. The bar never started late;
+                    // it was on a curve that runs longer than the thing it travels with, so the keys
+                    // overtook it every time. See `KeyboardManager.systemAnimation` for the
+                    // reference app's dispatcher and where the bezier comes from.
+                    .animation(keyboardManager.systemAnimation, value: messageViewPosition)
                     .offset(y: emojiViewPosition)
                     .opacity(messageViewPosition == 0 ? 0 : 1)
                 }
@@ -1258,7 +1265,14 @@ private extension StoryDetailView {
         // front-loaded like the keyboard, so the reply pill stays just above the keyboard's top edge
         // the whole way up instead of trailing behind it and popping in at the end (user: "bar comes
         // after the keyboard — make it same time").
-        .animation(.spring(response: keyboardManager.animationDuration, dampingFraction: 1.0), value: messageViewPosition)
+        // ⛔ THE KEYBOARD'S OWN CURVE, NOT A SPRING — his "the reply bar is coming late, it
+                    // is going under the keyboard". A spring's `response` is its NATURAL PERIOD, not
+                    // its arrival time, so a critically damped one handed the keyboard's 0.25 is
+                    // still moving well after the keyboard has stopped. The bar never started late;
+                    // it was on a curve that runs longer than the thing it travels with, so the keys
+                    // overtook it every time. See `KeyboardManager.systemAnimation` for the
+                    // reference app's dispatcher and where the bezier comes from.
+                    .animation(keyboardManager.systemAnimation, value: messageViewPosition)
         .offset(y: messageViewPosition)
     }
 
