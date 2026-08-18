@@ -140,6 +140,50 @@ struct ChatCropView: View {
     /// One number for the move, so the flight and the chrome behind it cannot run on two clocks.
     private static let entryDuration: Double = 0.3
 
+    /// ⛔ THE WAY OUT, AND IT IS THE WAY IN RUN BACKWARDS ON THE PART HE KEPT.
+    ///
+    /// His 2026-08-18 report: the entry zooms out properly now, and pressing Done "zoom back is not
+    /// working" — the screen just cuts. It used to, and the note on the transition said closing had
+    /// "no picture to be continuous with", which was true only while the entry did not move either.
+    ///
+    /// 0 while the picture is seated on the crop canvas, 1 when the CROP RECTANGLE has arrived at the
+    /// card. Not the whole picture: what the editor draws after Done is the cropped result, so flying
+    /// the full frame back would land one photograph and then swap it for a different one — the same
+    /// "suddenly replaced" this screen's entry was rebuilt to remove, wearing the other direction.
+    @State private var exitProgress: CGFloat = 0
+
+    /// The scale that carries `crop` onto the card. 1 at rest.
+    private var exitScale: CGFloat {
+        guard exitProgress > 0, crop.width > 1, entryFrom.width > 1 else { return 1 }
+        return 1 + (entryFrom.width / crop.width - 1) * exitProgress
+    }
+
+    /// ⚠️ SOLVED AGAINST THE SCALE, NOT ADDED TO IT. `.scaleEffect` grows the picture about the view's
+    /// own centre — `imageFrame`'s — so the crop rectangle's centre moves as it scales. The offset
+    /// that puts it on the card is therefore whatever is LEFT once the scale has had its say:
+    ///
+    ///     imageFrame.mid + (crop.mid - imageFrame.mid) * s + offset = entryFrom.mid
+    ///
+    /// Exact at both ends by construction, which is the property the entry's own note asks for.
+    private var exitOffset: CGSize {
+        guard exitProgress > 0, crop.width > 1, entryFrom.width > 1 else { return .zero }
+        let s = exitScale
+        return CGSize(width: entryFrom.midX - imageFrame.midX - (crop.midX - imageFrame.midX) * s,
+                      height: entryFrom.midY - imageFrame.midY - (crop.midY - imageFrame.midY) * s)
+    }
+
+    /// What is still visible as it flies: the window at rest, the kept rectangle by the end. Anything
+    /// outside the crop is not part of the picture the editor is about to show, so it goes on the way
+    /// rather than at the hand-over.
+    private var flightWindow: CGRect {
+        guard exitProgress > 0, crop.width > 1 else { return imageFrame }
+        let t = exitProgress
+        return CGRect(x: imageFrame.minX + (crop.minX - imageFrame.minX) * t,
+                      y: imageFrame.minY + (crop.minY - imageFrame.minY) * t,
+                      width: imageFrame.width + (crop.width - imageFrame.width) * t,
+                      height: imageFrame.height + (crop.height - imageFrame.height) * t)
+    }
+
     /// The scale that puts the fitted picture back at the card's size, eased out by the progress.
     private var entryScale: CGFloat {
         guard entryProgress < 1, entryFrom.width > 1, imageFrame.width > 1 else { return 1 }
@@ -248,7 +292,10 @@ struct ChatCropView: View {
                     .frame(width: displayFrame.width, height: displayFrame.height)
                     .rotationEffect(.degrees(angle))
                     .offset(x: pan.width, y: pan.height)
-                    .frame(width: imageFrame.width, height: imageFrame.height)
+                    // ⚠️ `flightWindow`, NOT `imageFrame`: at rest they are the same rectangle, and
+                    // during the exit this closes onto the crop so what lands on the card is exactly
+                    // what the card is about to draw. See `exitProgress`.
+                    .frame(width: flightWindow.width, height: flightWindow.height)
                     .clipped()
                     // ⚠️ THE CORNER IS DIVIDED BY THE SCALE, so what is on screen is the radius the
                     // card was actually wearing at every point of the flight rather than a number
@@ -260,13 +307,14 @@ struct ChatCropView: View {
                     // from and the fitted rect have the same centre and the same aspect, so a
                     // uniform scale is the entire difference between them. Nothing translates, which
                     // is why this cannot drift the way a hand-built path would.
-                    .scaleEffect(entryScale)
+                    .scaleEffect(entryScale * exitScale)
                     // The leftover translation, after `.scaleEffect` so it is read in canvas points
                     // rather than in the scaled picture's own. `.offset` draws, it does not lay out,
                     // so the `.position` below still seats the picture on its true crop rect and this
                     // only moves what is drawn there back onto the card for the length of the flight.
-                    .offset(entryOffset)
-                    .position(x: imageFrame.midX, y: imageFrame.midY)
+                    .offset(width: entryOffset.width + exitOffset.width,
+                            height: entryOffset.height + exitOffset.height)
+                    .position(x: flightWindow.midX, y: flightWindow.midY)
                 // Slide the picture: in the dimmed part, because inside the frame a one-finger drag
                 // belongs to the frame and always has. Below the crop's own views in this stack, so
                 // it can only ever get what they did not want.
@@ -573,7 +621,7 @@ struct ChatCropView: View {
                 .allowsHitTesting(frameChrome > 0.01)
             HStack(spacing: 12) {
                 // Leave with the picture untouched.
-                Button { close() } label: {
+                Button { cancelExit() } label: {
                     Image(systemName: "xmark").font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 44, height: 44)
@@ -842,8 +890,42 @@ struct ChatCropView: View {
             onRect?(CGRect(x: inImage.minX / img.size.width, y: inImage.minY / img.size.height,
                            width: inImage.width / img.size.width, height: inImage.height / img.size.height))
         }
-        onDone(out)
-        close()
+        // ⛔ AND IT FLIES HOME RATHER THAN CUTTING — his 2026-08-18 "when crop finished then click
+        // done, zoom back is not working".
+        //
+        // The kept rectangle travels to the card and the rest closes onto it, so the picture that
+        // lands IS the picture the editor is about to draw. Handing over at the end of that is what
+        // makes it one movement instead of a screen being replaced.
+        //
+        // Callers that hand no rect in have nowhere to fly to and keep the instant behaviour they
+        // have always had — the chat editor and media approval, unchanged.
+        guard initialContentRect != nil, crop.width > 1, entryFrom.width > 1 else {
+            onDone(out); close(); return
+        }
+        // The frame, the grid and the dim go first and faster, exactly as they arrived last and
+        // slowest. Nothing of the crop's furniture should still be drawn over a picture in flight.
+        withAnimation(.easeInOut(duration: 0.16)) { frameChrome = 0 }
+        withAnimation(.easeInOut(duration: Self.entryDuration)) {
+            exitProgress = 1
+            chrome = 0
+        } completion: {
+            onDone(out)
+            close()
+        }
+    }
+
+    /// ✕. The same journey with nothing kept: the picture goes back to the card whole, because the
+    /// editor still holds the picture it opened with. That is the entry run backwards, and it is the
+    /// one number the entry already animates.
+    private func cancelExit() {
+        guard initialContentRect != nil, entryFrom.width > 1 else { close(); return }
+        withAnimation(.easeInOut(duration: 0.16)) { frameChrome = 0 }
+        withAnimation(.easeInOut(duration: Self.entryDuration)) {
+            entryProgress = 0
+            chrome = 0
+        } completion: {
+            close()
+        }
     }
 
     private func rotate() {

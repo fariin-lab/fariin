@@ -2248,8 +2248,11 @@ struct StoryEditorView: View {
             //
             // The removal keeps its fade. Closing has no picture to be continuous with — the canvas
             // underneath is already where it was — and he reported nothing about the way out.
-            .transition(.asymmetric(insertion: .identity,
-                                    removal: .opacity.animation(.easeIn(duration: 0.16))))
+            // ⚠️ NO FADE EITHER WAY NOW. The removal kept one while closing had no picture to be
+            // continuous with; it has one since `ChatCropView` learned to fly home — the kept
+            // rectangle lands exactly on the card and the card is already drawing it, so a
+            // cross-fade would be dissolving a photograph into itself. His 2026-08-18 "zoom back".
+            .transition(.identity)
             .zIndex(20)
         }
     }
