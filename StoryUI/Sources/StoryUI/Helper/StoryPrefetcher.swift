@@ -274,7 +274,27 @@ public enum StoryPrefetcher {
             // ON DISK IS ONLY HALF OF IT. Building the asset, parsing the container, loading the
             // tracks and filling the render pipeline all still happen when you ARRIVE unless they are
             // done in advance, and all of it is visible as a wait. See StoryItemPreloader.
-            if case .success(let file) = result { StoryItemPreloader.warm(file) }
+            if case .success(let file) = result {
+                StoryItemPreloader.warm(file)
+                // ⚠️ AND THE CLIP'S OWN FIRST FRAME, AS A PICTURE, BEFORE ANYBODY REACHES IT.
+                //
+                // This is the reference app's `CachedVideoFirstFrameRepresentation`, which its
+                // preloader asks for on every item in its lookahead window alongside the poster and
+                // the byte prefix. It is the cover a video story is guaranteed to be able to show:
+                // a thumbnail upload can fail or still be in flight, but the clip on disk always
+                // contains its own opening frame.
+                //
+                // Ours generated this only on arrival, and only as a last resort once the poster
+                // had already missed — a decode started at the very moment the item went on screen,
+                // with a black card in front of it while it ran. Asking here makes it a cache hit
+                // by the time the item is built. `opening` de-duplicates and caps its own
+                // generators, so a fast tapper cannot pile these up.
+                //
+                // ⚠️ THE HOP IS NOT OPTIONAL. This completion is a download callback on a background
+                // queue and `StoryVideoFrames` is main-actor: it keeps its cache, its in-flight set
+                // and its landings in plain statics guarded by nothing but that isolation.
+                Task { @MainActor in StoryVideoFrames.warmOpening(file) }
+            }
         }
     }
 
@@ -282,7 +302,21 @@ public enum StoryPrefetcher {
     /// stands down. See the note on `warmVideo` for why the two are not treated the same.
     private static func warmImage(_ urlString: String?, poster: Bool) {
         guard let urlString, !urlString.isEmpty, let url = URL(string: urlString) else { return }
-        guard !isWarm(urlString), claim(urlString) else { return }
+        // ⚠️ BYTES ON DISK WERE TREATED AS "DONE" AND THEY ARE NOT DONE — this early return is what
+        // made the flash survive every previous fix, and it is worst in the exact case he reported.
+        //
+        // `isWarm` asks the FILE SYSTEM. Relaunch the app and every byte is still there, so this
+        // returned immediately and nothing was warmed at all; meanwhile the decoded-pixel cache,
+        // which is the only store the arrival path can read without hopping, was empty because it
+        // does not survive a launch. Bytes warm, pixels cold, and the lookahead reporting success.
+        //
+        // So a warm disk now means "skip the download", never "skip the decode". The decode is
+        // cheap, off the main thread, and it is the half that actually removes the wait.
+        if isWarm(urlString) {
+            Task.detached(priority: .utility) { await StoryMemoryCache.warm(url) }
+            return
+        }
+        guard claim(urlString) else { return }
 
         var request = URLRequest(url: url)
         // This is speculative work for something the person has not asked to see yet, so it stands
@@ -303,6 +337,22 @@ public enum StoryPrefetcher {
             if let response, data.count < 12 * 1024 * 1024 {
                 URLCache.shared.storeCachedResponse(.init(response: response, data: data),
                                                     for: .init(url: url))
+            }
+            // ⚠️ AND THEN THE DECODE, WHICH IS THE HALF THAT WAS MISSING. Everything above this line
+            // stores BYTES. The arrival path can only avoid a hop by finding PIXELS, so a lookahead
+            // that stops at bytes leaves the decode to be paid at the one moment that cannot afford
+            // it — and that decode of a full-screen JPEG is the forty to ninety milliseconds he
+            // reported as a black screen.
+            //
+            // The reference app's preloader does not stop at bytes either: for a video it goes as
+            // far as generating and caching the clip's first frame as a picture before the story is
+            // reached (`CachedVideoFirstFrameRepresentation`, fetched for every item in its
+            // lookahead window). This is the same intent for a photo.
+            //
+            // Off the main thread, and the cache is cost-limited, so three full-size photos held
+            // ahead evict themselves rather than grow.
+            Task.detached(priority: .utility) {
+                _ = await StoryMemoryCache.prepare(data, for: url)
             }
         }.resume()
     }

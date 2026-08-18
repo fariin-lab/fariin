@@ -598,6 +598,26 @@ public enum StoryVideoFrames {
         generate(url, at: second, key: k)
     }
 
+    /// GENERATE THE OPENING FRAME NOW, FOR A CLIP NOBODY HAS REACHED YET.
+    ///
+    /// ⚠️ A SEPARATE DOOR FROM `warm`, WHICH REFUSES SECOND ZERO. That one exists for the pause
+    /// (`guard second > 0.2`), because freezing a card on second zero would be the poster with extra
+    /// steps. Second zero is precisely what a lookahead wants, so it needs its own way in rather
+    /// than a loosened guard on a rule that is right where it stands.
+    ///
+    /// This is the reference app's `CachedVideoFirstFrameRepresentation`, which its story preloader
+    /// asks for on every item in its lookahead window alongside the poster and the byte prefix.
+    /// Generating it in advance is what lets an item that has never been on screen put a true
+    /// picture of itself up in the same turn it is built, instead of a black card over a decode.
+    ///
+    /// ⚠️ MAIN ACTOR, LIKE THE REST OF THIS TYPE, so the prefetcher's background completion has to
+    /// hop. Costs nothing when the frame is already cached or its decode is already running.
+    public static func warmOpening(_ url: URL) {
+        let k = key(url, 0)
+        guard full.object(forKey: k as NSString) == nil else { return }
+        _ = generate(url, at: 0, key: k)
+    }
+
     /// THE COVER THE CLIP IS ABOUT TO HAND OVER TO — second zero, because playback always begins
     /// there. Used behind the video while it loads, for a clip whose poster is missing (the window
     /// between a story doc being written and its `thumb.jpg` upload finishing, and anything posted

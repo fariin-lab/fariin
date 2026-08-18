@@ -700,10 +700,17 @@ final class StoryItemVideoView: UIView {
         // different one and warms that, so for a story just posted both of these miss and the cover
         // becomes a network fetch — leaving the hide-until-ready rule with nothing to hide behind.
         if let img = StoryPosterSource.provider?(poster) { posterImage = img; setCover(img, rank: .poster); return }
-        if let cached = URLCache.shared.cachedResponse(for: .init(url: u)), let img = UIImage(data: cached.data) {
-            posterImage = img; setCover(img, rank: .poster); return
-        }
-        if let disk = StoryDiskCache.image(u) { posterImage = disk; setCover(disk, rank: .poster); return }
+        // ⚠️ ONE DOOR FOR THREE STORES, AND THE DECODED ONE IS NEW HERE. These were two hand-rolled
+        // branches — `URLCache` then the disk cache — both building their picture with
+        // `UIImage(data:)`, which decodes NOTHING: it defers the work until the image is first
+        // drawn, so the cost landed on the main thread in the middle of the hand-over anyway.
+        //
+        // `decodedNow` asks the decoded-pixel cache first (which the lookahead now fills, so for an
+        // item you are about to reach this is a dictionary lookup), then the same two stores, and
+        // it returns something already display-ready and remembers it. This is the reference app's
+        // `attemptSynchronous` branch, which its story item view takes for the item that has just
+        // become current.
+        if let ready = StoryMemoryCache.decodedNow(for: u) { posterImage = ready; setCover(ready, rank: .poster); return }
         URLSession.shared.dataTask(with: u) { [weak self] data, _, _ in
             guard let data, let img = UIImage(data: data) else { return }
             StoryDiskCache.store(data, for: u)

@@ -81,6 +81,48 @@ enum StoryMemoryCache {
         }.value
     }
 
+    /// ⚠️ THE MAIN THREAD PAYS THE DECODE HERE, AND THAT IS THE POINT — the reference app's
+    /// `attemptSynchronous`.
+    ///
+    /// Its story item view takes exactly this branch for the item that has just become the current
+    /// one: if the file is on disk it does `UIImage(contentsOfFile:)?.preparingForDisplay()` inline,
+    /// inside the same update pass, and puts the picture up in that turn. It is not an oversight
+    /// that this blocks — they measured it (their own timing print sits beside the call) and decided
+    /// that a decode the eye reads as one heavier frame beats a hop the eye reads as a hole.
+    ///
+    /// Ours had only the async door: `decoded(for:)` hops to a detached task, and everything on the
+    /// screen in the meantime had already been taken down. That gap IS the black frame, and no
+    /// placeholder fixes it because the honest answer — the real picture — was on disk the whole time.
+    ///
+    /// ⚠️ ONLY EVER FOR THE ITEM BEING SHOWN RIGHT NOW. Called speculatively (a lookahead, a card in
+    /// a row) this would put a full-size decode on the main thread for a story nobody is looking at,
+    /// which is the opposite trade. The warm path below is what speculation uses.
+    static func decodedNow(for url: URL) -> UIImage? {
+        if let hit = image(for: url) { return hit }
+        var raw: UIImage?
+        if let cached = URLCache.shared.cachedResponse(for: .init(url: url)) {
+            raw = UIImage(data: cached.data)
+        }
+        if raw == nil { raw = StoryDiskCache.image(url) }
+        guard let raw else { return nil }
+        let ready = raw.preparingForDisplay() ?? raw
+        store(ready, for: url)
+        return ready
+    }
+
+    /// PIXELS, NOT BYTES, FOR A STORY NOBODY HAS REACHED YET.
+    ///
+    /// The lookahead used to stop at bytes: it filled `URLCache` and the disk cache and left the
+    /// decode to be paid at the moment of arrival, which is the one moment that cannot afford it.
+    /// The reference app's preloader does not stop there either — for a video it goes as far as
+    /// generating and caching the clip's FIRST FRAME as a picture before the story is reached.
+    ///
+    /// Everything expensive is off the main thread; a hit afterwards is a dictionary lookup, which
+    /// is what makes the arrival happen inside one turn with nothing to hide.
+    static func warm(_ url: URL) async {
+        _ = await decoded(for: url)
+    }
+
     /// Decode bytes we have just downloaded, off the main thread, and remember the result.
     static func prepare(_ data: Data, for url: URL) async -> UIImage? {
         await Task.detached(priority: .userInitiated) { () -> UIImage? in
@@ -331,8 +373,32 @@ final class ImageLoader: UIView {
 
     /// Draw the blurred poster NOW if we already hold one, so the story never opens on grey. Called
     /// before the network request goes out.
-    private func seedPreviewBlur(_ previewURL: String?) -> Bool {
-        guard let previewURL, let url = URL(string: previewURL) else { return false }
+    private func seedPreviewBlur(_ previewURL: String?, blurThumb: String) -> Bool {
+        // ⚠️ THE COVER THAT TRAVELS WITH THE STORY GOES FIRST WHEN NOTHING ELSE IS HELD, AND ITS
+        // ABSENCE FROM THIS FILE WAS HALF THE BUG.
+        //
+        // The story document carries a ~30px JPEG as base64 (`blurThumb`, and the app's own note on
+        // it says "this is the cover that cannot be missing"). It needs no network, no disk and no
+        // cache — it arrived with the story. The video item view has used it as its floor since it
+        // was built; this path never received it at all, so a photo whose bytes were not yet held
+        // fell through to the shimmer, which is `white: 0.14` and on an OLED screen reads as black.
+        //
+        // This is the reference app's rule and it does not split the two media kinds either: its
+        // story item view decodes `immediateThumbnailData` and puts it up blurred for an image and
+        // for a video alike, before any fetch is started, in the same update pass.
+        //
+        // ⚠️ TRIED ONLY AFTER THE THREE CACHES BELOW HAVE MISSED. Thirty pixels blurred is the
+        // FLOOR, not the preference: a poster already in hand is a real photograph and a better
+        // picture than this will ever be. Ordered last for that reason, and reached in practice
+        // only when this story has genuinely never been on this phone before.
+        func seedFromBlurThumb() -> Bool {
+            guard !blurThumb.isEmpty,
+                  let data = Data(base64Encoded: blurThumb),
+                  let img = UIImage(data: data) else { return false }
+            showPreviewBlur(img)
+            return true
+        }
+        guard let previewURL, let url = URL(string: previewURL) else { return seedFromBlurThumb() }
         // ⚠️ THE APP'S OWN CACHE IS ASKED FIRST, AND ITS ABSENCE HERE WAS HIS "the thumbnail turns
         // black for a fraction of a second".
         //
@@ -377,10 +443,11 @@ final class ImageLoader: UIView {
                 self.showPreviewBlur(img)
             }
         }.resume()
-        return false
+        return seedFromBlurThumb()
     }
 
-    func loadImageWithUrl(_ url: String?, previewURL: String? = nil, imageIsLoaded: @escaping () -> Void) {
+    func loadImageWithUrl(_ url: String?, previewURL: String? = nil, blurThumb: String = "",
+                          imageIsLoaded: @escaping () -> Void) {
 
         guard let validatedUrl = url else {
             print("url error")
@@ -494,11 +561,56 @@ final class ImageLoader: UIView {
         // (or the shimmer, if we do not even hold that yet) and nothing else — which is what it shows
         // at the end of a real download too, so the arrival looks the same however the picture got
         // here.
-        apply(nil)
-        if !seedPreviewBlur(previewURL) { showShimmer(true) }
+        // 2b) ⚠️ ON DISK COUNTS AS HELD, AND ASKING SYNCHRONOUSLY IS THE WHOLE FIX FOR THE BLACK
+        //     FRAME BETWEEN ONE STORY AND THE NEXT.
+        //
+        //     Everything above is a memory lookup, so before this line the ONLY way to arrive
+        //     without a flash was to have already watched this story in this session. The bytes
+        //     being on disk — which after one lookahead pass they almost always are — still went
+        //     the long way round: take the picture down, put a placeholder up, hop to a detached
+        //     task, read, decode, come back. Forty to ninety milliseconds of not-the-story, on
+        //     every first visit to every item, which is exactly the report: worst straight after
+        //     launch, and gone once you tap back through the same stories a second time.
+        //
+        //     The reference app's story item view has this branch and takes it for the item that
+        //     has just become current: file on disk → `preparingForDisplay()` inline → picture up
+        //     in this turn. It blocks the main thread for the length of one decode and they kept
+        //     it deliberately. A heavier frame is a thing nobody sees; a hole is the thing he
+        //     photographed.
+        //
+        //     ⚠️ IT SITS BELOW THE TWO MEMORY DOORS AND ABOVE EVERYTHING ELSE, so a story already
+        //     decoded never pays it twice, and `decodedNow` stores what it builds, so neither does
+        //     the second visit to this one.
+        if let ready = StoryMemoryCache.decodedNow(for: imageURL) {
+            showShimmer(false)
+            apply(ready)
+            imageIsLoaded()
+            return
+        }
 
-        // 2) URLCache or disk, with the read AND the decode off the main thread. This used to be two
-        //    synchronous branches right here, which is why "cached" still cost a stutter.
+        // ⚠️ THE FLOOR GOES UP BEFORE THE OLD PICTURE COMES DOWN, AND THE ORDER IS THE RULE.
+        //
+        // The take-down had to move above the first await (story A was being left on screen while
+        // story B looked itself up), and that was right. What it did not have was a guarantee that
+        // anything was replacing it — `seedPreviewBlur` was allowed to answer "nothing", and the
+        // shimmer it fell back to is `white: 0.14`. So the fix for one hole opened a smaller one.
+        //
+        // The reference app never reaches this state because it never clears at all: its update is
+        // wrapped in `if isMediaUpdated` and there is no `image = nil` anywhere in the file. It can
+        // afford that because each story owns its OWN view — the one being left slides away with
+        // its picture still in it. Ours is one view reused between stories, so leaving the picture
+        // up genuinely shows the wrong story. Replace, then, rather than clear: work out what is
+        // going up first, and only take the old picture down once something is standing in its
+        // place. With `blurThumb` in the chain there is always something, because it arrived on the
+        // story document itself.
+        let floorIsUp = seedPreviewBlur(previewURL, blurThumb: blurThumb)
+        apply(nil)
+        if !floorIsUp { showShimmer(true) }
+
+        // 3) NOTHING IS HELD ANYWHERE, so this is the download. The re-check in front of it is not
+        //    redundant with `decodedNow` above: the lookahead runs on its own queue and can land
+        //    this story's bytes in the gap between that line and this one, and finding them here
+        //    saves a second fetch of something already on the disk.
         let wanted = imageURL
         Task { [weak self] in
             if let ready = await StoryMemoryCache.decoded(for: wanted) {

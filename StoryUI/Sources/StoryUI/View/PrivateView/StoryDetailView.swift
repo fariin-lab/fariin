@@ -1084,6 +1084,11 @@ private extension StoryDetailView {
             // this one instead of arguing with it.
             ImageView(imageURL: story.mediaURL,
                       previewURL: story.previewURL,
+                      // ⚠️ AND THE COVER THAT ARRIVED WITH THE STORY, which this branch never
+                      // received. The video branch below has had it since it was written; a photo
+                      // with nothing cached had only the grey shimmer to fall back to, and that is
+                      // the black card between one item and the next. See `ImageView.blurThumb`.
+                      blurThumb: story.blurThumb,
                       cardCornerRadius: (story.config.storyType != .plain() || model.isMine) ? cardRadius : 0,
                       isCaptureProtected: story.isCaptureProtected) {
                 start(index: index)
@@ -2103,17 +2108,34 @@ private extension StoryDetailView {
         prefetchNext(after: index)   // warm the next photo so advancing is instant
     }
 
-    // Predictive prefetch: pull the next item's image into URLCache (what ImageLoader reads from),
-    // so tapping/auto-advancing to it shows instantly. One ahead — caching handles the rest.
+    // Predictive prefetch: get the next item's picture ready, so tapping or auto-advancing to it
+    // shows instantly. One ahead — `StoryPrefetcher` runs the real three-deep window off the tick,
+    // and this is the belt for the moment before that window has moved.
     private func prefetchNext(after index: Int) {
         let next = index + 1
-        guard next < model.stories.count,
-              model.stories[next].config.mediaType == .image,
-              let url = URL(string: model.stories[next].mediaURL),
-              URLCache.shared.cachedResponse(for: URLRequest(url: url)) == nil else { return }
+        guard next < model.stories.count else { return }
+        let story = model.stories[next]
+        // ⚠️ THE POSTER, NOT ONLY THE PHOTO, AND FOR A VIDEO TOO. This was `mediaType == .image` and
+        // refused to do anything at all for a clip — but a video item's first painted pixel is its
+        // COVER, and that cover is a picture like any other. Leaving it out meant a video story
+        // reached with nothing decoded put up its black view and waited, which is what he
+        // photographed. For a photo story `previewURL` IS `mediaURL`, so this one line covers both.
+        guard let poster = story.previewURL, let url = URL(string: poster) else { return }
+        // ⚠️ PIXELS, NOT BYTES. Storing into `URLCache` alone — which is all this used to do — leaves
+        // the decode to be paid on arrival, and that decode is the black frame. `decodedNow` reads
+        // the decoded cache first, so this is what makes the arrival a dictionary lookup.
+        //
+        // ⚠️ AND OFF THE MAIN THREAD, WHICH IS THE DIFFERENCE BETWEEN THIS AND `decodedNow`. Nobody
+        // is looking at this story yet, so there is nothing to be gained by blocking for it and a
+        // dropped frame to be lost. That is the same split the reference app draws: synchronous for
+        // the item that has just become current, asynchronous for everything it is guessing about.
+        if StoryMemoryCache.image(for: url) != nil { return }
+        Task.detached(priority: .utility) { await StoryMemoryCache.warm(url) }
+        guard URLCache.shared.cachedResponse(for: URLRequest(url: url)) == nil else { return }
         URLSession.shared.dataTask(with: url) { data, response, _ in
             guard let data, let response else { return }
             URLCache.shared.storeCachedResponse(.init(response: response, data: data), for: URLRequest(url: url))
+            Task.detached(priority: .utility) { _ = await StoryMemoryCache.prepare(data, for: url) }
         }.resume()
     }
     
