@@ -2159,12 +2159,39 @@ struct StoryEditorView: View {
         // Building it here takes the choice away: the trim screen renders through the player for
         // every clip, first or fifth. It also seeks to the cut's own start, so the frame you are
         // cutting on is on screen the moment the screen opens rather than after the first drag.
-        ensurePreviewPlayer()?.pause()
+        let player = ensurePreviewPlayer()
+        player?.pause()
+        // ⛔ IT OPENS ON THE FRAME HE WAS WATCHING, NOT ON THE START OF THE CLIP — his 2026-08-18
+        // "when video is playing or paused then I click trim, always realtime, don't reset … just
+        // make pause then continue, don't start from the beginning".
+        //
+        // This always seeked to `trimStart`, which for an untouched clip is zero. So watching thirty
+        // seconds in and reaching for the scissors threw those thirty seconds away and put the first
+        // frame on the trim page — and the trim page is precisely where the frame he was looking at
+        // is the thing he wants to cut around.
+        //
+        // The seek is not removed, it is aimed. A clip that has never been played has a player at
+        // zero and still needs putting on `trimStart`: that is the case the seek was written for
+        // (a clip added through + arrives with only its poster, and the poster is visibly darker
+        // than the player's own frame — see the note above). Only a position that is genuinely
+        // inside the kept range is worth keeping, so a clip watched past its own trim end still
+        // opens on the start rather than on a frame that is about to be cut off.
+        //
+        // ⚠️ AND WHEN THERE IS NOTHING TO MOVE, NOTHING IS ASKED FOR. Issuing a precise seek to the
+        // time the player is already sitting on is a decoder flush for no change on screen, and this
+        // screen has paid for exactly that once already — see `seekInFlight`.
+        let at = player?.currentTime().seconds ?? 0
+        let keepPosition = at.isFinite && at > trimStart + 0.05 && at < trimEnd - 0.05
+        let open = keepPosition ? at : trimStart
+        lastScrubSeconds = open
+        // The white line starts under the frame that is on screen. It is set by hand because the
+        // periodic observer only writes it while time is MOVING, and the clip has just been paused —
+        // left alone it would say zero over a picture thirty seconds in.
+        trimPlayhead.seconds = open
         // Through the serialiser like every other seek on this screen. Opening trim a SECOND time
         // used to add a precise seek on top of a queue the first trim's scrub had not finished
         // draining, which is the exact moment his clip froze — see `seekInFlight`.
-        lastScrubSeconds = trimStart
-        seekPreview(to: trimStart, precise: true)
+        if abs(open - at) > 0.01 { seekPreview(to: open, precise: true) }
         withAnimation(.easeInOut(duration: 0.28)) { showTrim = true }
     }
 
