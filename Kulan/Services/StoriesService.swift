@@ -558,16 +558,23 @@ final class StoriesService {
     ///
     /// Written only for `public` stories, and only once the media URL is known — a mirror pointing
     /// at an empty url is a black card on somebody else's profile.
+    ///
+    /// ⚠️ `createdAt` IS PASSED IN WHEN THE STORY ALREADY EXISTS, and leaving it out is not a detail.
+    /// This is a `setData`, so re-writing a mirror for a story whose audience has just been changed
+    /// would stamp it with `serverTimestamp()` all over again — the mirror would claim to have been
+    /// posted at the moment the author changed its audience, and a story that is an hour old would
+    /// appear on the profile as brand new. A post has no document yet and keeps the server's clock.
     private func writePublicMirror(storyId: String, me: String, mediaUrl: String, thumbUrl: String,
                                    blurThumb: String = "", stickers: [StoryTapTarget] = [],
                                    type: String, caption: String, duration: Double,
                                    expiresAt: Date, allowsReplies: Bool,
-                                   captureProtected: Bool = false) async {
+                                   captureProtected: Bool = false,
+                                   createdAt: Date? = nil) async {
         try? await db.collection("users").document(me)
             .collection("publicStories").document(storyId)
             .setData([
                 "authorUid": me,
-                "createdAt": FieldValue.serverTimestamp(),
+                "createdAt": createdAt.map { Timestamp(date: $0) } ?? FieldValue.serverTimestamp(),
                 "expiresAt": Timestamp(date: expiresAt),
                 "mediaUrl": mediaUrl,
                 "thumbUrl": thumbUrl,
@@ -1040,6 +1047,64 @@ final class StoriesService {
             try? await Storage.storage().reference().child(videoPath).delete()
             try? await Storage.storage().reference().child(thumbPath).delete()
             throw error
+        }
+    }
+
+    /// ⚠️ WHO CAN SEE A STORY THAT IS ALREADY UP — the SAME story, never a new one.
+    ///
+    /// His 2026-08-18 ask, and the reference app's own behaviour: the visibility of an active story
+    /// can be changed after it was posted, without deleting it and posting it again. So this writes
+    /// the audience fields and nothing else — the id, the posting time, the media, the caption, the
+    /// view receipts and the reactions all stay exactly where they are, which is the whole point of
+    /// it. Nothing here re-uploads a byte.
+    ///
+    /// The audience is resolved HERE, against the LIVE chat list, for the same reason `postStory`
+    /// resolves it at post time rather than storing a list id on the story: a list holding somebody
+    /// who has since been blocked must not reach them. See `resolveAudience`, and the note on
+    /// `StoryAudienceTag` for why the custom name never travels to Firestore.
+    ///
+    /// ⚠️ THE PUBLIC MIRROR FOLLOWS IN BOTH DIRECTIONS, and neither half is optional.
+    /// `users/{me}/publicStories/{id}` is the copy a STRANGER reads off the profile. A story moved
+    /// off Everyone that kept its mirror would still be public — the exact opposite of what was
+    /// asked for — and a story moved on to Everyone with no mirror would not be public at all.
+    /// Neither failure has anywhere to show itself on screen, which is why both are done here.
+    ///
+    /// ⚠️ A ONE-TIME STORY IS REFUSED. Being taken out of `recipientUids` is precisely how a single
+    /// view is spent (`onStoryConsumed` does the taking), so rewriting that list would hand somebody
+    /// a second look at a story they have already burned. The menu does not offer it either; this is
+    /// the half that cannot be got round.
+    func updateStoryAudience(_ story: Story, excluded: Set<String>, included: Set<String>,
+                                        everyone: Bool, allowsReplies: Bool,
+                                        tag: StoryAudienceTag) async throws {
+        let me = uid
+        guard !me.isEmpty, story.authorUid == me, !story.oneTime else { return }
+        let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included)
+        let docRef = db.collection("stories").document(story.id)
+        // NARROWING TAKES THE MIRROR DOWN FIRST. If the document write then fails, a story that is
+        // still public has lost its public copy, and that is the harmless direction to be wrong in.
+        // The other order leaves a story whose document says friends-only and which anybody who
+        // opens the profile can still watch.
+        if !everyone { try await deletePublicMirror(storyId: story.id, authorUid: me) }
+        try await docRef.updateData([
+            "audience": ["mode": everyone ? "everyone" : mode, "listId": "my-story"],
+            // The LABEL only — the custom list's name stays on this device. See `StoryAudienceTag`.
+            "audienceLabel": tag.label,
+            "public": everyone,
+            "allowsReplies": allowsReplies,
+            // ⚠️ TOKENS, NOT UIDS — see `StoryAudienceToken`. A recipient can read this document, so
+            // the audience travels as hashes here exactly as it does at post time.
+            "recipientUids": StoryAudienceToken.tokens(recipients),
+        ])
+        StoryPrefs.rememberAudienceName(storyId: story.id, tag: tag)
+        if everyone {
+            await writePublicMirror(storyId: story.id, me: me, mediaUrl: story.mediaUrl,
+                                    thumbUrl: story.thumbUrl, blurThumb: story.blurThumb,
+                                    stickers: story.stickers,
+                                    type: story.isVideo ? "video" : "image",
+                                    caption: story.caption, duration: story.duration,
+                                    expiresAt: story.expiresAt, allowsReplies: allowsReplies,
+                                    captureProtected: story.captureProtected,
+                                    createdAt: story.createdAt)
         }
     }
 

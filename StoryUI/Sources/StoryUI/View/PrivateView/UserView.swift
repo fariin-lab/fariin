@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit   // UIMenu + UIAction.subtitle - see StoryMoreMenu
 
 struct UserView: View {
 
@@ -21,6 +22,8 @@ struct UserView: View {
     var onProfile: (() -> Void)?   // tap the avatar+name block → that user's profile
     var showMore: Bool = false     // show the "…" dropdown menu; its buttons post notifications the host runs
     var isMyStory: Bool = false    // my own story → Delete (red) instead of Hide Stories; no Forward
+    /// Offer "Edit viewers" on this story. The host decides — see `Story.canEditAudience`.
+    var canEditAudience: Bool = false
 
     @Binding var isPresented: Bool
 
@@ -35,6 +38,56 @@ struct UserView: View {
                 .symbolRenderingMode(.palette)
                 .accessibilityLabel("Verified")
         }
+    }
+
+    /// WHAT THE "…" OFFERS, in the order he drew it.
+    ///
+    /// SAVE, FORWARD AND SHARE ARE MINE-ONLY. All three take somebody else's story OFF this app
+    /// permanently, and a story is a promise that it is gone in 24 hours. Save puts it in their
+    /// camera roll, Forward puts it in another chat, and Share is the worst of the three because it
+    /// hands the picture straight to another app or Messages. The author is never told any of it
+    /// happened.
+    ///
+    /// The standard messengers do not offer any of the three on another person's story. The
+    /// reference app does, but only when the author switched it on for that story. Nobody sells it
+    /// as a paid feature (owner asked, 2026-08-05).
+    ///
+    /// Forward used to be `!isMyStory`, which was exactly backwards. Screenshots still exist, and
+    /// that is fine: this is about not building the door.
+    ///
+    /// No Delete on my own story — the owner bar already has a trash button, so it lived in two
+    /// places. Others' stories keep Hide Stories and Report (App Store 1.2; the host files the doc).
+    private var moreItems: [StoryMoreMenu.Item] {
+        var out: [StoryMoreMenu.Item] = []
+        if isMyStory {
+            out.append(.init(title: "Save", systemImage: "square.and.arrow.down") {
+                NotificationCenter.default.post(name: .init("storyActionSave"), object: nil)
+            })
+            out.append(.init(title: "Forward", systemImage: "arrowshape.turn.up.right") {
+                NotificationCenter.default.post(name: .init("storyActionForward"), object: nil)
+            })
+            // ⚠️ THE SECOND LINE IS THE AUDIENCE THIS STORY ACTUALLY WENT TO, and it is the same
+            // string the pill under the name is showing — `storyAudienceTitle` on the host side, which
+            // the badge already carries. One source, so the menu and the header can never name the
+            // same audience two different ways. It sits between Forward and Share on his drawing.
+            if canEditAudience {
+                out.append(.init(title: "Edit viewers", subtitle: audience?.text,
+                                 systemImage: "megaphone") {
+                    NotificationCenter.default.post(name: .init("storyActionEditViewers"), object: nil)
+                })
+            }
+            out.append(.init(title: "Share", systemImage: "square.and.arrow.up") {
+                NotificationCenter.default.post(name: .init("storyActionShare"), object: nil)
+            })
+        } else {
+            out.append(.init(title: "Hide Stories", systemImage: "eye.slash") {
+                NotificationCenter.default.post(name: .init("storyActionHide"), object: nil)
+            })
+            out.append(.init(title: "Report", systemImage: "exclamationmark.bubble", destructive: true) {
+                NotificationCenter.default.post(name: .init("storyActionReport"), object: nil)
+            })
+        }
+        return out
     }
 
     var body: some View {
@@ -114,46 +167,16 @@ struct UserView: View {
 
             // "…" sits directly left of the X, same row, so they auto-align (no guessed padding).
             if showMore {
-                // Tap "…" → DROPDOWN popover anchored under the button (native iOS Menu).
-                Menu {
-                    // SAVE, FORWARD AND SHARE ARE MINE-ONLY. All three take somebody else's story
-                    // OFF this app permanently, and a story is a promise that it is gone in 24
-                    // hours. Save puts it in their camera roll, Forward puts it in another chat,
-                    // and Share is the worst of the three because it hands the picture straight to
-                    // another app or Messages. The author is never told any of it happened.
-                    //
-                    // The standard messengers do not offer any of the three on another
-                    // person's story. The reference app does, but only when the author switched it on for
-                    // that story. Nobody sells it as a paid feature (owner asked, 2026-08-05).
-                    //
-                    // Forward used to be `!isMyStory`, which was exactly backwards. Screenshots
-                    // still exist, and that is fine: this is about not building the door.
-                    if isMyStory {
-                        Button { NotificationCenter.default.post(name: .init("storyActionSave"), object: nil) }
-                            label: { Label("Save", systemImage: "square.and.arrow.down") }
-                        Button { NotificationCenter.default.post(name: .init("storyActionForward"), object: nil) }
-                            label: { Label("Forward", systemImage: "arrowshape.turn.up.right") }
-                        Button { NotificationCenter.default.post(name: .init("storyActionShare"), object: nil) }
-                            label: { Label("Share", systemImage: "square.and.arrow.up") }
-                    }
-                    // No Delete here on my own story — the owner bar already has a trash button, so
-                    // it lived in two places. Others' stories keep Hide Stories.
-                    if !isMyStory {
-                        Button { NotificationCenter.default.post(name: .init("storyActionHide"), object: nil) }
-                            label: { Label("Hide Stories", systemImage: "eye.slash") }
-                        // Abuse reporting (App Store 1.2) — the host files the report doc.
-                        Button(role: .destructive) { NotificationCenter.default.post(name: .init("storyActionReport"), object: nil) }
-                            label: { Label("Report", systemImage: "exclamationmark.bubble") }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(width: 32, height: 32)
-                        .background(Circle().fill(.black.opacity(0.3)))   // subtle circle → clear on any photo
-                        .frame(width: 44, height: 44)                      // keep the 44pt tap target
-                        .contentShape(Rectangle())
-                }
+                // Tap "…" → the same native dropdown anchored under the button. Only the MENU moved
+                // to UIKit, never the button — see `StoryMoreMenu` for the one reason it had to.
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(.white)
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(.black.opacity(0.3)))   // subtle circle → clear on any photo
+                    .frame(width: 44, height: 44)                      // keep the 44pt tap target
+                    .contentShape(Rectangle())
+                    .overlay(StoryMoreMenu(items: moreItems))
             }
 
             // 18pt glyph in a 44×44 touch target, now inside a subtle circle for visibility.
@@ -173,3 +196,75 @@ struct UserView: View {
     }
 }
 
+/// ⚠️ THE STORY MENU IS A UIKit `UIMenu` NOW, AND ONLY BECAUSE OF ONE SECOND LINE.
+///
+/// His 2026-08-18 drawing puts the story's current audience UNDER "Edit viewers", in grey — the way
+/// iOS has drawn a menu item with a subtitle since iOS 15 (`UIMenuElement.subtitle`). SwiftUI's
+/// `Menu` renders ONE line whatever view is handed to it: a `VStack` of two `Text`s comes out as the
+/// first one alone. That is the same wall the "+ New" button in the audience sheet hit, and this is
+/// the same answer it reached (`NewAudienceButton`).
+///
+/// ⚠️ THE BUTTON IS STILL THE SWIFTUI ONE, AND NOTHING ABOUT THE LOOK CHANGES. This is a
+/// transparent `UIButton` laid over the ellipsis that was already there, with
+/// `showsMenuAsPrimaryAction`, so the ellipsis, its circle and its 44pt target are drawn by exactly
+/// the same SwiftUI code as before. The dropdown is identical too — SwiftUI's `Menu` is a `UIMenu`
+/// underneath — which was his condition: the design does not move.
+///
+/// ⚠️ `sizeThatFits` IS NOT OPTIONAL. A `UIButton` with no title has a small intrinsic size and
+/// SwiftUI would otherwise hand this the layout's full width, so the tap area would reach across the
+/// header and swallow the taps meant for the name beside it.
+struct StoryMoreMenu: UIViewRepresentable {
+
+    struct Item {
+        var title: String
+        /// The grey second line. Nil draws a one-line item, which is every entry but one.
+        var subtitle: String? = nil
+        var systemImage: String
+        var destructive: Bool = false
+        var action: () -> Void
+
+        init(title: String, subtitle: String? = nil, systemImage: String,
+             destructive: Bool = false, action: @escaping () -> Void) {
+            self.title = title
+            self.subtitle = subtitle
+            self.systemImage = systemImage
+            self.destructive = destructive
+            self.action = action
+        }
+    }
+
+    let items: [Item]
+
+    func makeUIView(context: Context) -> UIButton {
+        let b = UIButton(type: .custom)
+        b.showsMenuAsPrimaryAction = true
+        b.backgroundColor = .clear
+        b.menu = menu
+        return b
+    }
+
+    func updateUIView(_ b: UIButton, context: Context) {
+        // Rebuilt rather than mutated: the audience under "Edit viewers" changes when the story on
+        // screen does, and a `UIMenu` cannot have its children edited in place.
+        b.menu = menu
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIButton, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 44, height: proposal.height ?? 44)
+    }
+
+    private var menu: UIMenu {
+        UIMenu(title: "", children: items.map { item in
+            let action = UIAction(title: item.title,
+                                  image: UIImage(systemName: item.systemImage),
+                                  attributes: item.destructive ? .destructive : []) { _ in
+                item.action()
+            }
+            // Set rather than passed to the initialiser: `subtitle` is a plain property on
+            // `UIMenuElement`, and going through it keeps this working whatever the initialiser
+            // overload set happens to be.
+            action.subtitle = item.subtitle
+            return action
+        })
+    }
+}

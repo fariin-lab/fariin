@@ -1038,7 +1038,6 @@ service cloud.firestore {
         && request.resource.data.authorUid == resource.data.authorUid
         && request.resource.data.createdAt == resource.data.createdAt
         && request.resource.data.expiresAt == resource.data.expiresAt
-        && request.resource.data.recipientUids == resource.data.recipientUids
         && request.resource.data.mediaPath == resource.data.mediaPath
         // type is pinned with the path (they were validated as a pair at create).
         && request.resource.data.type == resource.data.type
@@ -1046,7 +1045,33 @@ service cloud.firestore {
         // author could post a one-time story, let it be consumed, and clear the flag - or the
         // reverse, turning an ordinary story people have already opened into a burned one.
         && request.resource.data.get('oneTime', false) == resource.data.get('oneTime', false)
-        && request.resource.data.get('audienceLabel', '') == resource.data.get('audienceLabel', '')
+        // WHO CAN SEE IT MAY CHANGE AFTER POSTING, and this is the clause that had to move for it.
+        //
+        // `recipientUids` and `audienceLabel` were both pinned here, so a posted story's audience was
+        // frozen for its whole life and the only way to reach a different one was to delete it and
+        // post it again. The owner asked for the reference app's behaviour instead (2026-08-18):
+        // change who can see an ACTIVE story, keeping its id, its posting time, its media and the
+        // people who have already watched it.
+        //
+        // ⚠️ THIS IS NOT A HOLE IN THE FREEZE BELOW, AND THE TWO MUST NOT BE CONFUSED. The picture
+        // and the caption stay frozen exactly as they were: the whole reason that freeze exists is
+        // that content people have already seen must not change under them, and nothing here touches
+        // content. Widening an audience shows the SAME story to more people; narrowing it shows it to
+        // fewer. Neither can rewrite what anybody already watched.
+        //
+        // Two guards stay, and each answers a real move:
+        //   • The fan-out cap, the same 1000 the create rule enforces. Without it here, an audience
+        //     could be capped at post time and then edited past the cap a moment later.
+        //   • A ONE-TIME story's audience is FROZEN. Being taken out of `recipientUids` is precisely
+        //     how a single view is spent (`onStoryConsumed` does the taking), so rewriting that list
+        //     would put somebody back in and hand them a second look at a story they have already
+        //     burned. `public` and `audienceLabel` are pinned with it, or the same story could be
+        //     made public and read off the profile after its one view was gone.
+        && request.resource.data.recipientUids.size() <= 1000
+        && (resource.data.get('oneTime', false) == false
+            || (request.resource.data.recipientUids == resource.data.recipientUids
+                && request.resource.data.get('audienceLabel', '') == resource.data.get('audienceLabel', '')
+                && request.resource.data.get('public', false) == resource.data.get('public', false)))
         && (resource.data.get('mediaUrl', '') == ''
             || (request.resource.data.get('mediaUrl', '') == resource.data.get('mediaUrl', '')
                 && request.resource.data.get('caption', '') == resource.data.get('caption', '')));

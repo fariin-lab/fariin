@@ -135,7 +135,10 @@ struct StoryBurnIn {
 ///
 /// Posting kicks off a BACKGROUND upload (StoriesService.postStoryBackground) and pops to chat.
 struct ShareStorySheet: View {
-    let image: Data
+    /// Defaulted because the EDIT door has no picture to hand over: it is changing who can see a
+    /// story whose media was uploaded hours ago and is not being touched. Every posting call site
+    /// still passes one, exactly as before.
+    var image: Data = Data()
     var caption: String = ""
     var video: StoryVideoPayload? = nil   // set → posts a video story instead of the photo
     /// Everything after the first item, in order. They post behind it and share this audience.
@@ -143,6 +146,21 @@ struct ShareStorySheet: View {
     /// The Link and Location stickers on the FIRST item. Each extra carries its own — see
     /// `StoryTapTarget` and the note on `StoryExtra.stickers`.
     var stickers: [StoryTapTarget] = []
+    /// ⚠️ THE STORY WHOSE AUDIENCE IS BEING CHANGED — set only by the "Edit viewers" door on a
+    /// story that is already up, and nil for every post.
+    ///
+    /// His 2026-08-18 ask, and the reference app's own behaviour: the visibility of an active story
+    /// can be changed after posting instead of deleting it and posting it again. It is the SAME
+    /// sheet deliberately — he asked for his design left alone — with four differences, each of
+    /// which is a thing that cannot mean anything about a story that already exists:
+    ///
+    ///   • "+ New" is gone, so no audience is created from here (his restriction), and with it the
+    ///     One-Time Story entry, which is a kind of post rather than a setting on one.
+    ///   • Block screenshots is gone: it is a property of the picture, not of who can see it, and
+    ///     he asked for viewers only.
+    ///   • The button says Update and writes to the existing story — no upload, no second story.
+    ///   • The tick starts on the audience the story ACTUALLY went to, not on the store's default.
+    var editing: Story? = nil
     var onPosted: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -165,6 +183,16 @@ struct ShareStorySheet: View {
     /// always will. So the row says "Block screenshots" and the line under it does not promise more
     /// than that.
     @State private var captureProtectedChoice = false
+    /// WHICH AUDIENCE THE SHEET HAS TICKED WHILE EDITING, held here rather than in the store.
+    ///
+    /// `StoryAudienceStore.selectedId` is the default for the NEXT post and is remembered between
+    /// posts on purpose. Changing the audience of a story that is already up must not quietly change
+    /// that — opening this sheet on an old Everyone story to look at it and closing it again would
+    /// otherwise leave the next new story aimed at Everyone. Nil until `seedFromStory` runs.
+    @State private var editSelection: String?
+    /// An update that did not land, and it has to be SAID: the story keeps playing to its old
+    /// audience either way, so a silent failure looks exactly like a success.
+    @State private var updateError = false
 
     /// ⛔ WHAT ACTUALLY GETS POSTED, and a one-time story has no say in it. His 2026-08-18 order: "if
     /// user using One-Time Story it must always block screenshot, user cant make off".
@@ -190,6 +218,40 @@ struct ShareStorySheet: View {
 
     private var contactIds: Set<String> { StoryContact.ids(contacts) }
 
+    /// The audience the sheet currently has ticked, and the one door that writes it. See
+    /// `editSelection` for why editing does not touch the store.
+    private var chosenId: String { editing == nil ? store.selectedId : (editSelection ?? store.selectedId) }
+    private var chosen: StoryAudience { store.audience(id: chosenId) ?? store.myFriends }
+    private func choose(_ id: String) {
+        if editing == nil { store.select(id) } else { editSelection = id }
+    }
+
+    /// START ON THE AUDIENCE THE STORY ACTUALLY WENT TO. The store remembers the last audience
+    /// POSTED to, which has nothing to do with the story being edited — without this, opening the
+    /// sheet on a friends-only story could show Everyone already ticked, and one careless Update
+    /// would widen it to the whole app.
+    ///
+    /// A custom list is matched BY NAME, because that is all a posted story carries: nothing on a
+    /// story points back at the list it came from, which is what makes "changes never affect stories
+    /// you've already sent" true by construction rather than by care. A comma-joined name is a post
+    /// that went to several lists at once, and every one of them is ticked again. A name this phone
+    /// does not know — the list was deleted, or the story was posted from another device — falls
+    /// back to My Friends, which is the narrow way to be wrong rather than the wide one.
+    private func seedFromStory(_ s: Story) {
+        switch s.audienceLabel {
+        case "everyone": editSelection = store.everyone.id
+        case "custom":
+            let remembered = StoryPrefs.audienceName(storyId: s.id) ?? ""
+            let names = Set(remembered.split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty })
+            let hits = store.all.filter { $0.kind == .custom && names.contains($0.name) }
+            editSelection = hits.first?.id ?? store.myFriends.id
+            if hits.count > 1 { multiCustom = Set(hits.map(\.id)) }
+        default: editSelection = store.myFriends.id
+        }
+    }
+
     /// How tall the sheet has to be to show every audience without scrolling.
     ///
     /// Measured from the pieces rather than guessed as a fraction of the screen, because the same
@@ -210,7 +272,10 @@ struct ShareStorySheet: View {
             + 44                      // "Who can see your story" + the New button
             + 76                      // Post Story and its padding
             + Self.bottomSafeInset    // the home indicator, which the button sits above
-        let wanted = chrome + footerHeight + Self.captureSectionHeight
+        let wanted = chrome + footerHeight
+            // The Block-screenshots section is not drawn while editing viewers, so it is not budgeted
+            // for either — a sheet measured from its pieces has to be measured from the pieces it has.
+            + (editing == nil ? Self.captureSectionHeight : 0)
             + rowH * CGFloat(max(2, store.all.count))
         return min(wanted, UIScreen.main.bounds.height * 0.88)
     }
@@ -324,9 +389,14 @@ struct ShareStorySheet: View {
                     HStack {
                         Text("Who can see your story")
                         Spacer()
-                        NewAudienceButton(onCustom: { creating = true },
-                                          canAddCustom: store.canAddCustom,
-                                          onOneTime: { oneTimePicking = true })
+                        // NOTHING NEW IS MADE FROM THE EDIT DOOR, on his restriction: no custom
+                        // audience is created here, and no One-Time Story either — a one-time story
+                        // is a kind of post, not a setting an existing story can be moved on to.
+                        if editing == nil {
+                            NewAudienceButton(onCustom: { creating = true },
+                                              canAddCustom: store.canAddCustom,
+                                              onOneTime: { oneTimePicking = true })
+                        }
                     }
                     // Sentence case, his reference. A section header uppercases its text by
                     // default, and the + New button is not a header at all.
@@ -339,7 +409,7 @@ struct ShareStorySheet: View {
                         // measure is untouched.
                         Text("Only the people in these lists can watch it.")
                     } else {
-                        Text(store.selected.isPublic
+                        Text(chosen.isPublic
                              ? "Anyone on Fariin who opens your profile can watch this. People you have chatted with also get it in their stories."
                              : "Only the people in this list can watch it.")
                     }
@@ -353,20 +423,26 @@ struct ShareStorySheet: View {
                 // capture comes out blank rather than that it cannot happen. What is gone is the
                 // sentence about photographing the screen with another phone — true, and not
                 // something to spend three lines of a posting sheet on.
-                Section {
-                    Toggle("Block screenshots", isOn: Binding(
-                        get: { captureProtected },
-                        // A locked switch that still moves under the finger is worse than one that
-                        // does not move at all: it says the choice is yours and then takes it back.
-                        set: { if !oneTimeActive { captureProtectedChoice = $0 } }))
-                        // ⚠️ EXPLICIT GREEN, AND THAT IS NOT DECORATION. A `Toggle` wears the app's
-                        // accent, and this app's accent is WHITE in dark mode — so the switch read as
-                        // on-and-white against the track, which is his circle. Apple's own switch is
-                        // `systemGreen` and everybody's eye already knows what that means.
-                        .tint(Color(.systemGreen))
-                        .disabled(oneTimeActive)
-                } footer: {
-                    Text(oneTimeActive ? Self.captureLockedFooter : Self.captureFooter)
+                // ⚠️ VIEWERS ONLY WHILE EDITING, on his "only the already-available viewer options
+                // can be selected and updated". Block screenshots is a property of the picture rather
+                // than of who can see it, and a switch that is shown but never written would be worse
+                // than one that is not shown at all.
+                if editing == nil {
+                    Section {
+                        Toggle("Block screenshots", isOn: Binding(
+                            get: { captureProtected },
+                            // A locked switch that still moves under the finger is worse than one that
+                            // does not move at all: it says the choice is yours and then takes it back.
+                            set: { if !oneTimeActive { captureProtectedChoice = $0 } }))
+                            // ⚠️ EXPLICIT GREEN, AND THAT IS NOT DECORATION. A `Toggle` wears the app's
+                            // accent, and this app's accent is WHITE in dark mode — so the switch read as
+                            // on-and-white against the track, which is his circle. Apple's own switch is
+                            // `systemGreen` and everybody's eye already knows what that means.
+                            .tint(Color(.systemGreen))
+                            .disabled(oneTimeActive)
+                    } footer: {
+                        Text(oneTimeActive ? Self.captureLockedFooter : Self.captureFooter)
+                    }
                 }
             }
             .safeAreaInset(edge: .bottom) { postButton }
@@ -377,20 +453,28 @@ struct ShareStorySheet: View {
                     Button { dismiss() } label: { Image(systemName: "xmark") }
                 }
             }
+            .alert("Couldn't update", isPresented: $updateError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Who can see this story hasn't changed. Check your connection and try again.")
+            }
             .alert("No one will see this", isPresented: $emptyAudienceAlert) {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("Everyone in this list has been excluded or is no longer a chat. Pick another audience or add people to this one.")
             }
         }
-        .onAppear { if contacts.isEmpty { contacts = StoryContact.all() } }
+        .onAppear {
+            if contacts.isEmpty { contacts = StoryContact.all() }
+            if let editing, editSelection == nil { seedFromStory(editing) }
+        }
         // A new list is SELECTED the moment it is made: he built it in the middle of posting, so it
         // is obviously the one he means. The reference app does the same.
         .sheet(isPresented: $creating) {
             CreateCustomStoryFlow(
                 onCreated: { a in
                     oneTimeViewers = []
-                    store.select(a.id)
+                    choose(a.id)
                     // Mid-multi-pick, the new list JOINS the ticks instead of replacing them — he
                     // built it while choosing lists, so it is one of the lists he is choosing.
                     if !multiCustom.isEmpty { multiCustom.insert(a.id) }
@@ -449,7 +533,9 @@ struct ShareStorySheet: View {
 
     private var postButton: some View {
         Button { post() } label: {
-            Text("Post Story").font(.headline).foregroundStyle(.white)
+            // UPDATE, NOT POST — his word, and the honest one: nothing is uploaded and no second
+            // story is made, the one already up simply changes who can see it.
+            Text(editing == nil ? "Post Story" : "Update").font(.headline).foregroundStyle(.white)
                 .frame(maxWidth: .infinity).frame(height: 52)
                 .background(.blue, in: Capsule())
         }
@@ -464,34 +550,35 @@ struct ShareStorySheet: View {
     /// second tick ADDS a list rather than replacing the first (his 2026-08-09 ask).
     private func tapAudience(_ a: StoryAudience) {
         oneTimeViewers = []
-        guard a.kind == .custom else { multiCustom = []; store.select(a.id); return }
+        guard a.kind == .custom else { multiCustom = []; choose(a.id); return }
         var set = multiCustom
         // The single tick the store shows counts as one: tapping a SECOND list while "oky" is
         // ticked must read as adding to oky, not as replacing it silently.
-        if set.isEmpty, store.selected.kind == .custom { set.insert(store.selected.id) }
+        if set.isEmpty, chosen.kind == .custom { set.insert(chosen.id) }
         if set.contains(a.id) { set.remove(a.id) } else { set.insert(a.id) }
         multiCustom = set
         if set.isEmpty {
             // Unticking the last list cannot leave the post aimed at nothing — the same fallback
             // the store itself uses when a selected list is deleted.
-            store.select(store.myFriends.id)
-        } else if store.selected.kind != .custom || !set.contains(store.selectedId) {
+            choose(store.myFriends.id)
+        } else if chosen.kind != .custom || !set.contains(chosenId) {
             // The store remembers exactly ONE audience between posts; keep it on a ticked list.
-            if let keep = store.all.first(where: { set.contains($0.id) }) { store.select(keep.id) }
+            if let keep = store.all.first(where: { set.contains($0.id) }) { choose(keep.id) }
         }
     }
 
     private func tickOn(_ a: StoryAudience) -> Bool {
         guard !oneTimeActive else { return false }
-        if multiCustom.isEmpty { return store.selectedId == a.id }
+        if multiCustom.isEmpty { return chosenId == a.id }
         return a.kind == .custom && multiCustom.contains(a.id)
     }
 
     private func post() {
         guard !posting else { return }   // ignore a second tap while the first is in flight
+        if editing != nil { updateAudience(); return }
         if oneTimeActive { postOneTime(); return }
         if !multiCustom.isEmpty { postToLists(); return }
-        let a = store.selected
+        let a = chosen
         let recipients = a.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom)
         // Block ONLY when you HAVE chats but this audience narrows down to literally no one. With no
         // chats at all, posting is still fine: it is YOUR OWN story and always visible to you, it
@@ -567,6 +654,83 @@ struct ShareStorySheet: View {
             }
         }
         onPosted()   // dismisses the editor -> back to chat; upload runs in the background
+    }
+
+    /// UPDATE, NOT POST. The story keeps its id, its posting time, its media, its caption and
+    /// everybody who has already seen it; only who can see it changes. Nothing is uploaded and no
+    /// second story is created — see `StoriesService.updateStoryAudience`.
+    ///
+    /// ⚠️ IT ARRIVES AT THE SAME THREE VALUES THE POST PATH DOES, and that is deliberate rather
+    /// than repetitive. The service speaks in excluded/included/everyone and resolves them against
+    /// the live chat list, so an EDITED audience and a POSTED one have to be derived the same way or
+    /// "My Friends" would quietly mean two different sets of people depending on which door you came
+    /// through. The empty-audience guard is the post path's, for the same reason.
+    ///
+    /// ⚠️ THE FAILURE IS SHOWN. The story goes on playing to its old audience when this does not
+    /// land, so a swallowed error is indistinguishable from success — and the one error that is
+    /// likely here is a refusal from the security rules, which is invisible by nature.
+    private func updateAudience() {
+        guard let story = editing else { return }
+        // Several custom lists ticked at once resolve to their UNION, exactly as a post to several
+        // lists does: one story, one audience, no copies. See `postToLists`.
+        let lists = store.all.filter { $0.kind == .custom && multiCustom.contains($0.id) }
+        let multi = lists.count > 1
+        let a = chosen
+        let recipients = multi
+            ? lists.reduce(into: Set<String>()) {
+                $0.formUnion($1.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom))
+              }
+            : a.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom)
+        // Block ONLY when there are chats and this audience narrows to nobody — the post path's rule.
+        // With no chats at all it is still my own story and still visible to me.
+        if recipients.isEmpty && !contactIds.isEmpty {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            emptyAudienceAlert = true
+            return
+        }
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        posting = true
+
+        let everyone = !multi && a.isPublic
+        // "Hide my stories from X" rides along as an exclusion here too, so it applies to whichever
+        // audience the story is moved to rather than only to My Friends' own except-list.
+        let excluded: Set<String> = ((!multi && a.kind == .myFriends && a.mode == .except)
+                                     ? Set(a.members) : []).union(store.hiddenFrom)
+        let included: Set<String> = {
+            if multi { return lists.reduce(into: Set<String>()) { $0.formUnion(Set($1.members)) } }
+            if a.kind == .custom { return Set(a.members) }
+            if a.kind == .myFriends && a.mode == .only { return Set(a.members) }
+            return []
+        }()
+        // The strictest list wins when several are combined, the same direction every other privacy
+        // rule in this sheet leans.
+        let replies = multi ? lists.allSatisfy { $0.allowReplies } : a.allowReplies
+        let tag: StoryAudienceTag = {
+            if multi {
+                return StoryAudienceTag(label: "custom",
+                                        name: lists.map(\.name).joined(separator: ", "))
+            }
+            switch a.kind {
+            case .everyone: return .everyone
+            case .custom:   return StoryAudienceTag(label: "custom", name: a.name)
+            default:        return .friends
+            }
+        }()
+
+        Task {
+            do {
+                try await StoriesService.shared.updateStoryAudience(
+                    story, excluded: excluded, included: included, everyone: everyone,
+                    allowsReplies: replies, tag: tag)
+                // The header pill over the story reads `audienceLabel`, so the tray has to be re-read
+                // before the sheet goes — otherwise the story he just moved to Everyone is still
+                // wearing "My Friends" when he lands back on it.
+                await StoriesRepository.shared.load(force: true)
+                await MainActor.run { onPosted(); dismiss() }
+            } catch {
+                await MainActor.run { posting = false; updateError = true }
+            }
+        }
     }
 
     /// SEVERAL LISTS, ONE STORY — his 2026-08-09 answer, in his words: "one single story that all

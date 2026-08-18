@@ -1043,6 +1043,10 @@ struct StoryViewer: View {
     @State private var confirmDelete = false
     @State private var shareImg: StoryImagePayload?     // … → Share (system sheet)
     @State private var forwardImg: StoryImagePayload?   // … → Forward (chat picker)
+    /// The story whose viewers are being changed — "…" → Edit viewers. It is the story itself
+    /// rather than a flag because the sheet edits THAT story: same id, same posting time, same
+    /// media. See `ShareStorySheet.editing`.
+    @State private var editViewers: Story?
     @State private var profileSheet: StoryGroup?        // tap the header → profile sheet OVER the story (paused)
     @State private var toastText = "Sent"               // reused for "Sent" (reply) and "Saved"
     @State private var dragDown: CGFloat = 0            // swipe-down amount → fade my overlays with the card
@@ -1410,7 +1414,7 @@ struct StoryViewer: View {
     // VIEWERS sheet is handled separately via `viewersProgress` (below) so the story is frozen the
     // instant the sheet starts to rise, even mid-drag — otherwise it kept playing and, on reaching
     // the last item, auto-dismissed the whole viewer (taking the sheet with it).
-    private var sheetUp: Bool { shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil }
+    private var sheetUp: Bool { shareImg != nil || forwardImg != nil || confirmDelete || profileSheet != nil || editViewers != nil }
 
     init(group: StoryGroup, ownSwipeDismiss: Bool = false,
          heroDismiss: Bool = false, heroSourceKey: String = "", heroSourcePinned: Bool = false,
@@ -1518,6 +1522,11 @@ struct StoryViewer: View {
                         // person: a tray holds several stories and only some of them may be
                         // protected. See `CaptureShield` for what the viewer can actually enforce.
                         isCaptureProtected: s.captureProtected,
+                        // WHO CAN SEE IT MAY BE CHANGED AFTER POSTING, on my own story only — and
+                        // not on a one-time story, whose audience is spent as it is watched, nor on
+                        // one still uploading, which has no document to write to yet. See
+                        // `Story.canEditAudience` and `StoriesService.updateStoryAudience`.
+                        canEditAudience: g.isMine && !s.oneTime && !StoriesService.isPending(s.id),
                         config: StoryConfiguration(
                             // My own story shows NO reply bar (owner bar is overlaid instead).
                             // NO REPLY BAR FOR A STRANGER'S PUBLIC STORY (L3). A story reply is an
@@ -1572,6 +1581,12 @@ struct StoryViewer: View {
         v
         .sheet(item: $shareImg) { p in ActivityView(items: [p.image]) }
         .sheet(item: $forwardImg) { p in StoryForwardSheet(image: p.image, onSent: { flashSentToast() }) }
+        // EDIT VIEWERS. The audience sheet exactly as it is drawn for a post — his condition — with
+        // Update in place of Post Story and no way to make a new audience from here. It dismisses
+        // itself once the write lands; this only says so.
+        .sheet(item: $editViewers) { s in
+            ShareStorySheet(editing: s, onPosted: { flashSentToast("Viewers updated") })
+        }
         .sheet(item: $profileSheet) { g in
             NavigationStack {
                 ContactInfoView(cid: [me, g.authorUid].sorted().joined(separator: "_"),
@@ -1651,6 +1666,15 @@ struct StoryViewer: View {
             guard currentStory?.isVideo != true else { flashSentToast("Not available for videos yet"); return }
             let u = currentStory?.mediaUrl
             Task { if let img = await loadCurrentImage(u) { shareImg = StoryImagePayload(image: img) } }
+        }
+        // "…" → Edit viewers: the SAME audience sheet the posting flow uses, in edit mode. It
+        // writes to the story that is already up — no upload, no second story, no new id. The same
+        // three guards the library's own flag carries, re-asserted on LIVE state here because the
+        // menu is the part a modified client replaces.
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyActionEditViewers"))) { _ in
+            guard currentIsMine, let s = currentStory,
+                  !s.oneTime, !StoriesService.isPending(s.id) else { return }
+            editViewers = s
         }
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionHide"))) { _ in
             if !currentIsMine { StoryPrefs.setHidden(currentBucketUid, true); isPresented = false }

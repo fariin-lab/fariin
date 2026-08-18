@@ -97,6 +97,17 @@ public struct Story: Identifiable, Hashable {
     /// False for every story posted before the option existed, which is what those stories were.
     public var isCaptureProtected: Bool = false
 
+    /// ⚠️ WHETHER THIS STORY MAY HAVE ITS AUDIENCE CHANGED FROM THE "…" MENU — the host's
+    /// answer, never the library's.
+    ///
+    /// It is true for my own posted stories and false for everything else, and the two exclusions
+    /// are not tidiness. A story still UPLOADING has no document to write to yet. And a ONE-TIME
+    /// story's audience is spent as it is watched — being taken out of the recipient list is exactly
+    /// what a single view costs — so rewriting that list would hand somebody a second look at
+    /// something they have already burned. The server refuses it too; this is the half that keeps
+    /// the option from being offered in the first place.
+    public var canEditAudience: Bool = false
+
     public init(id: String = UUID().uuidString,
                 mediaURL: String,
                 previewURL: String? = nil,
@@ -110,6 +121,7 @@ public struct Story: Identifiable, Hashable {
                 caption: String = "",
                 audience: StoryAudienceBadge? = nil,
                 isCaptureProtected: Bool = false,
+                canEditAudience: Bool = false,
                 config: StoryConfiguration) {
 
         self.id = id
@@ -126,6 +138,7 @@ public struct Story: Identifiable, Hashable {
         self.isLiked = isLiked
         self.isSeen = isSeen
         self.isCaptureProtected = isCaptureProtected
+        self.canEditAudience = canEditAudience
         // (Removed `Constant.storySecond = duration` — mutating a global per-instance leaked the
         //  last story's duration into the default for any story built without an explicit one.)
     }

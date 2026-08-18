@@ -1183,6 +1183,9 @@ private extension StoryDetailView {
         // with ten stories up posted them to different audiences, and the header has to follow
         // the one you are looking at as you tap through them.
         let audience = getStoryOrNil(with: index)?.audience
+        // PER ITEM, like the audience pill beside it: a tray holds several stories and only some of
+        // them can have their viewers changed. See `Story.canEditAudience`.
+        let canEditAudience = getStoryOrNil(with: index)?.canEditAudience ?? false
         let name = model.user.name
         let image = model.user.image
         VStack {
@@ -1210,6 +1213,7 @@ private extension StoryDetailView {
                 onProfile: { onProfile?(model.user) },
                 showMore: showMore,
                 isMyStory: model.isMine,
+                canEditAudience: canEditAudience,
                 isPresented: $isPresented
             )
         }
