@@ -516,15 +516,37 @@ struct StoryDetailView: View {
                                 // already correct. If it still pops on a device, the answer is not
                                 // in this expression and the next step is to instrument rather than
                                 // to re-argue it.
+                                // ⛔ 0.4, WHICH IS THE Aa EDITOR'S NUMBER — his 2026-08-18 "when i
+                                // click reply bar the image is getting too dark; make it like Aa".
+                                //
+                                // 0.8 is the reference app's `contentDimView` value and the note
+                                // below is right that it was read from their source. He is asking
+                                // for the one his own app already uses a few screens away:
+                                // `StoryTextToolEditor.dimBackground` is
+                                // `UIColor.black.withAlphaComponent(0.4)`. Two dims over the same
+                                // photograph, in the same app, twice as dark on one of them, is the
+                                // inconsistency he is actually pointing at — and his judgement about
+                                // his own app decides which of the two wins.
+                                //
+                                // ⚠️ THE Aa EDITOR IS NOT TOUCHED, on his instruction. This borrows
+                                // its number and its clock; nothing on that screen changes.
                                 Rectangle()
                                     .fill(.black)
-                                    .opacity(replyDimOn ? 0.8 : 0)
-                                    // The keyboard's OWN duration, so the picture darkens with the
-                                    // keyboard rising rather than lagging behind it. `animationDuration`
-                                    // is read from the notification (`KeyboardManager`), so this is
-                                    // the real number the system is using, not a guess at it.
-                                    .animation(.easeInOut(duration: keyboardManager.animationDuration),
-                                               value: replyDimOn)
+                                    .opacity(replyDimOn ? 0.4 : 0)
+                                    // ⛔ AND THE KEYBOARD'S OWN CURVE, NOT JUST ITS DURATION — the
+                                    // "not smooth" half of the same report.
+                                    //
+                                    // This took the real duration off the notification, which was
+                                    // half right, and then ran it on `.easeInOut` — a curve the
+                                    // keyboard is not travelling on. So the picture darkened over
+                                    // the correct length of time along the wrong path, and drifted
+                                    // away from the keys in the middle of the move where the two
+                                    // curves are furthest apart. `systemAnimation` is the reference
+                                    // app's dispatcher: curve 7 becomes their own
+                                    // `bezierPoint(0.23, 1.0, 0.32, 1.0)`, anything else stays
+                                    // ease-in-out. Same value the reply bar itself rides, so the
+                                    // bar and the dim under it cannot come apart.
+                                    .animation(keyboardManager.systemAnimation, value: replyDimOn)
                                     .allowsHitTesting(false)
                             )
                             // THE CARD CARRIES ITS OWN BLACK, inside its own rounded rect.
