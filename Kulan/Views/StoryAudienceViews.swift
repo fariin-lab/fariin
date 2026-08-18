@@ -258,6 +258,8 @@ struct NameStoryView: View {
     let onCreate: () -> Void
 
     @FocusState private var nameFocused: Bool
+    /// The pending raise, held so leaving the page can cancel it. See the `.onAppear` below.
+    @State private var focusWork: DispatchWorkItem?
 
     var body: some View {
         List {
@@ -326,9 +328,33 @@ struct NameStoryView: View {
         // page has stopped moving and the keyboard gets the whole screen to itself and its normal
         // curve. `.task` rather than a dispatch, so backing out of the page cancels it instead of
         // raising a keyboard onto a view that has gone.
-        .task {
-            try? await Task.sleep(for: .milliseconds(350))
-            nameFocused = true
+        // ⚠️ `.onAppear`, NOT `.task`, AND THAT IS THE WHOLE OF "it's working first time only".
+        //
+        // `.task` runs ONCE PER VIEW IDENTITY. Coming back to build a second custom list without the
+        // sheet being dismissed reuses this same view, so the task never ran again — and `@FocusState`
+        // is part of that reused view, so `nameFocused` was STILL TRUE from the first visit. The field
+        // therefore took first responder the instant it existed, which is the beginning of the push,
+        // which is the sideways keyboard all over again. The first visit worked because the flag
+        // started false and only the delayed write raised it.
+        //
+        // `.onAppear` fires on every appearance, reused view or not. Lowering the flag here is what
+        // makes the delayed write the only thing that can raise the keyboard, on the second visit as
+        // much as the first.
+        .onAppear {
+            nameFocused = false
+            focusWork?.cancel()
+            // 0.35s is `UINavigationController`'s own push duration, so the field is asked the moment
+            // the page has stopped moving and the keyboard gets the screen to itself.
+            let work = DispatchWorkItem { nameFocused = true }
+            focusWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+        }
+        // Backing out before it lands must not raise a keyboard onto a page that has gone, and must
+        // leave the flag DOWN for the next visit — the pair is the fix, not either half.
+        .onDisappear {
+            focusWork?.cancel()
+            focusWork = nil
+            nameFocused = false
         }
     }
 }
