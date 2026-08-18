@@ -930,6 +930,23 @@ private struct StoryPhotoPreview: View {
         }
         .frame(width: box.width, height: box.height)
         .clipped()
+        // ⚠️ THE TAP THE LIFT WAS MISSING, AND IT HAS TO BE OURS. His ask, after the preview itself
+        // started working: the hold gives no vibration.
+        //
+        // `d5833ba0` had one, on the hand-built press. `e2b4ee88` replaced that press with the
+        // system lift and deleted the line without replacing it, on the assumption written into the
+        // note at the call site — that UIKit's own interaction brings a haptic with it. It does for a
+        // UIKit `UIContextMenuInteraction`; SwiftUI's `.contextMenu` does not deliver one here.
+        //
+        // ⚠️ FIRED FROM THE PREVIEW'S OWN `onAppear`, WHICH IS THE LIFT ITSELF. SwiftUI gives no
+        // will-present callback for `.contextMenu`, and adding a competing `LongPressGesture` to the
+        // tile to get one would fight both the system press and the grid's scroll — see the scroll
+        // and gesture rules. This view is built ONLY when the menu is actually being presented, so
+        // its appearance is exactly the moment the picture lifts and there is nothing to keep in step.
+        //
+        // `.medium`, the same weight the deleted line used, so the feel does not change from what he
+        // already approved.
+        .onAppear { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
         .task(id: asset.localIdentifier) {
             image = nil
             let side = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * UIScreen.main.scale
