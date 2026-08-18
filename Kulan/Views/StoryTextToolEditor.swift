@@ -935,8 +935,22 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
         // gets, because it is the grab area: the permissive recogniser claims any touch in these
         // bounds, so a finger aiming at a 10pt track still has a thumb's width of slack around it.
         let barLength = min(200, max(130, container.bounds.height * 0.28))
+        //
+        // ⚠️ AND IT SITS BELOW THE MIDDLE, NOT ON IT — his 08-18 pair of screenshots, the first
+        // circled "too up" and the second showing where it belongs. Centring it on the editing area
+        // put it level with the caret, which is the one line of the screen the words already own; it
+        // reads as two things fighting over the same height. A fifth of the area lower and it sits
+        // under the writing hand instead of beside it, which is also where a thumb already is.
+        //
+        // A FRACTION, NOT A CONSTANT, for the same reason the length is one: 82pt measured off his
+        // phone is most of a short screen's spare room once the keyboard is up. Clamped so the foot
+        // of the bar can never leave the editing area, and never lifted back above the middle.
+        let drop = container.bounds.height * 0.19
+        let lowest = container.bounds.maxY - barLength / 2 - 8
         colorBar.bounds = CGRect(x: 0, y: 0, width: 44, height: barLength)
-        colorBar.center = CGPoint(x: 4 + 22, y: container.bounds.midY)
+        colorBar.center = CGPoint(x: 4 + 22,
+                                  y: max(container.bounds.midY,
+                                         min(container.bounds.midY + drop, lowest)))
     }
 
     // MARK: Styling
