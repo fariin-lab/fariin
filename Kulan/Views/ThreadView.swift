@@ -4838,6 +4838,20 @@ struct ThreadView: View {
                 .frame(width: 24, height: 24).foregroundStyle(.primary)
                 .frame(width: 40, height: 40)
         }
+        // ⚠️ `.tint`, AND `.foregroundStyle` INSIDE THE LABEL IS NOT ENOUGH — his 2026-08-18
+        // screenshot with both icons circled blue.
+        //
+        // A `Button` tints its own label with the ambient accent, and that tint is applied around
+        // what the label asked for rather than under it, so a template image inside a button comes
+        // out accent-coloured however the image is styled. This app's accent is `.primary`, which is
+        // why these two looked right everywhere it reaches — but the chat opened from a STORY is
+        // presented out of the story's own UIKit host, and the root tint does not follow it there.
+        // The system's blue is what is left.
+        //
+        // The `+` beside them has carried `.tint(.primary)` for exactly this reason since it was
+        // written; these two were the pair that never got it. The mic is not a `Button` at all, which
+        // is why it stayed black in the same screenshot and is the third answer to the same question.
+        .tint(.primary)
     }
     // One-tap GIFs from the field (big apps keep GIFs next to the camera, not buried in +).
     /// HIS ORDER, 2026-08-14: back to what it was before tonight. Tap it, the keyboard goes, the
@@ -4858,6 +4872,7 @@ struct ThreadView: View {
                 .frame(width: 24, height: 24).foregroundStyle(.primary)
                 .frame(width: 40, height: 40)
         }
+        .tint(.primary)   // see `inFieldCamera` — same button, same accent, same answer
     }
 
     /// One send for both GIF routes (the composer's panel and the attach sheet's tile).

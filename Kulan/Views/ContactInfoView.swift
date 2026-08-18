@@ -591,6 +591,27 @@ struct ContactInfoView: View {
             .navigationDestination(isPresented: $openChat) {
                 ThreadView(cid: cid, title: name, photoUrl: photoUrl)
             }
+            // ⛔ THE SHEET LETS GO OF THE DRAG WHILE A CONVERSATION IS OPEN INSIDE IT — his
+            // 2026-08-18 "open a friend's story, tap the profile, tap Message, and scrolling down
+            // does not follow my finger".
+            //
+            // This profile is a SHEET when it is reached from a story, and a sheet coordinates its
+            // drag-to-dismiss with the scroll view inside it: while that scroll view is at the top of
+            // its content, a downward drag belongs to the sheet rather than to the list.
+            //
+            // ⚠️ THE MESSAGE LIST IS INVERTED (`NativeMessageList`: the collection view carries a
+            // scaleY(-1) and so does every cell), and that turns the rule upside down. A conversation
+            // OPENS at the newest message, which in the flipped view is `contentOffset` zero — the
+            // scroll view's "top". So the one gesture that reads older messages, a drag downward from
+            // where the chat opens, is also the exact gesture the sheet claims. Both want it, the
+            // sheet wins, and the list does not move under the finger. Nothing is wrong with the list:
+            // the same drag works perfectly on a chat opened any other way, because no other way puts
+            // one inside a sheet.
+            //
+            // Turning interactive dismissal off for exactly as long as the chat is up hands the drag
+            // back to the list. The way out of the chat is the back chevron that is already in the
+            // bar above it, and the moment that is tapped the sheet can be dragged down again.
+            .interactiveDismissDisabled(openChat)
             .navigationDestination(isPresented: $showVerify) {
                 VerifyEncryptionView(cid: cid, peerName: name, peerUid: otherUid, peerPhotoUrl: photoUrl)
             }
