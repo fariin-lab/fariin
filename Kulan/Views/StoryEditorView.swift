@@ -188,6 +188,10 @@ struct StoryEditorView: View {
     @State private var trimOpenedStart: Double = 0   // what X puts back
     @State private var trimOpenedEnd: Double = 0
     @State private var trimThumbs: [UIImage] = []
+    /// Which clip the strip above belongs to. The strip is the WHOLE clip with handles over it, so it
+    /// does not change when the handles do — only when the item does. Keeping it is what stops a
+    /// second trim of the same video decoding the same ten frames again; see `loadTrimThumbs`.
+    @State private var trimThumbsItem: UUID?
     // THE COMPOSER HAD NO PLAYER AT ALL, which is why the play mark did nothing and why trim was a
     // filmstrip you dragged blind. A video item drew its poster and a decorative `play.fill`.
     //
@@ -2053,27 +2057,67 @@ struct StoryEditorView: View {
         } else {
             trimStart = trimOpenedStart; trimEnd = trimOpenedEnd
         }
-        trimThumbs = []
+        // ⚠️ THE STRIP IS NOT THROWN AWAY ANY MORE — see `loadTrimThumbs` for what that cost. It is
+        // ten frames of THIS clip and the clip has not changed, so the next open draws it instantly
+        // and decodes nothing.
         withAnimation(.easeInOut(duration: 0.28)) { showTrim = false }
     }
 
     /// Ten frames across the clip — the same filmstrip recipe the video editor's trim uses.
+    /// ⛔ THIS IS WHAT WAS FREEZING THE CLIP AFTER A SECOND TRIM. Read before changing any of it.
+    ///
+    /// His report: trim → Done → trim → Done, and the video in the editor stops while the AUDIO
+    /// keeps playing, then catches up on its own a few seconds later.
+    ///
+    /// Nothing is wrong with the player. An `AVAssetImageGenerator` is a DECODE SESSION on the same
+    /// file the `AVPlayer` is playing, and a process gets a small, fixed number of video decode
+    /// pipelines from the system. Audio is not one of them, which is exactly why the sound survives
+    /// and the picture does not — the player's VIDEO renderer is what gets starved, and it recovers
+    /// by itself the moment a generator lets go. "A few seconds" is the length of the decode, not a
+    /// timer somewhere.
+    ///
+    /// Three things stacked those sessions up, and all three are fixed here:
+    ///
+    ///   1. ⚠️ **NOTHING EVER CANCELLED THE GENERATOR.** SwiftUI cancels this `.task` when the trim
+    ///      page goes away, but a cancelled Swift Task does not stop AVFoundation — only
+    ///      `cancelAllCGImageGeneration()` does, and nothing called it. The loop did not look at
+    ///      `Task.isCancelled` either, so it went on asking for the rest of the frames after the page
+    ///      had closed.
+    ///   2. ⚠️ **`closeTrim` THREW THE FINISHED STRIP AWAY** (`trimThumbs = []`), so opening trim a
+    ///      second time started a SECOND generator on the same asset while the first was very likely
+    ///      still running. That is why it takes two trims and not one.
+    ///   3. `requestedTimeToleranceBefore = .zero` forbade the generator from answering with an
+    ///      earlier keyframe, so every one of the ten frames was a decode forward from the previous
+    ///      keyframe rather than a keyframe read.
+    ///
+    /// The tolerance is half a slot now. A filmstrip is ten evenly spaced posters — being inside its
+    /// own slot is all "correct" means for it, and the frame somebody actually cuts on comes from the
+    /// player's own scrub seek, which is still `.zero` on both sides and always was.
     private func loadTrimThumbs() async {
         guard items.indices.contains(index), let u = items[index].videoURL else { return }
+        let itemId = items[index].id
+        // Already decoded, same clip: draw it and touch no decoder at all.
+        if trimThumbsItem == itemId, !trimThumbs.isEmpty { return }
         let dur = max(0.1, items[index].duration)
+        let count = 10
+        let slot = dur / Double(count - 1)
         let gen = AVAssetImageGenerator(asset: AVURLAsset(url: u))
         gen.appliesPreferredTrackTransform = true
-        gen.requestedTimeToleranceBefore = .zero
+        gen.requestedTimeToleranceBefore = CMTime(seconds: slot / 2, preferredTimescale: 600)
         gen.requestedTimeToleranceAfter = .positiveInfinity
         gen.maximumSize = CGSize(width: 160, height: 160)
-        let count = 10
+        // The generator outlives this function's scope only if AVFoundation is still working, which
+        // is the whole problem — so cancellation is explicit and covers every way out.
+        defer { gen.cancelAllCGImageGeneration() }
         var imgs: [UIImage] = []
         for i in 0..<count {
-            let t = CMTime(seconds: dur * Double(i) / Double(count - 1), preferredTimescale: 600)
+            if Task.isCancelled { return }
+            let t = CMTime(seconds: slot * Double(i), preferredTimescale: 600)
             if let cg = try? await gen.image(at: t).image { imgs.append(UIImage(cgImage: cg)) }
         }
+        if Task.isCancelled { return }
         let done = imgs
-        await MainActor.run { trimThumbs = done }
+        await MainActor.run { trimThumbs = done; trimThumbsItem = itemId }
     }
 
     /// Crop, presented INLINE with a cross-fade — the chat editor's own `cropOverlay`, move for move
