@@ -221,10 +221,19 @@ final class StoryTextColorPickerBar: UIControl {
     enum Axis { case horizontal, vertical }
     private let axis: Axis
 
+    /// ⚠️ HIS 2026-08-18 SIZING, THE SECOND ASK ON THE SAME CONTROL: "the color bar is too wide, make
+    /// it smaller and thinner". Theirs is a 16pt track with a 24pt thumb because theirs lies flat in
+    /// the keyboard's accessory row, where the screen's whole width is going spare. Ours stands in
+    /// the margin of the picture, so its thickness is a strip of his photograph and the same numbers
+    /// read as heavy. 10pt track, 16pt thumb, 7pt dot: the same control at the size he drew.
+    ///
+    /// ⚠️ THE GRAB AREA DOES NOT CHANGE WITH THESE. It is the control's own 44pt width and the
+    /// permissive recogniser, not the track — see `layoutTextViews`. Thinning the capsule costs a
+    /// finger nothing.
     private enum Metrics {
-        static let thumbSize: CGFloat = 24
-        static let barHeight: CGFloat = 16
-        static let colorCircleSize: CGFloat = 10
+        static let thumbSize: CGFloat = 16
+        static let barHeight: CGFloat = 10
+        static let colorCircleSize: CGFloat = 7
         /// Theirs — the preview floats this far above the bar.
         static let previewGap: CGFloat = 24
     }
@@ -910,12 +919,16 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
         // edge. Its length is a share of the area rather than a constant, or it would run off a short
         // screen once the keyboard is up.
         //
-        // ⚠️ HIS 2026-08-17 SIZING: SHORTER, AND HARD AGAINST THE EDGE. At 0.34 of the editing area it
-        // stood over 200pt tall on his phone and its gutter was 16pt, which is a strip of the picture
-        // the width of a thumb spent on a control that is touched for a second at a time. 0.24 and a
-        // 4pt gutter keep the same shape at the size he drew — the whole 44pt control is the grab
-        // area, so moving it out to the margin costs nothing a finger can feel.
-        let barLength = min(180, max(110, container.bounds.height * 0.24))
+        // ⚠️ HIS SIZING, TWICE. 08-17: 0.34 of the editing area stood over 200pt tall on his phone
+        // with a 16pt gutter, which is a strip of the picture the width of a thumb spent on a control
+        // that is touched for a second at a time → 0.24 and a 4pt gutter. 08-18, same screenshot with
+        // the same circle drawn round it: still too big → 0.19, and the track itself thins from 16pt
+        // to 10 (`Metrics`). About 95pt on his 428x926 phone against the 130 he photographed.
+        //
+        // ⚠️ THE 44pt CONTROL IS NOT THE BAR. It stays 44 wide however thin the capsule inside it
+        // gets, because it is the grab area: the permissive recogniser claims any touch in these
+        // bounds, so a finger aiming at a 10pt track still has a thumb's width of slack around it.
+        let barLength = min(140, max(88, container.bounds.height * 0.19))
         colorBar.bounds = CGRect(x: 0, y: 0, width: 44, height: barLength)
         colorBar.center = CGPoint(x: 4 + 22, y: container.bounds.midY)
     }
