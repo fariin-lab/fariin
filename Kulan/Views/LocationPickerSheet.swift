@@ -15,7 +15,26 @@ final class LocationFetcher: NSObject, ObservableObject, CLLocationManagerDelega
         manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
     }
 
-    func request() {
+    /// ⛔ THE FIX THE PHONE ALREADY HAS. `requestLocation()` goes and gets a NEW fix, and a new fix is
+    /// seconds — GPS has to acquire, and indoors or on a weak signal it is many seconds. iOS is
+    /// already holding the last one every other app asked for, and for "what is near me" a fix from a
+    /// minute ago is the same answer.
+    ///
+    /// Nil when nothing is cached or the permission was never granted. Reading it starts nothing and
+    /// costs nothing.
+    var cached: CLLocationCoordinate2D? {
+        switch manager.authorizationStatus {
+        case .authorizedWhenInUse, .authorizedAlways: return manager.location?.coordinate
+        default: return nil
+        }
+    }
+
+    /// `accuracy` exists for the same reason `cached` does: a map you drop a pin on wants metres, and
+    /// a list of places near you does not. A coarser target is answered from wifi and cell towers
+    /// instead of waiting on a GPS lock, which is most of the wait. The default is what the map
+    /// picker has always used, so that screen is unchanged.
+    func request(accuracy: CLLocationAccuracy = kCLLocationAccuracyHundredMeters) {
+        manager.desiredAccuracy = accuracy
         switch manager.authorizationStatus {
         case .notDetermined:        manager.requestWhenInUseAuthorization()   // → callback below fetches
         case .denied, .restricted:  denied = true

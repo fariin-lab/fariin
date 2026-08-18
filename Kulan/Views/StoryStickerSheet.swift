@@ -643,6 +643,10 @@ private struct PlaceStickerScreen: View {
     @State private var query = ""
     @State private var results: [MKMapItem] = []
     @State private var nearby: [MKMapItem] = []
+    /// ⚠️ `nearby.isEmpty` ALONE IS NOT A GUARD. The cached fix and the fresh one can both call in
+    /// before either search has answered, and two `MKLocalSearch`es for the same place is the one
+    /// thing that would make this slower rather than faster.
+    @State private var nearbyInFlight = false
     @State private var searching = false
     @State private var task: Task<Void, Never>?
     @FocusState private var focused: Bool
@@ -697,7 +701,21 @@ private struct PlaceStickerScreen: View {
         // raises one because a link can only be typed; this page has a list to read, and a keyboard
         // over an empty list is a screen with nothing on it. The field is one tap away for anyone who
         // does want to type.
-        .task { fetcher.request() }
+        // ⛔ THE CACHED FIX FIRST, AND THAT IS THE WHOLE OF HIS "make fast".
+        //
+        // The page was waiting on `requestLocation()`, which goes and acquires a NEW fix: seconds
+        // outdoors, many more indoors or on a weak signal, and the spinner he circled is that wait
+        // rather than MapKit being slow. iOS is already holding the last fix any app on the phone
+        // asked for, and for "what is near me" a fix from a minute ago is the same answer — so the
+        // search starts off THAT, immediately, and the fresh one only ever refines it.
+        //
+        // A coarser target for the fresh one too: a list of places is answered from wifi and cell
+        // towers, which do not wait for a GPS lock. The map picker keeps metres, and this changes
+        // nothing there — see `LocationFetcher.request(accuracy:)`.
+        .task {
+            if let c = fetcher.cached { await loadNearby(c) }
+            fetcher.request(accuracy: kCLLocationAccuracyKilometer)
+        }
         .onChange(of: fetcher.location?.latitude) { _, _ in
             guard let c = fetcher.location else { return }
             Task { await loadNearby(c) }
@@ -734,10 +752,15 @@ private struct PlaceStickerScreen: View {
     /// 1500m: far enough to fill a screen in a quiet place, near enough that the top of the list is
     /// somewhere you could point at.
     private func loadNearby(_ c: CLLocationCoordinate2D) async {
-        guard nearby.isEmpty else { return }        // one fix, one fill; a second GPS callback is not a new question
+        // One fill. The cached fix usually gets here first and the fresh one finds the answer already
+        // on screen — a second GPS callback is not a new question, and re-running would replace a
+        // list somebody may already be reading.
+        guard nearby.isEmpty, !nearbyInFlight else { return }
+        nearbyInFlight = true
         searching = true
         let request = MKLocalPointsOfInterestRequest(center: c, radius: 1500)
         let found = (try? await MKLocalSearch(request: request).start())?.mapItems ?? []
+        nearbyInFlight = false
         searching = false
         guard !Task.isCancelled else { return }
         nearby = found
