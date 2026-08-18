@@ -872,6 +872,21 @@ struct StoryEditorView: View {
                 // its first moving frame. Until then this card is what he is looking at, exactly as
                 // theirs keeps its review screen until `animateTransitionIn` runs.
                 .opacity(showCrop && cropFlying ? 0 : 1)
+                // ⛔ BOTH FLAGS, AND DROPPING ONE OF THEM IS WHAT PUT A BLACK SCREEN AFTER DONE.
+                //
+                // This line used to read `.animation(nil, value: showCrop)` and the note above says
+                // exactly why: instant, outside both animations, because a fade here is a
+                // cross-dissolve between two renderings of one photograph. Adding `cropFlying` to the
+                // opacity and moving the nil-animation onto it ALONE left `showCrop` governed by the
+                // `.animation(.easeInOut(0.3), value: showCrop)` further up — so closing crop faded
+                // this card in from zero over 0.3s while the crop screen was already gone.
+                //
+                // That is his "after zoom in finished screen is going black in secends after that is
+                // jumping frame up": three tenths of a second of nothing, then the card arriving.
+                //
+                // ⚠️ A `value:` OVERLOAD ONLY SPEAKS FOR THE VALUE IT NAMES. Two flags drive this
+                // opacity now, so it takes two lines; there is no version of this with one.
+                .animation(nil, value: showCrop)
                 .animation(nil, value: cropFlying)
             // Bottom chrome. While DRAWING, our pen bar takes the bottom instead; it stays pinned
             // because a drawing screen has no keyboard and the canvas must not move under a stroke.
