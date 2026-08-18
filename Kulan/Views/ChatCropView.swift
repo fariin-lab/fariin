@@ -136,6 +136,9 @@ struct ChatCropView: View {
     /// a few points and the drawn picture by `progress` times that, while easing it moves the drawn
     /// picture by the whole distance the canvas travelled.
     @State private var entryFrom: CGRect = .zero
+    /// Which geometry report is the latest one. See `armEntry` — the flight leaves one runloop turn
+    /// after the last of them, so a settling canvas cannot move the seat out from under it.
+    @State private var geoStamp = 0
 
     /// One number for the move, so the flight and the chrome behind it cannot run on two clocks.
     private static let entryDuration: Double = 0.3
@@ -158,18 +161,31 @@ struct ChatCropView: View {
         return 1 + (entryFrom.width / crop.width - 1) * exitProgress
     }
 
-    /// ⚠️ SOLVED AGAINST THE SCALE, NOT ADDED TO IT. `.scaleEffect` grows the picture about the view's
-    /// own centre — `imageFrame`'s — so the crop rectangle's centre moves as it scales. The offset
-    /// that puts it on the card is therefore whatever is LEFT once the scale has had its say:
+    /// ⚠️ SOLVED AGAINST `flightWindow`, WHICH IS WHERE `.position` ACTUALLY PUTS THIS VIEW — and
+    /// it used to be solved against `imageFrame`, which is his 2026-08-18 "when i click done is doing
+    /// zoom in jumping".
     ///
-    ///     imageFrame.mid + (crop.mid - imageFrame.mid) * s + offset = entryFrom.mid
+    /// `.scaleEffect` grows a view about its OWN centre, so scaling moves nothing: the drawn centre is
+    /// simply where `.position` seats it plus whatever this adds. `.position` is handed
+    /// `flightWindow.mid`, which travels from `imageFrame`'s centre to the CROP's as the window
+    /// closes — so an offset written against `imageFrame` was measuring from a point the view had
+    /// already left, and the error grew with the flight. It landed short by
+    /// `(crop.mid - imageFrame.mid) * (1 - scale)` and the card then snapped the picture the rest of
+    /// the way: a hop at the hand-over, in the zoom-in direction, exactly as he describes.
     ///
-    /// Exact at both ends by construction, which is the property the entry's own note asks for.
+    /// What it has to be is the distance from where the view IS seated to where the drawn picture
+    /// should be, and where it should be is the card by the end:
+    ///
+    ///     flightWindow.mid + offset = imageFrame.mid + (entryFrom.mid - imageFrame.mid) * t
+    ///
+    /// Zero at t = 0 and exactly the card at t = 1, both by construction rather than by arithmetic
+    /// that happens to come out.
     private var exitOffset: CGSize {
         guard exitProgress > 0, crop.width > 1, entryFrom.width > 1 else { return .zero }
-        let s = exitScale
-        return CGSize(width: entryFrom.midX - imageFrame.midX - (crop.midX - imageFrame.midX) * s,
-                      height: entryFrom.midY - imageFrame.midY - (crop.midY - imageFrame.midY) * s)
+        let t = exitProgress
+        let target = CGPoint(x: imageFrame.midX + (entryFrom.midX - imageFrame.midX) * t,
+                             y: imageFrame.midY + (entryFrom.midY - imageFrame.midY) * t)
+        return CGSize(width: target.x - flightWindow.midX, height: target.y - flightWindow.midY)
     }
 
     /// What is still visible as it flies: the window at rest, the kept rectangle by the end. Anything
@@ -291,7 +307,19 @@ struct ChatCropView: View {
                 Image(uiImage: img).resizable().scaledToFit()
                     .frame(width: displayFrame.width, height: displayFrame.height)
                     .rotationEffect(.degrees(angle))
-                    .offset(x: pan.width, y: pan.height)
+                    // ⚠️ THE SECOND HALF OF HIS "done is doing zoom in jumping", AND IT IS ABOUT THE
+                    // PIXELS RATHER THAN THE PLACE. A `.frame` CENTRES its content, so the picture's
+                    // centre is the WINDOW's centre plus `pan` — and during the exit the window is
+                    // closing from the whole picture onto the crop rectangle, so its centre travels.
+                    // Left alone, the picture travelled with it and the shrinking window kept showing
+                    // the middle of the photograph instead of the part he had framed: the content
+                    // slid under the closing window and then the card drew something else.
+                    //
+                    // Subtracting the window's own travel pins the picture where it is in canvas
+                    // points, so what the window closes onto is the crop rectangle and nothing else.
+                    // Zero at rest, where the window IS `imageFrame`.
+                    .offset(x: pan.width + imageFrame.midX - flightWindow.midX,
+                            y: pan.height + imageFrame.midY - flightWindow.midY)
                     // ⚠️ `flightWindow`, NOT `imageFrame`: at rest they are the same rectangle, and
                     // during the exit this closes onto the crop so what lands on the card is exactly
                     // what the card is about to draw. See `exitProgress`.
@@ -301,8 +329,10 @@ struct ChatCropView: View {
                     // card was actually wearing at every point of the flight rather than a number
                     // shrinking with the picture. Theirs animates the layer's own `cornerRadius`
                     // against an untransformed view, which is the same on-screen result.
+                    // …and by BOTH scales, or the corner grows with the picture on the way out and
+                    // lands wearing a radius the card is not wearing.
                     .clipShape(RoundedRectangle(cornerRadius: initialCornerRadius * (1 - chrome)
-                                                / max(entryScale, 0.05), style: .continuous))
+                                                / max(entryScale * exitScale, 0.05), style: .continuous))
                     // ONE NUMBER, ABOUT THE SHARED CENTRE. See `runEntry`: the rect we were opened
                     // from and the fitted rect have the same centre and the same aspect, so a
                     // uniform scale is the entire difference between them. Nothing translates, which
@@ -369,13 +399,8 @@ struct ChatCropView: View {
                 // wrapper's storage, so this closure sees whatever the last pass wrote rather than the
                 // numbers captured with it.
                 //
-                // ⚠️ IT DOES NOT ACTUALLY OUTRUN THE SETTLE, AND IT DOES NOT HAVE TO. This block runs
-                // at the end of the current runloop turn, while SwiftUI's next layout pass is a render
-                // cycle away, so the settle usually lands with the flight already up — which is fine,
-                // and the note on `entryFrom` is why: the seat and the canvas move in the same frame,
-                // so a pass landing mid-flight is invisible. It only stopped being invisible when the
-                // seat was given an animation of its own.
-                DispatchQueue.main.async { runEntry() }
+                // ⚠️ STARTING IT IS NOT THIS CALLBACK'S JOB ANY MORE — see `armEntry`, and the note
+                // on `entryFrom` for the three repairs that came before it.
             }
             // ⚠️ THE WHOLE FRAME, NOT JUST THE SIZE. The canvas can be re-seated without being
             // resized — a bar above it growing and one below it shrinking by the same amount moves
@@ -384,6 +409,7 @@ struct ChatCropView: View {
             // by exactly the distance the canvas moved.
             .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { f in
                 layout(f.size, canvasOrigin: f.origin)
+                armEntry()
             }
         }
         // ⚠️ THE ONE PLACE THIS DIVERGES FROM THEIRS, AND IT IS A UIKit-VERSUS-SwiftUI DIFFERENCE
@@ -473,6 +499,33 @@ struct ChatCropView: View {
     /// **0.3s** alongside it — one picture moving, the controls arriving on top of it. 0.15s was the
     /// other app's figure and it is half as long as this screen's own canvas step-back, so even when
     /// it did move, two halves of one motion ran on two clocks.
+    /// ⛔ THE FLIGHT WAITS FOR THE CANVAS TO STOP MOVING. FOURTH REPORT ON THIS ONE JUMP; READ THIS
+    /// AND THE NOTE ON `entryFrom` BEFORE TOUCHING EITHER.
+    ///
+    /// The three repairs before this all made a re-measurement landing mid-flight HARMLESS, and each
+    /// one was right about the case it looked at. The case none of them covered is a re-measurement
+    /// that moves the seat while the CLAMP is holding it. `layout` seats the fitted picture on the
+    /// card's centre, `min(max(12, wanted), …)` — and when that clamp binds, `imageFrame.midY` stops
+    /// following the canvas while `entryFrom.midY` keeps following it. The two no longer cancel, and
+    /// what is drawn shifts instantly by the canvas's travel times whatever is left of the flight.
+    /// Half a second in, on a bar's worth of settle, that is a visible hop.
+    ///
+    /// UIKit gets the ordering for nothing: `viewDidLoad` seats the picture, the layout settles, and
+    /// only then does `viewDidAppear` animate. `DispatchQueue.main.async` from `onAppear` was an
+    /// attempt at the same thing and it is one runloop turn, which the settle usually outlives.
+    ///
+    /// So the flight is armed by the GEOMETRY callback instead, and fires one turn after the LAST
+    /// report rather than one turn after the first: every new rect cancels the pending start by
+    /// bumping the stamp, so the picture leaves only once nothing is moving. The wait costs nothing
+    /// to look at — at progress 0 with the chrome still down, this screen is drawing the editor's own
+    /// card, in its place, wearing its corner.
+    private func armEntry() {
+        guard initialContentRect != nil, entryProgress < 1 else { return }
+        geoStamp &+= 1
+        let stamp = geoStamp
+        DispatchQueue.main.async { if geoStamp == stamp { runEntry() } }
+    }
+
     private func runEntry() {
         guard initialContentRect != nil, imageFrame.width > 1, entryProgress < 1,
               entryFrom.width > 1 else { return }
