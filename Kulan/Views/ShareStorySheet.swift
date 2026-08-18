@@ -279,6 +279,23 @@ struct ShareStorySheet: View {
             // The Block-screenshots section is not drawn while editing viewers, so it is not budgeted
             // for either — a sheet measured from its pieces has to be measured from the pieces it has.
             + (editing == nil ? Self.captureSectionHeight : 0)
+            // ⚠️ AND THE ONE-TIME ROW, WHICH IS DRAWN ABOVE THE LIST AND WAS NEVER COUNTED. His
+            // 2026-08-18: the sheet is the right size for custom folders every time and wrong the
+            // moment a one-time story is on it.
+            //
+            // `store.all` is the audiences he owns — Everyone, My Friends, his custom lists — and
+            // the One-Time Story row is NOT one of them. It is inserted ahead of the `ForEach` by
+            // `if oneTimeActive`, so the list draws one row more than the budget below pays for and
+            // the sheet comes up exactly 60pt short. That shortfall lands on the last thing in the
+            // sheet, which is why what he circled is the Block-screenshots switch squashed against
+            // Post Story. Same shape of bug as the capture section not being budgeted at all, one
+            // row further up.
+            //
+            // Safe to make the height depend on this one, unlike the ticked row: `oneTimeActive` is
+            // `!oneTimeViewers.isEmpty`, which only moves when the one-time PICKER is used, and that
+            // is a separate sheet that has been dismissed by the time this one is on screen again.
+            // Nothing here can resize under the finger that is choosing.
+            + (oneTimeActive ? rowH : 0)
             + rowH * CGFloat(max(2, store.all.count))
         return min(wanted, UIScreen.main.bounds.height * 0.88)
     }
