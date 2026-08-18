@@ -279,24 +279,43 @@ struct StoryMoreMenu: UIViewRepresentable {
         /// `pauseStory` handler already said this was meant to happen ("Host shows/hides a sheet over
         /// the viewer (viewers list, share, menu)"). The menu was the one of those three that never
         /// posted it, so the bar kept running and the story kept advancing behind an open menu.
-        func pause() {
+        func pause(host: UIView) {
             guard !pausedForMenu else { return }
             pausedForMenu = true
             NotificationCenter.default.post(name: .pauseStory, object: nil)
-            // ⚠️ THERE IS NO "MENU DISMISSED" CALLBACK ON A `UIButton` MENU, and inventing one by
-            // overriding the private context-menu delegate is not worth a story that freezes if a
-            // future iOS stops calling it. A presented menu lives in its OWN window, so the two
-            // public window notifications below both mark the moment it goes away: whichever
-            // arrives first releases the pause and both observers come down.
+            // ⚠️ FILTERED TO OUR OWN WINDOW, AND THE FIRST VERSION OF THIS RELEASED ITSELF INSTANTLY.
+            //
+            // His second report on the same menu: "Still Video is running is not pausing". The pause
+            // was taken and then given straight back, microseconds later, because this listened for
+            // ANY window becoming key — and the very next thing that happens after a menu is asked
+            // for is the MENU'S OWN window becoming key. It heard its own opening as a closing.
+            //
+            // There is still no "menu dismissed" callback on a `UIButton` menu, and overriding the
+            // private context-menu delegate is not worth a story that freezes when a future iOS stops
+            // calling it. But the window traffic does say it plainly once you read WHICH window:
+            //
+            //   · menu opens  → the MENU's window becomes key. Not ours, so it is ignored.
+            //   · menu closes → OURS becomes key again. That is the release.
+            //
+            // `didBecomeHidden` is kept for the same moment arriving the other way round, filtered
+            // the other way: the window being hidden at the end is the menu's, never ours.
             //
             // ⚠️ AND IF NEITHER EVER ARRIVES, NOTHING IS STRANDED. `tapNextStory` and
-            // `tapPreviousStory` clear the host pause themselves now — a finger on the story is
-            // proof no menu is over it. That belt is what makes this safe to do at all.
-            let release: (Notification) -> Void = { [weak self] _ in self?.resume() }
-            for name in [UIWindow.didBecomeHiddenNotification, UIWindow.didBecomeKeyNotification] {
-                closeObservers.append(NotificationCenter.default.addObserver(
-                    forName: name, object: nil, queue: .main, using: release))
+            // `tapPreviousStory` clear the host pause themselves — a finger on the story is proof no
+            // menu is over it. That belt is what makes this safe to do at all.
+            let ours = host.window
+            let onKey: (Notification) -> Void = { [weak self] note in
+                guard (note.object as? UIWindow) === ours else { return }
+                self?.resume()
             }
+            let onHidden: (Notification) -> Void = { [weak self] note in
+                guard let w = note.object as? UIWindow, w !== ours else { return }
+                self?.resume()
+            }
+            closeObservers.append(NotificationCenter.default.addObserver(
+                forName: UIWindow.didBecomeKeyNotification, object: nil, queue: .main, using: onKey))
+            closeObservers.append(NotificationCenter.default.addObserver(
+                forName: UIWindow.didBecomeHiddenNotification, object: nil, queue: .main, using: onHidden))
         }
 
         func resume() {
@@ -322,8 +341,10 @@ struct StoryMoreMenu: UIViewRepresentable {
         // the case where the first event does not arrive. `pause()` is idempotent, so both firing
         // costs nothing. The two outside-touch events undo a `.touchDown` that never became a menu.
         let coordinator = context.coordinator
-        b.addAction(UIAction { _ in coordinator.pause() }, for: .menuActionTriggered)
-        b.addAction(UIAction { _ in coordinator.pause() }, for: .touchDown)
+        b.addAction(UIAction { [weak b] _ in if let b { coordinator.pause(host: b) } },
+                    for: .menuActionTriggered)
+        b.addAction(UIAction { [weak b] _ in if let b { coordinator.pause(host: b) } },
+                    for: .touchDown)
         b.addAction(UIAction { _ in coordinator.resume() }, for: .touchUpOutside)
         b.addAction(UIAction { _ in coordinator.resume() }, for: .touchCancel)
         // ⚠️ ALL FOUR PRIORITIES DROPPED, AND IT IS THE TAP TARGET THAT DEPENDS ON IT. A

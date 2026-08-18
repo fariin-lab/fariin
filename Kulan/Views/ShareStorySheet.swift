@@ -389,6 +389,21 @@ struct ShareStorySheet: View {
                                 StoryTick(on: tickOn(a))
                             }
                         }
+                        // ⚠️ EVERY WORD IN THIS ROW WAS BLUE, AND `StoryAudienceRow` ALREADY ASKS FOR
+                        // `.primary` AND `.secondary` — WHICH IS THE TRAP.
+                        //
+                        // Those two are HIERARCHICAL styles: they do not name a colour, they name a
+                        // level of whatever the current foreground style is. Inside a `Button` that
+                        // style is the tint, so `.primary` resolved to solid accent and `.secondary`
+                        // to a faded accent. That is exactly his screenshot — a blue title over a
+                        // paler blue subtitle — and it is why the row looked correct everywhere the
+                        // accent happens to be white (see the accent-is-white-at-night family) and
+                        // wrong the moment this sheet is drawn light.
+                        //
+                        // `.plain` takes the tint out of the label's foreground, so the two levels
+                        // resolve against the label colour they were written for. The tick keeps its
+                        // own colour, because it sets one.
+                        .buttonStyle(.plain)
                         .listRowInsets(Self.audienceRowInsets)
                     }
                 } header: {
@@ -725,21 +740,51 @@ struct ShareStorySheet: View {
             }
         }()
 
+        // ⚠️ THE PILL IS CHANGED HERE, NOT BY THE RELOAD, AND THAT IS HIS "not chnaging real time".
+        //
+        // The old comment below promised the reload was what kept the header pill honest. It cannot
+        // be: `StoryViewer` takes `let groups: [StoryGroup]`, an immutable snapshot captured when the
+        // viewer was presented, so re-reading the repository changes nothing that is already on
+        // screen. And the reconcile that DOES push fresh buckets into mounted pages is keyed on
+        // `reconcileSignature`, which is bucket and item IDs only — an audience change moves no id,
+        // so it never fires. That is why the new label only appeared after leaving the story and
+        // coming back, which is a fresh snapshot.
+        //
+        // The title travels with it because the words are the audience's own (`a.title`, or the
+        // joined list names when several are ticked) and the host would otherwise have to re-derive
+        // them from a story it has not been told about yet.
+        NotificationCenter.default.post(
+            name: .init("storyAudienceUpdatedLocally"), object: nil,
+            userInfo: ["id": story.id, "label": tag.label,
+                       "title": multi ? lists.map(\.name).joined(separator: ", ") : a.title])
+        // ⚠️ AND THE SHEET GOES NOW, NOT TWO ROUND TRIPS LATER — his "its taking time to close sheet".
+        //
+        // This used to await the write AND then a forced full reload of every story before it would
+        // dismiss, so the sheet sat there for two networks in series after the tap. Nothing about
+        // either was needed to CLOSE it: the choice is already made, the pill above is already
+        // correct, and the write is the app's business rather than his.
+        onPosted(); dismiss()
         Task {
             do {
                 try await StoriesService.shared.updateStoryAudience(
                     story, excluded: excluded, included: included, everyone: everyone,
                     allowsReplies: replies, tag: tag)
-                // The header pill over the story reads `audienceLabel`, so the tray has to be re-read
-                // before the sheet goes — otherwise the story he just moved to Everyone is still
-                // wearing "My Friends" when he lands back on it.
+                // Still worth doing, just not worth waiting for: it puts the repository in step for
+                // the NEXT time the viewer is opened from a fresh snapshot.
                 await StoriesRepository.shared.load(force: true)
-                await MainActor.run { onPosted(); dismiss() }
             } catch {
+                // ⚠️ THE FAILURE IS STILL SHOWN, and it has to be — the story goes on playing to its
+                // old audience when this does not land, and the likeliest error here is a refusal
+                // from the security rules, which is invisible by nature. The sheet is gone by now, so
+                // it is the host that says so, the same way a failed delete does. The reload puts the
+                // truthful label back underneath the toast.
+                await StoriesRepository.shared.load(force: true)
                 await MainActor.run {
-                    posting = false
-                    updateErrorText = (error as? LocalizedError)?.errorDescription ?? ""
-                    updateError = true
+                    NotificationCenter.default.post(
+                        name: .init("storyAudienceUpdateFailed"), object: nil,
+                        userInfo: ["id": story.id,
+                                   "message": (error as? LocalizedError)?.errorDescription
+                                       ?? "Couldn't update who can see this — check your connection"])
                 }
             }
         }

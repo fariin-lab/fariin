@@ -974,6 +974,9 @@ struct StoryViewer: View {
     // Owner controls (my own story): Views/reactions/delete bar instead of the reply bar.
     @State private var currentBucketUid = ""
     @State private var currentStoryId = ""
+    /// The audience pill for a story edited from the sheet over this viewer, until this sitting ends.
+    /// See `audienceBadge` for why the snapshot cannot answer this and the reconcile does not fire.
+    @State private var audienceOverride: [String: StoryAudienceBadge] = [:]
     /// The footer's numbers for the story on screen. Nil until this story's own answer lands — see
     /// `loadBarViewers`, which is careful never to paint one story's numbers under another.
     @State private var barViewers: StoryViewSummary?
@@ -1717,6 +1720,32 @@ struct StoryViewer: View {
             guard currentIsMine, let s = currentStory,
                   !s.oneTime, !StoriesService.isPending(s.id) else { return }
             editViewers = s
+        }
+        // "…" → Edit viewers → Update. The pill changes on the tap rather than on the round trip;
+        // see `audienceBadge`. The glyph is picked by the same rule that file uses for a fetched
+        // story, so an edited label and a loaded one cannot draw two different icons.
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyAudienceUpdatedLocally"))) { note in
+            guard let info = note.userInfo,
+                  let id = info["id"] as? String,
+                  let label = info["label"] as? String,
+                  let title = info["title"] as? String else { return }
+            switch label {
+            case "everyone":
+                audienceOverride[id] = StoryAudienceBadge(systemImage: "globe", text: title)
+            case "custom":
+                audienceOverride[id] = StoryAudienceBadge(systemImage: "person.crop.rectangle.stack",
+                                                          assetImage: "ic_story_folder", text: title)
+            default:
+                audienceOverride[id] = StoryAudienceBadge(systemImage: "person.2.fill", text: title)
+            }
+        }
+        // ⚠️ AND THE OVERRIDE COMES OFF WHEN THE WRITE DID NOT LAND. Leaving it would show him an
+        // audience the story is not actually on, which is worse than the delay it replaces — the
+        // reload the sheet already ran has put the true label back underneath by now.
+        .onReceive(NotificationCenter.default.publisher(for: .init("storyAudienceUpdateFailed"))) { note in
+            guard let info = note.userInfo, let id = info["id"] as? String else { return }
+            audienceOverride.removeValue(forKey: id)
+            flashSentToast((info["message"] as? String) ?? "Couldn't update who can see this")
         }
         .onReceive(NotificationCenter.default.publisher(for: .init("storyActionHide"))) { _ in
             if !currentIsMine { StoryPrefs.setHidden(currentBucketUid, true); isPresented = false }
@@ -2658,6 +2687,13 @@ struct StoryViewer: View {
         // on a screen they did not post to. The header falls back to its old stacked name-over-time
         // shape when there is nothing here; see `UserView`.
         guard isMine else { return nil }
+        // ⚠️ WHAT HE JUST CHOSE BEATS WHAT THE SNAPSHOT SAYS. `StoryViewer` is handed
+        // `let groups: [StoryGroup]` when it is presented and never re-fed for anything but an id
+        // change, so a story whose audience was edited from the sheet over the top of it goes on
+        // wearing the label it was opened with until the whole viewer is thrown away. This is that
+        // one field, kept for as long as this sitting lasts; the repository catches up underneath and
+        // the next open reads the real thing.
+        if let b = audienceOverride[s.id] { return b }
         // The WORDS come from `storyAudienceTitle`, which the viewers sheet's tab reads too, so the
         // pill on the story and the tab over its viewers can never name the same audience two ways.
         let text = storyAudienceTitle(for: s)
