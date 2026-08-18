@@ -377,9 +377,11 @@ struct StoryDetailView: View {
         return max(1, min(nineBySixteen, available))
     }
 
-    /// The reference app's own card radius. Ours was 24 on the bottom corners only, and 0 on top,
-    /// because the card used to run off the top of the screen and there was no top corner to round.
-    private let cardRadius: CGFloat = 12
+    /// ⚠️ ONE NUMBER FOR THE WHOLE CARD, AND IT LIVES IN `Constant` SO THE PHOTO VIEW AND THE CLIP
+    /// VIEW READ THE SAME ONE. It was 12 here, 24 on the photo's own bottom corners and 12 again
+    /// inside the video view — three numbers for one rectangle, which is his "2 type corners".
+    /// Measured off his screenshots; the note on `Constant.cardCornerRadius` holds the measurement.
+    private let cardRadius: CGFloat = Constant.cardCornerRadius
 
     /// Hand the card's rectangle to `StoryCardMorph`, which shrinks the live story into the viewers
     /// sheet and needs to know it is aiming at the card and not at this whole page.
@@ -529,7 +531,7 @@ struct StoryDetailView: View {
                             // whole flight (see `flightMaskOn`); the rectangle clip itself stays, it is
                             // what cuts the blur backdrop's spill.
                             .clipShape(RoundedRectangle(cornerRadius: flightMaskOn ? 0 : cardRadius,
-                                                        style: .continuous))
+                                                        style: .circular))
                             .overlay(
                                 tapStory()
                                     .offset(
@@ -556,7 +558,7 @@ struct StoryDetailView: View {
                             .overlay(captionView(story.caption, plain: story.config.storyType == .plain())
                                         .modifier(SheetCaptionFade())
                                         .clipShape(RoundedRectangle(cornerRadius: flightMaskOn ? 0 : cardRadius,
-                                                                    style: .continuous)),
+                                                                    style: .circular)),
                                      alignment: .bottom)
                             // Top dark scrim so the username/avatar/close stay readable on white/bright photos.
                             // Fades with the chrome (it's part of the chrome look) — the PHOTO must stay
@@ -565,7 +567,7 @@ struct StoryDetailView: View {
                             .overlay(topScrim.opacity(chromeHidden ? 0 : 1)
                                         .animation(.linear(duration: 0.18), value: chromeHidden)
                                         .clipShape(RoundedRectangle(cornerRadius: flightMaskOn ? 0 : cardRadius,
-                                                                    style: .continuous)),
+                                                                    style: .circular)),
                                      alignment: .top)
                             // THE BARS AND THE HEADER LIVE INSIDE THE CARD, over the picture, which is
                             // where the reference app puts them (`contentInsets.top = 54`). They used to be
@@ -1043,13 +1045,18 @@ private extension StoryDetailView {
     func getStoryView(with index: Int, story: Story) -> some View {
         switch story.config.mediaType {
         case .image:
-            // Round the card's bottom corners in UIKit (a SwiftUI clip doesn't clip the blurred backdrop).
+            // Round the card in UIKit as well (a SwiftUI clip doesn't clip the blurred backdrop).
             // Applies to reply-bar (friend) cards AND my own story (isMine) — my own card is rounded but
             // uses the library's UIKit dismiss now, so the corners must live here, not in an app-level
             // clip (an app clip pinned the card and broke the smooth dismiss).
+            //
+            // ⚠️ `cardRadius`, NOT A 24 OF ITS OWN, AND ALL FOUR CORNERS RATHER THAN THE BOTTOM TWO.
+            // A photo wearing a hard 24 under the page's soft 12 is exactly the two-corner card he
+            // photographed. One number, one shape, and the clip above draws the same curve on top of
+            // this one instead of arguing with it.
             ImageView(imageURL: story.mediaURL,
                       previewURL: story.previewURL,
-                      bottomCornerRadius: (story.config.storyType != .plain() || model.isMine) ? 24 : 0) {
+                      cardCornerRadius: (story.config.storyType != .plain() || model.isMine) ? cardRadius : 0) {
                 start(index: index)
             }
             // ⚠️ NOTHING HAPPENS HERE ANY MORE, AND THAT IS THE POINT. This branch used to carry an

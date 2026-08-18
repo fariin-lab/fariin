@@ -151,7 +151,12 @@ final class StoryItemVideoView: UIView {
         super.init(frame: .zero)
 
         backgroundColor = .black
-        layer.cornerRadius = 12
+        // ⚠️ THE CARD'S ONE CORNER, NOT A 12 OF THIS VIEW'S OWN — his 2026-08-18 "video top corners
+        // and bottom corners is small". A clip carried 12 while a photo carried 24 underneath the
+        // page's 12, so the two media types did not even agree with each other. See
+        // `Constant.cardCornerRadius` for the measurement off his reference.
+        layer.cornerRadius = Constant.cardCornerRadius
+        layer.cornerCurve = .circular
         clipsToBounds = true
 
         canvasLayer.isHidden = true          // shown only once a clip is known not to fill the card

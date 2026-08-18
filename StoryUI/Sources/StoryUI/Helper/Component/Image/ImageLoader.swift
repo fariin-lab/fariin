@@ -130,12 +130,16 @@ final class ImageLoader: UIView {
 
     // MARK: Public Properties
     var imageURL: URL?
-    // Round ONLY the bottom two corners of the whole card (photo + canvas) in UIKit. This was
-    // forced by the old backdrop — a SwiftUI `.clipShape` does not clip a `UIVisualEffectView`,
-    // which composites separately and spilled past the mask, leaving the friend reply-bar card
-    // square. The canvas is an ordinary layer and would clip either way; the UIKit mask stays
-    // because it is what the callers ask for and it is one less thing to re-verify.
-    var bottomCornerRadius: CGFloat = 0 { didSet { applyCornerMask() } }
+    // Round the whole card (photo + canvas) in UIKit. This was forced by the old backdrop — a
+    // SwiftUI `.clipShape` does not clip a `UIVisualEffectView`, which composites separately and
+    // spilled past the mask, leaving the friend reply-bar card square. The canvas is an ordinary
+    // layer and would clip either way; the UIKit mask stays because it is what the callers ask for
+    // and it is one less thing to re-verify.
+    //
+    // ⚠️ ALL FOUR CORNERS, AND THE SAME NUMBER THE PAGE CLIPS WITH. It was the bottom two only, at a
+    // 24 of its own under a page clipping at 12 — his 2026-08-18 "image top corners and bottom
+    // corners are different", which is that sentence drawn. See `Constant.cardCornerRadius`.
+    var cardCornerRadius: CGFloat = 0 { didSet { applyCornerMask() } }
     // Foreground: the photo at its TRUE aspect ratio — never stretched/cropped.
     var imageView = UIImageView()
     /// THE REFERENCE APP'S CANVAS behind a photo that does not fill the card. See `StoryCanvas` for what this
@@ -178,11 +182,19 @@ final class ImageLoader: UIView {
         decideContentMode()
     }
 
-    // Round the bottom two corners of THIS view (which clips every subview, blur included).
+    // Round all four corners of THIS view (which clips every subview, blur included).
+    //
+    // ⚠️ `maskedCorners` IS BACK TO ALL FOUR AND `cornerCurve` IS SAID OUT LOUD. The card has had a
+    // visible top edge since it started below the status bar, and a circle is the curve his
+    // reference draws — measured, see `Constant.cardCornerRadius`. `.circular` is already the
+    // default; naming it stops a future edit from reaching for `.continuous` and quietly making
+    // this corner a different shape from the page clip drawn over it.
     private func applyCornerMask() {
-        layer.cornerRadius = bottomCornerRadius
-        layer.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
-        layer.masksToBounds = bottomCornerRadius > 0
+        layer.cornerRadius = cardCornerRadius
+        layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner,
+                               .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        layer.cornerCurve = .circular
+        layer.masksToBounds = cardCornerRadius > 0
     }
 
     // Fill edge-to-edge (no blur) vs aspect-FIT + blurred backdrop, decided against the CARD the

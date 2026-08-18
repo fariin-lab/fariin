@@ -14,7 +14,9 @@ struct ImageView: UIViewRepresentable {
     /// The story's small poster, drawn blurred while the full-size media downloads instead of a grey
     /// skeleton. See `ImageLoader.showPreviewBlur`.
     var previewURL: String?
-    var bottomCornerRadius: CGFloat = 0   // round the card's bottom corners in UIKit (clips the blur)
+    /// The card's corner, in UIKit, because a SwiftUI clip does not cut the blurred backdrop.
+    /// All four of them — see `Constant.cardCornerRadius`.
+    var cardCornerRadius: CGFloat = 0
     let imageIsLoaded: () -> Void
 
     func makeUIView(context: UIViewRepresentableContext<ImageView>) -> ImageLoader {
@@ -22,7 +24,7 @@ struct ImageView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: ImageLoader, context: Context) {
-        uiView.bottomCornerRadius = bottomCornerRadius
+        uiView.cardCornerRadius = cardCornerRadius
         uiView.loadImageWithUrl(imageURL, previewURL: previewURL, imageIsLoaded: imageIsLoaded)
     }
 }

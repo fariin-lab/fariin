@@ -984,7 +984,8 @@ public final class StoryCardMorph {
         // half of the same number.
         //
         // Both ends are now the radius of the thing actually being matched: `cornerRadius` at the row
-        // (the row card's 24) and `cardCornerRadius` at full screen (StoryDetailView's own 12, which
+        // (the row card's 24) and `cardCornerRadius` at full screen (the card's own, published by
+        // `StoryDetailView` from `Constant.cardCornerRadius`, which
         // it publishes). So the corner is rounded at every moment of the journey, and at BOTH ends
         // the hand-over is exact — at the row the mask agrees with the row card, and at full screen
         // it agrees with the card's own `.clipShape`, so `resetFlight` taking the mask away changes

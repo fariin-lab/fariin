@@ -19,7 +19,28 @@ enum Constant {
     static let progressBarHeight: CGFloat = 2
     static var storySecond: Double = 5.0
     static let progressBarSpacing: CGFloat = 2
-    
+
+    /// ⛔ THE STORY CARD'S CORNER, AND THERE IS EXACTLY ONE OF IT. HIS 2026-08-18 REPORT:
+    /// "my story view has 2 type corners — image top corners and bottom corners are different, also
+    /// video top and bottom corners are small", with two screenshots of the app he wants matched.
+    ///
+    /// There were three numbers and two SHAPES. The page's SwiftUI clip rounded all four at 12 in the
+    /// `.continuous` style; the photo view rounded its own BOTTOM TWO at 24 with a plain circular
+    /// `layer.cornerRadius` (`maskedCorners`); the clip's own view rounded all four at 12, also
+    /// circular. So a photo showed a soft 12 on top and a hard 24 underneath — his "2 types" — and a
+    /// clip showed 12 all round, which is his "small".
+    ///
+    /// ⚠️ MEASURED OFF HIS SCREENSHOTS, NOT CHOSEN. Fitting the arc down the left edge of the panel
+    /// in both of them gives a CIRCLE of 41.7px against a panel 1183px wide, sub-pixel error over
+    /// fifty rows — so it is a plain circular corner, not a squircle, or the fit would have drifted
+    /// at the ends. 41.7/1183 = 3.5% of the width, which on a 428pt phone is 15pt.
+    ///
+    /// ⚠️ AND THE STYLE IS PART OF THE NUMBER. `.continuous` at 15 spreads its curve about 1.5×
+    /// further along each edge than a circle at 15, so it reads as the "more rounded" he asked
+    /// against. Every corner of this card is circular now: the SwiftUI clips say so explicitly and
+    /// `layer.cornerRadius` already meant it.
+    static let cardCornerRadius: CGFloat = 15
+
     enum UserView {
         static let hStackSpace: CGFloat = 13
         static let textSize: CGFloat = 16
