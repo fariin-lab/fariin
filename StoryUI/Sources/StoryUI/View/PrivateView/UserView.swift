@@ -176,7 +176,7 @@ struct UserView: View {
                     .background(Circle().fill(.black.opacity(0.3)))   // subtle circle → clear on any photo
                     .frame(width: 44, height: 44)                      // keep the 44pt tap target
                     .contentShape(Rectangle())
-                    .overlay(StoryMoreMenu(items: moreItems))
+                    .overlay(StoryMoreMenu(items: moreItems).frame(width: 44, height: 44))
             }
 
             // 18pt glyph in a 44×44 touch target, now inside a subtle circle for visibility.
@@ -210,9 +210,11 @@ struct UserView: View {
 /// the same SwiftUI code as before. The dropdown is identical too — SwiftUI's `Menu` is a `UIMenu`
 /// underneath — which was his condition: the design does not move.
 ///
-/// ⚠️ `sizeThatFits` IS NOT OPTIONAL. A `UIButton` with no title has a small intrinsic size and
-/// SwiftUI would otherwise hand this the layout's full width, so the tap area would reach across the
-/// header and swallow the taps meant for the name beside it.
+/// ⚠️ IT IS GIVEN AN EXPLICIT FRAME BY ITS CALLER, and it needs one. SwiftUI sizes a
+/// representable from the view's intrinsic size, and a `UIButton` with no title barely has one —
+/// left to itself the tap target would be a few points across in the middle of the mark, and most
+/// taps on the ellipsis would land on nothing. (`sizeThatFits` would be the tidier answer and is
+/// iOS 16; this package is built for 15.)
 struct StoryMoreMenu: UIViewRepresentable {
 
     struct Item {
@@ -239,6 +241,15 @@ struct StoryMoreMenu: UIViewRepresentable {
         let b = UIButton(type: .custom)
         b.showsMenuAsPrimaryAction = true
         b.backgroundColor = .clear
+        // ⚠️ ALL FOUR PRIORITIES DROPPED, AND IT IS THE TAP TARGET THAT DEPENDS ON IT. A
+        // `UIButton` with no title and no image has a tiny intrinsic size, and SwiftUI sizes a
+        // representable from that unless the view says it will take whatever it is given — so the
+        // button would end up a few points across in the middle of a 44pt mark, and most taps on the
+        // ellipsis would miss it. The caller's `.frame(width: 44, height: 44)` is then the size.
+        for axis in [NSLayoutConstraint.Axis.horizontal, .vertical] {
+            b.setContentHuggingPriority(.defaultLow, for: axis)
+            b.setContentCompressionResistancePriority(.defaultLow, for: axis)
+        }
         b.menu = menu
         return b
     }
@@ -247,10 +258,6 @@ struct StoryMoreMenu: UIViewRepresentable {
         // Rebuilt rather than mutated: the audience under "Edit viewers" changes when the story on
         // screen does, and a `UIMenu` cannot have its children edited in place.
         b.menu = menu
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIButton, context: Context) -> CGSize? {
-        CGSize(width: proposal.width ?? 44, height: proposal.height ?? 44)
     }
 
     private var menu: UIMenu {
