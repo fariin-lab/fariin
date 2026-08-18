@@ -287,6 +287,17 @@ enum StoryCountCache {
                                 recent: StoriesService.faces(for: e.recent))
     }
 
+    /// Drop one story's remembered numbers. Used when the thing they were counted against has
+    /// changed under them — see `StoriesService.updateStoryAudience`.
+    static func forget(_ storyId: String) {
+        var s = store
+        guard s.removeValue(forKey: storyId) != nil else { return }
+        var order = UserDefaults.standard.stringArray(forKey: orderKey) ?? []
+        order.removeAll { $0 == storyId }
+        store = s
+        UserDefaults.standard.set(order, forKey: orderKey)
+    }
+
     static func put(_ storyId: String, count: Int, reactions: Int, recent: [String]) {
         var s = store
         var order = UserDefaults.standard.stringArray(forKey: orderKey) ?? []
@@ -455,6 +466,14 @@ final class StoriesService {
         // instantly in the viewer. BOTH CACHES, not URLCache alone: nothing on any server answers a
         // `fariin.local` url, so an eviction has nowhere to fall back to. See `StoryImageSeed`.
         if let u = URL(string: pending.url) { StoryImageSeed.seed(image, for: u) }
+        // ⛔ A DURABLE RECORD, WRITTEN BEFORE THE FIRST BYTE MOVES. The queue below is a `Task` and
+        // an array, both of which die with the process — swipe the app away mid-upload and the post
+        // was simply gone, with nothing to retry and nothing to say it had happened. See
+        // `StoryOutbox`; the ticket is torn up the moment the story lands or the person cancels.
+        let ticket = StoryOutbox.remember(image: image, caption: caption, stickers: stickers,
+                                          excluded: excluded, included: included, everyone: everyone,
+                                          allowsReplies: allowsReplies, tag: tag,
+                                          captureProtected: captureProtected)
         inFlight.append(pending)
         uploading = true
         uploadPhase = .preparing   // every post starts on the phone's half
@@ -468,9 +487,17 @@ final class StoriesService {
             _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
-            do { try await postStory(image: image, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected) }
-            catch is CancellationError { cancelled = true }   // user hit cancel → postStory removed the doc
+            do {
+                try await postStory(image: image, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected)
+                StoryOutbox.forget(ticket)   // it landed; there is nothing to resume
+            }
+            catch is CancellationError {
+                cancelled = true              // user hit cancel → postStory removed the doc
+                StoryOutbox.forget(ticket)    // …and a cancelled post must not come back next launch
+            }
             catch { failure = error.localizedDescription }     // surface it instead of dying silently
+            // ⚠️ A PLAIN FAILURE KEEPS ITS TICKET. That is the whole point: no connection now is the
+            // case worth remembering, and the next sign-in puts it back through this same door.
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
             await MainActor.run {
                 self.queuedUploads.removeAll { $0.isCancelled }   // tidy finished/cancelled entries
@@ -653,6 +680,36 @@ final class StoriesService {
             ])
     }
 
+    /// ⛔ COUNT THIS POST AGAINST THE HOUR'S ALLOWANCE. See the rate limit in `firestore.rules`.
+    ///
+    /// The counter is one document, `users/{me}/limits/stories`, holding the window it is counting
+    /// and how many have gone inside it. Its own write rules are where the teeth are — a window can
+    /// only be opened once the last one has genuinely expired, and inside a window the count may only
+    /// go up by one — so this cannot lower it, reset it, or move the window forward to escape a full
+    /// one. All it can do is the honest thing.
+    ///
+    /// ⚠️ BEST EFFORT, ALWAYS, AND THE FAILURE DIRECTION IS DELIBERATE. Every write here is `try?`:
+    /// a bump that does not land leaves the count LOWER than the truth, and the create rule treats a
+    /// low or missing count as allowed. So a network blip can never turn into a person who cannot
+    /// post — which is the only outcome worth being careful about, since the limit exists to stop a
+    /// runaway loop rather than to police a person.
+    ///
+    /// The window is read against `ServerClock`, not the phone's own, for the same reason expiry is.
+    private func countStoryAgainstBudget() async {
+        let me = uid
+        guard !me.isEmpty else { return }
+        let ref = db.collection("users").document(me).collection("limits").document("stories")
+        let opened = ((try? await ref.getDocument())?.data()?["windowStart"] as? Timestamp)?.dateValue()
+        // A window that has run out is replaced whole; one that is still open takes one more.
+        // `increment` rather than a read-modify-write, so two posts a second apart cannot both write
+        // the same number.
+        if let opened, ServerClock.now.timeIntervalSince(opened) <= 3600 {
+            try? await ref.updateData(["count": FieldValue.increment(Int64(1))])
+        } else {
+            try? await ref.setData(["windowStart": FieldValue.serverTimestamp(), "count": 1])
+        }
+    }
+
     /// The mirror goes when the story does. Harmless if there never was one.
     /// ⛔ IT THROWS NOW, AND THE ONE CALLER THAT CAN ACT ON IT DOES.
     ///
@@ -676,6 +733,9 @@ final class StoriesService {
         let me = uid
         guard !me.isEmpty else { return }
         try Task.checkCancellation()   // bail before any write if the user already cancelled
+        // Counted before the document is written, because the rule reads the counter as it stands
+        // when the create arrives. See `countStoryAgainstBudget`.
+        await countStoryAgainstBudget()
         let storyId = UUID().uuidString
         let path = "stories/\(storyId)/photo.jpg"   // {storyId}/ segment so Storage rules can audience-scope reads
 
@@ -983,6 +1043,7 @@ final class StoriesService {
         await markSending()
         try Task.checkCancellation()
 
+        await countStoryAgainstBudget()   // see `countStoryAgainstBudget`
         let storyId = UUID().uuidString
         let videoPath = "stories/\(storyId)/video.mp4"
         let thumbPath = "stories/\(storyId)/thumb.jpg"
@@ -1167,6 +1228,18 @@ final class StoriesService {
             "recipientUids": StoryAudienceToken.tokens(recipients),
         ])
         StoryPrefs.rememberAudienceName(storyId: story.id, tag: tag)
+        // ⚠️ THE REMEMBERED COUNT AND FACES FOR THIS STORY ARE DROPPED, NOT UPDATED.
+        //
+        // `StoryCountCache` is what the owner bar paints from before the server answers, and the
+        // audience it was counted against has just changed. Leaving it would draw yesterday's number
+        // under a story that now reaches a different set of people, for as long as it takes the
+        // counter document to be read again.
+        //
+        // ⚠️ THE RECEIPTS THEMSELVES ARE LEFT ALONE, AND THAT IS A DECISION RATHER THAN AN OMISSION.
+        // Somebody who watched this story DID watch it; narrowing the audience afterwards does not
+        // make that untrue, and deleting their receipt would take a real view out of the author's own
+        // history. Seen-by is a record of what happened, not a mirror of who can still open it.
+        StoryCountCache.forget(story.id)
         if everyone {
             await writePublicMirror(storyId: story.id, me: me, mediaUrl: story.mediaUrl,
                                     thumbUrl: story.thumbUrl, blurThumb: story.blurThumb,
@@ -1850,6 +1923,10 @@ final class StoriesRepository {
             // expiry test on this device reads `ServerClock.now`; until this lands it is the phone's
             // own clock, which is the behaviour we had. See `ServerClock`.
             Task.detached { await ServerClock.sync() }
+            // ⛔ AND ANYTHING THAT WAS STILL BEING POSTED WHEN THE APP LAST DIED. See `StoryOutbox`.
+            // After `seedFromDisk` so the row is already on screen, and on the main actor because
+            // `postStoryBackground` owns the in-flight state the row draws from.
+            Task { @MainActor in StoryOutbox.resume() }
             await MainActor.run {
                 start(me)          // first call, or the signed-in user changed
             }

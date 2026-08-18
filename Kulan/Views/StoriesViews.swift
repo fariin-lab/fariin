@@ -977,6 +977,9 @@ struct StoryViewer: View {
     /// The footer's numbers for the story on screen. Nil until this story's own answer lands — see
     /// `loadBarViewers`, which is careful never to paint one story's numbers under another.
     @State private var barViewers: StoryViewSummary?
+    /// One number that moves every time a view counter answers, so anything drawing those counts can
+    /// key a refresh on it. See `MyStoriesCarousel.countsTick`.
+    @State private var countsTick = 0
     @State private var showViewers = false
     @State private var viewersProgress: CGFloat = 0   // 0 sheet closed … 1 open; drives BOTH layers
     @State private var openDragging = false           // kept: read by the storyLayer opacity/hit-test
@@ -3708,6 +3711,7 @@ struct StoryViewer: View {
         let liveMyStories = StoriesRepository.shared.mine?.stories ?? myStories
         ZStack(alignment: .top) {
             MyStoriesCarousel(stories: liveMyStories, activeId: $sheetStoryId,
+                              countsTick: countsTick,
                               // THE SAME `pull` THE STAGING ABOVE AND THE LIVE STORY BOTH USE — one
                               // value, computed once in this body, handed to everything that has to
                               // agree about how far the sheet has got. See `sheetSizeFraction`.
@@ -4285,6 +4289,7 @@ struct StoryViewer: View {
                     // No answer leaves whatever the cache already knows on screen. See `viewSummary`.
                     guard let v = answer else { continue }
                     viewersByStory[id] = v
+                    countsTick &+= 1
                     // Every one of them, not just the one on screen: this sweep is the cheapest
                     // chance the cache gets to be right about the stories he has not reached yet,
                     // so the NEXT visit opens on a number AND on faces for all of them.
@@ -4347,6 +4352,7 @@ struct StoryViewer: View {
             // Nil = the read failed; the cached number stays rather than being overwritten with 0.
             guard let v = await Self.viewSummary(storyId: id) else { return }
             viewersByStory[id] = v
+            countsTick &+= 1
             StoryCountCache.put(id, count: v.count, reactions: v.reactionCount,
                                 recent: v.recent.map(\.id))
             if id == currentStoryId { barViewers = v; publishOwnerBar() }
@@ -4757,6 +4763,9 @@ struct UploadingAvatarRing: View {
 struct MyStoriesCarousel: View {
     let stories: [Story]
     @Binding var activeId: String
+    /// Bumped by the host whenever a story's view counter answers. Drives a re-read of the numbers
+    /// on the cards — see the second `.task` below.
+    var countsTick: Int = 0
     /// THE ROW'S LAYOUT, OWNED BY THE HOST NOW. It used to be five private formulas down this file,
     /// which was fine while the only thing laid out by them was a card. The live story is laid out
     /// by them too now, so they cannot live where only the cards can see them — see `StoryRowGeometry`.
@@ -4959,6 +4968,19 @@ struct MyStoriesCarousel: View {
         // of the session no matter how many people watched it. `id:` re-runs it when the set
         // changes, which is exactly when the answer it cached stopped being complete.
         .task(id: stories.map(\.id)) { await loadAll() }
+        // ⛔ AND AGAIN WHENEVER A COUNT ACTUALLY MOVES — the numbers on these cards used to be a
+        // photograph of the moment the sheet opened.
+        //
+        // The task above is keyed on the story SET, which changes when a story is posted or deleted
+        // and at no other time. So somebody watching one of them while he sat looking at the sheet
+        // never appeared: the panel's own list followed it (`refreshIfCountMoved`), the little number
+        // over the card did not, and the two disagreed on screen.
+        //
+        // `countsTick` is bumped by the host every time a summary lands from the server's counter
+        // document, so this costs nothing until there is real news. Two tasks rather than one
+        // compound key: they answer to different things, and either one arriving is a reason to
+        // re-read.
+        .task(id: countsTick) { await loadAll() }
     }
 
     // `cardMedia`, `card` and `centreDistance` moved to StoryRowUIKit.swift with the row itself.

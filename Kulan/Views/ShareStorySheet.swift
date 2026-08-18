@@ -193,6 +193,9 @@ struct ShareStorySheet: View {
     /// An update that did not land, and it has to be SAID: the story keeps playing to its old
     /// audience either way, so a silent failure looks exactly like a success.
     @State private var updateError = false
+    /// WHY it did not land, in the service's own words. A refusal and a dropped connection are two
+    /// different things to be told, and `PostRefusal` already writes the sentence for each of them.
+    @State private var updateErrorText = ""
 
     /// ⛔ WHAT ACTUALLY GETS POSTED, and a one-time story has no say in it. His 2026-08-18 order: "if
     /// user using One-Time Story it must always block screenshot, user cant make off".
@@ -456,7 +459,9 @@ struct ShareStorySheet: View {
             .alert("Couldn't update", isPresented: $updateError) {
                 Button("OK", role: .cancel) {}
             } message: {
-                Text("Who can see this story hasn't changed. Check your connection and try again.")
+                Text(updateErrorText.isEmpty
+                     ? "Who can see this story hasn't changed. Check your connection and try again."
+                     : updateErrorText)
             }
             .alert("No one will see this", isPresented: $emptyAudienceAlert) {
                 Button("OK", role: .cancel) {}
@@ -728,7 +733,11 @@ struct ShareStorySheet: View {
                 await StoriesRepository.shared.load(force: true)
                 await MainActor.run { onPosted(); dismiss() }
             } catch {
-                await MainActor.run { posting = false; updateError = true }
+                await MainActor.run {
+                    posting = false
+                    updateErrorText = (error as? LocalizedError)?.errorDescription ?? ""
+                    updateError = true
+                }
             }
         }
     }
