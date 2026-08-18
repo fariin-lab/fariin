@@ -80,6 +80,12 @@ enum SessionWipe {
             // holds the private names of the author's custom audiences ("Close friends", and worse),
             // which is the one piece of story state that is explicitly nobody else's business.
             "oneTimeUsed", "storyAudienceNames",
+            // ⚠️ AND THE STAMPED FORM OF THE SAME THREE. `StoryPrefs` keeps seen / liked / burned as
+            // id-to-timestamp dictionaries under a `.at` suffix so they can be pruned by AGE rather
+            // than by a count that forgot live stories. They are exactly as account-scoped as the
+            // keys above them, and a sign-out that took only the old names would hand the next
+            // account this one's burn list.
+            "seenStoryItems.at", "likedStories.at", "oneTimeUsed.at",
             // misc account-scoped state
             "defaultDisappearSeconds", "callsSeenAt",
         ]

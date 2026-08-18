@@ -776,15 +776,15 @@ enum StoryPrefs {
     ///
     /// Deliberately NOT the thing that makes one-time work. If this file were deleted the story would
     /// still be gone, because it is gone on the server.
-    static func isOneTimeUsed(_ storyId: String) -> Bool { set("oneTimeUsed").contains(storyId) }
-    /// ⚠️ `mutateOrdered`, NOT `save`. This store was written with the plain append-and-save pair,
+    static func isOneTimeUsed(_ storyId: String) -> Bool { stampedIds("oneTimeUsed").contains(storyId) }
+    /// ⚠️ `mutateStamped`, NOT `save`. This store was written with the plain append-and-save pair,
     /// which is the shape the seen and liked stores were explicitly moved OFF because they "grew
-    /// forever" — see the note above `mutateOrdered`. Every one-time story id ever opened would have
-    /// sat in UserDefaults for the life of the install, and UserDefaults is read into memory at
-    /// launch, so it becomes a launch cost that only ever grows. Same 1000-id cap as the others.
+    /// forever". Every one-time story id ever opened would have sat in UserDefaults for the life of
+    /// the install, and UserDefaults is read into memory at launch, so it becomes a launch cost that
+    /// only ever grows. Pruned by AGE with the other two now — see `mutateStamped`.
     static func markOneTimeUsed(_ storyId: String) {
         guard !storyId.isEmpty, !isOneTimeUsed(storyId) else { return }
-        mutateOrdered("oneTimeUsed") { $0.append(storyId) }
+        mutateStamped("oneTimeUsed") { $0[storyId] = Date().timeIntervalSince1970 }
     }
 
     /// THE NAME OF A CUSTOM STORY I POSTED, kept here and nowhere else.
@@ -816,31 +816,66 @@ enum StoryPrefs {
     static func toggleNotify(_ uid: String) {
         var s = set("notifyStories"); if s.contains(uid) { s.remove(uid) } else { s.insert(uid) }; save("notifyStories", s)
     }
-    // seen/liked stores were APPEND-ONLY and grew forever (every story id ever). Keep them as
-    // ORDERED arrays on disk (append at the end) so "oldest" is well-defined, and drop the oldest
-    // half once past 1000 ids — same cap pattern as VoicePlayed's 600 in Models.swift.
-    private static func mutateOrdered(_ key: String, _ change: (inout [String]) -> Void) {
+    /// ⛔ SEEN, LIKED AND BURNED ARE PRUNED BY AGE NOW, NOT BY COUNT — and the count was quietly
+    /// forgetting stories that were still on screen.
+    ///
+    /// They used to be ordered arrays with the oldest 500 dropped once past 1000 ids. Two things were
+    /// wrong with that. A heavy user passes a thousand story ids in a fortnight, so the cap is
+    /// reached in ordinary use; and what came off the front was not "old enough to forget", it was
+    /// "written longest ago", which on a busy account still includes stories that are live. A ring
+    /// he had watched turned unseen again by itself, and a heart he had set came back empty.
+    ///
+    /// A story is dead in 24 hours, so nothing in these three stores is worth keeping past that. Each
+    /// id now carries the moment it was written and anything past two days goes on the next touch.
+    /// The store then has a natural ceiling — two days of stories — and no cap has to guess at it.
+    ///
+    /// ⚠️ THE OLD FORMAT IS MIGRATED, NOT DROPPED. The ids already on disk have no stamps; they are
+    /// given the moment of the migration rather than thrown away, because forgetting a story
+    /// somebody has just watched is the exact fault being fixed. The legacy string is removed once
+    /// its contents have been carried across.
+    private static let stampedLifetime: TimeInterval = 48 * 3600
+    /// Where the stamped form lives, beside the legacy key rather than on top of it — an old build
+    /// reading this device would find its own key untouched rather than a dictionary it cannot parse.
+    static func stampedKey(_ key: String) -> String { key + ".at" }
+    /// ⚠️ CALLED WITH THE LOCK ALREADY HELD. It takes none of its own.
+    private static func stampedLocked(_ key: String) -> [String: Double] {
+        if let d = UserDefaults.standard.dictionary(forKey: stampedKey(key)) as? [String: Double] { return d }
+        let legacy = (UserDefaults.standard.string(forKey: key) ?? "")
+            .split(separator: " ").map(String.init)
+        guard !legacy.isEmpty else { return [:] }
+        let now = Date().timeIntervalSince1970
+        return Dictionary(legacy.map { ($0, now) }, uniquingKeysWith: { a, _ in a })
+    }
+    private static func stampedIds(_ key: String) -> Set<String> {
+        lock.lock(); defer { lock.unlock() }
+        if let c = cache[key] { return c }
+        let s = Set(stampedLocked(key).keys)
+        cache[key] = s
+        return s
+    }
+    private static func mutateStamped(_ key: String, _ change: (inout [String: Double]) -> Void) {
         lock.lock()
-        var arr = (UserDefaults.standard.string(forKey: key) ?? "").split(separator: " ").map(String.init)
-        change(&arr)
-        if arr.count > 1000 { arr.removeFirst(arr.count - 500) }
-        cache[key] = Set(arr)   // update cache synchronously → instant reads
+        var d = stampedLocked(key)
+        change(&d)
+        let cutoff = Date().timeIntervalSince1970 - stampedLifetime
+        d = d.filter { $0.value > cutoff }
+        cache[key] = Set(d.keys)   // update cache synchronously → instant reads
         lock.unlock()
-        UserDefaults.standard.set(arr.joined(separator: " "), forKey: key)
+        UserDefaults.standard.set(d, forKey: stampedKey(key))
+        UserDefaults.standard.removeObject(forKey: key)   // the legacy string is spent
     }
     // Per-STORY-ITEM seen state (drives the segmented ring: each arc greys as you view that story).
-    static func isStorySeen(_ id: String) -> Bool { set("seenStoryItems").contains(id) }
+    static func isStorySeen(_ id: String) -> Bool { stampedIds("seenStoryItems").contains(id) }
     static func markStorySeen(_ id: String) {
         guard !id.isEmpty, !isStorySeen(id) else { return }
-        mutateOrdered("seenStoryItems") { $0.append(id) }
+        mutateStamped("seenStoryItems") { $0[id] = Date().timeIntervalSince1970 }
     }
     // My own ❤️ on a story — persists so the heart is still red on reopen.
-    static func isStoryLiked(_ id: String) -> Bool { set("likedStories").contains(id) }
+    static func isStoryLiked(_ id: String) -> Bool { stampedIds("likedStories").contains(id) }
     static func setStoryLiked(_ id: String, _ liked: Bool) {
         guard !id.isEmpty else { return }
-        mutateOrdered("likedStories") { arr in
-            arr.removeAll { $0 == id }
-            if liked { arr.append(id) }
+        mutateStamped("likedStories") { d in
+            if liked { d[id] = Date().timeIntervalSince1970 } else { d[id] = nil }
         }
     }
     // seen flags for a bucket's stories (oldest→newest), for StoryRingView. A story is seen if I

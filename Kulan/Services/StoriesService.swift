@@ -302,6 +302,45 @@ enum StoryCountCache {
     }
 }
 
+/// ⛔ WHAT TIME IT IS ACCORDING TO THE SERVER, WHICH IS NOT ALWAYS WHAT THE PHONE THINKS.
+///
+/// A story's whole life is 24 hours, and every client-side judgement about whether one is still
+/// alive was `expiresAt > Date()`. A phone whose clock is wrong — set by hand, a flat battery, a bad
+/// timezone rollover — therefore hid stories that had hours left, or kept showing ones that were
+/// already gone. The server is never confused about this: the create rule pins `expiresAt` to within
+/// 30 hours of ITS clock and the sweeper deletes against ITS clock, so the phone is the only party
+/// that can disagree with everybody else.
+///
+/// ⚠️ THE ANCHOR IS THE AUTH TOKEN, and it is the cheapest true one available. A forced refresh
+/// mints a token on Google's servers at that moment, so `issuedAtDate` IS the server's clock — the
+/// difference against the local one is the phone's error, measured to within a round trip. Nothing
+/// is written, nothing is polled, and the SDK refreshes this token on its own schedule anyway.
+///
+/// ⚠️ IT FAILS TO ZERO. No token, no network, no answer: the offset stays nought and every reader
+/// behaves exactly as it did before. A correction that cannot be measured must never become one that
+/// is guessed.
+enum ServerClock {
+    private static let lock = NSLock()
+    private static var offset: TimeInterval = 0
+
+    /// Now, as the server would say it.
+    static var now: Date {
+        lock.lock(); defer { lock.unlock() }
+        return Date().addingTimeInterval(offset)
+    }
+
+    /// Learn the phone's error. Once per sign-in, off the main thread.
+    static func sync() async {
+        guard let user = Auth.auth().currentUser,
+              let result = try? await user.getIDTokenResult(forcingRefresh: true) else { return }
+        let delta = result.issuedAtDate.timeIntervalSince(Date())
+        // Under a couple of seconds is the round trip, not the clock. Ignoring it keeps `now` steady
+        // instead of moving by whatever the network did this launch.
+        guard abs(delta) > 2 else { return }
+        lock.lock(); offset = delta; lock.unlock()
+    }
+}
+
 @Observable
 final class StoriesService {
     static let shared = StoriesService()
@@ -474,8 +513,23 @@ final class StoriesService {
     /// repair afterwards and no way for him to find out. See `resolveAudience`.
     enum PostRefusal: LocalizedError {
         case audienceUnavailable
+        /// The edit would take a story people are currently watching down to no audience at all.
+        case audienceEmpty
+        /// Somebody else's story, or nobody's — the session went away mid-sheet.
+        case notMine
+        /// A one-time story's audience is spent as it is watched; see `updateStoryAudience`.
+        case oneTimeAudienceFrozen
         var errorDescription: String? {
-            "Couldn't load your chats, so this story would reach nobody. Check your connection and try again."
+            switch self {
+            case .audienceUnavailable:
+                "Couldn't load your chats, so this story would reach nobody. Check your connection and try again."
+            case .audienceEmpty:
+                "Nobody in that list can see this story any more. Pick another audience."
+            case .notMine:
+                "You're not signed in to the account that posted this story."
+            case .oneTimeAudienceFrozen:
+                "A one-time story keeps the audience it was sent to."
+            }
         }
     }
 
@@ -1077,8 +1131,25 @@ final class StoriesService {
                                         everyone: Bool, allowsReplies: Bool,
                                         tag: StoryAudienceTag) async throws {
         let me = uid
-        guard !me.isEmpty, story.authorUid == me, !story.oneTime else { return }
+        // ⚠️ IT THROWS RATHER THAN RETURNS. These three were a plain `return`, which the sheet reads
+        // as success: it dismissed with "Viewers updated" over a story whose audience had not moved.
+        // Signed out mid-sheet, or somehow reached on somebody else's story, and he would have been
+        // told the opposite of what happened.
+        guard !me.isEmpty, story.authorUid == me else { throw PostRefusal.notMine }
+        // A one-time story's audience is spent as it is watched — see the note above, and the rule
+        // that refuses it on the server whatever this does.
+        guard !story.oneTime else { throw PostRefusal.oneTimeAudienceFrozen }
         let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included)
+        // ⛔ AN EDIT MUST NOT QUIETLY AIM A LIVE STORY AT NOBODY. The post path refuses this case
+        // (`resolveAudience` throws when the chat list has not loaded); this one can still resolve to
+        // an empty set from a list whose members have all been blocked or have left. Posting to
+        // nobody is a valid state for a NEW story — it is still your own — but taking a story people
+        // are already watching and narrowing it to nobody, silently, is not something to do on a tap
+        // labelled Update. The sheet asks the same question before it gets here; this is the half
+        // that cannot be skipped by a caller.
+        if recipients.isEmpty, !everyone, story.recipientsLeft > 0 {
+            throw PostRefusal.audienceEmpty
+        }
         let docRef = db.collection("stories").document(story.id)
         // NARROWING TAKES THE MIRROR DOWN FIRST. If the document write then fails, a story that is
         // still public has lost its public copy, and that is the harmless direction to be wrong in.
@@ -1180,12 +1251,24 @@ final class StoriesService {
 
     // Remove my reaction from my view receipt (un-like) so the author's "Seen by" stops
     // showing a heart I took back.
+    /// ⚠️ `setData(merge:)`, NOT `updateData`, AND THE RECEIPT MAY GENUINELY NOT EXIST.
+    ///
+    /// `updateData` fails outright on a document that is not there, and `try?` swallowed it. A
+    /// receipt is missing more often than it looks: view receipts are a setting, and for months
+    /// every non-public story's receipt was refused outright by a rule still asking for a raw uid.
+    /// So un-liking could leave the heart cleared on this phone and still set on the author's list.
+    ///
+    /// Merging writes the view mark and takes the reaction off in one go, which is the truth either
+    /// way — the story WAS watched. Gated on the receipts setting for the same reason
+    /// `setStoryReaction` is: with receipts off there should be no receipt to correct.
     func clearStoryReaction(_ story: Story) async {
         let me = uid
         guard !me.isEmpty, story.authorUid != me else { return }
+        guard UserDefaults.standard.object(forKey: "storyViewReceipts") as? Bool ?? true else { return }
         try? await db.collection("stories").document(story.id)
             .collection("views").document(me)
-            .updateData(["reaction": FieldValue.delete()])
+            .setData(["viewedAt": FieldValue.serverTimestamp(),
+                      "reaction": FieldValue.delete()], merge: true)
     }
 
     /// THE COUNT WITHOUT THE LIST — one small document instead of every viewer receipt.
@@ -1590,7 +1673,7 @@ final class StoriesRepository {
         guard !me.isEmpty, !uid.isEmpty else { return }
         guard let snap = try? await db.collection("stories")
             .whereField("authorUid", isEqualTo: me).getDocuments() else { return }
-        let now = Date()
+        let now = ServerClock.now
         for doc in snap.documents {
             // Only live ones — expired docs are cleaned up on their own schedule.
             if let exp = (doc.data()["expiresAt"] as? Timestamp)?.dateValue(), exp <= now { continue }
@@ -1636,7 +1719,7 @@ final class StoriesRepository {
         // `limit`, so a daily poster's mirror collection grew without end and EVERY profile visit
         // paid a document read per mirror that had ever existed, then threw almost all of them away
         // in the filter below. The filter stays as the belt; the query is what stops the bill.
-        let now = Date()
+        let now = ServerClock.now
         let snap = try? await db.collection("users").document(uid)
             .collection("publicStories")
             .whereField("expiresAt", isGreaterThan: Timestamp(date: now))
@@ -1763,6 +1846,10 @@ final class StoriesRepository {
             // `StoriesService`, not `self` — this call site lives in `StoriesRepository`, and the
             // two share a file but not a type.
             Task.detached { await StoriesService.shared.sweepExpiredMirrors() }
+            // ⚠️ AND WHAT TIME THE SERVER THINKS IT IS, before anything is judged against it. Every
+            // expiry test on this device reads `ServerClock.now`; until this lands it is the phone's
+            // own clock, which is the behaviour we had. See `ServerClock`.
+            Task.detached { await ServerClock.sync() }
             await MainActor.run {
                 start(me)          // first call, or the signed-in user changed
             }
@@ -1794,7 +1881,7 @@ final class StoriesRepository {
     // listener snapshot, so the stories row renders on the first frame like the chat list does.
     @MainActor private func seedFromDisk(_ me: String) {
         guard mine == nil, others.isEmpty, let blob = StoryRowCache.load(uid: me) else { return }
-        let now = Date()
+        let now = ServerClock.now
         var m = blob.mine
         m?.stories.removeAll { $0.expiresAt <= now }
         mine = (m?.stories.isEmpty == false) ? m : nil
@@ -1899,7 +1986,7 @@ final class StoriesRepository {
                                        cachedProfiles: [String: (String, String?)])
 
     private func rebuild() async {
-        let now = Date()
+        let now = ServerClock.now
         // Claimed on the main actor with the inputs, so the number and the data it describes are
         // taken in the same hop and cannot disagree.
         var generation = 0

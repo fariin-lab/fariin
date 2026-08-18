@@ -207,7 +207,39 @@ service cloud.firestore {
       // no field may appear here that is not on the list, so a future bug cannot quietly start
       // mirroring the audience into a world-readable document.
       match /publicStories/{storyId} {
-        allow read: if signedIn();
+        /// The 1:1 conversation id for two people, which is how this project names them: the two
+        /// uids sorted and joined with an underscore (`ChatService.convId`).
+        function convWith(other) {
+          return request.auth.uid < other
+            ? request.auth.uid + '_' + other
+            : other + '_' + request.auth.uid;
+        }
+        // ⛔ A PERSON THE AUTHOR BLOCKED CANNOT READ THE MIRROR, AND THE APP WAS THE ONLY THING
+        // SAYING SO.
+        //
+        // `publicStoryGroup` checks `blockedBy` before it draws the ring — in Swift, on the reader's
+        // own device. The rule said `signedIn()`, so the check was advice: a blocked person with the
+        // document path, or any client that skips that branch, read the story anyway. It is the one
+        // surface in this app built for reach, which makes it the one place a block has to be
+        // enforced by the database.
+        //
+        // ⚠️ NO CONVERSATION READS AS NOT BLOCKED. A block is recorded on the shared conversation
+        // document; two people who have never spoken have no such document, and a missing document
+        // must not mean a missing story.
+        allow read: if signedIn() && (
+          request.auth.uid == uid
+          || !exists(/databases/$(database)/documents/conversations/$(convWith(uid)))
+          || get(/databases/$(database)/documents/conversations/$(convWith(uid)))
+               .data.get('blockedBy', {}).get(uid, false) != true
+        );
+        // ⛔ A MODERATOR CAN TAKE THE MIRROR DOWN, AND UNTIL NOW ONLY THE AUTHOR COULD.
+        //
+        // `stories/{id}` already allows a moderator to delete a reported story. This document is a
+        // SEPARATE copy in the author's own subcollection and its write rule named the author alone,
+        // so a moderator could remove the story everywhere except the one place a stranger reads it:
+        // the author's public profile. That is precisely the surface the story rules' own comment
+        // calls the App Store risk — the takedown looked complete and was not.
+        allow delete: if signedIn() && adminCan('moderate');
         allow write: if signedIn() && request.auth.uid == uid
           && (request.method == 'delete'
               // ⚠️ `blurThumb` HAS TO BE ON THIS LIST OR NOTHING IS MIRRORED AT ALL. The list is a
@@ -234,6 +266,45 @@ service cloud.firestore {
                      'captureProtected'])
                   && request.resource.data.authorUid == uid
                   && !isBanned()));
+      }
+
+      // ⛔ THE RATE-LIMIT COUNTER, AND ITS RULES ARE THE WHOLE OF WHY THE NUMBER MEANS ANYTHING.
+      //
+      // One document per limited action (`stories` today). It holds the window it is counting and
+      // how many have been done inside it, and the story create rule reads it — see `storyBudget`.
+      //
+      // It is the OWNER'S OWN document, so the only thing standing between it and a client that
+      // wants a bigger allowance is this rule. Three things are enforced and each closes one way of
+      // cheating:
+      //
+      //   • A window may only be OPENED at `request.time`, and only once the previous one has
+      //     actually expired. So the window cannot be moved forward to escape a full one.
+      //   • Inside a window the count may only go UP, and only by one. So it cannot be reset,
+      //     lowered, or held still while stories are posted.
+      //   • Nothing else may be written. A field the rule does not name is a field the rule cannot
+      //     reason about.
+      //
+      // Deleting is refused for the same reason a reset is: a deleted counter is an empty one, and
+      // the create rule treats a missing counter as "no limit known".
+      match /limits/{name} {
+        function windowLength() { return duration.value(1, 'h'); }
+        allow read: if signedIn() && request.auth.uid == uid;
+        allow create: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['windowStart', 'count'])
+          && request.resource.data.windowStart == request.time
+          && request.resource.data.count == 1;
+        allow update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['windowStart', 'count'])
+          && (
+               // Same window, one more.
+               (request.resource.data.windowStart == resource.data.windowStart
+                && request.resource.data.count == resource.data.count + 1)
+               // …or a fresh window, but only once the old one is genuinely spent.
+               || (request.resource.data.windowStart == request.time
+                   && request.resource.data.count == 1
+                   && resource.data.windowStart < request.time - windowLength())
+             );
+        allow delete: if false;
       }
 
       // Story distribution lists ("My Status" + custom lists) and per-user seen state.
@@ -768,6 +839,24 @@ service cloud.firestore {
         allow create: if signedIn()
           && request.auth.uid == request.resource.data.authorId
           && request.auth.uid in convData().users
+          // ⛔ "Allow replies" OFF NOW STOPS A REPLY, AND IT ONLY EVER HID OUR OWN BUTTON.
+          //
+          // A story reply is an ordinary 1:1 message carrying `replyTo.isStatus == true` and the
+          // story's id. `allowsReplies` was read in exactly one place — whether to draw the reply
+          // bar — so the author's switch was advice to our own UI and nothing else: any client could
+          // send the reply anyway, and it arrived quoting the story as though it had been invited.
+          // The reaction path was closed for the same reason months ago; this is the other half.
+          //
+          // ⚠️ AN EXPIRED STORY IS NOT A REFUSAL. The document is gone within 24 hours while a
+          // failed message can be retried after it, so a missing story reads as "no rule to apply"
+          // rather than as no. The quote already draws itself as expired in that case.
+          && (
+               request.resource.data.get('replyTo', {}).get('isStatus', false) != true
+               || !(request.resource.data.replyTo.id is string)
+               || !exists(/databases/$(database)/documents/stories/$(request.resource.data.replyTo.id))
+               || get(/databases/$(database)/documents/stories/$(request.resource.data.replyTo.id))
+                    .data.get('allowsReplies', true) == true
+             )
           // Announcement mode: when onlyAdminsSend is set, only admins may create messages.
           && (convData().get('onlyAdminsSend', false) == false
               || request.auth.uid in convData().get('admins', []))
@@ -973,8 +1062,33 @@ service cloud.firestore {
         // cannot. Reading is gated on the `moderate` permission, which nobody has by default.
         || adminCan('moderate')
       );
+      /// HOW MANY STORIES THIS ACCOUNT HAS POSTED IN THE CURRENT WINDOW — see
+      /// `users/{uid}/limits/{name}`, whose own rules are what make the number hard to fake.
+      function storyBudget() {
+        return get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/stories).data;
+      }
       allow create: if signedIn()
         && request.auth.uid == request.resource.data.authorUid
+        // ⛔ A CEILING ON HOW FAST STORIES CAN BE POSTED, AND IT FAILS OPEN ON PURPOSE.
+        //
+        // There was no limit of any kind: one loop in a client, ours or anybody's, could write
+        // stories until the project's quota ran out, and every one of them fans out to a thousand
+        // recipients.
+        //
+        // The counter lives at `users/{uid}/limits/stories` and its own write rule is where the
+        // teeth are: a window can only be opened when the last one has expired, and inside a window
+        // the count may only go up by one at a time. So the number cannot be reset or lowered by the
+        // client that owns it.
+        //
+        // ⚠️ MISSING OR EXPIRED READS AS ALLOWED, and that is deliberate rather than sloppy. This
+        // rule ships before the build that writes the counter, and an app that has never written one
+        // must not be an app that cannot post — that is an outage rather than a limit. What it stops
+        // is the case worth stopping: a client that IS counting, running away.
+        && (
+             !exists(/databases/$(database)/documents/users/$(request.auth.uid)/limits/stories)
+             || storyBudget().get('windowStart', request.time) < request.time - duration.value(1, 'h')
+             || storyBudget().get('count', 0) < 40
+           )
         // PUBLIC STORIES ARE BACK, on the owner's explicit order of 2026-08-06, and the rule that
         // refused them is gone with the audience option that was removed alongside it.
         //
@@ -1068,8 +1182,15 @@ service cloud.firestore {
         //     burned. `public` and `audienceLabel` are pinned with it, or the same story could be
         //     made public and read off the profile after its one view was gone.
         && request.resource.data.recipientUids.size() <= 1000
+        // ⚠️ A ONE-TIME STORY'S AUDIENCE MAY SHRINK, AND ONLY SHRINK. Pinning it outright was too
+        // strong and broke a real thing: `revokeAudience` takes a blocked person off every live
+        // story, and a one-time story needs that as much as any other. `hasAll` is a subset test —
+        // the OLD list must contain everything in the new one — so a name can be taken out and none
+        // can be put back, which is the whole of what "one view is spent" needs. The label and the
+        // public flag stay pinned with it, or the same story could be made readable off the profile
+        // after its single view was gone.
         && (resource.data.get('oneTime', false) == false
-            || (request.resource.data.recipientUids == resource.data.recipientUids
+            || (resource.data.recipientUids.hasAll(request.resource.data.recipientUids)
                 && request.resource.data.get('audienceLabel', '') == resource.data.get('audienceLabel', '')
                 && request.resource.data.get('public', false) == resource.data.get('public', false)))
         && (resource.data.get('mediaUrl', '') == ''
@@ -1130,9 +1251,27 @@ service cloud.firestore {
         // and somebody who reached an "Everyone" story from a profile is not in that list — so the
         // one audience whose entire purpose is reach was the one audience that could not measure it.
         // Their write was refused, silently, and the author's Seen-by never showed them.
+        // ⛔ THE AUDIENCE IS A LIST OF TOKENS, AND THIS CLAUSE WAS STILL ASKING FOR A RAW UID.
+        //
+        // When the audience was anonymised (`recipientUids` holds
+        // `sha256('fariin-audience-v1:' + uid)` per person) the story's own READ rule was moved to
+        // `audienceToken(...)`. This one, in the same file a hundred lines below, was not. So for
+        // every story that is not public — My Friends, a custom list, one-time — the viewer's
+        // receipt write has been DENIED, and denied silently: the client writes it with `try?`.
+        //
+        // What that cost, and it is not small: "Seen by" empty on every friends-only story, the view
+        // count stuck at zero, and the heart unable to land either (a reaction is a field on this
+        // same receipt, so a refused create refuses the reaction with it). Only "Everyone" stories
+        // kept working, through the `public` clause below — and stories posted before the audience
+        // was tokenised kept working too, which is exactly the 24 hours that would hide it from a
+        // test.
+        //
+        // Both forms are accepted: the raw one has to stay while stories written by an older build
+        // are still alive, the same migration the story read rule carries.
         allow create: if signedIn()
           && request.auth.uid == viewerUid
-          && (request.auth.uid in storyData().recipientUids
+          && (audienceToken(request.auth.uid) in storyData().recipientUids
+              || request.auth.uid in storyData().recipientUids
               || storyData().get('public', false) == true)
           && validReceipt() && reactionAllowed();
         allow update: if signedIn() && request.auth.uid == viewerUid
