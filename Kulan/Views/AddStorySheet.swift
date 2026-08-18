@@ -340,14 +340,6 @@ struct StoryLibraryPicker: View {
     /// number on the button.
     private var freshPicks: [PHAsset] { picked.filter { !initialIDs.contains($0.localIdentifier) } }
     @State private var tooMany = false
-    /// The tile being held down, if any. See `StoryPhotoPeek` — it exists only while the finger is
-    /// on it.
-    @State private var peeked: PHAsset?
-    /// ⚠️ A PEEK MUST NOT ALSO PICK. A tap and a long press on one view both resolve in SwiftUI, so
-    /// letting go after a look would tick the photo — or, in the create flow, open the editor on it.
-    /// Raised when a press becomes a peek, spent by the tap that follows it, and cleared at the start
-    /// of the next press so it can never sit true and swallow a real one.
-    @State private var suppressTap = false
     /// A batch where some, or all, of the ticks would not resolve: an iCloud original that will not
     /// come down, or a video whose file cannot be exported. The count so the notice can say how many
     /// were lost, and the ones that DID resolve so they still go through when he taps OK. Handing
@@ -460,21 +452,6 @@ struct StoryLibraryPicker: View {
             // race it through PhotoKit for the tab nobody is looking at; `load()` chains it once the
             // grid has its list. See both.
             .task { store.load(); seedFromPost() }
-        }
-        // OVER EVERYTHING, INCLUDING A PUSHED ALBUM. Outside the `NavigationStack` on purpose: an
-        // overlay inside it would be covered by the album grid the stack pushes, and a photo held
-        // down inside an album deserves the same look as one held down in the main grid.
-        //
-        // ⚠️ `allowsHitTesting(false)` IS LOAD-BEARING. The finger is still down on the tile
-        // underneath while this is up — that is the whole interaction — so a peek that could take a
-        // touch would swallow the release the gesture is waiting for and the preview would never go
-        // away.
-        .overlay {
-            if let peeked {
-                StoryPhotoPeek(asset: peeked, store: store)
-                    .allowsHitTesting(false)
-                    .transition(.opacity.combined(with: .scale(scale: 0.86)))
-            }
         }
         // ALWAYS DARK, like every story surface (owner's standing rule). On the picker itself so
         // every presentation — the camera's library button and both editors' + — is dark without
@@ -826,61 +803,59 @@ struct StoryLibraryPicker: View {
                     .padding(5)
                 }
             }
-            // ⚠️ HOLD TO LOOK, RELEASE TO PUT IT BACK — his 2026-08-18 ask, in both pickers,
-            // because both pickers are this one view (the camera's library button and the caption
-            // bar's +).
+            .onTapGesture { pick(asset) }
+            // ⚠️ THE SYSTEM'S OWN LIFT, NOT A HAND-BUILT ONE — his 2026-08-18 correction, with the
+            // All Media page named as the thing to copy: "use swift longpress for apple native
+            // preview, not custom".
             //
-            // `perform` fires when the press has been held long enough; `onPressingChanged(false)`
-            // fires when the finger comes off OR when it travels past `maximumDistance`, which is
-            // the second half of what he asked for ("dismiss naturally when I release or move my
-            // finger away") and is also what keeps a scroll a scroll: a flick past a tile moves
-            // further than 12pt long before 0.3s is up, so the grid still scrolls under a dragging
-            // thumb and nothing is peeked.
+            // The first attempt was a long-press gesture raising a full-screen overlay of my own, and
+            // he was right about it: whatever it is dressed as, a picture over a hand-made blur is not
+            // the iOS lift. `.contextMenu` hands the whole interaction to UIKit — the press timing,
+            // the lift, the parallax, the platter, the dismissal, the haptic — which is exactly what
+            // the All Media grid he pointed at is already using, one line, in this same app.
             //
-            // ⚠️ IT IS NOT A `contextMenu`, AND THAT IS THE POINT RATHER THAN A SHORTCUT. Apple's
-            // context menu preview STAYS after the finger lifts and has to be tapped away, because it
-            // is a menu; he asked for the picker's peek, which lives exactly as long as the press.
-            // The look is theirs — material behind, the picture on a continuous corner, one spring in
-            // and out, a medium tap when it opens.
+            // `preview:` is what makes it worth doing here. Without it the lift shows the TILE, and a
+            // tile in a four-column grid is a thumbnail; with it, the same gesture shows the picture
+            // at a size worth inspecting, which was the whole point of the request.
             //
-            // The identity check on the way out matters: two tiles can be pressed in quick
-            // succession, and the first one's release must not take the second one's peek down.
-            .onLongPressGesture(minimumDuration: 0.3, maximumDistance: 12) {
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                suppressTap = true
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { peeked = asset }
-            } onPressingChanged: { pressing in
-                if pressing { suppressTap = false; return }
-                guard peeked?.localIdentifier == asset.localIdentifier else { return }
-                withAnimation(.spring(response: 0.26, dampingFraction: 0.9)) { peeked = nil }
-            }
-            .onTapGesture {
-                // The look is not the pick — see `suppressTap`.
-                if suppressTap { suppressTap = false; return }
-                // In multi mode a tap only ticks. Nothing is resolved, nothing is handed over and
-                // the sheet does not move until Add.
-                if allowsMultiple { toggle(asset); return }
-                if asset.mediaType == .video {
-                    guard !loadingVideo else { return }
-                    // TEN MINUTES IS THE CEILING (owner's spec). Under it, any length is fine — a
-                    // long video becomes several 90-second stories on its own. Over it, say so
-                    // BEFORE the iCloud download rather than after somebody waits for it.
-                    guard asset.duration <= Double(Limits.storyVideoPickSeconds) + 1 else {
-                        tooLongVideo = true
-                        return
-                    }
-                    loadingVideo = true
-                    Task {
-                        let url = await store.videoURL(asset)
-                        loadingVideo = false
-                        if let url { onVideo(url, asset.localIdentifier) }
-                    }
-                } else {
-                    Task {
-                        if let ui = await store.fullImage(asset) { onImage(ui, asset.localIdentifier) }
-                    }
+            // The one action on the platter is the tap this tile already does, so the menu can never
+            // disagree with the grid about what picking means.
+            .contextMenu {
+                Button { pick(asset) } label: {
+                    Label(allowsMultiple ? "Select" : "Add to Story", systemImage: "plus.circle")
                 }
+            } preview: {
+                StoryPhotoPreview(asset: asset, store: store)
             }
+    }
+
+    /// ONE PICK, TWO DOORS — the tile's tap and the lift's own button. Extracted rather than copied so
+    /// the menu cannot drift from the grid: the five-item ceiling, the ten-minute video refusal and
+    /// the multi-select tick all live here and are answered the same way whichever door was used.
+    private func pick(_ asset: PHAsset) {
+        // In multi mode a tap only ticks. Nothing is resolved, nothing is handed over and
+        // the sheet does not move until Add.
+        if allowsMultiple { toggle(asset); return }
+        if asset.mediaType == .video {
+            guard !loadingVideo else { return }
+            // TEN MINUTES IS THE CEILING (owner's spec). Under it, any length is fine — a
+            // long video becomes several 90-second stories on its own. Over it, say so
+            // BEFORE the iCloud download rather than after somebody waits for it.
+            guard asset.duration <= Double(Limits.storyVideoPickSeconds) + 1 else {
+                tooLongVideo = true
+                return
+            }
+            loadingVideo = true
+            Task {
+                let url = await store.videoURL(asset)
+                loadingVideo = false
+                if let url { onVideo(url, asset.localIdentifier) }
+            }
+        } else {
+            Task {
+                if let ui = await store.fullImage(asset) { onImage(ui, asset.localIdentifier) }
+            }
+        }
     }
 
     private func durationLabel(_ s: TimeInterval) -> String {
@@ -913,54 +888,50 @@ struct StoryThumb: View {
     }
 }
 
-/// A PHOTO HELD UNDER A THUMB, SHOWN LARGE — the picker's peek.
+/// THE PICTURE THE SYSTEM LIFT SHOWS — `.contextMenu(preview:)` on every tile in the picker.
 ///
-/// It exists only while `StoryLibraryPicker.peeked` is set, which is only while the press is on, so
-/// there is no dismissal to write: the gesture that raised it takes it away. Everything here is
-/// about what is drawn.
+/// Everything about the interaction belongs to UIKit: the press, the lift, the parallax, the platter
+/// and the way it goes away. This is only what is drawn inside it.
 ///
-/// ⚠️ THE SAME STREAM THE GRID'S TILES USE, and that is what makes it appear at once rather than
-/// after a request. `thumbnails` is `.opportunistic`: PhotoKit answers immediately with whatever it
-/// has cached — usually the very tile that is being held — and then again with the sharp one. Asking
-/// for `fullImage` instead would be one high-quality request with nothing to show until it lands,
-/// which on an iCloud original is a grey rectangle for as long as the finger is down.
+/// ⚠️ IT SIZES ITSELF FROM THE ASSET, NOT FROM THE IMAGE THAT HAS NOT ARRIVED YET. A context-menu
+/// preview is measured ONCE, when the lift begins, so a view that starts empty and grows when its
+/// picture lands would be lifted as a small box and then have a photograph drawn into it. `PHAsset`
+/// carries `pixelWidth`/`pixelHeight` synchronously, so the box is the right shape from the first
+/// frame and only the pixels arrive late.
 ///
-/// A VIDEO PEEKS TOO, at its poster frame. `requestImage` answers for a video asset the same way it
-/// answers for a photo, so nothing here has to know the difference; the duration badge is the grid's
-/// job and stays there.
-private struct StoryPhotoPeek: View {
+/// ⚠️ THE SAME OPPORTUNISTIC STREAM THE TILES USE, which is what makes it appear at once: PhotoKit
+/// answers immediately with whatever it has cached — usually the very tile being held — and again
+/// with the sharp one. A `fullImage` request would leave the lift empty until it lands, which on an
+/// iCloud original is the whole time the finger is down. A video previews at its poster frame through
+/// the same call.
+private struct StoryPhotoPreview: View {
     let asset: PHAsset
     let store: PhotoGridStore
     @State private var image: UIImage?
 
+    /// Big enough to be worth looking at, and inside the screen on both axes so iOS never has to
+    /// shrink the platter to fit it.
+    private var box: CGSize {
+        let screen = UIScreen.main.bounds
+        let wide = min(screen.width - 40, 360)
+        let tall = min(screen.height * 0.62, 560)
+        let pw = max(1, CGFloat(asset.pixelWidth)), ph = max(1, CGFloat(asset.pixelHeight))
+        let ratio = pw / ph
+        // Fit the asset's own shape into that box, whichever edge binds first.
+        return wide / tall > ratio
+            ? CGSize(width: max(80, tall * ratio), height: tall)
+            : CGSize(width: wide, height: max(80, wide / ratio))
+    }
+
     var body: some View {
         ZStack {
-            // Their peek dims and blurs what is behind rather than blacking it out, so the grid is
-            // still legibly there and the picture reads as lifted off it rather than as a new screen.
-            Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
-            GeometryReader { geo in
-                ZStack {
-                    if let image {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFit()
-                            // Its own shape, never a fixed one: a tall photograph and a wide one are
-                            // both held to the same box and each keeps what it is.
-                            .frame(maxWidth: geo.size.width * 0.86,
-                                   maxHeight: geo.size.height * 0.74)
-                            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                            .shadow(color: .black.opacity(0.45), radius: 30, y: 12)
-                    } else {
-                        ProgressView().controlSize(.large).tint(.white)
-                    }
-                }
-                .frame(width: geo.size.width, height: geo.size.height)
-            }
+            Color.black
+            if let image { Image(uiImage: image).resizable().scaledToFill() }
         }
+        .frame(width: box.width, height: box.height)
+        .clipped()
         .task(id: asset.localIdentifier) {
             image = nil
-            // Big enough to be worth looking at and no bigger: the screen's own pixels. A full-size
-            // original would be decoded at 12MP to be drawn at a fraction of it.
             let side = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * UIScreen.main.scale
             for await img in store.thumbnails(asset, size: CGSize(width: side, height: side)) {
                 image = img
