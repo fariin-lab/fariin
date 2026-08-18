@@ -246,10 +246,86 @@ struct StoryMoreMenu: UIViewRepresentable {
 
     let items: [Item]
 
+    /// ⚠️ WHAT THE MENU IS MADE OF, AS ONE COMPARABLE STRING, AND IT IS THE WHOLE REASON THE MENU
+    /// WAS DEAD.
+    ///
+    /// His 2026-08-18 report: the dropdown opens and shows the right three entries, and tapping any
+    /// of them does nothing at all.
+    ///
+    /// `updateUIView` reassigned `b.menu` every single time it ran, and it runs on every re-render of
+    /// the story page — which is TWENTY TIMES A SECOND, because the progress bar advances on a 0.05s
+    /// tick and the header is redrawn with it. So for the whole time the dropdown was open, the
+    /// button's menu was being replaced underneath the presented copy, and the `UIAction` the finger
+    /// eventually landed on belonged to a `UIMenu` that had been thrown away several frames earlier.
+    /// Nothing was wrong with the actions, the notifications or the host's handlers; the menu the
+    /// user was looking at simply was not the button's menu any more.
+    ///
+    /// ⚠️ AND `Item` CANNOT BE `Equatable`, WHICH IS WHY THIS IS A STRING. It carries a closure, so
+    /// the compiler cannot synthesise equality and SwiftUI cannot skip the update for us. Everything
+    /// the menu actually DRAWS is in here; the closures are deliberately left out, because a fresh
+    /// closure every render is exactly the thing that must stop forcing a rebuild.
+    private var signature: String {
+        items.map { "\($0.title)|\($0.subtitle ?? "")|\($0.systemImage)|\($0.destructive)" }
+            .joined(separator: "\u{1F}")
+    }
+
+    final class Coordinator {
+        var signature: String?
+        /// The pause this menu owns, so it is released exactly once and only by the menu that took it.
+        var pausedForMenu = false
+        var closeObservers: [NSObjectProtocol] = []
+
+        /// ⚠️ THE STORY STOPS WHILE THE DROPDOWN IS UP — his ask, and the note on the host's own
+        /// `pauseStory` handler already said this was meant to happen ("Host shows/hides a sheet over
+        /// the viewer (viewers list, share, menu)"). The menu was the one of those three that never
+        /// posted it, so the bar kept running and the story kept advancing behind an open menu.
+        func pause() {
+            guard !pausedForMenu else { return }
+            pausedForMenu = true
+            NotificationCenter.default.post(name: .pauseStory, object: nil)
+            // ⚠️ THERE IS NO "MENU DISMISSED" CALLBACK ON A `UIButton` MENU, and inventing one by
+            // overriding the private context-menu delegate is not worth a story that freezes if a
+            // future iOS stops calling it. A presented menu lives in its OWN window, so the two
+            // public window notifications below both mark the moment it goes away: whichever
+            // arrives first releases the pause and both observers come down.
+            //
+            // ⚠️ AND IF NEITHER EVER ARRIVES, NOTHING IS STRANDED. `tapNextStory` and
+            // `tapPreviousStory` clear the host pause themselves now — a finger on the story is
+            // proof no menu is over it. That belt is what makes this safe to do at all.
+            let release: (Notification) -> Void = { [weak self] _ in self?.resume() }
+            for name in [UIWindow.didBecomeHiddenNotification, UIWindow.didBecomeKeyNotification] {
+                closeObservers.append(NotificationCenter.default.addObserver(
+                    forName: name, object: nil, queue: .main, using: release))
+            }
+        }
+
+        func resume() {
+            guard pausedForMenu else { return }
+            pausedForMenu = false
+            closeObservers.forEach { NotificationCenter.default.removeObserver($0) }
+            closeObservers.removeAll()
+            NotificationCenter.default.post(name: .resumeStory, object: nil)
+        }
+
+        deinit { resume() }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeUIView(context: Context) -> UIButton {
         let b = UIButton(type: .custom)
         b.showsMenuAsPrimaryAction = true
         b.backgroundColor = .clear
+        // ⚠️ TWO DOORS ONTO "THE MENU IS COMING UP", BECAUSE ONLY ONE OF THEM IS GUARANTEED.
+        // `.menuActionTriggered` is the documented event for a button whose primary action is its
+        // menu; `.touchDown` fires as the finger lands, which is a frame or two earlier and covers
+        // the case where the first event does not arrive. `pause()` is idempotent, so both firing
+        // costs nothing. The two outside-touch events undo a `.touchDown` that never became a menu.
+        let coordinator = context.coordinator
+        b.addAction(UIAction { _ in coordinator.pause() }, for: .menuActionTriggered)
+        b.addAction(UIAction { _ in coordinator.pause() }, for: .touchDown)
+        b.addAction(UIAction { _ in coordinator.resume() }, for: .touchUpOutside)
+        b.addAction(UIAction { _ in coordinator.resume() }, for: .touchCancel)
         // ⚠️ ALL FOUR PRIORITIES DROPPED, AND IT IS THE TAP TARGET THAT DEPENDS ON IT. A
         // `UIButton` with no title and no image has a tiny intrinsic size, and SwiftUI sizes a
         // representable from that unless the view says it will take whatever it is given — so the
@@ -259,21 +335,35 @@ struct StoryMoreMenu: UIViewRepresentable {
             b.setContentHuggingPriority(.defaultLow, for: axis)
             b.setContentCompressionResistancePriority(.defaultLow, for: axis)
         }
-        b.menu = menu
+        b.menu = menu(context.coordinator)
+        context.coordinator.signature = signature
         return b
     }
 
     func updateUIView(_ b: UIButton, context: Context) {
-        // Rebuilt rather than mutated: the audience under "Edit viewers" changes when the story on
-        // screen does, and a `UIMenu` cannot have its children edited in place.
-        b.menu = menu
+        // ⚠️ ONLY WHEN THE MENU HAS ACTUALLY CHANGED, AND THE GUARD IS THE FIX. A `UIMenu` cannot
+        // have its children edited in place, so a genuine change still means a fresh one — but this
+        // ran on every re-render, and the story page re-renders twenty times a second while the
+        // progress bar moves. Replacing the menu under a menu that is currently OPEN is what made
+        // every entry in it dead. See `signature`.
+        //
+        // The audience line under "Edit viewers" is the one thing here that legitimately changes
+        // while the viewer is up, and it is in the signature, so it still updates.
+        guard context.coordinator.signature != signature else { return }
+        context.coordinator.signature = signature
+        b.menu = menu(context.coordinator)
     }
 
-    private var menu: UIMenu {
+    private func menu(_ coordinator: Coordinator) -> UIMenu {
         UIMenu(title: "", children: items.map { item in
             let action = UIAction(title: item.title,
                                   image: UIImage(systemName: item.systemImage),
                                   attributes: item.destructive ? .destructive : []) { _ in
+                // The menu is gone the moment an entry is chosen, so the pause it took is released
+                // here as well as by the window notifications. What happens NEXT is the host's
+                // business: a sheet it opens posts its own pause, and Save leaves the story running,
+                // which is what picking Save should do.
+                coordinator.resume()
                 item.action()
             }
             // Set rather than passed to the initialiser: `subtitle` is a plain property on

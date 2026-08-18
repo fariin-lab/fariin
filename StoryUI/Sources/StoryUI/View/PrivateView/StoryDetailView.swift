@@ -2054,6 +2054,16 @@ private extension StoryDetailView {
         if isPaused || isHolding { isPaused = false; isHolding = false; syncVideoMode() }
         configureTapScreen()
         guard !isTapDisabled else { return }
+        // ⚠️ A TAP ON THE STORY IS PROOF NO HOST OVERLAY IS OVER IT, so the host's own pause comes
+        // down here too. It sits BELOW `isTapDisabled`, which is what makes it safe: while the
+        // viewers sheet is engaged taps are disabled and never reach this line, so that sheet's
+        // pause cannot be cleared out from under it.
+        //
+        // This is the belt for the "…" dropdown. A `UIButton` menu has no dismissal callback, so the
+        // menu releases its pause on two public window notifications and could in principle miss
+        // both — and a missed release used to mean the bar advanced on the tap and then froze for
+        // good, because nothing but `resumeStory` ever cleared `hostPause`. Now the next tap heals it.
+        if hostPause.paused { hostPause.paused = false; syncVideoMode() }
         // A POISONED PROGRESS IS RECOVERED HERE, not trapped on. Same reason as `getCurrentIndex`:
         // `Int(_:)` kills the process on infinity or NaN. Found by auditing the 463 crash rather than
         // by another report — these three sites had the identical hazard and only the layout one had
@@ -2076,6 +2086,7 @@ private extension StoryDetailView {
         if isPaused || isHolding { isPaused = false; isHolding = false; syncVideoMode() }   // see tapNextStory
         configureTapScreen()
         guard !isTapDisabled else { return }
+        if hostPause.paused { hostPause.paused = false; syncVideoMode() }   // see tapNextStory
         if !timerProgress.isFinite { timerProgress = 0 }   // see tapNextStory
         if (timerProgress - 1) < 0 {
             guard !isAdvancing else { return }
