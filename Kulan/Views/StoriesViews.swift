@@ -2453,7 +2453,16 @@ struct StoryViewer: View {
         // line. What changes is that the closed door is now visible instead of being an empty strip.
         .overlay(alignment: .bottom) {
             if !currentIsMine, let reason = replyLockReason {
-                Text(reason)
+                // ⚠️ APPLE'S SYMBOL, NOT THE EMOJI — his 2026-08-18 "dont use emoji icon use apple
+                // icon lock". A 🔒 inside the string is a colour glyph from whatever font the system
+                // reaches for: it ignores the text's weight, keeps its own yellow whatever the label
+                // is dimmed to, and cannot be aligned to the cap height. `lock.fill` is drawn as part
+                // of the label instead, so it takes the same size, the same opacity and the same
+                // baseline as the words next to it, and it dims with them.
+                HStack(spacing: 6) {
+                    Text(reason)
+                    Image(systemName: "lock.fill")
+                }
                     .font(.system(size: 16))
                     .foregroundStyle(.white.opacity(0.55))
                     .frame(maxWidth: .infinity)
@@ -2941,13 +2950,26 @@ struct StoryViewer: View {
     /// is built from (`storyType` in `libraryStories`), so the pill can never appear next to a bar
     /// or leave the slot empty — those two staying in step is the whole point of reading them here
     /// rather than re-deciding.
+    /// The one line the locked reply bar shows, whichever refusal it is. His words, and a typographic
+    /// apostrophe because this is a sentence rather than code.
+    private static let replyLocked = "You can’t reply to this story"
+
     private var replyLockReason: String? {
         guard !currentIsMine else { return nil }          // my own story has the owner bar instead
-        guard deliveredToMe || StoryContact.isFriend(currentBucketUid) else {
-            return "You can only reply to people you chat with 🔒"
-        }
+        // ⚠️ ONE SENTENCE FOR BOTH REFUSALS, ON HIS 2026-08-18 WORD, AND THE LOCK IS NO LONGER IN IT.
+        //
+        // It read "You can only reply to people you chat with 🔒", which explains the app's rule to
+        // somebody who did not ask about it and is a mouthful on one line. His replacement says the
+        // only thing the reader needs: this story cannot be replied to. Whether that is the author's
+        // reply switch or the audience they chose is the app's business, not the reader's.
+        //
+        // ⚠️ AND THE EMOJI IS GONE FROM THE STRING. A 🔒 is a colour glyph from whatever font the
+        // system picks, so it does not match the text's weight, does not take the text's colour, and
+        // cannot be tinted with it. The bar draws `lock.fill` beside this now — see the call site —
+        // which is Apple's own symbol, sized to the text and dimmed with it.
+        guard deliveredToMe || StoryContact.isFriend(currentBucketUid) else { return Self.replyLocked }
         guard currentStory?.allowsReplies == false else { return nil }   // a real bar is showing
-        return "You can't reply to this story 🔒"
+        return Self.replyLocked
     }
 
     /// Tell the world which person is on screen. Called at the open and on every change of person.
