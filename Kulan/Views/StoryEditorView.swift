@@ -2103,16 +2103,42 @@ struct StoryEditorView: View {
             HStack(spacing: 22) {
                 // UNDO IS THE HANDLES, NOT THE SCREEN. It puts this sitting's cut back to where the
                 // page opened, which is the only edit the page makes — so it is the pen's undo with
-                // this screen's one kind of change, and it lights only when there is something to
-                // undo. Leaving is still ✕'s job.
+                // this screen's one kind of change. Leaving is still ✕'s job.
+                //
+                // ⛔ IT IS DISABLED WHEN THERE IS NOTHING TO UNDO, AND THE NOTE THAT USED TO SIT HERE
+                // CLAIMED THAT AND DID NOT DO IT — his 2026-08-18 report, "Undo works when I have not
+                // made any change, and using it without a change freezes the video".
+                //
+                // `active:` is the TINT and only the tint. The button underneath was live either way,
+                // so with the handles untouched a tap ran the whole body: two writes that changed
+                // nothing, a pause, and a zero-tolerance seek back to `trimStart`.
+                //
+                // That seek is the freeze, and it got worse this morning rather than better. The page
+                // opens on the frame he was WATCHING now (see `openTrim`), so `trimStart` is usually
+                // not where the picture is — an "undo" with nothing to undo threw away his position
+                // and asked the decoder for an exact frame it had no reason to fetch. A precise seek
+                // is the expensive kind: the renderer flushes and decodes forward from the previous
+                // keyframe, and this screen has already paid for that once (`seekInFlight`).
+                //
+                // ⚠️ AND EVEN WHEN THERE IS SOMETHING TO UNDO, THE SEEK IS ONLY ASKED FOR IF THE START
+                // MOVED. Dragging the END handle and undoing it leaves the first frame exactly where
+                // it was, so there is nothing to seek to — the same rule `openTrim` follows.
                 capsuleTool("arrow.uturn.backward",
-                            active: trimStart != trimOpenedStart || trimEnd != trimOpenedEnd,
+                            active: canUndoTrim,
                             tint: Color(hex: 0x3DA1FD)) {
+                    guard canUndoTrim else { return }
+                    let startMoved = trimStart != trimOpenedStart
                     trimStart = trimOpenedStart
                     trimEnd = trimOpenedEnd
                     previewPlayer?.pause(); previewPlaying = false
+                    guard startMoved else { return }
+                    lastScrubSeconds = trimStart
+                    // The white line follows by hand: the periodic observer only writes it while time
+                    // is MOVING, and the clip has just been paused. See `openTrim`.
+                    trimPlayhead.seconds = trimStart
                     seekPreview(to: trimStart, precise: true)
                 }
+                .disabled(!canUndoTrim)
                 // The composer's mute, reachable from the screen that needs it. Same two lines as
                 // the top bar's copy, including the one that tells the PLAYER — a flag that only
                 // reaches the export is a button that looks dead while you are listening to it.
@@ -2147,6 +2173,15 @@ struct StoryEditorView: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    /// Is there a cut to put back? The page's only edit is where the two handles are, so this is the
+    /// whole of what Undo can mean — and it gates the button as well as tinting it, which is the half
+    /// that was missing. A hair of tolerance because a handle drag lands on a float: two positions
+    /// that differ by a thousandth of a second are the same cut, and treating them as different is
+    /// how a button that should be dead stays live.
+    private var canUndoTrim: Bool {
+        abs(trimStart - trimOpenedStart) > 0.001 || abs(trimEnd - trimOpenedEnd) > 0.001
     }
 
     private func openTrim() {
