@@ -123,7 +123,10 @@ final class StoryViewersPanelView: UIView {
         // indicator) resolve from the interface style and came out light-on-light without it.
         overrideUserInterfaceStyle = .dark
         backgroundColor = UIColor(white: 0.10, alpha: 1)
-        layer.cornerRadius = 24
+        // Apple's sheet corner, one number for both of this app's hand-built sheets — see
+        // `Theme.sheetCorner`. It was a 24 of this panel's own while the sticker tray next door
+        // stood at 32, and 24 is what he circled.
+        layer.cornerRadius = Theme.sheetCorner
         layer.cornerCurve = .continuous
         layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
         clipsToBounds = true

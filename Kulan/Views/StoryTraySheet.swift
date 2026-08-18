@@ -97,8 +97,10 @@ final class StoryTrayContainerVC: UIViewController {
     /// closely enough that the change of presentation does not read as a change of design.
     private static let dimAlpha: CGFloat = 0.35
     /// The top corners. The system sheet drew a device-matched radius; 32 continuous is that shape
-    /// at this size, and it is the only number here that is judged rather than carried across.
-    private static let corner: CGFloat = 32
+    /// at this size, and it is the only number here that was judged rather than carried across.
+    /// It lives in `Theme.sheetCorner` now — the viewers panel is the other hand-built sheet in this
+    /// app and it was answering the same question with a different number.
+    private static let corner: CGFloat = Theme.sheetCorner
 
     init(rootView: AnyView, heightFraction: CGFloat, onDismissed: @escaping () -> Void) {
         self.hosting = UIHostingController(rootView: rootView)

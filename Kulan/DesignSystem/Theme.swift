@@ -48,6 +48,20 @@ enum Theme {
     // text/glyphs read well on both.
     static func defaultBubble(_ dark: Bool) -> Color { dark ? Color(hex: 0x0A84FF) : Color(hex: 0x007AFF) }
     static let secondary = Color(hex: 0x8E8E93)
+
+    /// ⚠️ THE TOP CORNER OF A PANEL THAT STANDS IN FOR A SYSTEM SHEET, AND THERE IS ONE OF IT.
+    ///
+    /// This app draws its own sheets in two places — the viewers panel and the sticker tray — because
+    /// the system's own presentation could not do what each needed. Both then have to answer the same
+    /// question, "what does an Apple sheet's corner look like", and answering it twice is how they
+    /// drifted: the tray was judged at 32 against the device-matched radius the system drew for it,
+    /// while the viewers panel kept a 24 from before any of that, which is his 2026-08-18 "story
+    /// viewer sheet corners, please use apple rounded corners" with both top corners circled.
+    ///
+    /// Continuous, not circular, and that is the half the number does not say. Apple's own sheet
+    /// corner is a squircle; the STORY CARD's is a circle, measured off his reference the same day —
+    /// two different shapes for two different things, both deliberate.
+    static let sheetCorner: CGFloat = 32
 }
 
 enum AvatarPalette {
