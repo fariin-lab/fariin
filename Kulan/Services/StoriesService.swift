@@ -733,9 +733,15 @@ final class StoriesService {
         let me = uid
         guard !me.isEmpty else { return }
         try Task.checkCancellation()   // bail before any write if the user already cancelled
-        // Counted before the document is written, because the rule reads the counter as it stands
-        // when the create arrives. See `countStoryAgainstBudget`.
-        await countStoryAgainstBudget()
+        // ⚠️ COUNTED ALONGSIDE THE POST, NEVER IN FRONT OF IT. This is a read and a write against a
+        // document nobody is waiting for, and awaiting it would put a whole round trip between his
+        // tap and the first byte of his photograph — on the one path in this feature where he has
+        // complained about delay more than any other.
+        //
+        // The cost of not waiting is that a burst can be counted a little late, and the create rule
+        // then reads a number lower than the truth. That direction is already the designed one: the
+        // limit exists to stop a runaway loop, and it fails open everywhere else for the same reason.
+        Task.detached { [weak self] in await self?.countStoryAgainstBudget() }
         let storyId = UUID().uuidString
         let path = "stories/\(storyId)/photo.jpg"   // {storyId}/ segment so Storage rules can audience-scope reads
 
@@ -1043,7 +1049,7 @@ final class StoriesService {
         await markSending()
         try Task.checkCancellation()
 
-        await countStoryAgainstBudget()   // see `countStoryAgainstBudget`
+        Task.detached { [weak self] in await self?.countStoryAgainstBudget() }   // never in front of the post
         let storyId = UUID().uuidString
         let videoPath = "stories/\(storyId)/video.mp4"
         let thumbPath = "stories/\(storyId)/thumb.jpg"
