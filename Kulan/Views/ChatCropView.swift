@@ -312,8 +312,8 @@ struct ChatCropView: View {
                     // rather than in the scaled picture's own. `.offset` draws, it does not lay out,
                     // so the `.position` below still seats the picture on its true crop rect and this
                     // only moves what is drawn there back onto the card for the length of the flight.
-                    .offset(width: entryOffset.width + exitOffset.width,
-                            height: entryOffset.height + exitOffset.height)
+                    .offset(x: entryOffset.width + exitOffset.width,
+                            y: entryOffset.height + exitOffset.height)
                     .position(x: flightWindow.midX, y: flightWindow.midY)
                 // Slide the picture: in the dimmed part, because inside the frame a one-finger drag
                 // belongs to the frame and always has. Below the crop's own views in this stack, so
