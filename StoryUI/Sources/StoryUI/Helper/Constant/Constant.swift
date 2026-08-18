@@ -46,10 +46,14 @@ enum Constant {
     /// are. Apple's `.continuous` corner — the shape every icon, sheet and card on the system wears
     /// — eases curvature in and out instead, which is the whole of what "smooth" means here.
     ///
-    /// ⚠️ THE NUMBER IS UNTOUCHED, ON HIS INSTRUCTION, and it is worth knowing what that costs: a
-    /// continuous corner at a given radius spreads its curve about 1.5× further along each edge than
-    /// a circle at the same radius, so the same 16 reads a little more generous. That is the trade he
-    /// asked for. If it ever reads as too big, the fix is this number and not the style.
+    /// ⚠️ 18, AND THE NUMBER IS HIS — 2026-08-18, all four corners circled: "increase slightly,
+    /// they are a little too small". I reached for 20 and he said 18, so 18 it is. The style change
+    /// earlier that day had left the number where it was on his own instruction; with the smoother
+    /// curve actually on screen he wanted a little more of it.
+    ///
+    /// Worth knowing before anybody nudges it again: a continuous corner spreads its curve about
+    /// 1.5× further along each edge than a circle at the same radius, so two points here read as
+    /// three on the old shape. This is the one number to move; the style is settled.
     ///
     /// ⚠️ 16, NOT 15, AND IT WAS MEASURED AGAIN. He put his own card beside theirs — "not smooth
     /// like snapchat" — and the two photographs settle it: ours fits a circle of 38.4px against
@@ -59,7 +63,7 @@ enum Constant {
     /// The media view and the page were BOTH cutting the same curve, and two antialiased edges on one
     /// arc multiply their coverage, so the boundary pixels came out at a quarter strength and the
     /// curve read as hard and slightly ragged. One mask cuts it now.
-    static let cardCornerRadius: CGFloat = 16
+    static let cardCornerRadius: CGFloat = 18
 
     enum UserView {
         static let hStackSpace: CGFloat = 13
