@@ -340,6 +340,14 @@ struct StoryLibraryPicker: View {
     /// number on the button.
     private var freshPicks: [PHAsset] { picked.filter { !initialIDs.contains($0.localIdentifier) } }
     @State private var tooMany = false
+    /// The tile being held down, if any. See `StoryPhotoPeek` — it exists only while the finger is
+    /// on it.
+    @State private var peeked: PHAsset?
+    /// ⚠️ A PEEK MUST NOT ALSO PICK. A tap and a long press on one view both resolve in SwiftUI, so
+    /// letting go after a look would tick the photo — or, in the create flow, open the editor on it.
+    /// Raised when a press becomes a peek, spent by the tap that follows it, and cleared at the start
+    /// of the next press so it can never sit true and swallow a real one.
+    @State private var suppressTap = false
     /// A batch where some, or all, of the ticks would not resolve: an iCloud original that will not
     /// come down, or a video whose file cannot be exported. The count so the notice can say how many
     /// were lost, and the ones that DID resolve so they still go through when he taps OK. Handing
@@ -452,6 +460,21 @@ struct StoryLibraryPicker: View {
             // race it through PhotoKit for the tab nobody is looking at; `load()` chains it once the
             // grid has its list. See both.
             .task { store.load(); seedFromPost() }
+        }
+        // OVER EVERYTHING, INCLUDING A PUSHED ALBUM. Outside the `NavigationStack` on purpose: an
+        // overlay inside it would be covered by the album grid the stack pushes, and a photo held
+        // down inside an album deserves the same look as one held down in the main grid.
+        //
+        // ⚠️ `allowsHitTesting(false)` IS LOAD-BEARING. The finger is still down on the tile
+        // underneath while this is up — that is the whole interaction — so a peek that could take a
+        // touch would swallow the release the gesture is waiting for and the preview would never go
+        // away.
+        .overlay {
+            if let peeked {
+                StoryPhotoPeek(asset: peeked, store: store)
+                    .allowsHitTesting(false)
+                    .transition(.opacity.combined(with: .scale(scale: 0.86)))
+            }
         }
         // ALWAYS DARK, like every story surface (owner's standing rule). On the picker itself so
         // every presentation — the camera's library button and both editors' + — is dark without
@@ -803,7 +826,37 @@ struct StoryLibraryPicker: View {
                     .padding(5)
                 }
             }
+            // ⚠️ HOLD TO LOOK, RELEASE TO PUT IT BACK — his 2026-08-18 ask, in both pickers,
+            // because both pickers are this one view (the camera's library button and the caption
+            // bar's +).
+            //
+            // `perform` fires when the press has been held long enough; `onPressingChanged(false)`
+            // fires when the finger comes off OR when it travels past `maximumDistance`, which is
+            // the second half of what he asked for ("dismiss naturally when I release or move my
+            // finger away") and is also what keeps a scroll a scroll: a flick past a tile moves
+            // further than 12pt long before 0.3s is up, so the grid still scrolls under a dragging
+            // thumb and nothing is peeked.
+            //
+            // ⚠️ IT IS NOT A `contextMenu`, AND THAT IS THE POINT RATHER THAN A SHORTCUT. Apple's
+            // context menu preview STAYS after the finger lifts and has to be tapped away, because it
+            // is a menu; he asked for the picker's peek, which lives exactly as long as the press.
+            // The look is theirs — material behind, the picture on a continuous corner, one spring in
+            // and out, a medium tap when it opens.
+            //
+            // The identity check on the way out matters: two tiles can be pressed in quick
+            // succession, and the first one's release must not take the second one's peek down.
+            .onLongPressGesture(minimumDuration: 0.3, maximumDistance: 12) {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                suppressTap = true
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) { peeked = asset }
+            } onPressingChanged: { pressing in
+                if pressing { suppressTap = false; return }
+                guard peeked?.localIdentifier == asset.localIdentifier else { return }
+                withAnimation(.spring(response: 0.26, dampingFraction: 0.9)) { peeked = nil }
+            }
             .onTapGesture {
+                // The look is not the pick — see `suppressTap`.
+                if suppressTap { suppressTap = false; return }
                 // In multi mode a tap only ticks. Nothing is resolved, nothing is handed over and
                 // the sheet does not move until Add.
                 if allowsMultiple { toggle(asset); return }
@@ -855,6 +908,62 @@ struct StoryThumb: View {
                 for await img in store.thumbnails(asset, size: CGSize(width: side, height: side)) {
                     image = img
                 }
+            }
+        }
+    }
+}
+
+/// A PHOTO HELD UNDER A THUMB, SHOWN LARGE — the picker's peek.
+///
+/// It exists only while `StoryLibraryPicker.peeked` is set, which is only while the press is on, so
+/// there is no dismissal to write: the gesture that raised it takes it away. Everything here is
+/// about what is drawn.
+///
+/// ⚠️ THE SAME STREAM THE GRID'S TILES USE, and that is what makes it appear at once rather than
+/// after a request. `thumbnails` is `.opportunistic`: PhotoKit answers immediately with whatever it
+/// has cached — usually the very tile that is being held — and then again with the sharp one. Asking
+/// for `fullImage` instead would be one high-quality request with nothing to show until it lands,
+/// which on an iCloud original is a grey rectangle for as long as the finger is down.
+///
+/// A VIDEO PEEKS TOO, at its poster frame. `requestImage` answers for a video asset the same way it
+/// answers for a photo, so nothing here has to know the difference; the duration badge is the grid's
+/// job and stays there.
+private struct StoryPhotoPeek: View {
+    let asset: PHAsset
+    let store: PhotoGridStore
+    @State private var image: UIImage?
+
+    var body: some View {
+        ZStack {
+            // Their peek dims and blurs what is behind rather than blacking it out, so the grid is
+            // still legibly there and the picture reads as lifted off it rather than as a new screen.
+            Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
+            GeometryReader { geo in
+                ZStack {
+                    if let image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            // Its own shape, never a fixed one: a tall photograph and a wide one are
+                            // both held to the same box and each keeps what it is.
+                            .frame(maxWidth: geo.size.width * 0.86,
+                                   maxHeight: geo.size.height * 0.74)
+                            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                            .shadow(color: .black.opacity(0.45), radius: 30, y: 12)
+                    } else {
+                        ProgressView().controlSize(.large).tint(.white)
+                    }
+                }
+                .frame(width: geo.size.width, height: geo.size.height)
+            }
+        }
+        .task(id: asset.localIdentifier) {
+            image = nil
+            // Big enough to be worth looking at and no bigger: the screen's own pixels. A full-size
+            // original would be decoded at 12MP to be drawn at a fraction of it.
+            let side = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height) * UIScreen.main.scale
+            for await img in store.thumbnails(asset, size: CGSize(width: side, height: side)) {
+                image = img
             }
         }
     }
