@@ -2286,6 +2286,49 @@ struct StoryEditorView: View {
     /// full bleed. ChatCropView paints its own black to the edges and places its X and its Done with
     /// `safeAreaInset`, so telling it to ignore the safe area drove the top bar under the clock.
     /// Inline, it sits in this screen's own safe area exactly as it does inside the chat.
+    /// WHERE THE PICTURE ACTUALLY IS ON SCREEN, in global points — the rectangle the crop screen
+    /// opens out of and lands back on.
+    ///
+    /// ⚠️ IT IS NOT `cardRect`. The card is the 9:16 frame; the picture is aspect-fit INSIDE it and
+    /// then carries his own framing. `ZoomableImageView` draws it with a `UIImageView` pinned to the
+    /// card, `contentMode = .scaleAspectFit`, under `translate(photoOffset) · scale(photoZoom)` — and
+    /// a UIView's transform is about its own centre, so the drawn picture is the fitted rectangle
+    /// scaled by the zoom and moved by the pan. That is what this rebuilds, in the same order.
+    ///
+    /// ⚠️ `croppedSource ?? current` IS THE SAME IMAGE THE CROP SCREEN IS HANDED, and it has to be:
+    /// the aspect the flight is measured from must be the aspect of the picture that flies, or a
+    /// re-crop would start from a rectangle of the wrong shape.
+    ///
+    /// Nil while the card has not been measured, which is the same "no rect, no flight" the crop
+    /// screen already understands — the chat editor and media approval reach it that way every time.
+    private var photoRectOnScreen: CGRect? {
+        guard cardRect.width > 1, cardRect.height > 1 else { return nil }
+        let img = (croppedSource ?? current).size
+        guard img.width > 1, img.height > 1 else { return nil }
+        let fit = min(cardRect.width / img.width, cardRect.height / img.height)
+        let w = img.width * fit * photoZoom
+        let h = img.height * fit * photoZoom
+        let shown = CGRect(x: cardRect.midX + photoOffset.width - w / 2,
+                           y: cardRect.midY + photoOffset.height - h / 2,
+                           width: w, height: h)
+        // ⚠️ A PICTURE THAT COVERS THE CARD ANSWERS WITH THE CARD, and that is not a hedge.
+        //
+        // Most pictures here are framed past the edges — `restoreCurrent` opens a portrait photo at
+        // its fill zoom, so the drawn rectangle is genuinely larger than the card and the card is
+        // clipping it. What he can SEE in that case is a card-shaped window onto the picture, and the
+        // window's centre IS the card's centre, so the card is the honest rectangle to fly from and
+        // there was never a jump in that case. Handing the raw rectangle instead would open the
+        // flight on more picture than the card was showing — a reveal at the first frame, which is a
+        // new fault in place of the one being fixed.
+        //
+        // The case he photographed is the other one: a picture that does NOT cover the card sits in a
+        // band of it, high or low, while the card's centre is somewhere else entirely. There the
+        // picture's own rectangle is the only one that means anything.
+        let coversCard = shown.minX <= cardRect.minX + 0.5 && shown.minY <= cardRect.minY + 0.5
+            && shown.maxX >= cardRect.maxX - 0.5 && shown.maxY >= cardRect.maxY - 0.5
+        return coversCard ? cardRect : shown
+    }
+
     @ViewBuilder private var cropOverlay: some View {
         if showCrop {
             // From the CURRENT cropped result when there is one, so re-opening crop refines instead
@@ -2308,7 +2351,24 @@ struct StoryEditorView: View {
                          // THE PICTURE THIS SCREEN IS OPENING OUT OF, and the corner it is wearing
                          // while it does. Their presenter hands the same two things over before it
                          // presents; see the note on `ChatCropView.initialContentRect`.
-                         initialContentRect: cardRect == .zero ? nil : cardRect,
+                         // ⛔ THE PICTURE'S RECTANGLE, NOT THE CARD'S — his 2026-08-18 "the image is
+                         // first moved to the center of the screen, and only then does the zoom-out
+                         // begin … start it from the image's current position, even if that position
+                         // is near the top".
+                         //
+                         // This was `cardRect`, the whole 9:16 card. The picture inside it is
+                         // aspect-FIT and then carries the framing he set with two fingers, so the two
+                         // rectangles are the same only for a photograph that happens to fill the card
+                         // at zoom 1. Every other picture sits in a band of that card — high, low or
+                         // small — and the flight began by drawing it at the CARD's size and on the
+                         // CARD's centre. That is the move to the middle he is describing, and it
+                         // happens in one frame because it is where the flight STARTS rather than
+                         // something it animates. Done then ran it backwards: zoom home to the card's
+                         // centre, then a step to where the picture really lives.
+                         //
+                         // Handed the picture's own rectangle, the flight starts and ends exactly
+                         // where the picture is and the whole transition is one scale.
+                         initialContentRect: photoRectOnScreen,
                          initialCornerRadius: 40) { cropped in
                 croppedSource = cropped
                 recomputeEdited()
