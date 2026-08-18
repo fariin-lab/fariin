@@ -1050,7 +1050,32 @@ public final class StoryCardMorph {
         // whole reason stands; by the time an open's cover has started dissolving, the ack has long
         // since landed and `capped == wanted` anyway.
         let coverIsOpaque = !sheet && (flightCover.map { !$0.isHidden && $0.alpha >= 0.999 } ?? false)
-        let unconfirmed = !circular && !sheet && !cardClipIsDown && !coverIsOpaque
+        // ⛔ AND THE CAP BELONGS TO A LEAVING FLIGHT ONLY. His 2026-08-18 report, which is the third
+        // sighting of these corners and the one that names the case: square white corners around the
+        // row card for about a tenth of a second, ON THE FIRST OPEN ONLY, never on a close.
+        //
+        // Read `f` before deciding this is arbitrary. `wantedRadius` ramps from `cardCornerRadius` at
+        // f = 0 to `rowRadius` at f = 1, so f = 0 is the FULL-SCREEN end and f = 1 is the ROW end. A
+        // drag starts at 0 and climbs; an open starts at 1 and falls. The cap is
+        // `min(wanted, cardCornerRadius * scale)`, which in the card's own space is exactly the
+        // card's own clip — the right answer near f = 0, where the two curves are millimetres apart
+        // and the note above this is about that crescent.
+        //
+        // ⚠️ NEAR f = 1 THE SAME EXPRESSION IS THE BUG. `scale` there is the row card over the
+        // screen, about a fifth, so the cap collapses to three or four points against a `wanted` of
+        // the row's own 24 — a nearly SQUARE mask laid over the rounded row card, and the wedge
+        // between them shows whatever the flight holds: the story page, whose ground is white in
+        // light mode and black in dark. Both of his screenshots, one expression.
+        //
+        // Only the first open, and that is the last piece: `StoryZoomPresenter` photographs the row
+        // card to make the cover, and when there is nothing to photograph yet "that open flew bare"
+        // (its words). No cover ⇒ `coverIsOpaque` false ⇒ the cap held. Every later open has the
+        // cover `retargetCover` built, which released it — which is why one fix for the tap case
+        // looked complete and this survived under it.
+        //
+        // A leaving flight keeps every bit of the old behaviour: its dangerous frames are its first
+        // ones, at f = 0, which is the end the cap was written for.
+        let unconfirmed = !circular && !sheet && exiting && !cardClipIsDown && !coverIsOpaque
         let capped = unconfirmed ? min(wanted, cardCornerRadius * scale) : wanted
         let flightRadius = capped * (circular ? scale : 1)
         applyMask(on: card, sheet: sheet, rect: cropRect,
