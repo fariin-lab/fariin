@@ -211,6 +211,27 @@ struct StoryEditorView: View {
     @State private var trimPlayhead: Double = 0
     @State private var trimScrub: Double?
     @State private var trimDragging = false
+    /// ⛔ THE SEEK SERIALISER, AND IT IS WHY THE CLIP FROZE AFTER A SECOND TRIM.
+    ///
+    /// Every scrub of the trim strip fired `seek(toleranceBefore: .zero, toleranceAfter: .zero)`
+    /// STRAIGHT AT THE PLAYER, one per drag frame. A zero-tolerance seek is the expensive kind: it
+    /// cannot answer with a nearby keyframe, so the renderer flushes and decodes forward from the
+    /// previous sync sample every single time. Issued faster than they complete, they queue, and the
+    /// VIDEO renderer never settles long enough to put a frame on screen — while the audio, already
+    /// buffered and running on its own clock, plays straight through. That is his report word for
+    /// word: sound continues, frames stop, and it "suddenly starts playing again" the moment the
+    /// backlog drains.
+    ///
+    /// It is worse on the second trim because nothing clears between them: the storm from the first
+    /// scrub is still unwinding when the second `openTrim` adds another precise seek on top of it.
+    ///
+    /// Apple's own answer to this is QA1820 — never have more than one seek in flight, remember only
+    /// the LATEST target, and issue it when the current one finishes. That is exactly what these two
+    /// hold, and `seekPreview` is the only door to the player's seek now.
+    @State private var seekInFlight = false
+    @State private var pendingSeek: (time: CMTime, precise: Bool)?
+    /// Where the finger last asked for, so lifting it can land one exact seek. See `seekPreview`.
+    @State private var lastScrubSeconds: Double?
     @State private var cropRect: CGRect? = nil   // live crop as a rectangle — see DraftItem.cropRect
     // Our own pen palette, the same three controls ChatImageEditor drives PencilKit with. Defaults
     // match it too, so a pen is a pen wherever you pick one up in this app.
@@ -1532,6 +1553,37 @@ struct StoryEditorView: View {
         return p
     }
 
+    /// The ONE door to this screen's seeking — see `seekInFlight` for what going straight to the
+    /// player cost.
+    ///
+    /// ⚠️ `precise` IS NOT A DETAIL. A seek under a moving finger only has to look right, and a
+    /// tolerance lets the decoder answer from a nearby sample immediately, which is what makes a
+    /// scrub feel attached to the thumb. The seek that has to be EXACT is the one that lands when the
+    /// finger lifts, and the frame he cuts on is that one. So the old comment's rule — "a scrub that
+    /// lands on somewhere near is a scrub you cannot trust to cut on" — is kept where it is true and
+    /// dropped where it was only costing frames.
+    private func seekPreview(to seconds: Double, precise: Bool) {
+        guard let p = ensurePreviewPlayer() else { return }
+        pendingSeek = (CMTime(seconds: max(0, seconds), preferredTimescale: 600), precise)
+        guard !seekInFlight else { return }   // the one in flight will pick up the latest when it lands
+        drainSeeks(p)
+    }
+
+    private func drainSeeks(_ p: AVPlayer) {
+        guard let next = pendingSeek else { seekInFlight = false; return }
+        pendingSeek = nil
+        seekInFlight = true
+        // 0.12s is under four frames at 30fps and invisible while a thumb is moving; the exact one
+        // follows it the moment the thumb stops.
+        let tol: CMTime = next.precise ? .zero : CMTime(seconds: 0.12, preferredTimescale: 600)
+        p.seek(to: next.time, toleranceBefore: tol, toleranceAfter: tol) { _ in
+            // The completion's queue is not documented, and everything below it is `@State`.
+            DispatchQueue.main.async {
+                if pendingSeek != nil { drainSeeks(p) } else { seekInFlight = false }
+            }
+        }
+    }
+
     private func togglePreview() {
         guard let p = ensurePreviewPlayer() else { return }
         if previewPlaying { p.pause() } else { p.play() }
@@ -1918,10 +1970,18 @@ struct StoryEditorView: View {
             // The strip reports where the finger is; the clip goes there. `.zero` tolerance because a
             // scrub that lands on "somewhere near" is a scrub you cannot trust to cut on.
             .onChange(of: trimScrub) { _, t in
-                guard let t, let p = ensurePreviewPlayer() else { return }
-                p.pause(); previewPlaying = false
-                p.seek(to: CMTime(seconds: t, preferredTimescale: 600),
-                       toleranceBefore: .zero, toleranceAfter: .zero)
+                guard let t else { return }
+                previewPlayer?.pause(); previewPlaying = false
+                lastScrubSeconds = t
+                // Tolerant while the finger owns it, exact the moment it lets go — see `seekPreview`
+                // and the note on `seekInFlight`.
+                seekPreview(to: t, precise: !trimDragging)
+            }
+            // The exact frame lands here, once, on the release. Without it a scrub would leave the
+            // picture up to a tenth of a second away from the cut it is about to make.
+            .onChange(of: trimDragging) { _, dragging in
+                guard !dragging, let t = lastScrubSeconds else { return }
+                seekPreview(to: t, precise: true)
             }
         }
     }
@@ -1963,11 +2023,8 @@ struct StoryEditorView: View {
                             tint: Color(hex: 0x3DA1FD)) {
                     trimStart = trimOpenedStart
                     trimEnd = trimOpenedEnd
-                    if let p = ensurePreviewPlayer() {
-                        p.pause(); previewPlaying = false
-                        p.seek(to: CMTime(seconds: trimStart, preferredTimescale: 600),
-                               toleranceBefore: .zero, toleranceAfter: .zero)
-                    }
+                    previewPlayer?.pause(); previewPlaying = false
+                    seekPreview(to: trimStart, precise: true)
                 }
                 // The composer's mute, reachable from the screen that needs it. Same two lines as
                 // the top bar's copy, including the one that tells the PLAYER — a flag that only
@@ -2033,11 +2090,12 @@ struct StoryEditorView: View {
         // Building it here takes the choice away: the trim screen renders through the player for
         // every clip, first or fifth. It also seeks to the cut's own start, so the frame you are
         // cutting on is on screen the moment the screen opens rather than after the first drag.
-        if let p = ensurePreviewPlayer() {
-            p.pause()
-            p.seek(to: CMTime(seconds: trimStart, preferredTimescale: 600),
-                   toleranceBefore: .zero, toleranceAfter: .zero)
-        }
+        ensurePreviewPlayer()?.pause()
+        // Through the serialiser like every other seek on this screen. Opening trim a SECOND time
+        // used to add a precise seek on top of a queue the first trim's scrub had not finished
+        // draining, which is the exact moment his clip froze — see `seekInFlight`.
+        lastScrubSeconds = trimStart
+        seekPreview(to: trimStart, precise: true)
         withAnimation(.easeInOut(duration: 0.28)) { showTrim = true }
     }
 
