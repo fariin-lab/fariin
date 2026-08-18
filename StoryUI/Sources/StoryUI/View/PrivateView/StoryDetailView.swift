@@ -1186,6 +1186,8 @@ private extension StoryDetailView {
         // PER ITEM, like the audience pill beside it: a tray holds several stories and only some of
         // them can have their viewers changed. See `Story.canEditAudience`.
         let canEditAudience = getStoryOrNil(with: index)?.canEditAudience ?? false
+        // Per item too: one tray can hold a public story and a friends-only one. See `Story.isPublicStory`.
+        let isPublicStory = getStoryOrNil(with: index)?.isPublicStory ?? false
         let name = model.user.name
         let image = model.user.image
         VStack {
@@ -1214,6 +1216,7 @@ private extension StoryDetailView {
                 showMore: showMore,
                 isMyStory: model.isMine,
                 canEditAudience: canEditAudience,
+                isPublicStory: isPublicStory,
                 isPresented: $isPresented
             )
         }

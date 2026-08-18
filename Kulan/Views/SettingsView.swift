@@ -1247,19 +1247,28 @@ struct StorySettingsView: View {
             if !optedOut {
                 Section {
                     ForEach(audiences.all) { a in
-                        if a.kind == .everyone {
-                            // FIXED, and it does not pretend otherwise (owner's rule: "Everyone
-                            // cannot be edited"). No chevron, no destination, nothing to tap.
-                            StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
-                        } else if a.kind == .myFriends {
-                            NavigationLink { MyFriendsPrivacyView() } label: {
-                                StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
-                            }
-                        } else {
-                            NavigationLink { CustomStoryDetailView(audienceId: a.id) } label: {
-                                StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
+                        Group {
+                            if a.kind == .everyone {
+                                // ⚠️ IT OPENS NOW. The audience is still fixed — "Everyone cannot be
+                                // edited" was his own rule and stands — but the page behind it edits
+                                // the SEPARATE hidden list, which is not a property of any audience
+                                // and applies to all of them. See `EveryonePrivacyView`.
+                                NavigationLink { EveryonePrivacyView() } label: {
+                                    StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
+                                }
+                            } else if a.kind == .myFriends {
+                                NavigationLink { MyFriendsPrivacyView() } label: {
+                                    StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
+                                }
+                            } else {
+                                NavigationLink { CustomStoryDetailView(audienceId: a.id) } label: {
+                                    StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
+                                }
                             }
                         }
+                        // The share sheet's row height, from the row itself so the two lists cannot
+                        // drift — see `StoryAudienceRow.insets`.
+                        .listRowInsets(StoryAudienceRow<EmptyView>.insets)
                     }
                 } header: {
                     HStack {

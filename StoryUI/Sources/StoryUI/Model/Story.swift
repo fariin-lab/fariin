@@ -108,6 +108,14 @@ public struct Story: Identifiable, Hashable {
     /// the option from being offered in the first place.
     public var canEditAudience: Bool = false
 
+    /// ⚠️ WAS THIS STORY POSTED TO EVERYONE — the host's answer, and the only thing the "…" menu
+    /// uses it for is whether to offer Share.
+    ///
+    /// His 2026-08-18 rule: Share belongs to a story anybody can already reach. A story sent to My
+    /// Friends or to a named list was chosen to be narrow, and handing it out of the app is the one
+    /// move that undoes that choice for good.
+    public var isPublicStory: Bool = false
+
     public init(id: String = UUID().uuidString,
                 mediaURL: String,
                 previewURL: String? = nil,
@@ -122,6 +130,7 @@ public struct Story: Identifiable, Hashable {
                 audience: StoryAudienceBadge? = nil,
                 isCaptureProtected: Bool = false,
                 canEditAudience: Bool = false,
+                isPublicStory: Bool = false,
                 config: StoryConfiguration) {
 
         self.id = id
@@ -139,6 +148,7 @@ public struct Story: Identifiable, Hashable {
         self.isSeen = isSeen
         self.isCaptureProtected = isCaptureProtected
         self.canEditAudience = canEditAudience
+        self.isPublicStory = isPublicStory
         // (Removed `Constant.storySecond = duration` — mutating a global per-instance leaked the
         //  last story's duration into the default for any story built without an explicit one.)
     }

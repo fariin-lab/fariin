@@ -24,6 +24,8 @@ struct UserView: View {
     var isMyStory: Bool = false    // my own story → Delete (red) instead of Hide Stories; no Forward
     /// Offer "Edit viewers" on this story. The host decides — see `Story.canEditAudience`.
     var canEditAudience: Bool = false
+    /// Was it posted to Everyone. Decides whether Share is offered — see `Story.isPublicStory`.
+    var isPublicStory: Bool = false
 
     @Binding var isPresented: Bool
 
@@ -42,18 +44,19 @@ struct UserView: View {
 
     /// WHAT THE "…" OFFERS, in the order he drew it.
     ///
-    /// SAVE, FORWARD AND SHARE ARE MINE-ONLY. All three take somebody else's story OFF this app
-    /// permanently, and a story is a promise that it is gone in 24 hours. Save puts it in their
-    /// camera roll, Forward puts it in another chat, and Share is the worst of the three because it
-    /// hands the picture straight to another app or Messages. The author is never told any of it
-    /// happened.
+    /// SAVE AND SHARE ARE MINE-ONLY. Both take a story OFF this app permanently, and a story is a
+    /// promise that it is gone in 24 hours: Save puts it in a camera roll and Share hands the picture
+    /// straight to another app. The author is never told either happened.
     ///
-    /// The standard messengers do not offer any of the three on another person's story. The
-    /// reference app does, but only when the author switched it on for that story. Nobody sells it
-    /// as a paid feature (owner asked, 2026-08-05).
+    /// The standard messengers do not offer them on another person's story. The reference app does,
+    /// but only when the author switched it on for that story. Nobody sells it as a paid feature
+    /// (owner asked, 2026-08-05).
     ///
-    /// Forward used to be `!isMyStory`, which was exactly backwards. Screenshots still exist, and
-    /// that is fine: this is about not building the door.
+    /// ⚠️ FORWARD IS GONE, on his 2026-08-18 instruction. It put the picture into another chat
+    /// inside this app — which sounds gentler than Share and is not: the copy that lands in a chat
+    /// does not expire in 24 hours, so forwarding a story quietly turned an ephemeral thing into a
+    /// permanent one, and the author was never told. Share survives, narrowed to the one audience
+    /// where it costs nothing — see below.
     ///
     /// No Delete on my own story — the owner bar already has a trash button, so it lived in two
     /// places. Others' stories keep Hide Stories and Report (App Store 1.2; the host files the doc).
@@ -62,9 +65,6 @@ struct UserView: View {
         if isMyStory {
             out.append(.init(title: "Save", systemImage: "square.and.arrow.down") {
                 NotificationCenter.default.post(name: .init("storyActionSave"), object: nil)
-            })
-            out.append(.init(title: "Forward", systemImage: "arrowshape.turn.up.right") {
-                NotificationCenter.default.post(name: .init("storyActionForward"), object: nil)
             })
             // ⚠️ THE SECOND LINE IS THE AUDIENCE THIS STORY ACTUALLY WENT TO, and it is the same
             // string the pill under the name is showing — `storyAudienceTitle` on the host side, which
@@ -76,9 +76,18 @@ struct UserView: View {
                     NotificationCenter.default.post(name: .init("storyActionEditViewers"), object: nil)
                 })
             }
-            out.append(.init(title: "Share", systemImage: "square.and.arrow.up") {
-                NotificationCenter.default.post(name: .init("storyActionShare"), object: nil)
-            })
+            // ⛔ SHARE ONLY ON A STORY ANYBODY CAN ALREADY REACH — his 2026-08-18 rule, and it is
+            // the same reasoning that took Forward off this menu entirely.
+            //
+            // A story sent to My Friends or to a named list was chosen to be narrow. Share hands the
+            // picture straight out of the app, where the audience the author picked means nothing and
+            // nobody can take it back — so the one audience it belongs to is the one that is already
+            // public. Forward had the same shape with none of the excuse, so it is gone.
+            if isPublicStory {
+                out.append(.init(title: "Share", systemImage: "square.and.arrow.up") {
+                    NotificationCenter.default.post(name: .init("storyActionShare"), object: nil)
+                })
+            }
         } else {
             out.append(.init(title: "Hide Stories", systemImage: "eye.slash") {
                 NotificationCenter.default.post(name: .init("storyActionHide"), object: nil)

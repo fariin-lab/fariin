@@ -1565,6 +1565,10 @@ struct StoryViewer: View {
                         // one still uploading, which has no document to write to yet. See
                         // `Story.canEditAudience` and `StoriesService.updateStoryAudience`.
                         canEditAudience: g.isMine && !s.oneTime && !StoriesService.isPending(s.id),
+                        // WAS IT POSTED TO EVERYONE. Only the Share entry reads it, and only on my
+                        // own story — see `Story.isPublicStory`. A one-time story is never public
+                        // whatever its label says, so it is excluded here rather than in the menu.
+                        isPublicStory: s.audienceLabel == "everyone" && !s.oneTime,
                         config: StoryConfiguration(
                             // My own story shows NO reply bar (owner bar is overlaid instead).
                             // NO REPLY BAR FOR A STRANGER'S PUBLIC STORY (L3). A story reply is an

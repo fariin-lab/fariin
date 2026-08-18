@@ -363,7 +363,10 @@ struct ShareStorySheet: View {
     /// ⚠️ HORIZONTAL IS MEASURED OFF HIS SCREENSHOT, NOT GUESSED AT THE DEFAULT. `listRowInsets`
     /// replaces all four, so naming only the vertical pair would shift every avatar and every tick
     /// sideways. 16 is where they already sit.
-    private static let audienceRowInsets = EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16)
+    /// ⚠️ THE NUMBER LIVES ON THE ROW NOW, not here, because the settings list draws the same row
+    /// and had kept the grouped list's own 15pt — his 2026-08-18 "make it less, like the share
+    /// sheet". One source, two lists. See `StoryAudienceRow.insets`.
+    private static let audienceRowInsets = StoryAudienceRow<EmptyView>.insets
 
     /// The home indicator's strip. `postButton` is a bottom safe-area inset, so it sits ABOVE this
     /// and the sheet needs the room for both.

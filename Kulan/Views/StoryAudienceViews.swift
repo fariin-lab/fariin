@@ -58,6 +58,15 @@ struct StoryContact: Identifiable, Equatable {
 /// The audience row every list uses: the badge, the title, the grey line, and whatever the caller
 /// puts on the right. One row, so the share sheet and Settings cannot drift apart.
 struct StoryAudienceRow<Trailing: View>: View {
+    /// ⚠️ ONE ROW HEIGHT FOR EVERY LIST THAT DRAWS THIS ROW — his 2026-08-18 "in stories settings
+    /// Everyone / My Friends / customs has more space, make it less, like the share sheet".
+    ///
+    /// The share sheet trimmed these to 8pt above and below on his instruction months ago; the
+    /// settings list kept the grouped list's own padding, which measures about 15 — a 44pt row
+    /// sitting in a 74pt slot. Four audiences is most of a row's worth of screen spent on nothing.
+    /// The number lives here, on the row itself, so the two lists cannot drift apart again.
+    static var insets: EdgeInsets { EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16) }
+
     let audience: StoryAudience
     let contacts: Set<String>
     @ViewBuilder var trailing: Trailing
@@ -312,6 +321,78 @@ struct NameStoryView: View {
 ///
 /// This is the reference app's own story-privacy page and it is the ONLY built-in that can be edited — the
 /// owner's rule is that Everyone is fixed.
+/// ⛔ EVERYONE OPENS NOW, AND WHAT IT HOLDS IS THE ONE LIST THAT APPLIES WHATEVER YOU PICK.
+///
+/// His 2026-08-18 ask, with the row circled: "Everyone is locked — add Hide Story From; when I
+/// select someone that person never sees my story".
+///
+/// The audience itself is still fixed and still cannot be edited, which was his own earlier rule:
+/// Everyone means everyone, and a version of it with people carved out would be a custom list under
+/// another name. What this page edits is the SEPARATE hidden list — `StoryAudienceStore.hiddenFrom`
+/// — which is not a property of any one audience. It says "not this person, ever", and
+/// `recipients(contacts:)` subtracts it for every audience including this one, which is exactly the
+/// behaviour he described.
+///
+/// ⚠️ IT REACHES BACKWARDS AS WELL AS FORWARDS. `setHidden` also takes the person off every story
+/// that is already up (see its own note), so hiding somebody is not just a rule for the next post.
+///
+/// The picker is answered on Done rather than per tap: a half-made selection must not start
+/// revoking stories while he is still choosing who to revoke.
+struct EveryonePrivacyView: View {
+    @State private var store = StoryAudienceStore.shared
+    @State private var contacts: [StoryContact] = []
+    @State private var picking = false
+    @State private var draft: Set<String> = []
+
+    private var hidden: Set<String> { store.hiddenFrom }
+
+    var body: some View {
+        List {
+            Section {
+                Button {
+                    draft = hidden
+                    picking = true
+                } label: {
+                    HStack {
+                        Text("Hide Story From").foregroundStyle(.primary)
+                        Spacer()
+                        Text(hidden.isEmpty ? "No one"
+                             : "\(hidden.count) \(hidden.count == 1 ? "person" : "people")")
+                            .foregroundStyle(.secondary)
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                    }
+                }
+            } header: {
+                Text("Who Can View This Story")
+            } footer: {
+                Text("Anyone on Fariin who opens your profile can watch this, and people you have chatted with also get it in their stories. Anyone you hide is left out of every story you post, whichever audience you choose — including the ones already up.")
+            }
+        }
+        .navigationTitle("Everyone")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { if contacts.isEmpty { contacts = StoryContact.all() } }
+        .sheet(isPresented: $picking) {
+            NavigationStack {
+                SelectViewersView(title: "Hide Story From", actionTitle: "Done",
+                                  selected: $draft,
+                                  onAction: { commit() },
+                                  onCancel: { picking = false })
+            }
+        }
+    }
+
+    /// ⚠️ THE DIFFERENCE, NOT THE WHOLE LIST. `setHidden` is the one door that also revokes live
+    /// stories and rewrites the stored list, so it is called once per person who actually changed
+    /// side — re-hiding somebody already hidden would re-run that revoke sweep for nothing.
+    private func commit() {
+        let before = hidden
+        for uid in draft.subtracting(before) { store.setHidden(uid, true) }
+        for uid in before.subtracting(draft) { store.setHidden(uid, false) }
+        picking = false
+    }
+}
+
 struct MyFriendsPrivacyView: View {
     @State private var store = StoryAudienceStore.shared
     @State private var contacts: [StoryContact] = []
