@@ -1315,6 +1315,7 @@ struct StoryEditorView: View {
                     sticker: $s,
                     canvasSize: canvasSize,
                     interactive: !isDrawing && editingID == nil,
+                    onTapChip: { cycleChipColour(s.id) },
                     onDragChange: { live in
                         draggingID = s.id
                         let hot = isOverTrash(live)
@@ -2406,24 +2407,29 @@ struct StoryEditorView: View {
     /// off the tray. It moves with the same gesture, bakes with the same line and rides the same
     /// export. What is different about it is `action`, which nothing before the post ever reads.
     @MainActor private func chipSticker<C: View>(action: StickerAction?,
+                                                 recipe: StickerOverlay.ChipRecipe? = nil,
                                                  @ViewBuilder _ chip: () -> C) {
         let r = ImageRenderer(content: chip())
         r.scale = 3        // it is text at sticker size; a 1x bake of that is a smudge
         r.isOpaque = false
         guard let img = r.uiImage else { return }
         stickers.append(StickerOverlay(image: img, center: canvasCentre,
-                                       baseWidth: img.size.width, action: action))
+                                       baseWidth: img.size.width, action: action,
+                                       chip: recipe))
     }
 
     @MainActor private func addLinkSticker(_ url: URL) {
-        chipSticker(action: .link(url)) {
-            stickerChip(symbol: "link", text: StoryLinkSticker.label(for: url))
+        let text = StoryLinkSticker.label(for: url)
+        chipSticker(action: .link(url), recipe: .init(symbol: "link", text: text)) {
+            stickerChip(symbol: "link", text: text)
         }
     }
 
     @MainActor private func addPlaceSticker(_ name: String, _ coord: CLLocationCoordinate2D) {
-        chipSticker(action: .place(name: name, lat: coord.latitude, lon: coord.longitude)) {
-            stickerChip(symbol: "mappin.and.ellipse", text: name.uppercased())
+        let text = name.uppercased()
+        chipSticker(action: .place(name: name, lat: coord.latitude, lon: coord.longitude),
+                    recipe: .init(symbol: "mappin.and.ellipse", text: text)) {
+            stickerChip(symbol: "mappin.and.ellipse", text: text)
         }
     }
 
@@ -2444,15 +2450,35 @@ struct StoryEditorView: View {
     /// Solid white with black on it, and that is a decision rather than a default: these two sit on
     /// somebody's photograph and have to be legible on a snowfield and in a night club alike. Glass
     /// takes its colour from what is behind it, which is exactly the wrong property here.
-    @ViewBuilder private func stickerChip(symbol: String, text: String) -> some View {
+    @ViewBuilder private func stickerChip(symbol: String, text: String,
+                                          style: StoryChipStyle = .white) -> some View {
         HStack(spacing: 6) {
             Image(systemName: symbol).font(.system(size: 15, weight: .bold))
             Text(text).font(.system(size: 15, weight: .bold)).lineLimit(1)
         }
-        .foregroundStyle(.black)
+        .foregroundStyle(style.ink)
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
-        .background(Color.white, in: Capsule())
+        .background(style.background, in: Capsule())
+    }
+
+    /// Re-bake a chip in the next colour. ⚠️ THE PICTURE IS THE STICKER — a chip has been a flat
+    /// `UIImage` since the day it was made one, so changing its colour is not a property write, it is
+    /// the same render again with different paint. `chip` is the recipe kept for exactly this.
+    @MainActor private func cycleChipColour(_ id: UUID) {
+        guard let i = stickers.firstIndex(where: { $0.id == id }), let recipe = stickers[i].chip else { return }
+        let next = stickers[i].chipStyle.next
+        let r = ImageRenderer(content: stickerChip(symbol: recipe.symbol, text: recipe.text, style: next))
+        r.scale = 3
+        r.isOpaque = false
+        guard let img = r.uiImage else { return }
+        stickers[i].chipStyle = next
+        stickers[i].image = img
+        // ⚠️ AND THE WIDTH IS RE-READ, not kept. The three styles draw the same glyph at the same
+        // size so it should not move a point — but `baseWidth` IS the sticker's size, and pinning it
+        // to the first bake would silently stretch the picture if a style ever changed the padding.
+        stickers[i].baseWidth = img.size.width
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
     private func trimEmpty(_ id: UUID) {
         if let idx = overlays.firstIndex(where: { $0.id == id }),
@@ -3085,6 +3111,13 @@ struct StickerOverlay: Identifiable, Equatable {
     /// How wide it is drawn before the pinch, in canvas points. The height follows the artwork.
     var baseWidth: CGFloat = 150
     var action: StickerAction? = nil
+    /// ⛔ WHAT THIS CHIP IS MADE OF, kept so it can be BAKED AGAIN in another colour — his 2026-08-18
+    /// report: a white badge on a white picture cannot be read. Nil for a sticker off the tray, which
+    /// is a picture somebody drew and has no colours of ours to cycle.
+    struct ChipRecipe: Equatable { var symbol: String; var text: String }
+    var chip: ChipRecipe? = nil
+    /// White, black, blue, in that order, one tap apart. See `StoryChipStyle`.
+    var chipStyle: StoryChipStyle = .white
 
     var drawnSize: CGSize {
         let s = image.size
@@ -3095,6 +3128,47 @@ struct StickerOverlay: Identifiable, Equatable {
     static func == (a: StickerOverlay, b: StickerOverlay) -> Bool {
         a.id == b.id && a.center == b.center && a.scale == b.scale
             && a.rotation == b.rotation && a.baseWidth == b.baseWidth
+            // ⚠️ WITHOUT THIS THE TAP DOES NOTHING VISIBLE. The image is re-baked on a colour change
+            // but `image` is not compared here (a `UIImage` compares by identity and would defeat the
+            // diff), so equality has to notice the style or SwiftUI keeps drawing the old bake.
+            && a.chipStyle == b.chipStyle
+    }
+}
+
+/// ⛔ THE THREE COLOURS A LOCATION OR LINK BADGE CAN WEAR, and there are exactly three on his order:
+/// "white background + black text, black background + white text, blue background + white text.
+/// Each tap should switch to the next. Do not add a separate color picker or extra UI."
+///
+/// So there is no picker, no selected state and no handle: the badge IS the control, and the tap that
+/// was doing nothing at all now does this. A drag still drags it, because the drag only begins after
+/// two points of movement and a tap never travels that far.
+///
+/// Blue is `systemBlue`, which is what the NEXT button under it already wears, so a blue badge and
+/// the blue button on the same screen are one blue rather than two.
+enum StoryChipStyle: Int, Equatable {
+    case white, black, blue
+
+    var next: StoryChipStyle {
+        switch self {
+        case .white: return .black
+        case .black: return .blue
+        case .blue:  return .white
+        }
+    }
+
+    var background: Color {
+        switch self {
+        case .white: return .white
+        case .black: return .black
+        case .blue:  return Color(.systemBlue)
+        }
+    }
+
+    var ink: Color {
+        switch self {
+        case .white: return .black
+        case .black, .blue: return .white
+        }
     }
 }
 
@@ -3115,6 +3189,8 @@ struct StickerOverlayView: View {
     @Binding var sticker: StickerOverlay
     let canvasSize: CGSize
     let interactive: Bool
+    /// A tap on a CHIP cycles its colour. Nothing for a tray sticker, which has no recipe to re-bake.
+    var onTapChip: () -> Void = {}
     var onDragChange: (CGPoint) -> Void
     var onDragEnd: (CGPoint) -> Void
     var onSnap: (Bool, Bool) -> Void
@@ -3141,6 +3217,10 @@ struct StickerOverlayView: View {
             .position(liveCenter)
             .allowsHitTesting(interactive)
             .gesture(transform, including: interactive ? .all : .none)
+            // ⚠️ AFTER the drag, and it does not fight it: `DragGesture(minimumDistance: 2)` never
+            // begins for a finger that does not move, so a tap falls through to here. Only a chip
+            // answers — a picture off the tray has no colours of ours to cycle.
+            .onTapGesture { if sticker.chip != nil { onTapChip() } }
     }
 
     private var transform: some Gesture {

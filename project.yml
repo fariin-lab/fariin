@@ -87,7 +87,7 @@ targets:
         NSCameraUsageDescription: "Fariin needs camera access so you can take photos in chats."
         NSMicrophoneUsageDescription: "Fariin needs microphone access so you can send voice messages."
         NSFaceIDUsageDescription: "Fariin uses Face ID to unlock the app."
-        NSLocationWhenInUseUsageDescription: "Fariin needs your location so you can share it in chats."
+        NSLocationWhenInUseUsageDescription: "Fariin uses your location to share it in a chat and to suggest nearby places for a story."
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         CFBundleURLTypes:

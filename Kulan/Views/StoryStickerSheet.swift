@@ -624,17 +624,34 @@ private struct LinkStickerScreen: View {
 /// a second search to turn into coordinates, and a sticker with no coordinates is a label. This asks
 /// the question whose answer is the thing being placed.
 ///
-/// ⚠️ NO LOCATION PERMISSION IS ASKED FOR. A search works without one — results are simply not sorted
-/// by how near they are — and raising the system prompt to put a name on a photograph is a price
-/// nobody agreed to pay. "Places near me" is a permission and its own decision.
+/// ⛔ IT ASKS FOR LOCATION NOW, AND THE NOTE THAT SAID IT NEVER WOULD IS GONE ON HIS 2026-08-18
+/// ORDER: "the location sheet now looks empty, make it like image 2" — a list of places around you
+/// the moment it opens, which is a question that cannot be answered without knowing where you are.
+///
+/// The old reasoning was that raising the system prompt to put a name on a photograph is a price
+/// nobody agreed to pay. Two things answer it. The app already asks for exactly this permission to
+/// share a location in a chat, so this is not a new prompt on this phone, it is the same one. And a
+/// refusal costs nothing: the page falls back to being what it was, a search field, so the feature
+/// still works for somebody who says no.
+///
+/// `MKLocalSearch` rather than `MKLocalSearchCompleter` for the typed search, and
+/// `MKLocalPointsOfInterestRequest` for the nearby list — the one MapKit call that means "what is
+/// around this point" without a search string to invent.
 private struct PlaceStickerScreen: View {
     var onDone: (String, CLLocationCoordinate2D) -> Void
 
     @State private var query = ""
     @State private var results: [MKMapItem] = []
+    @State private var nearby: [MKMapItem] = []
     @State private var searching = false
     @State private var task: Task<Void, Never>?
     @FocusState private var focused: Bool
+    @StateObject private var fetcher = LocationFetcher()
+
+    /// The typed search wins while there is one; otherwise the page shows what is around you.
+    private var shown: [MKMapItem] {
+        query.trimmingCharacters(in: .whitespacesAndNewlines).count >= 2 ? results : nearby
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -653,7 +670,7 @@ private struct PlaceStickerScreen: View {
                 .padding(.vertical, 14)
 
             List {
-                ForEach(Array(results.enumerated()), id: \.offset) { _, item in
+                ForEach(Array(shown.enumerated()), id: \.offset) { _, item in
                     Button {
                         guard let c = item.placemark.location?.coordinate else { return }
                         onDone(Self.name(of: item), c)
@@ -673,14 +690,17 @@ private struct PlaceStickerScreen: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
-            .overlay { if searching, results.isEmpty { ProgressView().tint(.white) } }
+            .overlay { if searching, shown.isEmpty { ProgressView().tint(.white) } }
         }
         .toolbar(.hidden, for: .navigationBar)
-        // The same wait as the Link page, and this one has more to build behind it — see the note
-        // there. The list is empty until a search lands, so nothing is delayed but the keyboard.
-        .task {
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            focused = true
+        // ⚠️ NO KEYBOARD ON ARRIVAL ANY MORE, and that is half of his "it looks empty". The Link page
+        // raises one because a link can only be typed; this page has a list to read, and a keyboard
+        // over an empty list is a screen with nothing on it. The field is one tap away for anyone who
+        // does want to type.
+        .task { fetcher.request() }
+        .onChange(of: fetcher.location?.latitude) { _, _ in
+            guard let c = fetcher.location else { return }
+            Task { await loadNearby(c) }
         }
         // Debounced, for the same reason the sticker search is: a request per keystroke is a request
         // per keystroke, and MapKit rate-limits.
@@ -704,6 +724,23 @@ private struct PlaceStickerScreen: View {
         searching = false
         guard !Task.isCancelled else { return }
         results = found
+    }
+
+    /// What is around this point. ⚠️ NOT A SEARCH WITH AN INVENTED WORD IN IT — asking for
+    /// "restaurant" or "cafe" would answer a question nobody asked and would rank a coffee shop above
+    /// the street somebody is standing on. `MKLocalPointsOfInterestRequest` is the call that means
+    /// "everything of interest near here", which is what the list is for.
+    ///
+    /// 1500m: far enough to fill a screen in a quiet place, near enough that the top of the list is
+    /// somewhere you could point at.
+    private func loadNearby(_ c: CLLocationCoordinate2D) async {
+        guard nearby.isEmpty else { return }        // one fix, one fill; a second GPS callback is not a new question
+        searching = true
+        let request = MKLocalPointsOfInterestRequest(center: c, radius: 1500)
+        let found = (try? await MKLocalSearch(request: request).start())?.mapItems ?? []
+        searching = false
+        guard !Task.isCancelled else { return }
+        nearby = found
     }
 
     private static func name(of item: MKMapItem) -> String {
