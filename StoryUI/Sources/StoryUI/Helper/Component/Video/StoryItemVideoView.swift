@@ -183,8 +183,10 @@ final class StoryItemVideoView: UIView {
         // and bottom corners is small". A clip carried 12 while a photo carried 24 underneath the
         // page's 12, so the two media types did not even agree with each other. See
         // `Constant.cardCornerRadius` for the measurement off his reference.
-        layer.cornerRadius = Constant.cardCornerRadius
-        layer.cornerCurve = .circular
+        // ⛔ SQUARE HERE TOO, AND FOR THE REASON WRITTEN OUT IN `ImageLoader.applyCornerMask`: the
+        // page clips this card at `Constant.cardCornerRadius` already, and one arc cut by two masks
+        // is one arc drawn at a quarter of its antialiasing. `clipsToBounds` stays — the clip must
+        // not escape its rect — it simply stops rounding.
         clipsToBounds = true
 
         // ⚠️ THE PICTURE GOES IN THE SHIELD, THE CHROME DOES NOT — see `CaptureShield`. The cover,

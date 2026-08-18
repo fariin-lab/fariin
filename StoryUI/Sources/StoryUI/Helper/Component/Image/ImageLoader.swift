@@ -136,9 +136,11 @@ final class ImageLoader: UIView {
     // layer and would clip either way; the UIKit mask stays because it is what the callers ask for
     // and it is one less thing to re-verify.
     //
-    // ⚠️ ALL FOUR CORNERS, AND THE SAME NUMBER THE PAGE CLIPS WITH. It was the bottom two only, at a
-    // 24 of its own under a page clipping at 12 — his 2026-08-18 "image top corners and bottom
-    // corners are different", which is that sentence drawn. See `Constant.cardCornerRadius`.
+    // ⚠️ IT NO LONGER SETS A RADIUS, ONLY WHETHER THIS VIEW CLIPS AT ALL. It used to round the bottom
+    // two corners at a 24 of its own under a page clipping at 12 — his "image top corners and bottom
+    // corners are different" — then all four at the page's own number, which cut the same arc twice.
+    // The page owns the curve now and this owns the containment. See `applyCornerMask` for what two
+    // masks on one arc actually look like, and `Constant.cardCornerRadius` for the measurement.
     var cardCornerRadius: CGFloat = 0 { didSet { applyCornerMask() } }
     // Foreground: the photo at its TRUE aspect ratio — never stretched/cropped.
     var imageView = UIImageView()
@@ -222,10 +224,19 @@ final class ImageLoader: UIView {
     // default; naming it stops a future edit from reaching for `.continuous` and quietly making
     // this corner a different shape from the page clip drawn over it.
     private func applyCornerMask() {
-        layer.cornerRadius = cardCornerRadius
-        layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner,
-                               .layerMinXMaxYCorner, .layerMaxXMaxYCorner]
-        layer.cornerCurve = .circular
+        // ⛔ SQUARE ON PURPOSE, AND THE CURVE IS STILL THERE — the page's own `.clipShape` draws it.
+        //
+        // His 2026-08-18 comparison, his card beside theirs: "corners is not looks smooth". Half of
+        // that was the radius (measured, and 15 → 16 in `Constant`). The other half was here: this
+        // view rounded itself at exactly the radius the page was ALSO clipping at, so one arc was cut
+        // twice. Antialiasing is coverage, and two coverages multiply — a boundary pixel at half
+        // cover in each mask survives at a quarter, so the curve came out darker and harder-edged
+        // than a single mask draws it. That is what "not smooth" looks like at 3x.
+        //
+        // ⚠️ `masksToBounds` STAYS. The reason this view clips at all is the backdrop spill the note
+        // on `cardCornerRadius` describes; what it must not do is round. It clips to its own square
+        // rect, the page rounds the result, and there is exactly one antialiased curve on screen.
+        layer.cornerRadius = 0
         layer.masksToBounds = cardCornerRadius > 0
     }
 

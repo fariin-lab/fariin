@@ -39,7 +39,16 @@ enum Constant {
     /// further along each edge than a circle at 15, so it reads as the "more rounded" he asked
     /// against. Every corner of this card is circular now: the SwiftUI clips say so explicitly and
     /// `layer.cornerRadius` already meant it.
-    static let cardCornerRadius: CGFloat = 15
+    ///
+    /// ⚠️ 16, NOT 15, AND IT WAS MEASURED AGAIN. He put his own card beside theirs — "not smooth
+    /// like snapchat" — and the two photographs settle it: ours fits a circle of 38.4px against
+    /// their 41.7px on the same 1183px panel. About a point and a quarter short, which is why 16.
+    ///
+    /// ⚠️ THE OTHER HALF OF "not smooth" WAS NOT THE NUMBER AT ALL — see `ImageLoader.applyCornerMask`.
+    /// The media view and the page were BOTH cutting the same curve, and two antialiased edges on one
+    /// arc multiply their coverage, so the boundary pixels came out at a quarter strength and the
+    /// curve read as hard and slightly ragged. One mask cuts it now.
+    static let cardCornerRadius: CGFloat = 16
 
     enum UserView {
         static let hStackSpace: CGFloat = 13
