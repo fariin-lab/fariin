@@ -4648,6 +4648,25 @@ struct UploadingStoryHandoff: View {
                 StoryViewer(groups: siblings, startIndex: 0,
                             heroDismiss: !heroSourceKey.isEmpty,
                             heroSourceKey: heroSourceKey, heroSourcePinned: true,
+                            // ⛔ AND THEY REACHED ME, WHICH THIS DOOR NEVER SAID — his "while my
+                            // story is uploading, swiping to the next person says You can only reply
+                            // to people you chat with, and after the upload the same person lets me
+                            // reply".
+                            //
+                            // `siblings` is `[mine] + repo.others`, and `others` IS the query
+                            // "recipientUids contains me" — being in it is the author's own audience
+                            // choice, which is the whole reason the row's door passes this. Left
+                            // out, `replyLockReason` fell through to `StoryContact.isFriend`, a
+                            // second and stricter test of my chat list, and locked the bar.
+                            //
+                            // ⚠️ NOT A DEMO-ONLY FAULT, though demo people are what makes it show
+                            // every time — they are never `isFriend`, so the fallback always
+                            // refuses. A real author whose story reached me but who is not in that
+                            // list was refused exactly the same way, for as long as an upload was in
+                            // flight. Same list, same reasoning, same flag as
+                            // `MainShell.openStoryFromRow`; this was the one door never brought
+                            // along with it.
+                            deliveredToMe: true,
                             onHeroClose: onHeroClose,
                             onClose: onClose, onProfile: onProfile)
                     // ⚠️ NO `.id(svc.uploading)` — THAT WAS THE CLOSE-AND-REOPEN. Re-keying on the
