@@ -955,7 +955,7 @@ service cloud.firestore {
       //
       // The array holds `sha256('fariin-audience-v1:' + uid)` per person, lowercase hex. A uid is 28
       // characters of base62, so the list cannot be inverted or enumerated. The app computes the same
-      // string in `StoryAudience.token` and `onStoryConsumed` recomputes it too — all three have to
+      // string in `StoryAudienceToken.token` and `onStoryConsumed` recomputes it too — all three have to
       // change together or nothing is readable.
       function audienceToken(uid) {
         return hashing.sha256('fariin-audience-v1:' + uid).toHexString().lower();

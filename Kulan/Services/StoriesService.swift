@@ -6,7 +6,7 @@ import ImageIO   // CGImageSourceCreateThumbnailAtIndex, for the embedded story 
 import FirebaseAuth
 import FirebaseFirestore
 import FirebaseStorage
-import CryptoKit   // audienceToken — see `StoryAudience.token`
+import CryptoKit   // audienceToken — see `StoryAudienceToken.token`
 import StoryUI   // StoryVideoSeed / StoryImageSeed — the uploader warms the viewer's caches
 
 /// ⛔ WHO A STORY WENT TO, WITHOUT SAYING WHO THEY ARE.
@@ -38,7 +38,7 @@ import StoryUI   // StoryVideoSeed / StoryImageSeed — the uploader warms the v
 /// person received a story, and because the token is stable they can tell that the same unnamed
 /// person appears in several stories they received. Closing those would mean a fan-out write per
 /// recipient rather than one array, which is a different feature.
-enum StoryAudience {
+enum StoryAudienceToken {
     /// ⚠️ THIS EXACT STRING IS RECOMPUTED IN TWO OTHER PLACES — `firestore.rules` (`hashing.sha256`)
     /// and `onStoryConsumed` in the Cloud Functions. Change the prefix, the separator or the case and
     /// all three have to change in the same breath, or every story becomes unreadable to everyone.
@@ -702,10 +702,10 @@ final class StoriesService {
                 "public": everyone,
                 "allowsReplies": allowsReplies,
                 "replyCount": 0,
-                // ⚠️ TOKENS, NOT UIDS — see `StoryAudience`. The field name stays because the tray's
+                // ⚠️ TOKENS, NOT UIDS — see `StoryAudienceToken`. The field name stays because the tray's
             // `array-contains` query, the read rule and the Cloud Function all key on it, and a
             // rename would have to land in three places at the same instant.
-            "recipientUids": StoryAudience.tokens(recipients),
+            "recipientUids": StoryAudienceToken.tokens(recipients),
             ])
             StoryPrefs.rememberAudienceName(storyId: storyId, tag: tag)
 
@@ -975,10 +975,10 @@ final class StoriesService {
             "public": everyone,
             "allowsReplies": allowsReplies,
             "replyCount": 0,
-            // ⚠️ TOKENS, NOT UIDS — see `StoryAudience`. The field name stays because the tray's
+            // ⚠️ TOKENS, NOT UIDS — see `StoryAudienceToken`. The field name stays because the tray's
             // `array-contains` query, the read rule and the Cloud Function all key on it, and a
             // rename would have to land in three places at the same instant.
-            "recipientUids": StoryAudience.tokens(recipients),
+            "recipientUids": StoryAudienceToken.tokens(recipients),
         ])
         StoryPrefs.rememberAudienceName(storyId: storyId, tag: tag)
 
@@ -1537,7 +1537,7 @@ final class StoriesRepository {
             // and it has up to 24 hours left to live — removing only the token would leave a blocked
             // person watching it for the rest of the day. `arrayRemove` ignores what is not there.
             try? await doc.reference.updateData([
-                "recipientUids": FieldValue.arrayRemove([StoryAudience.token(uid), uid])
+                "recipientUids": FieldValue.arrayRemove([StoryAudienceToken.token(uid), uid])
             ])
         }
     }
@@ -1745,10 +1745,10 @@ final class StoriesRepository {
     @MainActor private func start(_ me: String) {
         stop()
         listeningUid = me
-        // ⚠️ MY TOKEN, NOT MY UID — see `StoryAudience`. One `array-contains` against the same field,
+        // ⚠️ MY TOKEN, NOT MY UID — see `StoryAudienceToken`. One `array-contains` against the same field,
         // so the query's shape, its index and its cost are exactly what they were.
         othersReg = db.collection("stories")
-            .whereField("recipientUids", arrayContains: StoryAudience.token(me))
+            .whereField("recipientUids", arrayContains: StoryAudienceToken.token(me))
             .addSnapshotListener { [weak self] snap, error in
                 guard let self, let snap else { if let error { print("stories listen error:", error) }; return }
                 if !snap.metadata.isFromCache { self.othersFromServer = true }
