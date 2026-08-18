@@ -164,7 +164,20 @@ struct ShareStorySheet: View {
     /// Apple has never documented, and a second phone photographing the screen defeats both and
     /// always will. So the row says "Block screenshots" and the line under it does not promise more
     /// than that.
-    @State private var captureProtected = false
+    @State private var captureProtectedChoice = false
+
+    /// ⛔ WHAT ACTUALLY GETS POSTED, and a one-time story has no say in it. His 2026-08-18 order: "if
+    /// user using One-Time Story it must always block screenshot, user cant make off".
+    ///
+    /// He is right that they belong together. A one-time story is the strongest promise this app
+    /// makes about a picture — one person, one look, then gone — and a screenshot is the one move
+    /// that breaks that promise permanently. Leaving the switch free would let somebody choose a
+    /// guarantee and then quietly turn off the only thing defending it.
+    ///
+    /// Computed rather than written into the state, so the choice he made for ordinary stories is
+    /// still there when he stops using one-time — the switch does not silently learn a new default
+    /// from a post he made under a rule.
+    private var captureProtected: Bool { oneTimeActive || captureProtectedChoice }
     @State private var oneTimePicking = false
     @State private var oneTimeViewers: Set<String> = []
     private var oneTimeActive: Bool { !oneTimeViewers.isEmpty }
@@ -243,6 +256,9 @@ struct ShareStorySheet: View {
     /// strings: the height budget below reads THIS, so the sheet cannot be sized against a sentence
     /// the screen is no longer showing.
     static let captureFooter = "Screenshots and screen recordings come out blank."
+    /// Why the switch will not move. Same length class as the line above it, so the sheet's height
+    /// does not change when the audience does.
+    static let captureLockedFooter = "Always on for a one-time story."
 
     /// What the Block-screenshots section costs the sheet — his "I can't see it without scrolling".
     ///
@@ -252,10 +268,15 @@ struct ShareStorySheet: View {
     /// the footer: the real string, the real font, the real width.
     private static var captureSectionHeight: CGFloat {
         let width = max(120, UIScreen.main.bounds.width - 72)
-        let h = (captureFooter as NSString).boundingRect(
-            with: CGSize(width: width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: UIFont.preferredFont(forTextStyle: .footnote)], context: nil).height
+        // The taller of the two, never the one currently showing — the same rule and the same reason
+        // as `footerHeight`: a detent that depends on which audience is ticked resizes the sheet
+        // under the finger that is ticking it.
+        let h = [captureFooter, captureLockedFooter].map { text -> CGFloat in
+            (text as NSString).boundingRect(
+                with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: UIFont.preferredFont(forTextStyle: .footnote)], context: nil).height
+        }.max() ?? 20
         return 44                    // the switch's own row
             + 18                     // the gap a grouped list puts between two sections
             + ceil(h) + 14           // the footer and its padding
@@ -317,9 +338,19 @@ struct ShareStorySheet: View {
                 // sentence about photographing the screen with another phone — true, and not
                 // something to spend three lines of a posting sheet on.
                 Section {
-                    Toggle("Block screenshots", isOn: $captureProtected)
+                    Toggle("Block screenshots", isOn: Binding(
+                        get: { captureProtected },
+                        // A locked switch that still moves under the finger is worse than one that
+                        // does not move at all: it says the choice is yours and then takes it back.
+                        set: { if !oneTimeActive { captureProtectedChoice = $0 } }))
+                        // ⚠️ EXPLICIT GREEN, AND THAT IS NOT DECORATION. A `Toggle` wears the app's
+                        // accent, and this app's accent is WHITE in dark mode — so the switch read as
+                        // on-and-white against the track, which is his circle. Apple's own switch is
+                        // `systemGreen` and everybody's eye already knows what that means.
+                        .tint(Color(.systemGreen))
+                        .disabled(oneTimeActive)
                 } footer: {
-                    Text(Self.captureFooter)
+                    Text(oneTimeActive ? Self.captureLockedFooter : Self.captureFooter)
                 }
             }
             .safeAreaInset(edge: .bottom) { postButton }
