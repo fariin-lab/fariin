@@ -1933,7 +1933,15 @@ struct StoryEditorView: View {
                 trimBar
                     .padding(.horizontal, 16)
                     .padding(.top, 14)
-                    .padding(.bottom, 28)
+                    // ⚠️ 6, WHICH IS THE NUMBER EVERY OTHER BAR ON THIS SCREEN USES. His 2026-08-18
+                    // report: the trim page's buttons do not sit where the editor's, the pen's and
+                    // the crop's do. Measured off his screenshots — the trim bar's centre sat at
+                    // 0.952 of the screen against the tool row's 0.977, about 22pt too high, which is
+                    // exactly the 28 this was against the tool row's 6.
+                    //
+                    // All three respect the bottom safe area and stand just above it, so matching the
+                    // number matches the position on every phone rather than on his.
+                    .padding(.bottom, 6)
             }
             // ⚠️ NOTHING AT ALL NOW. IT WAS 0.55, THEN 0.18, AND HIS 2026-08-16 INSTRUCTION IS THAT
             // THE TRIM PAGE SHOWS THE CLIP AT ITS OWN BRIGHTNESS "IN ALL CASES". The history below
