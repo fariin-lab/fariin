@@ -58,6 +58,11 @@ struct Story: Identifiable, Hashable, Codable {
     /// Each recipient may open it exactly once. Enforced on the server by removing them from
     /// `recipientUids` the moment they do — see `StoryPrefs.consumeOneTime` and `onStoryConsumed`.
     var oneTime: Bool = false
+    /// ⛔ THE AUTHOR ASKED FOR THIS STORY NOT TO BE COPIED, and the viewer honours it for the whole
+    /// session. What iOS actually does about a screenshot is written down in `CaptureShield`, and it
+    /// is less than the word "block" promises — nothing near this flag may claim more than the
+    /// system delivers. False for every story posted before the option existed.
+    var captureProtected: Bool = false
     /// How many of the people this story was sent to are still in its audience — and therefore, for
     /// a one-time story, how many of them have NOT used their single view yet. It counts down as
     /// each one opens it, because that is precisely what consuming a one-time story does: the
@@ -349,7 +354,7 @@ final class StoriesService {
     }
 
     // Fire-and-forget post: pop back to chat immediately, upload in the background, show progress.
-    @MainActor func postStoryBackground(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends) {
+    @MainActor func postStoryBackground(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends, captureProtected: Bool = false) {
         // Don't cancel an in-flight post (that silently DESTROYED the 1st story when a 2nd was
         // posted) — QUEUE instead: the new task waits for the previous one, so both post in order.
         let previous = uploadTask
@@ -381,7 +386,7 @@ final class StoriesService {
             _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
-            do { try await postStory(image: image, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag) }
+            do { try await postStory(image: image, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected) }
             catch is CancellationError { cancelled = true }   // user hit cancel → postStory removed the doc
             catch { failure = error.localizedDescription }     // surface it instead of dying silently
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
@@ -513,7 +518,8 @@ final class StoriesService {
     private func writePublicMirror(storyId: String, me: String, mediaUrl: String, thumbUrl: String,
                                    blurThumb: String = "", stickers: [StoryTapTarget] = [],
                                    type: String, caption: String, duration: Double,
-                                   expiresAt: Date, allowsReplies: Bool) async {
+                                   expiresAt: Date, allowsReplies: Bool,
+                                   captureProtected: Bool = false) async {
         try? await db.collection("users").document(me)
             .collection("publicStories").document(storyId)
             .setData([
@@ -536,6 +542,10 @@ final class StoriesService {
                 "caption": caption,
                 "duration": duration,
                 "allowsReplies": allowsReplies,
+                // ⚠️ AND THIS KEY IS ON THE RULE'S `hasOnly` LIST TOO. Left off, the mirror either
+                // fails silently or publishes the story to strangers with the author's protection
+                // stripped off it, which is the worse of the two.
+                "captureProtected": captureProtected,
             ])
     }
 
@@ -547,7 +557,8 @@ final class StoriesService {
 
     // Post a photo to "My Status": chosen audience can see it for 24h.
     func postStory(image: Data, caption: String = "", stickers: [StoryTapTarget] = [], expiryHours: Double = 24,
-                   excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends) async throws {
+                   excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends,
+                   captureProtected: Bool = false) async throws {
         let me = uid
         guard !me.isEmpty else { return }
         try Task.checkCancellation()   // bail before any write if the user already cancelled
@@ -631,6 +642,7 @@ final class StoriesService {
                 // here, because a recipient reads this document.
                 "audienceLabel": tag.label,
                 "oneTime": tag.oneTime,
+                "captureProtected": captureProtected,
                 // Public ("Everyone") stories are viewable by anyone who finds your profile — the
                 // read rules gate on this flag. Contacts still get it in their tray via
                 // recipientUids below.
@@ -654,7 +666,8 @@ final class StoriesService {
                                         blurThumb: cover, stickers: stickers,
                                         type: "image", caption: caption, duration: 0,
                                         expiresAt: expiresAt,
-                                        allowsReplies: allowsReplies)
+                                        allowsReplies: allowsReplies,
+                                        captureProtected: captureProtected)
             }
             // Warm the cache the My Story card reads from (DiskImageCache), so the final card shows the
             // image instantly as the "Uploading…" placeholder morphs into it — no blank-then-fetch.
@@ -687,7 +700,8 @@ final class StoriesService {
                                              burn: StoryBurnIn? = nil,
                                              trim: ClosedRange<Double>? = nil, caption: String = "",
                                              stickers: [StoryTapTarget] = [],
-                                             excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends) {
+                                             excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends,
+                                             captureProtected: Bool = false) {
         // Same queueing as postStoryBackground: never cancel an in-flight post, chain behind it.
         let previous = uploadTask
         // Its own entry in the queue, exactly as a photo post takes one — see `PendingUpload`.
@@ -720,7 +734,7 @@ final class StoriesService {
             _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
-            do { try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag) }
+            do { try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected) }
             catch is CancellationError { cancelled = true }
             catch { failure = error.localizedDescription }
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
@@ -754,7 +768,8 @@ final class StoriesService {
     /// what this feature is for.
     func postVideoStory(videoURL: URL, muted: Bool = false, trim: ClosedRange<Double>? = nil, burn: StoryBurnIn? = nil,
                         caption: String = "", stickers: [StoryTapTarget] = [], expiryHours: Double = 24,
-                        excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends) async throws {
+                        excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends,
+                        captureProtected: Bool = false) async throws {
         let full = (try? await AVURLAsset(url: videoURL).load(.duration).seconds) ?? 0
         // A hand trim decides where the material starts and how much of it there is; the split then
         // works on THAT, not on the original file. Trim to 20s and you get one story, not the first
@@ -771,7 +786,8 @@ final class StoriesService {
             try await postVideoSegment(videoURL: videoURL, range: range, caption: caption, muted: muted, burn: burn,
                                        stickers: stickers,
                                        expiryHours: expiryHours, excluded: excluded,
-                                       included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag)
+                                       included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag,
+                                       captureProtected: captureProtected)
             return
         }
 
@@ -795,7 +811,8 @@ final class StoriesService {
                                                // 90-second split posts several.
                                                stickers: i == 0 ? stickers : [],
                                                expiryHours: expiryHours, excluded: excluded,
-                                               included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag)
+                                               included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag,
+                                               captureProtected: captureProtected)
                     lastError = nil
                     break
                 } catch is CancellationError {
@@ -821,7 +838,8 @@ final class StoriesService {
     private func postVideoSegment(videoURL: URL, range: CMTimeRange?, caption: String, muted: Bool, burn: StoryBurnIn? = nil,
                                   stickers: [StoryTapTarget] = [],
                                   expiryHours: Double, excluded: Set<String>, included: Set<String>,
-                                  everyone: Bool, allowsReplies: Bool, tag: StoryAudienceTag) async throws {
+                                  everyone: Bool, allowsReplies: Bool, tag: StoryAudienceTag,
+                                  captureProtected: Bool = false) async throws {
         let me = uid
         guard !me.isEmpty else { return }
         try Task.checkCancellation()
@@ -897,6 +915,7 @@ final class StoriesService {
             // The label only — the custom name stays on this device. See StoryAudienceTag.
             "audienceLabel": tag.label,
             "oneTime": tag.oneTime,
+            "captureProtected": captureProtected,
             "public": everyone,
             "allowsReplies": allowsReplies,
             "replyCount": 0,
@@ -937,7 +956,8 @@ final class StoriesService {
                                         type: "video", caption: caption,
                                         duration: prepared.duration,
                                         expiresAt: expiresAt,
-                                        allowsReplies: allowsReplies)
+                                        allowsReplies: allowsReplies,
+                                        captureProtected: captureProtected)
             }
             // Warm both caches with the poster so my-story cards + the viewer's first frame are instant.
             if let img = UIImage(data: prepared.thumbnail) {
@@ -1513,6 +1533,10 @@ final class StoriesRepository {
                          audienceLabel: data["audienceLabel"] as? String
                             ?? ((data["public"] as? Bool ?? false) ? "everyone" : "friends"),
                          oneTime: data["oneTime"] as? Bool ?? false,
+                         // Absent on everything posted before the option existed, which reads as off.
+                         // The public MIRROR carries the same key, so a stranger reaching an
+                         // "Everyone" story from a profile gets the protection too.
+                         captureProtected: data["captureProtected"] as? Bool ?? false,
                          // Only my own story hands this over — see the property.
                          recipientsLeft: author == me
                             ? ((data["recipientUids"] as? [String])?.count ?? -1)

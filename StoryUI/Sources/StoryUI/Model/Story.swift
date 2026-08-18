@@ -89,6 +89,14 @@ public struct Story: Identifiable, Hashable {
     /// thing the picture could not carry.
     public var taps: [StoryTapArea] = []
 
+    /// ⛔ THE AUTHOR ASKED FOR THIS STORY NOT TO BE COPIED, and the viewer must honour it for the
+    /// whole session rather than only on the frame it opens. What iOS will and will not do about it
+    /// is written down in `CaptureShield`; the short version is that a screen recording is genuinely
+    /// defeated and a still screenshot is made black by a mechanism Apple has never documented.
+    ///
+    /// False for every story posted before the option existed, which is what those stories were.
+    public var isCaptureProtected: Bool = false
+
     public init(id: String = UUID().uuidString,
                 mediaURL: String,
                 previewURL: String? = nil,
@@ -101,6 +109,7 @@ public struct Story: Identifiable, Hashable {
                 duration: Double = 5,
                 caption: String = "",
                 audience: StoryAudienceBadge? = nil,
+                isCaptureProtected: Bool = false,
                 config: StoryConfiguration) {
 
         self.id = id
@@ -116,6 +125,7 @@ public struct Story: Identifiable, Hashable {
         self.audience = audience
         self.isLiked = isLiked
         self.isSeen = isSeen
+        self.isCaptureProtected = isCaptureProtected
         // (Removed `Constant.storySecond = duration` — mutating a global per-instance leaked the
         //  last story's duration into the default for any story built without an explicit one.)
     }

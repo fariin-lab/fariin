@@ -30,6 +30,10 @@ struct StoryVideoContent: UIViewRepresentable {
     let blurThumb: String
     /// This page's video session: the mode going down, the clock and the end coming back.
     let session: StoryVideoSession
+    /// The author asked for this story not to be copied — see `CaptureShield`. Applied on every
+    /// update, not only on creation, because a view kept by `StoryItemViewStore` comes back already
+    /// built and would otherwise carry the last story's answer.
+    let isCaptureProtected: Bool
 
     func makeUIView(context: Context) -> StoryItemVideoView {
         // A STORED VIEW COMES BACK WITH ITS PLAYER AND ITS POSITION. This is the collapsed-sheet
@@ -37,6 +41,7 @@ struct StoryVideoContent: UIViewRepresentable {
         // engaged, so ordinary navigation always lands on the `else` and gets a fresh player, which
         // starts at zero. See the store's own note — that switch IS the restart-at-zero rule.
         if let kept = StoryItemViewStore.take(storyId) {
+            kept.isCaptureProtected = isCaptureProtected
             kept.attach(to: session)
             return kept
         }
@@ -49,11 +54,13 @@ struct StoryVideoContent: UIViewRepresentable {
                                       storyURL: URL(string: storyURL),
                                       poster: posterURL,
                                       blurThumb: blurThumb)
+        view.isCaptureProtected = isCaptureProtected
         view.attach(to: session)
         return view
     }
 
     func updateUIView(_ view: StoryItemVideoView, context: Context) {
+        view.isCaptureProtected = isCaptureProtected
         // Idempotent: binding an already-bound view re-applies the same mode and re-publishes the
         // same numbers. This runs on every re-render of the story page, which is often.
         view.attach(to: session)

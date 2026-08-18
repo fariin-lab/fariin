@@ -141,6 +141,34 @@ final class StoryItemVideoView: UIView {
     /// render pass on every frame of a sheet pull. `.zero` for a real frame, which needs no compositing.
     private var coverRenderedSize: CGSize = .zero
 
+    /// ⛔ THE AUTHOR ASKED FOR THIS STORY NOT TO BE COPIED. `CaptureShield` holds what iOS actually
+    /// promises here, which is less than the word "block" suggests — read it before changing this.
+    private lazy var shield = CaptureShield(host: self)
+
+    /// Set from the story on every attach, so protection survives a pause, a swipe to the next clip,
+    /// a swipe back, an automatic advance, and a view handed back by `StoryItemViewStore` with its
+    /// player still running.
+    var isCaptureProtected: Bool = false {
+        didSet {
+            guard isCaptureProtected != oldValue else { return }
+            shield.onCaptureStateChanged = { [weak self] capturing in
+                self?.applyCaptureBlank(capturing)
+            }
+            shield.setProtected(isCaptureProtected)
+            applyCaptureBlank(shield.isCapturing)
+        }
+    }
+
+    /// ⚠️ THE CLIP KEEPS PLAYING. Blanking is one opacity write on the shield's content: no pause, no
+    /// seek, no teardown and no layout, so a recording that starts mid-story cannot desynchronise the
+    /// progress bar from the picture or leave a frozen frame behind when it stops.
+    private func applyCaptureBlank(_ capturing: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        shield.content.layer.opacity = capturing ? 0 : 1
+        CATransaction.commit()
+    }
+
     // MARK: - Init
 
     init(storyId: String, storyURL: URL?, poster: String?, blurThumb: String) {
@@ -159,13 +187,18 @@ final class StoryItemVideoView: UIView {
         layer.cornerCurve = .circular
         clipsToBounds = true
 
+        // ⚠️ THE PICTURE GOES IN THE SHIELD, THE CHROME DOES NOT — see `CaptureShield`. The cover,
+        // the canvas and the player layer are the clip; the spinner is ours and keeps its own
+        // constraints, which a reparented layer would not honour.
         canvasLayer.isHidden = true          // shown only once a clip is known not to fill the card
-        layer.addSublayer(canvasLayer)
+        shield.content.layer.addSublayer(canvasLayer)
 
         coverView.contentMode = .scaleAspectFill
         coverView.clipsToBounds = true
+        // Frames are set explicitly in `layoutSubviews`, which is what keeps this right inside the
+        // shield's content view — autoresizing needs a view hierarchy that reaches a window.
         coverView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        addSubview(coverView)
+        shield.content.addSubview(coverView)
 
         spinner.color = UIColor.lightGray.withAlphaComponent(0.7)
         spinner.translatesAutoresizingMaskIntoConstraints = false
@@ -363,8 +396,9 @@ final class StoryItemVideoView: UIView {
         pl.isHidden = true
         pl.frame = bounds
         playerLayer = pl
-        // ABOVE THE STILL, NEVER INSTEAD OF IT.
-        layer.insertSublayer(pl, above: coverView.layer)
+        // ABOVE THE STILL, NEVER INSTEAD OF IT — and inside the shield with it, so a protected
+        // clip and its own cover frame are one thing to the compositor.
+        shield.content.layer.insertSublayer(pl, above: coverView.layer)
 
         // ⚠️ EVERY OBSERVER IS INSTALLED BEFORE THE FIRST `play()`. The reference app installs
         // `playbackCompleted` and `ownsContentNodeUpdated` before `canAttachContent = true`, because
@@ -565,6 +599,10 @@ final class StoryItemVideoView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        // FIRST: the shield holds the clip at this view's own bounds whether it is shielded or not,
+        // so every frame below is set in the coordinates it always was.
+        shield.layout(in: bounds)
+        shield.retryIfNeeded()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         coverView.frame = bounds

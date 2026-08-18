@@ -17,6 +17,8 @@ struct ImageView: UIViewRepresentable {
     /// The card's corner, in UIKit, because a SwiftUI clip does not cut the blurred backdrop.
     /// All four of them — see `Constant.cardCornerRadius`.
     var cardCornerRadius: CGFloat = 0
+    /// The author asked for this story not to be copied — see `CaptureShield`.
+    var isCaptureProtected: Bool = false
     let imageIsLoaded: () -> Void
 
     func makeUIView(context: UIViewRepresentableContext<ImageView>) -> ImageLoader {
@@ -25,6 +27,8 @@ struct ImageView: UIViewRepresentable {
 
     func updateUIView(_ uiView: ImageLoader, context: Context) {
         uiView.cardCornerRadius = cardCornerRadius
+        // Every update, so it holds through a pause, a swipe either way and an automatic advance.
+        uiView.isCaptureProtected = isCaptureProtected
         uiView.loadImageWithUrl(imageURL, previewURL: previewURL, imageIsLoaded: imageIsLoaded)
     }
 }

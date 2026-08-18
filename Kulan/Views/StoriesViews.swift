@@ -1514,6 +1514,10 @@ struct StoryViewer: View {
                         // captions sit and the same place the editor's caption pill shows it.
                         caption: s.caption,
                         audience: audienceBadge(for: s, isMine: g.isMine),
+                        // ⛔ THE AUTHOR'S "do not copy this" SWITCH, carried per item rather than per
+                        // person: a tray holds several stories and only some of them may be
+                        // protected. See `CaptureShield` for what the viewer can actually enforce.
+                        isCaptureProtected: s.captureProtected,
                         config: StoryConfiguration(
                             // My own story shows NO reply bar (owner bar is overlaid instead).
                             // NO REPLY BAR FOR A STRANGER'S PUBLIC STORY (L3). A story reply is an

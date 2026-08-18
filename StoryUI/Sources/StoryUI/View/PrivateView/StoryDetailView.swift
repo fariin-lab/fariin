@@ -1056,7 +1056,8 @@ private extension StoryDetailView {
             // this one instead of arguing with it.
             ImageView(imageURL: story.mediaURL,
                       previewURL: story.previewURL,
-                      cardCornerRadius: (story.config.storyType != .plain() || model.isMine) ? cardRadius : 0) {
+                      cardCornerRadius: (story.config.storyType != .plain() || model.isMine) ? cardRadius : 0,
+                      isCaptureProtected: story.isCaptureProtected) {
                 start(index: index)
             }
             // ⚠️ NOTHING HAPPENS HERE ANY MORE, AND THAT IS THE POINT. This branch used to carry an
@@ -1078,7 +1079,8 @@ private extension StoryDetailView {
                 storyURL: story.mediaURL,
                 posterURL: story.previewURL,
                 blurThumb: story.blurThumb,
-                session: video
+                session: video,
+                isCaptureProtected: story.isCaptureProtected
             )
             // ⚠️ KEYED ON THE STORY'S ID, NOT ITS URL. Four places have to agree about what "this
             // clip" means — this identity, the view store, the session's claim and the carousel

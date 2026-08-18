@@ -222,9 +222,16 @@ service cloud.firestore {
               // the story would simply stop appearing on its author's public profile. It discloses
               // nothing new — the sticker is already drawn into the picture this document publishes,
               // and the url is the one the author chose to show.
+              // ⚠️ `captureProtected` IS ON THIS LIST FOR THE THIRD TIME FOR THE SAME REASON. It is
+              // the author's "do not let this be copied" switch, and the mirror is what a stranger
+              // reaching the profile actually reads — leave the key off and either the whole mirror
+              // write fails silently, or (worse) the story publishes to strangers with the
+              // protection stripped off it. It discloses nothing: it is a boolean about the
+              // author's own wishes for the picture this document already publishes.
               || (request.resource.data.keys().hasOnly(
                     ['authorUid', 'createdAt', 'expiresAt', 'mediaUrl', 'thumbUrl',
-                     'type', 'caption', 'duration', 'allowsReplies', 'blurThumb', 'stickers'])
+                     'type', 'caption', 'duration', 'allowsReplies', 'blurThumb', 'stickers',
+                     'captureProtected'])
                   && request.resource.data.authorUid == uid
                   && !isBanned()));
       }

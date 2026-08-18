@@ -157,6 +157,14 @@ struct ShareStorySheet: View {
     /// people each time… nothing is saved and there is no new row in the list"). It lives for the
     /// length of this sheet, becomes the audience while it is non-empty, and is gone the moment the
     /// sheet is. Choosing any saved audience clears it, which is what makes the tick mean one thing.
+    /// ⛔ THE AUTHOR'S "do not let this be copied" SWITCH, per story.
+    ///
+    /// ⚠️ THE WORDING IS THE FEATURE'S HONESTY. `CaptureShield` holds what iOS actually enforces: a
+    /// screen recording is genuinely defeated, a screenshot comes out black through a mechanism
+    /// Apple has never documented, and a second phone photographing the screen defeats both and
+    /// always will. So the row says "Block screenshots" and the line under it does not promise more
+    /// than that.
+    @State private var captureProtected = false
     @State private var oneTimePicking = false
     @State private var oneTimeViewers: Set<String> = []
     private var oneTimeActive: Bool { !oneTimeViewers.isEmpty }
@@ -275,6 +283,13 @@ struct ShareStorySheet: View {
                              ? "Anyone on Fariin who opens your profile can watch this. People you have chatted with also get it in their stories."
                              : "Only the people in this list can watch it.")
                     }
+                }
+                Section {
+                    Toggle(isOn: $captureProtected) {
+                        Label("Block screenshots", systemImage: "eye.slash")
+                    }
+                } footer: {
+                    Text("Screenshots and screen recordings of this story come out blank. Someone can still photograph the screen with another phone.")
                 }
             }
             .safeAreaInset(edge: .bottom) { postButton }
@@ -443,12 +458,12 @@ struct ShareStorySheet: View {
                 videoURL: video.url, thumbnail: video.thumbnail, muted: video.muted,
                 burn: video.burn, trim: video.trim, caption: caption, stickers: stickers,
                 excluded: excluded, included: included, everyone: everyone, allowsReplies: replies,
-                tag: tag)
+                tag: tag, captureProtected: captureProtected)
         } else {
             StoriesService.shared.postStoryBackground(
                 image: image, caption: caption, stickers: stickers,
                 excluded: excluded, included: included, everyone: everyone, allowsReplies: replies,
-                tag: tag)
+                tag: tag, captureProtected: captureProtected)
         }
         // The rest, in order, behind the first. The background posters already CHAIN rather than
         // cancel each other, so this queues instead of racing — which is what keeps a multi-item
@@ -466,12 +481,12 @@ struct ShareStorySheet: View {
                     videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim,
                     caption: extra.caption, stickers: extra.stickers,
                     excluded: excluded, included: included, everyone: everyone,
-                    allowsReplies: replies, tag: tag)
+                    allowsReplies: replies, tag: tag, captureProtected: captureProtected)
             } else if let p = extra.photo {
                 StoriesService.shared.postStoryBackground(
                     image: p, caption: extra.caption, stickers: extra.stickers,
                     excluded: excluded, included: included, everyone: everyone,
-                    allowsReplies: replies, tag: tag)
+                    allowsReplies: replies, tag: tag, captureProtected: captureProtected)
             }
         }
         onPosted()   // dismisses the editor -> back to chat; upload runs in the background
@@ -516,12 +531,12 @@ struct ShareStorySheet: View {
                 videoURL: video.url, thumbnail: video.thumbnail, muted: video.muted,
                 burn: video.burn, trim: video.trim, caption: caption,
                 excluded: excluded, included: included, everyone: false, allowsReplies: replies,
-                tag: tag)
+                tag: tag, captureProtected: captureProtected)
         } else {
             StoriesService.shared.postStoryBackground(
                 image: image, caption: caption,
                 excluded: excluded, included: included, everyone: false, allowsReplies: replies,
-                tag: tag)
+                tag: tag, captureProtected: captureProtected)
         }
         // ⚠️ AND `stickers:` WAS NOT BEING PASSED AT ALL ON THIS PATH OR THE ONE-TIME ONE — only on
         // the first of the three. So a Link or Location sticker on the second picture of a post to a
@@ -533,12 +548,12 @@ struct ShareStorySheet: View {
                     videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim,
                     caption: extra.caption, stickers: extra.stickers,
                     excluded: excluded, included: included, everyone: false,
-                    allowsReplies: replies, tag: tag)
+                    allowsReplies: replies, tag: tag, captureProtected: captureProtected)
             } else if let p = extra.photo {
                 StoriesService.shared.postStoryBackground(
                     image: p, caption: extra.caption, stickers: extra.stickers,
                     excluded: excluded, included: included, everyone: false,
-                    allowsReplies: replies, tag: tag)
+                    allowsReplies: replies, tag: tag, captureProtected: captureProtected)
             }
         }
         onPosted()
@@ -569,12 +584,12 @@ struct ShareStorySheet: View {
                 videoURL: video.url, thumbnail: video.thumbnail, muted: video.muted,
                 burn: video.burn, trim: video.trim, caption: caption,
                 excluded: store.hiddenFrom, included: people, everyone: false,
-                allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"))
+                allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected)
         } else {
             StoriesService.shared.postStoryBackground(
                 image: image, caption: caption,
                 excluded: store.hiddenFrom, included: people, everyone: false,
-                allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"))
+                allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected)
         }
         for extra in extras {
             if let v = extra.video {
@@ -582,12 +597,12 @@ struct ShareStorySheet: View {
                     videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim,
                     caption: extra.caption, stickers: extra.stickers,
                     excluded: store.hiddenFrom, included: people, everyone: false,
-                    allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"))
+                    allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected)
             } else if let p = extra.photo {
                 StoriesService.shared.postStoryBackground(
                     image: p, caption: extra.caption, stickers: extra.stickers,
                     excluded: store.hiddenFrom, included: people,
-                    everyone: false, allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"))
+                    everyone: false, allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected)
             }
         }
         onPosted()

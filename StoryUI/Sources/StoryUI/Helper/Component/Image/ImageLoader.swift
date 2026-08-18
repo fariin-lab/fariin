@@ -154,6 +154,33 @@ final class ImageLoader: UIView {
     /// The download in flight for the story on screen, held so that moving on can cancel it.
     private var loadTask: URLSessionDataTask?
 
+    /// ⛔ THE AUTHOR ASKED FOR THIS STORY NOT TO BE COPIED. Read `CaptureShield` before touching it —
+    /// in particular what iOS does and does not promise, which is most of the file.
+    private lazy var shield = CaptureShield(host: self)
+
+    /// Set from the story on every update, so the protection survives a pause, a swipe either way and
+    /// an automatic advance rather than only being right on the first frame.
+    var isCaptureProtected: Bool = false {
+        didSet {
+            guard isCaptureProtected != oldValue else { return }
+            shield.onCaptureStateChanged = { [weak self] capturing in
+                self?.applyCaptureBlank(capturing)
+            }
+            shield.setProtected(isCaptureProtected)
+            applyCaptureBlank(shield.isCapturing)
+        }
+    }
+
+    /// ⚠️ OPACITY, NOT A LAYOUT CHANGE AND NOT A TEARDOWN. A recording starting must not resize
+    /// anything, reload anything or leave a hole the next layout pass has to fill — the picture is
+    /// simply not drawn while the screen is being recorded or mirrored, and comes straight back.
+    private func applyCaptureBlank(_ capturing: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        shield.content.layer.opacity = capturing ? 0 : 1
+        CATransaction.commit()
+    }
+
     // MARK: - Initializers
     init() {
         super.init(frame: .zero)
@@ -166,6 +193,11 @@ final class ImageLoader: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        // FIRST, because everything below is positioned inside it. The shield holds the picture at
+        // this view's own bounds whether it is shielded or not, so the four lines after this one are
+        // the same lines they always were.
+        shield.layout(in: bounds)
+        shield.retryIfNeeded()
         // The canvas is framed through `StoryCanvas` rather than assigned directly: a CALayer
         // sublayer does not autoresize, and a bare `frame =` inside an animation block inherits that
         // animation, so the backdrop would lag the card it belongs to by one spring.
@@ -263,7 +295,9 @@ final class ImageLoader: UIView {
             v.contentMode = .scaleAspectFill
             v.clipsToBounds = true
             previewBlur = v
-            addSubview(v)
+            // Inside the shield: it is a picture of the story, blurred, and a blurred copy of a
+            // protected story is still a copy of it.
+            shield.content.addSubview(v)
             view = v
         }
         // BAKED, not a live material. This was the poster with a `UIVisualEffectView` laid over it,
@@ -527,14 +561,20 @@ private extension ImageLoader {
        // gradient between the colours at the top and bottom of the picture itself. A layer, not a
        // view, and deliberately so — it is the one backdrop primitive that survives being scaled by
        // a gesture, which is the entire history of this file.
-       layer.addSublayer(canvasLayer)
+       // ⚠️ INTO THE SHIELD'S CONTENT, NOT ONTO THIS VIEW. Everything that is the PICTURE goes in
+       // there so one `addSublayer` can move the whole lot inside the system's secure canvas for a
+       // protected story — see `CaptureShield`. The shield's content is laid out to these exact
+       // bounds every pass, so this is the same coordinate space it always was.
+       shield.content.layer.addSublayer(canvasLayer)
 
        // Foreground: the photo at its TRUE aspect ratio — aspect-FIT so a square/landscape is never
        // cropped/zoomed. The empty top/bottom are the canvas above.
        imageView.contentMode = .scaleAspectFit
        imageView.clipsToBounds = true
-       addSubview(imageView)
+       shield.content.addSubview(imageView)
 
+       // ⚠️ THE SKELETON STAYS OUTSIDE THE SHIELD. It is not the picture, it carries nothing, and a
+       // shimmer that vanishes from a screenshot only tells the person the shield is there.
        shimmer.isHidden = true
        addSubview(shimmer)
 
