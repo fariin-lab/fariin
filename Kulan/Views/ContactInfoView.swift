@@ -783,7 +783,13 @@ struct ContactInfoView: View {
             // The same glyph Settings uses for its Notifications row (owner: reuse that one).
             infoRow("Sounds & Notifications", "ic_notifications", value: muted ? "Muted" : "On") { showSounds = true }
             rowDivider
-            infoRow("Verify Encryption", "ic_verify_encryption", tint: .accentColor) { showVerify = true }
+            // ⚠️ THE SAME COLOUR AS THE TWO ROWS ABOVE IT, on his 2026-08-18 instruction. It wore
+            // `.accentColor`, so on a profile it was the one blue line in a card of black ones — and
+            // the accent is WHITE at night, which is its own trap (see the accent-is-white note).
+            // Verifying is not a destructive action and not a link; it is the third setting in a
+            // settings card, and it now looks like one. Block and Report keep their red, which says
+            // something the others do not.
+            infoRow("Verify Encryption", "ic_verify_encryption") { showVerify = true }
         }
         .profileSurface(plain: cardColor)
     }
@@ -1168,7 +1174,18 @@ struct ContactInfoView: View {
     /// profile cannot call itself, and Search only appears where there is a chat to search.
     private var glassActions: some View {
         HStack(spacing: 0) {
-            if source == .calls {
+            // ⛔ MESSAGE IS THE FIRST ACTION ANYWHERE THERE IS NO CHAT ALREADY UNDER THE PROFILE —
+            // his 2026-08-18 report: opening somebody's profile from their story left him with no way
+            // to write to them. It was offered from the CALLS list only, and a story is the same
+            // situation: a profile reached from somewhere that is not the conversation.
+            //
+            // From a chat it stays hidden, because the chat is the screen underneath and a button
+            // that goes back where you came from is not an action.
+            //
+            // `!isSelf` because my own story opens my own profile, and `!blocked` for the reason the
+            // call buttons already carry: an action offered to somebody you have blocked is a button
+            // that can only disappoint.
+            if source != .chat, !isSelf, !blocked {
                 Button { openChat = true } label: { PosterActionIcon(icon: "message.fill") }.tint(.primary)
             }
             // THE CALL BUTTONS STAY ON THE PROFILE even when the person refuses calls (owner
