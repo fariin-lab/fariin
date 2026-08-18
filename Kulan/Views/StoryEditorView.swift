@@ -1842,8 +1842,20 @@ struct StoryEditorView: View {
                         .foregroundStyle(.white)
                         .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
                 }
-                .padding(.horizontal, 22)
-                .padding(.bottom, 10)
+                // ⚠️ MEASURED FROM THE CARD'S EDGE, NOT THE SCREEN'S, AND THAT IS THE WHOLE BUG.
+                //
+                // His screenshot with the number circled against the corner: this bar sits in a
+                // full-width VStack, so a flat 22 is 22 from the SCREEN — while the card behind it is
+                // scaled to 0.9 for the trim, which pulls its right edge inward by 5% of the width,
+                // about 21pt on his phone. The two landed within a point of each other, so the label
+                // sat exactly on the card's edge, right where its 40pt corner is curving away.
+                //
+                // The 5% is the step-back's own arithmetic ((1 - 0.9) / 2), so this follows the card
+                // if that number ever changes. 22 past it puts the number a clear thumb's width
+                // inside the corner instead of on it.
+                .padding(.horizontal, (canvasSize.width > 1 ? canvasSize.width : UIScreen.main.bounds.width) * 0.05 + 22)
+                // Up off the bottom curve for the same reason — the corner eats both edges, not one.
+                .padding(.bottom, 16)
                 // REAL BINDINGS NOW, not `.constant`. Dragging a handle seeks the clip, so you can
                 // see the frame you are cutting on — which is the whole reason a trim screen has a
                 // picture above it. It was blind because the composer had no player; it has one.
