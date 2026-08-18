@@ -213,44 +213,83 @@ enum VideoTranscoder {
                                       max(Int64(duration * 400_000), 2 * 1024 * 1024))
         do { try await session.export(to: out, as: .mp4) } catch { return nil }
         guard let data = try? Data(contentsOf: out) else { return nil }
+        // ⚠️ THE POSTER IS A FRAME OF THE FILE THAT WAS JUST WRITTEN, NOT OF THE SOURCE, whenever
+        // this export re-framed the picture. The story viewer puts the poster up sharp and hands
+        // over to the live layer on its first frame, and that hand-over is only invisible while the
+        // two are the same picture at the same size (`StoryItemVideoView.resolveCover`).
+        //
+        // A pinched clip broke exactly that. The zoom IS in these bytes — `burnIn` crops the frame
+        // for a zoom in and scales the clip onto the canvas for a zoom out — while the poster was
+        // still a frame of the ORIGINAL, so every reframed video opened on its unzoomed framing for
+        // the ~0.15s before the player revealed, then jumped. That is his 2026-08-18 report, and a
+        // photo never had it because the photo path posts the very picture it renders.
+        //
+        // Same line also gives the poster the text and the pen strokes the source frame never had,
+        // and makes the reported width and height the POSTED clip's rather than the ones it came in
+        // with — a zoomed-in clip is not the shape it arrived as, and every card sizes itself off
+        // those two numbers.
+        //
+        // Narrow on purpose: a plain re-encode changes nothing but the resolution, so it keeps the
+        // sharper source frame (up to 1600px against 540p) for the row card and the chat ring. The
+        // test is the one that already decided the preset above — was anything composited.
+        let reframed = composing || backdropAspect != nil
+        // `backdropAspect` non-nil used to mean "compose the canvas onto the source frame". A frame
+        // of the export already wears that canvas, so it is handed over only for the path that
+        // still reads the source. Kept `out` alive until the frame is decoded.
+        let prepared = await finish(data: data, asset: asset, duration: duration,
+                                    canvasAspect: backdropAspect,
+                                    startAt: range?.start.seconds ?? 0,
+                                    posted: reframed ? AVURLAsset(url: out) : nil)
         try? FileManager.default.removeItem(at: out)
-        // `backdropAspect` is non-nil exactly when the gradient canvas was baked into this export, so
-        // it is also exactly when the poster has to be composed onto the same canvas. The passthrough
-        // call above never passes it, and cannot: a clip needing the canvas is never eligible for it.
-        return await finish(data: data, asset: asset, duration: duration, canvasAspect: backdropAspect,
-                            startAt: range?.start.seconds ?? 0)
+        return prepared
     }
 
-    /// The half both paths share: the poster frame. Taken just after the start, because frame 0 is
-    /// very often black, and rotation-corrected so a portrait clip does not land sideways.
-    /// ⚠️ `canvasAspect` NON-NIL MEANS THE EXPORT WEARS THE STORY CANVAS, AND SO MUST THE POSTER.
-    ///
-    /// The poster is generated from the SOURCE asset, which is right for every other use and wrong
-    /// for a story that just had a gradient baked into it: the video would carry the gradient and
-    /// its own thumbnail would not. His 2026-08-07 report, with two screenshots of the same story
-    /// seconds apart — one card showing the gradient, one showing black — because the carousel draws
-    /// a photograph of the LIVE card for some cards and `previewUrl` for others, and those two had
-    /// stopped being the same picture.
-    ///
-    /// Everything that renders `previewUrl` is affected: row cards, chat rings, reply thumbnails,
-    /// the carousel. So the poster is composed onto the same canvas by the same function the
-    /// placeholder uses, and the three pictures agree by construction.
-    private static func finish(data: Data, asset: AVAsset, duration: Double,
-                               canvasAspect: CGFloat? = nil, startAt: Double = 0) async -> Prepared? {
+    /// One frame, rotation-corrected so a portrait clip does not land sideways, or nil if the asset
+    /// will not give one up.
+    private static func frame(_ asset: AVAsset, at seconds: Double) async -> UIImage? {
         let gen = AVAssetImageGenerator(asset: asset)
         gen.appliesPreferredTrackTransform = true
         gen.maximumSize = CGSize(width: 1600, height: 1600)
-        // ⚠️ `startAt` IS WHERE THE POSTED CLIP BEGINS, which is not where the SOURCE begins the
-        // moment somebody trims. The poster is generated from the source asset, so a story trimmed
-        // to start at 0:12 was getting a picture of 0:00 — a frame that is nowhere in the file. That
-        // was survivable while the poster was only ever drawn blurred; now that a real cover goes up
-        // sharp and hands over to the live clip (see `VideoLoader.cover`), a wrong frame would be a
-        // visible cut at first play. Same 0.1s nudge past the start, because a first frame is very
-        // often black.
-        let t = CMTime(seconds: max(0, startAt) + min(0.1, duration / 2), preferredTimescale: 600)
+        let t = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
         guard let cg = try? await gen.image(at: t).image else { return nil }
-        var poster = UIImage(cgImage: cg)
-        if let canvasAspect { poster = storyCanvasPoster(poster, aspect: canvasAspect) }
+        return UIImage(cgImage: cg)
+    }
+
+    /// The half both paths share: the poster frame. Taken just after the start, because frame 0 is
+    /// very often black.
+    ///
+    /// ⚠️ `posted` IS THE FILE THIS CALL IS ABOUT TO RETURN, and it is the right place to take the
+    /// picture from whenever the export re-framed anything: a crop, a shrink, a canvas, burned-in
+    /// text. Only that asset carries what the viewer is going to play. Its timeline already begins
+    /// at the trim, so it is sampled from zero rather than from `startAt`.
+    ///
+    /// ⚠️ `canvasAspect` NON-NIL MEANS THE EXPORT WEARS THE STORY CANVAS, AND SO MUST THE POSTER —
+    /// but only on the path that still reads the SOURCE. His 2026-08-07 report was two screenshots
+    /// of the same story seconds apart, one card showing the gradient and one showing black, because
+    /// the carousel draws a photograph of the LIVE card for some cards and `previewUrl` for others
+    /// and those two had stopped being the same picture. A frame of the posted file has the gradient
+    /// in it already; composing a second one on top would be drawing the canvas twice.
+    ///
+    /// Everything that renders `previewUrl` is affected: row cards, chat rings, reply thumbnails,
+    /// the carousel. Whichever asset it comes from, the poster and the file agree by construction.
+    private static func finish(data: Data, asset: AVAsset, duration: Double,
+                               canvasAspect: CGFloat? = nil, startAt: Double = 0,
+                               posted: AVAsset? = nil) async -> Prepared? {
+        let nudge = min(0.1, duration / 2)
+        var picture: UIImage? = nil
+        if let posted { picture = await frame(posted, at: nudge) }
+        let fromPosted = picture != nil
+        // ⚠️ `startAt` IS WHERE THE POSTED CLIP BEGINS, which is not where the SOURCE begins the
+        // moment somebody trims. A poster generated from the source for a story trimmed to start at
+        // 0:12 was getting a picture of 0:00 — a frame that is nowhere in the file. That was
+        // survivable while the poster was only ever drawn blurred; now that a real cover goes up
+        // sharp and hands over to the live clip, a wrong frame is a visible cut at first play.
+        //
+        // Also the fallback: an export we cannot decode a frame out of is not a reason to fail a
+        // post that has otherwise succeeded, so the source frame still stands in.
+        if picture == nil { picture = await frame(asset, at: max(0, startAt) + nudge) }
+        guard var poster = picture else { return nil }
+        if let canvasAspect, !fromPosted { poster = storyCanvasPoster(poster, aspect: canvasAspect) }
         guard let thumb = poster.jpegData(compressionQuality: 0.72) else { return nil }
         // The reported size is the POSTER's, because that is what the bubble and the card shape
         // themselves against — and once it is on the canvas, the canvas is its shape.
