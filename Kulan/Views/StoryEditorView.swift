@@ -208,7 +208,30 @@ struct StoryEditorView: View {
     /// The playback clock behind the trim strip's white line. Removed from the PLAYER in
     /// `stopPreview()`, which is why it is held rather than discarded — see `ensurePreviewPlayer`.
     @State private var trimTimeObserver: Any?
-    @State private var trimPlayhead: Double = 0
+    /// ⛔ THE PLAYHEAD IS NOT THIS SCREEN'S `@State` ANY MORE, AND THAT IS THE VIDEO FREEZE.
+    ///
+    /// His report, and the repro he worked out himself, which is the whole diagnosis: it only happens
+    /// when the clip is PLAYING as he changes page. Pause first, trim, play in trim, pause, Done —
+    /// any number of times — and it never happens.
+    ///
+    /// The playhead is written by a periodic time observer at 20Hz, and a periodic observer only
+    /// fires while time is actually moving. That is exactly "only while it is playing". As a plain
+    /// `@State` on this view, each of those twenty writes a second INVALIDATED THE WHOLE EDITOR BODY:
+    /// the canvas, the overlays, the caption layer, the tool row, the trim page and, through
+    /// `ZoomableImageView.updateUIView`, a fresh `transform` write onto the very `UIView` whose layer
+    /// is the `AVPlayerLayer` showing the clip. Twenty times a second, on the main thread, on top of
+    /// a 0.28s page animation.
+    ///
+    /// The picture is what starves under that and the sound is not, which is precisely what he sees
+    /// and is not a coincidence: audio runs on its own real-time thread, while video frames reach an
+    /// `AVPlayerLayer` through the main run loop and CoreAnimation's commit. Starve the main thread
+    /// and the sound plays on over a still picture until it catches up — his "after minutes it works".
+    ///
+    /// A class in `@State` rather than a `@StateObject`, and the difference IS the fix: `@StateObject`
+    /// subscribes the owning view to `objectWillChange`, which would put the whole body straight back
+    /// on the 20Hz clock. `@State` holds the reference and nothing else, so the only view that
+    /// re-renders is the one that observes the box — `TrimStripHost`, which is 56 points tall.
+    @State private var trimPlayhead = TrimPlayheadBox()
     @State private var trimScrub: Double?
     @State private var trimDragging = false
     /// ⛔ THE SEEK SERIALISER, AND IT IS WHY THE CLIP FROZE AFTER A SECOND TRIM.
@@ -1558,7 +1581,7 @@ struct StoryEditorView: View {
         trimTimeObserver = p.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.05, preferredTimescale: 600), queue: .main) { t in
                 guard showTrim, !trimDragging else { return }
-                trimPlayhead = t.seconds
+                trimPlayhead.seconds = t.seconds
             }
         return p
     }
@@ -1952,10 +1975,11 @@ struct StoryEditorView: View {
                 // REAL BINDINGS NOW, not `.constant`. Dragging a handle seeks the clip, so you can
                 // see the frame you are cutting on — which is the whole reason a trim screen has a
                 // picture above it. It was blind because the composer had no player; it has one.
-                VideoTrimStrip(duration: dur, thumbnails: trimThumbs,
-                               trimStart: $trimStart, trimEnd: $trimEnd,
-                               playhead: $trimPlayhead, scrubTime: $trimScrub,
-                               playing: $previewPlaying, draggingPlayhead: $trimDragging)
+                // ⚠️ THROUGH A HOST THAT OWNS THE 20Hz, so the playhead's clock cannot reach this
+                // screen's body. See `TrimPlayheadBox`.
+                TrimStripHost(playhead: trimPlayhead, duration: dur, thumbnails: trimThumbs,
+                              trimStart: $trimStart, trimEnd: $trimEnd, scrubTime: $trimScrub,
+                              playing: $previewPlaying, draggingPlayhead: $trimDragging)
                     .frame(height: 56)
                     .padding(.horizontal, 16)
                     // Reserve the slot rather than let a late filmstrip shove the layout up.
@@ -3525,6 +3549,39 @@ struct ClipPreviewLayer: UIViewRepresentable {
     }
 }
 
+/// ⛔ THE TRIM PLAYHEAD, HELD OUTSIDE THE EDITOR'S OWN STATE. Read the long note on
+/// `StoryEditorView.trimPlayhead` before moving it back.
+///
+/// One number, written twenty times a second by the player's periodic observer while a clip is
+/// playing. Held here, in a class, only the view that observes it re-renders on that clock.
+final class TrimPlayheadBox: ObservableObject {
+    @Published var seconds: Double = 0
+}
+
+/// The trim strip, and the only view in the app that re-renders on the playhead's 20Hz.
+///
+/// It exists purely to put an `@ObservedObject` somewhere small. `VideoTrimStrip` itself is shared
+/// with the video editor and with the chat's media approval and takes a plain `Binding<Double>` —
+/// his standing instruction is that there is one trim system and it is not to be forked — so the box
+/// is unwrapped here, one level above it, instead of being pushed down into it.
+struct TrimStripHost: View {
+    @ObservedObject var playhead: TrimPlayheadBox
+    let duration: Double
+    let thumbnails: [UIImage]
+    @Binding var trimStart: Double
+    @Binding var trimEnd: Double
+    @Binding var scrubTime: Double?
+    @Binding var playing: Bool
+    @Binding var draggingPlayhead: Bool
+
+    var body: some View {
+        VideoTrimStrip(duration: duration, thumbnails: thumbnails,
+                       trimStart: $trimStart, trimEnd: $trimEnd,
+                       playhead: $playhead.seconds, scrubTime: $scrubTime,
+                       playing: $playing, draggingPlayhead: $draggingPlayhead)
+    }
+}
+
 struct StoryPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -3656,9 +3713,24 @@ struct ZoomableImageView: UIViewRepresentable {
         c.pinch?.isEnabled = interactive
         c.pan?.isEnabled = interactive
         if !c.active {   // adopt external scale/offset (e.g. a reset) only when not mid-gesture
+            // ⚠️ ONLY WHEN IT HAS ACTUALLY MOVED, AND THIS IS THE OTHER HALF OF THE VIDEO FREEZE.
+            //
+            // `applyTransform` writes `transform` onto the view whose layer IS the `AVPlayerLayer`.
+            // This ran on every single `updateUIView`, which is every single body evaluation of a
+            // screen that has plenty of reasons to evaluate — and while a clip is playing it had
+            // twenty a second. Rewriting a layer's transform to the value it already holds is not
+            // free: CoreAnimation re-evaluates it, and any write that lands inside an animation
+            // transaction (a page change is one, for 0.28s) starts an implicit animation on the
+            // layer showing the video.
+            //
+            // `appliedOnce` rather than trusting the initial values to differ: the first pass often
+            // matches what the coordinator was built with, and skipping THAT one would leave a
+            // reframed picture at 1.0 until something else moved it.
+            let newOffset = CGPoint(x: offset.width, y: offset.height)
+            let moved = !c.appliedOnce || c.curScale != scale || c.curOffset != newOffset
             c.curScale = scale
-            c.curOffset = CGPoint(x: offset.width, y: offset.height)
-            c.applyTransform()
+            c.curOffset = newOffset
+            if moved { c.appliedOnce = true; c.applyTransform() }
         }
     }
 
@@ -3674,6 +3746,8 @@ struct ZoomableImageView: UIViewRepresentable {
         var curScale: CGFloat
         var curOffset: CGPoint
         var active = false
+        /// Has the seat been written to the layers at least once? See `updateUIView`.
+        var appliedOnce = false
 
         init(_ p: ZoomableImageView) {
             parent = p
