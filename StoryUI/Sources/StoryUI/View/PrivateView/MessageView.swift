@@ -104,7 +104,10 @@ private extension MessageView {
                 buttonViewBuilder(config)
             } else {
                 Button(action: onCommitAction) {
-                    Image(systemName: "paperplane.fill").font(.title2).foregroundColor(.white)
+                    // His 2026-08-18: an arrow, not a paper plane. `arrow.up.circle.fill` is the
+                    // send glyph iOS itself uses in a compose field, so it reads as a button rather
+                    // than as a loose mark floating beside the pill.
+                    Image(systemName: "arrow.up.circle.fill").font(.title2).foregroundColor(.white)
                         .shadow(color: Color.black.opacity(0.55), radius: 6, y: 2)   // lifts off bright media (user)
                         .frame(width: 44, height: 44)        // bigger TAP target, same icon size
                         .contentShape(Rectangle())

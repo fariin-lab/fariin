@@ -71,8 +71,12 @@ struct UserView: View {
             // the badge already carries. One source, so the menu and the header can never name the
             // same audience two different ways. It sits between Forward and Share on his drawing.
             if canEditAudience {
+                // His own drawing, 2026-08-18: a list inside a rounded square. `megaphone` said
+                // "announce" — this row is about WHO the story is addressed to, which is a list.
+                // `systemImage` stays as the fallback for a build where the asset is missing.
                 out.append(.init(title: "Edit viewers", subtitle: audience?.text,
-                                 systemImage: "megaphone") {
+                                 systemImage: "megaphone",
+                                 assetImage: "ic_edit_viewers") {
                     NotificationCenter.default.post(name: .init("storyActionEditViewers"), object: nil)
                 })
             }
@@ -231,13 +235,23 @@ struct StoryMoreMenu: UIViewRepresentable {
         /// The grey second line. Nil draws a one-line item, which is every entry but one.
         var subtitle: String? = nil
         var systemImage: String
+        /// An icon from the APP's asset catalog, when no SF Symbol says the right thing. Nil for
+        /// every entry that has one, which is most of them.
+        ///
+        /// ⚠️ `Bundle.main`, NOT THE PACKAGE'S. This type lives in StoryUI and the artwork lives in
+        /// the app, which is the same arrangement `StoryAudienceBadge.assetImage` already uses and
+        /// draws through `Image(asset, bundle: .main)`. Rendered as a TEMPLATE so the menu tints it
+        /// like every symbol beside it rather than painting whatever colour the file carries.
+        var assetImage: String? = nil
         var destructive: Bool = false
         var action: () -> Void
 
         init(title: String, subtitle: String? = nil, systemImage: String,
+             assetImage: String? = nil,
              destructive: Bool = false, action: @escaping () -> Void) {
             self.title = title
             self.subtitle = subtitle
+            self.assetImage = assetImage
             self.systemImage = systemImage
             self.destructive = destructive
             self.action = action
@@ -377,8 +391,14 @@ struct StoryMoreMenu: UIViewRepresentable {
 
     private func menu(_ coordinator: Coordinator) -> UIMenu {
         UIMenu(title: "", children: items.map { item in
+            // The app's own artwork when the entry names one, the SF Symbol otherwise. Template
+            // rendering so a `UIMenu` tints it exactly like the symbols around it; without it the
+            // file's own colour is drawn and the row looks like a different app's.
+            let icon = item.assetImage
+                .flatMap { UIImage(named: $0)?.withRenderingMode(.alwaysTemplate) }
+                ?? UIImage(systemName: item.systemImage)
             let action = UIAction(title: item.title,
-                                  image: UIImage(systemName: item.systemImage),
+                                  image: icon,
                                   attributes: item.destructive ? .destructive : []) { _ in
                 // The menu is gone the moment an entry is chosen, so the pause it took is released
                 // here as well as by the window notifications. What happens NEXT is the host's
