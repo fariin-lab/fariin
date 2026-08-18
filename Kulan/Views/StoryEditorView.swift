@@ -320,6 +320,23 @@ struct StoryEditorView: View {
     /// there is no Aa editor, so this is false and the bar rides its own keyboard exactly as it did —
     /// including the animated padding below it, which is a separate fix and still needed.
     @State private var textToolKeyboardUp = false
+    /// ⚠️ THE BOTTOM OF THE SCREEN MUST NEVER BE BARE, AND IT WAS, FOR AS LONG AS THE KEYBOARD TAKES.
+    ///
+    /// His 2026-08-18 report: "when i click text before keyboard opening bottom button is going to
+    /// disappear". Tapping a text block set `editingID`, and both bottom layers read that directly, so
+    /// the tools capsule and NEXT blinked out in the SAME FRAME as the tap while the keyboard — and
+    /// the Aa bar it carries as its accessory — was still a quarter of a second from arriving. For
+    /// that quarter second the picture had no controls at all, which is the hole he is pointing at.
+    ///
+    /// So the bars are not hidden by the tap any more. They are hidden once the keyboard is UP, at
+    /// which point the keyboard is already standing over them and the flip cannot be seen: the same
+    /// far-side trick `textToolKeyboardUp` uses on the way out, for the same reason. Between the tap
+    /// and that moment they simply sit under the editor's own dim and are covered by the rising keys,
+    /// which is what every iOS screen does with the controls a keyboard lands on.
+    ///
+    /// ⚠️ NOT A TIMER. `keyboardDidShow` fires for a hardware keyboard's accessory bar too, so a
+    /// phone with no on-screen keys still lowers them rather than leaving them lit under the dim.
+    @State private var textToolBarsDown = false
     @State private var draggingID: UUID?
     @State private var trashHot = false
     @State private var guideV = false
@@ -883,6 +900,21 @@ struct StoryEditorView: View {
         // matter; see `textToolKeyboardUp`, which is where the reason is written down.
         .onChange(of: editingID) { _, id in
             if id != nil { textToolKeyboardUp = true }
+            // AND THE BARS COME BACK THE MOMENT EDITING ENDS, over the same 0.2s the editor takes to
+            // fade off them. Only this direction is driven by `editingID`: going the other way is the
+            // keyboard's business, not the tap's. See `textToolBarsDown`.
+            if id == nil { withAnimation(.easeInOut(duration: 0.2)) { textToolBarsDown = false } }
+        }
+        // The far side of the keyboard's arrival, where lowering them is invisible because the keys
+        // are already standing on top of them. `editingID` is checked for the same reason the hide
+        // notification below checks it: the caption field has a keyboard of its own and this is not
+        // about that one.
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidShowNotification)) { _ in
+            // Animated, though on his phone nothing is left to see: the keys pass the tool row about
+            // 50ms into their rise and the caption pill about 170ms, both before this fires. The fade
+            // is for the screens where they do not — a short one, so anything the keyboard failed to
+            // reach leaves quietly instead of popping.
+            if editingID != nil { withAnimation(.easeInOut(duration: 0.15)) { textToolBarsDown = true } }
         }
         // `keyboardDidHide`, not `willHide`: this must flip on the far side of the animation, when the
         // safe-area inset is already back to nothing, so the flip itself moves the caption bar by
@@ -1649,7 +1681,9 @@ struct StoryEditorView: View {
         // modifier with one identity rather than a branch that would rebuild the layer. See
         // `textToolKeyboardUp` for why it is latched rather than read off `editingID`.
         .ignoresSafeArea(.keyboard, edges: textToolKeyboardUp ? .bottom : [])
-        .opacity(draggingID == nil && editingID == nil ? 1 : 0)   // trash owns the bottom while dragging text
+        // Trash owns the bottom while dragging text. The Aa editor takes it too, but only once its
+        // keyboard is standing over this bar rather than the instant it opens — see `textToolBarsDown`.
+        .opacity(draggingID == nil && !textToolBarsDown ? 1 : 0)
     }
 
     /// Aa / crop-or-clip tools + NEXT, on the black band UNDER the card. Pinned: the keyboard never
@@ -1710,7 +1744,12 @@ struct StoryEditorView: View {
             .padding(.bottom, 6)
         }
         .ignoresSafeArea(.keyboard, edges: .bottom)
-        .opacity(!captionFocused && draggingID == nil && editingID == nil ? 1 : 0)
+        // ⚠️ `textToolBarsDown`, NOT `editingID`, AND THAT ONE WORD IS HIS 08-18 REPORT. This row is
+        // pinned under the keyboard, so it does not need to flee the moment a text block is tapped —
+        // it needs to still be there while the keyboard covers it. The tools and NEXT are what the
+        // Aa bar replaces, and until the keyboard has carried that bar onto the screen there is
+        // nothing to replace them WITH.
+        .opacity(!captionFocused && draggingID == nil && !textToolBarsDown ? 1 : 0)
     }
 
     /// The caption field in its glass pill, exactly as it was inside the old bottom bar.
