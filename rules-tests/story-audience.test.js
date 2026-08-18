@@ -52,6 +52,17 @@ const base = {
 const publicStory = { ...base, public: true };
 const privateStory = { ...base, public: false };
 
+// ⛔ S2 — THE AUDIENCE IS TOKENS NOW, AND THIS IS THE PROOF THAT BOTH FORMS WORK.
+//
+// `recipientUids` holds sha256('fariin-audience-v1:' + uid) per person, so a recipient reading a
+// story can no longer read the author's contact list out of it. The rule recomputes the caller's
+// token with `hashing.sha256(...).toHexString().lower()`; these constants are the same hash computed
+// outside the rules engine, so a mismatch in prefix, separator or CASE fails here rather than on
+// somebody's phone.
+const TOKEN_B = 'e9e0f60ebf1dfe02a3f99d709f61a556106530392b47ebf1ba98ccbd61dfe756';
+const TOKEN_C = '279eedee8de074e8584031bc9e5b7f1d1946a11a9c73ca8ac15f62848cd89281';
+const tokenStory = { ...base, public: false, recipientUids: [TOKEN_B] };
+
 /// One mock set per CALLER: isBanned() reads users/{caller} and adminCan() reads admins/{caller}.
 /// Getting this wrong is the trap the README calls out — an unmocked read makes the whole rule
 /// evaluate to nothing and the test reports a confident, meaningless answer.
@@ -86,6 +97,19 @@ const cases = [
     path: `${D}/stories/${SID}`, before: privateStory, mocks: mocksFor(C) },
   { name: 'a recipient reads a friends-only story', expect: 'ALLOW', uid: B, method: 'get',
     path: `${D}/stories/${SID}`, before: privateStory, mocks: mocksFor(B) },
+
+  // S2. The tokenised audience: the same two answers, off a list that names nobody.
+  { name: 'S2 a recipient reads a story whose audience is TOKENS', expect: 'ALLOW', uid: B,
+    method: 'get', path: `${D}/stories/${SID}`, before: tokenStory, mocks: mocksFor(B) },
+  { name: 'S2 a stranger cannot read a tokenised story', expect: 'DENY', uid: C,
+    method: 'get', path: `${D}/stories/${SID}`, before: tokenStory, mocks: mocksFor(C) },
+  // ⚠️ The one that would pass for the wrong reason if the rule simply ignored the token clause:
+  // C's own token is present, so an ALLOW here is the hash actually being computed and matched.
+  { name: 'S2 the token is matched, not waved through', expect: 'ALLOW', uid: C, method: 'get',
+    path: `${D}/stories/${SID}`, before: { ...base, public: false, recipientUids: [TOKEN_C] },
+    mocks: mocksFor(C) },
+  { name: 'S2 the author still reads a tokenised story', expect: 'ALLOW', uid: A, method: 'get',
+    path: `${D}/stories/${SID}`, before: tokenStory, mocks: mocksFor(A) },
 
   // ⚠️ THE CONTACT-GRAPH LEAK (S1). A story document carries recipientUids — every person the
   // author has an accepted chat with. It used to be world-readable whenever public == true, so one

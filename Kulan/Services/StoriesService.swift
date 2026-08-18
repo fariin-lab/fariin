@@ -6,7 +6,50 @@ import ImageIO   // CGImageSourceCreateThumbnailAtIndex, for the embedded story 
 import FirebaseAuth
 import FirebaseFirestore
 import FirebaseStorage
+import CryptoKit   // audienceToken — see `StoryAudience.token`
 import StoryUI   // StoryVideoSeed / StoryImageSeed — the uploader warms the viewer's caches
+
+/// ⛔ WHO A STORY WENT TO, WITHOUT SAYING WHO THEY ARE.
+///
+/// The story document has to carry its audience: the tray is one `array-contains` query against it,
+/// and a Firestore read rule can only authorise from fields on the document it is granting. But a
+/// rule cannot grant a document while HIDING one field of it — so for as long as that array held raw
+/// uids, every recipient who read a story read the author's whole contact list with it, up to a
+/// thousand people. The same hole was closed for strangers in 2026-08 by moving public reach to
+/// `users/{uid}/publicStories`; this is the half that was left, and it was the bigger half, because
+/// a friend is far likelier to look.
+///
+/// The array holds an opaque token per person now: `sha256("fariin-audience-v1:<uid>")`, lowercase
+/// hex. Everything that has to work still works, because every party can compute the token it needs
+/// and nobody can invert the ones it does not:
+///   · the tray queries `array-contains` its OWN token — one listener, same shape, same cost;
+///   · the read rule recomputes the caller's token with `hashing.sha256` and looks for it;
+///   · one-time consumption and block-revocation remove that person's token;
+///   · the author still gets a COUNT for `recipientsLeft`, which never needed identities.
+///
+/// ⚠️ THE TOKEN CANNOT BE PER-STORY, AND THAT IS A CONSTRAINT RATHER THAN A CHOICE. The tray is a
+/// single `array-contains` across every story at once, so the value it searches for has to be the
+/// same in all of them; a token mixed with the story id would need one query per story. So it is
+/// derived from the uid alone.
+///
+/// ⚠️ WHAT THIS DOES NOT DO, so nobody writes a stronger claim beside it. A uid is not guessable —
+/// 28 characters of base62 — so the list cannot be inverted or enumerated, which is the leak. Two
+/// things do survive: somebody who ALREADY KNOWS a particular uid can hash it and test whether that
+/// person received a story, and because the token is stable they can tell that the same unnamed
+/// person appears in several stories they received. Closing those would mean a fan-out write per
+/// recipient rather than one array, which is a different feature.
+enum StoryAudience {
+    /// ⚠️ THIS EXACT STRING IS RECOMPUTED IN TWO OTHER PLACES — `firestore.rules` (`hashing.sha256`)
+    /// and `onStoryConsumed` in the Cloud Functions. Change the prefix, the separator or the case and
+    /// all three have to change in the same breath, or every story becomes unreadable to everyone.
+    /// The version in the prefix is there so a future change can be made without guessing.
+    static func token(_ uid: String) -> String {
+        SHA256.hash(data: Data("fariin-audience-v1:\(uid)".utf8))
+            .map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func tokens(_ uids: some Sequence<String>) -> [String] { uids.map(token) }
+}
 
 // One story (photo or video). Rules-protected (v1, not E2EE); media is a plain file in Storage.
 /// WHO A STORY WENT TO, as a label — not as a pointer to the list it came from.
@@ -550,8 +593,18 @@ final class StoriesService {
     }
 
     /// The mirror goes when the story does. Harmless if there never was one.
-    private func deletePublicMirror(storyId: String, authorUid: String) async {
-        try? await db.collection("users").document(authorUid)
+    /// ⛔ IT THROWS NOW, AND THE ONE CALLER THAT CAN ACT ON IT DOES.
+    ///
+    /// This swallowed its own failure with `try?`. The mirror is the copy a STRANGER reads off the
+    /// author's profile, so a dropped request here — offline, a blip — left the story playing in
+    /// public while the story itself was deleted everywhere else, with nothing to notice it and
+    /// nothing to retry it. A delete that only mostly deletes is the one kind this feature cannot
+    /// have.
+    ///
+    /// Deleting a document that does not exist SUCCEEDS in Firestore, so this is safe to call for a
+    /// story that never had a mirror, which is most of them.
+    private func deletePublicMirror(storyId: String, authorUid: String) async throws {
+        try await db.collection("users").document(authorUid)
             .collection("publicStories").document(storyId).delete()
     }
 
@@ -649,7 +702,10 @@ final class StoriesService {
                 "public": everyone,
                 "allowsReplies": allowsReplies,
                 "replyCount": 0,
-                "recipientUids": Array(recipients),
+                // ⚠️ TOKENS, NOT UIDS — see `StoryAudience`. The field name stays because the tray's
+            // `array-contains` query, the read rule and the Cloud Function all key on it, and a
+            // rename would have to land in three places at the same instant.
+            "recipientUids": StoryAudience.tokens(recipients),
             ])
             StoryPrefs.rememberAudienceName(storyId: storyId, tag: tag)
 
@@ -919,7 +975,10 @@ final class StoriesService {
             "public": everyone,
             "allowsReplies": allowsReplies,
             "replyCount": 0,
-            "recipientUids": Array(recipients),
+            // ⚠️ TOKENS, NOT UIDS — see `StoryAudience`. The field name stays because the tray's
+            // `array-contains` query, the read rule and the Cloud Function all key on it, and a
+            // rename would have to land in three places at the same instant.
+            "recipientUids": StoryAudience.tokens(recipients),
         ])
         StoryPrefs.rememberAudienceName(storyId: storyId, tag: tag)
 
@@ -1217,7 +1276,15 @@ final class StoriesService {
         // to every stranger who opens it. `me` rather than the document's author for the same reason
         // as above: a failed read must not cost the mirror its deletion.
         let author = (data?["authorUid"] as? String) ?? me
-        if !author.isEmpty { await deletePublicMirror(storyId: id, authorUid: author) }
+        // ⚠️ FIRST, AND IT CAN STOP THE WHOLE DELETE. The mirror is the public copy; if it survives,
+        // the story goes on playing to every stranger who opens the profile even though it is gone
+        // from the author's own row and from every recipient's tray. Refusing here leaves BOTH
+        // copies in place, which is a state the user can see and retry from — the old silent `try?`
+        // left the one state nobody can see or repair.
+        if !author.isEmpty {
+            do { try await deletePublicMirror(storyId: id, authorUid: author) }
+            catch { return false }
+        }
         for p in knownPaths { try? await Storage.storage().reference().child(p).delete() }
         // The poster sits beside the mp4 for a video, and for a photo this path simply does not
         // exist. Asked unconditionally when the type is unknown, for the same reason.
@@ -1306,7 +1373,9 @@ final class StoriesService {
             // AND THE PUBLIC MIRROR, which is a SEPARATE document in a subcollection and does not
             // go with the story. An "Everyone" story writes one at post time; nothing here removed
             // it, and its read rule is signed-in-only, so it outlived the story it mirrors.
-            await deletePublicMirror(storyId: d.documentID, authorUid: me)
+            // Best-effort here on purpose: this is the expiry sweep, it runs again next launch, and
+            // one unreachable mirror must not stop it clearing the rest.
+            try? await deletePublicMirror(storyId: d.documentID, authorUid: me)
             try? await d.reference.delete()
         }
     }
@@ -1373,6 +1442,15 @@ final class StoriesRepository {
     // Live inputs. Listener callbacks arrive on the MAIN queue (Firestore default); rebuild()
     // snapshots them there and regroups off-main.
     private var othersReg: ListenerRegistration?
+    /// ⚠️ THE SECOND HALF OF THE TRAY, AND IT IS TEMPORARY. `array-contains` takes one value, and for
+    /// up to 24 hours after the audience was tokenised there are stories of both kinds in flight:
+    /// ones posted by an older build holding raw uids, and ones holding tokens. Two listeners merged
+    /// by id is the only way to see both without a round trip per story.
+    ///
+    /// ⚠️ SAFE TO DELETE ONCE EVERY STORY POSTED BEFORE THE TOKEN CHANGE HAS EXPIRED — a day after
+    /// the build carrying it reaches the LAST phone, not a day after it ships. Removing it early
+    /// makes an older friend's story silently absent, which is the hardest kind of bug to notice.
+    private var othersLegacyReg: ListenerRegistration?
     private var mineReg: ListenerRegistration?
     private var ctxReg: ListenerRegistration?
     private var listeningUid: String?               // re-attach when the signed-in user changes
@@ -1391,6 +1469,9 @@ final class StoriesRepository {
     /// rebuilds belong to the same account.
     private var rebuildGeneration = 0
     private var othersStories: [Story] = []
+    /// The two audience listeners' raw results, merged into `othersStories` by `mergeOthers`.
+    private var othersByToken: [Story] = []
+    private var othersByLegacyUid: [Story] = []
     private var mineStories: [Story] = []
     /// ⚠️ HAS THE SERVER ANSWERED THIS LISTENER YET, in this session.
     ///
@@ -1404,6 +1485,7 @@ final class StoriesRepository {
     /// Once the server has answered once, an empty snapshot means empty. See `start`.
     private var mineFromServer = false
     private var othersFromServer = false
+    private var othersLegacyFromServer = false
     private var profileCache: [String: (String, String?)] = [:]   // unknown-author name/photo
     private var expiryTask: Task<Void, Never>?      // wakes at the next expiresAt → drop that card
 
@@ -1411,11 +1493,13 @@ final class StoriesRepository {
     /// next account on its first load().
     func reset() {
         othersReg?.remove(); othersReg = nil
+        othersLegacyReg?.remove(); othersLegacyReg = nil
         mineReg?.remove(); mineReg = nil
         ctxReg?.remove(); ctxReg = nil
         listeningUid = nil
         expiryTask?.cancel(); expiryTask = nil
         othersStories = []; mineStories = []
+        othersByToken = []; othersByLegacyUid = []
         profileCache = [:]
         mine = nil; others = []
         didLoad = false          // the next account starts unknown, not "everything deleted"
@@ -1449,7 +1533,12 @@ final class StoriesRepository {
             // every other non-contact's profile ring as well, which is not what blocking one person
             // means. An "Everyone" story stays public, and the blocked person is turned away at read
             // time instead — see the block gate in publicStoryGroup.
-            try? await doc.reference.updateData(["recipientUids": FieldValue.arrayRemove([uid])])
+            // BOTH FORMS. A story posted before the audience was tokenised still holds raw uids,
+            // and it has up to 24 hours left to live — removing only the token would leave a blocked
+            // person watching it for the rest of the day. `arrayRemove` ignores what is not there.
+            try? await doc.reference.updateData([
+                "recipientUids": FieldValue.arrayRemove([StoryAudience.token(uid), uid])
+            ])
         }
     }
 
@@ -1656,12 +1745,26 @@ final class StoriesRepository {
     @MainActor private func start(_ me: String) {
         stop()
         listeningUid = me
-        othersReg = db.collection("stories").whereField("recipientUids", arrayContains: me)
+        // ⚠️ MY TOKEN, NOT MY UID — see `StoryAudience`. One `array-contains` against the same field,
+        // so the query's shape, its index and its cost are exactly what they were.
+        othersReg = db.collection("stories")
+            .whereField("recipientUids", arrayContains: StoryAudience.token(me))
             .addSnapshotListener { [weak self] snap, error in
                 guard let self, let snap else { if let error { print("stories listen error:", error) }; return }
                 if !snap.metadata.isFromCache { self.othersFromServer = true }
                 if Self.ignoreColdEmpty(snap, serverHasSpoken: self.othersFromServer) { return }
-                self.othersStories = self.parse(snap.documents)
+                self.othersByToken = self.parse(snap.documents)
+                self.mergeOthers()
+                Task { await self.rebuild() }
+            }
+        // The stories posted before the change, for the day they have left. See `othersLegacyReg`.
+        othersLegacyReg = db.collection("stories").whereField("recipientUids", arrayContains: me)
+            .addSnapshotListener { [weak self] snap, error in
+                guard let self, let snap else { if let error { print("legacy stories listen error:", error) }; return }
+                if !snap.metadata.isFromCache { self.othersLegacyFromServer = true }
+                if Self.ignoreColdEmpty(snap, serverHasSpoken: self.othersLegacyFromServer) { return }
+                self.othersByLegacyUid = self.parse(snap.documents)
+                self.mergeOthers()
                 Task { await self.rebuild() }
             }
         mineReg = db.collection("stories").whereField("authorUid", isEqualTo: me)
@@ -1688,6 +1791,13 @@ final class StoriesRepository {
             }
     }
 
+    /// The two audience listeners, as one list. Tokenised first so a story matching both keeps the
+    /// newer copy, deduplicated by id because a merge is the only place the two can meet.
+    @MainActor private func mergeOthers() {
+        var seen = Set<String>()
+        othersStories = (othersByToken + othersByLegacyUid).filter { seen.insert($0.id).inserted }
+    }
+
     /// THE OFFLINE COLD START, AND ONLY THAT: an empty snapshot out of the cache, before the server
     /// has ever answered this listener, with no unacknowledged write of ours to explain it.
     ///
@@ -1707,6 +1817,7 @@ final class StoriesRepository {
 
     @MainActor private func stop() {
         othersReg?.remove(); othersReg = nil
+        othersLegacyReg?.remove(); othersLegacyReg = nil
         mineReg?.remove(); mineReg = nil
         ctxReg?.remove(); ctxReg = nil
         listeningUid = nil

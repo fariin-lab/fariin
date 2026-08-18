@@ -945,8 +945,28 @@ service cloud.firestore {
       //
       // Public reach is not lost: it moved to `users/{uid}/publicStories/{storyId}`, a mirror that
       // carries the media and nothing about the audience. See that block, and `postStory`.
+      // ⛔ THE AUDIENCE IS A LIST OF TOKENS NOW, AND THAT IS A SECURITY FIX RATHER THAN A TIDY-UP.
+      //
+      // A rule cannot grant a document while hiding one field of it, so for as long as
+      // `recipientUids` held raw uids, EVERY RECIPIENT WHO READ A STORY READ THE AUTHOR'S WHOLE
+      // CONTACT LIST WITH IT — up to a thousand people they had no other way to name. The same hole
+      // was closed for strangers by moving public reach to `users/{uid}/publicStories`; this was the
+      // half left behind, and the bigger one, because a friend is likelier to look.
+      //
+      // The array holds `sha256('fariin-audience-v1:' + uid)` per person, lowercase hex. A uid is 28
+      // characters of base62, so the list cannot be inverted or enumerated. The app computes the same
+      // string in `StoryAudience.token` and `onStoryConsumed` recomputes it too — all three have to
+      // change together or nothing is readable.
+      function audienceToken(uid) {
+        return hashing.sha256('fariin-audience-v1:' + uid).toHexString().lower();
+      }
       allow read: if signedIn() && (
         request.auth.uid == resource.data.authorUid
+        || audienceToken(request.auth.uid) in resource.data.recipientUids
+        // ⚠️ THE RAW-UID FORM, FOR THE STORIES THAT WERE ALREADY UP WHEN THIS SHIPPED. They expire
+        // within 24 hours and this clause goes with the last of them — see `othersLegacyReg` in the
+        // app, which is the same migration seen from the other end. It is only ever a WIDENING for
+        // documents written by an older build; nothing new is written in that shape.
         || request.auth.uid in resource.data.recipientUids
         // A moderator acting on a report. A reported story is often NOT public - somebody's friend
         // reported it - and without this the one person who has to look at it is the one person who
