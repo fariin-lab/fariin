@@ -157,7 +157,27 @@ final class StoryViewersPanelView: UIView {
         addSubview(allTab); addSubview(friendsTab); addSubview(underline)
 
         search.placeholder = "Search"
-        search.backgroundColor = UIColor.white.withAlphaComponent(0.12)
+        // ⚠️ MEASURED OFF HIS SCREENSHOT: THE PILL WAS 80 ON A SHEET OF 25, WHICH IS WHY IT READ AS A
+        // LIGHT GREY BLOCK RATHER THAN AS A FIELD.
+        //
+        // `UISearchTextField` draws its OWN rounded fill, and `backgroundColor` goes BEHIND that
+        // rather than instead of it. So `white 0.12` — which on its own over this sheet works out
+        // near 53 — was composited under the system's fill and came out at 80. Every earlier attempt
+        // to darken it was tuning the wrong one of the two layers, which is why it stayed pale.
+        //
+        // `borderStyle = .none` is what stands the system fill down, and an OPAQUE colour is what
+        // makes the result predictable: with nothing left to composite, the pill is exactly the
+        // number written here. 0.17 is 43, which sits just off the sheet the way iOS draws a dark
+        // field, instead of a block that competes with the names under it.
+        //
+        // ⚠️ THE CORNER HAS TO BE OURS NOW TOO. It came with the system fill, so dropping one drops
+        // the other, and a square field is a worse bug than a pale one. Half of the 38pt height in
+        // `layoutSubviews`, so the two cannot drift apart.
+        search.borderStyle = .none
+        search.backgroundColor = UIColor(white: 0.17, alpha: 1)
+        search.layer.cornerRadius = 19
+        search.layer.cornerCurve = .continuous
+        search.clipsToBounds = true
         search.textColor = .white
         search.addTarget(self, action: #selector(searchChanged), for: .editingChanged)
         // The keyboard says SEARCH (his ask — the default return key said nothing useful), and
