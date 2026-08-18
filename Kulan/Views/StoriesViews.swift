@@ -4378,7 +4378,32 @@ struct StoryViewer: View {
     /// ⚠️ NIL IS "NO ANSWER", NOT "NO VIEWS" — see the guard inside. A caller that cannot tell the
     /// two apart writes a zero over a number that was right.
     private static func viewSummary(storyId: String) async -> StoryViewSummary? {
-        if let s = await StoriesService.shared.fetchViewSummary(storyId: storyId) { return s }
+        // ⚠️ A COUNTER OF ZERO IS NOT EVIDENCE OF ZERO — his 2026-08-18 screenshot, "0" above the
+        // eye with one viewer named in the list directly underneath it.
+        //
+        // These are two different sources and only one of them is the truth. The list reads the
+        // RECEIPTS, which are the documents somebody watching actually wrote. This reads
+        // `stories/{id}/meta/views`, a denormalised counter a server trigger maintains — so it is
+        // one write behind by nature, and a trigger that failed, was deployed late, or never ran for
+        // a story posted before it existed leaves the number at its initial value for good.
+        //
+        // `fetchViewSummary` already answers nil for a MISSING document, which falls through to the
+        // receipts correctly. The gap is a document that EXISTS and says zero: indistinguishable
+        // from "the trigger never counted anything", and trusted anyway.
+        //
+        // So zero is the one value that gets checked against the receipts. It is also the one value
+        // where checking is free: a story with genuinely no views has no receipts to read either, so
+        // the honest case costs an empty query and the broken case gets the right number. Any
+        // non-zero counter is still believed and still costs one small document, which is the whole
+        // reason the counter exists.
+        if let s = await StoriesService.shared.fetchViewSummary(storyId: storyId) {
+            guard s.count == 0 else { return s }
+            if let receipts = await StoriesService.shared.fetchViewers(storyId: storyId),
+               !receipts.isEmpty {
+                return .counted(from: receipts)
+            }
+            return s
+        }
         // ⚠️ A FAILED RECEIPT READ IS NOT A ZERO. `fetchViewers` answers nil when the request itself
         // failed, and counting nil as an empty list is what wrote "0 views" over a story that had
         // been read correctly a moment before. No answer leaves the previous number where it is.
