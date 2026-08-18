@@ -311,7 +311,25 @@ struct NameStoryView: View {
             }
         }
         // The name is the only thing this page is really for, so the keyboard is up on arrival.
-        .onAppear { nameFocused = true }
+        //
+        // ⚠️ AFTER THE PUSH, NOT DURING IT — his 2026-08-18 report, with the keyboard photographed
+        // sliding in from the RIGHT instead of up from the bottom, and the page arriving offset with it.
+        //
+        // This was `.onAppear`, which fires as the push BEGINS. So the field took first responder
+        // while this view was still travelling in from the right edge, and the keyboard's own
+        // presentation was handed to the navigation controller's in-flight transition: it rode the
+        // push sideways rather than running its own upward curve. The stutter he calls lag is the
+        // same instant — a keyboard appearing mid-push forces this List to re-lay-out its three
+        // sections against a safe area that is changing on two axes at once.
+        //
+        // 0.35s is `UINavigationController`'s own push duration, so the field is asked the moment the
+        // page has stopped moving and the keyboard gets the whole screen to itself and its normal
+        // curve. `.task` rather than a dispatch, so backing out of the page cancels it instead of
+        // raising a keyboard onto a view that has gone.
+        .task {
+            try? await Task.sleep(for: .milliseconds(350))
+            nameFocused = true
+        }
     }
 }
 
