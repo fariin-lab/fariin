@@ -1454,8 +1454,28 @@ struct StoryEditorView: View {
             }
 
             if isDrawing {
-                // Must live in the SAME space (the card) as the photo + overlays + the flatten
-                // capture rect, otherwise strokes bake shifted and the bottom band is clipped.
+                // ⛔ THE STROKES BELONG TO THE PICTURE, NOT TO THE CARD — his 2026-08-18 "if I zoom
+                // in, the line must stay on that same part of the image". READ THIS BEFORE MOVING
+                // THE PEN AGAIN.
+                //
+                // `PKDrawing` was authored and rendered in CARD space while the photo underneath is
+                // drawn `.scaleEffect(photoZoom).offset(photoOffset)`. Pinch the picture and the
+                // strokes stayed nailed to the screen while the thing they were drawn on slid out
+                // from under them. `flatten` had the identical omission, which is exactly why nobody
+                // caught it: the export and the screen agreed with each other, so WYSIWYG held —
+                // both were anchored to the wrong thing, in the same wrong way.
+                //
+                // The transform below is the photo's own, applied to the pen layer as well, so the
+                // two move as one surface. Applied to BOTH the live canvas and the static render,
+                // and to the export in `flatten`, or the three drift apart again.
+                //
+                // ⚠️ AND IT IS WHY STROKES DRAWN WHILE ZOOMED STILL LAND IN THE RIGHT PLACE. A
+                // SwiftUI transform maps touches through its inverse, so PencilKit goes on recording
+                // in its OWN untransformed coordinates — which is the un-zoomed card space, which is
+                // the picture's space. Nothing has to be converted on the way in or the way out.
+                //
+                // Must otherwise live in the SAME space (the card) as the photo + overlays + the
+                // flatten capture rect, or strokes bake shifted and the bottom band is clipped.
                 //
                 // OUR PEN, NOT APPLE'S PALETTE (owner 2026-08-03: "use my owner pen"). PencilKit still
                 // draws the strokes — it is the drawing engine, not a look — but its tool picker is off
@@ -1470,13 +1490,21 @@ struct StoryEditorView: View {
                                   withAnimation(.easeInOut(duration: 0.15)) { strokeInFlight = drawing }
                               })
                     .frame(width: card.width, height: card.height)
+                    .scaleEffect(photoZoom).offset(photoOffset)
             } else if !drawing.bounds.isEmpty {
                 // Bug fix: after "Done", keep the markup VISIBLE in the preview (it used to vanish because
                 // the canvas only existed in edit mode). Render the saved strokes as a static image, same
                 // space + on top, so it persists and matches the flattened export exactly.
-                Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: card), scale: UIScreen.main.scale))
+                //
+                // ⚠️ RENDERED AT THE ZOOM IT WILL BE SEEN AT. `drawing.image(scale:)` rasterises
+                // once, and the transform below then blows that raster up — so at 3× a stroke drawn
+                // sharp came out soft. Asking for the pixels the zoom is about to need costs nothing
+                // at zoom 1, which is nearly always.
+                Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: card),
+                                             scale: UIScreen.main.scale * max(1, photoZoom)))
                     .resizable()
                     .frame(width: card.width, height: card.height)
+                    .scaleEffect(photoZoom).offset(photoOffset)
                     .allowsHitTesting(false)
             }
 
@@ -2397,6 +2425,44 @@ struct StoryEditorView: View {
         return coversCard ? cardRect : shown
     }
 
+    /// Where a picture of `imageSize` sits inside the card at zoom 1: aspect-fit, centred. The same
+    /// rule `photoRectOnScreen` uses before it applies the pinch, and the same one
+    /// `Image(...).scaledToFit()` applies on screen — one shape, so the pen and the photo cannot
+    /// disagree about where the picture is.
+    private func fittedPhotoRect(_ imageSize: CGSize, in card: CGSize) -> CGRect {
+        guard imageSize.width > 0, imageSize.height > 0, card.width > 0, card.height > 0 else { return .zero }
+        let fit = min(card.width / imageSize.width, card.height / imageSize.height)
+        let w = imageSize.width * fit, h = imageSize.height * fit
+        return CGRect(x: (card.width - w) / 2, y: (card.height - h) / 2, width: w, height: h)
+    }
+
+    /// Carry the pen strokes through a crop. `r` is the kept rectangle as a 0-1 fraction of the
+    /// picture the crop screen was handed. See the note at the call site for why this cannot be a
+    /// transform on screen.
+    private func applyCropToDrawing(_ r: CGRect) {
+        guard !drawing.bounds.isEmpty, r.width > 0.0001, r.height > 0.0001 else { return }
+        let card = canvasSize
+        let base = (croppedSource ?? current).size
+        let oldFit = fittedPhotoRect(base, in: card)
+        guard oldFit.width > 1 else { return }
+        // The part of the old fitted picture that survives...
+        let kept = CGRect(x: oldFit.minX + r.minX * oldFit.width,
+                          y: oldFit.minY + r.minY * oldFit.height,
+                          width: oldFit.width * r.width,
+                          height: oldFit.height * r.height)
+        guard kept.width > 1 else { return }
+        // ...and where it lands once it is the whole picture and re-fitted.
+        let newFit = fittedPhotoRect(CGSize(width: base.width * r.width, height: base.height * r.height),
+                                     in: card)
+        guard newFit.width > 1 else { return }
+        let s = newFit.width / kept.width
+        let t = CGAffineTransform.identity
+            .translatedBy(x: newFit.minX, y: newFit.minY)
+            .scaledBy(x: s, y: s)
+            .translatedBy(x: -kept.minX, y: -kept.minY)
+        drawing = drawing.transformed(using: t)
+    }
+
     @ViewBuilder private var cropOverlay: some View {
         if showCrop {
             // From the CURRENT cropped result when there is one, so re-opening crop refines instead
@@ -2410,6 +2476,27 @@ struct StoryEditorView: View {
                          },
                          onFlightStart: { cropFlying = true },
                          onRect: { r in
+                             // ⛔ THE STROKES FOLLOW THE CROP — the second half of his 2026-08-18
+                             // "after cropping the Pen drawing should remain correctly positioned
+                             // relative to the image".
+                             //
+                             // Anchoring the pen to `photoZoom`/`photoOffset` (see `cardContent`)
+                             // makes it move with a PINCH, and that is most of the ask — but a crop
+                             // is a different kind of move and no transform on screen expresses it.
+                             // Cropping replaces the base picture and re-fits it, so the strokes'
+                             // un-zoomed card coordinates stop meaning what they meant: the kept
+                             // region grows to fill the card, and anything drawn on it has to grow
+                             // with it or it slides off the part of the photo it was drawn on.
+                             //
+                             // ⚠️ `photoZoom` AND `photoOffset` ARE NOT TOUCHED BY A CROP — nothing
+                             // in this file writes them outside `restoreCurrent` — so this maps the
+                             // UN-zoomed rects and the pinch keeps applying on top, unchanged.
+                             //
+                             // The mapping is the kept sub-rect of the old fitted picture onto the
+                             // new fitted picture: `p' = newFit.origin + s · (p − kept.origin)`.
+                             // Built in that order, because `translatedBy`/`scaledBy` compose onto
+                             // the right, so the last one written is the first one applied.
+                             applyCropToDrawing(r)
                              // Re-cropping refines the crop you already have, so the new rectangle is
                              // read INSIDE the old one rather than against the original — otherwise a
                              // second pass would jump back out to the full frame and lose the first.
@@ -3275,7 +3362,15 @@ struct StoryEditorView: View {
                     .position(s.center)
             }
             if !drawing.bounds.isEmpty {
-                Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: size), scale: UIScreen.main.scale)).resizable()
+                // ⚠️ THE PHOTO'S TRANSFORM, THE SAME TWO LINES IT CARRIES ABOVE. The pen layer is
+                // anchored to the picture on screen now (see the note in `cardContent`), so leaving
+                // it flat here would put the export and the editor back out of step — which is the
+                // one thing this whole function exists to prevent. Rendered at the zoom's own scale
+                // for the same reason the on-screen copy is.
+                Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: size),
+                                             scale: UIScreen.main.scale * max(1, photoZoom))).resizable()
+                    .scaleEffect(photoZoom).offset(photoOffset)
+                    .frame(width: size.width, height: size.height).clipped()
             }
             // Bake the text overlays — same builder + transforms as on-screen → WYSIWYG.
             ForEach(overlays) { o in
