@@ -118,9 +118,33 @@ enum DemoStoryMedia {
         return size > 4096
     }
 
+    /// ⚠️ EVERY STORE THAT MIGHT BE ASKED, NOT JUST `URLCache` — his grey skeleton cards.
+    ///
+    /// A demo url points at `fariin.local`, which resolves to nothing on purpose: the picture is
+    /// planted, never fetched. So any reader that misses its own cache goes to the network, waits for
+    /// a host that does not exist, and leaves the skeleton up for good. There is no failure to
+    /// recover from, only a lookup in the wrong drawer.
+    ///
+    /// This planted into `URLCache` alone, and the chat list's stories row does not read `URLCache`.
+    /// It draws through `DiskImageCache`, the APP's own store in its own folder — the same split
+    /// already written up in `ImageLoader.seedPreviewBlur`, where the app's cache holding the very
+    /// picture the library was about to download was the fix. Three readers, three drawers:
+    ///
+    ///   · `URLCache`        — the library's `ImageLoader` fast path and `resolveCover`
+    ///   · `DiskImageCache`  — the app: the stories row's cards and the viewers carousel
+    ///
+    /// ⚠️ `StoryDiskCache` IS DELIBERATELY NOT PLANTED AND DOES NOT NEED TO BE. It is internal to
+    /// StoryUI so this could not reach it without widening that package's API, and every library
+    /// reader that consults it — `StoryMemoryCache.decodedNow`, `seedPreviewBlur`,
+    /// `StoryItemVideoView.resolveCover` — asks `URLCache` FIRST and stops there on a hit. Making it
+    /// public to store a copy nobody would read is API surface for nothing.
     private static func plantImage(_ img: UIImage, at urlString: String) {
         guard let url = URL(string: urlString),
               let data = img.jpegData(compressionQuality: 0.85) else { return }
+        // The app's own store, which is what the chat-list row and the carousel actually read.
+        // `owned` stays false: this is a picture like any other and the cache may evict it, at which
+        // point the next launch plants it again.
+        DiskImageCache.shared.store(img, data: data, for: urlString)
         guard URLCache.shared.cachedResponse(for: URLRequest(url: url)) == nil else { return }
         let resp = URLResponse(url: url, mimeType: "image/jpeg",
                                expectedContentLength: data.count, textEncodingName: nil)
