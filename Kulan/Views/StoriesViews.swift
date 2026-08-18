@@ -4391,12 +4391,24 @@ struct StoryViewer: View {
         Task {
             // Nil = the read failed; the cached number stays rather than being overwritten with 0.
             guard let v = await Self.viewSummary(storyId: id) else { return }
-            viewersByStory[id] = v
-            countsTick &+= 1
-            StoryCountCache.put(id, count: v.count, reactions: v.reactionCount,
-                                recent: v.recent.map(\.id))
-            if id == currentStoryId { barViewers = v; publishOwnerBar() }
+            apply(v, for: id)
+            // The counter said nobody. Usually true, occasionally a trigger that never ran, so it is
+            // checked BEHIND the number rather than in front of it — see `verifiedZero`. Nil leaves
+            // what is already on screen alone.
+            if v.count == 0, let corrected = await Self.verifiedZero(storyId: id) {
+                apply(corrected, for: id)
+            }
         }
+    }
+
+    /// One place the footer, the cache and the carousel are all told the same number, so a correction
+    /// arriving late cannot update one of them and leave the others behind.
+    private func apply(_ v: StoryViewSummary, for id: String) {
+        viewersByStory[id] = v
+        countsTick &+= 1
+        StoryCountCache.put(id, count: v.count, reactions: v.reactionCount,
+                            recent: v.recent.map(\.id))
+        if id == currentStoryId { barViewers = v; publishOwnerBar() }
     }
 
     /// THE COUNTER FIRST, THE RECEIPTS ONLY IF THERE IS NO COUNTER.
@@ -4409,6 +4421,28 @@ struct StoryViewer: View {
     /// definition of "how many watched this", so the row's number and the footer's cannot disagree.
     static func viewSummaryPublic(storyId: String) async -> StoryViewSummary? {
         await viewSummary(storyId: storyId)
+    }
+
+    /// ⚠️ A ZERO IS NOT EVIDENCE OF ZERO, CHECKED AFTERWARDS RATHER THAN IN THE WAY.
+    ///
+    /// `stories/{id}/meta/views` is a denormalised counter a server trigger maintains, so it is one
+    /// write behind by nature and stays at its initial value for good if that trigger failed, was
+    /// deployed after the story was posted, or never ran for it. The receipts underneath are what
+    /// somebody watching actually wrote, and they are the truth — which is his "0 above the eye with
+    /// a viewer named in the list right below it".
+    ///
+    /// A missing counter document already falls through to the receipts inside `fetchViewSummary`.
+    /// This is the other case: a document that EXISTS and says zero, indistinguishable from "nothing
+    /// was ever counted here".
+    ///
+    /// ⚠️ AND IT RUNS AFTER THE NUMBER IS ALREADY ON SCREEN, NEVER IN FRONT OF IT. Zero is the honest
+    /// answer nearly every time, so making every caller wait for a confirmation of it is paying for
+    /// the rare case on every single story. Nil means "nothing to correct" — the number already shown
+    /// stands.
+    static func verifiedZero(storyId: String) async -> StoryViewSummary? {
+        guard let receipts = await StoriesService.shared.fetchViewers(storyId: storyId),
+              !receipts.isEmpty else { return nil }
+        return .counted(from: receipts)
     }
 
     /// ⚠️ NIL IS "NO ANSWER", NOT "NO VIEWS" — see the guard inside. A caller that cannot tell the
@@ -4432,14 +4466,12 @@ struct StoryViewer: View {
         // the honest case costs an empty query and the broken case gets the right number. Any
         // non-zero counter is still believed and still costs one small document, which is the whole
         // reason the counter exists.
-        if let s = await StoriesService.shared.fetchViewSummary(storyId: storyId) {
-            guard s.count == 0 else { return s }
-            if let receipts = await StoriesService.shared.fetchViewers(storyId: storyId),
-               !receipts.isEmpty {
-                return .counted(from: receipts)
-            }
-            return s
-        }
+        // ⚠️ ONE ROUND TRIP, ALWAYS. The zero-versus-receipts reconciliation this used to do INLINE is
+        // correct and it is now `verifiedZero` below, because doing it here made every caller wait for
+        // a second fetch — including `prefetchMyStoryCounts`, which is the sweep that exists to have
+        // the numbers ready before he can look at them. That is his "views and trash is coming late"
+        // and "eye is working but just appearing late": the fix for a wrong number bought a slow one.
+        if let s = await StoriesService.shared.fetchViewSummary(storyId: storyId) { return s }
         // ⚠️ A FAILED RECEIPT READ IS NOT A ZERO. `fetchViewers` answers nil when the request itself
         // failed, and counting nil as an empty list is what wrote "0 views" over a story that had
         // been read correctly a moment before. No answer leaves the previous number where it is.
