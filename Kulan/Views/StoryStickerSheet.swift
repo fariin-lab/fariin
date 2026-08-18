@@ -545,6 +545,9 @@ private struct LinkStickerScreen: View {
 
     @State private var text = ""
     @FocusState private var focused: Bool
+    /// The last frame this page reported. Two agreeing readings at rest mean the push has landed —
+    /// see the note on the geometry hook below, which is what raises the keyboard.
+    @State private var lastFrame: CGRect = .null
 
     private var resolved: URL? { StoryLinkSticker.url(from: text) }
 
@@ -605,13 +608,24 @@ private struct LinkStickerScreen: View {
         // fighting for the same frames, not the page being slow to build — there is one text field
         // on it.
         //
-        // 0.35s is the push's own length, so the field takes focus as the page lands and the sheet
-        // then resizes on its own. Two motions in sequence read as faster than three at once even
-        // though this finishes later. `task` and not `asyncAfter` so a page left before it lands
-        // cancels instead of raising a keyboard on the screen behind.
-        .task {
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            focused = true
+        // ⛔ AND A TIMER WAS THE WRONG WAY TO WAIT — his 2026-08-18 screenshot: the keyboard arriving
+        // from the RIGHT-HAND SIDE of the screen, half off it, mid-slide.
+        //
+        // This is a `NavigationStack`, so the push is a real UIKit transition, and a field that takes
+        // first responder while one is running makes the KEYBOARD PART OF THAT TRANSITION: it slides
+        // in horizontally with the page instead of up from the bottom. 0.35s was the push's nominal
+        // length measured against a sleep that starts when the page appears, which is when the push
+        // STARTS — so it lands in the last frames of the animation and races it. Some opens won, and
+        // the ones that lost are what he photographed.
+        //
+        // So it waits for the thing itself rather than for a number. A pushed page slides in from the
+        // right, so its own frame is the transition: while it moves, `minX` is positive; when the
+        // push has landed, it is zero and stays zero. Two agreeing readings at rest is the signal,
+        // and it cannot race a duration it does not depend on.
+        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { f in
+            guard !focused else { return }
+            if f.minX <= 0.5, f == lastFrame { focused = true }
+            lastFrame = f
         }
     }
 }
