@@ -4018,29 +4018,38 @@ struct StoryViewer: View {
         guard let s = groups.flatMap(\.stories).first(where: { $0.id == storyId }),
               let me = AuthService.shared.uid, me != s.authorUid else { return }
 
-        // Pure like-button toggle (no text, no picker emoji): remember it locally so the heart
-        // is still red when the story is reopened. Un-like removes my reaction from
-        // the author's "Seen by" and sends nothing.
+        // ⛔ THE HEART IS THE ONLY THING THAT IS A REACTION. Everything else is a message.
+        //
+        // His 2026-08-18 ruling, and it is the reference app's split: the ❤️ button records on the
+        // story's "Seen by" row and stays there; a tap on the react bar, a typed reply, an emoji, any
+        // of it, goes to the chat as an ordinary message. "Other reactions or replies should only be
+        // sent to the DM and should not replace the Love badge in the viewer sheet."
+        //
+        // ⚠️ THIS REVERSES HALF OF THE 2026-08-05 RULE AND KEEPS THE OTHER HALF. That day he had the
+        // react-bar emojis moved OUT of the chat and into the sheet, and both were treated as one
+        // thing from then on. Splitting them is what he is asking for now: the heart alone is a
+        // reaction, because the heart alone is the badge the author sees next to a name. An emoji
+        // that overwrote it took his ❤️ off the row, which is the "should not replace" in his words.
+        //
+        // The three doors are told apart by what the library hands over, and nothing else:
+        //   • no text, no emoji  → the heart button
+        //   • an emoji, no text  → the react bar
+        //   • text               → the reply field
         if typed == nil && emoji == nil {
+            // Remembered locally so the heart is still red when the story is reopened. Un-liking
+            // takes the reaction off the author's row and sends nothing at all.
             StoryPrefs.setStoryLiked(storyId, isLiked)
-            if !isLiked {
+            if isLiked {
+                Task { await StoriesService.shared.setStoryReaction(s, emoji: "❤️") }
+                flashSentToast("Reacted")
+            } else {
                 Task { await StoriesService.shared.clearStoryReaction(s) }
-                return
             }
-        }
-
-        let text = typed ?? emoji ?? (isLiked ? "❤️" : "")
-        guard !text.isEmpty else { return }
-        // A REACTION LIVES IN THE VIEWERS SHEET ONLY (owner 2026-08-05): the heart and the
-        // react-bar emojis record on the story's "Seen by" row and never become a chat message.
-        // They used to ALSO land in the conversation as a text bubble with a status quote, which
-        // is exactly what he ordered removed. Only a TYPED reply enters the chat.
-        let isReaction = typed == nil && (emoji != nil || isLiked)
-        if isReaction {
-            Task { await StoriesService.shared.setStoryReaction(s, emoji: text) }   // shows in "Seen by"
-            flashSentToast("Reacted")
             return
         }
+
+        let text = typed ?? emoji ?? ""
+        guard !text.isEmpty else { return }
         let cid = [me, s.authorUid].sorted().joined(separator: "_")
         // Attach the status reference so the reply shows as a "Status" quote (thumbnail) in chat.
         let ref = ReplyRef(id: s.id, authorId: s.authorUid, text: "", isStatus: true, storyThumbUrl: s.previewUrl)
