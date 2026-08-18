@@ -2438,12 +2438,18 @@ struct StoryEditorView: View {
     /// the moment it was placed rather than a live one: what posts is a photograph, so a ticking
     /// sticker could only ever be a lie about the file. The time somebody posted at is the useful
     /// fact anyway.
+    ///
+    /// ⚠️ IT STILL CARRIES A RECIPE, AND `action: nil` IS NOT THE TEST FOR THAT. His 2026-08-18
+    /// follow-up: the clock cycles its colour on a tap like the other two. What a chip DOES when it
+    /// is tapped in the viewer (`action`) and what it is MADE OF (`chip`) are two different
+    /// questions, and only the second one decides whether the editor can re-bake it.
     @MainActor private func addTimeSticker() {
         let f = DateFormatter()
         f.locale = Locale.current
         f.setLocalizedDateFormatFromTemplate("jmm")   // 12- or 24-hour, per the phone's own setting
-        chipSticker(action: nil) {
-            stickerChip(symbol: "clock", text: f.string(from: Date()))
+        let text = f.string(from: Date())
+        chipSticker(action: nil, recipe: .init(symbol: "clock", text: text)) {
+            stickerChip(symbol: "clock", text: text)
         }
     }
 
