@@ -919,16 +919,22 @@ final class StoryTextToolViewController: UIViewController, UITextViewDelegate, U
         // edge. Its length is a share of the area rather than a constant, or it would run off a short
         // screen once the keyboard is up.
         //
-        // ⚠️ HIS SIZING, TWICE. 08-17: 0.34 of the editing area stood over 200pt tall on his phone
-        // with a 16pt gutter, which is a strip of the picture the width of a thumb spent on a control
-        // that is touched for a second at a time → 0.24 and a 4pt gutter. 08-18, same screenshot with
-        // the same circle drawn round it: still too big → 0.19, and the track itself thins from 16pt
-        // to 10 (`Metrics`). About 95pt on his 428x926 phone against the 130 he photographed.
+        // ⚠️ HIS SIZING, THREE TIMES, AND THE THIRD ONE SPLIT THE TWO AXES. 08-17: 0.34 of the
+        // editing area stood over 200pt tall with a 16pt gutter, a strip of the picture as wide as a
+        // thumb spent on a control touched for a second at a time → 0.24 and a 4pt gutter. 08-18
+        // morning, same circle drawn round it: still too big → 0.19 AND the track thinned from 16pt
+        // to 10 (`Metrics`). 08-18 again, and this is the useful one: "width is ok, height is too
+        // short". The thickness was the whole complaint; cutting the length as well was mine, not
+        // his. → 0.28, about 145pt on his 428x926 phone, on a 10pt track.
+        //
+        // ⚠️ THE TWO NUMBERS ARE NOT ONE JUDGEMENT. A thin bar can be long without taking any of the
+        // picture — length buys precision along the spectrum and costs nothing but margin, which is
+        // exactly the trade he is describing. Do not "restore proportion" by trimming it again.
         //
         // ⚠️ THE 44pt CONTROL IS NOT THE BAR. It stays 44 wide however thin the capsule inside it
         // gets, because it is the grab area: the permissive recogniser claims any touch in these
         // bounds, so a finger aiming at a 10pt track still has a thumb's width of slack around it.
-        let barLength = min(140, max(88, container.bounds.height * 0.19))
+        let barLength = min(200, max(130, container.bounds.height * 0.28))
         colorBar.bounds = CGRect(x: 0, y: 0, width: 44, height: barLength)
         colorBar.center = CGPoint(x: 4 + 22, y: container.bounds.midY)
     }
