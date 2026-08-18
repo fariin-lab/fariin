@@ -948,6 +948,16 @@ struct StoryEditorView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
             if editingID == nil { textToolKeyboardUp = false }
         }
+        // A CALL THAT ARRIVES WHILE THE CLIP IS RUNNING STOPS IT, and until now nothing said so.
+        // The system pauses the player itself and posts this; `previewPlaying` stayed true, so the
+        // play mark — which hangs off that flag — stayed hidden over a clip that was not moving, and
+        // the next tap read as "pause" and did nothing. Following the interruption puts the mark back,
+        // and the tap after it goes through `playPreview`, which by then knows there is a call.
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { note in
+            let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            guard raw == AVAudioSession.InterruptionType.began.rawValue else { return }
+            previewPlaying = false
+        }
         // Closing the composer must not leave a decoder and an audio session running behind it.
         .onDisappear { stopPreview() }
         // ONE PLACE DECIDES WHETHER THE CLIP IS RUNNING, the same rule the video editor follows.
@@ -957,7 +967,7 @@ struct StoryEditorView: View {
         // player. Following the flag here means every writer of it stops the clip, not just
         // `togglePreview`.
         .onChange(of: previewPlaying) { _, on in
-            if on { previewPlayer?.play() } else { previewPlayer?.pause() }
+            if on, let p = previewPlayer { playPreview(p) } else { previewPlayer?.pause() }
         }
         // ALWAYS DARK, whatever the phone is set to (owner: "all story buttons always use dark mode
         // no light mode"). A story is white text and glass over somebody's photo; in light mode the
@@ -1586,14 +1596,41 @@ struct StoryEditorView: View {
 
     private func togglePreview() {
         guard let p = ensurePreviewPlayer() else { return }
-        if previewPlaying { p.pause() } else { p.play() }
+        if previewPlaying { p.pause() } else { playPreview(p) }
         previewPlaying.toggle()
+    }
+
+    /// ⚠️ EVERY `play()` ON THIS SCREEN GOES THROUGH HERE, and that is his "I am on a call in
+    /// another app and the video will not play". An AVPlayer activates the shared audio session for
+    /// itself, the session was on a category that activates by asking whoever holds it to stop, and
+    /// a call says no — so the player silently did not start. `StoryPreviewAudio` carries the whole
+    /// diagnosis; this is the one door it has to be applied at.
+    private func playPreview(_ p: AVPlayer) {
+        StoryPreviewAudio.prepare()
+        p.play()
+        // THE NET, because CallKit cannot be the whole answer: an app that does not report its calls
+        // — or anything else sitting on a session it will not release — would leave the clip exactly
+        // as he found it, still and silent with no error anywhere to notice. So the RESULT is checked
+        // rather than assumed. A player that was told to play and a third of a second later is not
+        // playing gets a mixable session and one more attempt.
+        //
+        // `.paused` specifically, never a bare "not playing": a clip that is buffering reports
+        // `.waitingToPlayAtSpecifiedRate`, which is a player doing its job and must not be restarted
+        // underneath itself. A local file is playing well inside this window either way.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            guard previewPlaying, previewPlayer === p,
+                  p.timeControlStatus == .paused, p.error == nil else { return }
+            StoryPreviewAudio.forceMixable()
+            p.play()
+        }
     }
 
     /// Leaving a clip, or the screen. An AVPlayer left running behind a photo keeps its audio session
     /// and its decoder, which is the kind of thing that only shows up as a battery complaint.
     private func stopPreview() {
         previewPlayer?.pause()
+        // Hand the category back the moment nothing is previewing. See `StoryPreviewAudio.give`.
+        StoryPreviewAudio.give()
         // ...and the observer goes with it. Dropping the player is not enough: the registration holds
         // a strong reference to both it and this view until it is removed by name.
         if let t = previewEndObserver { NotificationCenter.default.removeObserver(t) }
