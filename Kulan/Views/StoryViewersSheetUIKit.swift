@@ -1155,12 +1155,19 @@ struct StoryViewerRowContent: View {
         // a tap there does nothing.
         .contentShape(Rectangle())
         .onTapGesture { onOpenProfile() }
-        // The same three actions on a long press as behind the "…", because people reach for both
-        // and finding one of them empty is the kind of difference that reads as broken.
-        .contextMenu { rowActions }
+        // ⚠️ NO LONG PRESS HERE, ON HIS 2026-08-18 ORDER: "when i long press and when i click that
+        // 3dot button is using same menu same thing — remove long press, users will use that dot".
+        //
+        // It was deliberate once, on the reasoning that people reach for both and finding one of
+        // them empty reads as broken. He has now used it and ruled the other way, and he is right
+        // about the cost: a press-and-hold on a row whose TAP opens a profile means every slow tap
+        // is a coin toss between a menu and a profile, and the "…" is already sitting at the end of
+        // the row saying where the menu is.
+        //
+        // `rowActions` stays exactly where it was, behind the "…". Nothing about the menu changes.
     }
 
-    /// The one definition of what you can do to a viewer, used by the "…" menu and the long press.
+    /// The one definition of what you can do to a viewer, behind the "…" at the end of the row.
     @ViewBuilder private var rowActions: some View {
         Button(action: onSendMessage) { Label("Send message", systemImage: "message") }
         Button(action: onToggleHidden) {
