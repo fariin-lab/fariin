@@ -4874,12 +4874,14 @@ struct MyStoriesCarousel: View {
         max(0, min(max(0, stories.count - 1), centredIndex))
     }
 
-    init(stories: [Story], activeId: Binding<String>, row: StoryRowGeometry, liveStoryId: String,
+    init(stories: [Story], activeId: Binding<String>, countsTick: Int = 0,
+         row: StoryRowGeometry, liveStoryId: String,
          onActiveTap: @escaping () -> Void = {},
          onIndexSettled: @escaping (String) -> Void = { _ in },
          pageDrag: StorySheetPageDrag) {
         self.stories = stories
         self._activeId = activeId
+        self.countsTick = countsTick
         self.row = row
         self.liveStoryId = liveStoryId
         self.onActiveTap = onActiveTap

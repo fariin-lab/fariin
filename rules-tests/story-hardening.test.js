@@ -66,7 +66,7 @@ const notAdmin = (uid) => ([
 const isModerator = (uid) => ([
   { function: 'exists', args: [{ exactValue: `${D}/admins/${uid}` }], result: { value: true } },
   { function: 'get', args: [{ exactValue: `${D}/admins/${uid}` }],
-    result: { value: { data: { role: 'admin', permissions: ['moderate'] } } } },
+    result: { value: { data: { role: 'admin', perms: ['moderate'] } } } },
 ]);
 const storyDoc = (data) => ([
   { function: 'exists', args: [{ exactValue: `${D}/stories/${SID}` }], result: { value: true } },
@@ -92,7 +92,15 @@ const budget = (uid, data) => (
 );
 
 const receipt = { viewedAt: 1700000100000 };
-const now = Date.now();
+// ⚠️ ONE `request.time` FOR THE WHOLE RUN, AND EVERY TIMESTAMP AS AN ISO STRING.
+//
+// The rules API takes `resource.data` as plain JSON, so a number is a NUMBER — and a rule comparing
+// it against `request.time` then answers false rather than erroring, which reads as a rule that is
+// broken when it is the test that is. `windowStart` is compared against `request.time` in three
+// places, so it has to be the same kind of thing. Same trap `story-freeze` records for `expiresAt`.
+const REQ_TIME = new Date().toISOString();
+const now = Date.parse(REQ_TIME);
+const iso = (ms) => new Date(ms).toISOString();
 
 // [name, expect, uid, path, method, after, before, mocks]
 const cases = [
@@ -177,35 +185,35 @@ const cases = [
   ['post inside a window that is not full', 'ALLOW', A,
     `${D}/stories/${SID}`, 'create',
     { ...friendsStory, expiresAt: new Date(now + 23 * 3600e3).toISOString() }, null,
-    [...notBanned(A), ...notAdmin(A), ...budget(A, { windowStart: now - 60e3, count: 3 })]],
+    [...notBanned(A), ...notAdmin(A), ...budget(A, { windowStart: iso(now - 60e3), count: 3 })]],
   ['post inside a window that is full', 'DENY', A,
     `${D}/stories/${SID}`, 'create',
     { ...friendsStory, expiresAt: new Date(now + 23 * 3600e3).toISOString() }, null,
-    [...notBanned(A), ...notAdmin(A), ...budget(A, { windowStart: now - 60e3, count: 40 })]],
+    [...notBanned(A), ...notAdmin(A), ...budget(A, { windowStart: iso(now - 60e3), count: 40 })]],
   ['post after a full window has expired', 'ALLOW', A,
     `${D}/stories/${SID}`, 'create',
     { ...friendsStory, expiresAt: new Date(now + 23 * 3600e3).toISOString() }, null,
-    [...notBanned(A), ...notAdmin(A), ...budget(A, { windowStart: now - 2 * 3600e3, count: 99 })]],
+    [...notBanned(A), ...notAdmin(A), ...budget(A, { windowStart: iso(now - 2 * 3600e3), count: 99 })]],
 
   // ---- 6. the counter itself
   ['open a counter at one', 'ALLOW', A,
-    `${D}/users/${A}/limits/stories`, 'create', { windowStart: now, count: 1 }, null, []],
+    `${D}/users/${A}/limits/stories`, 'create', { windowStart: REQ_TIME, count: 1 }, null, []],
   ['open a counter already part-spent', 'DENY', A,
-    `${D}/users/${A}/limits/stories`, 'create', { windowStart: now, count: 0 }, null, []],
+    `${D}/users/${A}/limits/stories`, 'create', { windowStart: REQ_TIME, count: 0 }, null, []],
   ['take one more inside the window', 'ALLOW', A,
     `${D}/users/${A}/limits/stories`, 'update',
-    { windowStart: now - 60e3, count: 4 }, { windowStart: now - 60e3, count: 3 }, []],
+    { windowStart: iso(now - 60e3), count: 4 }, { windowStart: iso(now - 60e3), count: 3 }, []],
   ['reset the count inside the window', 'DENY', A,
     `${D}/users/${A}/limits/stories`, 'update',
-    { windowStart: now - 60e3, count: 1 }, { windowStart: now - 60e3, count: 30 }, []],
+    { windowStart: iso(now - 60e3), count: 1 }, { windowStart: iso(now - 60e3), count: 30 }, []],
   ['move the window forward while it is still open', 'DENY', A,
     `${D}/users/${A}/limits/stories`, 'update',
-    { windowStart: now, count: 1 }, { windowStart: now - 60e3, count: 30 }, []],
+    { windowStart: REQ_TIME, count: 1 }, { windowStart: iso(now - 60e3), count: 30 }, []],
   ['open a fresh window once the old one expired', 'ALLOW', A,
     `${D}/users/${A}/limits/stories`, 'update',
-    { windowStart: now, count: 1 }, { windowStart: now - 2 * 3600e3, count: 40 }, []],
+    { windowStart: REQ_TIME, count: 1 }, { windowStart: iso(now - 2 * 3600e3), count: 40 }, []],
   ['delete the counter', 'DENY', A,
-    `${D}/users/${A}/limits/stories`, 'delete', null, { windowStart: now, count: 40 }, []],
+    `${D}/users/${A}/limits/stories`, 'delete', null, { windowStart: REQ_TIME, count: 40 }, []],
 ];
 
 (async () => {
@@ -217,7 +225,7 @@ const cases = [
   for (const [name, expect, uid, path, method, after, before, mocks] of cases) {
     const request = {
       auth: { uid, token: { firebase: { sign_in_provider: 'password' } } },
-      path, method, time: new Date().toISOString(),
+      path, method, time: REQ_TIME,
     };
     if (after) request.resource = { data: after };
     const testCase = { expectation: expect, request, functionMocks: mocks };
