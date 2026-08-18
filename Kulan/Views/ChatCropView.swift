@@ -111,25 +111,33 @@ struct ChatCropView: View {
     @State private var entryProgress: CGFloat
     /// The card this screen was opened from, in THIS canvas's coordinates. Written by `layout`,
     /// which is the one place that knows where the canvas sits on the screen.
+    ///
+    /// ⛔ THE DROP, THIRD REPORT, AND THE THIRD CAUSE — 2026-08-18. READ THIS BEFORE TOUCHING `layout`.
+    ///
+    /// `entryFrom` and `imageFrame` are both in THIS CANVAS'S coordinates, and the canvas MOVES: its
+    /// two `safeAreaInset` bars do not know their heights on the first pass, so the second pass puts
+    /// the whole canvas about a bar's height further down the screen. Both rectangles are re-derived
+    /// against the new origin in the same breath, so on screen the two moves cancel EXACTLY and the
+    /// picture does not shift by a point — the drawn centre is `canvasOrigin + entryFrom.mid` at the
+    /// start of the flight and that product is the card's rect on the screen whatever the origin is.
+    ///
+    /// ⚠️ THE CANCELLATION ONLY HOLDS IF BOTH SIDES MOVE IN THE SAME FRAME. `d69bde49` put the seat
+    /// writes inside a 0.3s `withAnimation` so that a pass landing mid-flight would "move the seat on
+    /// the flight's own curve rather than snap to it" — but the canvas's own re-origin is a LAYOUT
+    /// change and layout does not ease. So the canvas dropped a bar's height instantly while the
+    /// picture's `.position` inside it eased back up over 0.3s: a picture that falls, then rises and
+    /// shrinks. That is his "the image goes down, after that the zoom out starts", and it is that
+    /// commit's own repair rather than the fault it was aimed at. `DispatchQueue.main.async` all but
+    /// guarantees it fires: the deferred `runEntry` runs before SwiftUI's second layout pass, so the
+    /// settle almost always lands with the flight already up.
+    ///
+    /// So the seat is written PLAINLY, in one frame, and it must stay that way. Snapping is not a
+    /// compromise here, it is the only thing that is invisible: a re-measure moves the DESTINATION by
+    /// a few points and the drawn picture by `progress` times that, while easing it moves the drawn
+    /// picture by the whole distance the canvas travelled.
     @State private var entryFrom: CGRect = .zero
-    /// ⚠️ RAISED ONLY WHILE THE 0.3s FLIGHT IS RUNNING, AND ITS ABSENCE IS THE SECOND HALF OF HIS
-    /// "the picture drops a little, and only then starts to zoom out".
-    ///
-    /// Deriving the scale and the offset from the live `imageFrame` made the FIRST frame right, and it
-    /// is not enough on its own: `withAnimation` interpolates the values body reported when the
-    /// transaction opened towards the values body reports now, and the seat itself —
-    /// `.position(imageFrame.mid)` — is not one of those values. It is a plain state write. So a
-    /// layout pass landing after the flight had begun re-seated the picture in ONE FRAME while the
-    /// scale carried on easing: the drop, and then the zoom, one step further back than it was.
-    ///
-    /// Two halves to the repair. The flight now waits a runloop turn for the canvas to stop moving
-    /// (see `onAppear`), which is what UIKit gives theirs for nothing — `viewDidLoad` seats the
-    /// picture and the whole layout has settled before `viewDidAppear` starts the animation. And if a
-    /// pass lands inside the flight anyway, `layout` MOVES the seat on the flight's own curve instead
-    /// of snapping to it, so there is no frame at which the picture is anywhere it was not travelling.
-    @State private var entryInFlight = false
-    /// One number for the move, so the seat correction above cannot run on a different clock from the
-    /// thing it is correcting.
+
+    /// One number for the move, so the flight and the chrome behind it cannot run on two clocks.
     private static let entryDuration: Double = 0.3
 
     /// The scale that puts the fitted picture back at the card's size, eased out by the progress.
@@ -309,10 +317,16 @@ struct ChatCropView: View {
                 // settled by the time `viewDidAppear` starts the animation. Ours is asked to fly on
                 // the first pass, and the canvas is still moving then: the two `safeAreaInset` bars
                 // do not know their own heights until they have been laid out, so the pass after this
-                // one is a different rectangle. Flying from a geometry that is about to change is the
-                // drop he is reporting — see `entryInFlight`. Every state read below goes through the
-                // property wrapper's storage, so this closure sees the settled numbers, not the ones
-                // captured with it.
+                // one is a different rectangle. Every state read below goes through the property
+                // wrapper's storage, so this closure sees whatever the last pass wrote rather than the
+                // numbers captured with it.
+                //
+                // ⚠️ IT DOES NOT ACTUALLY OUTRUN THE SETTLE, AND IT DOES NOT HAVE TO. This block runs
+                // at the end of the current runloop turn, while SwiftUI's next layout pass is a render
+                // cycle away, so the settle usually lands with the flight already up — which is fine,
+                // and the note on `entryFrom` is why: the seat and the canvas move in the same frame,
+                // so a pass landing mid-flight is invisible. It only stopped being invisible when the
+                // seat was given an animation of its own.
                 DispatchQueue.main.async { runEntry() }
             }
             // ⚠️ THE WHOLE FRAME, NOT JUST THE SIZE. The canvas can be re-seated without being
@@ -387,18 +401,11 @@ struct ChatCropView: View {
             CGRect(x: $0.minX - canvasOrigin.x, y: $0.minY - canvasOrigin.y,
                    width: $0.width, height: $0.height)
         }
-        // ⚠️ AND A PASS THAT LANDS INSIDE THE FLIGHT MOVES THE SEAT RATHER THAN SNAPPING TO IT. See
-        // `entryInFlight`: the seat is a plain state write that `.position` follows immediately, so
-        // outside a transaction it is a jump — his drop — however right the scale beside it is.
-        if entryInFlight, seat != imageFrame {
-            withAnimation(.easeInOut(duration: Self.entryDuration)) {
-                imageFrame = seat
-                if let from { entryFrom = from }
-            }
-        } else {
-            imageFrame = seat
-            if let from { entryFrom = from }
-        }
+        // ⚠️ BOTH IN ONE FRAME, PLAINLY, NEVER INSIDE A TRANSACTION — the long note on `entryFrom` is
+        // why, and it is his 2026-08-18 drop. These two rectangles and the canvas they are measured in
+        // move together; easing them apart from the canvas is what makes the picture fall.
+        imageFrame = seat
+        if let from { entryFrom = from }
         setAspect(aspect, animated: false)
     }
 
@@ -421,12 +428,9 @@ struct ChatCropView: View {
     private func runEntry() {
         guard initialContentRect != nil, imageFrame.width > 1, entryProgress < 1,
               entryFrom.width > 1 else { return }
-        entryInFlight = true
         withAnimation(.easeInOut(duration: Self.entryDuration)) {
             entryProgress = 1
             chrome = 1
-        } completion: {
-            entryInFlight = false
         }
         // AND ONLY THEN THE FRAME. Their completion block, expressed as a delay: `.delay(0.3)` is the
         // move's own duration, and 0.35 is the figure `transitionInFinishedAnimated:` animates the
