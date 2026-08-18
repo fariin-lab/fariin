@@ -1823,6 +1823,26 @@ struct StoryEditorView: View {
             let dur = max(0.1, items[index].duration)
             VStack {
                 Spacer()
+                // HOW LONG THE CLIP IS, small, at the corner of the picture — his 2026-08-18 request
+                // with the spot circled on his own screenshot.
+                //
+                // ⚠️ IT IS THE LENGTH BEING KEPT, NOT THE LENGTH OF THE FILE, and on a screen whose
+                // whole job is choosing a piece of a clip those are the same number until a handle
+                // moves. Frozen at the file's length it would read 0:58 over a ten-second selection,
+                // which is the one moment somebody actually looks at it.
+                //
+                // No pill and no background: it sits over the bottom of the picture, where a card is
+                // usually dark, and a shadow is enough to carry it over a bright frame. A capsule
+                // there would be a third control on a screen that already has its own bar.
+                HStack {
+                    Spacer()
+                    Text(trimLengthLabel)
+                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
+                }
+                .padding(.horizontal, 22)
+                .padding(.bottom, 10)
                 // REAL BINDINGS NOW, not `.constant`. Dragging a handle seeks the clip, so you can
                 // see the frame you are cutting on — which is the whole reason a trim screen has a
                 // picture above it. It was blind because the composer had no player; it has one.
@@ -2002,6 +2022,15 @@ struct StoryEditorView: View {
                    toleranceBefore: .zero, toleranceAfter: .zero)
         }
         withAnimation(.easeInOut(duration: 0.28)) { showTrim = true }
+    }
+
+    /// m:ss for the trim page's corner label. Rounded to the nearest second, the same rule the chat's
+    /// own media approval screen uses, so one clip does not read as two different lengths in two
+    /// places in the app.
+    private var trimLengthLabel: String {
+        let end = trimEnd > 0 ? trimEnd : (items.indices.contains(index) ? items[index].duration : 0)
+        let t = Int(max(0, end - trimStart).rounded())
+        return String(format: "%d:%02d", t / 60, t % 60)
     }
 
     private func closeTrim(keep: Bool) {
