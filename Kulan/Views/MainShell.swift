@@ -191,35 +191,25 @@ struct MainShell: View {
     @available(iOS 26.0, *)
     private var modernTabView: some View {
         TabView(selection: $tab) {
-            // FILLED WHEN YOU ARE ON IT, OUTLINE WHEN YOU ARE NOT — the Calls tab beside it has always
-            // worked this way (`phone` / `phone.fill`) and this one never did, so it was the same
-            // solid bubble whether you were in it or not and only the capsule said where you were
-            // (owner 2026-08-19, asking how the reference app keeps its active tab solid black).
+            // ⚠️ BACK TO HOW IT WAS, ON THE OWNER'S WORD (2026-08-19). A whole afternoon went into
+            // making these two icons swap between outline and filled on selection, it shipped to a
+            // browser preview, he looked at it and said something was still off and he needs time to
+            // decide. So this is the original, unchanged, and the decision is parked.
             //
-            // This is also WHY a black tab bar works at all. When the tint is the same colour in both
-            // states — ours is black in light and white in dark, deliberately — colour cannot carry
-            // the state, so the SHAPE has to. `ic_chat_outline` is the same path as `ic_chat`,
-            // stroked instead of filled, so the two cannot drift apart.
-            // ⚠️ THE `label:` FORM, NOT `Tab(_:image:value:)`, AND THAT IS THE WHOLE FIX.
-            // The convenience initialiser takes the icon's NAME, a String, and keeps the one it was
-            // given. Writing `tab == 0 ? "ic_chat" : "ic_chat_outline"` there reads like it swaps and
-            // does not: both tabs were built once at launch with tab == 0, so Chats stayed filled
-            // for ever and Calls never filled at all — which is precisely what the owner reported on
-            // the preview ("only the chats fills, call and settings won't"). A label CLOSURE puts the
-            // image in the view tree instead, where a change of `tab` reaches it.
-            Tab(value: 0) {
+            // ⚠️ AND THE LINE BELOW DOES NOT DO WHAT IT LOOKS LIKE IT DOES. `Tab(_:systemImage:value:)`
+            // takes the icon's NAME and keeps the one it was handed, so this ternary is read exactly
+            // once, at launch, with tab == 0 — Calls has therefore been permanently `phone` since it
+            // was written, and no build has ever shown `phone.fill` here. It is left in place because
+            // that IS the behaviour he is looking at and asked to keep for now. Making it real needs
+            // the `label:` closure form. Do not "fix" it as a typo, and read the memory note first:
+            // it holds the Apple guidance, why a black tint leaves the capsule as the only signal,
+            // and the outline asset that is already drawn and waiting (`ic_chat_outline`).
+            Tab("Chats", image: "ic_chat", value: 0) {
                 ChatsView(onSignOut: onSignOut)
-            } label: {
-                Label { Text("Chats") } icon: { Image(tab == 0 ? "ic_chat" : "ic_chat_outline") }
             }
             .badge(unreadChatsBadge)   // 0 hides it, same as the Calls tab
-            Tab(value: 1) {
+            Tab("Calls", systemImage: tab == 1 ? "phone.fill" : "phone", value: 1) {
                 CallsView()
-            } label: {
-                Label { Text("Calls") } icon: {
-                    Image(systemName: tab == 1 ? "phone.fill" : "phone")
-                        .contentTransition(.symbolEffect(.replace))   // outline <-> fill, animated
-                }
             }
             .badge(missedBadge)   // 0 hides it
             Tab(value: 2) {
