@@ -956,7 +956,15 @@ struct ChatsView: View {
         }
         // `.plain` is what left a tap with no feedback at all — see RowPressFill, which paints the
         // grey the cell underneath was never going to paint, and cannot strand it.
-        .buttonStyle(RowPressFill())
+        //
+        // ⚠️ THE DEAD ZONE IS THE STORY RING'S 56pt AVATAR PLUS ITS GUTTER. That avatar carries a
+        // `highPriorityGesture` that opens the person's story instead of the chat, and priority beat
+        // the Button's own tap for as long as the row WAS a Button. The row is driven by a
+        // simultaneous gesture now, and simultaneous means both fire: the story opened and the chat
+        // pushed in under it, leaving the story frozen over a screen that had moved (owner
+        // 2026-08-19). Only rows that actually wear a ring give the strip away, so a plain avatar
+        // still opens its chat like the rest of the row.
+        .buttonStyle(RowPressFill(deadZoneWidth: storySeen(conv).isEmpty ? 0 : 76))
         // Edit mode: the push is off, and the tap-catcher overlay below owns the tap.
         //
         // `.disabled(selecting)` was the wrong tool and `.opacity(1)` did not rescue it. Disabled

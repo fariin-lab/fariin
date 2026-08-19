@@ -347,13 +347,30 @@ struct RowPressFill: PrimitiveButtonStyle {
     /// grey, and it must not open anything.
     static let slop: CGFloat = 10
 
-    func makeBody(configuration: Configuration) -> some View { Fill(configuration: configuration) }
+    /// ⚠️ A LEADING STRIP THIS STYLE KEEPS ITS HANDS OFF, and it exists because of a real bug.
+    ///
+    /// A chat row whose avatar wears a story ring has a `highPriorityGesture` on that avatar: tap
+    /// the ring, open their story, not the chat. That priority beat a Button's own tap, which is all
+    /// it ever had to beat — until this style started driving the row from a SIMULTANEOUS gesture,
+    /// and simultaneous means exactly that. Both fired: the story opened AND the chat pushed in
+    /// underneath it, leaving the story frozen over a screen that had moved (owner 2026-08-19).
+    ///
+    /// Priority cannot settle this, because nothing is competing — they are running together on
+    /// purpose, which is what keeps the list scrolling. So the row is told where not to look. Zero
+    /// for every row without a ring, including the whole archive list, so a plain avatar still opens
+    /// its chat.
+    var deadZoneWidth: CGFloat = 0
+
+    func makeBody(configuration: Configuration) -> some View {
+        Fill(configuration: configuration, deadZoneWidth: deadZoneWidth)
+    }
 
     // The state lives in a real View, not in makeBody: a style is a value that gets rebuilt.
     // ⚠️ NOT named `Body`: the protocol declares an associatedtype of that name, so a nested type
     // called Body is taken as the witness for it and a private one cannot be (compile error).
     private struct Fill: View {
         let configuration: PrimitiveButtonStyleConfiguration
+        let deadZoneWidth: CGFloat
         @State private var lit = false
         @State private var fade: Task<Void, Never>?
 
@@ -365,6 +382,8 @@ struct RowPressFill: PrimitiveButtonStyle {
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { v in
+                            // Started on the story ring: that gesture owns this touch. See deadZoneWidth.
+                            if v.startLocation.x < deadZoneWidth { release(after: 0); return }
                             if Self.moved(v.translation) {
                                 // A scroll or a swipe. Drop the grey at once, exactly as a table
                                 // view does the moment a scroll begins.
@@ -374,6 +393,7 @@ struct RowPressFill: PrimitiveButtonStyle {
                             }
                         }
                         .onEnded { v in
+                            if v.startLocation.x < deadZoneWidth { release(after: 0); return }
                             // STATELESS on purpose. A "was it cancelled" flag would survive a
                             // gesture the scroll view steals — no onEnded, flag stuck, and every
                             // later tap silently does nothing. The translation is the only thing
