@@ -1052,10 +1052,9 @@ struct PrivacySettingsView: View {
     // Default "modern", and any value this build does not recognise falls back to modern too — the
     // new header is the app's layout, the circle is the opt-out.
     @AppStorage(ProfileLayoutStyle.storageKey) private var profileLayout = ProfileLayoutStyle.modern.rawValue
-    // The adaptive profile background, on a switch (owner, 2026-08-08: "add button in privacy
-    // settings, when I make on I can use that design, when I off I see my original design").
-    // Default OFF — the original page is what everyone keeps until they choose otherwise.
-    @AppStorage(ProfileBackgroundStyle.storageKey) private var adaptiveProfileBackground = false
+    // The adaptive profile background used to be a switch here (2026-08-08). It is not a setting any
+    // more: a profile takes its colour from that person's photograph for everyone, always, and there
+    // is no second design left to choose between (owner, 2026-08-19).
     @State private var showDefaultDisappear = false
 
     private var profileLayoutStyle: ProfileLayoutStyle {
@@ -1099,12 +1098,6 @@ struct PrivacySettingsView: View {
                 // ID, Touch ID OR the passcode — and on a Touch ID phone the old line named a
                 // sensor that device does not have. Both pages say the same thing now.
                 Text("Require Face ID, Touch ID or your passcode to unlock Fariin.")
-            }
-
-            Section {
-                Toggle("Adaptive Profile Background", isOn: $adaptiveProfileBackground).tint(.green)
-            } footer: {
-                Text("Takes the colours of a profile photo down the whole page behind it, and turns the cards on that page to glass. Turn it off to go back to the original design. Profiles with no photo are unchanged.")
             }
 
             // HIDDEN, not removed (owner, 2026-08-02: "Dont delete just hide… i need Modern Header

@@ -525,16 +525,16 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         ProfilePhotoIndex.noteLoad(s, ok: false)
     }
 
-    /// Hand the adaptive page background its palette, off the bitmap this header is already holding.
+    /// Hand the page its colours, off the bitmap this header is already holding.
     ///
-    /// GUARDED, so with the setting off nothing is sampled, nothing is cached and nothing is posted —
-    /// the load path is byte for byte what it was. It lives here because this is the one place in the
-    /// app that reliably has a profile photo decoded; the page that draws the colours does not own the
-    /// download. `ProfileAdaptiveTheme.sample` is itself cached, so a second visit costs a dictionary
-    /// lookup.
+    /// It lives here because this is the one place in the app that reliably has a profile photo
+    /// decoded; the page that wears the colours does not own the download. `extract` returns
+    /// immediately — the reading happens on its own queue, is cached per url, and refuses to start
+    /// a second read of a photo it is already reading. So this costs a dictionary lookup on every
+    /// path except the first sight of a new photo.
     private func noteAdaptive(_ ui: UIImage) {
-        guard ProfileBackgroundStyle.isOn, let s = photoUrl, !s.isEmpty else { return }
-        ProfileAdaptiveTheme.sample(ui, for: s)
+        guard let s = photoUrl, !s.isEmpty else { return }
+        ProfilePalette.extract(ui, for: s)
     }
 }
 
@@ -564,10 +564,11 @@ struct PosterActionIcon: View {
         }
         .foregroundStyle(.primary)
         .frame(width: diameter, height: diameter)
-        // Liquid Glass normally; a tint of the page while the adaptive background is on, which is
-        // what his reference does — see `ProfileAdaptiveCircleSurface`. The other two screens that
-        // use this icon never set that environment value, so they are unchanged.
-        .modifier(ProfileAdaptiveCircleSurface())
+        // LIQUID GLASS, AND ONLY HERE. These circles sit on the photograph, where glass has
+        // something to refract and where the owner's standing rule puts it; the cards further down
+        // the page sit on a flat colour and are flat themselves. One page, two surfaces, and the
+        // line between them is "is it on the picture".
+        .liquidGlass(Circle(), interactive: true)
         .frame(maxWidth: .infinity)
     }
 }
