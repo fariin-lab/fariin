@@ -691,7 +691,12 @@ final class StoriesService {
         // queued before somebody was hidden must not reach them when it finally goes up.
         let hidden = await MainActor.run { StoryAudienceStore.shared.hiddenFrom }
         let pool = allContacts.subtracting(hidden)
-        if !included.isEmpty { return (included.intersection(pool), "only") }
+        // ⚠️ AN EXPLICIT LIST IS NOT FILTERED BY THE HIDE LIST — `allContacts`, not `pool`. This is
+        // the upload-time half of the same rule `StoryAudienceStore.recipients` carries, and the two
+        // must agree or the sheet promises an audience the post does not deliver. Naming somebody
+        // beats a standing rule about crowds; a block still beats everything, and blocks are already
+        // out of `allContacts` in both directions.
+        if !included.isEmpty { return (included.intersection(allContacts), "only") }
         if !excluded.isEmpty { return (pool.subtracting(excluded), "except") }
         return (pool, "all")
     }

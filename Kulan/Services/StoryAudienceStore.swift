@@ -98,9 +98,32 @@ struct StoryAudience: Identifiable, Codable, Equatable {
     /// since blocked or lost the chat with quietly stops reaching them instead of posting into a
     /// hole. Blocked people are already out of `contacts` before it gets here.
     func recipients(contacts: Set<String>, hiddenFrom: Set<String> = []) -> Set<String> {
-        // "Hide my stories from X" beats every audience, including Everyone. Subtracted last so no
-        // list, however it was built, can put somebody back in.
-        return rawRecipients(contacts: contacts).subtracting(hiddenFrom)
+        // ⚠️ NAMING SOMEBODY OUTRANKS HIDING THEM, and it did not. "Hide my stories from X" used
+        // to be subtracted from EVERY audience, so a Custom list built by hand and containing one
+        // person who happens to be on that list resolved to nobody — the owner hid Jini from
+        // Everyone, put Jini in a custom list, and got "No one will see this" (2026-08-19).
+        //
+        // The two are different kinds of instruction. Hiding is a rule about BROADCAST reach: it
+        // answers "when I post to everybody, who is not part of everybody". A custom list is not a
+        // broadcast, it is a named set of people, and putting a name in it is a deliberate act that
+        // has to beat a standing rule about crowds — otherwise the app silently refuses an
+        // instruction it just watched somebody give, which is what he saw.
+        //
+        // Blocks are NOT affected: those are removed from `contacts` before this is called, in both
+        // directions, and no list can put them back.
+        let raw = rawRecipients(contacts: contacts)
+        return namesPeopleExplicitly ? raw : raw.subtracting(hiddenFrom)
+    }
+
+    /// Does this audience NAME people, or describe a crowd? A named set beats the global hide list;
+    /// a crowd does not. See `recipients`.
+    var namesPeopleExplicitly: Bool {
+        switch kind {
+        case .custom:    return true
+        case .myFriends: return mode == .only    // "only these people" is a list, the others are rules
+        case .everyone:  return false
+        case .hidden:    return false
+        }
     }
 
     private func rawRecipients(contacts: Set<String>) -> Set<String> {
