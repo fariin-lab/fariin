@@ -250,7 +250,19 @@ public final class StoryCardMorph {
     /// home — his image 2. A NUMBER, deliberately: the geometry is not in question, only how long
     /// it is allowed to be in between, so this is the one thing to move if he wants it different
     /// again. Divide by the door's `heroDragCeiling` before reading it as a percentage.
-    static let circleRushSpan: CGFloat = 0.03
+    /// ⚠️ 0.05 SINCE 2026-08-19, up from 0.03. His words: "when I make a small downward scroll
+    /// the full circle appears almost immediately, this feels too fast and not smooth. Only reduce
+    /// the speed of the full-circle animation." Nothing else about the door was touched for it,
+    /// because this number is the whole of it — which is what the note above promised.
+    ///
+    /// ⚠️ AND IT IS A TENSION, NOT A MISTAKE EITHER WAY. Long, and the in-between shape (a big
+    /// rounded rectangle that is neither the card nor the circle) is on screen long enough to read
+    /// as a blob — that is what he disliked at 0.06 on 2026-08-09. Short, and the circle snaps into
+    /// existence with no travel at all, which is what he is looking at now. 0.05 is about 8% of the
+    /// drag, deliberately between the two rather than back on the number he already rejected. If he
+    /// asks again, move THIS and nothing else, and know which of the two complaints you are moving
+    /// toward.
+    static let circleRushSpan: CGFloat = 0.05
 
     public func setFlightCoverAlpha(_ a: CGFloat) {
         guard let flightCover else { return }
