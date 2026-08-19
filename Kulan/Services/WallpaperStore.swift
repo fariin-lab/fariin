@@ -89,28 +89,62 @@ enum WallpaperColors {
     ]
 }
 
-/// A built-in theme, stored as NUMBERS. Three ground stops and one ink colour per appearance, plus
-/// the bubble colour it is paired with. That is the entire definition — there is no artwork for a
-/// theme any more, because `ChatPattern` is shared by all of them and everything else here is a
-/// colour. Adding a theme is adding one of these; it costs no app size and no App Store review.
+/// A built-in theme, stored as NUMBERS. Four corner colours per appearance plus the bubble colour
+/// it is paired with. That is the entire definition — there is no artwork for a theme, because
+/// `ChatPattern` is shared by all of them and everything else here is a colour. Adding a theme is
+/// adding one of these; it costs no app size and no App Store review.
 ///
-/// ⚠️ THE HEXES ARE MEASURED, NOT CHOSEN. Every ground and ink below was read out of the JPEG it
-/// replaces (per-channel mode for the ground at three heights; the mean of the pixels furthest from
-/// the ground for the ink), so these six render what they have always rendered. Do not "tidy" them
-/// toward rounder numbers — the difference between a ground and its ink is single digits, and that
-/// narrowness is the design: the sheet has to lose to a message bubble.
+/// The hexes USED to be measured rather than chosen: every ground was read out of the JPEG it
+/// replaced, three stops a few digits apart, and the narrowness was described here as the design.
+/// It is not the design any more — see the rule above `ChatWallpapers.all` for what replaced it and
+/// why the readability it was buying does not actually cost the colour.
 struct WallpaperGradient: Identifiable, Equatable {
     let id: String
     let name: String
-    let lightGround: [UInt]   // top → bottom
-    let lightInk: UInt
-    let darkGround: [UInt]
-    let darkInk: UInt
+    /// FOUR CORNERS, not a top-to-bottom ramp: top-left, top-right, bottom-left, bottom-right.
+    let lightCorners: [UInt]
+    let darkCorners: [UInt]
     let tint: Color        // vivid representative colour → the "Apply Wallpaper" button tint
     let bubbleHex: UInt    // the bubble colour this wallpaper is PAIRED with (a "theme" = both)
 
-    func colors(_ dark: Bool) -> [Color] { (dark ? darkGround : lightGround).map { Color(hex: $0) } }
-    func ink(_ dark: Bool) -> Color { Color(hex: dark ? darkInk : lightInk) }
+    /// The nine colours a 3×3 mesh needs, from the four we store: corners as given, edges as the
+    /// blend of the two corners they sit between, centre as the blend of all four. Nine hand-picked
+    /// numbers per appearance per theme would be 108 numbers nobody could keep consistent; four
+    /// corners is the smallest thing a person can actually design, and the rest is arithmetic.
+    func meshColors(_ isDark: Bool) -> [Color] {
+        let c = isDark ? darkCorners : lightCorners
+        guard c.count == 4 else { return c.map { Color(hex: $0) } }
+        let tl = c[0], tr = c[1], bl = c[2], br = c[3]
+        let hexes = [tl,               Self.mix(tl, tr), tr,
+                     Self.mix(tl, bl), Self.mix(Self.mix(tl, br), Self.mix(tr, bl)), Self.mix(tr, br),
+                     bl,               Self.mix(bl, br), br]
+        return hexes.map { Color(hex: $0) }
+    }
+
+    /// The single colour this theme is "about" — used where one flat colour is all there is room
+    /// for (a tiny swatch, a blurred stand-in). The blend of its four corners.
+    func flat(_ isDark: Bool) -> Color {
+        let c = isDark ? darkCorners : lightCorners
+        guard c.count == 4 else { return Color(hex: c.first ?? 0) }
+        return Color(hex: Self.mix(Self.mix(c[0], c[1]), Self.mix(c[2], c[3])))
+    }
+
+    private static func mix(_ a: UInt, _ b: UInt) -> UInt {
+        let r = (((a >> 16) & 0xFF) + ((b >> 16) & 0xFF)) / 2
+        let g = (((a >> 8) & 0xFF) + ((b >> 8) & 0xFF)) / 2
+        let bl = ((a & 0xFF) + (b & 0xFF)) / 2
+        return (r << 16) | (g << 8) | bl
+    }
+
+    /// The grid the mesh is drawn on. The interior point is deliberately OFF centre: on a perfect
+    /// grid the four colours meet in a symmetrical cross and the result reads as a manufactured
+    /// gradient. Moved a little up and to the right, the colours pool unevenly and it reads as
+    /// something that was painted.
+    static let meshPoints: [SIMD2<Float>] = [
+        [0, 0],   [0.5, 0],     [1, 0],
+        [0, 0.5], [0.58, 0.42], [1, 0.5],
+        [0, 1],   [0.5, 1],     [1, 1],
+    ]
 }
 
 /// The one place a built-in theme becomes pixels: the ground gradient, with the shared pattern inked
@@ -121,27 +155,52 @@ struct GradientWallpaperView: View {
     let g: WallpaperGradient
     let dark: Bool
     var blur: CGFloat = 0
+
     var body: some View {
-        LinearGradient(colors: g.colors(dark), startPoint: .top, endPoint: .bottom)
-            .overlay {
-                // Color.clear is the layout-defining view and the sheet rides as a CLIPPED overlay,
-                // the same shape the photo wallpaper uses: a bare scaledToFill re-flows when the
-                // container height changes (keyboard open/close) and nudges the composer.
-                if let sheet = ChatPattern.sheet {
+        ground
+            .overlay { ink }
+            .blur(radius: blur)
+    }
+
+    /// A MESH, not a ramp. The old one was a three-stop LinearGradient between colours a few hex
+    /// digits apart, which is a solid colour with extra steps — owner 2026-08-19, holding ours up
+    /// against a picker full of colour: "ours looks dead".
+    ///
+    /// Colour arrives in a wallpaper from two places, and we were using neither. It moves DIAGONALLY
+    /// (four corners bleeding into each other, so no two parts of the screen are the same), and it
+    /// is SATURATED but even in brightness. That second half is the whole trick and it is the
+    /// opposite of what this file used to do: we bought a readable background by draining the colour
+    /// out of it, when the way to buy it is to keep every corner at the same lightness and let hue
+    /// do the work. A bubble wins against a loud background as long as the background does not also
+    /// go light and dark underneath it.
+    private var ground: some View {
+        MeshGradient(width: 3, height: 3,
+                     points: WallpaperGradient.meshPoints,
+                     colors: g.meshColors(dark))
+    }
+
+    /// The doodles are the GROUND AGAIN, darkened, showing through the pattern's own shape — so a
+    /// doodle over the pink corner is pink and the same doodle over the blue corner is blue, and the
+    /// texture moves with the colour instead of lying on top of it as one flat grey. That flat grey
+    /// ink is the other half of why ours read as dead.
+    ///
+    /// Color.clear is the layout-defining view and the sheet rides as a CLIPPED overlay, the same
+    /// shape the photo wallpaper uses: a bare scaledToFill re-flows when the container height
+    /// changes (keyboard open/close) and nudges the composer.
+    @ViewBuilder private var ink: some View {
+        if let sheet = ChatPattern.sheet {
+            ground
+                .overlay(dark ? Color.white.opacity(0.10) : Color.black.opacity(0.15))
+                .mask {
                     Color.clear
-                        .overlay {
-                            Image(uiImage: sheet).resizable().scaledToFill()
-                                .foregroundStyle(g.ink(dark))
-                        }
+                        .overlay { Image(uiImage: sheet).resizable().scaledToFill() }
                         .clipped()
                 }
-            }
-            .blur(radius: blur)
+        }
     }
 }
 
 enum ChatWallpapers {
-    // Kept subtle so message bubbles always read clearly on top (the top→bottom fall is gentle).
     // BUILT-IN themes: never deletable (they aren't part of the user library at all).
     /// ONE PATTERN, SIX GROUNDS, A LIGHT AND A DARK OF EACH — his instruction, and how the reference
     /// apps actually ship this. Their picker is not a row of different drawings; it is the same
@@ -154,33 +213,48 @@ enum ChatWallpapers {
     /// always wins — which is the whole job of a chat background.
     ///
     /// `sunset` and `mono` kept their ids — a chat that stored either still resolves — and are the
-    /// Paper and Graphite grounds.
+    /// Sunset and Graphite grounds. (`sunset` was called Paper while it was the drained one.)
+    /// ⚠️ THE RULE THESE ARE BUILT ON, and it replaces the one that was here.
     ///
-    /// ADDING ONE IS ADDING A ROW HERE. No asset, no app-size cost, no review.
+    /// The old six were measured out of the JPEGs they replaced, and those had been drained on
+    /// purpose so a bubble could win: three stops a few hex digits apart, plus one flat grey ink.
+    /// That bought readability by removing the colour, and it looked exactly like that.
+    ///
+    /// The trade is not real. A background stays readable when its BRIGHTNESS is even, not when its
+    /// colour is gone — a bubble loses only where the ground goes light under one half of it and
+    /// dark under the other. So every corner of a palette sits inside a narrow lightness band
+    /// (about 216-234 in light, 35-47 in dark, on the usual 0.299/0.587/0.114 weighting) while the
+    /// HUES are pushed as far apart as they can go. Loud and flat is the target; pale and flat was
+    /// the mistake.
+    ///
+    /// Four corners each, top-left, top-right, bottom-left, bottom-right; the mesh fills in the
+    /// rest. Adding a theme is still adding one row here — no asset, no app-size cost, no review.
+    /// Graphite deliberately breaks the loudness half and not the flatness half: someone who wants
+    /// a quiet chat should have one, and it is the only palette here whose corners are neutral.
     static let all: [WallpaperGradient] = [
-        .init(id: "sunset", name: "Paper",
-              lightGround: [0xECE4D9, 0xE9DFD5, 0xE6DCD2], lightInk: 0xADA39A,
-              darkGround:  [0x0B1014, 0x0A0E12, 0x090C11], darkInk:  0x464B50,
+        .init(id: "sunset", name: "Sunset",
+              lightCorners: [0xFFD9C2, 0xFFE7B0, 0xFFC6D4, 0xEBC9F0],
+              darkCorners:  [0x3C2119, 0x372A12, 0x361A28, 0x2C1C33],
               tint: Color(hex: 0xF08A5D), bubbleHex: 0xF08A5D),
         .init(id: "ocean", name: "Ocean",
-              lightGround: [0xE2EBF4, 0xDDE7F1, 0xD7E3F1], lightInk: 0xA2AEBA,
-              darkGround:  [0x09131C, 0x08111A, 0x060F16], darkInk:  0x414B54,
+              lightCorners: [0xBEE3FF, 0xC6F1EA, 0xD3DCFF, 0xAFDDF6],
+              darkCorners:  [0x12314F, 0x113638, 0x1A2A55, 0x0F2D46],
               tint: Color(hex: 0x3DA1FD), bubbleHex: 0x2E8BF0),
         .init(id: "dusk", name: "Dusk",
-              lightGround: [0xE8E4F4, 0xE2DEF1, 0xDFD7EE], lightInk: 0xABA4BA,
-              darkGround:  [0x0F0B19, 0x0D0917, 0x0B0813], darkInk:  0x464351,
+              lightCorners: [0xE2CCFA, 0xF6CDEA, 0xCED4FA, 0xEBD2FF],
+              darkCorners:  [0x2C1F4E, 0x3E1F44, 0x22224E, 0x341C4A],
               tint: Color(hex: 0x9B6DF3), bubbleHex: 0x8A5CF0),
         .init(id: "forest", name: "Forest",
-              lightGround: [0xE1EEE4, 0xDAEAE0, 0xD5E7D9], lightInk: 0xA0B2A5,
-              darkGround:  [0x091410, 0x08110E, 0x060F0C], darkInk:  0x434D4A,
+              lightCorners: [0xCFEFCB, 0xE7F4C2, 0xC4EEDD, 0xDCF2CE],
+              darkCorners:  [0x143A25, 0x1E3C1B, 0x113A33, 0x1A3A1F],
               tint: Color(hex: 0x34C76F), bubbleHex: 0x1FA85A),
         .init(id: "mono", name: "Graphite",
-              lightGround: [0xEEEEF0, 0xE8E8EA, 0xE3E2E7], lightInk: 0xADACB1,
-              darkGround:  [0x0F0F11, 0x0D0D0F, 0x0B0B0D], darkInk:  0x4A4A4C,
+              lightCorners: [0xEFEFF2, 0xE6E6EB, 0xF2F1F5, 0xE9E8EE],
+              darkCorners:  [0x18181B, 0x131316, 0x1C1C20, 0x141417],
               tint: Color(hex: 0x8E8E93), bubbleHex: 0x3A3A3C),
         .init(id: "rose", name: "Rose",
-              lightGround: [0xF5E5E8, 0xF2DFE4, 0xEED9E0], lightInk: 0xB9A6AC,
-              darkGround:  [0x150A10, 0x12090E, 0x0F090D], darkInk:  0x4C4348,
+              lightCorners: [0xFFD2DB, 0xFFE2CE, 0xF9CBE7, 0xFFD8E9],
+              darkCorners:  [0x3E1E2B, 0x40261E, 0x351A33, 0x3A1F3C],
               tint: Color(hex: 0xF06792), bubbleHex: 0xE84D86),
     ]
 

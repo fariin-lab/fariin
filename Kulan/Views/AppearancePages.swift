@@ -167,6 +167,9 @@ struct ChatWallpaperPage: View {
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Set Wallpaper")
         .navigationBarTitleDisplayMode(.inline)
+        // Pushed page, so the shell's tab bar has no business here — the same miss as the archive
+        // page, caught in the same screenshot batch (owner 2026-08-19).
+        .toolbar(.hidden, for: .tabBar)
         .onChange(of: photoItem) { _, item in
             guard let item else { return }
             Task {
@@ -265,6 +268,7 @@ struct WallpaperColorPage: View {
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Wallpaper Color")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
         .fullScreenCover(item: $previewing) { WallpaperPreviewScreen(wallpaper: $0) }
     }
 
