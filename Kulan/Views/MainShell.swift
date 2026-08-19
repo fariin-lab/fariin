@@ -191,7 +191,16 @@ struct MainShell: View {
     @available(iOS 26.0, *)
     private var modernTabView: some View {
         TabView(selection: $tab) {
-            Tab("Chats", image: "ic_chat", value: 0) {
+            // FILLED WHEN YOU ARE ON IT, OUTLINE WHEN YOU ARE NOT — the Calls tab beside it has always
+            // worked this way (`phone` / `phone.fill`) and this one never did, so it was the same
+            // solid bubble whether you were in it or not and only the capsule said where you were
+            // (owner 2026-08-19, asking how the reference app keeps its active tab solid black).
+            //
+            // This is also WHY a black tab bar works at all. When the tint is the same colour in both
+            // states — ours is black in light and white in dark, deliberately — colour cannot carry
+            // the state, so the SHAPE has to. `ic_chat_outline` is the same path as `ic_chat`,
+            // stroked instead of filled, so the two cannot drift apart.
+            Tab("Chats", image: tab == 0 ? "ic_chat" : "ic_chat_outline", value: 0) {
                 ChatsView(onSignOut: onSignOut)
             }
             .badge(unreadChatsBadge)   // 0 hides it, same as the Calls tab
