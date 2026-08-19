@@ -1362,6 +1362,7 @@ struct StoryEditorView: View {
             ZoomableImageView(image: edited, player: currentIsVideo ? previewPlayer : nil,
                               scale: $photoZoom, offset: $photoOffset,
                               maxScale: 4, interactive: !isDrawing && editingID == nil,
+                              relay: photoTransform,
                               onTap: {
                                   captionFocused = false; selectedID = nil
                                   // ⚠️ PLAY AND PAUSE ARE BOTH THE WHOLE FRAME, AND BOTH BELONG TO
@@ -1383,7 +1384,6 @@ struct StoryEditorView: View {
                                       togglePreview()
                                   }
                               },
-                              relay: photoTransform,
                               onSwipe: { step in
                                   // ZOOMED IN = a horizontal drag is panning the PICTURE, never
                                   // a page turn (owner 2026-08-05: "if I make zoom, block swipe
@@ -3972,6 +3972,11 @@ struct ZoomableImageView: UIViewRepresentable {
     /// and the export can already draw.
     var minScale: CGFloat = 0.4
     var interactive: Bool = true
+    /// Anything riding on top of the picture gets each frame of the gesture through this. Declared
+    /// HERE rather than beside the closures: Swift requires call-site order to match declaration
+    /// order, and it reads better before two multi-line closures than wedged between them.
+    /// See `PhotoTransformRelay`.
+    var relay: PhotoTransformRelay? = nil
     var onTap: () -> Void = {}
     /// SWIPE TO THE NEXT PICTURE, +1 forward and -1 back (owner 2026-08-04: "when i swipe touching
     /// screen nothing happens… it most work swipe to next image").
@@ -3979,9 +3984,6 @@ struct ZoomableImageView: UIViewRepresentable {
     /// It belongs HERE and not on a SwiftUI gesture over the top, because this view's own pan
     /// recogniser is what was eating the swipe. Nothing to do with the strip.
     var onSwipe: (Int) -> Void = { _ in }
-    /// Anything riding on top of the picture gets each frame of the gesture through this. See
-    /// `PhotoTransformRelay`.
-    var relay: PhotoTransformRelay? = nil
 
     func makeUIView(context: Context) -> UIView {
         let container = UIView()
