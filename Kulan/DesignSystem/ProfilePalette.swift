@@ -26,23 +26,11 @@ extension Notification.Name {
 /// the phone can be flipped between light and dark while it is cached. Which family is worn is
 /// decided at draw time by `isDark(scheme:)`.
 final class ProfilePalette {
-    /// Which family of surfaces the picture asks for.
-    enum Polarity {
-        /// A bright picture — a pale page with dark text, whatever the phone is set to.
-        case light
-        /// A dark picture — a deep page with light text, whatever the phone is set to.
-        case dark
-        /// A mid-toned picture. Either family reads well, so the phone's own setting decides and
-        /// the profile stays in step with the rest of the app.
-        case follow
-    }
-
     let key: String
     /// THE EXTRACTED COLOUR ITSELF, kept exactly as it came off the photograph. Nothing draws this
     /// raw — it is the seed every surface below is derived from, and it is worth keeping honest so
     /// a wrong-looking page can always be traced back to what was actually read.
     let base: UIColor
-    let polarity: Polarity
 
     private let hue: CGFloat
     private let sat: CGFloat
@@ -51,110 +39,85 @@ final class ProfilePalette {
     fileprivate init?(key: String, base: UIColor) {
         var h: CGFloat = 0, s: CGFloat = 0, v: CGFloat = 0, a: CGFloat = 0
         guard base.getHue(&h, saturation: &s, brightness: &v, alpha: &a) else { return nil }
-        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0
-        base.getRed(&r, green: &g, blue: &b, alpha: &a)
-
         self.key = key
         self.base = base
         self.hue = h
         self.sat = s
         self.val = v
-
-        // Perceived lightness, not HSB brightness: green reads far lighter than blue at the same
-        // brightness, and getting that backwards is how a page ends up with white text on lime.
-        let lum = 0.299 * r + 0.587 * g + 0.114 * b
-        if lum > 0.62 { polarity = .light }
-        else if lum < 0.24 { polarity = .dark }
-        else { polarity = .follow }
-    }
-
-    /// The family to wear right now. A clearly bright or clearly dark photograph overrides the
-    /// phone; everything in between follows it.
-    func isDark(scheme: ColorScheme) -> Bool {
-        switch polarity {
-        case .light: return false
-        case .dark: return true
-        case .follow: return scheme == .dark
-        }
     }
 
     // MARK: The surfaces
 
-    /// THE PAGE: one flat colour, and the colour the header's photo dissolves into.
+    /// ⚠️ **A PROFILE IS ALWAYS DARK MODE.** Owner, 2026-08-19: "dont use light mode in profile
+    /// always use dark mode" — and 2026-08-08 before that, on the same screen. There is one family
+    /// of surfaces here and one colour of text on them, so a pale photograph can never hand the
+    /// page a white background: it hands it a rich mid-tone instead.
+
+    /// THE PAGE: the extracted colour, kept at ITS OWN lightness, clamped only at the two ends.
     ///
-    /// ⚠️ ONE FUNCTION, TWO READERS, and it has to stay that way. The page paints this and the
+    /// ⚠️ **DO NOT DARKEN THIS AGAIN.** The first version dragged every photo down to a 0.085-0.17
+    /// brightness band, and the verdict was immediate: "the colour looks different and it is too
+    /// dark". The reference contact page he sent does the opposite — a grey cat gives a MID grey
+    /// page, a violet avatar a bright violet one, a photograph of night mountains a near-black one.
+    /// The value it read IS the answer. All that is enforced here is a floor, so a black photograph
+    /// still shows some of its colour, and a luminance ceiling, so white text keeps its footing.
+    ///
+    /// ⚠️ ONE PROPERTY, TWO READERS, and it has to stay that way. The page paints this and the
     /// header fades its photo to this. The moment the two are computed apart, a line appears where
     /// they meet — which this screen has been reported for three separate times.
-    ///
-    /// The bands are deliberately narrow. A profile page is a reading surface before it is a mood,
-    /// so brightness lands between 0.085 and 0.17 on the dark side and between 0.90 and 0.955 on
-    /// the light one — near-black for a black photograph, near-white for a white one, and a deep or
-    /// pale version of the real hue for everything else. Saturation is damped hard for the same
-    /// reason: the page should read as "their blue", not as blue paint.
-    func page(dark: Bool) -> UIColor {
-        let c = dark
-            ? UIColor(hue: hue, saturation: min(sat, 0.75) * 0.70, brightness: 0.085 + val * 0.085, alpha: 1)
-            : UIColor(hue: hue, saturation: min(sat, 0.90) * 0.16, brightness: 0.900 + val * 0.055, alpha: 1)
-        return ProfilePalette.readable(c, dark: dark)
+    var page: UIColor {
+        let s = min(sat, 0.62)
+        let v = min(max(val, 0.16), 0.90)
+        return ProfilePalette.grounded(UIColor(hue: hue, saturation: s, brightness: v, alpha: 1))
     }
 
     /// A CARD: the same colour, lifted. Not a material, not a translucency, not a blur — a flat
-    /// opaque fill that happens to be made of the page's colour, which is how a settings card ends
-    /// up olive on an olive page and teal on a teal one without ever being told which.
+    /// opaque fill made of the page's own colour, which is how one rule gives an olive card on an
+    /// olive page and a violet card on a violet one without either being written down.
     ///
     /// Lifted by brightness and DAMPED by saturation, both on purpose. A card that gains colour as
     /// it rises reads as a painted panel; a card that gains light reads as a surface above the
     /// page, which is the whole difference between this and the tinted-plastic look.
-    func card(dark: Bool) -> UIColor {
-        let p = page(dark: dark)
+    var card: UIColor {
         var h: CGFloat = 0, s: CGFloat = 0, v: CGFloat = 0, a: CGFloat = 0
+        let p = page
         guard p.getHue(&h, saturation: &s, brightness: &v, alpha: &a) else { return p }
-        return dark
-            ? UIColor(hue: h, saturation: s * 0.88, brightness: min(1, v + 0.075), alpha: 1)
-            : UIColor(hue: h, saturation: s * 0.55, brightness: min(1, v + 0.050), alpha: 1)
+        return UIColor(hue: h, saturation: s * 0.92, brightness: min(0.95, v + 0.075), alpha: 1)
     }
 
-    /// The hairline round a card. It exists for the light family, where the card and the page are
-    /// only five points of brightness apart and a shadow would be the wrong answer (this design has
-    /// no shadows). On the dark family it is nearly invisible and that is correct — there the
-    /// brightness step alone already separates them.
-    func edge(dark: Bool) -> UIColor {
-        dark ? UIColor(white: 1, alpha: 0.06) : UIColor(white: 0, alpha: 0.05)
-    }
+    /// The hairline round a card — light, because everything on this page is.
+    var edge: UIColor { UIColor(white: 1, alpha: 0.08) }
 
     /// A separator INSIDE a card, which cannot be the system's own: that one is resolved against
     /// the system background, and on a tinted card it reads as a scratch.
-    func separator(dark: Bool) -> UIColor {
-        dark ? UIColor(white: 1, alpha: 0.10) : UIColor(white: 0, alpha: 0.08)
-    }
+    var separator: UIColor { UIColor(white: 1, alpha: 0.14) }
 
     // MARK: Contrast
 
-    /// Nudge a surface until the text that will sit on it clears 7:1 — the AAA line for body text,
-    /// which is the right target for a screen whose background is decided by somebody's photograph
-    /// rather than by a designer. The bands above already clear it for almost every picture; this
-    /// catches the ones that do not (a saturated yellow reads far lighter than its HSB brightness
-    /// suggests) instead of leaving them to luck.
-    private static func readable(_ colour: UIColor, dark: Bool) -> UIColor {
+    /// Hold a surface below the lightness where white text starts to fail.
+    ///
+    /// A CEILING, NOT A TARGET — the difference matters. Chasing a fixed contrast ratio is what made
+    /// the first version look nothing like the photograph: it dragged a mid grey down to near-black
+    /// to win a number nobody asked for. This lets a page be as light as the picture is and only
+    /// steps in at the top.
+    ///
+    /// ⚠️ **0.25 IS MEASURED OFF THE REFERENCE, NOT CHOSEN.** Their lightest contact page is the one
+    /// under the grey kitten, and that grey is 0.254 relative luminance — white text on it is about
+    /// 3.4:1. Their violet page is 0.17, their slate blue 0.11, their night mountains near zero. So
+    /// the whole family lives under a quarter, and a page that goes past it is not "brighter", it is
+    /// off the design. Relative luminance, NOT HSB brightness: a mid grey is 0.54 bright and 0.25
+    /// luminous, and using the wrong one of those two numbers here makes every warm colour glow.
+    private static func grounded(_ colour: UIColor) -> UIColor {
         var h: CGFloat = 0, s: CGFloat = 0, v: CGFloat = 0, a: CGFloat = 0
         guard colour.getHue(&h, saturation: &s, brightness: &v, alpha: &a) else { return colour }
-        let text = UIColor(white: dark ? 1 : 0, alpha: 1)
         var out = colour
         var steps = 0
-        while contrast(out, text) < 7, steps < 14 {
-            v = max(0, min(1, v + (dark ? -0.02 : 0.02)))
-            // Saturation goes with it. Pulling brightness alone toward black leaves a muddy dark
-            // hue that reads as a stain rather than as a colour.
-            s = max(0, s - 0.015)
+        while luminance(out) > 0.25, steps < 45 {
+            v = max(0, v - 0.02)
             out = UIColor(hue: h, saturation: s, brightness: v, alpha: 1)
             steps += 1
         }
         return out
-    }
-
-    private static func contrast(_ a: UIColor, _ b: UIColor) -> CGFloat {
-        let la = luminance(a), lb = luminance(b)
-        return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
     }
 
     /// Relative luminance, sRGB, gamma undone — the number a contrast ratio is actually defined on.
@@ -187,6 +150,35 @@ extension ProfilePalette {
     static func cached(for url: String?) -> ProfilePalette? {
         guard let url, !url.isEmpty else { return nil }
         return cache.object(forKey: url as NSString)
+    }
+
+    /// THE COLOUR OF SOMEBODY WHOSE PICTURE IS NOT HERE.
+    ///
+    /// ⚠️ This is not a nicety, it is the fix for a real report (owner, 2026-08-19, on a preview
+    /// build): a page whose top was a bright orange letter avatar and whose bottom was black. The
+    /// header falls back to the person's own two-colour gradient when it has no bitmap — a photo
+    /// still downloading, a cold launch, no signal — and the page had nothing to read, so it stayed
+    /// the plain system colour and the screen was two unrelated halves.
+    ///
+    /// The letter's gradient is what is ON SCREEN in that moment, so it is the honest thing to take
+    /// the colour from. When the real photo lands the palette changes under the page and it washes,
+    /// which is the same movement as walking from one person to another.
+    static func forName(_ name: String) -> ProfilePalette? {
+        let key = "name:\(name)"
+        if let hit = cache.object(forKey: key as NSString) { return hit }
+        let pair = AvatarPalette.gradient(for: name)
+        guard let top = pair.first, let bottom = pair.last else { return nil }
+        guard let made = ProfilePalette(key: key, base: mix(UIColor(top), UIColor(bottom))) else { return nil }
+        cache.setObject(made, forKey: key as NSString)
+        return made
+    }
+
+    private static func mix(_ a: UIColor, _ b: UIColor) -> UIColor {
+        var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
+        var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, a2: CGFloat = 0
+        a.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
+        b.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
+        return UIColor(red: (r1 + r2) / 2, green: (g1 + g2) / 2, blue: (b1 + b2) / 2, alpha: 1)
     }
 
     /// Read a photo the caller already holds. Returns immediately; the answer arrives as

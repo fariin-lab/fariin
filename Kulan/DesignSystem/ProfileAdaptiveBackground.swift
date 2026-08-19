@@ -37,7 +37,6 @@ struct ProfileAdaptiveBackdrop: View {
     let palette: ProfilePalette?
     /// Drawn when there is no photo to read — an ordinary system page, which is the stated fallback.
     let fallback: Color
-    @Environment(\.colorScheme) private var scheme
     /// The palette this view has already drawn once. See `wash` — it is the whole reason the first
     /// colours of a session land instantly and every later change is animated.
     @State private var drawn: String?
@@ -58,19 +57,19 @@ struct ProfileAdaptiveBackdrop: View {
 
     /// ⚠️ THE FIRST COLOURS OF A VISIT LAND INSTANTLY; ONLY A CHANGE OF PERSON IS ANIMATED.
     ///
-    /// The page's colour is not the only thing that turns over when a reading lands — the text on it
-    /// flips between black and white at the same moment, and a `\.colorScheme` cannot be animated.
-    /// Washing the background over 0.4s while the labels flip in one frame would put white text on a
-    /// still-pale page for most of that wash, which is worse than any cut. So the arrival is a
-    /// single frame where everything agrees, and the animation is kept for going from one person's
-    /// colour straight to another's, where the text usually does not flip at all.
+    /// The page is not the only thing that turns over when a reading lands — the cards, the hairlines
+    /// and the header's fade all change with it, and not every one of them is a colour SwiftUI can
+    /// carry. Washing one of them over 0.4s while the rest cut is worse than everything cutting
+    /// together, so an arrival is a single frame where the whole page agrees. The animation is kept
+    /// for going from one person's colour straight to another's, which is a change of subject rather
+    /// than the page finishing loading.
     private var wash: Animation? {
         drawn == nil ? nil : .easeInOut(duration: 0.40)
     }
 
     private var colour: Color {
         guard let palette else { return fallback }
-        return Color(uiColor: palette.page(dark: palette.isDark(scheme: scheme)))
+        return Color(uiColor: palette.page)
     }
 }
 
@@ -88,13 +87,13 @@ struct ProfileAdaptiveBackdrop: View {
 ///
 /// So: **a flat, opaque fill, made of the page's own colour, lifted.** Nothing here samples, blurs
 /// or refracts anything behind it — there is no material in this file at all. The lift is brightness,
-/// never saturation, which is what keeps a blue profile's cards a whisper of blue instead of blue
-/// panels. A hairline carries the light family, where card and page are close by design.
+/// never saturation, which is what keeps a violet profile's cards a lighter violet rather than a
+/// louder one. A hairline sits on top of that for the pages whose colour is light enough that the
+/// step alone is quiet.
 struct ProfileAdaptiveSurface: ViewModifier {
     /// Drawn instead of the tint on a profile with no photo — the ordinary card colour.
     let plain: Color
     let radius: CGFloat
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.profilePalette) private var palette
     /// Same rule as the page behind it: the first colours land in the frame the text flips, and only
     /// a change of person is washed. A card that animated while the page cut would be worse than
@@ -119,12 +118,12 @@ struct ProfileAdaptiveSurface: ViewModifier {
 
     private var fill: Color {
         guard let palette else { return plain }
-        return Color(uiColor: palette.card(dark: palette.isDark(scheme: scheme)))
+        return Color(uiColor: palette.card)
     }
 
     private var stroke: Color {
         guard let palette else { return .clear }
-        return Color(uiColor: palette.edge(dark: palette.isDark(scheme: scheme)))
+        return Color(uiColor: palette.edge)
     }
 }
 

@@ -154,30 +154,35 @@ struct ContactInfoView: View {
 
     // MARK: The adaptive theme, taken off this person's photo
 
-    /// The colour read out of their photograph, and everything the page derives from it. nil until
-    /// the reading lands, and nil forever for somebody with no photo — which is the fallback: the
-    /// ordinary system page they have always had.
-    @State private var palette: ProfilePalette?
+    /// The colour read out of their photograph, and everything the page derives from it. nil only
+    /// while the very first reading is in flight.
+    @State private var photoPalette: ProfilePalette?
+
+    /// ⚠️ THE PAGE IS NEVER HALF-COLOURED. If the photo has not been read yet — still downloading,
+    /// a cold launch, no signal — the header is showing the person's letter on their own two-colour
+    /// gradient, so the page takes ITS colour from that gradient and the screen is one thing.
+    ///
+    /// This is a fix for a real report (owner, 2026-08-19): a bright orange letter avatar at the top
+    /// of the page and black cards under it, because the page had nothing to read and fell back to
+    /// the system colour. When the photograph does land, the palette changes and the page washes.
+    private var palette: ProfilePalette? {
+        photoPalette ?? ProfilePalette.forName(shownName)
+    }
 
     /// The adaptive page is a POSTER idea: the photograph runs off the top of the screen and the
     /// colour it dissolves into is the page. Somebody on the classic circle header has no such
     /// photograph, so they keep the ordinary background.
     private var useAdaptive: Bool { useModernHeader && palette != nil }
 
-    /// Which family of surfaces this profile wears. A clearly bright photo gives a pale page with
-    /// dark text and a clearly dark one gives a deep page with light text, whatever the phone is set
-    /// to; a mid-toned photo follows the phone.
-    private var adaptiveDark: Bool { palette?.isDark(scheme: scheme) ?? (scheme == .dark) }
-
     /// The colour the header's photo dissolves into. It is the page's own colour, read from the same
-    /// function the page reads — the only reason the join cannot show.
+    /// property the page reads — the only reason the join cannot show.
     private var posterFadeInto: Color {
         guard useAdaptive, let palette else { return pageBackground }
-        return Color(uiColor: palette.page(dark: adaptiveDark))
+        return Color(uiColor: palette.page)
     }
 
     private func loadPalette() async {
-        palette = await ProfilePalette.resolve(url: gatedPosterUrl)
+        photoPalette = await ProfilePalette.resolve(url: gatedPosterUrl)
     }
 
     // The name shown here reflects a local rename (Edit) if one exists, else the passed-in name. Read
@@ -401,22 +406,23 @@ struct ContactInfoView: View {
         // ONE ANSWER, READ BY EVERY CARD ON THE PAGE. Set on the whole scroll rather than passed to
         // six call sites, so a card added later is themed just by existing.
         .environment(\.profilePalette, useAdaptive ? palette : nil)
-        // ⚠️ THE TEXT FOLLOWS THE COLOUR, NOT THE PHONE. `\.colorScheme` is what every label, icon,
-        // chevron and separator below resolves against, so setting it here is how "white or black
-        // text, whichever stays readable" is answered once instead of at every Text on the page. The
-        // page colour itself is held inside a contrast-checked band, so the pair always clears 7:1.
+        // ⚠️ A COLOURED PROFILE IS ALWAYS DARK MODE, WHATEVER THE PHONE IS SET TO. Owner, twice:
+        // "when am using full color please always use the dark-mode colors" (2026-08-08) and "dont
+        // use light mode in profile always use dark mode" (2026-08-19). The page's colour is held
+        // below the lightness where white text starts to fail, so there is one text colour here and
+        // no second family to get wrong.
         //
         // `\.colorScheme`, NOT `.preferredColorScheme`. The latter sets the WINDOW's style and is
         // dead code inside a screen here — KulanApp sets one outside RootView and an outer one
         // always wins. This one is a subtree value, so nothing outside this page is touched.
-        .environment(\.colorScheme, useAdaptive ? (adaptiveDark ? .dark : .light) : scheme)
+        .environment(\.colorScheme, useAdaptive ? .dark : scheme)
         // Two ways in, because a photo is either already here or on its way. The cache answers on
         // the first frame for anyone you have seen before; the notification carries a cold download
         // in afterwards and the page washes to it rather than flashing.
         .task(id: gatedPosterUrl ?? "") { await loadPalette() }
         .onReceive(NotificationCenter.default.publisher(for: .profilePaletteReady)) { note in
             guard let u = note.object as? String, u == gatedPosterUrl else { return }
-            palette = ProfilePalette.cached(for: u)
+            photoPalette = ProfilePalette.cached(for: u)
         }
         // ⚠️ THE REFUSAL IS SAID WHERE THE CALL WAS TRIED, AND THIS IS ONE OF THE PLACES IT IS
         // TRIED. Same fix as ThreadView's, and the same report a screen later (owner, 2026-08-07:
@@ -923,7 +929,7 @@ struct ContactInfoView: View {
     /// the palette carries its own, mixed from the same colour the card is made of.
     @ViewBuilder private var rowDivider: some View {
         if useAdaptive, let palette {
-            Color(uiColor: palette.separator(dark: adaptiveDark))
+            Color(uiColor: palette.separator)
                 .frame(height: 0.5)
                 .padding(.leading, 56)
         } else {
