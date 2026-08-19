@@ -1041,6 +1041,9 @@ struct ChatsView: View {
                 voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
             .equatable()   // skip rebuild when this conversation is unchanged
             .frame(maxWidth: .infinity, alignment: .leading)
+            // The 150ms UIKit holds a touch for inside a scroll view, off for THIS list only. It was
+            // set app-wide for one build and broke the story viewer's drag. See ScrollTouchDelayOff.
+            .background(ScrollTouchDelayOff().frame(width: 0, height: 0))
             // NO BACKGROUND OF OUR OWN. A fill painted here used to mark the open chat; it is gone
             // (see the Button above). Do not bring one back on this modifier, or on the List's
             // selection binding, or on `.listRowBackground`: the binding stranded a permanent grey

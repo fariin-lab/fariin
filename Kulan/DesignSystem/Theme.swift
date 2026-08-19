@@ -426,6 +426,36 @@ struct RowPressFill: PrimitiveButtonStyle {
     }
 }
 
+/// Turns off `delaysContentTouches` on the ONE scroll view that encloses it, and nothing else.
+///
+/// ⚠️ THIS WAS `UIScrollView.appearance()` FOR ONE BUILD AND IT BROKE THE STORY VIEWER. The flag
+/// is a UIScrollView default: a touch landing on something inside a scroll view is held for about
+/// 150ms while UIKit decides whether the finger is going to scroll instead. Turning it off makes a
+/// chat row answer the finger at once, which is what the owner asked for after 613 felt slower than
+/// 611. Set through `appearance()` it also reached the STORY viewer, where touches the drag used to
+/// absorb now start the card's corner morph on the smallest movement and scrolling back does not
+/// fully undo it — his 614 report, and 613 was clean.
+///
+/// So it is applied to one scroll view, found by walking up from a zero-sized view planted inside
+/// it. Idempotent and cheap: the walk stops at the first scroll view it meets, and setting a Bool
+/// that is already false costs nothing. Put one inside the content of a list that wants it; do NOT
+/// put it back on `appearance()`.
+struct ScrollTouchDelayOff: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView { Finder() }
+    func updateUIView(_ v: UIView, context: Context) {}
+
+    private final class Finder: UIView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            var v: UIView? = superview
+            while let cur = v {
+                if let scroll = cur as? UIScrollView { scroll.delaysContentTouches = false; return }
+                v = cur.superview
+            }
+        }
+    }
+}
+
 struct AvatarView: View {
     let name: String
     var photoUrl: String?
