@@ -5,6 +5,8 @@ import StoryUI   // StoryPosterSource: lets the story player read the app's imag
 struct KulanApp: App {
     // Firebase config + APNs/FCM handshake live in the app delegate.
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
