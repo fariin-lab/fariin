@@ -165,8 +165,14 @@ struct ContactInfoView: View {
     /// This is a fix for a real report (owner, 2026-08-19): a bright orange letter avatar at the top
     /// of the page and black cards under it, because the page had nothing to read and fell back to
     /// the system colour. When the photograph does land, the palette changes and the page washes.
+    ///
+    /// ⚠️ THE ORDER IS THE FIX FOR "IT OPENS IN THE WRONG COLOUR". The photo's own reading comes
+    /// first and it is asked for SYNCHRONOUSLY (`warm`), because the bitmap is already decoded by
+    /// the time this page is built — the header seeds itself from the same cache in its own
+    /// initialiser. Reaching the letter gradient before trying that is what put a pink page under a
+    /// blue photograph for the whole push animation.
     private var palette: ProfilePalette? {
-        photoPalette ?? ProfilePalette.forName(shownName)
+        photoPalette ?? ProfilePalette.warm(url: gatedPosterUrl) ?? ProfilePalette.forName(shownName)
     }
 
     /// The adaptive page is a POSTER idea: the photograph runs off the top of the screen and the
@@ -182,6 +188,9 @@ struct ContactInfoView: View {
     }
 
     private func loadPalette() async {
+        // The warm answer first and WITHOUT an await: an await here would give up the frame even on
+        // a hit, and the frame is the whole complaint.
+        if let warm = ProfilePalette.warm(url: gatedPosterUrl) { photoPalette = warm; return }
         photoPalette = await ProfilePalette.resolve(url: gatedPosterUrl)
     }
 
@@ -516,6 +525,18 @@ struct ContactInfoView: View {
         // that is still on screen. This changes the bar's BACKGROUND, never its visibility —
         // toggling visibility resizes the scroll inset, which is what used to jump the whole page.
         .toolbarBackground(photoUnderBar ? .hidden : .automatic, for: .navigationBar)
+        // BACK AND EDIT ARE ALWAYS THE DARK-MODE PAIR (owner, 2026-08-19), and this is the only
+        // modifier that can say so: the back chevron belongs to the navigation stack, not to this
+        // view, so the `\.colorScheme` set on the scroll below never reaches it — that value stops
+        // at the page's own content, which is exactly why the page went dark and the bar did not.
+        //
+        // Nothing else about them changes: same placement, same size, same Liquid Glass the system
+        // draws for a bar item. Only which of its two appearances it draws.
+        //
+        // `nil` on the plain page, where "always dark" would mean a white chevron on a light grey
+        // page. `useAdaptive` is true for everyone with a photo, so in practice this is always dark
+        // wherever there is a colour to be dark against.
+        .toolbarColorScheme(useAdaptive ? .dark : nil, for: .navigationBar)
         .task {
             // Seed from the warm cache FIRST so "All Media" shows instantly (no late pop-in on
             // re-entry); the async load() then refreshes it.

@@ -152,6 +152,30 @@ extension ProfilePalette {
         return cache.object(forKey: url as NSString)
     }
 
+    /// THE COLOUR ON FRAME ONE, ON THE CALLER'S THREAD.
+    ///
+    /// ⚠️ **THIS IS WHAT KEEPS A PROFILE FROM OPENING IN THE WRONG COLOUR.** Owner, 2026-08-19, with
+    /// a screenshot of a blue photograph over a PINK page mid-push: "during the transition the
+    /// profile should use the correct profile colour… after the page is fully opened it is using the
+    /// correct colour". Nothing was wrong with the reading — it simply had not happened yet, so the
+    /// page was still wearing the letter-gradient fallback while the picture on top of it was
+    /// already the real photograph.
+    ///
+    /// The bitmap is nearly always in hand before the page is built: the header seeds itself the
+    /// same way in its own initialiser. So the read is done HERE, synchronously, exactly as
+    /// `PosterTone` has always been sampled — 2420 pixels is well under a millisecond, and it is
+    /// paid once per photo because both the image and the palette land in their caches.
+    ///
+    /// A miss costs a memory lookup and a Set lookup (`smallImageSync` gates on `isCached`), so this
+    /// is safe to call from a view's body. It never touches the network and never blocks on a
+    /// download — a photo that is not on the phone yet is the letter gradient's job, below.
+    static func warm(url: String?) -> ProfilePalette? {
+        guard let url, !url.isEmpty else { return nil }
+        if let hit = cached(for: url) { return hit }
+        guard let image = DiskImageCache.shared.smallImageSync(url) else { return nil }
+        return produce(image, key: url)
+    }
+
     /// THE COLOUR OF SOMEBODY WHOSE PICTURE IS NOT HERE.
     ///
     /// ⚠️ This is not a nicety, it is the fix for a real report (owner, 2026-08-19, on a preview
