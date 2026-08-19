@@ -191,27 +191,20 @@ struct MainShell: View {
     @available(iOS 26.0, *)
     private var modernTabView: some View {
         TabView(selection: $tab) {
-            // ⚠️ FILLED IN BOTH STATES, AND THAT IS APPLE'S RULE, NOT AN OVERSIGHT.
-            // Human Interface Guidelines, Tab bars: "Prefer filled symbols or icons for consistency
-            // with the platform." It says nothing about swapping to an outline when a tab is not
-            // selected, because on iOS that is not what tells you where you are: COLOUR is. The
-            // system draws the selected item in the tint and the rest in secondary grey, in every
-            // one of Apple's own apps.
+            // FILLED WHEN YOU ARE ON IT, OUTLINE WHEN YOU ARE NOT — the Calls tab beside it has always
+            // worked this way (`phone` / `phone.fill`) and this one never did, so it was the same
+            // solid bubble whether you were in it or not and only the capsule said where you were
+            // (owner 2026-08-19, asking how the reference app keeps its active tab solid black).
             //
-            // The outline-when-unselected pattern belongs to the apps we compare ourselves to, not
-            // to the platform. It was written here on 2026-08-19 (a stroked twin of `ic_chat`) and
-            // taken straight back out when the owner asked for Apple's guidance to lead. The Calls
-            // tab below was doing the same swap and stopped for the same reason.
-            //
-            // What the guidance DOES back is our tint: "If your app already has bright, colorful
-            // content in the content layer, prefer a monochromatic appearance for tab bars." Black
-            // in light and white in dark is exactly that.
-            Tab("Chats", image: "ic_chat", value: 0) {
+            // This is also WHY a black tab bar works at all. When the tint is the same colour in both
+            // states — ours is black in light and white in dark, deliberately — colour cannot carry
+            // the state, so the SHAPE has to. `ic_chat_outline` is the same path as `ic_chat`,
+            // stroked instead of filled, so the two cannot drift apart.
+            Tab("Chats", image: tab == 0 ? "ic_chat" : "ic_chat_outline", value: 0) {
                 ChatsView(onSignOut: onSignOut)
             }
             .badge(unreadChatsBadge)   // 0 hides it, same as the Calls tab
-            // Filled in both states. See the note on the Chats tab above.
-            Tab("Calls", systemImage: "phone.fill", value: 1) {
+            Tab("Calls", systemImage: tab == 1 ? "phone.fill" : "phone", value: 1) {
                 CallsView()
             }
             .badge(missedBadge)   // 0 hides it
