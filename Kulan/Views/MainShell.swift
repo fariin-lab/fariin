@@ -2023,6 +2023,12 @@ struct ArchivedChatsView: View {
             }
             .navigationTitle("Archived")
             .navigationBarTitleDisplayMode(.inline)
+            // THE TAB BAR HAS NO BUSINESS HERE (owner 2026-08-19, screenshot). The archive is a
+            // PUSHED page of the chats stack, so it inherited the shell's tab bar and the floating
+            // Chats/Calls/Settings pill sat under a sub page. Every other pushed page in the app
+            // already hides it (ThreadView, ContactInfoView). Only when pushed: presented as a
+            // sheet this view lives outside the TabView and there is nothing to hide.
+            .toolbar(pushed ? .hidden : .automatic, for: .tabBar)
             // NO SEARCH BAR (his call, 2026-08-13, first thing he caught on 571). It has been here
             // since June and neither reference has one: the archive is the short list you put things
             // in on purpose, and a permanent search field over a handful of rows is furniture. The
