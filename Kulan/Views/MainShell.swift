@@ -1093,8 +1093,16 @@ struct ChatsView: View {
                     MenuIcon("ic_archive", size: 20)
                         .foregroundStyle(.secondary)
                         .frame(width: 56)
+                    // ⚠️ IT IS NOT A PEER OF THE ROWS UNDER IT, and the line that used to sit here
+                    // said it was: a chat name's font, `.primary`, semibold. That made the heaviest
+                    // type on the whole screen belong to the row people tap least, and it made the
+                    // archive read as a conversation with a strange name. Owner 2026-08-19, holding
+                    // ours beside the reference app's: theirs is grey and lighter than every name
+                    // below it, and it reads as a shelf rather than as a chat. This reverses his own
+                    // earlier call on the same row; the icon size he set that day is untouched.
                     Text("Archived")
-                        .font(.system(size: 16, weight: .semibold))   // a chat name's font: it is a peer of the rows under it
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.secondary)
                     Spacer(minLength: 8)
                     if !archivedChats.isEmpty {
                         Text("\(archivedChats.count)")
