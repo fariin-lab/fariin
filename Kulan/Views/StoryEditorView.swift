@@ -3330,7 +3330,6 @@ struct StoryEditorView: View {
 
     @MainActor private func flatten() async -> Data {
         let base = edited
-        let quality: CGFloat = 0.9
         let size = canvasSize == .zero ? UIScreen.main.bounds.size : canvasSize
         // THE FAST PATH IS NOW ALSO A "DOES IT FILL" TEST. Nothing to draw, nothing to type, no
         // zoom AND the photo already fills the frame → post it untouched at full resolution, which
@@ -3347,7 +3346,7 @@ struct StoryEditorView: View {
         // ⚠️ `stickers.isEmpty` BELONGS IN THIS TEST. The fast path posts the photo untouched, so
         // anything left off this line is a thing he placed and never sees again.
         if drawing.bounds.isEmpty && overlays.isEmpty && stickers.isEmpty && !zoomed && imageFillsCanvas(size) {
-            return base.jpegData(compressionQuality: quality) ?? Data()
+            return StoryPhoto.encode(base)
         }
         // BAKED AT THE CARD'S OWN SIZE, which is the space the pen drew in and the text overlays are
         // positioned in, so what he framed is byte-for-byte what lands. On every full-size phone the
@@ -3399,11 +3398,18 @@ struct StoryEditorView: View {
             // (Caption is NOT baked here — it's posted as text and drawn as an overlay.)
         }
         .frame(width: size.width, height: size.height)
-        let r = ImageRenderer(content: composed); r.scale = UIScreen.main.scale
+        let r = ImageRenderer(content: composed)
+        // ⚠️ THE STORY CANVAS, NOT THE SCREEN'S SCALE. This was `UIScreen.main.scale`, so the
+        // posted frame's size depended on which phone drew it, and then the upload capped whatever
+        // came out at 1600px anyway. Asking the renderer for 1080 across makes 9:16 come out at
+        // exactly 1080×1920 on every device — the size a story is posted at everywhere — and it is
+        // free, because it is the same composition drawn at a different scale rather than a resample
+        // afterwards. See `StoryPhoto`.
+        r.scale = size.width > 0 ? StoryPhoto.canvasWidth / size.width : UIScreen.main.scale
         // The render is the story. There is no crop-back any more (see the note below), so the only
         // fallback left is the untouched photo, for a renderer that returned nothing at all.
-        return r.uiImage?.jpegData(compressionQuality: quality)
-            ?? base.jpegData(compressionQuality: quality) ?? Data()
+        // ONE encode either way, through the ladder that answers for the byte budget.
+        return r.uiImage.map { StoryPhoto.encode($0) } ?? StoryPhoto.encode(base)
     }
 
     // `flattenBackdrop` lived here: the photo aspect-filled into an eighth-size canvas and darkened

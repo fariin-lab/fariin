@@ -352,6 +352,74 @@ enum ServerClock {
     }
 }
 
+/// HOW A PHOTO STORY BECOMES A FILE. One canvas, ONE encode, a size check, upload.
+///
+/// ⚠️ IT USED TO BE ENCODED TWICE. The editor's `flatten` produced a JPEG at 0.9, and this
+/// service then handed that straight to `ChatService.downscaledJPEG`, which decoded it, capped the
+/// long edge at 1600 and re-encoded it at 0.72. Two lossy passes over the same pixels for nothing,
+/// and the cap quietly shrank every composed story: the card is about 1080×1920, so anything with
+/// text, a sticker, a pen stroke or a zoom on it posted at 900×1600 instead. That rule came from
+/// chat photos, where an arbitrary camera file has to be brought down to something sendable. A
+/// story frame is not an arbitrary file — it is a canvas this app drew, at the size it should be
+/// posted at.
+///
+/// The shape here is Signal's, because it is the right shape for a client that encodes its own
+/// media: a fixed quality, and RESOLUTION gives way when a frame does not fit the budget. Their
+/// `PushMediaConstraints` steps 4096 → 3072 → 2048 → 1600 → 1024 → 768 → 512 against 1.5 MB at
+/// quality 75. Ours starts at the story canvas instead of a camera's full resolution, so the ladder
+/// is shorter and the first rung is nearly always the answer.
+enum StoryPhoto {
+    /// The story canvas. Every composed frame is rendered at exactly this width, and 9:16 of it is
+    /// 1080×1920 — the size a story is posted at everywhere. On a short phone the card is squatter
+    /// than 9:16 and the file follows it, which is the same trade `flatten` has always made.
+    static let canvasWidth: CGFloat = 1080
+    /// Signal's standard-quality budget, and for the same reason: a predictable upload on a phone
+    /// that may be on one bar.
+    static let budget = 1_500_000
+    /// Fixed, like theirs. When a frame will not fit, pixels give way rather than quality — a
+    /// smaller sharp picture beats a full-size mushy one.
+    static let quality: CGFloat = 0.85
+    /// Tried in order. The first rung is the canvas itself and almost always wins.
+    static let widthLadder: [CGFloat] = [1080, 900, 720, 540]
+
+    /// The one encode. Returns the first rung that fits the budget, or the smallest if none do.
+    static func encode(_ image: UIImage) -> Data {
+        var last = Data()
+        for w in widthLadder {
+            guard let d = fit(image, toWidth: w).jpegData(compressionQuality: quality) else { continue }
+            last = d
+            if d.count <= budget { return d }
+        }
+        return last
+    }
+
+    /// ⚠️ NEVER UPSCALES. A picture already at or under the rung is handed back untouched, which
+    /// is what keeps the normal path to exactly one encode: the composer renders at 1080 wide, so
+    /// the first rung resamples nothing.
+    private static func fit(_ image: UIImage, toWidth w: CGFloat) -> UIImage {
+        let px = image.size.width * image.scale
+        guard px > w, image.size.width > 0, image.size.height > 0 else { return image }
+        let k = w / px
+        let size = CGSize(width: px * k, height: image.size.height * image.scale * k)
+        let f = UIGraphicsImageRendererFormat.default()
+        f.scale = 1                                    // the numbers above are already pixels
+        return UIGraphicsImageRenderer(size: size, format: f).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+
+    /// The net under the upload, for bytes that did NOT come from the composer.
+    ///
+    /// Every caller today hands over `flatten`'s output, which is already encoded by `encode` above
+    /// and carries no camera metadata because it is drawn from pixels rather than copied. So this
+    /// decodes NOTHING on the normal path — it is a length check. ⚠️ A future caller that passes a
+    /// camera file straight through would keep its EXIF, GPS included: hand it to `encode` first.
+    static func ensureWithinBudget(_ data: Data) -> Data {
+        guard data.count > budget, let img = UIImage(data: data) else { return data }
+        return encode(img)
+    }
+}
+
 @Observable
 final class StoriesService {
     static let shared = StoriesService()
@@ -768,7 +836,9 @@ final class StoriesService {
         // has to happen the instant this returns, and doing that from inside a `@Sendable` closure
         // would mean capturing `self` there. The cost is that ~0.3s of CPU no longer overlaps the
         // audience resolve, which is a local main-actor hop — nothing worth capturing a class for.
-        let jpeg = ChatService.downscaledJPEG(image)
+        // ONE ENCODE, DONE IN THE COMPOSER. This was `ChatService.downscaledJPEG(image)`, a second
+        // lossy pass that also capped the frame at 1600px. See `StoryPhoto`.
+        let jpeg = StoryPhoto.ensureWithinBudget(image)
         // THE PHONE'S HALF IS OVER. Everything past this line is the network, and this person's own
         // copy is already complete — so the ring comes down here, not at the end.
         await markSending()
