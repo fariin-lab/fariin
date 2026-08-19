@@ -211,6 +211,18 @@ final class DiskImageCache {
         }
     }
 
+    /// The ORIGINAL bytes exactly as they were stored (see `store`), read off the main thread.
+    /// For SHARING and exporting, where `image(for:)` would hand out the display-bounded copy —
+    /// a downscaled version of the user's own photo — and where re-downloading the ciphertext to
+    /// get the full one is a round trip for something already on this phone.
+    func rawData(for url: String) async -> Data? {
+        await withCheckedContinuation { cont in
+            read.async {
+                cont.resume(returning: try? Data(contentsOf: self.existingFileURL(url)))
+            }
+        }
+    }
+
     /// Store a decoded image in memory + persist its bytes to disk. Pass the original
     /// `data` when available to avoid a re-encode; otherwise it is JPEG-encoded.
     /// `owned: true` marks this as a chat photo the phone must KEEP (see the .own note above).

@@ -40,6 +40,7 @@ struct MediaGalleryView: View {
     @State private var tab: Tab = .media
     @State private var mediaFilter: MediaFilter = .all
     @State private var selecting = false
+    @State private var preparingShare = false   // Share tapped, items not ready yet (see shareSelected)
     @State private var selection = Set<String>()
     @State private var viewerImage: Message?
     @State private var viewerVideo: Message?
@@ -65,11 +66,18 @@ struct MediaGalleryView: View {
     // the drag-close landing resolve real geometry.
     private var expandedAll: [Message] { all.flatMap { $0.expandedGalleryItems(cid: cid) } }
 
-    private var mediaItems: [Message] {
+    /// Everything the Media tab holds, BEFORE the Show filter narrows it. Split out because the
+    /// "..." menu has to know the difference: a tab with photos in it but the Videos filter on is
+    /// empty on screen and still needs its menu, since the way back to All Media is inside it.
+    private var allMediaItems: [Message] {
         // ⚠️ `!viewOnce` HERE IS A HOLE CLOSED, not a nicety (found 2026-08-11 while adding the
         // voice exclusion below): a view-once photo was never filtered from this grid, so the
         // person it was burned for could simply reopen it from All Media.
-        expandedAll.filter { ($0.isImage || $0.isVideo) && !$0.isGif && !$0.viewOnce }.filter { m in
+        expandedAll.filter { ($0.isImage || $0.isVideo) && !$0.isGif && !$0.viewOnce }
+    }
+
+    private var mediaItems: [Message] {
+        allMediaItems.filter { m in
             switch mediaFilter {
             case .all:    return true
             case .photos: return m.isImage
@@ -229,9 +237,18 @@ struct MediaGalleryView: View {
             ToolbarItem(placement: .topBarLeading) {
                 Button { exitSelection() } label: { Image(systemName: "xmark") }.tint(.primary)
             }
-        } else {
+        } else if showsMoreMenu {
             ToolbarItem(placement: .topBarTrailing) { moreMenu }
         }
+    }
+
+    /// NO "..." ON AN EMPTY TAB (owner 2026-08-19, on the Files tab with nothing in it). The menu's
+    /// only entry on Files, Voice, Links and GIFs is Select, and Select on an empty page is a button
+    /// that greys itself out the moment you open it — a control that exists to tell you it cannot be
+    /// used. The Media tab keeps its menu as long as the tab holds anything at all, filtered or not,
+    /// because the Show section is in there and it is the only way to undo a filter.
+    private var showsMoreMenu: Bool {
+        tab == .media ? !allMediaItems.isEmpty : !currentItems.isEmpty
     }
 
     // "..." menu (user spec): filtering lives here now, plus Select â€” so the nav bar stays clean
@@ -245,10 +262,11 @@ struct MediaGalleryView: View {
                     filterButton("Videos", mediaFilter == .videos) { mediaFilter = .videos }
                 }
             }
-            // ALWAYS present, disabled when there is nothing to select. A SwiftUI Menu with no children
-            // renders as a button that does nothing at all when tapped - which is exactly what happened on
-            // Files, Voice, Links and GIFs, because the "Show" section is Media-only and this Select was
-            // conditional on the tab having items. The menu looked broken rather than empty.
+            // Always present INSIDE the menu, disabled when there is nothing to select. A SwiftUI Menu
+            // with no children renders as a button that does nothing at all when tapped, so Select is
+            // never made conditional here — the "Show" section above is Media-only, and a tab whose menu
+            // held neither looked broken rather than empty. (An empty tab has no "..." at all now; see
+            // `showsMoreMenu`. This still matters on Media, where a filter can empty the grid.)
             Button { selecting = true } label: { Label("Select", systemImage: "checkmark.circle") }
                 .disabled(currentItems.isEmpty)
         } label: {
@@ -274,11 +292,17 @@ struct MediaGalleryView: View {
         HStack {
             // Share â€” 48px real Liquid Glass circle.
             Button { shareSelected() } label: {
-                Image(systemName: "square.and.arrow.up").font(.system(size: 20)).foregroundStyle(.primary)
-                    .frame(width: 48, height: 48)
-                    .liquidGlass(Circle(), interactive: true)
+                // A SPINNER WHILE IT PREPARES. Even with the cache below there is a case that has to
+                // fetch (a photo evicted from this phone), and a button that stays exactly as it was
+                // for a second reads as a button that did not work.
+                Group {
+                    if preparingShare { ProgressView().tint(.primary) }
+                    else { Image(systemName: "square.and.arrow.up").font(.system(size: 20)).foregroundStyle(.primary) }
+                }
+                .frame(width: 48, height: 48)
+                .liquidGlass(Circle(), interactive: true)
             }
-            .disabled(selection.isEmpty)
+            .disabled(selection.isEmpty || preparingShare)
             Spacer()
             // Count â€” a glass pill (Apple's floating-toolbar style), not a plain label on a bar.
             Text("\(selection.count) Selected")
@@ -656,26 +680,60 @@ struct MediaGalleryView: View {
 
     private func share(_ m: Message) {
         if let url = Self.firstURL(in: m.text) { shareItems = [url]; return }
+        let cid = self.cid
         Task {
-            if let img = await decryptedImage(m) { await MainActor.run { shareItems = [img] } }
+            if let img = await Self.shareImage(m, cid: cid) { await MainActor.run { shareItems = [img] } }
             else if !m.text.isEmpty { await MainActor.run { shareItems = [m.text] } }
         }
     }
     private func shareSelected() {
         // Share the decrypted images among the selection (the shareable representation we can build here).
+        guard !preparingShare else { return }
         let picked = all.filter { selection.contains($0.id) }
+        let cid = self.cid
+        preparingShare = true
         Task {
-            var items: [Any] = []
-            for m in picked { if let img = await decryptedImage(m) { items.append(img) } }
+            // ALL AT ONCE, not one after another. This was a `for` loop that awaited each photo in
+            // turn, so picking four meant four fetches END TO END before the sheet could open, and
+            // nothing on screen said anything was happening (owner 2026-08-19: "it opens late").
+            // The photos have nothing to do with each other, so they are fetched together and put
+            // back in the order they were picked.
+            var out: [(Int, UIImage)] = []
+            await withTaskGroup(of: (Int, UIImage?).self) { group in
+                for (i, m) in picked.enumerated() {
+                    group.addTask { (i, await Self.shareImage(m, cid: cid)) }
+                }
+                for await (i, img) in group { if let img { out.append((i, img)) } }
+            }
+            var items: [Any] = out.sorted { $0.0 < $1.0 }.map { $0.1 as Any }
             if items.isEmpty { for m in picked where !m.text.isEmpty { items.append(m.text) } }
-            if !items.isEmpty { await MainActor.run { shareItems = items } }
+            await MainActor.run {
+                preparingShare = false
+                if !items.isEmpty { shareItems = items }
+            }
         }
     }
 
-    // Download + decrypt an image message to a UIImage for sharing (nil for non-images / failures).
-    private func decryptedImage(_ m: Message) async -> UIImage? {
+    /// The full-quality image behind a message, for sharing (nil for non-images / failures).
+    ///
+    /// ⚠️ THE PHONE'S OWN COPY FIRST, and that is the second half of the "it opens late" report.
+    /// This went straight to the network and decrypted the photo again every single time, even
+    /// though the tile you are looking at was drawn from a picture `DiskImageCache` already holds:
+    /// SecureImageView writes the ORIGINAL decrypted bytes to disk the first time a photo is seen.
+    /// So Share paid for a download of something the app had in hand.
+    ///
+    /// The raw file, not `image(for:)`: that one returns the display-bounded bitmap, which would
+    /// share a downscaled copy of your own photo. The memory tier is the fallback under it, and the
+    /// download stays as the last resort for a photo this phone no longer keeps.
+    ///
+    /// `static`, so the parallel fetch below hands the task group a message and a cid rather than
+    /// the whole view.
+    private static func shareImage(_ m: Message, cid: String) async -> UIImage? {
         if let data = m.localImageData { return UIImage(data: data) }
-        guard m.isImage, let s = m.imageUrl, let url = URL(string: s), let meta = m.enc,
+        guard m.isImage, let s = m.imageUrl else { return nil }
+        if let raw = await DiskImageCache.shared.rawData(for: s), let ui = UIImage(data: raw) { return ui }
+        if let mem = DiskImageCache.shared.memoryImage(s) { return mem }
+        guard let url = URL(string: s), let meta = m.enc,
               let (cipher, _) = try? await MediaSession.shared.data(from: url),
               let dec = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else { return nil }
         return UIImage(data: dec)
