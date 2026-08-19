@@ -46,6 +46,11 @@ final class DeviceRegistry: ObservableObject {
         db.collection("users").document(uid).collection("devices")
     }
 
+    /// "This install has been registered for this account before." Per account, so signing in as
+    /// somebody else on the same phone starts clean. UserDefaults on purpose: a delete-and-reinstall
+    /// clears it, and a reinstall IS a new session (`identifierForVendor` resets with it too).
+    private static func registeredKey(_ uid: String) -> String { "device.registered.\(uid)" }
+
     // MARK: - This device
 
     /// Record this device and start watching for a remote sign-out. Safe to call on every
@@ -65,20 +70,110 @@ final class DeviceRegistry: ObservableObject {
             "appVersion": Self.appVersion,
             "lastSeenAt": FieldValue.serverTimestamp(),
         ]
+        // ⚠️ SIGNED OUT WHILE WE WERE CLOSED. Until now this method wrote the record back
+        // unconditionally, so signing a device out from another phone only ever worked against a
+        // phone that happened to be RUNNING and listening. A closed one simply re-created its own
+        // record on next launch and carried on — while the screen's own footer promised it would be
+        // signed out the next time it was opened. The automatic sweep on the server has the same
+        // dependency, so this had to be true before that could mean anything.
+        //
+        // The local marker is what makes the question answerable: an account with NO record and no
+        // marker is a first launch, and an account with no record but a marker had one taken away.
+        // `source: .server` because Firestore answers from its cache when offline and reports a
+        // document it has never seen as missing — which would sign people out for being on a plane.
+        // A throw means we could not ask, so we say nothing and register as before.
+        let marker = Self.registeredKey(uid)
+        let hadRegistered = UserDefaults.standard.bool(forKey: marker)
+        var existing: DocumentSnapshot?
+        do {
+            let fromServer = try await ref.getDocument(source: .server)
+            existing = fromServer
+            if !fromServer.exists && hadRegistered {
+                revoked = true
+                return
+            }
+        } catch {
+            existing = try? await ref.getDocument()   // offline: fall through and write as before
+        }
+
         // First sign-in on this device sets the date it started. Written only when the record
         // is new, so "signed in on" keeps meaning the first time, not the last launch.
-        let existing = try? await ref.getDocument()
         if existing?.exists != true { data["createdAt"] = FieldValue.serverTimestamp() }
 
         do {
             try await ref.setData(data, merge: true)
+            UserDefaults.standard.set(true, forKey: marker)
             registered = true
             watchThisDevice()
+            startHeartbeat()   // the registration write IS the first beat; this keeps it honest after
         } catch {
             // A failed write must NOT arm the watcher: it would see no record and sign the
             // user out of a device that simply never managed to register.
             registered = false
         }
+    }
+
+    // MARK: - Heartbeat
+
+    /// ⚠️ `lastSeenAt` USED TO MEAN "last launched". It was written when the device registered
+    /// (a cold launch) and when a push token changed, and nowhere else — so a phone you had used all
+    /// week still read "Last active 3 days ago", and the inactivity sweep on the server reads this
+    /// exact field to decide what to sign out. Both of those need it to mean what it says.
+    ///
+    /// A timer rather than one write per foreground: an app left open for an hour is in use for that
+    /// hour, and nothing else was going to say so. Five minutes is the interval the list's "Active
+    /// now" is drawn against, so the two agree by construction.
+    private var heartbeat: Task<Void, Never>?
+    private var lastTouch: Date?
+    private static let heartbeatInterval: TimeInterval = 300
+
+    /// Start marking this device active. Call when the app comes to the front; safe to call twice.
+    func startHeartbeat() {
+        guard heartbeat == nil else { return }
+        heartbeat = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.touch()
+                try? await Task.sleep(nanoseconds: UInt64(Self.heartbeatInterval * 1_000_000_000))
+            }
+        }
+    }
+
+    /// Stop when the app goes to the back. What is already written stands: the device was last
+    /// active when it was last in front, which is exactly what the list should say.
+    func stopHeartbeat() {
+        heartbeat?.cancel()
+        heartbeat = nil
+    }
+
+    private func touch() async {
+        guard let uid, !Self.thisDeviceId.isEmpty, registered else { return }
+        // A foreground and a timer tick can land together; one write is enough.
+        if let lastTouch, Date().timeIntervalSince(lastTouch) < 60 { return }
+        lastTouch = Date()
+        try? await devices(uid).document(Self.thisDeviceId)
+            .setData(["lastSeenAt": FieldValue.serverTimestamp()], merge: true)
+    }
+
+    // MARK: - Automatic sign-out of devices nobody uses
+
+    /// How long a device may sit unopened before the server signs it out, in days. 0 = never.
+    /// Stored on the account, not on the phone, because the sweep that acts on it runs on the
+    /// server and because the answer should follow you to a new phone.
+    /// `nonisolated` like `thisDeviceId` above and for the same reason: the Devices screen reads
+    /// them where a main-actor hop would be noise, and they are constants.
+    nonisolated static let autoSignOutOptions = [0, 30, 90, 180, 365]
+    nonisolated static let autoSignOutDefaultDays = 180
+
+    func autoSignOutDays() async -> Int {
+        guard let uid else { return Self.autoSignOutDefaultDays }
+        let snap = try? await db.collection("users").document(uid).getDocument()
+        return snap?.get("deviceAutoSignOutDays") as? Int ?? Self.autoSignOutDefaultDays
+    }
+
+    func setAutoSignOutDays(_ days: Int) async throws {
+        guard let uid else { throw AuthFlowError.notSignedIn }
+        try await db.collection("users").document(uid)
+            .setData(["deviceAutoSignOutDays": days], merge: true)
     }
 
     /// Keep the push tokens on the record, so signing this device out from another phone can
@@ -110,6 +205,7 @@ final class DeviceRegistry: ObservableObject {
     /// Sign this device out because another device said so. Same teardown as tapping Sign Out.
     func performRevokedSignOut() async {
         stopWatching()
+        if let uid { UserDefaults.standard.removeObject(forKey: Self.registeredKey(uid)) }
         await Push.unregister()          // needs auth, so before signOut
         try? Auth.auth().signOut()
         SessionWipe.wipeAccountData()
@@ -121,6 +217,9 @@ final class DeviceRegistry: ObservableObject {
     func removeThisDevice() async {
         stopWatching()
         guard let uid, !Self.thisDeviceId.isEmpty else { return }
+        // The marker goes with the record. Leaving it behind would make the next sign-in on this
+        // phone look like a device that had been thrown off.
+        UserDefaults.standard.removeObject(forKey: Self.registeredKey(uid))
         try? await devices(uid).document(Self.thisDeviceId).delete()
     }
 
@@ -128,6 +227,7 @@ final class DeviceRegistry: ObservableObject {
         watcher?.remove()
         watcher = nil
         registered = false
+        stopHeartbeat()
     }
 
     // MARK: - The list

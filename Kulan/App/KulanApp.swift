@@ -33,6 +33,10 @@ struct KulanApp: App {
         }
         .onChange(of: scenePhase) { _, phase in
             Task { await PresenceService.set(online: phase == .active) }
+            // "Last active" on the Devices screen is only as true as this. Foreground beats,
+            // background stops. See DeviceRegistry.startHeartbeat.
+            if phase == .active { DeviceRegistry.shared.startHeartbeat() }
+            else { DeviceRegistry.shared.stopHeartbeat() }
         }
     }
 

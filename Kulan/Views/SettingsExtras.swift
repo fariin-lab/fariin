@@ -190,6 +190,8 @@ struct DevicesView: View {
     @State private var pendingSignOut: DeviceSession?
     @State private var error: String?
     @State private var working = false
+    @State private var autoDays = DeviceRegistry.autoSignOutDefaultDays
+    @State private var autoLoaded = false
 
     private var others: [DeviceSession] { sessions.filter { !$0.isThisDevice } }
 
@@ -259,6 +261,19 @@ struct DevicesView: View {
             }
 
             Section {
+                Picker("Sign out inactive devices", selection: $autoDays) {
+                    ForEach(DeviceRegistry.autoSignOutOptions, id: \.self) { d in
+                        Text(Self.autoLabel(d)).tag(d)
+                    }
+                }
+                .disabled(!autoLoaded)
+            } header: {
+                Text("Automatic sign-out")
+            } footer: {
+                Text("A device that is not opened for this long is signed out on its own. The device you are using stays signed in as long as you keep using it.")
+            }
+
+            Section {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "lock.fill").font(.caption)
                     Text("Messages are end-to-end encrypted and stored on each device. Signing a device out stops it receiving anything new, but the messages already on it stay there.")
@@ -278,6 +293,16 @@ struct DevicesView: View {
             if listener == nil { loaded = true }   // signed out; nothing to watch
         }
         .onDisappear { listener?.remove(); listener = nil }
+        .task {
+            autoDays = await DeviceRegistry.shared.autoSignOutDays()
+            autoLoaded = true
+        }
+        // `autoLoaded` gates the write: the first change of this value is the loaded answer
+        // arriving, not a choice anybody made.
+        .onChange(of: autoDays) { _, days in
+            guard autoLoaded else { return }
+            run { try await DeviceRegistry.shared.setAutoSignOutDays(days) }
+        }
         .confirmationDialog("Sign out this device?",
                             isPresented: Binding(get: { pendingSignOut != nil },
                                                  set: { if !$0 { pendingSignOut = nil } }),
@@ -347,9 +372,27 @@ struct DevicesView: View {
         }
     }
 
-    /// "Active now" for this phone (it is, you are looking at it), a relative time for the rest.
+    /// The interval the heartbeat writes on, plus a minute of slack. A device in use has written
+    /// inside this window by definition, and one that has not is genuinely not in front of anybody.
+    private static let activeWindow: TimeInterval = 360
+
+    static func autoLabel(_ days: Int) -> String {
+        switch days {
+        case 0:   return "Never"
+        case 30:  return "After 1 month"
+        case 90:  return "After 3 months"
+        case 180: return "After 6 months"
+        case 365: return "After 1 year"
+        default:  return "After \(days) days"
+        }
+    }
+
+    /// "Active now" for this phone (it is, you are looking at it) AND for any other device that
+    /// reported in within the heartbeat window — a second phone in your other hand is active, and
+    /// saying "last active 2 minutes ago" about it was only ever true because nothing was writing.
     private func subtitle(_ s: DeviceSession) -> String {
         if s.isThisDevice { return "Active now" }
+        if s.lastSeenAt > Date().addingTimeInterval(-Self.activeWindow) { return "Active now" }
         let last = s.lastSeenAt.formatted(.relative(presentation: .named))
         guard let created = s.createdAt else { return "Last active \(last)" }
         return "Last active \(last) Â· signed in \(created.formatted(.dateTime.day().month(.abbreviated).year()))"
