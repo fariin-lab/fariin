@@ -3921,7 +3921,17 @@ struct LiveTransformImage: UIViewRepresentable {
 
     func makeUIView(context: Context) -> UIImageView {
         let v = UIImageView(image: image)
-        v.contentMode = .scaleAspectFit
+        // ⚠️ `.scaleToFill`, WHICH IS WHAT `.resizable()` MEANT. The layer this replaced was
+        // `Image(uiImage:).resizable().frame(card)`, and resizable stretches the picture to the frame
+        // it is given whatever its own point size is. `.scaleAspectFit` does NOT: when the rendered
+        // strokes come back at a different point size from the card — which they do, because they are
+        // rasterised at the zoom's own scale — aspect fit shrinks them and re-centres them inside the
+        // frame. The owner's two screenshots are exactly that: the same strokes, about half size and
+        // moved, the moment the pen closed and this layer took over from the live canvas (2026-08-19).
+        //
+        // The drawing is rendered from a rect that IS the card, so its aspect already matches and
+        // filling distorts nothing. There is no case where fitting is the right answer here.
+        v.contentMode = .scaleToFill
         v.isUserInteractionEnabled = false
         v.backgroundColor = .clear
         relay.apply = { [weak v] s, o in

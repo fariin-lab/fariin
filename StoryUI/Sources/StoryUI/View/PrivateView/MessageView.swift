@@ -115,7 +115,7 @@ private extension MessageView {
                     Image(systemName: "arrow.up.circle.fill")
                         .resizable().scaledToFit()
                         .foregroundColor(.white)
-                        .frame(width: Constant.MessageView.height, height: Constant.MessageView.height)
+                        .frame(width: Constant.MessageView.sendSize, height: Constant.MessageView.sendSize)
                         .shadow(color: Color.black.opacity(0.55), radius: 6, y: 2)   // lifts off bright media (user)
                         .contentShape(Rectangle())
                 }

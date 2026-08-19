@@ -73,6 +73,10 @@ enum Constant {
     
     enum MessageView {
         static let height: CGFloat = 44   // spec: 40–44pt pill (Capsule → 22pt radius)
+        /// The send circle beside the pill. 40, his call 2026-08-19, after seeing it at the pill's
+        /// full 44 — a hair smaller than the field reads as a button next to it rather than a second
+        /// field. Its own number so the two can be tuned apart.
+        static let sendSize: CGFloat = 40
         static let padding = EdgeInsets(top: 0, leading: 8, bottom: 0, trailing: 8)
         static let cornerRadius: CGFloat = 24
         static let likeImage: String = "heart"
