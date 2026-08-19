@@ -101,6 +101,10 @@ struct AttachRecentsStrip: View {
 
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 3)   // 3 per row (user request)
 
+    /// The header's own height: the 48pt close button plus its 8pt bottom padding. The grid and the
+    /// album list start this far down (see `grid`), so nothing sits UNDER an opaque bar at rest.
+    private let headerHeight: CGFloat = 56
+
     var body: some View {
         // THE PHOTOS RUN UNDER THE HEADER (his reference, 2026-08-14: "make the white follow the
         // photo… swipe down and it comes back"). It used to be the first row of a VStack, which is a
@@ -111,6 +115,15 @@ struct AttachRecentsStrip: View {
         // and everything slides under it the moment you scroll, coming back as you scroll down. The
         // header itself paints NOTHING now: the close button carries its own glass circle and the
         // album title floats, which is what theirs does.
+        //
+        // ⚠️ THAT LAST LINE STOPPED BEING TRUE on 2026-08-17, when the header took a solid background
+        // so the title and chevron would stop dissolving into the photos (see `header`). An opaque bar
+        // over a grid that starts at the very top edge means the Camera tile and the first row are
+        // half covered before you touch anything — owner 2026-08-19, screenshot. The fix is NOT to go
+        // back to an inset (that brings back the strip of empty sheet he rejected): the header stays
+        // an overlay, and the SCROLL CONTENT gets a top margin of the header's height. At rest the
+        // grid begins under a clear edge; scrolled, the photos still run beneath the bar exactly as
+        // before, because a content margin moves the content, not the scroll view.
         Group {
             if showAlbums { albumsList } else { grid }
         }
@@ -293,6 +306,8 @@ struct AttachRecentsStrip: View {
             .padding(.horizontal, 12)
             .padding(.top, 2)
         }
+        // Starts the Camera tile and the first row of photos clear of the header bar. See `body`.
+        .contentMargins(.top, headerHeight, for: .scrollContent)
     }
 
     // Native-style album list (Recents, Favorites, Videos, Selfies, Live Photos, Panoramas, user albums).
@@ -316,6 +331,8 @@ struct AttachRecentsStrip: View {
                 }
             }
         }
+        // Same as the grid: the first album row is not born under the bar.
+        .contentMargins(.top, headerHeight, for: .scrollContent)
     }
 
     private func selectAlbum(_ album: AttachAlbum) {
