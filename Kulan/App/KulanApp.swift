@@ -5,6 +5,25 @@ import StoryUI   // StoryPosterSource: lets the story player read the app's imag
 struct KulanApp: App {
     // Firebase config + APNs/FCM handshake live in the app delegate.
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
+    /// ⚠️ A LIST ROW ANSWERS THE FINGER AT ONCE NOW, and this one line is most of why.
+    ///
+    /// `delaysContentTouches` is a UIScrollView default, and it means what it says: a touch that
+    /// lands on something INSIDE a scroll view is held back for about 150ms while UIKit decides
+    /// whether the finger is going to scroll instead. Every list in this app is a scroll view, so
+    /// every row tap and every row highlight has been paying that wait since the app was written.
+    ///
+    /// Owner on build 613: the chat opens and the grey draws, "but is not as fast as it used to be
+    /// on 611". A tap now travels through the row's own gesture rather than through a Button, and
+    /// this delay sits in front of a gesture more visibly than it sits in front of a Button's
+    /// action. Turning it off is the standard messenger answer and it makes both halves instant.
+    ///
+    /// Scrolling is NOT lost by this: the scroll view still claims the touch the moment the finger
+    /// moves, and the row's own 10pt slop test (see RowPressFill) drops its grey and refuses to
+    /// open anything when that happens.
+    init() {
+        UIScrollView.appearance().delaysContentTouches = false
+    }
     @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
     @Environment(\.scenePhase) private var scenePhase
 

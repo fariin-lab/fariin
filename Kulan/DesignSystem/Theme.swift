@@ -336,7 +336,13 @@ struct RowPressFill: PrimitiveButtonStyle {
     /// lifts the row at about half a second), short enough that a stranded press is never seen.
     static let watchdog: UInt64 = 3_000_000_000
     /// How long the grey survives the finger leaving. See `Fill.release`.
-    static let outlive: UInt64 = 180_000_000
+    ///
+    /// 180ms originally, cut on the owner's 613 report that opening a chat felt slower than it used
+    /// to. The push begins the instant the finger lifts, so anything this number buys after that is
+    /// grey sitting UNDER a screen that is already sliding over it — which reads as the list being
+    /// slow to let go. Long enough to be seen on a fast tap, short enough to be gone by the time the
+    /// chat has covered the row.
+    static let outlive: UInt64 = 90_000_000
     /// Past this, the finger is scrolling the list or swiping the row. It is not a tap, it gets no
     /// grey, and it must not open anything.
     static let slop: CGFloat = 10
@@ -375,8 +381,11 @@ struct RowPressFill: PrimitiveButtonStyle {
                             if Self.moved(v.translation) {
                                 release(after: 0)
                             } else {
-                                release(after: RowPressFill.outlive)
+                                // THE OPEN FIRST, the grey's bookkeeping after. Nothing here is slow,
+                                // but the push is the thing the eye is waiting for and it should not
+                                // be queued behind a fade that only matters once it has started.
                                 configuration.trigger()
+                                release(after: RowPressFill.outlive)
                             }
                         }
                 )
