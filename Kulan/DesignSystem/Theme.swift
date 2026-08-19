@@ -324,6 +324,8 @@ struct RowPressFill: ButtonStyle {
     /// Long enough that a long press keeps its grey while the context menu takes over (the menu
     /// lifts the row at about half a second), short enough that a stranded press is never seen.
     static let watchdog: UInt64 = 3_000_000_000
+    /// How long the grey survives the finger leaving. See `Fill.release`.
+    static let outlive: UInt64 = 180_000_000
 
     func makeBody(configuration: Configuration) -> some View { Fill(configuration: configuration) }
 
@@ -333,31 +335,75 @@ struct RowPressFill: ButtonStyle {
     private struct Fill: View {
         let configuration: ButtonStyleConfiguration
         @State private var lit = false
+        @State private var fade: Task<Void, Never>?
 
         var body: some View {
             configuration.label
                 .background(lit ? RowPressFill.fill : .clear)
-                .task(id: configuration.isPressed) {
-                    if configuration.isPressed {
-                        lit = true                                   // instant, on touch down
-                        // The stranding watchdog (see the type's note): a press that never ends
-                        // cannot leave grey behind.
-                        try? await Task.sleep(nanoseconds: RowPressFill.watchdog)
-                        guard !Task.isCancelled else { return }
-                        withAnimation(.easeOut(duration: 0.2)) { lit = false }
-                    } else {
-                        // ⚠️ IT HAS TO OUTLIVE THE FINGER, and this is the second report (owner
-                        // 2026-08-13 on build 570, which carries the first fix: "you said you made
-                        // it and you did not"). Painting only while `isPressed` is true is correct
-                        // and invisible: a tap holds the glass for about a tenth of a second and the
-                        // chat is already pushing over the row by the time the eye arrives. So the
-                        // fill survives the lift by a beat and then fades, which is what makes a tap
-                        // something you SAW rather than something that happened.
-                        try? await Task.sleep(nanoseconds: 180_000_000)
-                        guard !Task.isCancelled else { return }
-                        withAnimation(.easeOut(duration: 0.18)) { lit = false }
-                    }
+                // ⚠️ THIRD REPORT, AND THE FIRST TWO FIXES BOTH DROVE THIS OFF `isPressed` ALONE
+                // (owner 2026-08-19: "it won't highlight gray... I told other sessions and it claimed
+                // to make it, but it won't"). His own comparison is the evidence that settled it:
+                // Settings rows DO grey and chat rows do not, and a Settings row is a NavigationLink,
+                // so its grey is UIKit's cell highlight and never went through this style at all.
+                // Nothing here was ever proven to fire; two fixes tuned the timing of a light that
+                // may never have been switched on.
+                //
+                // So the light is no longer asked to trust one signal. A touch-down drag with
+                // `minimumDistance: 0` reports the finger landing DIRECTLY, and it is `simultaneous`,
+                // so it composes with the button, the swipe actions and the context menu rather than
+                // competing with any of them.
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { v in
+                            // A finger that has travelled is scrolling the list or swiping the row,
+                            // not tapping it. Drop the grey at once, exactly as a table view does
+                            // the moment a scroll begins.
+                            if abs(v.translation.width) > 10 || abs(v.translation.height) > 10 {
+                                release(after: 0)
+                            } else if !lit {
+                                light()
+                            }
+                        }
+                        .onEnded { _ in release(after: RowPressFill.outlive) }
+                )
+                // The button's own state, kept as the second source. Whichever arrives first lights
+                // the row; neither can strand it.
+                .onChange(of: configuration.isPressed) { _, pressed in
+                    if pressed { light() } else { release(after: RowPressFill.outlive) }
                 }
+        }
+
+        /// ⚠️ SYNCHRONOUS, and this is the other half of what was wrong. The light used to be set
+        /// inside `.task(id:)`, which runs asynchronously: on a quick tap the id flips true and back
+        /// to false inside one update, and the work that would have painted the grey is racing its
+        /// own cancellation. `onChange` and a gesture callback run on the main actor, now.
+        private func light() {
+            fade?.cancel()
+            lit = true
+            // The stranding watchdog. This list re-sorts on every incoming message, so a row rebuilt
+            // under a resting finger may never be told the press ended; a press that never ends
+            // cannot outlive this.
+            fade = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: RowPressFill.watchdog)
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.2)) { lit = false }
+            }
+        }
+
+        /// IT HAS TO OUTLIVE THE FINGER. A tap holds the glass for about a tenth of a second and the
+        /// chat is already pushing over the row by the time the eye arrives, so the fill survives the
+        /// lift by a beat and then fades — which is what makes a tap something you SAW rather than
+        /// something that happened. `after: 0` is the scroll case, where the grey must go instantly.
+        private func release(after: UInt64) {
+            fade?.cancel()
+            guard lit else { return }
+            fade = Task { @MainActor in
+                if after > 0 {
+                    try? await Task.sleep(nanoseconds: after)
+                    guard !Task.isCancelled else { return }
+                }
+                withAnimation(.easeOut(duration: 0.18)) { lit = false }
+            }
         }
     }
 }
