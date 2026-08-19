@@ -1339,37 +1339,6 @@ struct StorySettingsView: View {
 // A picked image awaiting the circular profile cropper (Identifiable for fullScreenCover).
 private struct CropItem: Identifiable { let id = UUID(); let image: UIImage }
 
-/// The saved profile photo, for the Large preview card. Plain url, not E2EE, from the same store
-/// every avatar in the app is filled from — so it is already in hand and the card opens holding the
-/// picture instead of flashing a grey rectangle first.
-private struct PosterPreviewImage: View {
-    let url: String
-    @State private var image: UIImage?
-
-    init(url: String) {
-        self.url = url
-        // MEMORY only. `smallImageSync` would also read the disk, but its own documentation bars
-        // full-size photos from the main thread and a poster is one — the task below fetches it.
-        _image = State(initialValue: DiskImageCache.shared.memoryImage(for: url))
-    }
-
-    var body: some View {
-        Group {
-            if let image { Image(uiImage: image).resizable().scaledToFill() }
-            else { Color(uiColor: .secondarySystemGroupedBackground) }
-        }
-        .task(id: url) {
-            if image != nil { return }
-            if let cached = await DiskImageCache.shared.image(for: url) { image = cached; return }
-            guard let u = URL(string: url),
-                  let (data, _) = try? await MediaSession.shared.data(from: u),
-                  let ui = UIImage(data: data) else { return }
-            DiskImageCache.shared.store(ui, data: data, for: url)
-            image = ui
-        }
-    }
-}
-
 struct EditProfileView: View {
     @Environment(\.dismiss) private var dismiss
     private var profile = ProfileStore.shared
@@ -1419,146 +1388,15 @@ struct EditProfileView: View {
     /// is cropped, which is what makes X a real cancel rather than a late goodbye.
     private var hasUnsavedChanges: Bool { hasUnsavedText || pendingPhoto != nil || pendingRemove }
 
-    enum EditTab: String, CaseIterable, Identifiable {
-        // The raw value is the stored/AppStorage-free tab identity only; the LABEL is what he reads.
-        // "Large" named a layout; this tab shows what other people see, so it says Preview (his
-        // word, 2026-08-03).
-        case circle, large
-        var id: String { rawValue }
-        var label: String { self == .circle ? "Circle" : "Preview" }
-    }
-    @State private var tab: EditTab = .circle
-
-    /// PREVIEW ONLY — your picture at the shape the Large layout crops it to, your name, your
-    /// handle. Nothing else and nothing to press (owner, 2026-08-03: "minimalist and clear").
-    ///
-    /// A CARD, deliberately not `ProfilePosterHeader` itself. That header is the real profile PAGE:
-    /// it bleeds to both screen edges, runs up under the bars and melts into the page below it.
-    /// Those are the right instincts on a page you scroll and the wrong ones inside a sheet, where
-    /// the same drawing reads as a photograph that ran out rather than as a preview of anything —
-    /// and the five round actions belong to a person you can call, which on your own profile is
-    /// nobody. **THE REAL PROFILE PAGE IS NOT TOUCHED BY ANY OF THIS** (his order, in as many
-    /// words): the redesign lives on this tab alone.
-    ///
-    /// The GeometryReader is what makes the card the right height on the first frame. A ratio would
-    /// have nothing to divide: scrolling content is proposed an unspecified height, the same trap
-    /// `ProfilePosterHeader.photoSpacer` states outright and works around.
-    private var largePreview: some View {
-        GeometryReader { g in
-            // Narrower than the page, because the cards behind it need somewhere to be seen. His
-            // drawing puts the front card at roughly three quarters of the width.
-            let cardW = max(0, g.size.width * 0.74)
-            ScrollView {
-                previewDeck(width: cardW)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 34)
-                    .padding(.bottom, 44)
-            }
-        }
-        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
-    }
-
-    /// A DECK: the card you are previewing, with the same card peeking from both screen edges,
-    /// smaller and tilted (owner's drawing, 2026-08-03 — asked whether the edge pieces were real he
-    /// answered "a card deck, decorative"). The two behind are scenery: no gesture, no paging, and
-    /// nothing to press.
-    @ViewBuilder private func previewDeck(width: CGFloat) -> some View {
-        if let art = previewArt {
-            ZStack {
-                deckSide(art, width: width, side: -1)
-                deckSide(art, width: width, side: 1)
-                frontCard(art, width: width)
-            }
-            // Reserve exactly the front card's height. The tilted neighbours are drawn from the
-            // same box and must not lengthen the page or the whole deck drifts up as they lean.
-            .frame(height: width * PosterGeometry.aspect)
-        } else {
-            // No photo, no deck: a stack of empty rectangles would be inventing a layout you will
-            // never have. A profile with no picture shows the circle, so the preview shows one.
-            AvatarView(name: previewName, photoUrl: nil, size: 140)
-                .padding(.vertical, 28)
-        }
-    }
-
-    /// The card in front: the 4:5 crop the big header takes, at `PosterGeometry.aspect` so the
-    /// preview and the thing it previews can never disagree about the shape — with the name and
-    /// handle INSIDE it, on a dark plate near the bottom, exactly as he drew it.
-    private func frontCard(_ art: PreviewArt, width: CGFloat) -> some View {
-        cardArtwork(art, width: width, corner: 32)
-            .overlay(alignment: .bottom) {
-                VStack(spacing: 2) {
-                    Text(previewName)
-                        .font(.title3.weight(.bold)).foregroundStyle(.white)
-                        .lineLimit(1).minimumScaleFactor(0.7)
-                    // A blank line rather than no line, so the plate keeps its height while a
-                    // handle is being typed.
-                    Text(handle.isEmpty ? " " : "@\(handle)")
-                        .font(.subheadline).foregroundStyle(.white.opacity(0.85))
-                        .lineLimit(1)
-                }
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 22).padding(.vertical, 10)
-                .background(Color.black.opacity(0.38),
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .padding(.bottom, 26)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
-    }
-
-    /// One of the two behind. Scaled down, pushed almost all the way off its own edge, and leaned
-    /// away from the middle, so what is left on screen is the sliver in his drawing.
-    private func deckSide(_ art: PreviewArt, width: CGFloat, side: CGFloat) -> some View {
-        cardArtwork(art, width: width, corner: 26)
-            .scaleEffect(0.84)
-            .rotationEffect(.degrees(side * 5))
-            .offset(x: side * width * 0.82)
-            .allowsHitTesting(false)
-    }
-
-    /// The picture itself at the card's size. One place, so the front card and the two behind can
-    /// never end up showing different crops of the same photograph.
-    private func cardArtwork(_ art: PreviewArt, width: CGFloat, corner: CGFloat) -> some View {
-        Group {
-            switch art {
-            case .local(let img): Image(uiImage: img).resizable().scaledToFill()
-            case .remote(let url): PosterPreviewImage(url: url)
-            }
-        }
-        .frame(width: width, height: width * PosterGeometry.aspect)
-        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
-    }
-
-    /// Which picture the preview is of. The unsaved crop wins over anything already stored — the
-    /// whole point of a preview is to show the photo before it exists anywhere — and the poster crop
-    /// wins over the circle one.
-    private enum PreviewArt {
-        case local(UIImage)
-        case remote(String)
-    }
-    private var previewArt: PreviewArt? {
-        if pendingRemove { return nil }
-        if let img = pendingPoster ?? pendingPhoto { return .local(img) }
-        // `hasPicture`, not "is the string empty" — the same last question every profile header
-        // asks, so your own preview cannot claim a photo the app cannot draw.
-        if let p = profile.me?.posterUrl, ProfilePhotoIndex.hasPicture(p) { return .remote(p) }
-        if let p = profile.me?.photoUrl, ProfilePhotoIndex.hasPicture(p) { return .remote(p) }
-        return nil
-    }
-
-    private var previewName: String {
-        let n = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
-        return n.isEmpty ? (profile.me?.name ?? "You") : n
-    }
-
     var body: some View {
         NavigationStack {
-            // TWO TABS, ONE SCREEN. Circle is where you edit; Large is only ever a look at the
-            // result. Tabs of the same screen rather than a pushed page, so Save and X stay put and
-            // one set of pending changes feeds both — a preview on its own page would need the
-            // unsaved photo threaded into it and could drift out of step with the form.
-            Group {
-                if tab == .large { largePreview } else { editForm }
-            }
+            // ONE SCREEN, and only ever the form. A Circle/Preview segmented control used to sit in
+            // the top bar with a card-deck rendering of the big profile header behind it (owner
+            // 2026-08-03). Owner 2026-08-19, looking at it: "it doesn't make sense, remove it" — you
+            // edit your profile here and you look at it on the profile page, so a second drawing of
+            // the same thing inside the editor was a tab that needed explaining rather than using.
+            editForm
+            .navigationTitle("Edit Profile")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // Hide the toolbar's own glass so CloseXButton's circle isn't double-wrapped (iOS 26).
@@ -1571,13 +1409,6 @@ struct EditProfileView: View {
                     ToolbarItem(placement: .cancellationAction) {
                         CloseXButton { if hasUnsavedChanges { confirmDiscard = true } else { dismiss() } }
                     }
-                }
-                ToolbarItem(placement: .principal) {
-                    Picker("", selection: $tab) {
-                        ForEach(EditTab.allCases) { Text($0.label).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 190)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { Task { await save() } }
