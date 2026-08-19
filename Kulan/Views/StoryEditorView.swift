@@ -236,6 +236,10 @@ struct StoryEditorView: View {
     /// on the 20Hz clock. `@State` holds the reference and nothing else, so the only view that
     /// re-renders is the one that observes the box — `TrimStripHost`, which is 56 points tall.
     @State private var trimPlayhead = TrimPlayheadBox()
+    /// The photo's live transform, for the pen layer that rides above it. A class in `@State` for the
+    /// same reason `trimPlayhead` is one: the reference is held and NOTHING re-renders when it
+    /// changes. See `PhotoTransformRelay`.
+    @State private var photoTransform = PhotoTransformRelay()
     @State private var trimScrub: Double?
     @State private var trimDragging = false
     /// ⛔ THE SEEK SERIALISER, AND IT IS WHY THE CLIP FROZE AFTER A SECOND TRIM.
@@ -1379,6 +1383,7 @@ struct StoryEditorView: View {
                                       togglePreview()
                                   }
                               },
+                              relay: photoTransform,
                               onSwipe: { step in
                                   // ZOOMED IN = a horizontal drag is panning the PICTURE, never
                                   // a page turn (owner 2026-08-05: "if I make zoom, block swipe
@@ -1500,11 +1505,23 @@ struct StoryEditorView: View {
                 // once, and the transform below then blows that raster up — so at 3× a stroke drawn
                 // sharp came out soft. Asking for the pixels the zoom is about to need costs nothing
                 // at zoom 1, which is nearly always.
-                Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: card),
-                                             scale: UIScreen.main.scale * max(1, photoZoom)))
-                    .resizable()
+                // ⚠️ THE TRANSFORM ARRIVES FRAME BY FRAME, NOT AT THE END OF THE GESTURE — his
+                // 2026-08-19: "the pen stays in its old position during the zoom, then suddenly
+                // snaps to the correct position when I finish". It was `.scaleEffect(photoZoom)`,
+                // and `photoZoom` is written when the FINGERS COME OFF, because a SwiftUI state
+                // write per touch re-renders this screen and shakes the pinch. So the pen did not
+                // lag the picture, it did not move at all until the gesture ended.
+                //
+                // Same report the video gave in August, and nearly the same fix: the video went
+                // INSIDE the zoom view, under the one transform. The pen cannot — it is drawn above
+                // the stickers and below the text, and `flatten` bakes it in that order, so moving
+                // it inside the picture would put the screen and the export out of step. It rides
+                // the transform instead. See `PhotoTransformRelay`.
+                LiveTransformImage(image: drawing.image(from: CGRect(origin: .zero, size: card),
+                                                        scale: UIScreen.main.scale * max(1, photoZoom)),
+                                   relay: photoTransform,
+                                   scale: photoZoom, offset: photoOffset)
                     .frame(width: card.width, height: card.height)
-                    .scaleEffect(photoZoom).offset(photoOffset)
                     .allowsHitTesting(false)
             }
 
@@ -3852,6 +3869,82 @@ struct StoryPressStyle: ButtonStyle {
 // re-render mid-pinch (that re-render is what caused the violent shake). Pinch + pan recognize together and
 // accumulate-then-reset; the pinch anchors between the fingers. On release it springs to the clamped value
 // and syncs the final scale/offset back to the bindings so the WYSIWYG flatten matches exactly.
+/// The photo's transform as it happens, for anything that must ride ON TOP of the picture rather
+/// than inside it.
+///
+/// ⚠️ WHY THIS EXISTS AT ALL, because the obvious answer is wrong twice over. The picture is
+/// pinched by writing a `CGAffineTransform` straight onto a UIView, and `photoZoom`/`photoOffset` are
+/// only written back when the fingers COME OFF — a SwiftUI state write per touch re-renders this
+/// whole screen and shakes the gesture. So anything drawn as a SwiftUI sibling with
+/// `.scaleEffect(photoZoom)` is not merely late, it does not move at ALL until the gesture ends and
+/// then jumps to its new place. That is his 2026-08-19 report about the pen, word for word, and it is
+/// the same report the video gave in August.
+///
+/// The video was fixed by moving it INSIDE the zoom view, under the one transform. The pen cannot go
+/// there: it is drawn above the stickers and below the text, and `flatten` bakes it in that order.
+/// Moving it inside the picture's own view would put it under the stickers on screen and over them in
+/// the export, and the two disagreeing is the one thing this editor refuses to do.
+///
+/// So the transform is relayed instead. No `@Published`, no `ObservableObject`, nothing SwiftUI
+/// observes: the coordinator hands each frame's numbers to a closure that writes a `transform` onto
+/// one UIView. Same idea as `TrimPlayheadBox` above — a class in `@State` so the reference is held
+/// and nothing re-renders.
+final class PhotoTransformRelay {
+    /// Set by whoever is riding along. Called on every frame of the gesture, on the main thread.
+    var apply: ((CGFloat, CGSize) -> Void)?
+    /// The last transform published, so a rider that appears mid-gesture starts in the right place.
+    private(set) var last: (scale: CGFloat, offset: CGSize) = (1, .zero)
+
+    func publish(scale: CGFloat, offset: CGSize) {
+        last = (scale, offset)
+        apply?(scale, offset)
+    }
+}
+
+/// A still image that wears the photo's transform frame by frame, through `PhotoTransformRelay`.
+///
+/// The transform is written inside a `CATransaction` with actions disabled: without it every write
+/// during a pinch starts CoreAnimation's own quarter-second implicit animation, and the layer chases
+/// the fingers a beat behind instead of tracking them — which would trade one lag for another.
+struct LiveTransformImage: UIViewRepresentable {
+    let image: UIImage
+    let relay: PhotoTransformRelay
+    /// The committed transform, for the frames that are not part of a gesture.
+    let scale: CGFloat
+    let offset: CGSize
+
+    func makeUIView(context: Context) -> UIImageView {
+        let v = UIImageView(image: image)
+        v.contentMode = .scaleAspectFit
+        v.isUserInteractionEnabled = false
+        v.backgroundColor = .clear
+        relay.apply = { [weak v] s, o in
+            guard let v else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            v.transform = CGAffineTransform(translationX: o.width, y: o.height).scaledBy(x: s, y: s)
+            CATransaction.commit()
+        }
+        return v
+    }
+
+    func updateUIView(_ v: UIImageView, context: Context) {
+        if v.image !== image { v.image = image }
+        // Re-arm on every update: a rebuilt representable leaves the old closure holding a dead view.
+        relay.apply = { [weak v] s, o in
+            guard let v else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            v.transform = CGAffineTransform(translationX: o.width, y: o.height).scaledBy(x: s, y: s)
+            CATransaction.commit()
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        v.transform = CGAffineTransform(translationX: offset.width, y: offset.height).scaledBy(x: scale, y: scale)
+        CATransaction.commit()
+    }
+}
+
 struct ZoomableImageView: UIViewRepresentable {
     let image: UIImage
     /// ⚠️ THE CLIP RIDES INSIDE THIS VIEW, IT IS NOT A LAYER OVER IT — his 2026-08-16 report, "the
@@ -3886,6 +3979,9 @@ struct ZoomableImageView: UIViewRepresentable {
     /// It belongs HERE and not on a SwiftUI gesture over the top, because this view's own pan
     /// recogniser is what was eating the swipe. Nothing to do with the strip.
     var onSwipe: (Int) -> Void = { _ in }
+    /// Anything riding on top of the picture gets each frame of the gesture through this. See
+    /// `PhotoTransformRelay`.
+    var relay: PhotoTransformRelay? = nil
 
     func makeUIView(context: Context) -> UIView {
         let container = UIView()
@@ -4015,6 +4111,8 @@ struct ZoomableImageView: UIViewRepresentable {
             let t = CGAffineTransform(translationX: curOffset.x, y: curOffset.y).scaledBy(x: curScale, y: curScale)
             imageView?.transform = t
             clipView?.transform = t
+            // ...and everything riding on top of the picture, in the same frame. See PhotoTransformRelay.
+            parent.relay?.publish(scale: curScale, offset: CGSize(width: curOffset.x, height: curOffset.y))
         }
 
         private func clampOffset() {
