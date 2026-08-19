@@ -51,13 +51,18 @@ struct WelcomeView: View {
                         }
                         #if DEBUG
                         // Appetize preview: a Firebase-free local demo account. Debug-only.
+                        // READABLE ON PURPOSE. It was `.caption` in `.tertiary`, which on the white
+                        // auth page is grey on almost-white at eleven points — the owner could not
+                        // find it in the browser preview he had just been told to open with it. This
+                        // whole block is `#if DEBUG`, so it is never in a TestFlight or App Store
+                        // build and costs a real user nothing.
                         Button("Preview demo") {
                             DemoMode.activate()
                             onDemo()
                         }
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .padding(.top, 2)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .padding(.top, 6)
                         #endif
                     }
                     .padding(.horizontal, 24)

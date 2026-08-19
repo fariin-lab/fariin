@@ -200,12 +200,26 @@ struct MainShell: View {
             // states — ours is black in light and white in dark, deliberately — colour cannot carry
             // the state, so the SHAPE has to. `ic_chat_outline` is the same path as `ic_chat`,
             // stroked instead of filled, so the two cannot drift apart.
-            Tab("Chats", image: tab == 0 ? "ic_chat" : "ic_chat_outline", value: 0) {
+            // ⚠️ THE `label:` FORM, NOT `Tab(_:image:value:)`, AND THAT IS THE WHOLE FIX.
+            // The convenience initialiser takes the icon's NAME, a String, and keeps the one it was
+            // given. Writing `tab == 0 ? "ic_chat" : "ic_chat_outline"` there reads like it swaps and
+            // does not: both tabs were built once at launch with tab == 0, so Chats stayed filled
+            // for ever and Calls never filled at all — which is precisely what the owner reported on
+            // the preview ("only the chats fills, call and settings won't"). A label CLOSURE puts the
+            // image in the view tree instead, where a change of `tab` reaches it.
+            Tab(value: 0) {
                 ChatsView(onSignOut: onSignOut)
+            } label: {
+                Label { Text("Chats") } icon: { Image(tab == 0 ? "ic_chat" : "ic_chat_outline") }
             }
             .badge(unreadChatsBadge)   // 0 hides it, same as the Calls tab
-            Tab("Calls", systemImage: tab == 1 ? "phone.fill" : "phone", value: 1) {
+            Tab(value: 1) {
                 CallsView()
+            } label: {
+                Label { Text("Calls") } icon: {
+                    Image(systemName: tab == 1 ? "phone.fill" : "phone")
+                        .contentTransition(.symbolEffect(.replace))   // outline <-> fill, animated
+                }
             }
             .badge(missedBadge)   // 0 hides it
             Tab(value: 2) {
