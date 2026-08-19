@@ -302,21 +302,32 @@ struct MenuIcon: View {
     }
 }
 
-/// The grey a list row wears while a finger is on it.
+/// The grey a list row wears while a finger is on it, and the tap that opens what it names.
 ///
 /// THE ROWS HAD NO TOUCH FEEDBACK AT ALL (owner 2026-08-13, on the chat list: tapping a chat to open
-/// it shows nothing, "no gray that tells it's tapped this user"). The chat row is a plain-styled
-/// Button, and the belief written beside it was that the List cell underneath would paint its own
-/// highlight through it. It does not: the Button takes the touch, so the cell never learns a press
-/// happened and never lights. `.plain` means exactly what it says — no feedback of any kind.
+/// it shows nothing, "no gray that tells it's tapped this user"). The cell underneath was believed
+/// to paint its own highlight through the row's Button. It does not: the Button takes the touch, so
+/// the cell never learns a press happened, and `.plain` means exactly what it says.
 ///
-/// ⚠️ THE RESET IS THE WHOLE PROBLEM HERE, and it is why the previous press style was deleted rather
-/// than fixed. Painting straight from `configuration.isPressed` strands the grey whenever a press
-/// never ends, and this list re-sorts on every incoming message — a row rebuilt under a resting
-/// finger never receives its release. So the fill is `isPressed` AND a watchdog: the moment a press
-/// begins, a task starts that takes the fill away by itself. A press that ends normally cancels it
-/// (the id flips), a press that never ends cannot outlive it. Nothing here can leave grey behind.
-struct RowPressFill: ButtonStyle {
+/// A PRIMITIVE style, not a `ButtonStyle`, and build 612 is the reason.
+///
+/// ⚠️ READ THIS BEFORE CHANGING ANYTHING HERE. A plain `ButtonStyle` paints from
+/// `configuration.isPressed`, and two shipped fixes built on that signal both failed: on 612 the
+/// owner reported grey arriving for the first time AND the chat no longer opening. That single
+/// report settles the whole question. The grey came from the touch-down drag added in 612, so
+/// `isPressed` was never the thing painting anything, which is why tuning its timing twice changed
+/// nothing. And the drag, added as a SIMULTANEOUS gesture inside a Button, recognised alongside the
+/// Button's own tap and took the tap with it.
+///
+/// A primitive style has no built-in tap to compete with, so one gesture owns both halves: it
+/// lights the row when the finger lands and fires the action when the finger lifts without having
+/// travelled. Nothing can disagree with anything, because there is only one recogniser.
+///
+/// What 612 also proved, and what this keeps: with this gesture installed the list still scrolls,
+/// the swipe actions still open and the long-press menu still lifts. `simultaneousGesture` is what
+/// buys that, so it stays simultaneous even though there is no longer a Button gesture to be
+/// simultaneous WITH.
+struct RowPressFill: PrimitiveButtonStyle {
     /// The app's own highlight token, one step up from the menu's `.secondarySystemFill`: a menu row
     /// is a small target under a finger that is already still, a chat row is the full width of the
     /// screen and the eye is somewhere else. It still adapts to light and dark on its own.
@@ -326,63 +337,61 @@ struct RowPressFill: ButtonStyle {
     static let watchdog: UInt64 = 3_000_000_000
     /// How long the grey survives the finger leaving. See `Fill.release`.
     static let outlive: UInt64 = 180_000_000
+    /// Past this, the finger is scrolling the list or swiping the row. It is not a tap, it gets no
+    /// grey, and it must not open anything.
+    static let slop: CGFloat = 10
 
     func makeBody(configuration: Configuration) -> some View { Fill(configuration: configuration) }
 
-    // The state lives in a real View, not in makeBody: a ButtonStyle is a value that gets rebuilt.
-    // ⚠️ NOT named `Body`: ButtonStyle declares an associatedtype of that name, so a nested type
+    // The state lives in a real View, not in makeBody: a style is a value that gets rebuilt.
+    // ⚠️ NOT named `Body`: the protocol declares an associatedtype of that name, so a nested type
     // called Body is taken as the witness for it and a private one cannot be (compile error).
     private struct Fill: View {
-        let configuration: ButtonStyleConfiguration
+        let configuration: PrimitiveButtonStyleConfiguration
         @State private var lit = false
         @State private var fade: Task<Void, Never>?
 
         var body: some View {
             configuration.label
                 .background(lit ? RowPressFill.fill : .clear)
-                // ⚠️ THIRD REPORT, AND THE FIRST TWO FIXES BOTH DROVE THIS OFF `isPressed` ALONE
-                // (owner 2026-08-19: "it won't highlight gray... I told other sessions and it claimed
-                // to make it, but it won't"). His own comparison is the evidence that settled it:
-                // Settings rows DO grey and chat rows do not, and a Settings row is a NavigationLink,
-                // so its grey is UIKit's cell highlight and never went through this style at all.
-                // Nothing here was ever proven to fire; two fixes tuned the timing of a light that
-                // may never have been switched on.
-                //
-                // So the light is no longer asked to trust one signal. A touch-down drag with
-                // `minimumDistance: 0` reports the finger landing DIRECTLY, and it is `simultaneous`,
-                // so it composes with the button, the swipe actions and the context menu rather than
-                // competing with any of them.
+                // The whole row answers the finger, including its empty space.
+                .contentShape(Rectangle())
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { v in
-                            // A finger that has travelled is scrolling the list or swiping the row,
-                            // not tapping it. Drop the grey at once, exactly as a table view does
-                            // the moment a scroll begins.
-                            if abs(v.translation.width) > 10 || abs(v.translation.height) > 10 {
+                            if Self.moved(v.translation) {
+                                // A scroll or a swipe. Drop the grey at once, exactly as a table
+                                // view does the moment a scroll begins.
                                 release(after: 0)
                             } else if !lit {
                                 light()
                             }
                         }
-                        .onEnded { _ in release(after: RowPressFill.outlive) }
+                        .onEnded { v in
+                            // STATELESS on purpose. A "was it cancelled" flag would survive a
+                            // gesture the scroll view steals — no onEnded, flag stuck, and every
+                            // later tap silently does nothing. The translation is the only thing
+                            // asked, and it is asked fresh.
+                            if Self.moved(v.translation) {
+                                release(after: 0)
+                            } else {
+                                release(after: RowPressFill.outlive)
+                                configuration.trigger()
+                            }
+                        }
                 )
-                // The button's own state, kept as the second source. Whichever arrives first lights
-                // the row; neither can strand it.
-                .onChange(of: configuration.isPressed) { _, pressed in
-                    if pressed { light() } else { release(after: RowPressFill.outlive) }
-                }
         }
 
-        /// ⚠️ SYNCHRONOUS, and this is the other half of what was wrong. The light used to be set
-        /// inside `.task(id:)`, which runs asynchronously: on a quick tap the id flips true and back
-        /// to false inside one update, and the work that would have painted the grey is racing its
-        /// own cancellation. `onChange` and a gesture callback run on the main actor, now.
+        private static func moved(_ t: CGSize) -> Bool {
+            abs(t.width) > RowPressFill.slop || abs(t.height) > RowPressFill.slop
+        }
+
         private func light() {
             fade?.cancel()
             lit = true
             // The stranding watchdog. This list re-sorts on every incoming message, so a row rebuilt
-            // under a resting finger may never be told the press ended; a press that never ends
-            // cannot outlive this.
+            // under a resting finger may never be told the press ended; and a gesture the scroll
+            // view takes over never reports an end at all. Neither can leave grey behind.
             fade = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: RowPressFill.watchdog)
                 guard !Task.isCancelled else { return }
