@@ -218,8 +218,12 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     let photoUrl: String?
     /// Coordinate space of the enclosing ScrollView — the pull-to-stretch reads its own offset in it.
     let scrollSpace: String
-    /// The photo's rect in GLOBAL coordinates, so a full-screen viewer can fly out of exactly it.
+    /// The SQUARE the photo's spacer reserves, in global coordinates. What the nav bar watches.
     var onPhotoRect: (CGRect) -> Void = { _ in }
+    /// The rect the picture is ACTUALLY DRAWN IN, in global coordinates — the same square plus the
+    /// quarter again that runs on behind the name and the buttons. A viewer that flies out of the
+    /// photo has to start here, or it starts on a different crop of the same picture.
+    var onArtworkRect: (CGRect) -> Void = { _ in }
     /// Raw scroll offset of the header, for whatever the page fades against it (the nav bar title).
     var onScroll: (CGFloat) -> Void = { _ in }
     var onTap: () -> Void = {}
@@ -256,6 +260,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
 
     init(name: String, photoUrl: String?, scrollSpace: String,
          onPhotoRect: @escaping (CGRect) -> Void = { _ in },
+         onArtworkRect: @escaping (CGRect) -> Void = { _ in },
          onScroll: @escaping (CGFloat) -> Void = { _ in },
          onTap: @escaping () -> Void = {},
          photoHidden: Bool = false,
@@ -270,6 +275,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         self.photoUrl = photoUrl
         self.scrollSpace = scrollSpace
         self.onPhotoRect = onPhotoRect
+        self.onArtworkRect = onArtworkRect
         self.onScroll = onScroll
         self.onTap = onTap
         self.photoHidden = photoHidden
@@ -484,6 +490,15 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         .offset(y: -contentTop)
         .opacity(photoHidden ? 0 : 1)
         .animation(.easeOut(duration: 0.25), value: image != nil)
+        // ⚠️ WHERE THE PICTURE REALLY IS — reported from the artwork itself, after the offset that
+        // lifts it under the bars, so nothing about it is recomputed by a reader.
+        //
+        // `onPhotoRect` above reports the SQUARE the spacer reserves, which is what the nav bar
+        // watches. The photo is 1.25 of that square tall, and a viewer that grows out of the square
+        // starts on a DIFFERENT CROP of the same picture — `scaledToFill` into a 1:1 box shows less
+        // of the width than into a 4:5 one. That mismatch is the one-frame jump on opening and
+        // closing the photo, reported for months.
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onArtworkRect($0) }
     }
 
     /// FETCH THE PICTURE. It reports nothing back, on purpose.

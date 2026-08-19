@@ -131,7 +131,12 @@ struct ContactInfoView: View {
     /// Live scroll position of the header, fed by HeroOffsetKey. Drives `collapse`.
     @State private var heroOffset: CGFloat = 0
     @State private var avatarFrame: CGRect = .zero   // hero avatar's global frame — the morph's start/end
-    @State private var posterRect: CGRect = .zero    // poster photo's global square — the modern morph's start/end
+    @State private var posterRect: CGRect = .zero    // poster photo's global square — what the nav bar watches
+    /// ⚠️ WHERE THE PICTURE IS REALLY DRAWN, which is a quarter taller than that square and is the
+    /// rect the full-screen viewer must fly out of. Growing out of the square meant the viewer's
+    /// first frame was a DIFFERENT CROP of the same photo (`scaledToFill` shows less width in a 1:1
+    /// box than in a 4:5 one), which is the small jump he has reported on opening AND on closing.
+    @State private var posterArtRect: CGRect = .zero
     @AppStorage(ProfileLayoutStyle.storageKey) private var profileLayout = ProfileLayoutStyle.modern.rawValue
     @State private var publicStory: StoryGroup?    // their active "Everyone" story, shown as a ring here
     /// Their story, from whichever of this screen's two circles was tapped: the hero avatar's ring or
@@ -246,6 +251,11 @@ struct ContactInfoView: View {
         return posterRect == .zero || posterRect.maxY > barBottom
     }
 
+    /// The rect the photo viewer grows out of and shrinks back into. The artwork's real frame
+    /// when it has been measured, the reserved square only until then (frame one of a fresh page,
+    /// where nothing is tappable yet anyway).
+    private var posterFlightRect: CGRect { posterArtRect == .zero ? posterRect : posterArtRect }
+
     private var dark: Bool { scheme == .dark }
     // Native grouped-list card color: WHITE in light, 0x1C1C1E in dark — the exact
     // fill iOS Settings uses for its rows. It sits on `pageBackground` (grey/black) so
@@ -273,7 +283,7 @@ struct ContactInfoView: View {
                     // one that was on screen rather than a different crop of it.
                     ProfilePhotoViewer(name: shownName,
                                        photoUrl: (useModernHeader ? gatedPosterUrl : gatedPhotoUrl) ?? "",
-                                       sourceFrame: useModernHeader ? posterRect : avatarFrame,
+                                       sourceFrame: useModernHeader ? posterFlightRect : avatarFrame,
                                        poster: useModernHeader,
                                        closeSignal: photoCloseTick,
                                        isPresented: $showProfilePhoto)
@@ -1172,6 +1182,8 @@ struct ContactInfoView: View {
             photoUrl: gatedPosterUrl,
             scrollSpace: "profileScroll",
             onPhotoRect: { posterRect = $0 },
+            // The artwork's own rect, so the viewer starts on the picture that is on screen.
+            onArtworkRect: { posterArtRect = $0 },
             // The poster reports the same number the old hero published, so the nav bar's title
             // still rides in on `collapse` with nothing else changed.
             onScroll: { heroOffset = $0 },
@@ -1567,9 +1579,13 @@ struct ProfilePhotoViewer: View {
     /// being reported for. `Color.black` in the classic case is a mask that does nothing.
     @ViewBuilder private var liftMask: some View {
         if poster {
+            // THE HEADER'S OWN NUMBER, not a hand-picked one. The photo starts giving out at
+            // `blurStart` up there, and the viewer's first frame has to be the same picture at the
+            // same place — a mask that let go 45pt earlier was part of what read as a jump.
+            let start = PosterGeometry.blurStart(width: sourceFrame.width)
             LinearGradient(stops: [
                 .init(color: .black, location: 0),
-                .init(color: .black, location: 0.62 + 0.38 * progress),
+                .init(color: .black, location: start + (1 - start) * progress),
                 .init(color: .clear, location: 1),
             ], startPoint: .top, endPoint: .bottom)
         } else {
