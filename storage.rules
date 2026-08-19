@@ -24,12 +24,21 @@ service firebase.storage {
       //
       // The identical check sitting one line below on delete is what makes this an oversight rather
       // than a decision: the rule was understood, written down, and applied to the wrong verb.
+      //
+      // ⚠️ AND THERE ARE TWO FILES PER PERSON, NOT ONE. A profile photo is cropped twice: the
+      // circle every list shows (`<uid>.jpg`) and the tall poster the profile header bleeds to the
+      // screen edges (`<uid>-poster.jpg`). The ownership check above was written when there was only
+      // the circle, so the poster upload was refused outright and the whole save failed with
+      // "User does not have permission to access .../profiles/<uid>-poster.jpg" — nobody could
+      // change their picture at all (owner 2026-08-19). The fix keeps the ownership rule exactly as
+      // strict; it just knows about the second name.
       allow write: if request.auth != null
-        && file == request.auth.uid + '.jpg'
+        && (file == request.auth.uid + '.jpg' || file == request.auth.uid + '-poster.jpg')
         && request.resource.size < 8 * 1024 * 1024
         && request.resource.contentType.matches('image/.*');
-      // You may delete your OWN profile photo (file is "<uid>.jpg") — used on account deletion.
-      allow delete: if request.auth != null && file == request.auth.uid + '.jpg';
+      // You may delete your OWN profile photos (both crops) — used on account deletion.
+      allow delete: if request.auth != null
+        && (file == request.auth.uid + '.jpg' || file == request.auth.uid + '-poster.jpg');
     }
 
     // Chat media: chat/{cid}/{messageId}.enc — END-TO-END ENCRYPTED, so it uploads
