@@ -1777,6 +1777,11 @@ enum ChatService {
     /// "no media": a failed load (offline, or a permission hiccup) emptied `mediaHint` and the All
     /// Media section vanished from a chat full of photos (user report + screenshots, build 400).
     static func sharedMedia(_ cid: String) async -> [Message]? {
+        // ⚠️ AN EMPTY id IS NOT A DOCUMENT. `documentWithPath:` THROWS `invalid argument` for one —
+        // an NSException, which `try?` cannot catch and which aborts the process. Guarded here rather
+        // than only at the call sites so no future caller can crash the app by asking about a chat
+        // that does not exist.
+        guard !cid.isEmpty else { return nil }
         do {
             // 200 MESSAGES, not 60. This is a window over MESSAGES that is then filtered down to media,
             // so the number that matters is how much conversation can sit on top of the last photo
@@ -1841,6 +1846,7 @@ enum ChatService {
 
     /// Delete all of MY messages in this conversation ("Clear chat" for me).
     static func clearMyMessages(_ cid: String) async {
+        guard !cid.isEmpty else { return }   // an empty id throws, it does not return nil — see `sharedMedia`
         do {
             let snap = try await db.collection("conversations").document(cid).collection("messages")
                 .whereField("authorId", isEqualTo: uid).getDocuments()

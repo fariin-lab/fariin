@@ -658,6 +658,10 @@ struct ContactInfoView: View {
         // the page's own `\.colorScheme` is still dark, which is the rule that matters.
         .toolbarColorScheme(barColorScheme, for: .navigationBar)
         .task {
+            // ⛔ NO CONVERSATION, NO SHARED MEDIA. In preview there is no chat between me and myself,
+            // and every one of these reads builds a Firestore path out of `cid` — which throws an
+            // ObjC exception on an empty one rather than returning nil. See the note in `load`.
+            guard !cid.isEmpty else { return }
             // Seed from the warm cache FIRST so "All Media" shows instantly (no late pop-in on
             // re-entry); the async load() then refreshes it.
             // The remembered count first (disk, instant), then the warm cache, then the network.
@@ -1553,6 +1557,16 @@ struct ContactInfoView: View {
         if let p = await ProfileStore.shared.fetch(otherUid) {
             handle = p.handle; about = p.about; targetPrivacy = p.privacy
         }
+        // ⛔ AN EMPTY `cid` IS NOT A DOCUMENT, AND FIRESTORE ANSWERS THAT WITH AN OBJC EXCEPTION.
+        //
+        // `documentWithPath:` does not return nil for an empty path, it THROWS `invalid argument` —
+        // an NSException, which is not catchable by `try?` and aborts the process. That is the crash
+        // report from build 621: tapping Preview in Edit Profile, straight to SIGABRT.
+        //
+        // The preview has no conversation by construction: it is my own profile drawn the way a
+        // stranger sees it, so there is no chat between us to read. Everything above this line is
+        // about the PERSON and still runs; only the conversation half is skipped.
+        guard !cid.isEmpty else { loaded = true; return }
         if let snap = try? await Firestore.firestore().collection("conversations").document(cid).getDocument(),
            let d = snap.data() {
             let me = AuthService.shared.uid ?? ""
