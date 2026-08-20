@@ -202,8 +202,29 @@ struct ContactInfoView: View {
     /// the time this page is built — the header seeds itself from the same cache in its own
     /// initialiser. Reaching the letter gradient before trying that is what put a pink page under a
     /// blue photograph for the whole push animation.
+    /// ⛔ THE NAME'S COLOUR IS FOR SOMEBODY WITH NO PHOTOGRAPH, AND IT WAS BEING USED FOR
+    /// EVERYBODY WHOSE PHOTOGRAPH HAD NOT BEEN READ YET.
+    ///
+    /// That is the purple page under the dark green picture in his screenshot (2026-08-20). Nothing
+    /// was stale about it: `forName` is a deterministic colour per NAME, and it sat at the end of
+    /// this chain with no condition on it, so a profile whose new photo had not been sampled yet
+    /// wore a colour that has nothing to do with the picture on top of it.
+    ///
+    /// ⚠️ THE ROUND AVATAR RESCUES ALMOST EVERY CASE, and it is the same photograph. The poster is
+    /// a separate, larger file, so a NEW picture misses the cache here while the small copy of it is
+    /// already decoded — the chat list drew it. `warm` reads a cached image on the calling thread,
+    /// so asking the avatar's url costs nothing and answers on the first frame with the true
+    /// colours.
+    ///
+    /// With neither copy in hand there is no honest colour, so this says so. `ProfileAdaptiveBackdrop`
+    /// holds the plain page colour and washes into the reading when it lands — which is what it was
+    /// written for. A wash from neutral is the right kind of wrong; a confident purple is not.
     private var palette: ProfilePalette? {
-        photoPalette ?? ProfilePalette.warm(url: gatedPosterUrl) ?? ProfilePalette.forName(shownName)
+        if let photoPalette { return photoPalette }
+        if let warm = ProfilePalette.warm(url: gatedPosterUrl) { return warm }
+        if let fromAvatar = ProfilePalette.warm(url: gatedPhotoUrl) { return fromAvatar }
+        let hasPhotograph = gatedPosterUrl?.isEmpty == false || gatedPhotoUrl?.isEmpty == false
+        return hasPhotograph ? nil : ProfilePalette.forName(shownName)
     }
 
     /// The adaptive page is a POSTER idea: the photograph runs off the top of the screen and the
@@ -1243,10 +1264,18 @@ struct ContactInfoView: View {
     /// of JPEG, behind the same privacy gate as the picture it stands in for, because a cover of a
     /// photo I may not see is still that photo.
     private var headerThumb: UIImage? {
-        guard PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: iAmContact),
-              let b64 = headerFacts.thumb, !b64.isEmpty,
-              let data = Data(base64Encoded: b64) else { return nil }
-        return UIImage(data: data)
+        guard PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: iAmContact) else { return nil }
+        if let b64 = headerFacts.thumb, !b64.isEmpty,
+           let data = Data(base64Encoded: b64), let ui = UIImage(data: data) { return ui }
+        // ⚠️ AND THE ROUND AVATAR WHEN THE RECORD HAS NO THUMB — same photograph, already decoded.
+        //
+        // The thumb travels WITH the profile record, so a picture changed since this record was
+        // fetched has none here, and the header drew nothing at all until the full poster finished
+        // downloading ("new profile picture … is appearing late"). The avatar for the same person is
+        // in the cache from the chat list, and a small copy of the right photograph beats an empty
+        // header for the second it takes the large one to arrive.
+        guard let avatar = gatedPhotoUrl, !avatar.isEmpty else { return nil }
+        return DiskImageCache.shared.smallImageSync(avatar)
     }
 
     private var gatedPosterUrl: String? {
