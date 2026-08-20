@@ -130,6 +130,8 @@ struct ContactInfoView: View {
     /// them on the handoff meant they all reappeared in one step after the picture had already
     /// landed. This one drops as soon as a close BEGINS, so they fade in over the collapse.
     @State private var chromeHiddenForPhoto = false
+    /// What the window's style was before this page forced it dark — see `holdWindowDark`.
+    @State private var savedWindowStyle: UIUserInterfaceStyle?
     @State private var photoCloseTick = 0         // toolbar X → viewer close (see ProfilePhotoViewer.closeSignal)
     // A REAL photo is on screen (not the letter fallback). The tap gate used to be "url isn't
     // empty", which is a different thing: a removed or stale url still shows the letter, and
@@ -397,6 +399,31 @@ struct ContactInfoView: View {
     /// is already at the compiler's type-checking limit — three ternaries added to it in the body was
     /// enough to tip it into "unable to type-check this expression in reasonable time". Plain typed
     /// properties cost the inference engine nothing.
+    /// ⛔ THE MENUS ARE NOT IN THIS VIEW TREE, WHICH IS WHY THEY CAME OUT LIGHT.
+    ///
+    /// The page pins `\.colorScheme` to dark for its own subtree, and that is all a subtree value
+    /// can do. A `Menu`'s contents are presented by UIKit in its OWN platform presentation, above
+    /// this window's content and outside its environment, so Mute's duration list and the More menu
+    /// were drawn in the device's style — white cards on a page that is always dark.
+    ///
+    /// The only lever that reaches a system presentation is the window's own style. It is set while
+    /// this page is up and put back exactly as it was on the way out, so nothing outside the page
+    /// keeps it. `preferredColorScheme` is not an option here and the note further down says why:
+    /// KulanApp sets one outside RootView and an outer one always wins.
+    private func holdWindowDark(_ on: Bool) {
+        guard useAdaptive else { return }
+        let window = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+        guard let window else { return }
+        if on {
+            if savedWindowStyle == nil { savedWindowStyle = window.overrideUserInterfaceStyle }
+            window.overrideUserInterfaceStyle = .dark
+        } else if let saved = savedWindowStyle {
+            window.overrideUserInterfaceStyle = saved
+            savedWindowStyle = nil
+        }
+    }
+
     private var barGlyph: Color { useAdaptive ? .white : .primary }
     private var barTint: Color? { useAdaptive ? .white : nil }
 
@@ -524,6 +551,8 @@ struct ContactInfoView: View {
         // The system back chevron takes its colour from here, not from the bar's scheme, so it stays
         // white through the iOS 26 material flip above.
         .tint(barTint)
+        .onAppear { holdWindowDark(true) }
+        .onDisappear { holdWindowDark(false) }
         .toolbar { navTrailing }
         // The photo viewer's X, as a BAR ITEM in the back button's place. The top strip belongs to
         // the navigation bar, which sits above the viewer overlay and eats its touches — an X drawn

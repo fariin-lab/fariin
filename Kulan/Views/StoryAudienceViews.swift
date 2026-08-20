@@ -257,7 +257,7 @@ struct SelectViewersView: View {
                     .disabled(requiresSelection && selected.isEmpty)
             }
         }
-        .onAppear { contacts = StoryContact.all()   // recomputed: a block made since this screen was built must count }
+        .onAppear { contacts = StoryContact.all() }
     }
 }
 
@@ -428,7 +428,7 @@ struct EveryonePrivacyView: View {
         }
         .navigationTitle("Everyone")
         .navigationBarTitleDisplayMode(.inline)
-        .task { contacts = StoryContact.all()   // recomputed: a block made since this screen was built must count }
+        .task { contacts = StoryContact.all() }
         .sheet(isPresented: $picking) {
             NavigationStack {
                 SelectViewersView(title: "Hide Story From", actionTitle: "Done",
@@ -501,7 +501,7 @@ struct MyFriendsPrivacyView: View {
         }
         .navigationTitle("My Friends")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { contacts = StoryContact.all()   // recomputed: a block made since this screen was built must count }
+        .onAppear { contacts = StoryContact.all() }
         .sheet(item: $picking) { target in
             NavigationStack {
                 MembersEditor(
@@ -591,7 +591,7 @@ struct CustomStoryDetailView: View {
                 Color.clear.onAppear { dismiss() }
             }
         }
-        .onAppear { contacts = StoryContact.all()   // recomputed: a block made since this screen was built must count }
+        .onAppear { contacts = StoryContact.all() }
     }
 
     @ViewBuilder private func list(_ a: StoryAudience) -> some View {
@@ -771,7 +771,7 @@ struct CreateCustomStoryFlow: View {
                                       onCreated(a)
                                   })
                 }
-                .onAppear { contacts = StoryContact.all()   // recomputed: a block made since this screen was built must count }
+                .onAppear { contacts = StoryContact.all() }
         }
     }
 }
