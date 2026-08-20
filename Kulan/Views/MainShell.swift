@@ -747,6 +747,10 @@ struct ChatsView: View {
     enum ArchiveRoute: Hashable { case archive }
     @State private var showDeleteSelected = false
     @State private var showCompose = false
+    @State private var storyLimitReached = false
+    /// Observed, so the button closes the moment the fiftieth story lands rather than at the next
+    /// launch — `StoriesService` is `@Observable` and this reads its two counter properties.
+    private var storyBudget: StoriesService { StoriesService.shared }
     @State private var showMyQR = false   // welcome empty-state → My QR Code sheet
     @State private var welcomeGreet = 0   // one-shot greeting bounce on the welcome glyph
     /// ⚠️ THE COVER IS GONE, AND SO ARE `viewerSourceID` AND `viewerHero` (2026-08-07, migration
@@ -1220,7 +1224,7 @@ struct ChatsView: View {
             }
             // Stories off (Settings > Stories > Turn Off Stories) → no Add Story entry.
             if !storiesOptedOut {
-                Button { showCompose = true } label: {
+                Button { composeStory() } label: {
                     Label { Text("Add Story") } icon: { MenuIcon("ic_stories") }
                 }
             }
@@ -1547,7 +1551,7 @@ struct ChatsView: View {
                                      // under the close before it could land on it — his story leaving
                                      // sideways towards the screen edge. See `StoriesRow.displayedOthers`.
                                      freezeOrder: storyDoorState.isOpen,
-                                     onCompose: { showCompose = true },
+                                     onCompose: { composeStory() },
                                      // EVERY SURFACE IS ON OUR OWN TRANSITION NOW (migration finished
                                      // 2026-08-07). The viewer is presented by `StoryZoomPresenter` — a
                                      // screen we own, added and removed with no system animation — and
@@ -1677,6 +1681,18 @@ struct ChatsView: View {
             .fullScreenCover(isPresented: $showCompose) {
                 AddStorySheet { Task { await StoriesRepository.shared.load(force: true) } }
             }
+            // ⛔ THE ANSWER ARRIVES BEFORE THE CAMERA DOES (owner, 2026-08-20). Told at Upload
+            // instead, a person has already opened the picker, chosen twenty photos, waited for
+            // them to resolve and pressed the button — all of it spent on a post the database was
+            // always going to refuse. See `composeStory`.
+            .alert("That's today's limit", isPresented: $storyLimitReached) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("You've posted \(StoriesService.dailyStoryLimit) stories today. You can post again in about \(storyBudget.dailyLimitHoursLeft) hours.")
+            }
+            // Ask once when the row appears, so the button already knows the answer when it is
+            // pressed. Posting keeps the count moving from there without another read.
+            .task { await storyBudget.refreshDailyBudget() }
             // ONE ANSWER, EVERYWHERE, and it is this alert.
             //
             // A profile used to get a bottom sheet with the person's avatar on it while every other
@@ -1762,6 +1778,26 @@ struct ChatsView: View {
                 Button("Delete", role: .destructive) { deleteSelected() }
                 Button("Cancel", role: .cancel) {}
             }
+    }
+
+    /// ⛔ ONE DOOR TO THE COMPOSER, AND THE DAY'S LIMIT IS CHECKED ON THE WAY THROUGH IT.
+    ///
+    /// Two places open it — the menu's Add Story and the "+" on the story row — and both went
+    /// straight to `showCompose`. The refusal then arrived from the database at Upload, after the
+    /// picker had been opened, photos chosen and resolved and the button pressed, all of it spent
+    /// on a post that was never going to land. He asked for the answer at the tap instead.
+    ///
+    /// The database is still the enforcement and this is not a second one: `dailyLimitReached` is
+    /// false whenever the count is unknown, so nothing here can lock somebody out on its own.
+    private func composeStory() {
+        if storyBudget.dailyLimitReached {
+            storyLimitReached = true
+            // The cached count said full — confirm it against the server, so a window that rolled
+            // while the app sat open opens the composer on the next tap instead of a day later.
+            Task { await storyBudget.refreshDailyBudget() }
+        } else {
+            showCompose = true
+        }
     }
 
     // Open a chat from a notification tap. Stays pending until the chat list loads

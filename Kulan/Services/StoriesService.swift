@@ -688,6 +688,17 @@ final class StoriesService {
     /// reported as.
     static func friendlyPostError(_ error: Error) -> String {
         guard isPermanentPostFailure(error) else { return error.localizedDescription }
+        // ⚠️ WHICH CEILING REFUSED IT — the day's or the hour's. A rules refusal is opaque:
+        // permission-denied says no and never why. But the counters are ours to read, and the app
+        // has already read the daily one, so the sentence can be the true one instead of a guess.
+        //
+        // The day is tested first because it is the longer window: if the day is spent, "wait a
+        // little" is a lie that has him back here in ten minutes to be refused again.
+        let budget = StoriesService.shared
+        if budget.dailyLimitReached {
+            return "You've posted \(dailyStoryLimit) stories today, which is the daily limit. "
+                 + "You can post again in about \(budget.dailyLimitHoursLeft) hours."
+        }
         return "You've posted a lot of stories in the last hour. Wait a little and try again."
     }
 
@@ -867,18 +878,90 @@ final class StoriesService {
     /// runaway loop rather than to police a person.
     ///
     /// The window is read against `ServerClock`, not the phone's own, for the same reason expiry is.
+    /// ⛔ THE DAY'S ALLOWANCE, HELD WHERE A BUTTON CAN ASK IT WITHOUT WAITING.
+    ///
+    /// The rules are the enforcement and always will be; this is so the app can say no BEFORE the
+    /// picker opens (owner, 2026-08-20: "as soon as the user taps Add Story … do not open the media
+    /// picker"). Finding out after choosing twenty photos and pressing Upload is the version of this
+    /// that wastes the most of somebody's time.
+    ///
+    /// ⚠️ MUST MATCH `firestore.rules`. The rule holds its own copy of this number — it cannot read
+    /// Swift — so the two are changed together or the app refuses at a different point than the
+    /// database does.
+    static let dailyStoryLimit = 50
+
+    private(set) var dailyStoriesUsed = 0
+    private(set) var dailyWindowStart: Date?
+
+    /// ⚠️ FAILS OPEN, exactly like the rule. An unknown window — never loaded, never posted, no
+    /// connection — is not a full one, and a person who cannot be counted must still be able to
+    /// post. The database is what actually holds the line.
+    var dailyLimitReached: Bool {
+        guard let start = dailyWindowStart,
+              ServerClock.now.timeIntervalSince(start) <= 86_400 else { return false }
+        return dailyStoriesUsed >= Self.dailyStoryLimit
+    }
+
+    /// Whole hours until the window rolls, for the sentence shown when it is full. At least one, so
+    /// it never says "in 0 hours".
+    var dailyLimitHoursLeft: Int {
+        guard let start = dailyWindowStart else { return 0 }
+        let left = 86_400 - ServerClock.now.timeIntervalSince(start)
+        return max(1, Int(ceil(left / 3600)))
+    }
+
+    /// Read the day's counter. Cheap, one document, and worth doing whenever the story row appears
+    /// so the button's answer is already in hand when it is pressed.
+    func refreshDailyBudget() async {
+        let me = uid
+        guard !me.isEmpty else { return }
+        let snap = try? await db.collection("users").document(me)
+            .collection("limits").document("storiesDaily").getDocument()
+        let data = snap?.data()
+        let started = (data?["windowStart"] as? Timestamp)?.dateValue()
+        await MainActor.run {
+            self.dailyWindowStart = started
+            self.dailyStoriesUsed = (data?["count"] as? NSNumber)?.intValue ?? 0
+        }
+    }
+
     private func countStoryAgainstBudget() async {
         let me = uid
         guard !me.isEmpty else { return }
-        let ref = db.collection("users").document(me).collection("limits").document("stories")
+        // ⛔ TWO COUNTERS, AND THEY ANSWER DIFFERENT QUESTIONS. The hour bounds how FAST stories
+        // can go out; the day bounds how MANY. Forty an hour is nine hundred and sixty a day, so an
+        // account posting steadily under the hourly ceiling never meets a limit at all — which is
+        // why the second one exists (owner, 2026-08-20). Both are enforced in `firestore.rules`;
+        // these writes only keep the count honest.
+        await bumpBudget("stories", window: 3600)
+        await bumpBudget("storiesDaily", window: 86_400)
+    }
+
+    /// One counter's window and count. `name` and `window` must match the pair in the rules, which
+    /// derive the window from the document's own name.
+    private func bumpBudget(_ name: String, window: TimeInterval) async {
+        let me = uid
+        guard !me.isEmpty else { return }
+        let ref = db.collection("users").document(me).collection("limits").document(name)
         let opened = ((try? await ref.getDocument())?.data()?["windowStart"] as? Timestamp)?.dateValue()
         // A window that has run out is replaced whole; one that is still open takes one more.
         // `increment` rather than a read-modify-write, so two posts a second apart cannot both write
         // the same number.
-        if let opened, ServerClock.now.timeIntervalSince(opened) <= 3600 {
+        let inWindow = opened.map { ServerClock.now.timeIntervalSince($0) <= window } ?? false
+        if inWindow {
             try? await ref.updateData(["count": FieldValue.increment(Int64(1))])
         } else {
             try? await ref.setData(["windowStart": FieldValue.serverTimestamp(), "count": 1])
+        }
+        // The cached answer moves with the write, so the fiftieth post closes the button without
+        // waiting for anything to be read back. `refreshDailyBudget` corrects it from the server
+        // whenever the row appears; this only keeps it from lagging a whole sitting behind.
+        guard name == "storiesDaily" else { return }
+        let start = inWindow ? opened : ServerClock.now
+        let used = inWindow ? dailyStoriesUsed + 1 : 1
+        await MainActor.run {
+            self.dailyWindowStart = start
+            self.dailyStoriesUsed = used
         }
     }
 

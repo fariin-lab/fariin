@@ -287,7 +287,14 @@ service cloud.firestore {
       // Deleting is refused for the same reason a reset is: a deleted counter is an empty one, and
       // the create rule treats a missing counter as "no limit known".
       match /limits/{name} {
-        function windowLength() { return duration.value(1, 'h'); }
+        // ⛔ THE WINDOW IS PER COUNTER NOW. `stories` counts an hour, to stop a runaway loop
+        // inside one sitting; `storiesDaily` counts a day, because an account can also spend the
+        // whole day just under the hourly ceiling and still post hundreds. One number cannot say
+        // both, and a shared 1h length would have let the daily counter be reopened every hour —
+        // which is not a daily limit at all.
+        function windowLength() {
+          return name == 'storiesDaily' ? duration.value(24, 'h') : duration.value(1, 'h');
+        }
         allow read: if signedIn() && request.auth.uid == uid;
         allow create: if signedIn() && request.auth.uid == uid
           && request.resource.data.keys().hasOnly(['windowStart', 'count'])
@@ -1067,6 +1074,10 @@ service cloud.firestore {
       function storyBudget() {
         return get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/stories).data;
       }
+      /// The same, over a day rather than an hour — see the second clause of the create rule.
+      function dailyStoryBudget() {
+        return get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/storiesDaily).data;
+      }
       allow create: if signedIn()
         && request.auth.uid == request.resource.data.authorUid
         // ⛔ A CEILING ON HOW FAST STORIES CAN BE POSTED, AND IT FAILS OPEN ON PURPOSE.
@@ -1088,6 +1099,23 @@ service cloud.firestore {
              !exists(/databases/$(database)/documents/users/$(request.auth.uid)/limits/stories)
              || storyBudget().get('windowStart', request.time) < request.time - duration.value(1, 'h')
              || storyBudget().get('count', 0) < 40
+           )
+        // ⛔ AND A CEILING ON THE WHOLE DAY (owner, 2026-08-20), because the hour above does not
+        // bound one. Forty an hour is nine hundred and sixty a day: an account that simply keeps
+        // posting under the hourly ceiling never trips it, and every story fans out to a thousand
+        // recipients. Fifty a day is his number.
+        //
+        // A SECOND COUNTER, not a longer window on the first. They answer different questions — how
+        // fast, and how much — and a single window cannot hold both without one of them becoming
+        // meaningless.
+        //
+        // Fails open on exactly the same terms as the hourly one, and for the same reason: a client
+        // that has never written this counter must not be a client that cannot post. What it stops
+        // is the case worth stopping, a client that IS counting and keeps going.
+        && (
+             !exists(/databases/$(database)/documents/users/$(request.auth.uid)/limits/storiesDaily)
+             || dailyStoryBudget().get('windowStart', request.time) < request.time - duration.value(24, 'h')
+             || dailyStoryBudget().get('count', 0) < 50
            )
         // PUBLIC STORIES ARE BACK, on the owner's explicit order of 2026-08-06, and the rule that
         // refused them is gone with the audience option that was removed alongside it.
