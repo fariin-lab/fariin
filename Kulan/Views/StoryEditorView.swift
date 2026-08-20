@@ -324,6 +324,26 @@ struct StoryEditorView: View {
     /// greyed asks to be tapped and answers nothing.
     static let cropEnabled = false
 
+    /// ⛔ THE PEN'S OWN CANVAS, WHICH IS NOT ALWAYS THE CARD.
+    ///
+    /// The pen layer wears the photo's transform, so a stroke stays on the part of the picture it was
+    /// drawn on when you pinch. That is right, and zooming OUT exposed the other half of it: at a
+    /// zoom below 1 the canvas shrinks with the photo, so it stops covering the card and the blurred
+    /// surround has no canvas under it at all. The owner's report — the pen simply does not draw
+    /// there.
+    ///
+    /// Dividing by the zoom gives the canvas back exactly the size it needs to STILL cover the card
+    /// once the transform has shrunk it. Above 1 there is nothing to fix: a zoomed-in canvas already
+    /// more than covers the card, and enlarging it further would only waste raster.
+    ///
+    /// ⚠️ EVERY PLACE THE DRAWING IS RENDERED HAS TO ASK THIS, not `card` — the live canvas, the
+    /// still that replaces it after Done, `flatten`, and the video burn-in. They share one
+    /// coordinate space or the strokes land somewhere other than where they were drawn.
+    static func penCanvasSize(card: CGSize, zoom: CGFloat) -> CGSize {
+        let z = min(1, max(0.01, zoom))
+        return CGSize(width: card.width / z, height: card.height / z)
+    }
+
     static func cardSize(in space: CGSize, top: CGFloat) -> CGSize {
         let available = max(1, space.height - top - toolZoneHeight)
         return CGSize(width: space.width, height: min(ceil(space.width * 1.77778), available))
@@ -1333,6 +1353,9 @@ struct StoryEditorView: View {
     /// flatten renders, the pen bakes against and the text overlays position in. One space for the
     /// seen and the posted picture is the whole WYSIWYG contract of this screen.
     @ViewBuilder private func cardContent(card: CGSize) -> some View {
+        // The pen's canvas for this pass — the card, enlarged when the photo is zoomed out so its
+        // surround can still be drawn on. See `penCanvasSize`.
+        let penCanvas = Self.penCanvasSize(card: card, zoom: photoZoom)
         ZStack {
             Color.black
             // ⚠️ THE CANVAS THE POST WILL BAKE, not a blur of the photo. WYSIWYG is the whole
@@ -1505,7 +1528,9 @@ struct StoryEditorView: View {
                               onStroke: { drawing in
                                   withAnimation(.easeInOut(duration: 0.15)) { strokeInFlight = drawing }
                               })
-                    .frame(width: card.width, height: card.height)
+                    // Big enough to STILL cover the card once the zoom has shrunk it — see
+                    // `penCanvasSize`. At a zoom of 1 or more this is exactly the card.
+                    .frame(width: penCanvas.width, height: penCanvas.height)
                     .scaleEffect(photoZoom).offset(photoOffset)
             } else if !drawing.bounds.isEmpty {
                 // Bug fix: after "Done", keep the markup VISIBLE in the preview (it used to vanish because
@@ -1528,11 +1553,11 @@ struct StoryEditorView: View {
                 // the stickers and below the text, and `flatten` bakes it in that order, so moving
                 // it inside the picture would put the screen and the export out of step. It rides
                 // the transform instead. See `PhotoTransformRelay`.
-                LiveTransformImage(image: drawing.image(from: CGRect(origin: .zero, size: card),
+                LiveTransformImage(image: drawing.image(from: CGRect(origin: .zero, size: penCanvas),
                                                         scale: UIScreen.main.scale * max(1, photoZoom)),
                                    relay: photoTransform,
                                    scale: photoZoom, offset: photoOffset)
-                    .frame(width: card.width, height: card.height)
+                    .frame(width: penCanvas.width, height: penCanvas.height)
                     .allowsHitTesting(false)
             }
 
@@ -3260,7 +3285,12 @@ struct StoryEditorView: View {
                         .position(s.center)
                 }
                 if !drawing.bounds.isEmpty {
-                    Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: size), scale: UIScreen.main.scale))
+                    // The SAME canvas the pen drew on — see `penCanvasSize`. Rendering a
+                    // zoomed-out drawing from the card's rect would clip everything outside the
+                    // picture, which is exactly the area that became drawable.
+                    Image(uiImage: drawing.image(from: CGRect(origin: .zero,
+                                                             size: Self.penCanvasSize(card: size, zoom: photoZoom)),
+                                                 scale: UIScreen.main.scale))
                         .resizable()
                 }
                 ForEach(overlays) { o in
@@ -3394,7 +3424,8 @@ struct StoryEditorView: View {
                 // it flat here would put the export and the editor back out of step — which is the
                 // one thing this whole function exists to prevent. Rendered at the zoom's own scale
                 // for the same reason the on-screen copy is.
-                Image(uiImage: drawing.image(from: CGRect(origin: .zero, size: size),
+                Image(uiImage: drawing.image(from: CGRect(origin: .zero,
+                                                          size: Self.penCanvasSize(card: size, zoom: photoZoom)),
                                              scale: UIScreen.main.scale * max(1, photoZoom))).resizable()
                     .scaleEffect(photoZoom).offset(photoOffset)
                     .frame(width: size.width, height: size.height).clipped()
