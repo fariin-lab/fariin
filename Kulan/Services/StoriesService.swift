@@ -468,7 +468,7 @@ final class StoriesService {
     /// nowhere to be drawn, and the viewer had nothing to page between.
     struct PendingUpload: Identifiable {
         let id: String                  // this post's synthetic story id — unique per post
-        let image: UIImage?             // the picture, or a video's poster frame
+        var image: UIImage?             // the picture, or a video's poster frame (filled off-main)
         let url: String                 // the synthetic media url its bytes are cached under
         let startedAt: Date
         let tag: StoryAudienceTag
@@ -525,26 +525,47 @@ final class StoriesService {
         // "shows a different video that was already in my Story" report). A fresh path misses every
         // cache by construction. The PATH must vary, not a query — the disk cache ignores queries.
         let pending = PendingUpload(id: "\(Self.uploadingStoryId).\(UUID().uuidString)",
-                                    image: UIImage(data: image),
+                                    image: nil,   // filled by `prep`, off the main actor
                                     url: "https://fariin.local/uploading-\(UUID().uuidString).jpg",
                                     startedAt: Date(),
                                     tag: tag,   // the header says the chosen audience from frame one
                                     caption: caption)
-        // Pre-store the picked bytes under the synthetic URL so the injected uploading item renders
-        // instantly in the viewer. BOTH CACHES, not URLCache alone: nothing on any server answers a
-        // `fariin.local` url, so an eviction has nowhere to fall back to. See `StoryImageSeed`.
-        if let u = URL(string: pending.url) { StoryImageSeed.seed(image, for: u) }
-        // ⛔ A DURABLE RECORD, WRITTEN BEFORE THE FIRST BYTE MOVES. The queue below is a `Task` and
-        // an array, both of which die with the process — swipe the app away mid-upload and the post
-        // was simply gone, with nothing to retry and nothing to say it had happened. See
-        // `StoryOutbox`; the ticket is torn up the moment the story lands or the person cancels.
-        let ticket = StoryOutbox.remember(image: image, caption: caption, stickers: stickers,
-                                          excluded: excluded, included: included, everyone: everyone,
-                                          allowsReplies: allowsReplies, tag: tag,
-                                          captureProtected: captureProtected,
-                                          // Whose post this is. The folder outlives a sign-out — see
-                                          // the note on `Ticket.ownerUid`.
-                                          ownerUid: uid)
+        let pendingId = pending.id
+        let pendingURL = pending.url
+        let me = uid
+        // ⛔ EVERY HEAVY THING A QUEUED POST DOES NOW HAPPENS OFF THE MAIN ACTOR.
+        //
+        // This function is `@MainActor` and the share sheet enqueues a whole post in ONE turn — up
+        // to twenty items, one call each. Each call used to decode the picked photo at full camera
+        // resolution, write those bytes into two caches, and write the outbox ticket's JPEG to disk:
+        // all synchronous, all on the main thread. Twenty items is twenty full-resolution decodes
+        // and forty blocking file writes before the UI gets a frame back, which is the owner's
+        // "the whole app lags while a story uploads".
+        //
+        // None of it has to be there. The only thing the UI needs at once is the placeholder row,
+        // which is `inFlight.append` below, and that can draw for a moment without a picture.
+        //
+        // ⚠️ THE TICKET IS STILL WRITTEN BEFORE THE FIRST BYTE MOVES. The upload task awaits this,
+        // so the durable record exists before anything is sent — it is simply not built on the main
+        // thread any more. See `StoryOutbox`.
+        let prep = Task.detached(priority: .userInitiated) { () -> (UIImage?, String) in
+            // Pre-store the picked bytes under the synthetic URL so the injected uploading item
+            // renders instantly in the viewer. BOTH CACHES, not URLCache alone: nothing on any
+            // server answers a `fariin.local` url, so an eviction has nowhere to fall back to.
+            if let u = URL(string: pendingURL) { StoryImageSeed.seed(image, for: u) }
+            // A DURABLE RECORD. The queue below is a `Task` and an array, both of which die with
+            // the process — swipe the app away mid-upload and the post was simply gone, with
+            // nothing to retry. The ticket is torn up the moment the story lands or is cancelled.
+            let ticket = StoryOutbox.remember(image: image, caption: caption, stickers: stickers,
+                                              excluded: excluded, included: included, everyone: everyone,
+                                              allowsReplies: allowsReplies, tag: tag,
+                                              captureProtected: captureProtected,
+                                              // Whose post this is. The folder outlives a sign-out.
+                                              ownerUid: me)
+            // A CARD-SIZED thumbnail, not the whole photograph: this is drawn in a small rounded
+            // rectangle in the row and nowhere else.
+            return (UIImage(data: image)?.boundedForDisplay(maxPixels: 420), ticket)
+        }
         inFlight.append(pending)
         uploading = true
         uploadPhase = .preparing   // every post starts on the phone's half
@@ -555,6 +576,16 @@ final class StoriesService {
         let token = UUID()
         currentUploadToken = token
         uploadTask = Task {
+            // The thumbnail and the ticket, both built off the main actor — see `prep`. Awaited
+            // here so the durable record still exists before the first byte moves.
+            let (card, ticket) = await prep.value
+            if let card {
+                await MainActor.run {
+                    if let i = self.inFlight.firstIndex(where: { $0.id == pendingId }) {
+                        self.inFlight[i].image = card
+                    }
+                }
+            }
             _ = await previous?.value   // chain behind any in-flight post (posts queue, never cancel each other)
             var failure: String?
             var cancelled = false
