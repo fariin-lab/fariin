@@ -578,6 +578,87 @@ struct ContactInfoView: View {
         }
     }
 
+    /// ⛔ THE BAR'S ITEMS LIVE IN THEIR OWN PROPERTIES, AND THE TYPE CHECKER IS WHY.
+    ///
+    /// These were two inline `.toolbar { }` closures in the chain below. Each holds a
+    /// conditional — the leading one holds three branches after Back and Edit gained their
+    /// own tinted glass — and a builder closure with branches inside a chain that is already
+    /// at the limit is what tipped it over twice in a row, first as one expression and then
+    /// again after it had been cut in half. `navTrailing` has been a property since the first
+    /// time this happened; these two join it.
+    @ToolbarContentBuilder private var navLeading: some ToolbarContent {
+        // ⚠️ `chromeHiddenForPhoto`, NOT `showProfilePhoto` — the X belongs to the CHROME,
+        // not to the handoff. `showProfilePhoto` has to stay true until the very last frame
+        // because it is what hides the header photo the viewer stands in for; the back
+        // chevron now returns the moment a close BEGINS. Gating the X on the handoff meant
+        // that for the length of the collapse both were on screen at once, a chevron and an
+        // X side by side, which is the owner's screenshot. They swap on the same instant now.
+        if chromeHiddenForPhoto {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { photoCloseTick &+= 1 } label: {
+                    Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
+                }
+                .tint(.primary)
+            }
+        } else if isPreview {
+            ToolbarItem(placement: .topBarLeading) {
+                // THE PREVIEW HAS NO BACK CHEVRON: it is presented, not pushed, so its stack has
+                // nothing behind it to go back to and the slot sat empty. Same X, same place —
+                // and it takes `barGlyph` rather than `.primary` because it rides the photograph
+                // like the Edit button opposite it, not a plain bar.
+                //
+                // Tested BEFORE the glass branch below: a previewed profile with a photograph
+                // satisfies both, and what it needs is the X, not a chevron pointing at a stack
+                // with nothing in it.
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
+                }
+                .tint(barGlyph)
+            }
+        } else if let barGlassTint {
+            ToolbarItem(placement: .topBarLeading) {
+                // OUR BACK CHEVRON, so it can carry the same tinted glass as Edit opposite it.
+                // The system's own item cannot be reached by any modifier — it belongs to the
+                // navigation stack, not to this view, which is the same reason the page's
+                // `\.colorScheme` never touched it.
+                //
+                // Only the surface changes. Same chevron, same place, same size, and `dismiss()`
+                // is what the system button calls, so the swipe back from the screen edge is
+                // untouched.
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.backward")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(width: 30, height: 30)
+                        .liquidGlass(Circle(), interactive: true, tint: barGlassTint)
+                }
+                .tint(barGlyph)
+            }
+            .sharedBackgroundVisibility(.hidden)
+        }
+    }
+
+    @ToolbarContentBuilder private var navPrincipal: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            ZStack {
+                // The story control, in the one strip of the photo nothing else occupies —
+                // between Back and Edit. Nothing takes over from it any more; an empty middle is
+                // the correct state for a person with no story.
+                if useModernHeader, !chromeHiddenForPhoto, let g = publicStory, !g.stories.isEmpty {
+                    // The flight's source when the header has scrolled away and this badge is
+                    // what is on screen. A DIFFERENT key from the hero avatar's, deliberately:
+                    // they are two rectangles in two places, only one is ever visible, and one
+                    // key for both would let the story fly home to whichever had reported last.
+                    // The badge puts it on its first circle — see `StoryStackBadge.rectKey`.
+                    Button { openProfileStory(g, from: "profile-story-badge") } label: {
+                        StoryStackBadge(group: g, textColor: toolbarOnPhoto,
+                                        rectKey: "profile-story-badge")
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
     /// ⚠️ THE CHAIN IS SPLIT IN TWO, AND IT IS THE COMPILER THAT ASKED, NOT A REFACTOR.
     ///
     /// Everything from here down used to hang off `coreScroll` in one expression: the scroll, the
@@ -623,56 +704,7 @@ struct ContactInfoView: View {
         // that belongs to the ITEM rather than to its contents: our back chevron has to hide the
         // system's shared glass so its own tinted glass is the only surface, and the two X's must
         // keep theirs. One item cannot be both.
-        .toolbar {
-            // ⚠️ `chromeHiddenForPhoto`, NOT `showProfilePhoto` — the X belongs to the CHROME,
-            // not to the handoff. `showProfilePhoto` has to stay true until the very last frame
-            // because it is what hides the header photo the viewer stands in for; the back
-            // chevron now returns the moment a close BEGINS. Gating the X on the handoff meant
-            // that for the length of the collapse both were on screen at once, a chevron and an
-            // X side by side, which is the owner's screenshot. They swap on the same instant now.
-            if chromeHiddenForPhoto {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { photoCloseTick &+= 1 } label: {
-                        Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
-                    }
-                    .tint(.primary)
-                }
-            } else if isPreview {
-                ToolbarItem(placement: .topBarLeading) {
-                    // THE PREVIEW HAS NO BACK CHEVRON: it is presented, not pushed, so its stack has
-                    // nothing behind it to go back to and the slot sat empty. Same X, same place —
-                    // and it takes `barGlyph` rather than `.primary` because it rides the photograph
-                    // like the Edit button opposite it, not a plain bar.
-                    //
-                    // Tested BEFORE the glass branch below: a previewed profile with a photograph
-                    // satisfies both, and what it needs is the X, not a chevron pointing at a stack
-                    // with nothing in it.
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
-                    }
-                    .tint(barGlyph)
-                }
-            } else if let barGlassTint {
-                ToolbarItem(placement: .topBarLeading) {
-                    // OUR BACK CHEVRON, so it can carry the same tinted glass as Edit opposite it.
-                    // The system's own item cannot be reached by any modifier — it belongs to the
-                    // navigation stack, not to this view, which is the same reason the page's
-                    // `\.colorScheme` never touched it.
-                    //
-                    // Only the surface changes. Same chevron, same place, same size, and `dismiss()`
-                    // is what the system button calls, so the swipe back from the screen edge is
-                    // untouched.
-                    Button { dismiss() } label: {
-                        Image(systemName: "chevron.backward")
-                            .font(.system(size: 17, weight: .semibold))
-                            .frame(width: 30, height: 30)
-                            .liquidGlass(Circle(), interactive: true, tint: barGlassTint)
-                    }
-                    .tint(barGlyph)
-                }
-                .sharedBackgroundVisibility(.hidden)
-            }
-        }
+        .toolbar { navLeading }
         // ⛔ THE BAR CARRIES THE STORY BADGE AND NOTHING ELSE (owner, 2026-08-20).
         //
         // It used to fade a small avatar and the name into the middle of the bar as the header
@@ -687,27 +719,7 @@ struct ContactInfoView: View {
         // ⚠️ THE BADGE NO LONGER FADES ON SCROLL EITHER. It faded because a name was arriving to take
         // its place; with nothing arriving, fading it out would leave an empty bar over a story that
         // is still there to open. It stays, and stays tappable.
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                ZStack {
-                    // The story control, in the one strip of the photo nothing else occupies —
-                    // between Back and Edit. Nothing takes over from it any more; an empty middle is
-                    // the correct state for a person with no story.
-                    if useModernHeader, !chromeHiddenForPhoto, let g = publicStory, !g.stories.isEmpty {
-                        // The flight's source when the header has scrolled away and this badge is
-                        // what is on screen. A DIFFERENT key from the hero avatar's, deliberately:
-                        // they are two rectangles in two places, only one is ever visible, and one
-                        // key for both would let the story fly home to whichever had reported last.
-                        // The badge puts it on its first circle — see `StoryStackBadge.rectKey`.
-                        Button { openProfileStory(g, from: "profile-story-badge") } label: {
-                            StoryStackBadge(group: g, textColor: toolbarOnPhoto,
-                                            rectKey: "profile-story-badge")
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        }
+        .toolbar { navPrincipal }
     }
 
     /// The second half of the chain above — the bar's own appearance, and the load. Split only for
