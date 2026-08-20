@@ -443,6 +443,26 @@ struct ContactInfoView: View {
     /// change and needs the owner's word rather than a third guess.
 
     private var barGlyph: Color { useAdaptive ? .white : .primary }
+
+    /// ⛔ THE GLASS FOR BACK AND EDIT, AND IT IS A TINT — the same answer, from the same colour,
+    /// as the five round buttons under the name.
+    ///
+    /// Neither of the system's two appearances is right on iOS 26. `.dark` gives near black discs on
+    /// a bright page; `.light` gives the cream capsules with a black chevron he photographed
+    /// ("looks light mode"). That is not a bug in the choice — 26's glass does not read the backdrop
+    /// the way 27's does, so there is nothing behind it for either appearance to answer to.
+    ///
+    /// `PosterGlassSchemeFix` solved exactly this for the round buttons by handing 26 the backdrop
+    /// colour itself, and he approved that row. These two now take the identical colour from the
+    /// identical place, so the bar and the row cannot drift apart.
+    ///
+    /// Nil on a page with no photo, and nil on iOS 27, which reads the backdrop itself and is
+    /// already right — overriding it there would re-break what this exists to match.
+    private var barGlassTint: Color? {
+        if #available(iOS 27.0, *) { return nil }
+        guard useAdaptive, let palette else { return nil }
+        return Color(palette.card)
+    }
     private var barTint: Color? { useAdaptive ? .white : nil }
 
     private var barColorScheme: ColorScheme? { useAdaptive ? Self.barScheme : nil }
@@ -454,11 +474,26 @@ struct ContactInfoView: View {
 
     @ToolbarContentBuilder private var navTrailing: some ToolbarContent {
         if !isSelf && !isPreview && !chromeHiddenForPhoto {   // no Edit floating over the open photo
-            ToolbarItem(placement: .topBarTrailing) {
-                // `.white` rather than `.primary` on the adaptive page: the bar's scheme is
-                // flipped to light on iOS 26 for the material's sake (see `barScheme`), and
-                // `.primary` would follow it to black. On this page the two were the same value.
-                Button("Edit") { showRename = true }.tint(barGlyph)
+            if let barGlassTint {
+                // ⚠️ `sharedBackgroundVisibility(.hidden)`, OR THERE ARE TWO CAPSULES. From 26 a
+                // toolbar item draws its own glass behind whatever it holds, so our tinted capsule
+                // would sit inside the system's untinted one — the same trap the story picker's X
+                // fell into. Hiding the shared one leaves ours as the only surface.
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Edit") { showRename = true }
+                        .tint(barGlyph)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .liquidGlass(Capsule(), interactive: true, tint: barGlassTint)
+                }
+                .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem(placement: .topBarTrailing) {
+                    // `.white` rather than `.primary` on the adaptive page: the bar's scheme is
+                    // flipped to light on iOS 26 for the material's sake (see `barScheme`), and
+                    // `.primary` would follow it to black. On this page the two were the same value.
+                    Button("Edit") { showRename = true }.tint(barGlyph)
+                }
             }
         }
     }
@@ -565,7 +600,9 @@ struct ContactInfoView: View {
         // Hide the back chevron while the photo viewer is open so it doesn't float over the photo.
         // We hide the ITEMS, never the bar itself — toggling bar visibility changes the scroll
         // inset, which is what used to jump the whole page.
-        .navigationBarBackButtonHidden(chromeHiddenForPhoto)
+        // Ours replaces it wherever the tinted glass applies — see `barGlassTint`. `dismiss()` is
+        // what the system item calls, and hiding the item does not touch the screen-edge swipe.
+        .navigationBarBackButtonHidden(chromeHiddenForPhoto || barGlassTint != nil)
         // The system back chevron takes its colour from here, not from the bar's scheme, so it stays
         // white through the iOS 26 material flip above.
         .tint(barTint)
@@ -575,29 +612,59 @@ struct ContactInfoView: View {
         // inside the overlay up there is visible through the transparent bar and dead to the finger
         // (three device reports). The strip's owner holds the button; the tick reaches the viewer
         // as closeSignal and runs its normal reverse morph.
+        //
+        // ⚠️ THREE SEPARATE ToolbarItems, NOT ONE HOLDING AN if/else. They differ in a modifier
+        // that belongs to the ITEM rather than to its contents: our back chevron has to hide the
+        // system's shared glass so its own tinted glass is the only surface, and the two X's must
+        // keep theirs. One item cannot be both.
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                // ⚠️ `chromeHiddenForPhoto`, NOT `showProfilePhoto` — the X belongs to the CHROME,
-                // not to the handoff. `showProfilePhoto` has to stay true until the very last frame
-                // because it is what hides the header photo the viewer stands in for; the back
-                // chevron now returns the moment a close BEGINS. Gating the X on the handoff meant
-                // that for the length of the collapse both were on screen at once, a chevron and an
-                // X side by side, which is the owner's screenshot. They swap on the same instant now.
-                if chromeHiddenForPhoto {
+            // ⚠️ `chromeHiddenForPhoto`, NOT `showProfilePhoto` — the X belongs to the CHROME,
+            // not to the handoff. `showProfilePhoto` has to stay true until the very last frame
+            // because it is what hides the header photo the viewer stands in for; the back
+            // chevron now returns the moment a close BEGINS. Gating the X on the handoff meant
+            // that for the length of the collapse both were on screen at once, a chevron and an
+            // X side by side, which is the owner's screenshot. They swap on the same instant now.
+            if chromeHiddenForPhoto {
+                ToolbarItem(placement: .topBarLeading) {
                     Button { photoCloseTick &+= 1 } label: {
                         Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
                     }
                     .tint(.primary)
-                } else if isPreview {
+                }
+            } else if isPreview {
+                ToolbarItem(placement: .topBarLeading) {
                     // THE PREVIEW HAS NO BACK CHEVRON: it is presented, not pushed, so its stack has
                     // nothing behind it to go back to and the slot sat empty. Same X, same place —
                     // and it takes `barGlyph` rather than `.primary` because it rides the photograph
                     // like the Edit button opposite it, not a plain bar.
+                    //
+                    // Tested BEFORE the glass branch below: a previewed profile with a photograph
+                    // satisfies both, and what it needs is the X, not a chevron pointing at a stack
+                    // with nothing in it.
                     Button { dismiss() } label: {
                         Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
                     }
                     .tint(barGlyph)
                 }
+            } else if let barGlassTint {
+                ToolbarItem(placement: .topBarLeading) {
+                    // OUR BACK CHEVRON, so it can carry the same tinted glass as Edit opposite it.
+                    // The system's own item cannot be reached by any modifier — it belongs to the
+                    // navigation stack, not to this view, which is the same reason the page's
+                    // `\.colorScheme` never touched it.
+                    //
+                    // Only the surface changes. Same chevron, same place, same size, and `dismiss()`
+                    // is what the system button calls, so the swipe back from the screen edge is
+                    // untouched.
+                    Button { dismiss() } label: {
+                        Image(systemName: "chevron.backward")
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(width: 30, height: 30)
+                            .liquidGlass(Circle(), interactive: true, tint: barGlassTint)
+                    }
+                    .tint(barGlyph)
+                }
+                .sharedBackgroundVisibility(.hidden)
             }
         }
         // ⛔ THE BAR CARRIES THE STORY BADGE AND NOTHING ELSE (owner, 2026-08-20).
