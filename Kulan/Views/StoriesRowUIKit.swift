@@ -178,11 +178,11 @@ final class StoryRingUIView: UIView {
         let d = min(bounds.width, bounds.height)
         guard d > 0 else { return }
         let activeW = lineWidth
-        // ⚠️ GROUPED ONCE THERE ARE MORE STORIES THAN 37pt CAN HOLD. Straight `seen.count` here is
-        // what made a 29-story ring invisible and a 30-story ring absent — the whole reckoning is
-        // written out in `StoryRingGeometry`. This is the SwiftUI ring's twin and must stay equal
-        // to it, so it takes the same two numbers from the same place.
-        let arcs = StoryRingGeometry.condensed(seen, diameter: d, lineWidth: activeW)
+        // ⚠️ THE TWENTY MOST RECENT, NEVER MORE. Straight `seen.count` here is what made a
+        // 29-story ring invisible and a 30-story ring absent — the whole reckoning is written out
+        // in `StoryRingGeometry`. This is the SwiftUI ring's twin and must stay equal to it, so it
+        // takes the same numbers from the same place.
+        let arcs = StoryRingGeometry.condensed(seen)
         let n = max(1, arcs.count)
         let seenW = max(1, lineWidth * 0.66)
         let gap = StoryRingGeometry.gap(count: n, diameter: d, lineWidth: activeW)

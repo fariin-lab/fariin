@@ -5,50 +5,41 @@ import UIKit
 import CoreImage
 import StoryUI
 
-// ⛔ HOW MANY ARCS A RING THIS SIZE CAN ACTUALLY HOLD — and the reason a 29-story ring vanished.
+// ⛔ TWENTY ARCS, AND NOT ONE MORE — and the reason a 29-story ring vanished entirely.
 ///
-/// The gap between arcs was a fixed 2·lineWidth of circumference, and the arc was whatever the
-/// segment had left after taking it. On the 37pt card ring that is 4pt of gap out of 116pt of
-/// circumference, so at 29 stories the segment IS the gap: 116/29 = 4.005pt, leaving eight
-/// thousandths of a point of arc. At 30 the gap is wider than the segment, `to` lands before
-/// `from`, every segment is skipped and the ring disappears completely.
+/// The gap between arcs was a fixed 2·lineWidth of circumference and the arc was whatever the
+/// segment had left after taking it. The card ring is 37pt across, so 116pt of circumference: at 29
+/// stories each segment is 116/29 = 4.005pt and the gap IS the segment, leaving eight thousandths
+/// of a point of arc. At 30 the gap is wider than the segment, `to` lands before `from`, the
+/// `to > from` guard skips every segment and the ring is not drawn at all.
 ///
-/// 28 "worked" only because of the round line cap, which extends a stroke by half its width past
-/// each end — 28 dots of pure cap, no arc between them. That is the cliff he found: 28 draws, 29
-/// is invisible, 30 is gone.
+/// 28 only "worked" because of the round line cap, which extends a stroke half its width past each
+/// end: 28 dots of pure cap with no arc between them. That is the cliff he found — 28 draws, 29 is
+/// invisible, 30 is gone.
 ///
-/// The fix is not a bigger gap or a smaller one. It is that a 37pt circle cannot say twenty-nine
-/// separate things, and pretending otherwise is what produced a ring with nothing in it. Above what
-/// fits, stories are grouped and each arc speaks for its group.
+/// ⚠️ THE LIMIT IS THE RING'S ALONE. It shows the twenty most recent stories; it does not group
+/// them, does not stand for the ones it leaves out, and changes nothing about what is stored or what
+/// opens. Tap a ring showing twenty arcs on an author with thirty stories and all thirty play, in
+/// order, exactly as before (owner, 2026-08-20: "it should not limit or remove any stories
+/// internally … all 30 stories must still exist and remain accessible").
 enum StoryRingGeometry {
-    /// An arc needs the gap (2·w, of which the round caps eat half) plus at least w of its own
-    /// before it reads as a mark rather than a dot — so 3·w of circumference each.
-    static func maxSegments(diameter d: CGFloat, lineWidth w: CGFloat) -> Int {
-        guard d > 0, w > 0 else { return 1 }
-        return max(8, Int((.pi * d) / (3 * w)))
-    }
+    /// His number. Twenty arcs on the 37pt card ring is 5.8pt of circumference each — a 2pt gap and
+    /// an arc either side of it. Twenty-one is where they start becoming dots.
+    static let maxSegments = 20
 
-    /// One entry per arc. Under the limit this is the array it was handed, untouched; over it, the
-    /// stories are split into equal groups and a group is grey only when EVERY story in it has been
-    /// watched — so the ring can never claim you are further along than you are.
-    static func condensed(_ seen: [Bool], diameter: CGFloat, lineWidth: CGFloat) -> [Bool] {
-        let m = maxSegments(diameter: diameter, lineWidth: lineWidth)
-        guard seen.count > m else { return seen }
-        return (0..<m).map { j in
-            let lo = j * seen.count / m
-            let hi = min(seen.count, max(lo + 1, (j + 1) * seen.count / m))
-            return seen[lo..<hi].allSatisfy { $0 }
-        }
+    /// One entry per arc, newest last, as the ring is drawn. Over the limit this is the LAST twenty
+    /// — the most recent stories, one arc each, no grouping and no averaging.
+    static func condensed(_ seen: [Bool]) -> [Bool] {
+        seen.count > maxSegments ? Array(seen.suffix(maxSegments)) : seen
     }
 
     /// The gap, as a fraction of a turn: the same absolute 2·w it has always been, since that is
     /// what leaves a visible w once the round caps have eaten half of it at each end.
     ///
-    /// The ceiling is a backstop and nothing more. `maxSegments` already guarantees a segment of
-    /// 3·w against a gap of 2·w, so it cannot bind in normal use — tightening it below that would
-    /// close the gaps rather than protect them, and the ring would come out solid. It exists for a
-    /// ring so small that even the floor of 8 segments does not fit, where an arc of three tenths of
-    /// a segment is still an arc and a negative one is a ring that is not drawn at all.
+    /// The ceiling is a backstop and nothing more. At twenty arcs on any ring this app draws the
+    /// absolute gap fits with arc to spare, so it cannot bind — tightening it below that would close
+    /// the gaps rather than protect them and the ring would come out solid. It exists so that a ring
+    /// too small for twenty arcs still draws twenty short ones instead of nothing at all.
     static func gap(count n: Int, diameter d: CGFloat, lineWidth w: CGFloat) -> CGFloat {
         guard n > 1, d > 0 else { return 0 }
         return min((w * 2) / (.pi * d), (1 / CGFloat(n)) * 0.7)
@@ -79,8 +70,8 @@ struct StoryRingView: View {
         GeometryReader { geo in
             let d = min(geo.size.width, geo.size.height)
             let activeW = lineWidth
-            // Grouped if there are more stories than this circle can hold — see StoryRingGeometry.
-            let arcs = StoryRingGeometry.condensed(seen, diameter: d, lineWidth: activeW)
+            // The twenty most recent, if there are more than twenty — see StoryRingGeometry.
+            let arcs = StoryRingGeometry.condensed(seen)
             let n = max(1, arcs.count)
             let seenW = max(1, lineWidth * 0.66)                       // inactiveLineWidth
             let gradient = AnyShapeStyle(LinearGradient(colors: [Color(hex: 0x34C76F), Color(hex: 0x3DA1FD)],
