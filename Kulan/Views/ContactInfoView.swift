@@ -380,7 +380,7 @@ struct ContactInfoView: View {
     /// iOS 26: `.light`, purely so the MATERIAL matches. That version resolves the glass against this
     /// scheme, and `.dark` there produced the near black Back and Edit buttons on a bright page. The
     /// glyphs are pinned white at their own call sites so they do not come along.
-    /// ⚠️ PRECOMPUTED, NOT WRITTEN INLINE. `coreScroll` carries this page's whole modifier chain and
+    /// ⚠️ PRECOMPUTED, NOT WRITTEN INLINE. This page's modifier chain sits at the compiler's
     /// is already at the compiler's type-checking limit — three ternaries added to it in the body was
     /// enough to tip it into "unable to type-check this expression in reasonable time". Plain typed
     /// properties cost the inference engine nothing.
@@ -423,7 +423,7 @@ struct ContactInfoView: View {
         Button { showClear = true } label: { Label("Clear My Messages", systemImage: "trash") }
     }
 
-    private var coreScroll: some View {
+    private var coreScrollBody: some View {
         ScrollView {
             VStack(spacing: 20) { sections }
                 .padding(.horizontal, 16)
@@ -483,6 +483,20 @@ struct ContactInfoView: View {
         } message: {
             Text("This person restricts who can call them.")
         }
+    }
+
+    /// ⚠️ THE CHAIN IS SPLIT IN TWO, AND IT IS THE COMPILER THAT ASKED, NOT A REFACTOR.
+    ///
+    /// Everything from here down used to hang off `coreScroll` in one expression: the scroll, the
+    /// backdrop, two environments, a task, a notification, an alert, four `toolbar` blocks, both
+    /// toolbar-background modifiers and the load. That single expression was already at the point
+    /// where Swift gives up — "unable to type-check this expression in reasonable time" — and adding
+    /// one more modifier to it tipped it over twice in a row.
+    ///
+    /// Nothing is reordered and nothing is dropped. The chain runs in exactly the same sequence; it
+    /// is simply handed to the type checker in two halves.
+    private var coreScrollWithBars: some View {
+        coreScrollBody
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         // Keep the nav bar visible always: toggling it hidden while the photo viewer opens
@@ -634,7 +648,7 @@ struct ContactInfoView: View {
 
     // Sheets, full-screen covers and pushes.
     private var withSheets: some View {
-        coreScroll
+        coreScrollWithBars
             .fullScreenCover(item: $viewerImage) { msg in
                 // No system .zoom: MediaOpen flies the tapped thumb (see the strip's tap),
                 // the same pipeline as the conversation and the gallery. The story cover below still
