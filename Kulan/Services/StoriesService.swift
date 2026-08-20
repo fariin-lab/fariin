@@ -597,7 +597,13 @@ final class StoriesService {
                 cancelled = true              // user hit cancel → postStory removed the doc
                 StoryOutbox.forget(ticket)    // …and a cancelled post must not come back next launch
             }
-            catch { failure = error.localizedDescription }     // surface it instead of dying silently
+            catch {
+                // ⚠️ A RULE REFUSAL DOES NOT GET A SECOND CHANCE — see `isPermanentPostFailure`. The
+                // ticket is torn up here, or the next launch resumes a post the server has already
+                // refused and shows the same alert again, forever.
+                failure = Self.friendlyPostError(error)
+                if Self.isPermanentPostFailure(error) { StoryOutbox.forget(ticket) }
+            }
             // ⚠️ A PLAIN FAILURE KEEPS ITS TICKET. That is the whole point: no connection now is the
             // case worth remembering, and the next sign-in puts it back through this same door.
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
@@ -654,6 +660,37 @@ final class StoriesService {
     /// WHY A POST WAS REFUSED, in words the composer can show. A story that reaches nobody is worse
     /// than a story that did not go: `recipientUids` is pinned immutable by the rules, so there is no
     /// repair afterwards and no way for him to find out. See `resolveAudience`.
+    /// ⛔ IS THIS FAILURE WORTH KEEPING A TICKET FOR?
+    ///
+    /// The outbox exists for one case: the post could not go out NOW and will go out later — no
+    /// signal, a dropped connection, the app killed mid-upload. A rule refusal is the opposite. It
+    /// will refuse again on the next launch, and the next, and the ticket makes it try forever:
+    /// every re-entry resumes the post, the server says no, and the alert comes back. That is the
+    /// owner's report — the same message over and over with no way out but hitting the limit's own
+    /// clock.
+    ///
+    /// So a permission failure discards the ticket. The post did not happen and is not coming back.
+    static func isPermanentPostFailure(_ error: Error) -> Bool {
+        let ns = error as NSError
+        // The gRPC status codes, by number rather than through the SDK's enum: these are the wire
+        // values and they do not move, where the Swift enum has been renamed and re-nested more than
+        // once across Firebase versions. 3 invalidArgument · 7 permissionDenied · 9 failedPrecondition
+        // · 16 unauthenticated — every one of them a "no" that will be a "no" again tomorrow.
+        if ns.domain == FirestoreErrorDomain { return [3, 7, 9, 16].contains(ns.code) }
+        // Storage: -13021 is unauthorized, its own equivalent of a rule refusal.
+        if ns.domain == StorageErrorDomain { return ns.code == -13021 }
+        return false
+    }
+
+    /// What to SAY about it. "Missing or insufficient permissions" is Firestore describing a rule to
+    /// another program; on this screen it is the only thing standing between somebody and an answer.
+    /// The one rule a story create can realistically break is the hourly cap, so that is what it is
+    /// reported as.
+    static func friendlyPostError(_ error: Error) -> String {
+        guard isPermanentPostFailure(error) else { return error.localizedDescription }
+        return "You've posted a lot of stories in the last hour. Wait a little and try again."
+    }
+
     enum PostRefusal: LocalizedError {
         case audienceUnavailable
         /// The edit would take a story people are currently watching down to no audience at all.
@@ -1058,7 +1095,7 @@ final class StoriesService {
             var cancelled = false
             do { try await postVideoStory(videoURL: videoURL, muted: muted, trim: trim, burn: burn, caption: caption, stickers: stickers, excluded: excluded, included: included, everyone: everyone, allowsReplies: allowsReplies, tag: tag, captureProtected: captureProtected) }
             catch is CancellationError { cancelled = true }
-            catch { failure = error.localizedDescription }
+            catch { failure = Self.friendlyPostError(error) }   // video keeps no ticket to tear up
             if !cancelled && failure == nil { await StoriesRepository.shared.load(force: true) }
             await MainActor.run {
                 self.queuedUploads.removeAll { $0.isCancelled }   // tidy finished/cancelled entries
