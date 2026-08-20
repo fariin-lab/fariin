@@ -3919,44 +3919,84 @@ struct LiveTransformImage: UIViewRepresentable {
     let scale: CGFloat
     let offset: CGSize
 
-    func makeUIView(context: Context) -> UIImageView {
+    /// ⛔ A PLAIN CONTAINER, AND THE TRANSFORM GOES ON THE VIEW INSIDE IT. READ THIS BEFORE
+    /// FLATTENING THIS BACK INTO ONE VIEW.
+    ///
+    /// SwiftUI owns the frame of whatever `makeUIView` returns and writes it on every layout pass.
+    /// UIKit says the frame is undefined while a transform is not the identity — setting it rewrites
+    /// the view's BOUNDS to `frame.size / scale`. So when the image view was itself the root, the
+    /// card-sized drawing was painted into bounds of `card / photoZoom` and the transform scaled it
+    /// back out by the same factor: the two cancelled, and the pen layer rendered at 1x no matter
+    /// what the zoom was. The live canvas uses a SwiftUI `.scaleEffect`, which is immune, and both
+    /// export paths apply the zoom themselves — so the post-Done preview was the only surface
+    /// disagreeing, which is exactly the owner's "in the pen page and after Done it shows
+    /// different", strokes a third of the size and thrown up and to the left. The shift is not about
+    /// the card's centre: cancelling the zoom scales about the pinch's own anchor, `centre + offset`.
+    ///
+    /// `ZoomableImageView` below has always done it this way — container out, Auto Layout inside,
+    /// transform on the inner view — which is why the photograph never had this bug and the pen did.
+    func makeUIView(context: Context) -> UIView {
+        let box = UIView()
+        box.backgroundColor = .clear
+        box.isUserInteractionEnabled = false
         let v = UIImageView(image: image)
         // ⚠️ `.scaleToFill`, WHICH IS WHAT `.resizable()` MEANT. The layer this replaced was
         // `Image(uiImage:).resizable().frame(card)`, and resizable stretches the picture to the frame
-        // it is given whatever its own point size is. `.scaleAspectFit` does NOT: when the rendered
-        // strokes come back at a different point size from the card — which they do, because they are
-        // rasterised at the zoom's own scale — aspect fit shrinks them and re-centres them inside the
-        // frame. The owner's two screenshots are exactly that: the same strokes, about half size and
-        // moved, the moment the pen closed and this layer took over from the live canvas (2026-08-19).
-        //
-        // The drawing is rendered from a rect that IS the card, so its aspect already matches and
-        // filling distorts nothing. There is no case where fitting is the right answer here.
+        // it is given whatever its own point size is. `.scaleAspectFit` does NOT: the raster comes
+        // back at the zoom's own point size, and fitting would shrink and re-centre it inside the
+        // frame. The drawing is rendered from a rect that IS the card, so its aspect already matches
+        // and filling distorts nothing. There is no case where fitting is the right answer here.
         v.contentMode = .scaleToFill
         v.isUserInteractionEnabled = false
         v.backgroundColor = .clear
-        relay.apply = { [weak v] s, o in
-            guard let v else { return }
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            v.transform = CGAffineTransform(translationX: o.width, y: o.height).scaledBy(x: s, y: s)
-            CATransaction.commit()
-        }
-        return v
+        v.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(v)
+        // Pinned, not framed: Auto Layout writes bounds and centre, neither of which a transform
+        // makes undefined. This is the whole reason the inner view can be trusted to keep its scale.
+        NSLayoutConstraint.activate([
+            v.leadingAnchor.constraint(equalTo: box.leadingAnchor),
+            v.trailingAnchor.constraint(equalTo: box.trailingAnchor),
+            v.topAnchor.constraint(equalTo: box.topAnchor),
+            v.bottomAnchor.constraint(equalTo: box.bottomAnchor),
+        ])
+        context.coordinator.image = v
+        arm(context.coordinator)
+        Self.apply(scale: scale, offset: offset, to: v)
+        return box
     }
 
-    func updateUIView(_ v: UIImageView, context: Context) {
+    func updateUIView(_ box: UIView, context: Context) {
+        guard let v = context.coordinator.image else { return }
         if v.image !== image { v.image = image }
         // Re-arm on every update: a rebuilt representable leaves the old closure holding a dead view.
-        relay.apply = { [weak v] s, o in
-            guard let v else { return }
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            v.transform = CGAffineTransform(translationX: o.width, y: o.height).scaledBy(x: s, y: s)
-            CATransaction.commit()
+        arm(context.coordinator)
+        Self.apply(scale: scale, offset: offset, to: v)
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        weak var image: UIImageView?
+    }
+
+    /// ⚠️ THE CLOSURE MUST NOT CAPTURE `self`. The relay is a class this struct holds strongly, so a
+    /// closure that captured the struct to reach an instance method would close the loop: relay →
+    /// closure → struct → relay. `apply` is static for that reason alone.
+    private func arm(_ c: Coordinator) {
+        relay.apply = { [weak c] s, o in
+            guard let v = c?.image else { return }
+            LiveTransformImage.apply(scale: s, offset: o, to: v)
         }
+    }
+
+    /// The transform is written inside a `CATransaction` with actions disabled: without it every
+    /// write during a pinch starts CoreAnimation's own quarter-second implicit animation, and the
+    /// layer chases the fingers a beat behind instead of tracking them — which would trade one lag
+    /// for another.
+    private static func apply(scale s: CGFloat, offset o: CGSize, to v: UIImageView) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        v.transform = CGAffineTransform(translationX: offset.width, y: offset.height).scaledBy(x: scale, y: scale)
+        v.transform = CGAffineTransform(translationX: o.width, y: o.height).scaledBy(x: s, y: s)
         CATransaction.commit()
     }
 }
