@@ -313,6 +313,17 @@ struct StoryEditorView: View {
     ///
     /// `ceil` and 1.77778 are copied from the viewer deliberately. Two rectangles that have to agree
     /// to the pixel must be the same arithmetic, not arithmetic that happens to match.
+    /// ⛔ THE CROP TOOL IS OFF, AND THE CODE BEHIND IT IS DELIBERATELY UNTOUCHED (owner, 2026-08-20:
+    /// "disable the Crop Image feature inside Stories for now… we will use this feature again
+    /// later"). This hides the ONE door: the button in the photo tool row. Everything it opened is
+    /// still here and still compiles — `showCrop`, the `ChatCropView` sheet, `applyCropToDrawing`,
+    /// `croppedSource`, `cropRect` and the refinement path — so turning it back on is this one
+    /// constant and nothing else.
+    ///
+    /// Not `#if`, not a deletion, and not a disabled-looking button: a tool that is present and
+    /// greyed asks to be tapped and answers nothing.
+    static let cropEnabled = false
+
     static func cardSize(in space: CGSize, top: CGFloat) -> CGSize {
         let available = max(1, space.height - top - toolZoneHeight)
         return CGSize(width: space.width, height: min(ceil(space.width * 1.77778), available))
@@ -1905,7 +1916,7 @@ struct StoryEditorView: View {
                         // instruction. Everything left in this capsule opens something; sound was
                         // the one entry that silently flipped a state.)
                         capsuleTool("scissors", active: items[index].isTrimmed) { openTrim() }
-                    } else {
+                    } else if Self.cropEnabled {
                         capsuleTool("crop", active: croppedSource != nil) {
                             withAnimation(.easeInOut(duration: 0.3)) { showCrop = true }
                         }
