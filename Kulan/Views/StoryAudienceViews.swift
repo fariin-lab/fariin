@@ -28,7 +28,13 @@ struct StoryContact: Identifiable, Equatable {
     static func all() -> [StoryContact] {
         let me = AuthService.shared.uid ?? ""
         return ConversationsRepository.shared.conversations
-            .filter { !$0.isGroup && !$0.isBlockedByMe(me) }
+            // ⚠️ BOTH DIRECTIONS, AND THIS HAD DRIFTED FROM THE TWO TESTS BESIDE IT. `isFriend` below
+            // and `resolveAudience` in the service both ask "did I block them AND did they block me";
+            // this asked only the first half, so somebody I had blocked could still be listed when
+            // the conversation's flag had not caught up, and somebody who blocked ME was listed
+            // every time. Either way the picker offered a person the post would then strip, which is
+            // the owner's report: a blocked user must not be selectable at all.
+            .filter { !$0.isGroup && !$0.isBlockedByMe(me) && !$0.isBlockedByMe($0.otherUid(me)) }
             .compactMap {
                 let u = $0.otherUid(me)
                 return u.isEmpty ? nil : StoryContact(id: u, name: $0.displayName(me), photo: $0.displayPhoto(me))
@@ -251,7 +257,7 @@ struct SelectViewersView: View {
                     .disabled(requiresSelection && selected.isEmpty)
             }
         }
-        .onAppear { if contacts.isEmpty { contacts = StoryContact.all() } }
+        .onAppear { contacts = StoryContact.all()   // recomputed: a block made since this screen was built must count }
     }
 }
 
@@ -422,7 +428,7 @@ struct EveryonePrivacyView: View {
         }
         .navigationTitle("Everyone")
         .navigationBarTitleDisplayMode(.inline)
-        .task { if contacts.isEmpty { contacts = StoryContact.all() } }
+        .task { contacts = StoryContact.all()   // recomputed: a block made since this screen was built must count }
         .sheet(isPresented: $picking) {
             NavigationStack {
                 SelectViewersView(title: "Hide Story From", actionTitle: "Done",
@@ -495,7 +501,7 @@ struct MyFriendsPrivacyView: View {
         }
         .navigationTitle("My Friends")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { if contacts.isEmpty { contacts = StoryContact.all() } }
+        .onAppear { contacts = StoryContact.all()   // recomputed: a block made since this screen was built must count }
         .sheet(item: $picking) { target in
             NavigationStack {
                 MembersEditor(
@@ -585,7 +591,7 @@ struct CustomStoryDetailView: View {
                 Color.clear.onAppear { dismiss() }
             }
         }
-        .onAppear { if contacts.isEmpty { contacts = StoryContact.all() } }
+        .onAppear { contacts = StoryContact.all()   // recomputed: a block made since this screen was built must count }
     }
 
     @ViewBuilder private func list(_ a: StoryAudience) -> some View {
@@ -765,7 +771,7 @@ struct CreateCustomStoryFlow: View {
                                       onCreated(a)
                                   })
                 }
-                .onAppear { if contacts.isEmpty { contacts = StoryContact.all() } }
+                .onAppear { contacts = StoryContact.all()   // recomputed: a block made since this screen was built must count }
         }
     }
 }

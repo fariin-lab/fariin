@@ -505,7 +505,7 @@ struct ShareStorySheet: View {
             }
         }
         .onAppear {
-            if contacts.isEmpty { contacts = StoryContact.all() }
+            contacts = StoryContact.all()   // recomputed: a block made since this sheet was built must count
             if let editing, editSelection == nil { seedFromStory(editing) }
         }
         // A new list is SELECTED the moment it is made: he built it in the middle of posting, so it

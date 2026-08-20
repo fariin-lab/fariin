@@ -1322,7 +1322,7 @@ struct StorySettingsView: View {
         }
         .navigationTitle("Stories")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { if contacts.isEmpty { contacts = StoryContact.all() } }
+        .onAppear { contacts = StoryContact.all() }   // recomputed, so a fresh block counts
         .sheet(isPresented: $creating) {
             CreateCustomStoryFlow(onCreated: { _ in creating = false },
                                   onCancel: { creating = false })
