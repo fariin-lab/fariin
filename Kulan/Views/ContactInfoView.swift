@@ -587,8 +587,14 @@ struct ContactInfoView: View {
     /// one more modifier to it tipped it over twice in a row.
     ///
     /// Nothing is reordered and nothing is dropped. The chain runs in exactly the same sequence; it
-    /// is simply handed to the type checker in two halves.
-    private var coreScrollWithBars: some View {
+    /// is simply handed to the type checker in pieces.
+    ///
+    /// ⚠️ THREE PIECES NOW, NOT TWO, AND THE SECOND SPLIT COST A BUILD TOO. Giving Back and Edit
+    /// their own tinted glass added a condition to the leading slot and turned one toolbar item into
+    /// three, and that was enough to put THIS half back over the same limit. Same remedy, same rule:
+    /// do not merge them back, and if a modifier has to be added here, add it to whichever half is
+    /// shorter.
+    private var coreScrollBars: some View {
         coreScrollBody
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
@@ -702,6 +708,12 @@ struct ContactInfoView: View {
                 }
             }
         }
+    }
+
+    /// The second half of the chain above — the bar's own appearance, and the load. Split only for
+    /// the type checker; it runs in the same sequence it always did.
+    private var coreScrollWithBars: some View {
+        coreScrollBars
         // Let the photo run under the bar while it is still there, then hand the bar back its own
         // material the moment the photo's bottom edge passes it.
         //
