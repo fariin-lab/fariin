@@ -5,6 +5,56 @@ import UIKit
 import CoreImage
 import StoryUI
 
+// ⛔ HOW MANY ARCS A RING THIS SIZE CAN ACTUALLY HOLD — and the reason a 29-story ring vanished.
+///
+/// The gap between arcs was a fixed 2·lineWidth of circumference, and the arc was whatever the
+/// segment had left after taking it. On the 37pt card ring that is 4pt of gap out of 116pt of
+/// circumference, so at 29 stories the segment IS the gap: 116/29 = 4.005pt, leaving eight
+/// thousandths of a point of arc. At 30 the gap is wider than the segment, `to` lands before
+/// `from`, every segment is skipped and the ring disappears completely.
+///
+/// 28 "worked" only because of the round line cap, which extends a stroke by half its width past
+/// each end — 28 dots of pure cap, no arc between them. That is the cliff he found: 28 draws, 29
+/// is invisible, 30 is gone.
+///
+/// The fix is not a bigger gap or a smaller one. It is that a 37pt circle cannot say twenty-nine
+/// separate things, and pretending otherwise is what produced a ring with nothing in it. Above what
+/// fits, stories are grouped and each arc speaks for its group.
+enum StoryRingGeometry {
+    /// An arc needs the gap (2·w, of which the round caps eat half) plus at least w of its own
+    /// before it reads as a mark rather than a dot — so 3·w of circumference each.
+    static func maxSegments(diameter d: CGFloat, lineWidth w: CGFloat) -> Int {
+        guard d > 0, w > 0 else { return 1 }
+        return max(8, Int((.pi * d) / (3 * w)))
+    }
+
+    /// One entry per arc. Under the limit this is the array it was handed, untouched; over it, the
+    /// stories are split into equal groups and a group is grey only when EVERY story in it has been
+    /// watched — so the ring can never claim you are further along than you are.
+    static func condensed(_ seen: [Bool], diameter: CGFloat, lineWidth: CGFloat) -> [Bool] {
+        let m = maxSegments(diameter: diameter, lineWidth: lineWidth)
+        guard seen.count > m else { return seen }
+        return (0..<m).map { j in
+            let lo = j * seen.count / m
+            let hi = min(seen.count, max(lo + 1, (j + 1) * seen.count / m))
+            return seen[lo..<hi].allSatisfy { $0 }
+        }
+    }
+
+    /// The gap, as a fraction of a turn: the same absolute 2·w it has always been, since that is
+    /// what leaves a visible w once the round caps have eaten half of it at each end.
+    ///
+    /// The ceiling is a backstop and nothing more. `maxSegments` already guarantees a segment of
+    /// 3·w against a gap of 2·w, so it cannot bind in normal use — tightening it below that would
+    /// close the gaps rather than protect them, and the ring would come out solid. It exists for a
+    /// ring so small that even the floor of 8 segments does not fit, where an arc of three tenths of
+    /// a segment is still an arc and a negative one is a ring that is not drawn at all.
+    static func gap(count n: Int, diameter d: CGFloat, lineWidth w: CGFloat) -> CGFloat {
+        guard n > 1, d > 0 else { return 0 }
+        return min((w * 2) / (.pi * d), (1 / CGFloat(n)) * 0.7)
+    }
+}
+
 // Segmented story ring: one arc per story (3 stories = 3 arcs with gaps, 1 = full circle).
 // Colorful gradient when unviewed, grey when viewed. Reused on story cards AND chat-list avatars.
 struct StoryRingView: View {
@@ -28,18 +78,19 @@ struct StoryRingView: View {
         //  • segment gap = activeLineWidth * 2  (points along the circumference)
         GeometryReader { geo in
             let d = min(geo.size.width, geo.size.height)
-            let n = max(1, seen.count)
             let activeW = lineWidth
+            // Grouped if there are more stories than this circle can hold — see StoryRingGeometry.
+            let arcs = StoryRingGeometry.condensed(seen, diameter: d, lineWidth: activeW)
+            let n = max(1, arcs.count)
             let seenW = max(1, lineWidth * 0.66)                       // inactiveLineWidth
             let gradient = AnyShapeStyle(LinearGradient(colors: [Color(hex: 0x34C76F), Color(hex: 0x3DA1FD)],
                                                         startPoint: .top, endPoint: .bottom))
             let grey = AnyShapeStyle(seenColor)
-            let gapPts: CGFloat = n > 1 ? activeW * 2.0 : 0           // spacing = activeLineWidth·2
-            let gap = d > 0 ? gapPts / (CGFloat.pi * d) : 0
+            let gap = StoryRingGeometry.gap(count: n, diameter: d, lineWidth: activeW)
             let seg = 1.0 / CGFloat(n)
             ZStack {
                 ForEach(0..<n, id: \.self) { i in
-                    let isSeen = i < seen.count ? seen[i] : false
+                    let isSeen = i < arcs.count ? arcs[i] : false
                     Circle()
                         .inset(by: activeW / 2)                       // keep the stroke inside the frame
                         .trim(from: CGFloat(i) * seg + gap / 2, to: CGFloat(i + 1) * seg - gap / 2)

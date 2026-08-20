@@ -177,11 +177,15 @@ final class StoryRingUIView: UIView {
 
         let d = min(bounds.width, bounds.height)
         guard d > 0 else { return }
-        let n = max(1, seen.count)
         let activeW = lineWidth
+        // ⚠️ GROUPED ONCE THERE ARE MORE STORIES THAN 37pt CAN HOLD. Straight `seen.count` here is
+        // what made a 29-story ring invisible and a 30-story ring absent — the whole reckoning is
+        // written out in `StoryRingGeometry`. This is the SwiftUI ring's twin and must stay equal
+        // to it, so it takes the same two numbers from the same place.
+        let arcs = StoryRingGeometry.condensed(seen, diameter: d, lineWidth: activeW)
+        let n = max(1, arcs.count)
         let seenW = max(1, lineWidth * 0.66)
-        let gapPts: CGFloat = n > 1 ? activeW * 2.0 : 0
-        let gap = gapPts / (.pi * d)
+        let gap = StoryRingGeometry.gap(count: n, diameter: d, lineWidth: activeW)
         let seg = 1.0 / CGFloat(n)
         let centre = CGPoint(x: bounds.midX, y: bounds.midY)
         let radius = d / 2 - activeW / 2
@@ -189,7 +193,7 @@ final class StoryRingUIView: UIView {
         let unseenPath = UIBezierPath()
         let seenPath = UIBezierPath()
         for i in 0..<n {
-            let isSeen = i < seen.count ? seen[i] : false
+            let isSeen = i < arcs.count ? arcs[i] : false
             let from = CGFloat(i) * seg + gap / 2
             let to = CGFloat(i + 1) * seg - gap / 2
             guard to > from else { continue }
