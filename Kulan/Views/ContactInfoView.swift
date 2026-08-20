@@ -579,7 +579,13 @@ struct ContactInfoView: View {
         // as closeSignal and runs its normal reverse morph.
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                if showProfilePhoto {
+                // ⚠️ `chromeHiddenForPhoto`, NOT `showProfilePhoto` — the X belongs to the CHROME,
+                // not to the handoff. `showProfilePhoto` has to stay true until the very last frame
+                // because it is what hides the header photo the viewer stands in for; the back
+                // chevron now returns the moment a close BEGINS. Gating the X on the handoff meant
+                // that for the length of the collapse both were on screen at once, a chevron and an
+                // X side by side, which is the owner's screenshot. They swap on the same instant now.
+                if chromeHiddenForPhoto {
                     Button { photoCloseTick &+= 1 } label: {
                         Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
                     }
