@@ -372,10 +372,15 @@ final class StoryCubePagerVC: UIViewController {
     /// The spring is unaffected — `springProgress` is normalised over its own duration, so the same
     /// sampled curve simply plays at a different rate and still lands exactly on 1.
     ///
-    /// ⛔ AND IT IS A FLOOR NOW, NOT THE WHOLE ANSWER. See `span(forDistance:)`.
+    /// ⛔ AND IT IS 0.165 FOR EVERY DISTANCE AGAIN, TAP INCLUDED. Scaling a tap up to their 0.4 was
+    /// tried on 2026-08-20 and he rejected it on sight: "now too small… use the speed you used
+    /// before, just make it smooth and more fps". He is right, and the slow version was treating the
+    /// symptom — a turn that drops frames does not stop dropping them because it lasts longer, it
+    /// just drops them for longer. The frames themselves are fixed in `applyFold` instead.
     private static let settleDuration: CFTimeInterval = 0.165
 
-    /// Theirs, for a WHOLE face. The number this file has always quoted and never used.
+    /// ⛔ KEPT AS HISTORY, DELIBERATELY UNUSED. Their full-face duration, tried and rejected — see
+    /// the note above before reaching for it again.
     private static let fullFaceDuration: CFTimeInterval = 0.4
 
     /// ⛔ HOW LONG A TURN TAKES DEPENDS ON HOW FAR IT HAS TO GO, and until now it did not.
@@ -394,7 +399,8 @@ final class StoryCubePagerVC: UIViewController {
     /// their 0.4 for a full one, so a tap now gets the time their turn takes and every swipe that
     /// lands inside the floor feels precisely as it did before.
     private static func span(forDistance distance: CGFloat) -> CFTimeInterval {
-        max(Self.settleDuration, Self.fullFaceDuration * CFTimeInterval(min(1, abs(distance))))
+        _ = distance          // his speed, whatever the distance — see `settleDuration`
+        return Self.settleDuration
     }
 
     private func settle(to target: CGFloat, then done: @escaping () -> Void) {
@@ -521,6 +527,23 @@ final class StoryCubePagerVC: UIViewController {
     private func applyFold() {
         let w = view.bounds.width
         guard w > 1 else { return }
+        // ⛔ THE ONE THAT ACTUALLY COSTS THE FRAMES. The tint is a CAGradientLayer we add ourselves,
+        // and a STANDALONE layer is not a view's backing layer: UIKit disables implicit animations
+        // on the latter, and on the former CoreAnimation happily gives every property write its
+        // default quarter-second animation. So each frame of a turn was allocating and scheduling a
+        // fresh 0.25s animation on the darkening — sixty to a hundred and twenty of them a second,
+        // each one animating toward a value that is overwritten eight milliseconds later, all of
+        // them still running when the turn is already over.
+        //
+        // That is both halves of his report at once. The scheduling is the dropped frames, and the
+        // darkening arriving late and out of step with the geometry is the "brightness problem": the
+        // shading was chasing the rotation instead of being drawn with it.
+        //
+        // A display-link animation must always disable actions, which is what every other per-frame
+        // writer in this codebase already does — see `LiveTransformImage` in the story editor.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         var order: [(vc: UIViewController, t: CGFloat)] = []
         if let focused { order.append((focused, panFraction)) }
         if let after { order.append((after, panFraction + 1)) }
@@ -542,12 +565,20 @@ final class StoryCubePagerVC: UIViewController {
             }
             face.isHidden = false
             if let g = tint(for: face) {
-                g.frame = face.bounds
+                // ⛔ GEOMETRY ONLY WHEN IT CHANGES. A CAGradientLayer re-renders its whole gradient
+                // when its frame or its end points are written, and these were written on EVERY
+                // frame of every turn while holding the same values — a full-screen gradient redrawn
+                // sixty to a hundred and twenty times a second for nothing. The opacity is the only
+                // thing that actually moves, and opacity alone is a compositor property: it costs a
+                // blend, not a redraw.
+                if g.frame != face.bounds { g.frame = face.bounds }
                 // The darkening runs the other way depending on which edge the face is turning on.
-                if t < 0 {
-                    g.startPoint = CGPoint(x: 0, y: 0); g.endPoint = CGPoint(x: 1, y: 0)
-                } else if t > 0 {
-                    g.startPoint = CGPoint(x: 1, y: 0); g.endPoint = CGPoint(x: 0, y: 0)
+                let sp: CGPoint, ep: CGPoint
+                if t < 0 { sp = CGPoint(x: 0, y: 0); ep = CGPoint(x: 1, y: 0) }
+                else     { sp = CGPoint(x: 1, y: 0); ep = CGPoint(x: 0, y: 0) }
+                if t != 0 {
+                    if g.startPoint != sp { g.startPoint = sp }
+                    if g.endPoint != ep { g.endPoint = ep }
                 }
                 g.opacity = Float(min(1, abs(t) * 1.3))
             }
