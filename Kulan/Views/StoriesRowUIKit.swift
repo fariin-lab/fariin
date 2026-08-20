@@ -853,8 +853,16 @@ final class StoryCardUIView: UIControl {
         setRectKey(MediaOpenRects.key(.storyRow, group.id))
     }
 
-    /// My own card. `heroKey` is nil when there is nothing posted — there is no story to open, so
-    /// the tap composes instead and the card registers no rectangle for anything to fly to.
+    /// THE KEY MY OWN CARD REGISTERS UNDER WHEN THERE IS NOTHING POSTED. It exists so the card can
+    /// still be FOUND — the long press hit-tests the same rectangle registry the story flight uses,
+    /// so a card that registers nothing cannot be pressed at all. That is why a long press on an
+    /// empty My Story did nothing while a posted one raised its menu. Nothing flies to this key; it
+    /// is a hit target and a lift source, in the shape of the one `StoryDoor.uploadingSourceKey`
+    /// already uses for the placeholder.
+    static let emptyMyStoryKey = "my-story-empty"
+
+    /// My own card. `heroKey` is nil when there is nothing posted — there is no story to OPEN, so the
+    /// tap composes instead, and the rectangle it registers is `emptyMyStoryKey` rather than a story.
     func configureMine(coverUrl: String?, meName: String, mePhoto: String?, seen: [Bool],
                        heroKey: String?, animated: Bool,
                        onTap: @escaping () -> Void, onBadge: @escaping () -> Void) {
@@ -885,7 +893,7 @@ final class StoryCardUIView: UIControl {
             corner.isHidden = true
             smallBadge?.isHidden = true
         }
-        setRectKey(heroKey.map { MediaOpenRects.key(.storyRow, $0) } ?? "")
+        setRectKey(MediaOpenRects.key(.storyRow, heroKey ?? Self.emptyMyStoryKey))
     }
 
     private func addSmallBadgeIfNeeded() {
@@ -1734,6 +1742,22 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
             return StoryMenuTarget(key: key, rect: lifted(key, r), actions: [
                 CMAction(title: "Add Story", icon: "ic_stories") { [weak self] in self?.onCompose() },
                 CMAction(title: "Posted Stories", icon: "circle.dashed") { [weak self] in self?.onOpen(m) },
+            ], labelRect: myCard.labelView.flatMap { MediaOpenRects.drawnRect(of: $0) } ?? myCard.labelWindowRect,
+               labelView: myCard.labelView)
+        }
+        // NOTHING POSTED, AND THE PRESS STILL HAS TO ANSWER. The branch above needs a story to
+        // find a rectangle, so with an empty My Story the whole press fell through to the friends
+        // loop, matched nothing, and the menu never came up — while the same press on a posted card
+        // worked. The card is still a card, and the one thing it can offer is the compose action it
+        // already performs on a tap.
+        // `!service.uploading` keeps the placeholder out of it: while a post is going up the slot is
+        // drawn by the uploading card, and a lift there would photograph that card while offering an
+        // action about a different one. That press did nothing before and it still does nothing.
+        if repo.mine?.stories.isEmpty ?? true, !service.uploading,
+           let r = hit(StoryCardUIView.emptyMyStoryKey) {
+            let key = MediaOpenRects.key(.storyRow, StoryCardUIView.emptyMyStoryKey)
+            return StoryMenuTarget(key: key, rect: lifted(key, r), actions: [
+                CMAction(title: "Add Story", icon: "ic_stories") { [weak self] in self?.onCompose() },
             ], labelRect: myCard.labelView.flatMap { MediaOpenRects.drawnRect(of: $0) } ?? myCard.labelWindowRect,
                labelView: myCard.labelView)
         }

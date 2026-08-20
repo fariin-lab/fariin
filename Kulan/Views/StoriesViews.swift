@@ -2072,6 +2072,14 @@ struct StoryViewer: View {
             // runloop turn as the picture. Removing it from one handler and leaving it in the other
             // would have fixed nothing.
         }
+        // ⚠️ THE WATCHER BEHIND `refreshTick`, STARTED AND STOPPED WITH THE SHEET. Two handlers with
+        // no guards of their own on purpose: every other `sheetStoryId` handler on this view returns
+        // early on `showingMine`, and a watcher that inherits those guards is how the sheet's live
+        // list came to be dead in the first place. `watchViewCount` is idempotent, so re-asking for
+        // the story it is already on costs nothing.
+        .onChange(of: showViewers) { _, _ in syncViewCountWatch() }
+        .onChange(of: sheetStoryId) { _, _ in syncViewCountWatch() }
+        .onDisappear { StoriesService.shared.stopWatchingViewCount() }
         // The COVER'S OWN BACKING (not just an inner canvas) must be opaque black while the viewers
         // sheet is up — otherwise the .zoom transition composites the clear backing over the inner
         // black canvas and the light Chats list bleeds through as the "white" bug. Clear only at rest,
@@ -3954,7 +3962,14 @@ struct StoryViewer: View {
                           },
                           // The tap's slide hint rides the same box the page-drag does — see
                           // `StorySheetPageDrag.pendingSheetSlide`.
-                          slideBox: pageDragBox)
+                          slideBox: pageDragBox,
+                          // THE SHEET'S LIVE LIST. Reading the service's counter HERE is what
+                          // subscribes this view to it, so a view landing while the sheet is open
+                          // re-renders with a new tick and reaches `Coordinator.refresh` instead of
+                          // dying at its `tick != lastTick` guard. The property existed on the sheet
+                          // and no caller had ever passed it, so the list was frozen for the whole
+                          // sitting. The watcher itself is started and stopped with the sheet, below.
+                          refreshTick: StoriesService.shared.viewCountTick)
             .ignoresSafeArea()
     }
 
@@ -4035,6 +4050,17 @@ struct StoryViewer: View {
     /// the only close path there is — every way out of the sheet (drag, tap, centre-card tap,
     /// self-heal) funnels here, and none of them may dismiss the whole viewer. (The reference app's
     /// own close handling does the same check in as many words: list open → hide the list only.)
+    /// The story whose view counter is worth following: the one the sheet is showing, and only while
+    /// the sheet is up. A listener left running behind a closed sheet is a read charge for a screen
+    /// nobody is looking at, which is why this is a sync rather than a start.
+    private func syncViewCountWatch() {
+        if showViewers, !sheetStoryId.isEmpty {
+            StoriesService.shared.watchViewCount(storyId: sheetStoryId)
+        } else {
+            StoriesService.shared.stopWatchingViewCount()
+        }
+    }
+
     private func closeViewers(velocity: CGFloat = 0) {
         // ⚠️ THE DEFERRED JUMP IS SPENT HERE, at the START of the collapse, which is the same beat
         // the reference app builds the player it refused to build while the list was up. The clip loads

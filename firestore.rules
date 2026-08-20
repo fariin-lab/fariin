@@ -1303,10 +1303,21 @@ service cloud.firestore {
         // acting on a report. The AUTHOR is not given it — they can already infer it from their
         // own recipient list, and there is no reason to hand them a second, tidier copy.
         allow read: if signedIn() && (request.auth.uid == viewerUid || adminCan('moderate'));
+        // ⚠️ BOTH FORMS, FOR THE SAME REASON THE `views` RULE ABOVE TAKES BOTH — and this clause was
+        // MISSED when the audience was tokenised. `recipientUids` holds sha256 tokens now, so a raw
+        // uid test is false for every story written since, the create was denied, and the client
+        // writes this doc with `try?` so the denial was silent. `onStoryConsumed` fires on the CREATE
+        // of this document, so nothing ever removed the token: the burn stopped happening at all and
+        // the only enforcement left was the device-local flag, which does not survive a reinstall and
+        // does not reach a second device. A one-time story could be watched again by reinstalling.
+        //
+        // The raw form stays for as long as stories written by an older build are still alive, which
+        // is the same migration the story read rule and the views rule carry.
         allow create: if signedIn()
           && request.auth.uid == viewerUid
           && storyData().get('oneTime', false) == true
-          && request.auth.uid in storyData().recipientUids
+          && (audienceToken(request.auth.uid) in storyData().recipientUids
+              || request.auth.uid in storyData().recipientUids)
           && request.resource.data.keys().hasOnly(['at']);
       }
     }

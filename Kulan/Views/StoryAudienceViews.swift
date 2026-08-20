@@ -173,6 +173,13 @@ struct SelectViewersView: View {
     @Binding var selected: Set<String>
     let onAction: () -> Void
     var onCancel: (() -> Void)? = nil
+    /// ⚠️ WHETHER AN EMPTY SELECTION IS A REFUSAL, AND IT IS ONLY TRUE WHERE THE SCREEN IS BUILDING
+    /// SOMETHING. Creating a list or a one-time story with nobody in it makes no sense, so Done is
+    /// dead there. EDITING an existing list is the opposite case: emptying it is the whole point of
+    /// the visit. This screen is reused as the "Hide Story From" editor, where the hardcoded rule
+    /// meant unticking the last hidden person killed the only button that saves — so the last person
+    /// hidden could never be un-hidden from the screen that hides them, and the X discards.
+    var requiresSelection: Bool = true
 
     @State private var search = ""
     @State private var contacts: [StoryContact] = []
@@ -241,7 +248,7 @@ struct SelectViewersView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button(actionTitle) { onAction() }
                     .fontWeight(.semibold)
-                    .disabled(selected.isEmpty)
+                    .disabled(requiresSelection && selected.isEmpty)
             }
         }
         .onAppear { if contacts.isEmpty { contacts = StoryContact.all() } }
@@ -421,7 +428,9 @@ struct EveryonePrivacyView: View {
                 SelectViewersView(title: "Hide Story From", actionTitle: "Done",
                                   selected: $draft,
                                   onAction: { commit() },
-                                  onCancel: { picking = false })
+                                  onCancel: { picking = false },
+                                  // Hiding nobody is a real answer here — see `requiresSelection`.
+                                  requiresSelection: false)
             }
         }
     }

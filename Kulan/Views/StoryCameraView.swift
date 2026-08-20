@@ -110,6 +110,40 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
 
     /// Back to the middle, and back to continuous. Called when the scene itself changes, never from a
     /// tap: a person who has just chosen a subject has not asked for it to be forgotten.
+    /// The system has taken the camera. Nothing to do but stop pretending: a recording that was
+    /// running is already over as far as the pipeline is concerned, and the torch belongs to a
+    /// session we no longer own.
+    @objc private func sessionInterrupted(_ n: Notification) {
+        sessionQueue.async { [weak self] in self?.setTorch(false) }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.recording else { return }
+            self.recording = false
+        }
+    }
+
+    /// ⚠️ `wantsRunning`, NOT AN UNCONDITIONAL RESTART. The interruption ending says the camera is
+    /// available again, not that anybody wants it — the person may have switched to the text page
+    /// while the call was up, and starting the session behind an opaque screen lights the green
+    /// indicator over a preview nobody can see.
+    @objc private func sessionInterruptionEnded(_ n: Notification) {
+        guard wantsRunning else { return }
+        sessionQueue.async { [weak self] in
+            guard let self, !self.session.isRunning else { return }
+            self.session.startRunning()
+        }
+    }
+
+    /// A media services reset is the recoverable one and it is the common one; anything else is left
+    /// alone rather than restarted in a loop.
+    @objc private func sessionRuntimeError(_ n: Notification) {
+        guard let err = n.userInfo?[AVCaptureSessionErrorKey] as? AVError,
+              err.code == .mediaServicesWereReset, wantsRunning else { return }
+        sessionQueue.async { [weak self] in
+            guard let self, !self.session.isRunning else { return }
+            self.session.startRunning()
+        }
+    }
+
     @objc private func subjectAreaChanged() {
         sessionQueue.async { [weak self] in
             guard let dev = self?.input?.device, (try? dev.lockForConfiguration()) != nil else { return }
@@ -258,6 +292,21 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         NotificationCenter.default.addObserver(
             self, selector: #selector(subjectAreaChanged),
             name: AVCaptureDevice.subjectAreaDidChangeNotification, object: nil)
+        // ⛔ THE SESSION CAN BE TAKEN AWAY WITHOUT THE APP EVER LEAVING THE SCREEN, and until these
+        // three registrations existed nothing brought it back. An incoming call is the everyday
+        // case: the banner does not change the scene phase, so neither of the two handlers that
+        // call `start()` fires, iOS stops the session, and both capture entry points then dead-end
+        // on their own `session.isRunning` guards — a frozen preview under a shutter that answers
+        // taps and does nothing, for good, until the person leaves the page.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(sessionInterrupted(_:)),
+            name: AVCaptureSession.wasInterruptedNotification, object: session)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(sessionInterruptionEnded(_:)),
+            name: AVCaptureSession.interruptionEndedNotification, object: session)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(sessionRuntimeError(_:)),
+            name: AVCaptureSession.runtimeErrorNotification, object: session)
         // A story is short by nature, and a cap means a forgotten recording cannot fill the disk.
         movieOutput.maxRecordedDuration = CMTime(seconds: 60, preferredTimescale: 600)
         // ALREADY ALLOWED THE MICROPHONE? Then take it now, while nothing is happening, instead of
@@ -434,7 +483,15 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         DispatchQueue.main.async { [weak self] in self?.bootPlaceholder = image }
     }
 
+    /// ⚠️ WHETHER THE CAMERA IS MEANT TO BE RUNNING, WHICH IS NOT THE SAME QUESTION AS WHETHER IT IS.
+    /// The system stops the session on its own for an incoming call, Siri, another app taking the
+    /// camera, or a media services reset, and only this flag can say whether we should take it back.
+    /// Without it an interruption handler cannot tell "the call ended, resume" from "the person is on
+    /// the text page and asked for the camera to be off".
+    private var wantsRunning = false
+
     func start() {
+        wantsRunning = true
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             guard let self else { return }
             // Surface a denial instead of silently leaving a dead black preview.
@@ -448,6 +505,7 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     }
 
     func stop() {
+        wantsRunning = false
         sessionQueue.async { [weak self] in
             guard let self else { return }
             // Before the session goes, or the lamp is left burning on a camera nobody is looking
@@ -539,8 +597,14 @@ final class StoryCamera: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         // The PHOTO half of the flash: a per-shot setting on the request. The video half is the
         // torch, in `setTorch`, and it is the half that was missing.
         if output.supportedFlashModes.contains(.on) { settings.flashMode = flashOn ? .on : .off }
-        if let conn = output.connection(with: .video), conn.isVideoRotationAngleSupported(90) {
-            conn.videoRotationAngle = 90   // lock captured photo to portrait
+        if let conn = output.connection(with: .video) {
+            if conn.isVideoRotationAngleSupported(90) { conn.videoRotationAngle = 90 }   // portrait
+            // ⚠️ THE SAME MIRROR THE VIDEO HALF HAS ALWAYS SET, AND THE STILL WAS THE ONE THING IN
+            // THE WHOLE FLOW WITHOUT IT. The preview layer mirrors the front camera by itself and
+            // `startRecording` mirrors the movie connection on purpose, so a tapped photo came out
+            // reversed against both — most visible on the frozen shot, which is the un-mirrored file
+            // drawn over the mirrored preview, so the picture flipped at the moment of the handover.
+            if conn.isVideoMirroringSupported { conn.isVideoMirrored = (position == .front) }
         }
         output.capturePhoto(with: settings, delegate: self)
     }
@@ -1139,7 +1203,13 @@ struct StoryCameraView: View {
             // A camera left framing a shot must not dim and lock — the reference app blocks the idle timer for
             // exactly the time the camera is up. Released in `onDisappear`, which is the only place
             // it can be, or the whole app stops sleeping.
-            UIApplication.shared.isIdleTimerDisabled = true
+            // ⚠️ THROUGH `SleepBlocker`, NOT THE SHARED FLAG DIRECTLY. Writing
+            // `isIdleTimerDisabled` by hand gave the one system flag two owners with no agreement:
+            // closing this screen during a voice recording or a call wrote `false` and let the phone
+            // lock under them, and any other holder releasing its last reason wrote `false` while
+            // the camera was still up and started dimming it. Voice record, voice playback and calls
+            // all hold their reason here; the camera is now the fourth.
+            SleepBlocker.shared.add("story-camera")
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
         }
         .onAppear {
@@ -1168,7 +1238,7 @@ struct StoryCameraView: View {
         }
         .onDisappear {
             cam.stopRecording(); cam.stop()
-            UIApplication.shared.isIdleTimerDisabled = false
+            SleepBlocker.shared.remove("story-camera")
             UIDevice.current.endGeneratingDeviceOrientationNotifications()
             // A screen flash interrupted by leaving would otherwise leave the display pinned at full
             // brightness for the rest of the session.
@@ -1188,7 +1258,21 @@ struct StoryCameraView: View {
             if cam.recording { recordSeconds += 1 }
         }
         .onChange(of: scenePhase) { _, phase in   // free the camera when backgrounded
-            if phase == .active { cam.start() } else { cam.stop() }
+            // ⚠️ `mode == .camera` ON THE WAY BACK, AND THAT CONDITION IS THE FIX. Two handlers own
+            // this session and neither used to read the other: coming back from the background
+            // started the camera unconditionally, and because `mode` had not CHANGED the handler
+            // below never fired to stop it again. The session then ran behind the opaque text page
+            // with the green indicator lit and nothing being previewed, until the mode was toggled.
+            if phase == .active {
+                if mode == .camera { cam.start() }
+            } else {
+                // Stop the recording before the session, not after. `stop()` alone tears the session
+                // down with the movie output still running, and the delegate's error path can still
+                // report a usable file — which then hands a clip to the editor from the background,
+                // handover animation and all. `onDisappear` has always had this order.
+                cam.stopRecording()
+                cam.stop()
+            }
         }
         // The camera is a power draw with nothing to show while text is on screen.
         .onChange(of: mode) { _, m in
@@ -1237,7 +1321,12 @@ struct StoryCameraView: View {
     private func captureWithScreenFlashIfNeeded() {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         guard cam.needsScreenFlash else { cam.capture(); return }
-        brightnessBeforeFlash = UIScreen.main.brightness
+        // ⚠️ THE SAVE HAPPENS ONCE PER FLASH, AND A SECOND SHOT INSIDE THE 0.47s DOES NOT RE-SAVE.
+        // Without this test the second capture read the brightness the FIRST one had just set — 1.0
+        // — and stored it as the value to restore, so both restores wrote full brightness and the
+        // display stayed at maximum. That is a system setting, not app state: it survived leaving
+        // the camera, leaving the app, and relaunching, until the person turned it down by hand.
+        if brightnessBeforeFlash == nil { brightnessBeforeFlash = UIScreen.main.brightness }
         withAnimation(.easeOut(duration: 0.08)) { screenFlash = true }
         UIScreen.main.brightness = 1.0
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
