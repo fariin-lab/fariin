@@ -22,22 +22,24 @@ struct SendContactSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section("Recent Chats") {
+            // ⛔ A GRID OF FACES, FOUR TO A ROW (owner, 2026-08-20). It was one full-width row per
+            // person, which is a list of names — you read it. A grid of pictures is scanned, and
+            // when the people you message most are the first four, the one you want is usually in
+            // the first row.
+            //
+            // THE ORDER IS THE CHAT LIST'S AND ALWAYS WAS: `people` sorts on `displayUpdatedAt`,
+            // the same key `MainShell` sorts the chat list by, so the most recent conversation is
+            // first here for the same reason it is first there. Not alphabetical, not arbitrary.
+            ScrollView {
+                LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 18) {
                     ForEach(people) { c in
-                        Button { toggle(c.id) } label: {
-                            HStack(spacing: 12) {
-                                AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 44)
-                                Text(c.displayName(me)).font(.system(size: 17, weight: .medium)).foregroundStyle(.primary)
-                                if !c.isGroup { VerifiedMark(uid: c.otherUid(me), size: 13) }
-                                Spacer()
-                                Image(systemName: selected.contains(c.id) ? "checkmark.circle.fill" : "circle")
-                                    .font(.system(size: 22))
-                                    .foregroundStyle(selected.contains(c.id) ? Color.primary : Color.secondary)
-                            }
-                        }
+                        Button { toggle(c.id) } label: { personTile(c) }
+                            .buttonStyle(.plain)
                     }
                 }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .padding(.bottom, 12)
             }
             .searchable(text: $query, prompt: "Search")
             .navigationTitle("Send to")
@@ -114,6 +116,39 @@ struct SendContactSheet: View {
             }
         }
         .buttonStyle(.plain)
+    }
+
+    /// Four across, which is what he asked for and what the reference sheet uses.
+    private static let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 4)
+
+    @ViewBuilder private func personTile(_ c: Conversation) -> some View {
+        let picked = selected.contains(c.id)
+        VStack(spacing: 6) {
+            ZStack(alignment: .bottomTrailing) {
+                AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 64)
+                    .overlay {
+                        // The ring is the selection, not a tick floating over a face.
+                        Circle().strokeBorder(picked ? Color.accentColor : .clear, lineWidth: 3)
+                    }
+                if picked {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 20))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, Color.accentColor)
+                        .offset(x: 2, y: 2)
+                }
+            }
+            .frame(width: 64, height: 64)
+            HStack(spacing: 3) {
+                Text(c.displayName(me))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.primary)
+                    .lineLimit(2).multilineTextAlignment(.center)
+                if !c.isGroup { VerifiedMark(uid: c.otherUid(me), size: 10) }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
     }
 
     private func toggle(_ id: String) {
