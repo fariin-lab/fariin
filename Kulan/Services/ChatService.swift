@@ -2514,7 +2514,10 @@ enum ChatService {
     ///
     /// Two reads instead of one query, and the second one is a plain document fetch the app makes
     /// everywhere else, so it is cached like any other profile.
-    static func findByHandle(_ handle: String) async -> UserProfile? {
+    /// `allowSelf` is for the PROFILE LINK PREVIEW and nothing else. Sharing your own link has to
+    /// draw your own card; every other caller is trying to start a chat, where finding yourself is
+    /// the bug this guard exists to stop.
+    static func findByHandle(_ handle: String, allowSelf: Bool = false) async -> UserProfile? {
         var h = handle.trimmingCharacters(in: .whitespaces).lowercased()
         if h.hasPrefix("@") { h.removeFirst() }   // users type "@ayaan"
         guard !h.isEmpty else { return nil }
@@ -2533,7 +2536,7 @@ enum ChatService {
             // rule because Firestore rules are not filters - a data-dependent read rule would make
             // this whole read fail instead of skipping the row.
             if u.isAwaitingDeletion { return nil }
-            guard u.id != uid else { return nil }   // never "find" yourself
+            if !allowSelf { guard u.id != uid else { return nil } }   // never "find" yourself
             return ProfileStore.indexed(u)          // warms photo / call-privacy / verification
         } catch {
             print("findByHandle failed:", error)

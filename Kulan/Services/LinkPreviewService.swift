@@ -32,12 +32,62 @@ actor LinkPreviewService {
         let key = url.absoluteString
         if let cached = cache[key] { return cached }
         if let task = inFlight[key] { return await task.value }
-        let task = Task<LinkDraft?, Never> { await Self.fetch(url) }
+        // ⛔ OUR OWN PROFILE LINKS ARE ANSWERED FROM THE ACCOUNT, NOT FROM THE WEB PAGE. Scraping
+        // fariin.com/u/<handle> gets whatever the site serves, which knows nothing about the person
+        // — so a shared profile arrived as a bare link. The card is built here, on the SENDER's
+        // device, and travels with the message like every other preview in this app: a snapshot, so
+        // a name or photo changed next week does not rewrite what was sent today.
+        let task = Task<LinkDraft?, Never> {
+            if let handle = Self.profileHandle(in: url) {
+                return await Self.profileDraft(url: url, handle: handle)
+            }
+            return await Self.fetch(url)
+        }
         inFlight[key] = task
         let result = await task.value
         inFlight[key] = nil
         cache[key] = result
         return result
+    }
+
+    /// The handle in one of OUR profile links, or nil for every other url on the internet.
+    ///
+    /// Only `https://fariin.com/u/<handle>`. `kulan://u/<handle>` is deliberately not matched: the
+    /// detector that feeds this only ever offers https links, and a custom scheme in a message is
+    /// dead text on a phone without the app anyway.
+    static func profileHandle(in url: URL) -> String? {
+        guard let host = url.host?.lowercased().replacingOccurrences(of: "www.", with: ""),
+              host == "fariin.com" else { return nil }
+        let parts = url.path.split(separator: "/").map(String.init)
+        guard parts.count == 2, parts[0] == "u" else { return nil }
+        let handle = parts[1].trimmingCharacters(in: .whitespaces)
+        return handle.isEmpty ? nil : handle
+    }
+
+    /// The card for a profile link. `title` carries the name, `desc` the @handle, and the image is
+    /// their photograph — the same three fields every other preview uses, so nothing downstream
+    /// needed a new shape. `LinkPreviewCard` recognises a profile link by its URL and draws the
+    /// person layout instead of the article one.
+    ///
+    /// An unresolvable handle still produces a card. A deleted account, a released name or a typo
+    /// should SAY so rather than leaving a bare link that looks like it might work.
+    private static func profileDraft(url: URL, handle: String) async -> LinkDraft? {
+        guard let user = await ChatService.findByHandle(handle, allowSelf: true) else {
+            return LinkDraft(url: url, title: "Unavailable", desc: "", image: nil)
+        }
+        var photo: UIImage?
+        if let p = user.photoUrl, !p.isEmpty {
+            photo = DiskImageCache.shared.memoryImage(p) ?? (await DiskImageCache.shared.image(for: p))
+            if photo == nil, let u = URL(string: p),
+               let (data, _) = try? await URLSession.shared.data(from: u) {
+                photo = UIImage(data: data)
+            }
+        }
+        let name = user.name.trimmingCharacters(in: .whitespaces)
+        return LinkDraft(url: url,
+                         title: name.isEmpty ? handle : name,
+                         desc: user.handle.isEmpty ? "" : "@\(user.handle)",
+                         image: photo)
     }
 
     /// First https URL in a text, if any — the one the preview is built for.
