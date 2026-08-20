@@ -541,7 +541,10 @@ final class StoriesService {
         let ticket = StoryOutbox.remember(image: image, caption: caption, stickers: stickers,
                                           excluded: excluded, included: included, everyone: everyone,
                                           allowsReplies: allowsReplies, tag: tag,
-                                          captureProtected: captureProtected)
+                                          captureProtected: captureProtected,
+                                          // Whose post this is. The folder outlives a sign-out — see
+                                          // the note on `Ticket.ownerUid`.
+                                          ownerUid: uid)
         inFlight.append(pending)
         uploading = true
         uploadPhase = .preparing   // every post starts on the phone's half
@@ -575,8 +578,22 @@ final class StoriesService {
                 // its own entry and the row would show an upload that had already landed.
                 self.inFlight.removeAll { $0.id == pending.id }
                 self.uploading = !self.inFlight.isEmpty
+                // ⚠️ A FAILURE IS REPORTED BY WHICHEVER POST FAILED, NOT ONLY BY THE NEWEST, AND
+                // THIS IS OUTSIDE THE GUARD FOR THE SAME REASON THE LINE ABOVE IT IS.
+                //
+                // A post of five items enqueues all five in one turn, so the token belongs to item
+                // five before item one has sent a byte. Under the guard, items one to four could
+                // fail and their error was thrown away — while `inFlight.removeAll` above still ran,
+                // so their placeholders vanished exactly as if they had landed. Three of five could
+                // silently not exist, with the documents already rolled back by `postStory`'s catch.
+                //
+                // Nothing CLEARS the error here any more either. Success used to write `nil`, and
+                // since the items complete in order that meant item five landing wiped item one's
+                // report a moment after it was made. The alert's own OK button owns the clearing
+                // (`StoriesRowUIKit`), which is the only place that knows the person has read it.
+                if let failure { self.uploadError = failure }
                 guard self.currentUploadToken == token else { return }   // a newer post owns the rest
-                self.uploadTask = nil; self.uploadError = failure
+                self.uploadTask = nil
             }
         }
         if let t = uploadTask { queuedUploads.append(t) }   // cancellable as part of the chain
@@ -614,6 +631,12 @@ final class StoriesService {
         case notMine
         /// A one-time story's audience is spent as it is watched; see `updateStoryAudience`.
         case oneTimeAudienceFrozen
+        /// ⚠️ NOBODY IS SIGNED IN, AND THIS HAS TO BE A REFUSAL RATHER THAN A QUIET RETURN. The post
+        /// paths used to `return` here, and a plain return IS SUCCESS to the caller: the background
+        /// poster took its success branch, tore up the outbox ticket, and left `uploadError` nil. A
+        /// post queued behind another one while the person signed out therefore evaporated along
+        /// with the only record that could have brought it back.
+        case signedOut
         var errorDescription: String? {
             switch self {
             case .audienceUnavailable:
@@ -624,6 +647,8 @@ final class StoriesService {
                 "You're not signed in to the account that posted this story."
             case .oneTimeAudienceFrozen:
                 "A one-time story keeps the audience it was sent to."
+            case .signedOut:
+                "You're signed out, so this story wasn't posted. Sign in and try again."
             }
         }
     }
@@ -804,7 +829,8 @@ final class StoriesService {
                    excluded: Set<String> = [], included: Set<String> = [], everyone: Bool = false, allowsReplies: Bool = true, tag: StoryAudienceTag = .friends,
                    captureProtected: Bool = false) async throws {
         let me = uid
-        guard !me.isEmpty else { return }
+        // A quiet `return` here read as SUCCESS to the background poster — see `PostRefusal.signedOut`.
+        guard !me.isEmpty else { throw PostRefusal.signedOut }
         try Task.checkCancellation()   // bail before any write if the user already cancelled
         // ⚠️ COUNTED ALONGSIDE THE POST, NEVER IN FRONT OF IT. This is a read and a write against a
         // document nobody is waiting for, and awaiting it would put a whole round trip between his
@@ -1000,8 +1026,9 @@ final class StoriesService {
                 self.queuedUploads.removeAll { $0.isCancelled }   // tidy finished/cancelled entries
                 self.inFlight.removeAll { $0.id == pending.id }   // outside the guard — see the photo path
                 self.uploading = !self.inFlight.isEmpty
+                if let failure { self.uploadError = failure }   // any post reports — see the photo path
                 guard self.currentUploadToken == token else { return }
-                self.uploadTask = nil; self.uploadError = failure
+                self.uploadTask = nil
             }
         }
         // IN THE CANCEL CHAIN, like the photo path always was. This append was missing here, so
@@ -1099,7 +1126,8 @@ final class StoriesService {
                                   everyone: Bool, allowsReplies: Bool, tag: StoryAudienceTag,
                                   captureProtected: Bool = false) async throws {
         let me = uid
-        guard !me.isEmpty else { return }
+        // A quiet `return` here read as SUCCESS to the background poster — see `PostRefusal.signedOut`.
+        guard !me.isEmpty else { throw PostRefusal.signedOut }
         try Task.checkCancellation()
 
         // Transcode BEFORE creating the doc — a failed/cancelled transcode leaves zero server state.
@@ -1505,6 +1533,44 @@ final class StoriesService {
                                           reactionCount: data["reactionCount"] as? Int ?? 0,
                                           recent: Array(recent)))
             }
+    }
+
+    /// ⚠️ THE LIVE VIEWERS LIST, ACTUALLY DRIVEN. `observeViewCount` above was written, documented
+    /// and correct, and nothing in the app ever called it — grep found it in its own definition and
+    /// in two comments, nowhere else. The viewers sheet's `refreshTick` therefore sat at its default
+    /// 0 for the life of the process, so `Coordinator.refresh` returned on `guard tick != lastTick`
+    /// every single time and `fill(force:)` was unreachable. The list was fetched once when the sheet
+    /// opened and then frozen for the whole sitting, which is the opposite of what both files claim.
+    ///
+    /// One watcher, following whichever story the sheet is showing. The tick is all the sheet wants:
+    /// it re-asks for the list itself, and the count under the card has its own path already.
+    var viewCountTick = 0
+    @ObservationIgnored private var viewCountWatch: ListenerRegistration?
+    @ObservationIgnored private var viewCountWatchId = ""
+
+    /// Point the watcher at `storyId`. Idempotent on purpose — asking for the story it is already on
+    /// does nothing at all, so this is safe to call from a SwiftUI update pass, which is where the
+    /// sheet's active story changes.
+    func watchViewCount(storyId: String) {
+        guard viewCountWatchId != storyId else { return }
+        stopWatchingViewCount()
+        guard !storyId.isEmpty else { return }
+        viewCountWatchId = storyId
+        viewCountWatch = observeViewCount(storyId: storyId) { [weak self] _ in
+            // The id test is not paranoia: `remove()` does not promise that a snapshot already in
+            // flight will not still be delivered, and a tick attributed to the wrong story would
+            // make the sheet re-ask for a list it is no longer showing.
+            guard let self, self.viewCountWatchId == storyId else { return }
+            self.viewCountTick &+= 1
+        }
+    }
+
+    /// Called when the sheet closes and when the viewer goes away. A listener that outlives the sheet
+    /// is a read charge for a screen nobody is looking at.
+    func stopWatchingViewCount() {
+        viewCountWatch?.remove()
+        viewCountWatch = nil
+        viewCountWatchId = ""
     }
 
     /// NIL means the read failed and the question is still open; `[]` means nobody has watched it.
@@ -2007,7 +2073,10 @@ final class StoriesRepository {
             // ⛔ AND ANYTHING THAT WAS STILL BEING POSTED WHEN THE APP LAST DIED. See `StoryOutbox`.
             // After `seedFromDisk` so the row is already on screen, and on the main actor because
             // `postStoryBackground` owns the in-flight state the row draws from.
-            Task { @MainActor in StoryOutbox.resume() }
+            // ⚠️ FOR THIS ACCOUNT ONLY. The outbox folder is shared by every account that signs in on
+            // the phone and survives a sign-out, so an unqualified resume published one person's
+            // failed post as the next person to sign in. See `Ticket.ownerUid`.
+            Task { @MainActor in StoryOutbox.resume(for: me) }
             await MainActor.run {
                 start(me)          // first call, or the signed-in user changed
             }

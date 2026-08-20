@@ -37,6 +37,7 @@ enum SessionWipe {
         ProfilePhotoIndex.reset()
         SendQueue.removeAll()                   // queued unsent plaintext
         PendingOutbox.removeAll()               // forwarded bubbles waiting for a chat to be opened
+        StoryOutbox.removeAll()                 // unfinished story posts — never inherited
         AudioCache.removeAll()                  // decrypted voice notes on disk
         VideoCache.removeAll()                  // decrypted videos on disk
         AppRouter.shared.pendingChatId = nil

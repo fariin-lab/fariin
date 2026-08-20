@@ -42,6 +42,17 @@ enum StoryOutbox {
         var captureProtected: Bool
         /// When it was first attempted. A post is not resumed for ever — see `pending`.
         var startedAt: Double
+        /// ⚠️ WHOSE POST THIS IS, AND THE WHOLE REASON IT IS HERE. A ticket carried no owner, the
+        /// folder is shared by every account that signs in on this phone, and sign-out did not clear
+        /// it — so a post that failed for one person was resumed by the NEXT person to sign in, and
+        /// published under their name to their contacts, photo and caption and all. `resume` now
+        /// refuses anything that is not the signed-in account's.
+        ///
+        /// Optional, not defaulted: Swift's synthesized decoder does not apply property defaults, so
+        /// this is what lets a ticket written by an older build still decode. Such a ticket has no
+        /// owner to check, so `resume` discards it rather than guessing — a day's worth of unfinished
+        /// posts at the very worst, against publishing somebody's picture as somebody else.
+        var ownerUid: String?
     }
 
     /// Beside the story media cache rather than in `Caches`: the OS empties `Caches` under pressure,
@@ -60,14 +71,16 @@ enum StoryOutbox {
     /// written. A missing record only costs the retry it would have bought.
     static func remember(image: Data, caption: String, stickers: [StoryTapTarget],
                          excluded: Set<String>, included: Set<String>, everyone: Bool,
-                         allowsReplies: Bool, tag: StoryAudienceTag, captureProtected: Bool) -> String {
+                         allowsReplies: Bool, tag: StoryAudienceTag, captureProtected: Bool,
+                         ownerUid: String) -> String {
         let id = UUID().uuidString
         let t = Ticket(id: id, caption: caption, stickers: stickers,
                        excluded: Array(excluded), included: Array(included),
                        everyone: everyone, allowsReplies: allowsReplies,
                        tagLabel: tag.label, tagName: tag.name,
                        captureProtected: captureProtected,
-                       startedAt: Date().timeIntervalSince1970)
+                       startedAt: Date().timeIntervalSince1970,
+                       ownerUid: ownerUid)
         try? image.write(to: bytes(id), options: .atomic)
         if let d = try? JSONEncoder().encode(t) { try? d.write(to: meta(id), options: .atomic) }
         return id
@@ -78,6 +91,19 @@ enum StoryOutbox {
         guard !id.isEmpty else { return }
         try? FileManager.default.removeItem(at: meta(id))
         try? FileManager.default.removeItem(at: bytes(id))
+    }
+
+    /// Sign-out. Every unfinished post goes with the account that made it — the next person to sign
+    /// in on this phone inherits an empty queue, not somebody else's photographs. `resume` refuses a
+    /// foreign ticket anyway; this is the other half, so the bytes do not sit on disk either.
+    /// ⚠️ THE CONTENTS, NOT THE FOLDER. `StoryStorage.directory` caches the URL it built and does not
+    /// rebuild it, so deleting the directory itself would leave every later `remember` writing into a
+    /// path that no longer exists — best-effort writes, so the outbox would simply stop working for
+    /// the rest of the process without saying so.
+    static func removeAll() {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+        for f in files { try? fm.removeItem(at: f) }
     }
 
     /// Everything still waiting, oldest first, with anything past its day already cleaned up.
@@ -106,8 +132,16 @@ enum StoryOutbox {
     /// ⚠️ THE RECORD IS TORN UP BEFORE THE RETRY, not after. `postStoryBackground` writes a record of
     /// its own, so leaving this one in place would mean two records for one post and a second copy of
     /// the story on the launch after that.
-    @MainActor static func resume() {
+    /// ⚠️ `uid` IS NOT OPTIONAL AND IS NOT TRUSTED FROM THE TICKET. Every ticket that does not name
+    /// this exact account is torn up rather than posted: a stranger's unfinished post is not ours to
+    /// finish, and a ticket from before this field existed cannot prove whose it is.
+    @MainActor static func resume(for uid: String) {
+        guard !uid.isEmpty else { return }
         for (t, img) in pending() {
+            guard t.ownerUid == uid else {
+                forget(t.id)
+                continue
+            }
             forget(t.id)
             StoriesService.shared.postStoryBackground(
                 image: img, caption: t.caption, stickers: t.stickers,

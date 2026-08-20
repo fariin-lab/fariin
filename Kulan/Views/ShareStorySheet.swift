@@ -844,19 +844,21 @@ struct ShareStorySheet: View {
         if let video {
             StoriesService.shared.postVideoStoryBackground(
                 videoURL: video.url, thumbnail: video.thumbnail, muted: video.muted,
-                burn: video.burn, trim: video.trim, caption: caption,
+                burn: video.burn, trim: video.trim, caption: caption, stickers: stickers,
                 excluded: excluded, included: included, everyone: false, allowsReplies: replies,
                 tag: tag, captureProtected: captureProtected)
         } else {
             StoriesService.shared.postStoryBackground(
-                image: image, caption: caption,
+                image: image, caption: caption, stickers: stickers,
                 excluded: excluded, included: included, everyone: false, allowsReplies: replies,
                 tag: tag, captureProtected: captureProtected)
         }
-        // ⚠️ AND `stickers:` WAS NOT BEING PASSED AT ALL ON THIS PATH OR THE ONE-TIME ONE — only on
-        // the first of the three. So a Link or Location sticker on the second picture of a post to a
-        // custom list was silently dropped at post time, while the same post to friends kept it.
-        // `StoryExtra`'s own note says why they are per item; two of the three callers never read it.
+        // ⚠️ `stickers:` HAS TO BE PASSED ON EVERY CALL IN EVERY ONE OF THE THREE POST PATHS — the
+        // first item's as well as the extras'. It defaults to empty, so an omission is silent: the
+        // sticker is still DRAWN into the picture by the editor, and only the tap target is missing.
+        // That is what a Link sticker to a custom list looked like for a while, a photograph of a
+        // button that does nothing, while the same post to friends kept working. The extras were
+        // repaired first and the first item was left behind, so check both halves, not one.
         for extra in extras {
             if let v = extra.video {
                 StoriesService.shared.postVideoStoryBackground(
@@ -897,12 +899,12 @@ struct ShareStorySheet: View {
         if let video {
             StoriesService.shared.postVideoStoryBackground(
                 videoURL: video.url, thumbnail: video.thumbnail, muted: video.muted,
-                burn: video.burn, trim: video.trim, caption: caption,
+                burn: video.burn, trim: video.trim, caption: caption, stickers: stickers,
                 excluded: store.hiddenFrom, included: people, everyone: false,
                 allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected)
         } else {
             StoriesService.shared.postStoryBackground(
-                image: image, caption: caption,
+                image: image, caption: caption, stickers: stickers,
                 excluded: store.hiddenFrom, included: people, everyone: false,
                 allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected)
         }
