@@ -6704,7 +6704,12 @@ struct MessageBubble: View, Equatable {
                     // shrinks back into it (same as photos).
                     .modifier(MediaRectReporter(id: message.id, scope: .chat))   // live bubble rect
                     .overlay {   // upload ring while sending, play disc once delivered
-                        if message.sendState == .sending {
+                        // ⚠️ NOT ONCE THE CLIP ITSELF HAS LANDED. `sendState` is per-MESSAGE and stays
+                        // `.sending` until the attach write comes back, while UploadProgress drops
+                        // this id the moment the bytes finish — so the ring spent that gap as an
+                        // indeterminate half circle on a finished upload. Same rule the album tiles
+                        // have carried since 08-05; see `markItemDone`.
+                        if message.sendState == .sending, !mediaSend.isItemDone(message.rowId) {
                             ZStack { Color.black.opacity(0.18); UploadingRing(clientId: message.rowId) }
                         } else {
                             Image(systemName: "play.fill")
@@ -6896,7 +6901,9 @@ struct MessageBubble: View, Equatable {
                     // bubble and the drag-down dismiss shrinks back into it, following the finger.
                     .modifier(MediaRectReporter(id: message.id, scope: .chat))   // live bubble rect
                     .overlay {   // clean upload indicator (ring in a frosted disc)
-                        if message.sendState == .sending {
+                        // ⚠️ NOT ONCE THIS PHOTO'S OWN BYTES HAVE LANDED — see the video bubble above
+                        // and `markItemDone`. This is the half ring the owner photographed.
+                        if message.sendState == .sending, !mediaSend.isItemDone(message.rowId) {
                             ZStack {
                                 Color.black.opacity(0.18)
                                 UploadingRing(clientId: message.rowId)

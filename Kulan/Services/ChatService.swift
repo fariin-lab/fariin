@@ -908,6 +908,18 @@ enum ChatService {
 
         // NOW the bytes. Everything above is already on the recipient's screen.
         let url = try await uploadedURL
+        // ⛔ THIS TRANSFER IS DONE, AND THE RING COMES OFF NOW — not when the message commits.
+        //
+        // `sendState` stays `.sending` until the attach write below has landed and come back
+        // through the listener, and by then `UploadProgress` has already dropped this id. The ring
+        // draws a filling arc only while it has a fraction, so in that gap it fell back to its
+        // indeterminate half circle and sat there spinning on a photo that had finished uploading
+        // — the owner's screenshot, gone as soon as he left the chat and came back, because that
+        // rebuilds the row from the repository.
+        //
+        // Exactly the fix the album tiles already carry, and for exactly the same reason; the
+        // single-media paths never got it. Per-item truth, not per-message.
+        if let clientId { await MediaSend.shared.markItemDone(clientId) }
         // Seed the cache with the plaintext image under its URL so when the optimistic bubble
         // reconciles to the server message, SecureImageView renders instantly (no shimmer / re-download).
         if let ui = UIImage(data: rawData) { DiskImageCache.shared.store(ui, for: url, owned: true) }
@@ -1480,7 +1492,11 @@ enum ChatService {
         // server object exists only to deliver, and the recipient deletes it on pickup.
         VideoCache.store(video, for: msgRef.documentID)
         // And the clip itself, whenever it finishes.
-        try await attachMedia(["videoUrl": try await videoUp], to: msgRef)
+        let videoUrl = try await videoUp
+        // The clip has landed — the ring comes off here rather than when the message commits. Same
+        // reasoning as the photo path above, written out there.
+        if let clientId { await MediaSend.shared.markItemDone(clientId) }
+        try await attachMedia(["videoUrl": videoUrl], to: msgRef)
     }
 
     /// Encrypt + send a document/file. Contents are E2EE (same pipeline as photos); the file

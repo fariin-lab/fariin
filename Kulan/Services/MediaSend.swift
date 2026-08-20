@@ -67,6 +67,12 @@ final class MediaSend: ObservableObject {
         if doneItems.contains(where: { $0.hasPrefix(prefix) }) {
             doneItems = doneItems.filter { !$0.hasPrefix(prefix) }
         }
+        // ⚠️ AND THE BARE ID. An album item's key is "clientId#index" and the prefix above clears
+        // those; a SINGLE photo or video files its done mark under the clientId itself, with no
+        // "#", so the prefix never matched it. Without this a retry of the same bubble would find
+        // the previous attempt's mark still standing and hide the ring for an upload that had not
+        // started.
+        doneItems.remove(clientId)
     }
 
     // MARK: one album item
