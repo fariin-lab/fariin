@@ -1346,6 +1346,8 @@ struct EditProfileView: View {
     private var profile = ProfileStore.shared
     @State private var firstName = ""
     @State private var lastName = ""
+    /// The username editor, presented from the bottom rather than pushed — see the row below.
+    @State private var editingUsername = false
     @State private var handle = ""
     @State private var about = ""
     @State private var photoItem: PhotosPickerItem?
@@ -1509,6 +1511,11 @@ struct EditProfileView: View {
                                           action: $photoAction)
                     }
                     .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
+                    // Its own stack, because it carries a title and a Done and is no longer inside
+                    // this screen's navigation.
+                    .sheet(isPresented: $editingUsername) {
+                        NavigationStack { UsernameEditView(handle: $handle) }
+                    }
                 }
 
                 Section {
@@ -1521,14 +1528,24 @@ struct EditProfileView: View {
                 }
 
                 Section {
-                    NavigationLink {
-                        UsernameEditView(handle: $handle)
-                    } label: {
+                    // ⛔ A SHEET, NOT A PUSH (owner, 2026-08-20: "that page and keyboard is coming
+                    // right side… it must come bottom"). A push arrives from the trailing edge, and
+                    // because the field takes focus as it arrives, iOS carries the KEYBOARD in on
+                    // that same horizontal transition — so the keys slid in from the right corner
+                    // instead of rising. Presenting from the bottom makes both move the one way.
+                    //
+                    // The row keeps its own chevron: it is a `Button` now, and `NavigationLink` was
+                    // what used to draw that for free.
+                    Button { editingUsername = true } label: {
                         HStack {
-                            Text("Username")
+                            Text("Username").foregroundStyle(.primary)
                             Spacer()
                             Text(handle.isEmpty ? "Set" : "@\(handle)").foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(.tertiary)
                         }
+                        .contentShape(Rectangle())
                     }
                 }
 
@@ -1795,7 +1812,16 @@ struct UsernameEditView: View {
                     .disabled(claiming || clean.count < Limits.usernameMinChars || status == .taken)
             }
         }
-        .onAppear { draft = handle; focused = true }
+        // ⚠️ THE FOCUS WAITS FOR THE PRESENTATION TO LAND. Asking for it in `onAppear` means asking
+        // while the screen is still arriving, and iOS then animates the keyboard along whatever
+        // transition is running rather than raising it from the bottom — which is exactly what the
+        // owner photographed. One runloop turn after the sheet has settled, the keyboard rises the
+        // ordinary way.
+        .onAppear { draft = handle }
+        .task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            focused = true
+        }
     }
 
     /// THE RULES STAY PUT (owner 2026-08-04: they vanished the moment the checker answered).
