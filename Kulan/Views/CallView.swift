@@ -291,7 +291,13 @@ struct CallView: View {
             // The person's own colour, black when there is none — see `peerPalette`. Still a FLAT
             // fill and never a gradient or a blur of their photo: the 2026-07-11 decision that killed
             // those stands, and this only changes which flat colour it is.
-            (peerPalette.map { Color($0.page) } ?? Color.black)
+            //
+            // ⛔ VOICE ONLY (owner, 2026-08-20). On a video call this is the floor under a camera
+            // feed that is about to cover it completely, so all it ever did was flash their colour
+            // for the fraction of a second before the picture arrived and then never be seen again
+            // — "first time it's showing profile color, after that opened camera". A video call
+            // starts black and stays black behind the feed.
+            (call.isVideo ? Color.black : (peerPalette.map { Color($0.page) } ?? Color.black))
                 .animation(.easeOut(duration: 0.35), value: peerPalette?.key)
             if call.isVideo {
                 VideoRendererView(track: full, mirror: showLocalFull && call.usingFrontCamera)
