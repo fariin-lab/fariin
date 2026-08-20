@@ -210,6 +210,15 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showEdit) { EditProfileView() }
             .sheet(isPresented: $showQR) { MyQRView() }
+            // ⚠️ THE HONEST HALF OF AN OPTIMISTIC PHOTO, and it belongs on THIS screen rather than in
+            // the sheet: the sheet has already closed by the time an upload can fail. The old picture
+            // is back before this appears, which is why it says what happened rather than asking for
+            // anything.
+            .alert("Photo wasn't changed",
+                   isPresented: Binding(get: { profile.photoError != nil },
+                                        set: { if !$0 { profile.photoError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(profile.photoError ?? "") }
         }
     }
 
@@ -1623,29 +1632,27 @@ struct EditProfileView: View {
     /// Writes the held photo change. Called ONLY from `save()` — the whole point is that nothing
     /// reaches the server before then. Returns false if it failed, so Save can stop and leave the
     /// screen open with the error rather than closing over a photo that never landed.
-    private func applyPendingPhoto() async -> Bool {
+    /// ⛔ THE PHOTO NO LONGER HOLDS THE SHEET OPEN, and that is the whole of "make it fast".
+    ///
+    /// This used to await the two uploads, the download-url round trips and the user-document write
+    /// before Save would close — several seconds on a phone connection, watching a spinner. The
+    /// reference app does not wait for any of that: the picture you cropped is on screen at once and
+    /// the upload runs behind you.
+    ///
+    /// `setPhotoLocallyThenUpload` publishes the new picture under a local url seeded into the image
+    /// cache, so every avatar in the app has it on the next frame, and swaps to the real url when it
+    /// lands. Nothing here can fail any more, so nothing here returns false: a failed upload puts the
+    /// old picture back and reports itself through `profile.photoError`, which this screen watches.
+    private func applyPendingPhoto() {
         if pendingRemove {
-            do { try await profile.removePhoto(); pendingRemove = false; return true }
-            catch { self.error = "Could not remove photo: \(error.localizedDescription)"; return false }
+            profile.removePhotoLocallyThenSync()
+            pendingRemove = false
+            return
         }
-        guard let img = pendingPhoto else { return true }
-        do {
-            // THE IMAGES GO OVER, NOT JPEGs OF THEM. This used to encode both crops at FULL camera
-            // resolution here, on the main thread, purely so `uploadProfileImages` could decode them
-            // again and throw most of it away at 1280 — a 12MP encode and a 12MP decode per crop
-            // while the spinner turned, every byte of it discarded. The resize is the only encode
-            // either crop gets now, and it runs off the main actor.
-            //
-            // The rest of why Save was slow is in `uploadProfileImages`: it waited on a sweep of
-            // every conversation before it would let the sheet close.
-            try await profile.uploadProfileImages(circle: img, poster: pendingPoster)
-            pendingPhoto = nil
-            pendingPoster = nil
-            return true
-        } catch {
-            self.error = "Photo upload failed: \(error.localizedDescription)"
-            return false
-        }
+        guard let img = pendingPhoto else { return }
+        profile.setPhotoLocallyThenUpload(circle: img, poster: pendingPoster)
+        pendingPhoto = nil
+        pendingPoster = nil
     }
 
     private func save() async {
@@ -1662,10 +1669,13 @@ struct EditProfileView: View {
             // NO PRE-CHECK. `updateProfile` claims the name in one server transaction when it has
             // changed, which is the only test that can actually settle who gets it — a query here
             // could only ever report what was true a round trip ago.
-            // The photo goes first, and a failure stops here: closing over a photo that never landed
-            // would tell you it saved when it did not.
-            guard await applyPendingPhoto() else { saving = false; return }
+            // ⚠️ THE ORDER IS REVERSED, AND ON PURPOSE. The TEXT is what can be refused — a username
+            // is claimed by one server transaction and somebody else may hold it — so it is awaited
+            // first and its failure keeps the sheet open with the reason. The photo cannot fail here
+            // at all any more: it is applied locally and uploaded behind, so it is started last and
+            // the sheet closes on top of it.
             if hasUnsavedText { try await profile.updateProfile(name: n, handle: h, about: about) }
+            applyPendingPhoto()
             dismiss()
         } catch {
             let msg = error.localizedDescription

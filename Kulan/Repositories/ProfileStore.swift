@@ -14,6 +14,11 @@ final class ProfileStore {
 
     private let db = Firestore.firestore()
     var me: UserProfile?
+    /// A photo change that is on screen but not yet on the server. Nothing blocks on it; it exists so
+    /// a screen can say so if it wants to, and so two changes cannot overlap unnoticed.
+    var photoUploading = false
+    /// Set when an optimistic photo change had to be put back. Cleared when the next one starts.
+    var photoError: String?
 
     func loadMine() async {
         guard let uid = Auth.auth().currentUser?.uid else { return }
@@ -111,6 +116,93 @@ final class ProfileStore {
         // screen ever fetches to find out whether to draw one. See VerificationIndex.
         VerificationIndex.record(uid: p.id, verification: p.verification)
         return p
+    }
+
+    /// ⛔ WHY A PROFILE PHOTO IS INSTANT NOW, AND WHAT MAKES IT SAFE.
+    ///
+    /// The reference app is not fast because it uploads faster. It is fast because it never makes you
+    /// WAIT: the picture you cropped is on screen before a single byte has moved, and the upload
+    /// happens behind you. Ours could not do that for one structural reason — a photo has no url
+    /// until Storage answers, and every avatar in this app is driven by a url.
+    ///
+    /// So it is given one. A `fariin.local` url nothing on any server answers, seeded into the image
+    /// cache before it is published, exactly as an uploading STORY already does it
+    /// (`StoriesService.postStoryBackground` + `StoryImageSeed`). Every AvatarView, the poster
+    /// header, the tab icon and the chat list resolve pictures through that cache, so all of them
+    /// show the new photograph on the next frame with no change to any of them.
+    ///
+    /// When the real urls land, `uploadProfileImages` seeds the cache under THOSE and republishes
+    /// `me` — both are cache hits, so the swap from the local url to the real one is invisible.
+    ///
+    /// FAILURE PUTS IT BACK. On a throw the previous profile is restored and `photoError` is set, so
+    /// the picture reverts rather than sitting there looking saved. That is the honest half of going
+    /// optimistic, and it is why this reports rather than retrying silently.
+    @MainActor
+    func setPhotoLocallyThenUpload(circle: UIImage, poster: UIImage?) {
+        guard let uid = Auth.auth().currentUser?.uid, me != nil else { return }
+        let previous = me
+        let localCircle = "https://fariin.local/profile-\(UUID().uuidString).jpg"
+        let localPoster = poster == nil ? nil : "https://fariin.local/profile-poster-\(UUID().uuidString).jpg"
+        // Seeded BEFORE the urls are published, or the frame in between draws a letter.
+        DiskImageCache.shared.store(circle, for: localCircle)
+        if let poster, let localPoster { DiskImageCache.shared.store(poster, for: localPoster) }
+        me?.photoUrl = localCircle
+        if let localPoster { me?.posterUrl = localPoster }
+        photoError = nil
+        // The header does not ask `me`, it asks the index — so the index has to agree or the profile
+        // page keeps drawing the old answer while every circle in the app shows the new picture.
+        if let p = me {
+            ProfilePhotoIndex.record(uid: p.id, photo: p.photoUrl, poster: p.posterUrl,
+                                     thumb: p.photoThumb, privacy: p.privacy)
+        }
+        photoUploading = true
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.uploadProfileImages(circle: circle, poster: poster)
+            } catch {
+                await MainActor.run {
+                    self.me = previous
+                    if let p = previous {
+                        ProfilePhotoIndex.record(uid: p.id, photo: p.photoUrl, poster: p.posterUrl,
+                                                 thumb: p.photoThumb, privacy: p.privacy)
+                    }
+                    self.photoError = "Your photo could not be uploaded. \(error.localizedDescription)"
+                }
+            }
+            await MainActor.run { self.photoUploading = false }
+            _ = uid
+        }
+    }
+
+    /// The same shape for removal: the letter is there immediately and the server catches up.
+    @MainActor
+    func removePhotoLocallyThenSync() {
+        guard me != nil else { return }
+        let previous = me
+        me?.photoUrl = ""
+        me?.posterUrl = ""
+        me?.photoThumb = ""
+        photoError = nil
+        if let p = me {
+            ProfilePhotoIndex.record(uid: p.id, photo: "", poster: "", thumb: "", privacy: p.privacy)
+        }
+        photoUploading = true
+        Task { [weak self] in
+            guard let self else { return }
+            do { try await self.removePhoto() }
+            catch {
+                await MainActor.run {
+                    self.me = previous
+                    if let p = previous {
+                        ProfilePhotoIndex.record(uid: p.id, photo: p.photoUrl, poster: p.posterUrl,
+                                                 thumb: p.photoThumb, privacy: p.privacy)
+                    }
+                    self.photoError = "Your photo could not be removed. \(error.localizedDescription)"
+                }
+            }
+            await MainActor.run { self.photoUploading = false }
+        }
     }
 
     /// Re-read MY profile and publish it. Anything that changes my account on the SERVER without
