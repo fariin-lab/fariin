@@ -663,8 +663,30 @@ final class ThreadRepository {
         let call = (data["callOutcome"] as? String ?? "") + ":"
             + String((data["callDuration"] as? NSNumber)?.intValue ?? -1) + ":"
             + String(data["callVideo"] as? Bool ?? false)
+        // ⛔ THE TWO-PHASE MEDIA WRITE, AND THE THIRD INSTANCE OF THE MISTAKE ABOVE.
+        //
+        // A photo, video, voice note or file is written in TWO writes: the message first, carrying
+        // `uploading: true` and no url so the recipient gets a real bubble immediately, and then a
+        // second write that attaches the url and deletes the flag when the bytes land.
+        //
+        // Not one field of that second write was in this signature. For a single photo with no
+        // caption the string it produced was byte-identical before and after — same empty text, same
+        // type "image", no album, not deleted, no reactions, not a call — so `buildCached` handed
+        // back the Message it had built from the FIRST write, the one that still says
+        // `uploading == true` and has no url. `refreshItems` hides a server copy that is still
+        // uploading in favour of my own pending row, so the bubble kept its clock and its ring for
+        // as long as the chat stayed open. Leaving and coming back rebuilt the cache from the doc as
+        // it now stands, which is why it healed itself the moment he did that.
+        //
+        // ⚠️ An ALBUM was immune, and that is the tell: `albumSig` above already reads the item
+        // urls, so the attach write moved its signature. Every path that attaches a SINGLE url had
+        // nothing watching it.
+        let uploading = String(data["uploading"] as? Bool ?? false)
+        let media = ["imageUrl", "videoUrl", "audioUrl", "fileUrl", "thumbUrl"]
+            .map { data[$0] as? String ?? "" }.joined(separator: ",")
         return (data["text"] as? String ?? "") + "|" + String(data["edited"] as? Bool ?? false)
             + "|" + reactions + "|" + albumSig + "|" + deleted + "|" + type + "|" + call
+            + "|" + uploading + "|" + media
     }
 
     // Build a message, reusing the cached copy unless a mutable field (reactions / edit) changed.
