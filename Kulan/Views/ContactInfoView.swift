@@ -123,6 +123,13 @@ struct ContactInfoView: View {
     @State private var showAddGroup = false
     @State private var openGroup: Conversation?
     @State private var showProfilePhoto = false   // tap the hero avatar → in-place photo morph
+    /// ⛔ THE CHROME'S OWN FLAG, AND IT IS NOT `showProfilePhoto`. That one has to stay true until the
+    /// very last frame, because it is what hides the header photo the viewer is standing in for — a
+    /// handoff, which must be instant or you see two copies or none. The chrome is a different
+    /// question: Edit, the back chevron and the story badge have nothing to hand over, and gating
+    /// them on the handoff meant they all reappeared in one step after the picture had already
+    /// landed. This one drops as soon as a close BEGINS, so they fade in over the collapse.
+    @State private var chromeHiddenForPhoto = false
     @State private var photoCloseTick = 0         // toolbar X → viewer close (see ProfilePhotoViewer.closeSignal)
     // A REAL photo is on screen (not the letter fallback). The tap gate used to be "url isn't
     // empty", which is a different thing: a removed or stale url still shows the letter, and
@@ -286,6 +293,12 @@ struct ContactInfoView: View {
                                        sourceFrame: useModernHeader ? posterFlightRect : avatarFrame,
                                        poster: useModernHeader,
                                        closeSignal: photoCloseTick,
+                                       // The chrome comes back WITH the collapse, not after it.
+                                       onClosingBegan: {
+                                           withAnimation(.easeOut(duration: 0.28)) {
+                                               chromeHiddenForPhoto = false
+                                           }
+                                       },
                                        isPresented: $showProfilePhoto)
                         // THE VIEWER OWNS THE WHOLE SCREEN. Without this the overlay is the page's
                         // frame, which stops below the status bar, and the viewer's chrome was being
@@ -395,7 +408,7 @@ struct ContactInfoView: View {
     }
 
     @ToolbarContentBuilder private var navTrailing: some ToolbarContent {
-        if !isSelf && !showProfilePhoto {   // no Edit floating over the open photo
+        if !isSelf && !chromeHiddenForPhoto {   // no Edit floating over the open photo
             ToolbarItem(placement: .topBarTrailing) {
                 // `.white` rather than `.primary` on the adaptive page: the bar's scheme is
                 // flipped to light on iOS 26 for the material's sake (see `barScheme`), and
@@ -507,7 +520,7 @@ struct ContactInfoView: View {
         // Hide the back chevron while the photo viewer is open so it doesn't float over the photo.
         // We hide the ITEMS, never the bar itself — toggling bar visibility changes the scroll
         // inset, which is what used to jump the whole page.
-        .navigationBarBackButtonHidden(showProfilePhoto)
+        .navigationBarBackButtonHidden(chromeHiddenForPhoto)
         // The system back chevron takes its colour from here, not from the bar's scheme, so it stays
         // white through the iOS 26 material flip above.
         .tint(barTint)
@@ -539,7 +552,7 @@ struct ContactInfoView: View {
                     // The story control, in the one strip of the photo nothing else occupies —
                     // between Back and Edit. It hands over to the name as the header leaves, so the
                     // middle of the bar is never empty and never holds two things at once.
-                    if useModernHeader, !showProfilePhoto, let g = publicStory, !g.stories.isEmpty {
+                    if useModernHeader, !chromeHiddenForPhoto, let g = publicStory, !g.stories.isEmpty {
                         // The flight's source when the header has scrolled away and this badge is
                         // what is on screen. A DIFFERENT key from the hero avatar's, deliberately:
                         // they are two rectangles in two places, only one is ever visible, and one
@@ -1141,7 +1154,7 @@ struct ContactInfoView: View {
                                                            startPoint: .topLeading, endPoint: .bottomTrailing)),
                             lineWidth: 3)
                     .frame(width: 100, height: 100)
-                    .opacity(publicStory != nil && !showProfilePhoto ? 1 : 0)
+                    .opacity(publicStory != nil && !chromeHiddenForPhoto ? 1 : 0)
                     .animation(.easeOut(duration: 0.2), value: publicStory != nil)
                 AvatarView(name: shownName, photoUrl: gatedPhotoUrl, size: 88,
                            onPhotoResolved: { heroHasPhoto = $0 })
@@ -1170,14 +1183,14 @@ struct ContactInfoView: View {
                 // photo unreachable. With only one of them available, go straight there.
                 if publicStory != nil, hasPhoto { showAvatarChoice = true }
                 else if let s = publicStory { openProfileStory(s, from: "profile-story") }
-                else if hasPhoto { showProfilePhoto = true }
+                else if hasPhoto { showProfilePhoto = true; chromeHiddenForPhoto = true }
             }
             // Attached HERE, on the hero, not on the outer chain that already carries three alerts:
             // stacking presentations on one view is what made the Edit Photo sheet never appear.
             // Bottom sheet, not confirmationDialog: on iOS 26 the system dialog anchors itself to the
             // avatar as a little callout bubble, and the user wants a sheet from the bottom.
             .bottomActionSheet("Select an action", isPresented: $showAvatarChoice, actions: [
-                SheetAction("View profile photo") { showProfilePhoto = true },
+                SheetAction("View profile photo") { showProfilePhoto = true; chromeHiddenForPhoto = true },
                 SheetAction("View story") {
                     if let s = publicStory { openProfileStory(s, from: "profile-story") }
                 },
@@ -1258,7 +1271,7 @@ struct ContactInfoView: View {
             onScroll: { heroOffset = $0 },
             // A tap is the PHOTO, always. The story has its own control in the toolbar now, so the
             // "which did you mean" sheet the round avatar needed is gone from this path.
-            onTap: { showProfilePhoto = true },
+            onTap: { showProfilePhoto = true; chromeHiddenForPhoto = true },
             // NO LAYOUT FEEDBACK FROM THE DOWNLOAD. A failed load means "offline" as often as it
             // means "gone", and either way the answer lands seconds after the page did. The header
             // draws their letter on their own colour while it has no bitmap, which is a real large
@@ -1606,17 +1619,25 @@ struct ProfilePhotoViewer: View {
     /// transparent bar and dead to the finger — this bug came back three times before the strip's
     /// owner was made to hold the button.
     var closeSignal: Int = 0
+    /// ⛔ FIRED WHEN A CLOSE BEGINS, NOT WHEN IT ENDS. The page's chrome — Edit, the back chevron,
+    /// the story badge — is gated on "is the viewer up", and that flag only drops when the overlay is
+    /// torn down, a beat AFTER the collapse has finished. So the picture flew home and then, later,
+    /// everything else appeared at once: the owner's "feels like a pop, and late". With this the page
+    /// can bring its chrome back ON the collapse, over the same third of a second.
+    var onClosingBegan: () -> Void = {}
     @Binding var isPresented: Bool
     @State private var image: UIImage?
 
     init(name: String, photoUrl: String, sourceFrame: CGRect, poster: Bool = false,
-         landsSquare: Bool = false, closeSignal: Int = 0, isPresented: Binding<Bool>) {
+         landsSquare: Bool = false, closeSignal: Int = 0,
+         onClosingBegan: @escaping () -> Void = {}, isPresented: Binding<Bool>) {
         self.name = name
         self.photoUrl = photoUrl
         self.sourceFrame = sourceFrame
         self.poster = poster
         self.landsSquare = landsSquare
         self.closeSignal = closeSignal
+        self.onClosingBegan = onClosingBegan
         _isPresented = isPresented
         // The avatar this grows out of is already on screen, so its bitmap is already in memory.
         // Seeding here means the morph begins holding the photo, instead of a grey disc that swaps
@@ -1758,6 +1779,8 @@ struct ProfilePhotoViewer: View {
     private func close() {
         guard !closing else { return }
         closing = true
+        // Told FIRST, so the page's own fade runs beside this spring rather than after it.
+        onClosingBegan()
         withAnimation(.spring(duration: 0.34, bounce: 0.12)) { progress = 0; drag = .zero; zoom = 1 }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) { isPresented = false }
     }

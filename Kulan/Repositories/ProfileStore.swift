@@ -155,6 +155,10 @@ final class ProfileStore {
             ProfilePhotoIndex.record(uid: p.id, photo: p.photoUrl, poster: p.posterUrl,
                                      thumb: p.photoThumb, privacy: p.privacy)
         }
+        // The story row and the story viewer's header draw a picture captured when their groups were
+        // built, and a profile change is not a story event — so nothing regrouped them. See
+        // `StoriesRepository.refreshMyDisplay`.
+        StoriesRepository.shared.refreshMyDisplay()
         photoUploading = true
         Task { [weak self] in
             guard let self else { return }
@@ -187,6 +191,7 @@ final class ProfileStore {
         if let p = me {
             ProfilePhotoIndex.record(uid: p.id, photo: "", poster: "", thumb: "", privacy: p.privacy)
         }
+        StoriesRepository.shared.refreshMyDisplay()   // see the note in `setPhotoLocallyThenUpload`
         photoUploading = true
         Task { [weak self] in
             guard let self else { return }

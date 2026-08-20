@@ -2226,6 +2226,18 @@ final class StoriesRepository {
                                        myName: String, myPhoto: String?,
                                        cachedProfiles: [String: (String, String?)])
 
+    /// ⛔ MY OWN NAME AND PICTURE CHANGED, SO THE ROW AND THE VIEWER HEADER HAVE TO BE REGROUPED.
+    ///
+    /// `rebuild` reads `ProfileStore.shared.me` live, so it always produces the right answer — but
+    /// nothing ASKED it to run when the profile changed. It is driven by the three story listeners,
+    /// and changing your photograph is not a story event. So the group kept the url captured at the
+    /// last rebuild: after a removal the story header still showed the deleted picture, and after a
+    /// change it still showed the old one, until some unrelated story event happened to regroup.
+    ///
+    /// Cheap by construction — the note on `rebuild` says it: no story reads, just regrouping what
+    /// is already in memory.
+    func refreshMyDisplay() { Task { await rebuild() } }
+
     private func rebuild() async {
         let now = ServerClock.now
         // Claimed on the main actor with the inputs, so the number and the data it describes are
