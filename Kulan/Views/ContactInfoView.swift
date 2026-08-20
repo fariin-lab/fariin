@@ -276,6 +276,11 @@ struct ContactInfoView: View {
     /// later than the first frame — see `headerFacts`.
     private var useModernHeader: Bool { layoutStyle == .modern && headerFacts.hasPhoto }
 
+    /// Whether anything on this header sits on a PHOTOGRAPH. The round actions and the wash behind
+    /// the classic circle both belong to a picture; with no picture they are a white glyph on a
+    /// white page and a colour from nowhere. See `PosterActionIcon.onPhoto` and `heroBackdrop`.
+    private var hasPhotoHeader: Bool { headerFacts.hasPhoto }
+
     /// Chrome sitting on the photo: white on a dark picture, near-black on a pale one. Reads the
     /// sampling the poster already did, so nothing is measured twice.
     private var toolbarOnPhoto: Color {
@@ -1319,6 +1324,15 @@ struct ContactInfoView: View {
     /// Drawn behind the hero rather than replacing it, so the story ring, the tap routing and the
     /// avatar's geometry reporting are all untouched.
     @ViewBuilder private var heroBackdrop: some View {
+        // ⛔ NOTHING AT ALL WITHOUT A PHOTOGRAPH (owner, 2026-08-20: "non profile users plz remove
+        // top color").
+        //
+        // This is the letter gradient at 40%, and on somebody with a picture it is a soft echo of
+        // the avatar under the name. On somebody without one it is the whole top of the page tinted
+        // by a colour derived from their NAME — pink for one contact, teal for the next, with
+        // nothing on screen it belongs to. A plain page is the honest state, and the light and dark
+        // it already follows come free with it.
+        if hasPhotoHeader {
         GeometryReader { geo in
             let minY = geo.frame(in: .named("profileScroll")).minY
             // Pull-to-stretch: minY goes POSITIVE as the scroll rubber-bands.
@@ -1358,6 +1372,7 @@ struct ContactInfoView: View {
         // measured.
         .padding(.top, -180)
         .allowsHitTesting(false)
+        }
     }
 
     /// How far the header has scrolled away, 0 (at rest) to 1 (gone). ONE number, so everything that
@@ -1581,7 +1596,7 @@ struct ContactInfoView: View {
             // call buttons already carry: an action offered to somebody you have blocked is a button
             // that can only disappoint.
             if source != .chat, !isSelf, !blocked {
-                Button { openChat = true } label: { PosterActionIcon(icon: "message.fill") }.tint(.primary)
+                Button { openChat = true } label: { PosterActionIcon(icon: "message.fill", onPhoto: hasPhotoHeader) }.tint(.primary)
             }
             // THE CALL BUTTONS STAY ON THE PROFILE even when the person refuses calls (owner
             // 2026-08-04: "why you are hiding call voice and call video button… plz show that
@@ -1600,27 +1615,27 @@ struct ContactInfoView: View {
                 // instead of the one under his thumb.
                 Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl,
                                                       fromProfile: true) } label: {
-                    PosterActionIcon(icon: "phone.fill")
+                    PosterActionIcon(icon: "phone.fill", onPhoto: hasPhotoHeader)
                 }
                 .tint(.primary)
                 .modifier(CallZoomSourceModifier(video: false))
                 Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl,
                                                       video: true, fromProfile: true) } label: {
-                    PosterActionIcon(icon: "video.fill")
+                    PosterActionIcon(icon: "video.fill", onPhoto: hasPhotoHeader)
                 }
                 .tint(.primary)
                 .modifier(CallZoomSourceModifier(video: true))
             }
             if !isSelf {
                 Menu { muteMenuItems } label: {
-                    PosterActionIcon(icon: muted ? "ic_bell" : "ic_bell_off")
+                    PosterActionIcon(icon: muted ? "ic_bell" : "ic_bell_off", onPhoto: hasPhotoHeader)
                 }.tint(.primary)
             }
             if source == .chat && !isSelf {
-                Button { onSearch() } label: { PosterActionIcon(icon: "magnifyingglass") }.tint(.primary)
+                Button { onSearch() } label: { PosterActionIcon(icon: "magnifyingglass", onPhoto: hasPhotoHeader) }.tint(.primary)
             }
             if !isSelf {
-                Menu { moreMenuItems } label: { PosterActionIcon(icon: "ellipsis") }.tint(.primary)
+                Menu { moreMenuItems } label: { PosterActionIcon(icon: "ellipsis", onPhoto: hasPhotoHeader) }.tint(.primary)
             }
         }
     }

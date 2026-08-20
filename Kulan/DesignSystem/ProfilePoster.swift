@@ -612,6 +612,16 @@ struct PosterActionIcon: View {
     /// 60pt, the owner's number off a device photo. The glyph is a fraction of it rather than a
     /// second number to remember, so the circle and what is inside it can never fall out of step.
     var diameter: CGFloat = 60
+    /// ⛔ IS THERE A PHOTOGRAPH UNDER THIS CIRCLE?
+    ///
+    /// White is the right glyph on a picture and the wrong one on a page — a profile with no photo
+    /// has no wash behind these, so on a light phone they came out white on near-white and vanished
+    /// (owner, 2026-08-20, with a photo of five empty circles). The glass is already correct there:
+    /// with no palette to tint it, `PosterGlassSchemeFix` hands back plain glass.
+    ///
+    /// True keeps exactly what a profile with a picture has always had, which is the one thing he
+    /// asked not to touch.
+    var onPhoto: Bool = true
 
     var body: some View {
         Group {
@@ -627,7 +637,7 @@ struct PosterActionIcon: View {
         // the same value anyway: it is pinned dark, so `.primary` has only ever resolved to white
         // here. Nothing about the glyph changes; it just stops depending on a scheme that is now
         // being set for the glass's benefit rather than the icon's.
-        .foregroundStyle(.white)
+        .foregroundStyle(onPhoto ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
         .frame(width: diameter, height: diameter)
         // LIQUID GLASS, AND ONLY HERE. These circles sit on the photograph, where glass has
         // something to refract and where the owner's standing rule puts it; the cards further down
