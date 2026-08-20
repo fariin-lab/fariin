@@ -358,7 +358,7 @@ final class StoryCubePagerVC: UIViewController {
     private var settleStart: CFTimeInterval = 0
     private var settleDone: (() -> Void)?
     /// This turn's own duration, chosen from how far it has to travel — see `span(forDistance:)`.
-    private var settleSpan: CFTimeInterval = StoryCubePager.settleDuration
+    private var settleSpan: CFTimeInterval = StoryCubePagerVC.settleDuration
 
     /// ⚠️ 0.165s IS HIS, NOT THEIRS. Theirs is 0.4.
     ///
