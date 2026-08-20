@@ -135,7 +135,18 @@ struct MediaGalleryView: View {
         .navigationTitle("All Media")
         .navigationSubtitle(subtitle)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(selecting)   // selection mode â†’ only the X, no back
+        .navigationBarBackButtonHidden(selecting)   // selection mode → only the X, no back
+        // ⛔ THIS SCREEN'S BAR FOLLOWS THE PHONE, AND IT HAS TO SAY SO OUT LOUD.
+        //
+        // A pushed screen inherits the navigation bar's appearance from whoever pushed it, and the
+        // profile page forces its bar dark — that page is always dark by the owner's rule, photo or
+        // not. Pushed from there in light mode, this bar kept the dark scheme and drew WHITE "All
+        // Media" and a white count on a white bar: his screenshot, where the title is not faint but
+        // simply gone.
+        //
+        // `nil` is "follow the environment", which is what every other pushed screen gets by not
+        // having been pushed from a page with an opinion.
+        .toolbarColorScheme(nil, for: .navigationBar)
         .toolbar { toolbar }
         .safeAreaInset(edge: .bottom) { if selecting { selectionToolbar } }
         .task {

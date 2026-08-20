@@ -45,6 +45,9 @@ struct VerifyEncryptionView: View {
         }
         .navigationTitle("Encryption")
         .navigationBarTitleDisplayMode(.inline)
+        // Follows the phone. A pushed screen inherits the bar's appearance from whoever pushed it,
+        // and the profile page forces its bar dark — see the note in `MediaGalleryView`.
+        .toolbarColorScheme(nil, for: .navigationBar)
         .task { await compute() }
         .sheet(isPresented: $showScanner) {
             VerifyScanSheet { code in handleScanned(code) }

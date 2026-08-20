@@ -48,6 +48,9 @@ struct SoundsNotificationsView: View {
         .background(pageBackground.ignoresSafeArea())   // grouped-list page so the white card pops, like Settings
         .navigationTitle("Sounds & Notifications")
         .navigationBarTitleDisplayMode(.inline)
+        // Follows the phone. A pushed screen inherits the bar's appearance from whoever pushed it,
+        // and the profile page forces its bar dark — see the note in `MediaGalleryView`.
+        .toolbarColorScheme(nil, for: .navigationBar)
         .task { reload(); await loadMute() }
         .sheet(item: $picker) { kind in
             SoundPickerView(cid: cid, kind: kind,
