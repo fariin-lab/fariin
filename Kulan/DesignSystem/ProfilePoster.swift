@@ -622,14 +622,45 @@ struct PosterActionIcon: View {
                 Image(systemName: icon).font(.system(size: diameter * 0.36, weight: .medium))
             }
         }
-        .foregroundStyle(.primary)
+        // ⚠️ `.white`, NOT `.primary`. The modifier below can hand this subtree a LIGHT colour
+        // scheme, and `.primary` would follow it straight to black. On this page the two were always
+        // the same value anyway: it is pinned dark, so `.primary` has only ever resolved to white
+        // here. Nothing about the glyph changes; it just stops depending on a scheme that is now
+        // being set for the glass's benefit rather than the icon's.
+        .foregroundStyle(.white)
         .frame(width: diameter, height: diameter)
         // LIQUID GLASS, AND ONLY HERE. These circles sit on the photograph, where glass has
         // something to refract and where the owner's standing rule puts it; the cards further down
         // the page sit on a flat colour and are flat themselves. One page, two surfaces, and the
         // line between them is "is it on the picture".
         .liquidGlass(Circle(), interactive: true)
+        .modifier(PosterGlassSchemeFix())
         .frame(maxWidth: .infinity)
+    }
+}
+
+/// ⛔ THE iOS 26 GLASS, MADE TO MATCH iOS 27 — and this is the whole of the difference.
+///
+/// The profile page pins `\.colorScheme` to dark, because the owner's rule is that this page is
+/// never light. `Glass.regular` resolves against that scheme, and on iOS 26 that produces the near
+/// black discs in his screenshot: dark glass over a bright pink page, far heavier than anything else
+/// on the screen. iOS 27 changed how the material samples its backdrop and comes out light there, so
+/// the same code draws two different buttons on two OS versions.
+///
+/// Handing the glass a LIGHT scheme on 26 is what closes the gap. It is scoped to these circles and
+/// applied after the effect, so the page's own dark scheme, the palette, the sizes and the Liquid
+/// Glass style are all untouched — the only thing this changes is which way one material resolves.
+///
+/// iOS 27 and later are left exactly as they are: they are already right, and overriding them would
+/// be re-breaking what this exists to match.
+private struct PosterGlassSchemeFix: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 27.0, *) {
+            content
+        } else {
+            content.environment(\.colorScheme, .light)
+        }
     }
 }
 

@@ -371,10 +371,27 @@ struct ContactInfoView: View {
     }
 
     // Nav bar trailing: just Edit (rename). The "…" More menu is a quick-action tile (below).
+    /// Which scheme the NAVIGATION BAR is handed on an adaptive (photo-coloured) profile.
+    ///
+    /// iOS 27 and later: `.dark`, which is what the page is. Their bar draws its items' glass from
+    /// the backdrop and ignores the scheme for it, so this gives light glass and white glyphs, which
+    /// is the appearance the owner signed off.
+    ///
+    /// iOS 26: `.light`, purely so the MATERIAL matches. That version resolves the glass against this
+    /// scheme, and `.dark` there produced the near black Back and Edit buttons on a bright page. The
+    /// glyphs are pinned white at their own call sites so they do not come along.
+    private static var barScheme: ColorScheme {
+        if #available(iOS 27.0, *) { return .dark }
+        return .light
+    }
+
     @ToolbarContentBuilder private var navTrailing: some ToolbarContent {
         if !isSelf && !showProfilePhoto {   // no Edit floating over the open photo
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Edit") { showRename = true }.tint(.primary)
+                // `.white` rather than `.primary` on the adaptive page: the bar's scheme is
+                // flipped to light on iOS 26 for the material's sake (see `barScheme`), and
+                // `.primary` would follow it to black. On this page the two were the same value.
+                Button("Edit") { showRename = true }.tint(useAdaptive ? .white : .primary)
             }
         }
     }
@@ -468,6 +485,9 @@ struct ContactInfoView: View {
         // We hide the ITEMS, never the bar itself — toggling bar visibility changes the scroll
         // inset, which is what used to jump the whole page.
         .navigationBarBackButtonHidden(showProfilePhoto)
+        // The system back chevron takes its colour from here, not from the bar's scheme, so it stays
+        // white through the iOS 26 material flip above.
+        .tint(useAdaptive ? .white : nil)
         .toolbar { navTrailing }
         // The photo viewer's X, as a BAR ITEM in the back button's place. The top strip belongs to
         // the navigation bar, which sits above the viewer overlay and eats its touches — an X drawn
@@ -515,6 +535,7 @@ struct ContactInfoView: View {
                     HStack(spacing: 7) {
                         AvatarView(name: shownName, photoUrl: gatedPhotoUrl, size: 26)
                         Text(shownName).font(.headline).lineLimit(1)
+                            .foregroundStyle(useAdaptive ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
                         // Not tappable: the whole collapsed bar is `allowsHitTesting(false)` so it
                         // cannot eat scrolls, and the hero mark below is the one to tap anyway.
                         VerifiedMark(uid: otherUid, size: 14)
@@ -546,7 +567,18 @@ struct ContactInfoView: View {
         // `nil` on the plain page, where "always dark" would mean a white chevron on a light grey
         // page. `useAdaptive` is true for everyone with a photo, so in practice this is always dark
         // wherever there is a colour to be dark against.
-        .toolbarColorScheme(useAdaptive ? .dark : nil, for: .navigationBar)
+        // ⚠️ AND ON iOS 26 IT IS `.light`, WHICH IS NOT A CONTRADICTION OF THE LINE ABOVE.
+        //
+        // This one switch drives BOTH the bar's material and its glyph colour. iOS 27 draws the
+        // items' glass from the backdrop and ignores the scheme for it, so `.dark` there gives what
+        // the owner wants: light glass, white chevron. iOS 26 obeys it for the material too, and the
+        // result is the near black Back and Edit discs in his screenshot, far heavier than the same
+        // page one version later.
+        //
+        // So 26 is handed `.light` to get the material right, and the three glyphs that ride this bar
+        // are pinned to white just below so they do not follow it. Nothing else on the page moves:
+        // the page's own `\.colorScheme` is still dark, which is the rule that matters.
+        .toolbarColorScheme(useAdaptive ? Self.barScheme : nil, for: .navigationBar)
         .task {
             // Seed from the warm cache FIRST so "All Media" shows instantly (no late pop-in on
             // re-entry); the async load() then refreshes it.
