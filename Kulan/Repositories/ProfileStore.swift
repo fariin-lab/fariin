@@ -101,7 +101,8 @@ final class ProfileStore {
     /// depended on one — search is the single place impersonation is actually attempted, and it was
     /// the one list that could never draw a mark.
     static func indexed(_ p: UserProfile) -> UserProfile {
-        ProfilePhotoIndex.record(uid: p.id, photo: p.photoUrl, poster: p.posterUrl, privacy: p.privacy)
+        ProfilePhotoIndex.record(uid: p.id, photo: p.photoUrl, poster: p.posterUrl,
+                                 thumb: p.photoThumb, privacy: p.privacy)
         // The same one hook feeds the call-privacy answer, so pressing the call button has something
         // to read on the frame it is pressed. See CallPrivacyIndex.
         CallPrivacyIndex.record(uid: p.id, privacy: p.privacy)
@@ -357,7 +358,13 @@ final class ProfileStore {
             DiskImageCache.shared.store(ui, data: posterData, for: posterURL)
         }
 
-        var userFields: [String: Any] = ["photoUrl": circleURL]
+        // ⛔ THE COVER TRAVELS WITH THE RECORD, exactly as a story's does. Written in the SAME
+        // document write as the url, so there is no window where an account is known to have a
+        // photograph and has nothing of it to draw — which is the whole bug: opening somebody's
+        // profile straight after they changed their picture showed the big letter on flat colour
+        // until the download finished. About 400-700 bytes.
+        var userFields: [String: Any] = ["photoUrl": circleURL,
+                                         "photoThumb": StoriesService.blurThumbBase64(circleData)]
         if let posterURL { userFields["posterUrl"] = posterURL }
         try await db.collection("users").document(uid).setData(userFields, merge: true)
 
@@ -420,7 +427,7 @@ final class ProfileStore {
         // beat later when the load came back empty (owner: "after a few seconds they switch back").
         // A half-cleared record is the bug; clearing all of it is the fix.
         try await db.collection("users").document(uid)
-            .setData(["photoUrl": "", "posterUrl": ""], merge: true)
+            .setData(["photoUrl": "", "posterUrl": "", "photoThumb": ""], merge: true)
 
         let snap = try await db.collection("conversations")
             .whereField("users", arrayContains: uid).getDocuments()

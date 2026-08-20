@@ -39,6 +39,13 @@ struct UserProfile: Identifiable, Equatable {
     /// The TALL header framing. A separate crop of the same picture, chosen separately, because a
     /// face centred for a full-width header is not centred for a 40pt circle. nil = never set one.
     var posterUrl: String?
+    /// ⛔ THE PICTURE THAT CANNOT BE LATE. A base64 JPEG about 30px on its long edge — the same
+    /// thing a story carries in `blurThumb`, for the same reason. It travels IN the user document,
+    /// so it is already in hand the moment the profile opens and there is no state where we know
+    /// somebody has a photograph and have nothing of it to draw. The header blurs it and the real
+    /// picture fades in on top. Nil for accounts whose photo was set before this existed; those
+    /// still fall back to the letter.
+    var photoThumb: String?
     var publicKeyB64: String?
     /// The account's verification record, or nil for the overwhelming majority who have none. Granted
     /// only by us, never requested, never bought — see Verification.swift.
@@ -63,6 +70,7 @@ struct UserProfile: Identifiable, Equatable {
         if let ts = data["deletionScheduledFor"] as? Timestamp { self.deletionScheduledFor = ts.dateValue() }
         self.photoUrl = data["photoUrl"] as? String
         self.posterUrl = data["posterUrl"] as? String
+        self.photoThumb = data["photoThumb"] as? String
         self.publicKeyB64 = data["publicKey"] as? String
         // Verification rides along with the profile rather than being fetched. See Verification.swift
         // for why that single decision is what makes the badge appear everywhere without a request.

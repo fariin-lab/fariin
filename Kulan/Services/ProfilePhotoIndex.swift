@@ -38,6 +38,11 @@ enum ProfilePhotoIndex {
     struct Facts: Codable {
         var photo: String
         var poster: String
+        /// The tiny base64 cover that travels with the record — see `UserProfile.photoThumb`.
+        /// OPTIONAL, because this file is persisted: the synthesized decoder does not apply property
+        /// defaults, so a non-optional here would make every record written before it existed fail
+        /// to decode and quietly empty the index.
+        var thumb: String?
         /// Raw `Audience` for the "photo" key. Empty = the default, everyone.
         var audience: String
     }
@@ -50,6 +55,9 @@ enum ProfilePhotoIndex {
         let photoUrl: String?
         /// The tall crop, falling back to the circle's photo when they only ever had one.
         let posterUrl: String?
+        /// The base64 cover to draw while the real picture is still coming. Nil means fall back to
+        /// the letter, which is the only honest thing left to show.
+        let thumb: String?
     }
 
     // MARK: - Reading
@@ -65,11 +73,12 @@ enum ProfilePhotoIndex {
     ///     the conversation repository.
     static func header(uid: String, fallbackPhoto: String?, fallbackPoster: String?,
                        iAmContact: Bool) -> Header {
-        let none = Header(hasPhoto: false, photoUrl: nil, posterUrl: nil)
+        let none = Header(hasPhoto: false, photoUrl: nil, posterUrl: nil, thumb: nil)
         // Which urls this person is described by. The record wins when we have it; otherwise the
         // urls this screen was handed, which are right whenever the mirror is fresh.
         let photo: String?
         let poster: String?
+        var thumb: String?
         if let f = facts(uid) {
             guard allowsPhoto(f.audience, iAmContact: iAmContact) else { return none }
             // The circle decides. The poster is a second crop of the same photograph and cannot
@@ -77,6 +86,7 @@ enum ProfilePhotoIndex {
             // leftover posterUrl still says.
             photo = f.photo.isEmpty ? nil : f.photo
             poster = f.poster.isEmpty ? nil : f.poster
+            thumb = (f.thumb?.isEmpty == false) ? f.thumb : nil
         } else {
             photo = (fallbackPhoto?.isEmpty == false) ? fallbackPhoto : nil
             poster = (fallbackPoster?.isEmpty == false) ? fallbackPoster : nil
@@ -90,7 +100,7 @@ enum ProfilePhotoIndex {
         // drawing a letter where a face should be.
         let usablePoster: String
         if let poster, hasPicture(poster) { usablePoster = poster } else { usablePoster = photo }
-        return Header(hasPhoto: true, photoUrl: photo, posterUrl: usablePoster)
+        return Header(hasPhoto: true, photoUrl: photo, posterUrl: usablePoster, thumb: thumb)
     }
 
     /// IS THERE A PICTURE BEHIND THIS URL — answered now, without a fetch.
@@ -144,14 +154,16 @@ enum ProfilePhotoIndex {
 
     /// Record what a users document actually says. Called by `ProfileStore` on every read, so the
     /// index fills itself from work the app was already doing.
-    static func record(uid: String, photo: String?, poster: String?, privacy: [String: String]) {
+    static func record(uid: String, photo: String?, poster: String?, thumb: String? = nil,
+                       privacy: [String: String]) {
         guard !uid.isEmpty else { return }
         let next = Facts(photo: photo ?? "",
                          poster: poster ?? "",
+                         thumb: thumb,
                          audience: privacy["photo"] ?? "")
         // A same-value write would rewrite the defaults file on every profile read.
         if let old = store[uid], old.photo == next.photo, old.poster == next.poster,
-           old.audience == next.audience { return }
+           old.thumb == next.thumb, old.audience == next.audience { return }
         store[uid] = next
         // Bounded: this is a convenience cache, not a database. Dropping entries costs one
         // fall-back-to-the-url open, never a wrong answer that sticks.

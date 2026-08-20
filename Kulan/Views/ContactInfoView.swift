@@ -991,6 +991,17 @@ struct ContactInfoView: View {
     /// What the HEADER draws: their tall crop when there is one, otherwise the avatar. Behind the
     /// same privacy gate as the avatar — a poster is the same photograph, so hiding one and showing
     /// the other would be a hole in the setting rather than a fallback.
+    /// THE COVER, DECODED ONCE. `headerFacts` is settled in the initialiser and does not change
+    /// mid-visit, so this is computed rather than stored and never re-decodes on a scroll — 30 pixels
+    /// of JPEG, behind the same privacy gate as the picture it stands in for, because a cover of a
+    /// photo I may not see is still that photo.
+    private var headerThumb: UIImage? {
+        guard PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: iAmContact),
+              let b64 = headerFacts.thumb, !b64.isEmpty,
+              let data = Data(base64Encoded: b64) else { return nil }
+        return UIImage(data: data)
+    }
+
     private var gatedPosterUrl: String? {
         PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: iAmContact) ? headerFacts.posterUrl : nil
     }
@@ -1181,6 +1192,9 @@ struct ContactInfoView: View {
             // those are all the round one.
             photoUrl: gatedPosterUrl,
             scrollSpace: "profileScroll",
+            // The cover that came down with the record, so the header never has to draw a letter for
+            // somebody who plainly has a photograph. See `UserProfile.photoThumb`.
+            placeholder: headerThumb,
             onPhotoRect: { posterRect = $0 },
             // The artwork's own rect, so the viewer starts on the picture that is on screen.
             onArtworkRect: { posterArtRect = $0 },

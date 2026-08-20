@@ -218,6 +218,13 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     let photoUrl: String?
     /// Coordinate space of the enclosing ScrollView — the pull-to-stretch reads its own offset in it.
     let scrollSpace: String
+    /// ⛔ THE PICTURE TO HOLD UP UNTIL THE REAL ONE ARRIVES — a ~30px cover that came down with the
+    /// record itself, so it is here before any download starts. Blurred, because it is 30 pixels and
+    /// pretending otherwise looks like a broken image; the sharp photo crossfades over it.
+    ///
+    /// Nil falls back to the letter, which is right for an account that genuinely has no photograph
+    /// and for one whose picture predates the cover.
+    var placeholder: UIImage? = nil
     /// The SQUARE the photo's spacer reserves, in global coordinates. What the nav bar watches.
     var onPhotoRect: (CGRect) -> Void = { _ in }
     /// The rect the picture is ACTUALLY DRAWN IN, in global coordinates — the same square plus the
@@ -259,6 +266,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
     @Environment(\.colorScheme) private var scheme
 
     init(name: String, photoUrl: String?, scrollSpace: String,
+         placeholder: UIImage? = nil,
          onPhotoRect: @escaping (CGRect) -> Void = { _ in },
          onArtworkRect: @escaping (CGRect) -> Void = { _ in },
          onScroll: @escaping (CGFloat) -> Void = { _ in },
@@ -274,6 +282,7 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         self.name = name
         self.photoUrl = photoUrl
         self.scrollSpace = scrollSpace
+        self.placeholder = placeholder
         self.onPhotoRect = onPhotoRect
         self.onArtworkRect = onArtworkRect
         self.onScroll = onScroll
@@ -415,6 +424,22 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         Group {
             if let image {
                 Image(uiImage: image).resizable().scaledToFill()
+                    // The cover is underneath until this arrives, so the swap is a crossfade rather
+                    // than a letter being replaced by a face.
+                    .transition(.opacity)
+            } else if let placeholder {
+                // ⛔ WHAT THE REFERENCE APP SHOWS AND WE DID NOT. Their profile picture is never
+                // absent while it loads: a few hundred bytes of it ride along with the account
+                // record, and what you see first is that, blurred, at full size. Then the real file
+                // fades in over it. Ours drew the LETTER in that window, so changing your picture
+                // and opening the profile showed a giant initial on flat colour and then a
+                // photograph — the owner's screenshot.
+                //
+                // 30px blown up to full width is pure smear, which is exactly the point: it is the
+                // right colours in the right places, and it reads as a photograph arriving rather
+                // than as a broken one.
+                Image(uiImage: placeholder).resizable().scaledToFill()
+                    .blur(radius: 18, opaque: true)
             } else {
                 // A LARGE AVATAR, NOT A SLAB. This state is reached whenever the bitmap is not here
                 // YET (a photo just set on another device, a cold launch, no signal) — and it used to
@@ -490,6 +515,9 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         .offset(y: -contentTop)
         .opacity(photoHidden ? 0 : 1)
         .animation(.easeOut(duration: 0.25), value: image != nil)
+        // The cover and the photograph are the same picture, so the change between them is a fade
+        // and never a move.
+        .animation(.easeOut(duration: 0.28), value: placeholder != nil)
         // ⚠️ WHERE THE PICTURE REALLY IS — and the lift is SUBTRACTED BY HAND, because a reader
         // wrapped around `.offset` does not see it.
         //
