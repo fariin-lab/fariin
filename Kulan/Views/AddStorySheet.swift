@@ -410,13 +410,28 @@ struct StoryLibraryPicker: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { CloseXButton { dismiss() } }
+                // ⚠️ `sharedBackgroundVisibility(.hidden)` ON iOS 26, OR THE X IS DRAWN TWICE.
+                // `CloseXButton` is itself a glass circle, and from 26 a toolbar item puts its own
+                // glass behind whatever it holds — so the button came out as a circle inside a
+                // circle, which is the owner's "duplicate X". `SendContactSheet` already carries
+                // this exact guard for the same button.
+                if #available(iOS 26.0, *) {
+                    ToolbarItem(placement: .topBarLeading) { CloseXButton { dismiss() } }
+                        .sharedBackgroundVisibility(.hidden)
+                } else {
+                    ToolbarItem(placement: .topBarLeading) { CloseXButton { dismiss() } }
+                }
                 ToolbarItem(placement: .principal) {
-                    // `.fixedSize(vertical:)` and NOT `.frame(height:)` — a frame gives the
-                    // representable a 40pt slot and lets UIKit centre a shorter control inside it,
-                    // which is how this bar came out at 34 with dead space the first time.
-                    GlassSegmentedSwitch(titles: ["Photos", "Collections"], selection: $tab)
-                        .fixedSize(horizontal: false, vertical: true)
+                    // ⛔ APPLE'S OWN SEGMENTED CONTROL, NOT OURS (owner, 2026-08-20: make it exactly
+                    // the calls page's All/Missed bar, "native Apple", not custom). That bar is a
+                    // plain `Picker` with `.pickerStyle(.segmented)` in the principal slot, so this
+                    // is the same three lines — the width is wider only because the words are.
+                    Picker("", selection: $tab) {
+                        Text("Photos").tag(0)
+                        Text("Collections").tag(1)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 220)
                 }
             }
             .navigationDestination(item: $openAlbum) { album in albumGrid(album) }
@@ -982,6 +997,9 @@ private struct StoryPhotoPreview: View {
 ///
 /// Full width by design (no `.fixedSize()`): the segments split the bar evenly the way the Photos
 /// picker's does, rather than shrinking to their words.
+/// ⚠️ NO LONGER USED BY THIS SCREEN. The picker's bar is Apple's own segmented control now, on the
+/// owner's word (2026-08-20) — the calls page's All/Missed bar, exactly. Kept because it is a real
+/// control other screens may still want and deleting it is not part of that instruction.
 struct GlassSegmentedSwitch: UIViewRepresentable {
     let titles: [String]
     @Binding var selection: Int
