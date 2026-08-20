@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // "Send to" chat picker for Share Contact — sends the contact's Fariin link into one or more chats
 // (multi-select), instead of the system share sheet. Real send pipeline via ChatService.sendText.
@@ -57,7 +58,62 @@ struct SendContactSheet: View {
                 if sending { ProgressView().padding(20).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14)) }
             }
             .interactiveDismissDisabled(sending)
+            // ⛔ THE ROW ALONG THE BOTTOM, which is the half this sheet was missing. Sending it to
+            // somebody in the app and sending it OUT of the app are the same intention, and the
+            // reference sheet puts both on one screen rather than making you dismiss and hunt for
+            // the system share sheet.
+            //
+            // Two buttons and no more. Copy is the one he named. "Share to…" is the system sheet,
+            // which is where WhatsApp, Snapchat and everything else the phone actually has live —
+            // hard-coding tiles for named apps would list apps that may not be installed and would
+            // need a new tile every time he wants another one.
+            .safeAreaInset(edge: .bottom) { linkActions }
         }
+    }
+
+    @State private var copied = false
+
+    private var linkActions: some View {
+        HStack(spacing: 28) {
+            Spacer(minLength: 0)
+            actionTile(copied ? "checkmark" : "link", copied ? "Copied" : "Copy link") {
+                UIPasteboard.general.string = link
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                withAnimation(.easeOut(duration: 0.18)) { copied = true }
+                Task {
+                    try? await Task.sleep(nanoseconds: 1_600_000_000)
+                    withAnimation(.easeOut(duration: 0.18)) { copied = false }
+                }
+            }
+            actionTile("square.and.arrow.up", "Share to…") { showSystemShare = true }
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 14)
+        .padding(.bottom, 8)
+        .background(.bar)
+        .sheet(isPresented: $showSystemShare) { SystemShareSheet(items: [link]) }
+    }
+
+    @State private var showSystemShare = false
+
+    /// Just the url. `contactText` is the sentence that goes into a CHAT bubble; a clipboard or
+    /// another app wants the link on its own, or the person pasting it gets our sentence too.
+    private var link: String {
+        contactText.split(separator: " ").last.map(String.init) ?? contactText
+    }
+
+    private func actionTile(_ icon: String, _ title: String, _ tap: @escaping () -> Void) -> some View {
+        Button(action: tap) {
+            VStack(spacing: 7) {
+                Image(systemName: icon)
+                    .font(.system(size: 22, weight: .regular))
+                    .foregroundStyle(.primary)
+                    .frame(width: 58, height: 58)
+                    .background(Color.secondary.opacity(0.15), in: Circle())
+                Text(title).font(.system(size: 12)).foregroundStyle(.primary)
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     private func toggle(_ id: String) {
@@ -73,4 +129,15 @@ struct SendContactSheet: View {
         sending = false
         dismiss()
     }
+}
+
+/// UIActivityViewController bridge. `ShareLink` is a button, and this row needs to PRESENT one from
+/// a tap. There is an identical private bridge in `OfficialChatView`; it is private, so this is a
+/// second one rather than a shared type nothing else asked for.
+struct SystemShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }
