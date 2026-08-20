@@ -633,7 +633,6 @@ struct PosterActionIcon: View {
         // something to refract and where the owner's standing rule puts it; the cards further down
         // the page sit on a flat colour and are flat themselves. One page, two surfaces, and the
         // line between them is "is it on the picture".
-        .liquidGlass(Circle(), interactive: true)
         .modifier(PosterGlassSchemeFix())
         .frame(maxWidth: .infinity)
     }
@@ -647,22 +646,48 @@ struct PosterActionIcon: View {
 /// on the screen. iOS 27 changed how the material samples its backdrop and comes out light there, so
 /// the same code draws two different buttons on two OS versions.
 ///
-/// Handing the glass a LIGHT scheme on 26 is what closes the gap. It is scoped to these circles and
-/// applied after the effect, so the page's own dark scheme, the palette, the sizes and the Liquid
-/// Glass style are all untouched — the only thing this changes is which way one material resolves.
+/// The fix is inside the modifier below, and it is a TINT rather than a scheme — the scheme was the
+/// first two attempts and both missed, dark then white. Only these circles are touched; the page's
+/// own scheme, the palette, the sizes and the Liquid Glass style are all left alone.
 ///
 /// iOS 27 and later are left exactly as they are: they are already right, and overriding them would
 /// be re-breaking what this exists to match.
 private struct PosterGlassSchemeFix: ViewModifier {
+    @Environment(\.profilePalette) private var palette
+
     @ViewBuilder
     func body(content: Content) -> some View {
         if #available(iOS 27.0, *) {
-            content
+            // Already right: their glass reads the backdrop itself.
+            content.liquidGlass(Circle(), interactive: true)
         } else {
-            content.environment(\.colorScheme, .light)
+            // ⛔ iOS 26'S GLASS DOES NOT READ THE BACKDROP, SO IT IS HANDED ONE.
+            //
+            // Two attempts before this, both wrong in opposite directions. The page pins its scheme
+            // to dark, so plain `.regular` glass resolved DARK and drew near-black discs on a bright
+            // page. Forcing the scheme LIGHT fixed that and overshot: whitish frosted circles that
+            // sit on top of the picture instead of in it — his second screenshot.
+            //
+            // The real difference is not the scheme, it is that 26 has nothing to refract. On 27 the
+            // circle takes its colour from what is behind it; here that colour is handed over as a
+            // tint, and the source is the page's own extracted palette — the same colour the cards
+            // below use, so the row belongs to the page rather than floating over it.
+            //
+            // No palette (a profile with no photo) falls back to the plain glass, which is correct
+            // there: nothing has been extracted, so there is no backdrop colour to imitate.
+            content.liquidGlass(Circle(), interactive: true, tint: tint)
         }
     }
+
+    /// The page colour, lifted the way a translucent surface over it would read. `card` is that
+    /// exact idea and is already used by every panel on this page, so the circles and the cards
+    /// cannot drift apart.
+    private var tint: Color? {
+        guard let palette else { return nil }
+        return Color(palette.card)
+    }
 }
+
 
 // MARK: - Stories, on the poster
 
