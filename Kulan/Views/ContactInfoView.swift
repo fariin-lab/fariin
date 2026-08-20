@@ -958,42 +958,49 @@ struct ContactInfoView: View {
     // Menus, dialogs and the rename alert.
     private var withAlerts: some View {
         withSheets
-            .alert("Clear your messages?", isPresented: $showClear) {
-                Button("Cancel", role: .cancel) {}
-                Button("Clear", role: .destructive) {
-                    // A refusal here must not blank the strip — only a real answer replaces it.
-                    Task {
-                        await ChatService.clearMyMessages(cid)
-                        if let fresh = await ChatService.sharedMedia(cid) { media = fresh; mediaHint = fresh.count }
-                    }
-                }
-            } message: {
-                Text("This deletes the messages you sent in this chat. It can't be undone.")
-            }
+            // ⛔ `darkAlert`, NOT `.alert`. This page is always dark whatever the phone is set to,
+            // and a SwiftUI alert cannot be told that from here — the whole reckoning, including the
+            // two ways it has already been tried and reverted, is in `DarkAlert.swift`. Same titles,
+            // same messages, same destructive red.
+            .darkAlert("Clear your messages?",
+                       message: "This deletes the messages you sent in this chat. It can't be undone.",
+                       isPresented: $showClear,
+                       actions: [
+                        .cancel(),
+                        .destructive("Clear") {
+                            // A refusal here must not blank the strip — only a real answer replaces it.
+                            Task {
+                                await ChatService.clearMyMessages(cid)
+                                if let fresh = await ChatService.sharedMedia(cid) { media = fresh; mediaHint = fresh.count }
+                            }
+                        },
+                       ])
             // shownName, not the raw name (audit): renamed to "Mom", the button said "Block Mom"
             // but this safety-critical confirm asked about "ayaan_99" — reads as a different person.
-            .alert("Block \(shownName)?", isPresented: $showBlock) {
-                Button("Cancel", role: .cancel) {}
-                Button("Block", role: .destructive) {
-                    Task { await ChatService.setBlocked(cid, true); blocked = true }
-                }
-            } message: {
-                Text("You won't be able to send messages in this chat until you unblock. \(shownName) won't be told they were blocked.")
-            }
-            .alert("Report \(shownName)?", isPresented: $showReport) {
-                Button("Cancel", role: .cancel) {}
-                Button("Report", role: .destructive) {
-                    Task { await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user") }
-                }
-                Button("Report and Block", role: .destructive) {
-                    Task {
-                        await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user")
-                        await ChatService.setBlocked(cid, true); blocked = true
-                    }
-                }
-            } message: {
-                Text("Our team will review this account within 24 hours. \(shownName) won't be told.")
-            }
+            .darkAlert("Block \(shownName)?",
+                       message: "You won't be able to send messages in this chat until you unblock. \(shownName) won't be told they were blocked.",
+                       isPresented: $showBlock,
+                       actions: [
+                        .cancel(),
+                        .destructive("Block") {
+                            Task { await ChatService.setBlocked(cid, true); blocked = true }
+                        },
+                       ])
+            .darkAlert("Report \(shownName)?",
+                       message: "Our team will review this account within 24 hours. \(shownName) won't be told.",
+                       isPresented: $showReport,
+                       actions: [
+                        .cancel(),
+                        .destructive("Report") {
+                            Task { await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user") }
+                        },
+                        .destructive("Report and Block") {
+                            Task {
+                                await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user")
+                                await ChatService.setBlocked(cid, true); blocked = true
+                            }
+                        },
+                       ])
     }
 
     /// The private note from Edit (ContactNames, device-only — nothing here is ever sent, which is
