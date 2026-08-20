@@ -397,8 +397,20 @@ struct StoryLibraryPicker: View {
             // same black the grid and the album list already use — means there is one colour on the
             // screen and nothing left to sample.
             .background(Color(.systemBackground))
-            .toolbarBackground(Color(.systemBackground), for: .navigationBar)
-            .toolbarBackground(.visible, for: .navigationBar)
+            // ⛔ AND THEN THE PIN CAME OFF AGAIN (owner, 2026-08-20: "black border only
+            // appearing before scroll … like apple style … follow apple guidelines").
+            //
+            // Pinning it solved the two-blacks problem by making the bar a wall: opaque from the
+            // first frame, so the grid began BELOW it and the top of the screen was a black band
+            // with an X in it. Apple's bars do not do that. They are transparent while the scroll
+            // is at rest at the top and grow their material only once content is actually behind
+            // them — the scroll edge effect — which is what makes the photographs look like they
+            // slide UNDER the controls instead of stopping at them.
+            //
+            // Leaving both modifiers off is that behaviour; `.automatic` is the default. The colour
+            // cast that forced the pin is not a risk any more for the reason written at the top of
+            // this file: the screen is held in a dark trait, so the material it blurs and the grid
+            // it blurs are the same black to begin with.
             // ⛔ NO TITLE, AND THE SWITCH RIDES THE BAR (owner, 2026-08-20, with the reference shot).
             // "Add to Story" was a word for a screen that is obviously a picker: it took the middle
             // of the bar, pushed the Photos/Collections switch onto a row of its own underneath, and
@@ -780,8 +792,7 @@ struct StoryLibraryPicker: View {
         // root's own background: anything left to the navigation stack's default draws a
         // translucent chrome material and reads as a different, lighter colour.
         .background(Color(.systemBackground))
-        .toolbarBackground(Color(.systemBackground), for: .navigationBar)
-        .toolbarBackground(.visible, for: .navigationBar)
+        // Same scroll edge effect as the picker it was pushed from — see the note there.
     }
 
     private func tile(_ asset: PHAsset) -> some View {

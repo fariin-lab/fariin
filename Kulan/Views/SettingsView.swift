@@ -1537,7 +1537,16 @@ struct EditProfileView: View {
                     // the same view a stranger gets, with the same palette extracted from the same
                     // photograph — a second copy built to look like it would start lying the first
                     // time either changes. It cannot be acted on; see `previewUid`.
-                    .sheet(isPresented: $showProfilePreview) {
+                    //
+                    // ⚠️ A COVER, NOT A SHEET. As a sheet it sat on a card with rounded corners and
+                    // the LIGHT Settings screen showing through them — white wedges in both bottom
+                    // corners of a dark profile (owner: "the preview page butt i see white things").
+                    // Painting the sheet's own background cannot reach those corners: what shows in
+                    // them is the presenting screen behind the card, not the card. A preview of how
+                    // a stranger sees this page also has no business being drawn at card size, on a
+                    // page it is a preview OF. Full screen removes the card, the corners and the
+                    // scale in one move; the X added to its bar closes it.
+                    .fullScreenCover(isPresented: $showProfilePreview) {
                         NavigationStack {
                             ContactInfoView(cid: "",
                                             name: profile.me?.name ?? "",

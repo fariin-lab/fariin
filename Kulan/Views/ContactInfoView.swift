@@ -588,6 +588,15 @@ struct ContactInfoView: View {
                         Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
                     }
                     .tint(.primary)
+                } else if isPreview {
+                    // THE PREVIEW HAS NO BACK CHEVRON: it is presented, not pushed, so its stack has
+                    // nothing behind it to go back to and the slot sat empty. Same X, same place —
+                    // and it takes `barGlyph` rather than `.primary` because it rides the photograph
+                    // like the Edit button opposite it, not a plain bar.
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
+                    }
+                    .tint(barGlyph)
                 }
             }
         }
@@ -661,22 +670,34 @@ struct ContactInfoView: View {
             // ⛔ NO CONVERSATION, NO SHARED MEDIA. In preview there is no chat between me and myself,
             // and every one of these reads builds a Firestore path out of `cid` — which throws an
             // ObjC exception on an empty one rather than returning nil. See the note in `load`.
-            guard !cid.isEmpty else { return }
-            // Seed from the warm cache FIRST so "All Media" shows instantly (no late pop-in on
-            // re-entry); the async load() then refreshes it.
-            // The remembered count first (disk, instant), then the warm cache, then the network.
-            mediaHint = ChatService.SharedMediaPresence.count(cid)
-            if media.isEmpty, let cached = ChatService.cachedSharedMedia(cid) { media = cached }
-            // LOCAL values BEFORE the network round-trips (audit): the timer row said "Off" for
-            // seconds on a slow connection — and the picker opened preselected wrong — though the
-            // repository already knew the answer.
-            disappearSeconds = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.disappearSeconds ?? 0
-            localName = ContactNames.shared.name(for: otherUid)
+            //
+            // ⚠️ THIS WAS `guard !cid.isEmpty else { return }`, AND IT SKIPPED `load()` WITH IT —
+            // which is the one call that fetches the @handle and the bio. The preview drew the name
+            // it was handed in its initialiser and nothing else (owner: "in preview i see my name
+            // but iam not seeing my usarname"). Only the CONVERSATION half may be skipped here; the
+            // PERSON half has to run, and `load()` already draws that line internally.
+            let hasChat = !cid.isEmpty
+            if hasChat {
+                // Seed from the warm cache FIRST so "All Media" shows instantly (no late pop-in on
+                // re-entry); the async load() then refreshes it.
+                // The remembered count first (disk, instant), then the warm cache, then the network.
+                mediaHint = ChatService.SharedMediaPresence.count(cid)
+                if media.isEmpty, let cached = ChatService.cachedSharedMedia(cid) { media = cached }
+                // LOCAL values BEFORE the network round-trips (audit): the timer row said "Off" for
+                // seconds on a slow connection — and the picker opened preselected wrong — though the
+                // repository already knew the answer.
+                disappearSeconds = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.disappearSeconds ?? 0
+                // NOT in preview: this is the name I have saved for a CONTACT, and in preview the
+                // "contact" is me. What the preview must show is the name strangers see.
+                localName = ContactNames.shared.name(for: otherUid)
+            }
             // `load()` owns mediaHint from here: it is the only place that knows whether the count it
             // has is an ANSWER or a failure. Setting it from `media.count` out here zeroed the hint
             // whenever the load failed, which is how the section disappeared from a chat full of photos.
             await load()
-            disappearSeconds = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.disappearSeconds ?? 0
+            if hasChat {
+                disappearSeconds = ConversationsRepository.shared.conversations.first(where: { $0.id == cid })?.disappearSeconds ?? 0
+            }
             // Their public ("Everyone") story, if any — surfaces as a ring on the hero avatar so
             // anyone who reaches this profile can watch it, contact or not.
             // NOT while Stories are turned off (audit): Settings promises "you will no longer be
