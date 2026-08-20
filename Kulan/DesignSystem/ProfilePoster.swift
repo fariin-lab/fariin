@@ -490,15 +490,32 @@ struct ProfilePosterHeader<Caption: View, Actions: View>: View {
         .offset(y: -contentTop)
         .opacity(photoHidden ? 0 : 1)
         .animation(.easeOut(duration: 0.25), value: image != nil)
-        // ⚠️ WHERE THE PICTURE REALLY IS — reported from the artwork itself, after the offset that
-        // lifts it under the bars, so nothing about it is recomputed by a reader.
+        // ⚠️ WHERE THE PICTURE REALLY IS — and the lift is SUBTRACTED BY HAND, because a reader
+        // wrapped around `.offset` does not see it.
+        //
+        // This used to read `frame(in: .global)` straight and the note claimed it was measuring
+        // "after the offset". It was not. `.offset` is a render-time transform: it moves the
+        // subtree's pixels and leaves the layout slot exactly where it was, and a modifier attached
+        // OUTSIDE it is not in that subtree, so it measures the slot. The rect came back
+        // `contentTop` too low — safe-area top plus the nav bar, about 103pt — and that rect is both
+        // ends of the flight. Opening, the wrong start was on screen for one frame under a picture
+        // that was already growing, so nobody could see it. CLOSING, it was the RESTING frame: the
+        // spring settled a whole third of a second early, held the picture 103pt below the header,
+        // and then the overlay was torn down and the real photo un-hidden at its true position with
+        // nothing animating the difference. That is his "stops lower, then jumps into place".
+        //
+        // The subtraction is inside the TRANSFORM rather than the action on purpose: the layout slot
+        // does not move when `contentTop` locks, so a reader that only watched the slot would never
+        // fire again and would keep answering with the seeded value.
         //
         // `onPhotoRect` above reports the SQUARE the spacer reserves, which is what the nav bar
         // watches. The photo is 1.25 of that square tall, and a viewer that grows out of the square
         // starts on a DIFFERENT CROP of the same picture — `scaledToFill` into a 1:1 box shows less
         // of the width than into a 4:5 one. That mismatch is the one-frame jump on opening and
         // closing the photo, reported for months.
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onArtworkRect($0) }
+        .onGeometryChange(for: CGRect.self) {
+            $0.frame(in: .global).offsetBy(dx: 0, dy: -contentTop)
+        } action: { onArtworkRect($0) }
     }
 
     /// FETCH THE PICTURE. It reports nothing back, on purpose.
