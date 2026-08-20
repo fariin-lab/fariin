@@ -1538,15 +1538,19 @@ struct EditProfileView: View {
                     // photograph — a second copy built to look like it would start lying the first
                     // time either changes. It cannot be acted on; see `previewUid`.
                     //
-                    // ⚠️ A COVER, NOT A SHEET. As a sheet it sat on a card with rounded corners and
-                    // the LIGHT Settings screen showing through them — white wedges in both bottom
-                    // corners of a dark profile (owner: "the preview page butt i see white things").
-                    // Painting the sheet's own background cannot reach those corners: what shows in
-                    // them is the presenting screen behind the card, not the card. A preview of how
-                    // a stranger sees this page also has no business being drawn at card size, on a
-                    // page it is a preview OF. Full screen removes the card, the corners and the
-                    // scale in one move; the X added to its bar closes it.
-                    .fullScreenCover(isPresented: $showProfilePreview) {
+                    // ⛔ A SHEET AGAIN (owner, 2026-08-20: "dont make full Page … make it sheet like
+                    // before"), and the white it was moved away from is answered a different way.
+                    //
+                    // The history, so the swap is not made a third time: as a sheet it sat on a card
+                    // with rounded corners and white showed in both bottom ones. `presentationBackground`
+                    // is the answer to that IF the white was the sheet's own default surface, which
+                    // it almost certainly was — the page paints its colour inside its safe area and
+                    // the corner radius cuts across it. Black, because this page is always dark by
+                    // his own standing rule, so there is no light state for it to be wrong in.
+                    //
+                    // If white still shows there, then it is the LIGHT Settings screen behind the
+                    // card rather than the card itself, and no background set here can reach it.
+                    .sheet(isPresented: $showProfilePreview) {
                         NavigationStack {
                             ContactInfoView(cid: "",
                                             name: profile.me?.name ?? "",
@@ -1554,6 +1558,7 @@ struct EditProfileView: View {
                                             posterUrl: profile.me?.posterUrl,
                                             previewUid: AuthService.shared.uid ?? "")
                         }
+                        .presentationBackground(.black)
                     }
                     // Its own stack, because it carries a title and a Done and is no longer inside
                     // this screen's navigation.
