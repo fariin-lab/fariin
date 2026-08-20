@@ -14,6 +14,12 @@ import WebRTC
 struct CallView: View {
     private var call = CallService.shared
     @State private var now = Date()
+    /// ⛔ THE CALL WEARS THE PERSON'S OWN COLOUR (owner, 2026-08-20), reversing the flat black of
+    /// 2026-07-11. The same extraction the profile page uses, from the same photograph, so a call and
+    /// that person's profile read as one surface rather than two screens about one person. Nil until
+    /// it resolves and nil for somebody with no photo — both fall back to the black this screen has
+    /// always had, which is the right answer when there is nothing to extract from.
+    @State private var peerPalette: ProfilePalette?
     // Layout state lives in CallService so minimize/restore keeps the SAME big/small choice and tile
     // position (the fullScreenCover destroys this view on minimize; @State here reset every time).
     private var isLocalExpanded: Bool { get { call.isLocalExpanded } nonmutating set { call.isLocalExpanded = newValue } }
@@ -197,6 +203,14 @@ struct CallView: View {
             .onReceive(ticker) { now = $0 }
             .onAppear { armAutoHide() }
             .onDisappear { hideTask?.cancel() }
+            // ⛔ ALWAYS DARK (owner, 2026-08-20). A call is a dark screen whatever the phone is set
+            // to — the controls, the name and the glass circles are all drawn for a dark ground, and
+            // on a light phone the system-coloured pieces among them came out light on black.
+            // `\.colorScheme` rather than `preferredColorScheme`: this is the subtree, not the window.
+            .environment(\.colorScheme, .dark)
+            // Their colour, the same way the profile page gets it: the warm cache answers on the
+            // first frame for anybody seen before, and the full extraction follows for anybody else.
+            .task(id: call.otherPhotoUrl ?? "") { await loadPeerPalette() }
             // Connecting, and a voice call turning into a video call, both restart the clock: show the
             // controls for the moment something changes, then get out of the way again.
             .onChange(of: call.state) { _, _ in showControls() }
@@ -274,9 +288,11 @@ struct CallView: View {
         // we toggle it by opacity + swap its track in place (no recreate), so connect / camera-
         // toggle / stream-swap don't tear down + rebuild the Metal view (which caused black flicker).
         ZStack {
-            // Always a solid BLACK base (user decision 2026-07-11) — no more purple gradient /
-            // avatar-blur wash. Video still renders on top for video calls.
-            Color.black
+            // The person's own colour, black when there is none — see `peerPalette`. Still a FLAT
+            // fill and never a gradient or a blur of their photo: the 2026-07-11 decision that killed
+            // those stands, and this only changes which flat colour it is.
+            (peerPalette.map { Color($0.page) } ?? Color.black)
+                .animation(.easeOut(duration: 0.35), value: peerPalette?.key)
             if call.isVideo {
                 VideoRendererView(track: full, mirror: showLocalFull && call.usingFrontCamera)
                     .overlay(Color.black.opacity((showLocalFull && flipDim) ? 1 : 0))   // fullscreen switch = dip through black
@@ -301,7 +317,9 @@ struct CallView: View {
         HStack {
             // The ONLY way to minimize the call (swipe-to-minimize removed — screen is locked).
             Button { withAnimation(.easeInOut(duration: 0.25)) { call.minimized = true } } label: {
-                topCircle("chevron.down")
+                // The minimise glyph rather than a bare chevron: this button shrinks the call
+                            // into the pill, it does not dismiss or scroll anything.
+                            topCircle("arrow.down.right.and.arrow.up.left")
             }
             .buttonStyle(CallControlStyle())
 
@@ -347,10 +365,18 @@ struct CallView: View {
         )
     }
 
+    /// The peer's extracted colour. Warm cache first so a person already seen paints on frame one;
+    /// the full read follows. Nobody with no photo gets one, and the screen stays black.
+    private func loadPeerPalette() async {
+        guard let url = call.otherPhotoUrl, !url.isEmpty else { peerPalette = nil; return }
+        if let warm = ProfilePalette.warm(url: url) { peerPalette = warm; return }
+        peerPalette = await ProfilePalette.resolve(url: url)
+    }
+
     private func topCircle(_ icon: String) -> some View {
         Image(systemName: icon)
-            .font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-            .frame(width: 48, height: 48)   // 48px top buttons (user spec, matches the app's glass controls)
+            .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+            .frame(width: 40, height: 40)   // 40px top buttons (owner, 2026-08-20; was 48)
             // NON-interactive glass: `.interactive()` glass consumes the touch itself, so the
             // wrapping Button's action never fired — the minimize chevron did nothing when tapped.
             .liquidGlass(Circle(), interactive: false)

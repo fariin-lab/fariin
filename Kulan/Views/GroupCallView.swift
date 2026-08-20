@@ -26,6 +26,9 @@ struct GroupCallView: View {
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
         }
+        // Always dark, for the same reason the 1:1 call is — see `CallView`. A call is drawn for a
+        // dark ground whatever the phone is set to.
+        .environment(\.colorScheme, .dark)
         .onChange(of: service.activeCid) { _, cid in if cid == nil { dismiss() } }
     }
 
