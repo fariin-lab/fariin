@@ -29,7 +29,29 @@ struct KulanApp: App {
                 // is lazy and is not necessarily touched before the viewer opens, and it is not
                 // main-actor isolated, which this is. Memory only and synchronous, which is what the
                 // hook asks for; a miss falls through to the old path unchanged.
-                .task { StoryPosterSource.provider = { DiskImageCache.shared.memoryImage($0) } }
+                .task {
+                    StoryPosterSource.provider = { DiskImageCache.shared.memoryImage($0) }
+                    // ⛔ AND THE SAME CACHE FOR THE STORY HEADER'S AVATAR, for the same reason one
+                    // level down. That view knew only `URLCache.shared`, which nothing else in this
+                    // app writes to — so the profile picture the app had just seeded on disk when
+                    // the person changed it was invisible to it, and the story header drew a grey
+                    // disc and then downloaded a file it already had. The owner's report: "already I
+                    // have cache, why is it grey".
+                    //
+                    // `cachedNow` is memory-only and synchronous so the first frame can already have
+                    // the picture; `cached` adds the disk read for the far more common case of a
+                    // photo cached in a previous session; `store` hands a fresh download back so the
+                    // next surface to ask gets a hit rather than a second fetch.
+                    // `smallImageSync`, not `memoryImage`: it is the reader written for avatars,
+                    // and it adds a gated disk read to the memory lookup. That is what removes the
+                    // grey frame outright rather than shortening it — a photo cached in an earlier
+                    // session is on disk with memory cold, which is every cold launch.
+                    StoryUIImages.cachedNow = { DiskImageCache.shared.smallImageSync($0) }
+                    StoryUIImages.cached = { await DiskImageCache.shared.image(for: $0) }
+                    StoryUIImages.store = { image, data, url in
+                        DiskImageCache.shared.store(image, data: data, for: url)
+                    }
+                }
         }
         .onChange(of: scenePhase) { _, phase in
             Task { await PresenceService.set(online: phase == .active) }
