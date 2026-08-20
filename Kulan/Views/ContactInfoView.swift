@@ -512,8 +512,8 @@ struct ContactInfoView: View {
     private var tintedEditButton: some View {
         Button("Edit") { showRename = true }
             .tint(barGlyph)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 7)
+            .padding(.horizontal, Self.barItemTextInset)
+            .frame(height: Self.barItemSide)
             .liquidGlass(Capsule(), interactive: true, tint: barGlassTint)
     }
 
@@ -643,11 +643,27 @@ struct ContactInfoView: View {
     ///
     /// Only the surface changes. Same chevron, same place, same size, and `dismiss()` is what the
     /// system button calls, so the swipe back from the screen edge is untouched.
+    /// ⛔ THE SYSTEM'S OWN MEASUREMENTS, TAKEN OFF HIS TWO SCREENSHOTS OF THIS BAR.
+    ///
+    /// Only the COLOUR was ever wrong here, and the first attempt changed the geometry with it: the
+    /// chevron came out at 28pt against the system's 43, and Edit at 88pt wide against its 58 — a
+    /// small circle beside an oversized capsule, which is what he photographed and called custom.
+    ///
+    /// Both shots are 921px for a 393pt screen. The bar the system drew: a 43pt circle, and a
+    /// capsule 43 tall by 58 wide around the word "Edit". So the circle is 43 and the capsule is 43
+    /// tall with 13 either side of the text, which lands on 58 for four letters at the bar's font.
+    ///
+    /// ⚠️ These are the SYSTEM's numbers, not a taste. They are only written by hand because a
+    /// toolbar item that hides its shared background stops being laid out by it, and this one must,
+    /// or the tinted glass sits inside the untinted glass the system draws.
+    private static let barItemSide: CGFloat = 43
+    private static let barItemTextInset: CGFloat = 13
+
     private var tintedBackButton: some View {
         Button { dismiss() } label: {
             Image(systemName: "chevron.backward")
                 .font(.system(size: 17, weight: .semibold))
-                .frame(width: 30, height: 30)
+                .frame(width: Self.barItemSide, height: Self.barItemSide)
                 .liquidGlass(Circle(), interactive: true, tint: barGlassTint)
         }
         .tint(barGlyph)
