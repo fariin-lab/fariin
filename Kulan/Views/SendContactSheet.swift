@@ -21,63 +21,73 @@ struct SendContactSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            // ⛔ A GRID OF FACES, FOUR TO A ROW (owner, 2026-08-20). It was one full-width row per
-            // person, which is a list of names — you read it. A grid of pictures is scanned, and
-            // when the people you message most are the first four, the one you want is usually in
-            // the first row.
-            //
-            // THE ORDER IS THE CHAT LIST'S AND ALWAYS WAS: `people` sorts on `displayUpdatedAt`,
-            // the same key `MainShell` sorts the chat list by, so the most recent conversation is
-            // first here for the same reason it is first there. Not alphabetical, not arbitrary.
-            ScrollView {
-                LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 18) {
-                    ForEach(people) { c in
-                        Button { toggle(c.id) } label: { personTile(c) }
-                            .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 12)
+        // ⛔ NO NAVIGATION BAR. The reference sheet he gave is a grabber, a search field, faces, and a
+        // row of actions along the bottom — there is no title strip and no Send in a corner. A nav
+        // bar under a grabber reads as two headers stacked, which is what the first version looked
+        // like beside his screenshot.
+        VStack(spacing: 0) {
+            searchRow
+            peopleGrid
+            actionBar
+        }
+        .background(Color(.systemBackground))
+        // Half height, and draggable to full — his first bullet. `.medium` is the system's own half
+        // detent rather than a hand-picked number, so it is right on every screen size.
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .interactiveDismissDisabled(sending)
+        .overlay {
+            if sending {
+                ProgressView().padding(20)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
             }
-            .searchable(text: $query, prompt: "Search")
-            .navigationTitle("Send to")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                if #available(iOS 26.0, *) {
-                    ToolbarItem(placement: .cancellationAction) { CloseXButton { dismiss() } }
-                        .sharedBackgroundVisibility(.hidden)
-                } else {
-                    ToolbarItem(placement: .cancellationAction) { CloseXButton { dismiss() } }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Send") { Task { await sendAll() } }
-                        .disabled(selected.isEmpty || sending).fontWeight(.semibold)
-                }
-            }
-            .overlay {
-                if sending { ProgressView().padding(20).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14)) }
-            }
-            .interactiveDismissDisabled(sending)
-            // ⛔ THE ROW ALONG THE BOTTOM, which is the half this sheet was missing. Sending it to
-            // somebody in the app and sending it OUT of the app are the same intention, and the
-            // reference sheet puts both on one screen rather than making you dismiss and hunt for
-            // the system share sheet.
-            //
-            // Two buttons and no more. Copy is the one he named. "Share to…" is the system sheet,
-            // which is where WhatsApp, Snapchat and everything else the phone actually has live —
-            // hard-coding tiles for named apps would list apps that may not be installed and would
-            // need a new tile every time he wants another one.
-            .safeAreaInset(edge: .bottom) { linkActions }
         }
     }
 
-    @State private var copied = false
+    private var searchRow: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Search", text: $query)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            if !query.isEmpty {
+                Button { query = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .font(.system(size: 16))
+        .padding(.horizontal, 14)
+        .frame(height: 44)
+        .background(Color.secondary.opacity(0.12), in: Capsule())
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 6)
+    }
 
-    private var linkActions: some View {
-        HStack(spacing: 28) {
-            Spacer(minLength: 0)
+    private var peopleGrid: some View {
+        // THE ORDER IS THE CHAT LIST'S: `people` sorts on `displayUpdatedAt`, the same key MainShell
+        // sorts the chat list by, so the most recent conversation is first here for the same reason
+        // it is first there. Not alphabetical, not arbitrary.
+        ScrollView {
+            LazyVGrid(columns: Self.columns, alignment: .leading, spacing: 20) {
+                ForEach(people) { c in
+                    Button { toggle(c.id) } label: { personTile(c) }
+                        .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 16)
+        }
+    }
+
+    /// Copy and Share always; Send only once somebody is picked, which is the only time it means
+    /// anything. It takes the trailing end of the same row rather than a corner of a bar that no
+    /// longer exists.
+    private var actionBar: some View {
+        HStack(spacing: 24) {
             actionTile(copied ? "checkmark" : "link", copied ? "Copied" : "Copy link") {
                 UIPasteboard.general.string = link
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
@@ -89,17 +99,32 @@ struct SendContactSheet: View {
             }
             actionTile("square.and.arrow.up", "Share to…") { showSystemShare = true }
             Spacer(minLength: 0)
+            if !selected.isEmpty {
+                Button { Task { await sendAll() } } label: {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 52, height: 52)
+                        .background(Color.accentColor, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(sending)
+                .transition(.scale.combined(with: .opacity))
+            }
         }
-        .padding(.top, 14)
-        .padding(.bottom, 8)
+        .animation(.easeOut(duration: 0.18), value: selected.isEmpty)
+        .padding(.horizontal, 24)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
         .background(.bar)
         .sheet(isPresented: $showSystemShare) { SystemShareSheet(items: [link]) }
     }
 
+    @State private var copied = false
     @State private var showSystemShare = false
 
     /// Just the url. `contactText` is the sentence that goes into a CHAT bubble; a clipboard or
-    /// another app wants the link on its own, or the person pasting it gets our sentence too.
+    /// another app wants the link on its own, or whoever pastes it gets our sentence too.
     private var link: String {
         contactText.split(separator: " ").last.map(String.init) ?? contactText
     }
@@ -110,7 +135,7 @@ struct SendContactSheet: View {
                 Image(systemName: icon)
                     .font(.system(size: 22, weight: .regular))
                     .foregroundStyle(.primary)
-                    .frame(width: 58, height: 58)
+                    .frame(width: 52, height: 52)
                     .background(Color.secondary.opacity(0.15), in: Circle())
                 Text(title).font(.system(size: 12)).foregroundStyle(.primary)
             }
@@ -118,14 +143,15 @@ struct SendContactSheet: View {
         .buttonStyle(.plain)
     }
 
-    /// Four across, which is what he asked for and what the reference sheet uses.
-    private static let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 4)
+    /// Three across. It was four; the newer reference images he gave are three, and at three the
+    /// face is big enough to recognise without reading the name under it.
+    private static let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
 
     @ViewBuilder private func personTile(_ c: Conversation) -> some View {
         let picked = selected.contains(c.id)
         VStack(spacing: 6) {
             ZStack(alignment: .bottomTrailing) {
-                AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 64)
+                AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 76)
                     .overlay {
                         // The ring is the selection, not a tick floating over a face.
                         Circle().strokeBorder(picked ? Color.accentColor : .clear, lineWidth: 3)
@@ -138,7 +164,7 @@ struct SendContactSheet: View {
                         .offset(x: 2, y: 2)
                 }
             }
-            .frame(width: 64, height: 64)
+            .frame(width: 76, height: 76)
             HStack(spacing: 3) {
                 Text(c.displayName(me))
                     .font(.system(size: 12))
