@@ -11,10 +11,18 @@ import CoreImage.CIFilterBuiltins
 /// the post does not have — the WYSIWYG break this editor has already been reported for on the crop
 /// and on the trim range.
 enum StoryVideoBrightness {
-    /// -1…1 from the dial, 0 untouched. Core Image's `brightness` is an additive offset where ±1 is
-    /// pure white and pure black, so the dial's full travel is scaled to a range that is a visible
-    /// change and still a picture: a story is watched for five seconds, not graded.
-    static func exposure(for value: Double) -> Float { Float(min(1, max(-1, value)) * 0.28) }
+    /// ⛔ EXPOSURE, NOT AN ADDITIVE OFFSET — read from the reference app's own source (2026-08-20).
+    ///
+    /// Theirs maps the brightness slider onto EXPOSURE and passes the value through unscaled:
+    /// `self.adjustmentsPass.adjustments.exposure = value`, in a Metal pass where exposure multiplies
+    /// the colour. Ours used `CIFilter.colorControls().brightness`, which ADDS a constant to every
+    /// channel — so darkening lifted the blacks toward grey and flattened the picture instead of
+    /// deepening it, and brightening washed rather than opened up. Same dial, visibly worse ends.
+    ///
+    /// `exposureAdjust` is Core Image's multiplicative equivalent and takes stops, so the dial's
+    /// -1…1 IS the value in EV: one stop down at the left, one up at the right, and their
+    /// pass-through mapping rather than a scale factor of ours invented on top of it.
+    static func exposureEV(for value: Double) -> Float { Float(min(1, max(-1, value))) }
 
     static func isNeutral(_ value: Double) -> Bool { abs(value) < 0.001 }
 
@@ -23,13 +31,11 @@ enum StoryVideoBrightness {
     /// passthrough, and paying for a Core Image pass to add zero would be a straight loss.
     static func composition(for asset: AVAsset, value: Double) async -> AVVideoComposition? {
         guard !isNeutral(value) else { return nil }
-        let amount = exposure(for: value)
+        let ev = exposureEV(for: value)
         return try? await AVMutableVideoComposition.videoComposition(with: asset) { request in
-            let f = CIFilter.colorControls()
+            let f = CIFilter.exposureAdjust()
             f.inputImage = request.sourceImage
-            f.brightness = amount
-            f.contrast = 1
-            f.saturation = 1
+            f.ev = ev
             // ⚠️ CROPPED BACK TO THE SOURCE EXTENT. A colour filter can hand back an image with a
             // different or infinite extent, and a composition given one of those renders a frame
             // that does not line up with the one before it.
