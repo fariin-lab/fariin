@@ -187,6 +187,12 @@ struct StoryEditorView: View {
     // lives here rather than in a pushed screen because trimming is a mode of this editor, the same
     // call he made on the video editor.
     @State private var showTrim = false
+    /// Which tab the trim page is showing. Always `.video` on open — his rule, and the reason the
+    /// page is entered at all is nearly always the trim.
+    private enum TrimTab { case video, adjust }
+    @State private var trimTab: TrimTab = .video
+    /// Coalesces the dial's per-touch reports — see `applyPreviewBrightness`.
+    @State private var brightnessTask: Task<Void, Never>?
     @State private var trimStart: Double = 0
     @State private var trimEnd: Double = 0
     @State private var trimOpenedStart: Double = 0   // what X puts back
@@ -505,6 +511,10 @@ struct StoryEditorView: View {
         // `trimEnd == 0` means "not trimmed" rather than "zero length", so an untouched clip needs no
         // knowledge of its own duration to be correct.
         var muted = false
+        /// ⛔ THE TRIM PAGE'S SECOND TAB, -1…1 with 0 untouched (owner, 2026-08-20). Per ITEM, like
+        /// the mute and the trim beside it: a post can hold five clips and they were not all shot in
+        /// the same light.
+        var brightness: Double = 0
         var trimStart: Double = 0
         var trimEnd: Double = 0
         var isTrimmed: Bool { trimStart > 0.05 || (trimEnd > 0 && trimEnd < duration - 0.05) }
@@ -2091,13 +2101,30 @@ struct StoryEditorView: View {
                 // picture above it. It was blind because the composer had no player; it has one.
                 // ⚠️ THROUGH A HOST THAT OWNS THE 20Hz, so the playhead's clock cannot reach this
                 // screen's body. See `TrimPlayheadBox`.
-                TrimStripHost(playhead: trimPlayhead, duration: dur, thumbnails: trimThumbs,
-                              trimStart: $trimStart, trimEnd: $trimEnd, scrubTime: $trimScrub,
-                              playing: $previewPlaying, draggingPlayhead: $trimDragging)
-                    .frame(height: 56)
-                    .padding(.horizontal, 16)
-                    // Reserve the slot rather than let a late filmstrip shove the layout up.
-                    .opacity(trimThumbs.isEmpty ? 0 : 1)
+                // ⛔ ONE SLOT, TWO CONTROLS. The filmstrip and the brightness dial are the same band
+                // of the screen: the Video tab trims, the Adjust tab lights. Swapping rather than
+                // stacking is what keeps the picture the same size on both tabs — a second row would
+                // push the clip up the moment you switched, which is the one thing this page cannot
+                // do while you are judging a frame.
+                if trimTab == .video {
+                    TrimStripHost(playhead: trimPlayhead, duration: dur, thumbnails: trimThumbs,
+                                  trimStart: $trimStart, trimEnd: $trimEnd, scrubTime: $trimScrub,
+                                  playing: $previewPlaying, draggingPlayhead: $trimDragging)
+                        .frame(height: 56)
+                        .padding(.horizontal, 16)
+                        // Reserve the slot rather than let a late filmstrip shove the layout up.
+                        .opacity(trimThumbs.isEmpty ? 0 : 1)
+                } else {
+                    BrightnessDial(value: Binding(
+                        get: { items.indices.contains(index) ? items[index].brightness : 0 },
+                        set: { v in
+                            guard items.indices.contains(index) else { return }
+                            items[index].brightness = v
+                            applyPreviewBrightness(v)
+                        }))
+                        .frame(height: 56)
+                        .padding(.horizontal, 16)
+                }
                 // ✕ · one tool group · ✓ — HIS 2026-08-16 REDESIGN, and it is the same three-part
                 // bar the pen and the crop screen already wear rather than a fourth arrangement.
                 //
@@ -2238,6 +2265,15 @@ struct StoryEditorView: View {
                 // The composer's mute, reachable from the screen that needs it. Same two lines as
                 // the top bar's copy, including the one that tells the PLAYER — a flag that only
                 // reaches the export is a button that looks dead while you are listening to it.
+                // ⛔ THE TWO TABS. Video is the trim this page has always been; Adjust swaps the
+                // filmstrip for the brightness dial. Default is Video on every open — the page is
+                // nearly always entered to cut something.
+                capsuleTool("video.fill", active: trimTab == .video, tint: Color(hex: 0x3DA1FD)) {
+                    withAnimation(.easeInOut(duration: 0.18)) { trimTab = .video }
+                }
+                capsuleTool("sun.max.fill", active: trimTab == .adjust, tint: Color(hex: 0x3DA1FD)) {
+                    withAnimation(.easeInOut(duration: 0.18)) { trimTab = .adjust }
+                }
                 capsuleTool(items[index].muted ? "speaker.slash.fill" : "speaker.wave.2.fill",
                             active: items[index].muted, tint: Color(hex: 0x3DA1FD)) {
                     items[index].muted.toggle()
@@ -2280,6 +2316,28 @@ struct StoryEditorView: View {
         abs(trimStart - trimOpenedStart) > 0.001 || abs(trimEnd - trimOpenedEnd) > 0.001
     }
 
+    /// ⛔ THE DIAL HAS TO SHOW ON THE CLIP, or it is a number with no picture attached — and the
+    /// export would then be the first place anybody saw what they had chosen.
+    ///
+    /// The SAME builder the export uses (`StoryVideoBrightness`), so the preview cannot drift from
+    /// the file. Neutral clears the composition rather than installing an identity one: a player item
+    /// with no composition takes the plain decode path, which is what an unadjusted clip deserves.
+    ///
+    /// Coalesced through a task: the dial reports on every touch and rebuilding a video composition
+    /// per frame of a drag would stutter the very picture being judged. Only the last value survives.
+    private func applyPreviewBrightness(_ value: Double) {
+        brightnessTask?.cancel()
+        guard let item = previewPlayer?.currentItem else { return }
+        guard !StoryVideoBrightness.isNeutral(value) else { item.videoComposition = nil; return }
+        brightnessTask = Task { [weak item] in
+            try? await Task.sleep(nanoseconds: 90_000_000)
+            guard !Task.isCancelled, let item, let asset = item.asset as AVAsset? else { return }
+            let comp = await StoryVideoBrightness.composition(for: asset, value: value)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { item.videoComposition = comp }
+        }
+    }
+
     private func openTrim() {
         guard items.indices.contains(index), items[index].isVideo else { return }
         // TRIM ARRIVES ON A STILL FRAME, the video editor's own rule (`openTrim` there does the same
@@ -2287,6 +2345,10 @@ struct StoryEditorView: View {
         // and leaving the flag true was also how the card's play button ended up hidden after trim:
         // closing put nothing back, and the button is drawn `.opacity(previewPlaying ? 0 : 1)`.
         previewPlaying = false
+        // ⛔ ALWAYS THE VIDEO TAB ON OPEN (his rule). The page is nearly always entered to cut
+        // something, and a tab remembered from the last visit would put a dial in front of somebody
+        // who came here for the strip.
+        trimTab = .video
         trimStart = items[index].trimStart
         trimEnd = items[index].trimEnd > 0 ? items[index].trimEnd : items[index].duration
         trimOpenedStart = trimStart
@@ -3348,7 +3410,9 @@ struct StoryEditorView: View {
         return StoryBurnIn(overlay: art, cropRect: crop,
                            canvasAspect: size.height > 0 ? size.width / size.height : nil,
                            contentScale: shrunk ? photoZoom : 1,
-                           backdrop: shrunk ? canvasBackdrop(size: size) : nil)
+                           backdrop: shrunk ? canvasBackdrop(size: size) : nil,
+                           // The Adjust tab's dial, carried with everything else the editor did.
+                           brightness: items.indices.contains(index) ? items[index].brightness : 0)
     }
 
     /// The story's own canvas as a picture, for the export to put behind a clip that has been pinched
@@ -4551,5 +4615,69 @@ struct CropCorners: Shape {
         p.move(to: CGPoint(x: rect.maxX, y: rect.maxY - len)); p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY)); p.addLine(to: CGPoint(x: rect.maxX - len, y: rect.maxY))
         p.move(to: CGPoint(x: rect.minX + len, y: rect.maxY)); p.addLine(to: CGPoint(x: rect.minX, y: rect.maxY)); p.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - len))
         return p
+    }
+}
+
+/// ⛔ THE BRIGHTNESS DIAL — the trim page's Adjust tab (owner, 2026-08-20, with his screenshot).
+///
+/// A row of ticks with a mark in the middle: drag left and the clip darkens, drag right and it
+/// brightens, and the centre is untouched. Deliberately NOT a `Slider` — the reference is a ruler
+/// you push past, it has no thumb to grab, and the whole strip is the target rather than a 30pt knob
+/// somewhere along it.
+///
+/// It reports through a plain binding and holds no state of its own beyond the drag, so switching
+/// tabs, changing item or leaving the page cannot strand a half-finished gesture.
+private struct BrightnessDial: View {
+    @Binding var value: Double            // -1…1, 0 = untouched
+    @State private var dragStart: Double?
+
+    private let ticks = 41
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            ZStack {
+                HStack(spacing: 0) {
+                    ForEach(0..<ticks, id: \.self) { i in
+                        // The centre tick is taller: it is the only value worth finding by eye.
+                        let centre = i == ticks / 2
+                        Rectangle()
+                            .fill(Color.white.opacity(centre ? 0.9 : 0.45))
+                            .frame(width: 1.5, height: centre ? 26 : 16)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                // The mark sits where the value is, so the ruler reads as something being pushed
+                // rather than a static row with a number attached to it.
+                Rectangle()
+                    .fill(Color.white)
+                    .frame(width: 2.5, height: 34)
+                    .offset(x: CGFloat(value) * (w / 2 - 8))
+                    .animation(.easeOut(duration: 0.12), value: value)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { g in
+                        // Anchored on the value the drag STARTED from, not on the finger's absolute
+                        // position: a ruler you push should follow your thumb by the distance it
+                        // moved, and jumping to wherever the first touch landed is how a control
+                        // like this loses a setting somebody had already dialled in.
+                        let start = dragStart ?? value
+                        if dragStart == nil { dragStart = start }
+                        let span = max(1, w - 16)
+                        value = min(1, max(-1, start + Double(g.translation.width / span) * 2))
+                    }
+                    .onEnded { _ in
+                        dragStart = nil
+                        // Snap the last sliver back to neutral, so "put it back" does not need a
+                        // steady hand.
+                        if abs(value) < 0.03 { value = 0 }
+                    }
+            )
+            // Double tap is the reset every dial of this kind has.
+            .onTapGesture(count: 2) { withAnimation(.easeOut(duration: 0.18)) { value = 0 } }
+        }
     }
 }

@@ -68,7 +68,22 @@ enum VideoTranscoder {
                         hd: Bool = false, range: CMTimeRange? = nil,
                         overlay: UIImage? = nil, cropRect: CGRect? = nil,
                         canvasAspect: CGFloat? = nil, contentScale: CGFloat = 1,
-                        backdrop: UIImage? = nil, storyBackdrop: Bool = false) async -> Prepared? {
+                        backdrop: UIImage? = nil, storyBackdrop: Bool = false,
+                        brightness: Double = 0) async -> Prepared? {
+        // ⛔ BRIGHTNESS IS A PRE-PASS, AND IT HAS TO BE (owner, 2026-08-20 — the trim page's Adjust
+        // tab). It cannot ride the composition the export already uses: `burnIn` composites with
+        // LAYER INSTRUCTIONS and a Core Animation tool, which has nowhere to hang a Core Image
+        // filter, so a clip carrying text or a pen stroke would silently post at its original
+        // brightness — the same shape of WYSIWYG break this editor has been reported for twice.
+        //
+        // Doing it first, into a temp file, means everything downstream is untouched and every path
+        // gets it: passthrough, burn-in and the gradient canvas alike. It costs one extra encode,
+        // and only for a clip somebody actually adjusted.
+        var url = url
+        if !StoryVideoBrightness.isNeutral(brightness),
+           let lit = await brightnessPass(url, value: brightness) {
+            url = lit
+        }
         let asset = AVURLAsset(url: url)
         guard let fullTime = try? await asset.load(.duration), fullTime.seconds > 0 else { return nil }
         var duration = fullTime.seconds
@@ -369,6 +384,30 @@ enum VideoTranscoder {
     ///
     /// ONLY REACHED WHEN THERE IS SOMETHING TO BURN IN. A plain video still exports down the original
     /// path, untouched, so nothing that works today can be broken by what happens in here.
+    /// One export whose only job is the dial's value. Returns nil on any failure, and the caller then
+    /// exports the clip unadjusted rather than not at all — a story that posts a shade too dark beats
+    /// a story that does not post.
+    private static func brightnessPass(_ url: URL, value: Double) async -> URL? {
+        let asset = AVURLAsset(url: url)
+        guard let comp = await StoryVideoBrightness.composition(for: asset, value: value),
+              let session = AVAssetExportSession(asset: asset,
+                                                 presetName: AVAssetExportPresetHighestQuality)
+        else { return nil }
+        let out = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lit-\(UUID().uuidString).mp4")
+        session.outputURL = out
+        session.outputFileType = .mp4
+        session.shouldOptimizeForNetworkUse = true
+        session.videoComposition = comp
+        do {
+            try await session.export(to: out, as: .mp4)
+        } catch {
+            try? FileManager.default.removeItem(at: out)
+            return nil
+        }
+        return out
+    }
+
     private static func burnIn(asset: AVAsset, overlay: UIImage?, cropRect: CGRect?,
                                canvasAspect: CGFloat?, contentScale: CGFloat = 1,
                                backdrop: UIImage? = nil, hd: Bool) async -> AVVideoComposition? {

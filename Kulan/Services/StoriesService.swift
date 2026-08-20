@@ -1217,7 +1217,8 @@ final class StoriesService {
                                                            canvasAspect: burn?.canvasAspect,
                                                            contentScale: burn?.contentScale ?? 1,
                                                            backdrop: burn?.backdrop,
-                                                           storyBackdrop: true) else {
+                                                           storyBackdrop: true,
+                                                           brightness: burn?.brightness ?? 0) else {
             throw NSError(domain: "Fariin", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Couldn't process this video"])
         }

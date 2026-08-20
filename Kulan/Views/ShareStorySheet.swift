@@ -115,8 +115,19 @@ struct StoryBurnIn {
     /// that lands.
     var backdrop: UIImage? = nil
 
+    /// The trim page's Adjust dial, -1…1 with 0 untouched. It rides here rather than on
+    /// `StoryVideoPayload` because everything else the editor did to the picture rides here, and the
+    /// export reads them together.
+    var brightness: Double = 0
+
     /// Nothing to do — so the caller can hand back nil and keep the untouched path.
-    var isEmpty: Bool { overlay == nil && cropRect == nil && backdrop == nil && contentScale == 1 }
+    ///
+    /// ⚠️ BRIGHTNESS COUNTS. Leaving it out is how an adjusted clip would take the untouched export
+    /// path and post at its original light.
+    var isEmpty: Bool {
+        overlay == nil && cropRect == nil && backdrop == nil && contentScale == 1
+            && StoryVideoBrightness.isNeutral(brightness)
+    }
 }
 
 // MARK: - Share Story
