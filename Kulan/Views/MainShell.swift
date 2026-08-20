@@ -934,12 +934,12 @@ struct ChatsView: View {
         // NavigationLink row draws the disclosure chevron and there is no API to turn it off
         // (user: "remove the arrow in chat list"). The link ALSO set the List's selection, and
         // SwiftUI never cleared it on the way back; fixed in the two onChange handlers on the List.
-        // ⚠️ THAT LEFT THE ROW WITH NO HIGHLIGHT AT ALL, and the paragraph that used to sit here said
-        // the opposite: that a plain-styled Button in a List row lets the cell's own pressed state
-        // paint through it. It does not. The Button takes the touch, the cell never learns a press
-        // happened, and `.plain` adds no feedback of its own — so tapping a chat to open it looked
-        // like nothing had been tapped (owner 2026-08-13). The grey is ours again, via RowPressFill,
-        // which carries the watchdog that makes the old stranding impossible.
+        // ⚠️ AND IT LEAVES THE ROW WITH NO PRESS HIGHLIGHT, WHICH IS NOW THE DECISION. A plain-styled
+        // Button in a List row does NOT let the cell's own pressed state paint through it: the Button
+        // takes the touch, so the cell never learns a press happened. That was called a bug on
+        // 2026-08-13 and a custom grey was built for it; on 2026-08-19 he asked for the grey out and
+        // this back the way it was. The note where `RowPressFill` used to live in Theme.swift says
+        // what the grey cost — read it before anybody builds it a fourth time.
         //
         // A row used to stay lit while its chat was open (the reference app's `selectRow`, build 441). It is
         // deleted. On a phone that highlight is only ever VISIBLE during the back swipe, because
@@ -954,17 +954,15 @@ struct ChatsView: View {
         } label: {
             chatListRowLabel(conv)
         }
-        // `.plain` is what left a tap with no feedback at all — see RowPressFill, which paints the
-        // grey the cell underneath was never going to paint, and cannot strand it.
-        //
-        // ⚠️ THE DEAD ZONE IS THE STORY RING'S 56pt AVATAR PLUS ITS GUTTER. That avatar carries a
-        // `highPriorityGesture` that opens the person's story instead of the chat, and priority beat
-        // the Button's own tap for as long as the row WAS a Button. The row is driven by a
-        // simultaneous gesture now, and simultaneous means both fire: the story opened and the chat
-        // pushed in under it, leaving the story frozen over a screen that had moved (owner
-        // 2026-08-19). Only rows that actually wear a ring give the strip away, so a plain avatar
-        // still opens its chat like the rest of the row.
-        .buttonStyle(RowPressFill(deadZoneWidth: storySeen(conv).isEmpty ? 0 : 76))
+        // ⚠️ `.plain`, AND THE TOUCH GREY IS GONE ON HIS WORD (2026-08-19: "remove the highlight
+        // grey we added when you tap a chat list row, back the way it was before"). It was asked for
+        // on 2026-08-13, took three attempts to make visible, and each attempt cost something else:
+        // driving the row from a gesture rather than a Button took the tap away entirely in 612, then
+        // made a ringed avatar open the story AND the chat at once, and the app-wide touch-delay
+        // change that went with it broke the story viewer's corners. None of that exists without the
+        // grey. See the deleted `RowPressFill` in Theme.swift if it is ever asked for again — and
+        // read what it cost before rebuilding it.
+        .buttonStyle(.plain)   // no accent tint on the label, and no custom press flag to get stuck
         // Edit mode: the push is off, and the tap-catcher overlay below owns the tap.
         //
         // `.disabled(selecting)` was the wrong tool and `.opacity(1)` did not rescue it. Disabled
@@ -1049,9 +1047,6 @@ struct ChatsView: View {
                 voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
             .equatable()   // skip rebuild when this conversation is unchanged
             .frame(maxWidth: .infinity, alignment: .leading)
-            // The 150ms UIKit holds a touch for inside a scroll view, off for THIS list only. It was
-            // set app-wide for one build and broke the story viewer's drag. See ScrollTouchDelayOff.
-            .background(ScrollTouchDelayOff().frame(width: 0, height: 0))
             // NO BACKGROUND OF OUR OWN. A fill painted here used to mark the open chat; it is gone
             // (see the Button above). Do not bring one back on this modifier, or on the List's
             // selection binding, or on `.listRowBackground`: the binding stranded a permanent grey
@@ -1141,7 +1136,7 @@ struct ChatsView: View {
                 .padding(.horizontal, 16)   // the chat row's gutter, for the same reason (row insets are zero)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(RowPressFill())    // the same touch grey as the chat rows under it
+            .buttonStyle(.plain)            // same deal as a chat row: no custom press state
             // Select mode: dimmed and dead, not gone. `disabled` is the right tool here for once —
             // it stops the tap AND greys the row, and greyed is exactly the state being asked for.
             .disabled(selecting)
@@ -2000,7 +1995,7 @@ struct ArchivedChatsView: View {
                                             voiceDraftSecs: AudioRecorder.draftIndex[conv.id] ?? 0,
                                             voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
                                 }
-                                .buttonStyle(RowPressFill())   // the same touch grey the chat list has
+                                .buttonStyle(.plain)
                                 .tag(conv.id)
                                 .listRowInsets(EdgeInsets())
                                 .listRowSeparator(.hidden)

@@ -302,179 +302,22 @@ struct MenuIcon: View {
     }
 }
 
-/// The grey a list row wears while a finger is on it, and the tap that opens what it names.
-///
-/// THE ROWS HAD NO TOUCH FEEDBACK AT ALL (owner 2026-08-13, on the chat list: tapping a chat to open
-/// it shows nothing, "no gray that tells it's tapped this user"). The cell underneath was believed
-/// to paint its own highlight through the row's Button. It does not: the Button takes the touch, so
-/// the cell never learns a press happened, and `.plain` means exactly what it says.
-///
-/// A PRIMITIVE style, not a `ButtonStyle`, and build 612 is the reason.
-///
-/// ⚠️ READ THIS BEFORE CHANGING ANYTHING HERE. A plain `ButtonStyle` paints from
-/// `configuration.isPressed`, and two shipped fixes built on that signal both failed: on 612 the
-/// owner reported grey arriving for the first time AND the chat no longer opening. That single
-/// report settles the whole question. The grey came from the touch-down drag added in 612, so
-/// `isPressed` was never the thing painting anything, which is why tuning its timing twice changed
-/// nothing. And the drag, added as a SIMULTANEOUS gesture inside a Button, recognised alongside the
-/// Button's own tap and took the tap with it.
-///
-/// A primitive style has no built-in tap to compete with, so one gesture owns both halves: it
-/// lights the row when the finger lands and fires the action when the finger lifts without having
-/// travelled. Nothing can disagree with anything, because there is only one recogniser.
-///
-/// What 612 also proved, and what this keeps: with this gesture installed the list still scrolls,
-/// the swipe actions still open and the long-press menu still lifts. `simultaneousGesture` is what
-/// buys that, so it stays simultaneous even though there is no longer a Button gesture to be
-/// simultaneous WITH.
-struct RowPressFill: PrimitiveButtonStyle {
-    /// The app's own highlight token, one step up from the menu's `.secondarySystemFill`: a menu row
-    /// is a small target under a finger that is already still, a chat row is the full width of the
-    /// screen and the eye is somewhere else. It still adapts to light and dark on its own.
-    static let fill = Color(.systemFill)
-    /// Long enough that a long press keeps its grey while the context menu takes over (the menu
-    /// lifts the row at about half a second), short enough that a stranded press is never seen.
-    static let watchdog: UInt64 = 3_000_000_000
-    /// How long the grey survives the finger leaving. See `Fill.release`.
-    ///
-    /// 180ms originally, cut on the owner's 613 report that opening a chat felt slower than it used
-    /// to. The push begins the instant the finger lifts, so anything this number buys after that is
-    /// grey sitting UNDER a screen that is already sliding over it — which reads as the list being
-    /// slow to let go. Long enough to be seen on a fast tap, short enough to be gone by the time the
-    /// chat has covered the row.
-    static let outlive: UInt64 = 90_000_000
-    /// Past this, the finger is scrolling the list or swiping the row. It is not a tap, it gets no
-    /// grey, and it must not open anything.
-    static let slop: CGFloat = 10
-
-    /// ⚠️ A LEADING STRIP THIS STYLE KEEPS ITS HANDS OFF, and it exists because of a real bug.
-    ///
-    /// A chat row whose avatar wears a story ring has a `highPriorityGesture` on that avatar: tap
-    /// the ring, open their story, not the chat. That priority beat a Button's own tap, which is all
-    /// it ever had to beat — until this style started driving the row from a SIMULTANEOUS gesture,
-    /// and simultaneous means exactly that. Both fired: the story opened AND the chat pushed in
-    /// underneath it, leaving the story frozen over a screen that had moved (owner 2026-08-19).
-    ///
-    /// Priority cannot settle this, because nothing is competing — they are running together on
-    /// purpose, which is what keeps the list scrolling. So the row is told where not to look. Zero
-    /// for every row without a ring, including the whole archive list, so a plain avatar still opens
-    /// its chat.
-    var deadZoneWidth: CGFloat = 0
-
-    func makeBody(configuration: Configuration) -> some View {
-        Fill(configuration: configuration, deadZoneWidth: deadZoneWidth)
-    }
-
-    // The state lives in a real View, not in makeBody: a style is a value that gets rebuilt.
-    // ⚠️ NOT named `Body`: the protocol declares an associatedtype of that name, so a nested type
-    // called Body is taken as the witness for it and a private one cannot be (compile error).
-    private struct Fill: View {
-        let configuration: PrimitiveButtonStyleConfiguration
-        let deadZoneWidth: CGFloat
-        @State private var lit = false
-        @State private var fade: Task<Void, Never>?
-
-        var body: some View {
-            configuration.label
-                .background(lit ? RowPressFill.fill : .clear)
-                // The whole row answers the finger, including its empty space.
-                .contentShape(Rectangle())
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 0)
-                        .onChanged { v in
-                            // Started on the story ring: that gesture owns this touch. See deadZoneWidth.
-                            if v.startLocation.x < deadZoneWidth { release(after: 0); return }
-                            if Self.moved(v.translation) {
-                                // A scroll or a swipe. Drop the grey at once, exactly as a table
-                                // view does the moment a scroll begins.
-                                release(after: 0)
-                            } else if !lit {
-                                light()
-                            }
-                        }
-                        .onEnded { v in
-                            if v.startLocation.x < deadZoneWidth { release(after: 0); return }
-                            // STATELESS on purpose. A "was it cancelled" flag would survive a
-                            // gesture the scroll view steals — no onEnded, flag stuck, and every
-                            // later tap silently does nothing. The translation is the only thing
-                            // asked, and it is asked fresh.
-                            if Self.moved(v.translation) {
-                                release(after: 0)
-                            } else {
-                                // THE OPEN FIRST, the grey's bookkeeping after. Nothing here is slow,
-                                // but the push is the thing the eye is waiting for and it should not
-                                // be queued behind a fade that only matters once it has started.
-                                configuration.trigger()
-                                release(after: RowPressFill.outlive)
-                            }
-                        }
-                )
-        }
-
-        private static func moved(_ t: CGSize) -> Bool {
-            abs(t.width) > RowPressFill.slop || abs(t.height) > RowPressFill.slop
-        }
-
-        private func light() {
-            fade?.cancel()
-            lit = true
-            // The stranding watchdog. This list re-sorts on every incoming message, so a row rebuilt
-            // under a resting finger may never be told the press ended; and a gesture the scroll
-            // view takes over never reports an end at all. Neither can leave grey behind.
-            fade = Task { @MainActor in
-                try? await Task.sleep(nanoseconds: RowPressFill.watchdog)
-                guard !Task.isCancelled else { return }
-                withAnimation(.easeOut(duration: 0.2)) { lit = false }
-            }
-        }
-
-        /// IT HAS TO OUTLIVE THE FINGER. A tap holds the glass for about a tenth of a second and the
-        /// chat is already pushing over the row by the time the eye arrives, so the fill survives the
-        /// lift by a beat and then fades — which is what makes a tap something you SAW rather than
-        /// something that happened. `after: 0` is the scroll case, where the grey must go instantly.
-        private func release(after: UInt64) {
-            fade?.cancel()
-            guard lit else { return }
-            fade = Task { @MainActor in
-                if after > 0 {
-                    try? await Task.sleep(nanoseconds: after)
-                    guard !Task.isCancelled else { return }
-                }
-                withAnimation(.easeOut(duration: 0.18)) { lit = false }
-            }
-        }
-    }
-}
-
-/// Turns off `delaysContentTouches` on the ONE scroll view that encloses it, and nothing else.
-///
-/// ⚠️ THIS WAS `UIScrollView.appearance()` FOR ONE BUILD AND IT BROKE THE STORY VIEWER. The flag
-/// is a UIScrollView default: a touch landing on something inside a scroll view is held for about
-/// 150ms while UIKit decides whether the finger is going to scroll instead. Turning it off makes a
-/// chat row answer the finger at once, which is what the owner asked for after 613 felt slower than
-/// 611. Set through `appearance()` it also reached the STORY viewer, where touches the drag used to
-/// absorb now start the card's corner morph on the smallest movement and scrolling back does not
-/// fully undo it — his 614 report, and 613 was clean.
-///
-/// So it is applied to one scroll view, found by walking up from a zero-sized view planted inside
-/// it. Idempotent and cheap: the walk stops at the first scroll view it meets, and setting a Bool
-/// that is already false costs nothing. Put one inside the content of a list that wants it; do NOT
-/// put it back on `appearance()`.
-struct ScrollTouchDelayOff: UIViewRepresentable {
-    func makeUIView(context: Context) -> UIView { Finder() }
-    func updateUIView(_ v: UIView, context: Context) {}
-
-    private final class Finder: UIView {
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
-            var v: UIView? = superview
-            while let cur = v {
-                if let scroll = cur as? UIScrollView { scroll.delaysContentTouches = false; return }
-                v = cur.superview
-            }
-        }
-    }
-}
+// `RowPressFill` and `ScrollTouchDelayOff` lived here and are gone on the owner's word (2026-08-19):
+// "remove the highlight grey we added when you tap a chat list row, back the way it was before."
+//
+// ⚠️ READ THIS BEFORE BUILDING IT AGAIN. The grey was asked for on 2026-08-13, and it took three
+// attempts to make it appear at all, because the signal it was built on (`configuration.isPressed`
+// on a plain ButtonStyle) never fired for a list row. What finally made it visible was driving the
+// row from a gesture instead of a Button, and that is where the cost landed:
+//   · 612 shipped with chat rows that could not be opened at all — the gesture took the tap.
+//   · a ringed avatar then opened the story AND the chat together, leaving the story frozen.
+//   · turning off `delaysContentTouches` app-wide, to make the gesture feel as quick as the Button
+//     had, broke the story viewer's corner morph. He bisected that one to the build himself.
+// Every one of those is a bug this app did not have while the row was a plain `Button`.
+//
+// If it is ever wanted again, the honest routes are a `NavigationLink` row (which gets UIKit's own
+// cell highlight for free, and costs a disclosure chevron he has already rejected) or a UIKit list.
+// Not a gesture over a Button.
 
 struct AvatarView: View {
     let name: String
