@@ -357,6 +357,8 @@ final class StoryCubePagerVC: UIViewController {
     private var settleTo: CGFloat = 0
     private var settleStart: CFTimeInterval = 0
     private var settleDone: (() -> Void)?
+    /// This turn's own duration, chosen from how far it has to travel — see `span(forDistance:)`.
+    private var settleSpan: CFTimeInterval = StoryCubePager.settleDuration
 
     /// ⚠️ 0.165s IS HIS, NOT THEIRS. Theirs is 0.4.
     ///
@@ -369,7 +371,31 @@ final class StoryCubePagerVC: UIViewController {
     ///
     /// The spring is unaffected — `springProgress` is normalised over its own duration, so the same
     /// sampled curve simply plays at a different rate and still lands exactly on 1.
+    ///
+    /// ⛔ AND IT IS A FLOOR NOW, NOT THE WHOLE ANSWER. See `span(forDistance:)`.
     private static let settleDuration: CFTimeInterval = 0.165
+
+    /// Theirs, for a WHOLE face. The number this file has always quoted and never used.
+    private static let fullFaceDuration: CFTimeInterval = 0.4
+
+    /// ⛔ HOW LONG A TURN TAKES DEPENDS ON HOW FAR IT HAS TO GO, and until now it did not.
+    ///
+    /// One constant covered both gestures, and the two hand it completely different distances. A
+    /// SWIPE does most of the rotation with the finger: by the time `commit` rebases the fraction,
+    /// what is left to travel is `1 - |what you dragged|`, usually a tenth to four tenths of a face.
+    /// A TAP starts at exactly zero, so the same clock is asked to turn a WHOLE face — three to ten
+    /// times the angular speed, about ten frames at 60Hz to move 90 degrees on two full-screen
+    /// layers that each carry a gradient. That is the owner's "swipe is smooth, tap lags and the
+    /// brightness jumps": the darkening is `|t| * 1.3`, so a tap also sweeps a face from clear to
+    /// fully dark and back inside those same ten frames, which reads as a flash rather than shading.
+    ///
+    /// His 0.165 stays exactly as it is, because it was measured on swipe tails and it is right for
+    /// them — it is the FLOOR. Anything longer than a bit over four tenths of a face scales up to
+    /// their 0.4 for a full one, so a tap now gets the time their turn takes and every swipe that
+    /// lands inside the floor feels precisely as it did before.
+    private static func span(forDistance distance: CGFloat) -> CFTimeInterval {
+        max(Self.settleDuration, Self.fullFaceDuration * CFTimeInterval(min(1, abs(distance))))
+    }
 
     private func settle(to target: CGFloat, then done: @escaping () -> Void) {
         stopSettle(finishing: false)
@@ -382,6 +408,7 @@ final class StoryCubePagerVC: UIViewController {
         settleFrom = panFraction
         settleTo = target
         settleStart = CACurrentMediaTime()
+        settleSpan = Self.span(forDistance: target - panFraction)
         settleDone = done
         let link = CADisplayLink(target: self, selector: #selector(stepSettle))
         // `.common` so a settle that overlaps anything else on the main runloop still runs.
@@ -391,7 +418,7 @@ final class StoryCubePagerVC: UIViewController {
 
     @objc private func stepSettle() {
         let elapsed = CACurrentMediaTime() - settleStart
-        let u = min(1, CGFloat(elapsed / Self.settleDuration))
+        let u = min(1, CGFloat(elapsed / max(0.0001, settleSpan)))
         panFraction = settleFrom + (settleTo - settleFrom) * Self.springProgress(u)
         applyFold()
         guard u >= 1 else { return }
