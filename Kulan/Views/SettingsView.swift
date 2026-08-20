@@ -1464,10 +1464,14 @@ struct EditProfileView: View {
                                 // to end up with, rather than the photo you just asked to delete.
                                 AvatarView(name: editingName,
                                            photoUrl: pendingRemove ? nil : profile.me?.photoUrl,
-                                           size: 100)
+                                           // 120, matching the Settings header's own circle. At 100
+                                           // it was the smallest picture on a page whose entire
+                                           // subject is that picture, with the pill under it nearly
+                                           // as wide as the photo itself (owner, 2026-08-20).
+                                           size: 120)
                                 if let pendingPhoto {
                                     Image(uiImage: pendingPhoto).resizable().scaledToFill()
-                                        .frame(width: 100, height: 100).clipShape(Circle())
+                                        .frame(width: 120, height: 120).clipShape(Circle())
                                 }
                             }
                             .contentShape(Circle())
