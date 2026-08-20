@@ -380,6 +380,15 @@ struct ContactInfoView: View {
     /// iOS 26: `.light`, purely so the MATERIAL matches. That version resolves the glass against this
     /// scheme, and `.dark` there produced the near black Back and Edit buttons on a bright page. The
     /// glyphs are pinned white at their own call sites so they do not come along.
+    /// ⚠️ PRECOMPUTED, NOT WRITTEN INLINE. `coreScroll` carries this page's whole modifier chain and
+    /// is already at the compiler's type-checking limit — three ternaries added to it in the body was
+    /// enough to tip it into "unable to type-check this expression in reasonable time". Plain typed
+    /// properties cost the inference engine nothing.
+    private var barGlyph: Color { useAdaptive ? .white : .primary }
+    private var barTint: Color? { useAdaptive ? .white : nil }
+
+    private var barColorScheme: ColorScheme? { useAdaptive ? Self.barScheme : nil }
+
     private static var barScheme: ColorScheme {
         if #available(iOS 27.0, *) { return .dark }
         return .light
@@ -391,7 +400,7 @@ struct ContactInfoView: View {
                 // `.white` rather than `.primary` on the adaptive page: the bar's scheme is
                 // flipped to light on iOS 26 for the material's sake (see `barScheme`), and
                 // `.primary` would follow it to black. On this page the two were the same value.
-                Button("Edit") { showRename = true }.tint(useAdaptive ? .white : .primary)
+                Button("Edit") { showRename = true }.tint(barGlyph)
             }
         }
     }
@@ -487,7 +496,7 @@ struct ContactInfoView: View {
         .navigationBarBackButtonHidden(showProfilePhoto)
         // The system back chevron takes its colour from here, not from the bar's scheme, so it stays
         // white through the iOS 26 material flip above.
-        .tint(useAdaptive ? .white : nil)
+        .tint(barTint)
         .toolbar { navTrailing }
         // The photo viewer's X, as a BAR ITEM in the back button's place. The top strip belongs to
         // the navigation bar, which sits above the viewer overlay and eats its touches — an X drawn
@@ -535,7 +544,7 @@ struct ContactInfoView: View {
                     HStack(spacing: 7) {
                         AvatarView(name: shownName, photoUrl: gatedPhotoUrl, size: 26)
                         Text(shownName).font(.headline).lineLimit(1)
-                            .foregroundStyle(useAdaptive ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                            .foregroundStyle(barGlyph)
                         // Not tappable: the whole collapsed bar is `allowsHitTesting(false)` so it
                         // cannot eat scrolls, and the hero mark below is the one to tap anyway.
                         VerifiedMark(uid: otherUid, size: 14)
@@ -578,7 +587,7 @@ struct ContactInfoView: View {
         // So 26 is handed `.light` to get the material right, and the three glyphs that ride this bar
         // are pinned to white just below so they do not follow it. Nothing else on the page moves:
         // the page's own `\.colorScheme` is still dark, which is the rule that matters.
-        .toolbarColorScheme(useAdaptive ? Self.barScheme : nil, for: .navigationBar)
+        .toolbarColorScheme(barColorScheme, for: .navigationBar)
         .task {
             // Seed from the warm cache FIRST so "All Media" shows instantly (no late pop-in on
             // re-entry); the async load() then refreshes it.
