@@ -6850,9 +6850,22 @@ struct MessageBubble: View, Equatable {
                 let minW: CGFloat = hasCaption
                     ? min(boxMax, (message.text as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: 17)]).width + 24)
                     : 0
-                var w = boxMax * aspect, h = boxMax
+                // ⛔ A PORTRAIT PHOTO MAY RUN TALLER THAN THE BOX IS WIDE (owner, 2026-08-20, with
+                // the two side-by-side shots).
+                //
+                // `h = boxMax` pinned every image's height to the WIDTH cap, so the taller the
+                // picture the narrower the bubble: a phone screenshot at 9:19.5 came out about 140pt
+                // across on his screen — a stamp beside the same photo in the reference. Landscape
+                // never noticed, because it clamps on width one line below and always did.
+                //
+                // 1.3 rather than a free rein: the bubble still has to read as a message in a list
+                // and not as a full-screen page, and a picture that keeps growing pushes the rest of
+                // the conversation off the screen.
+                let tallMax = boxMax * 1.3
+                var h = aspect < 1 ? tallMax : boxMax
+                var w = h * aspect
                 w = max(w, minW)
-                if w > boxMax { w = boxMax; h = boxMax / aspect }
+                if w > boxMax { w = boxMax; h = w / aspect }
                 // Anti-upscale: never enlarge a tiny original (but never drop below 150pt either).
                 if let sw = message.width, let sh = message.height {
                     let srcShort = CGFloat(min(sw, sh)), dispShort = min(w, h)
