@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UIKit
 
 // "Select Theme" sheet, our own look. A native sheet with a row of gradient swatches
 // + None (+ a Photos tile when a custom photo is the pick). Picking a swatch LIVE-previews it on the
@@ -113,9 +114,14 @@ struct WallpaperPickerSheet: View {
             bottomBar
         }
         .padding(.top, 8)      // native gap under the system grabber (was a big dead band)
-        .padding(.bottom, 12)
+        // ⛔ THE HOME INDICATOR IS NOT PART OF THE 12. A fixed detent measures the sheet from the
+        // bottom of the SCREEN, so on a phone with an indicator the last button sat in the strip the
+        // system draws over — 12pt of clearance where the indicator alone wants about 34. The inset
+        // is added to the padding AND to the detent: adding it to the padding alone would have kept
+        // the sheet the same height and squeezed the content instead of lifting the button.
+        .padding(.bottom, 12 + Self.bottomInset)
         // Taller only while the secondary "Apply For All Chats" button is present.
-        .presentationDetents([.height(hasPendingChange && !globalOnly ? 428 : 384)])
+        .presentationDetents([.height((hasPendingChange && !globalOnly ? 428 : 384) + Self.bottomInset)])
         .presentationDragIndicator(.visible)
         .sheet(isPresented: $showCustomColor) {
             CustomColorView(cid: cid) { spec in
@@ -247,6 +253,14 @@ struct WallpaperPickerSheet: View {
 
     // Contextual bottom button: a pending wallpaper/colour change → "Apply Wallpaper" (commits both);
     // otherwise → "Choose Wallpaper from Photos".
+    /// The home indicator's strip, read from the window. A sheet's own safe area does not reach a
+    /// fixed-height detent's arithmetic, which is what has to know about it here.
+    static var bottomInset: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
+            .first ?? 0
+    }
+
     @ViewBuilder private var bottomBar: some View {
         Group {
             if hasPendingChange {
