@@ -11,6 +11,7 @@ struct SendContactSheet: View {
     @State private var query = ""
     @State private var selected = Set<String>()
     @State private var sending = false
+    @FocusState private var searchFocused: Bool
     private var me: String { AuthService.shared.uid ?? "" }
 
     private var people: [Conversation] {
@@ -28,8 +29,17 @@ struct SendContactSheet: View {
         VStack(spacing: 0) {
             searchRow
             peopleGrid
-            actionBar
+            // ⛔ NOT WHILE THE KEYBOARD IS UP (owner: "when i click search bar buttom button like
+            // copylink and shere is jumping up … hide that buttons").
+            //
+            // The keyboard takes the bottom of the sheet away, so a bar pinned to the bottom of the
+            // stack was lifted into the middle of the faces and sat across them. There is nowhere
+            // good to put it: under the keyboard is off-screen, above it is on top of the grid. So
+            // it leaves while you are typing and comes back when you stop, which is what the
+            // reference sheet does and what the space is actually for.
+            if !searchFocused { actionBar.transition(.move(edge: .bottom).combined(with: .opacity)) }
         }
+        .animation(.easeOut(duration: 0.2), value: searchFocused)
         .background(Color(.systemBackground))
         // Half height, and draggable to full — his first bullet. `.medium` is the system's own half
         // detent rather than a hand-picked number, so it is right on every screen size.
@@ -48,6 +58,8 @@ struct SendContactSheet: View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField("Search", text: $query)
+                .focused($searchFocused)
+                .submitLabel(.search)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
             if !query.isEmpty {
@@ -81,6 +93,7 @@ struct SendContactSheet: View {
             .padding(.top, 8)
             .padding(.bottom, 16)
         }
+        .scrollDismissesKeyboard(.interactively)
     }
 
     /// Copy and Share always; Send only once somebody is picked, which is the only time it means
@@ -102,9 +115,9 @@ struct SendContactSheet: View {
             if !selected.isEmpty {
                 Button { Task { await sendAll() } } label: {
                     Image(systemName: "arrow.up")
-                        .font(.system(size: 20, weight: .semibold))
+                        .font(.system(size: 23, weight: .semibold))
                         .foregroundStyle(.white)
-                        .frame(width: 52, height: 52)
+                        .frame(width: Self.action, height: Self.action)
                         .background(Color.accentColor, in: Circle())
                 }
                 .buttonStyle(.plain)
@@ -129,29 +142,39 @@ struct SendContactSheet: View {
         contactText.split(separator: " ").last.map(String.init) ?? contactText
     }
 
+    /// The bottom row's circles, and Send with them so the three read as one row rather than two
+    /// sizes (owner, 2026-08-20: "copy link and shere button add size"). 60 against the 70 of a
+    /// face: big enough to be the row's weight, still clearly not one of the people.
+    private static let action: CGFloat = 60
+
     private func actionTile(_ icon: String, _ title: String, _ tap: @escaping () -> Void) -> some View {
         Button(action: tap) {
             VStack(spacing: 7) {
                 Image(systemName: icon)
-                    .font(.system(size: 22, weight: .regular))
+                    .font(.system(size: 25, weight: .regular))
                     .foregroundStyle(.primary)
-                    .frame(width: 52, height: 52)
+                    .frame(width: Self.action, height: Self.action)
                     .background(Color.secondary.opacity(0.15), in: Circle())
-                Text(title).font(.system(size: 12)).foregroundStyle(.primary)
+                Text(title).font(.system(size: 13)).foregroundStyle(.primary)
             }
         }
         .buttonStyle(.plain)
     }
 
-    /// Three across. It was four; the newer reference images he gave are three, and at three the
-    /// face is big enough to recognise without reading the name under it.
-    private static let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 3)
+    /// Four across (owner, 2026-08-20, with the row he drew out). It has been three since the
+    /// redesign; four fits a row of a chat list's worth of people on screen at the half detent,
+    /// which is the point of the grid.
+    private static let columns = Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
+    /// The face, sized to what four columns leave: the narrowest phone is 320pt wide, less 32 of
+    /// page margin and 30 of gutter, over four — so the cell is about 64 there and 82 on a modern
+    /// phone. 70 is the largest circle that never overflows the small one.
+    private static let face: CGFloat = 70
 
     @ViewBuilder private func personTile(_ c: Conversation) -> some View {
         let picked = selected.contains(c.id)
         VStack(spacing: 6) {
             ZStack(alignment: .bottomTrailing) {
-                AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: 76)
+                AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: Self.face)
                     .overlay {
                         // The ring is the selection, not a tick floating over a face.
                         Circle().strokeBorder(picked ? Color.accentColor : .clear, lineWidth: 3)
@@ -164,7 +187,7 @@ struct SendContactSheet: View {
                         .offset(x: 2, y: 2)
                 }
             }
-            .frame(width: 76, height: 76)
+            .frame(width: Self.face, height: Self.face)
             HStack(spacing: 3) {
                 Text(c.displayName(me))
                     .font(.system(size: 12))
@@ -178,6 +201,10 @@ struct SendContactSheet: View {
     }
 
     private func toggle(_ id: String) {
+        // ⚠️ AND IT DROPS THE KEYBOARD. Send lives in the bar that the keyboard hides, so picking
+        // somebody while searching would otherwise select them into a bar you cannot see. Tapping a
+        // face means you have found who you were looking for; the search is over at that point.
+        searchFocused = false
         if selected.contains(id) { selected.remove(id) } else { selected.insert(id) }
     }
     private func sendAll() async {
