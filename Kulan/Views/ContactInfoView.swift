@@ -149,8 +149,6 @@ struct ContactInfoView: View {
     /// them on the handoff meant they all reappeared in one step after the picture had already
     /// landed. This one drops as soon as a close BEGINS, so they fade in over the collapse.
     @State private var chromeHiddenForPhoto = false
-    /// What the window's style was before this page forced it dark — see `holdWindowDark`.
-    @State private var savedWindowStyle: UIUserInterfaceStyle?
     @State private var photoCloseTick = 0         // toolbar X → viewer close (see ProfilePhotoViewer.closeSignal)
     // A REAL photo is on screen (not the letter fallback). The tap gate used to be "url isn't
     // empty", which is a different thing: a removed or stale url still shows the letter, and
@@ -425,29 +423,24 @@ struct ContactInfoView: View {
     /// is already at the compiler's type-checking limit — three ternaries added to it in the body was
     /// enough to tip it into "unable to type-check this expression in reasonable time". Plain typed
     /// properties cost the inference engine nothing.
-    /// ⛔ THE MENUS ARE NOT IN THIS VIEW TREE, WHICH IS WHY THEY CAME OUT LIGHT.
+    /// ⛔ THE MENUS ARE NOT IN THIS VIEW TREE, WHICH IS WHY THEY CAME OUT LIGHT — and the first fix
+    /// for it was worse than the fault.
     ///
-    /// The page pins `\.colorScheme` to dark for its own subtree, and that is all a subtree value
-    /// can do. A `Menu`'s contents are presented by UIKit in its OWN platform presentation, above
-    /// this window's content and outside its environment, so Mute's duration list and the More menu
-    /// were drawn in the device's style — white cards on a page that is always dark.
+    /// The page pins `\.colorScheme` to dark for its own subtree, and that is all a subtree value can
+    /// do: a `Menu`'s contents are presented by UIKit in its own platform presentation, outside this
+    /// environment, so Mute's durations and the More menu drew in the device's style.
     ///
-    /// The only lever that reaches a system presentation is the window's own style. It is set while
-    /// this page is up and put back exactly as it was on the way out, so nothing outside the page
-    /// keeps it. `preferredColorScheme` is not an option here and the note further down says why:
-    /// KulanApp sets one outside RootView and an outer one always wins.
-    private func holdWindowDark(_ on: Bool) {
-        guard useAdaptive else { return }
-        let window = UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
-        guard let window else { return }
-        if on {
-            if savedWindowStyle == nil { savedWindowStyle = window.overrideUserInterfaceStyle }
-            window.overrideUserInterfaceStyle = .dark
-        } else if let saved = savedWindowStyle {
-            window.overrideUserInterfaceStyle = saved
-            savedWindowStyle = nil
-        }
+    /// ⚠️ IT USED TO SET THE WHOLE WINDOW DARK AND PUT IT BACK IN `onDisappear`. That fixed the menus
+    /// and broke something far more visible: `onDisappear` runs AFTER the next screen has drawn, so
+    /// going back to a chat rendered the entire conversation dark for a beat before it snapped to
+    /// light. His report, and a regression I caused.
+    ///
+    /// Scoped to this page's own view controller now. The override lives on the controller rather
+    /// than the window, so it dies with the page and no other screen can inherit it — a pushed chat
+    /// is a different controller and is never touched. A presented menu takes its traits from the
+    /// controller it is presented FROM, which is the one being overridden here.
+    private var darkTraitScope: some View {
+        DarkTraitScope(active: useAdaptive)
     }
 
     private var barGlyph: Color { useAdaptive ? .white : .primary }
@@ -577,8 +570,7 @@ struct ContactInfoView: View {
         // The system back chevron takes its colour from here, not from the bar's scheme, so it stays
         // white through the iOS 26 material flip above.
         .tint(barTint)
-        .onAppear { holdWindowDark(true) }
-        .onDisappear { holdWindowDark(false) }
+        .background(darkTraitScope)
         .toolbar { navTrailing }
         // The photo viewer's X, as a BAR ITEM in the back button's place. The top strip belongs to
         // the navigation bar, which sits above the viewer overlay and eats its touches — an X drawn
@@ -1842,5 +1834,55 @@ struct ProfilePhotoViewer: View {
         onClosingBegan()
         withAnimation(.spring(duration: 0.34, bounce: 0.12)) { progress = 0; drag = .zero; zoom = 1 }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) { isPresented = false }
+    }
+}
+
+/// Puts a dark trait override on the CONTROLLER this view lives in, and takes it off when the view
+/// goes away. See `ContactInfoView.darkTraitScope` for what it is for and what it replaced.
+///
+/// A controller, deliberately, and never the window: a window override outlives the screen that set
+/// it and paints whatever is drawn next — which is exactly how going back to a chat came to flash
+/// dark for a beat.
+private struct DarkTraitScope: UIViewRepresentable {
+    let active: Bool
+
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.isUserInteractionEnabled = false
+        v.isHidden = true
+        return v
+    }
+
+    func updateUIView(_ v: UIView, context: Context) {
+        // On the next turn: the view is not in a controller yet on the pass that creates it.
+        DispatchQueue.main.async {
+            guard let host = v.owningController else { return }
+            let want: UIUserInterfaceStyle = active ? .dark : .unspecified
+            if host.overrideUserInterfaceStyle != want { host.overrideUserInterfaceStyle = want }
+            context.coordinator.host = host
+        }
+    }
+
+    static func dismantleUIView(_ v: UIView, coordinator: Coordinator) {
+        coordinator.host?.overrideUserInterfaceStyle = .unspecified
+        coordinator.host = nil
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        weak var host: UIViewController?
+    }
+}
+
+private extension UIView {
+    /// The nearest view controller up the responder chain.
+    var owningController: UIViewController? {
+        var r: UIResponder? = self
+        while let next = r?.next {
+            if let vc = next as? UIViewController { return vc }
+            r = next
+        }
+        return nil
     }
 }
