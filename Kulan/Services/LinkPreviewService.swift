@@ -77,7 +77,13 @@ actor LinkPreviewService {
         }
         var photo: UIImage?
         if let p = user.photoUrl, !p.isEmpty {
-            photo = DiskImageCache.shared.memoryImage(p) ?? (await DiskImageCache.shared.image(for: p))
+            // `??` takes an autoclosure, which cannot carry an await — the two steps have to be
+            // written out.
+            if let warm = DiskImageCache.shared.memoryImage(p) {
+                photo = warm
+            } else {
+                photo = await DiskImageCache.shared.image(for: p)
+            }
             if photo == nil, let u = URL(string: p),
                let (data, _) = try? await URLSession.shared.data(from: u) {
                 photo = UIImage(data: data)
