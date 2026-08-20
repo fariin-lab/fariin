@@ -191,7 +191,10 @@ struct StoryEditorView: View {
     /// page is entered at all is nearly always the trim.
     private enum TrimTab { case video, adjust }
     @State private var trimTab: TrimTab = .video
-    /// Coalesces the dial's per-touch reports — see `applyPreviewBrightness`.
+    /// The one composition the dial drives, and the live exposure inside it. Built on the first
+    /// touch of the dial and dropped with the player — see `applyPreviewBrightness`.
+    @State private var brightnessLive: StoryVideoBrightness.LiveExposure?
+    /// Builds that one composition — see `applyPreviewBrightness`.
     @State private var brightnessTask: Task<Void, Never>?
     @State private var trimStart: Double = 0
     @State private var trimEnd: Double = 0
@@ -1789,6 +1792,12 @@ struct StoryEditorView: View {
         trimTimeObserver = nil
         previewPlayer = nil
         previewPlaying = false
+        // ⚠️ AND THE LIVE EXPOSURE, or the next clip previewed finds a handle to a composition that
+        // is no longer attached to anything: the dial would set a value nothing reads and stay dead
+        // for that clip, with no way back short of leaving the editor.
+        brightnessTask?.cancel()
+        brightnessTask = nil
+        brightnessLive = nil
     }
 
     @ViewBuilder private var itemStrip: some View {
@@ -2325,22 +2334,52 @@ struct StoryEditorView: View {
     ///
     /// Coalesced through a task: the dial reports on every touch and rebuilding a video composition
     /// per frame of a drag would stutter the very picture being judged. Only the last value survives.
+    /// ⛔ TWO REASONS THE DIAL WAS NOT LIVE, AND THE PAUSE IS THE BIGGER ONE.
+    ///
+    /// **A paused player does not redraw.** Trim opens on a still frame by its own rule (`openTrim`
+    /// sets `previewPlaying = false`), and assigning `videoComposition` to an item that is not
+    /// playing changes what the NEXT frame will look like — and there is no next frame. The picture
+    /// therefore sat unchanged for the whole drag and only caught up when he pressed play. A
+    /// zero-tolerance seek to the time it is already at is what forces it to render one now.
+    ///
+    /// **And the composition was rebuilt per touch.** A composition bakes its filter in at build
+    /// time, so following the dial meant an asynchronous build between every move of his thumb and
+    /// the picture, which is what the 35ms coalesce was papering over. It is built ONCE now and
+    /// reads its exposure live — see `StoryVideoBrightness.LiveExposure` — so every move after the
+    /// first is a float and a redraw, with nothing to wait for and nothing to coalesce.
     private func applyPreviewBrightness(_ value: Double) {
-        brightnessTask?.cancel()
         guard let item = previewPlayer?.currentItem else { return }
-        guard !StoryVideoBrightness.isNeutral(value) else { item.videoComposition = nil; return }
-        brightnessTask = Task { [weak item] in
-            // ⚠️ 35ms, NOT 90. Building an `AVVideoComposition` is not free, so the dial's per-touch
-            // reports still have to be coalesced — but at 90 the picture arrived a tenth of a second
-            // behind the thumb and the whole thing read as steps rather than a slide. 35 is short
-            // enough to feel attached to the finger and still collapses a fast drag into a handful of
-            // builds instead of one per touch.
-            try? await Task.sleep(nanoseconds: 35_000_000)
-            guard !Task.isCancelled, let item, let asset = item.asset as AVAsset? else { return }
-            let comp = await StoryVideoBrightness.composition(for: asset, value: value)
-            guard !Task.isCancelled else { return }
-            await MainActor.run { item.videoComposition = comp }
+        let ev = StoryVideoBrightness.exposureEV(for: value)
+        if let live = brightnessLive {
+            live.ev = ev
+            nudgePreviewFrame(item)
+            return
         }
+        // First touch of the dial for this clip: build the one composition, then never again.
+        brightnessTask?.cancel()
+        brightnessTask = Task { [weak item] in
+            guard let item, let asset = item.asset as AVAsset? else { return }
+            guard let (comp, live) = await StoryVideoBrightness.liveComposition(for: asset) else { return }
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                // The dial may have moved on while this was building; take the value as it stands
+                // rather than the one this call was made with.
+                live.ev = StoryVideoBrightness.exposureEV(
+                    for: items.indices.contains(index) ? items[index].brightness : Double(ev))
+                brightnessLive = live
+                item.videoComposition = comp
+                nudgePreviewFrame(item)
+            }
+        }
+    }
+
+    /// Make a stopped player show the frame it is already on, once, through whatever the composition
+    /// now says. Zero tolerance on both sides or AVFoundation is free to answer with the frame it has
+    /// already drawn, which is the one being replaced.
+    private func nudgePreviewFrame(_ item: AVPlayerItem) {
+        guard previewPlayer?.rate == 0 else { return }   // playing already draws every frame
+        item.seek(to: item.currentTime(), toleranceBefore: .zero, toleranceAfter: .zero,
+                  completionHandler: nil)
     }
 
     private func openTrim() {

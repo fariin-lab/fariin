@@ -26,6 +26,44 @@ enum StoryVideoBrightness {
 
     static func isNeutral(_ value: Double) -> Bool { abs(value) < 0.001 }
 
+    /// ⛔ THE EXPOSURE A PREVIEW IS APPLYING RIGHT NOW, CHANGEABLE WITHOUT REBUILDING ANYTHING.
+    ///
+    /// A composition bakes its filter in at build time, so following the dial by building a new one
+    /// per touch meant an asynchronous build between every move of his thumb and the picture. This
+    /// is the value the handler READS on each frame instead, so the whole drag is one composition
+    /// and each move is a float.
+    ///
+    /// ⚠️ Locked because the two ends are on different threads: the dial writes on the main actor
+    /// and the composition's handler runs on AVFoundation's own render queue.
+    final class LiveExposure: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: Float = 0
+        var ev: Float {
+            get { lock.lock(); defer { lock.unlock() }; return stored }
+            set { lock.lock(); stored = newValue; lock.unlock() }
+        }
+    }
+
+    /// One composition for a whole editing session, reading `LiveExposure` on every frame.
+    ///
+    /// Neutral is a pass-through rather than a filter with nothing to do — the dial spends most of
+    /// its life at zero and an exposure of 0 EV is a full Core Image pass to return what it was
+    /// given.
+    static func liveComposition(for asset: AVAsset) async -> (AVVideoComposition, LiveExposure)? {
+        let live = LiveExposure()
+        let comp = try? await AVMutableVideoComposition.videoComposition(with: asset) { request in
+            let ev = live.ev
+            guard abs(ev) > 0.001 else { request.finish(with: request.sourceImage, context: nil); return }
+            let f = CIFilter.exposureAdjust()
+            f.inputImage = request.sourceImage
+            f.ev = ev
+            let out = (f.outputImage ?? request.sourceImage).cropped(to: request.sourceImage.extent)
+            request.finish(with: out, context: nil)
+        }
+        guard let comp else { return nil }
+        return (comp, live)
+    }
+
     /// The composition to hang on a player item or an export session. Nil when there is nothing to
     /// do, so a clip nobody adjusted keeps whatever path it had — for a plain video that is a
     /// passthrough, and paying for a Core Image pass to add zero would be a straight loss.
