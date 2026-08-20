@@ -569,18 +569,26 @@ struct ContactInfoView: View {
                 }
             }
         }
-        // The name RIDES UP into the bar as the header goes. Without it, scrolling past the header
-        // left nothing on screen saying whose profile this is: the title is deliberately empty
-        // because the name used to live in the hero, and the hero now scrolls away.
+        // ⛔ THE BAR CARRIES THE STORY BADGE AND NOTHING ELSE (owner, 2026-08-20).
         //
-        // A small circle beside a name is the shape the CHAT header already uses, so a scrolled
-        // profile lands on something the app does everywhere else rather than a new invention.
+        // It used to fade a small avatar and the name into the middle of the bar as the header
+        // scrolled away, on the reasoning that otherwise nothing on screen said whose profile this
+        // was. He has seen it and called it what it is: you are already on the person's page, with
+        // their picture filling the top of it and their name written underneath, so a second copy
+        // riding the bar is the same thing twice.
+        //
+        // What stays is the story control, which is not a duplicate of anything — a ring and a count
+        // that exist nowhere else on the page, and only when there is a story to open.
+        //
+        // ⚠️ THE BADGE NO LONGER FADES ON SCROLL EITHER. It faded because a name was arriving to take
+        // its place; with nothing arriving, fading it out would leave an empty bar over a story that
+        // is still there to open. It stays, and stays tappable.
         .toolbar {
             ToolbarItem(placement: .principal) {
                 ZStack {
                     // The story control, in the one strip of the photo nothing else occupies —
-                    // between Back and Edit. It hands over to the name as the header leaves, so the
-                    // middle of the bar is never empty and never holds two things at once.
+                    // between Back and Edit. Nothing takes over from it any more; an empty middle is
+                    // the correct state for a person with no story.
                     if useModernHeader, !chromeHiddenForPhoto, let g = publicStory, !g.stories.isEmpty {
                         // The flight's source when the header has scrolled away and this badge is
                         // what is on screen. A DIFFERENT key from the hero avatar's, deliberately:
@@ -592,24 +600,7 @@ struct ContactInfoView: View {
                                             rectKey: "profile-story-badge")
                         }
                         .buttonStyle(.plain)
-                        .opacity(1 - collapse)
-                        // Dead once it has faded, so a name scrolled into its place can never be
-                        // tapped into somebody's story.
-                        .allowsHitTesting(collapse < 0.4)
                     }
-                    HStack(spacing: 7) {
-                        AvatarView(name: shownName, photoUrl: gatedPhotoUrl, size: 26)
-                        Text(shownName).font(.headline).lineLimit(1)
-                            .foregroundStyle(barGlyph)
-                        // Not tappable: the whole collapsed bar is `allowsHitTesting(false)` so it
-                        // cannot eat scrolls, and the hero mark below is the one to tap anyway.
-                        VerifiedMark(uid: otherUid, size: 14)
-                    }
-                    .opacity(collapse)
-                    // Rises the last few points rather than appearing in place, so it reads as the same
-                    // name arriving from below and not a second one fading in.
-                    .offset(y: (1 - collapse) * 7)
-                    .allowsHitTesting(false)
                 }
             }
         }
@@ -1161,6 +1152,12 @@ struct ContactInfoView: View {
     /// How far the header has scrolled away, 0 (at rest) to 1 (gone). ONE number, so everything that
     /// reacts to the scroll stays in step; separate triggers per element drift apart by a frame and
     /// read as loose. Clamped, so flinging cannot push anything past its end state.
+    ///
+    /// ⚠️ NOTHING READS IT TODAY. Its two consumers were the collapsed name in the bar, removed on
+    /// the owner's word (see the toolbar note), and the bar's background, which is driven off where
+    /// the PHOTO is instead — 96pt of scroll against a 393pt photo were never the same question. It
+    /// is kept because `heroOffset` is still measured and reported, and this is what that
+    /// measurement means; anything added to this bar next will want it rather than a second reading.
     private var collapse: Double {
         min(1, max(0, Double(-heroOffset) / 96))
     }
