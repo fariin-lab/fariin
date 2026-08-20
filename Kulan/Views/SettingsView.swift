@@ -1364,6 +1364,8 @@ struct EditProfileView: View {
     @State private var cropCandidate: CropItem?   // picked image awaiting the circular cropper
     @State private var confirmRemovePhoto = false   // Remove asks first (user request)
     @State private var showEditPhoto = false        // the Edit Photo sheet
+    /// My own profile, drawn the way everybody else sees it — see `ContactInfoView.previewUid`.
+    @State private var showProfilePreview = false
     /// What that sheet was asked for. Read and cleared in its onDismiss, never acted on inline.
     @State private var photoAction: ProfilePhotoAction?
     @State private var showPhotoPicker = false       // programmatic PhotosPicker present
@@ -1471,13 +1473,29 @@ struct EditProfileView: View {
                             .contentShape(Circle())
                         }
                         .buttonStyle(.plain)
-                        Button { showEditPhoto = true } label: {
-                            Text("Edit Photo").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                                .padding(.horizontal, 20).frame(height: 36)
-                                .background(Color(.secondarySystemGroupedBackground), in: Capsule())
-                                .contentShape(Capsule())
+                        HStack(spacing: 10) {
+                            Button { showEditPhoto = true } label: {
+                                Text("Edit Photo").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                                    .padding(.horizontal, 20).frame(height: 36)
+                                    .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+                                    .contentShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            // ⛔ SEE IT AS THEY SEE IT (owner, 2026-08-20). Everything on this screen
+                            // is a field; none of it shows what the RESULT looks like, and the page
+                            // it feeds takes its colour from the photograph — so the one thing you
+                            // cannot judge from here is the thing this screen decides.
+                            Button { showProfilePreview = true } label: {
+                                Image(systemName: "person.text.rectangle")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundStyle(.primary)
+                                    .frame(width: 36, height: 36)
+                                    .background(Color(.secondarySystemGroupedBackground), in: Circle())
+                                    .contentShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Preview profile")
                         }
-                        .buttonStyle(.plain)
                         // Was `.disabled(uploading)`, guarding an upload that started the moment you
                         // cropped. Nothing uploads here any more, so there is nothing to guard: you
                         // can pick a different photo as many times as you like before pressing Save.
@@ -1511,6 +1529,19 @@ struct EditProfileView: View {
                                           action: $photoAction)
                     }
                     .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
+                    // ⚠️ THE REAL SCREEN, NOT A MOCK-UP OF IT. `ContactInfoView` in preview mode is
+                    // the same view a stranger gets, with the same palette extracted from the same
+                    // photograph — a second copy built to look like it would start lying the first
+                    // time either changes. It cannot be acted on; see `previewUid`.
+                    .sheet(isPresented: $showProfilePreview) {
+                        NavigationStack {
+                            ContactInfoView(cid: "",
+                                            name: profile.me?.name ?? "",
+                                            photoUrl: profile.me?.photoUrl,
+                                            posterUrl: profile.me?.posterUrl,
+                                            previewUid: AuthService.shared.uid ?? "")
+                        }
+                    }
                     // Its own stack, because it carries a title and a Done and is no longer inside
                     // this screen's navigation.
                     .sheet(isPresented: $editingUsername) {

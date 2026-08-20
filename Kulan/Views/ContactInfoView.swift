@@ -30,6 +30,16 @@ struct ContactInfoView: View {
     var posterUrl: String? = nil
     var source: ProfileSource = .chat
     var isSelf: Bool = false   // your OWN profile (opened from your own story) → no call-yourself buttons
+    /// ⛔ PREVIEW: MY OWN PROFILE, DRAWN THE WAY EVERYBODY ELSE SEES IT (owner, 2026-08-20).
+    ///
+    /// Deliberately NOT `isSelf`. That flag strips the page down — no settings card, no danger card,
+    /// no story — because it is for looking at your own page as yourself. A preview has to keep all
+    /// of it: the point is to see the layout and the colour a stranger gets, and the colour is
+    /// extracted from the photograph, so a stripped page would answer the wrong question.
+    ///
+    /// What it changes is that nothing here can be ACTED on — see `isPreview`. Everything is the
+    /// real screen, so it can never drift from what it is previewing; it simply cannot be used.
+    var previewUid: String? = nil
     var onSearch: () -> Void = {}   // "search" tile → pop back to the chat and open in-chat search
 
     /// THE HEADER'S SHAPE, DECIDED ONCE, BEFORE THE FIRST FRAME, AND NEVER AGAIN.
@@ -47,7 +57,9 @@ struct ContactInfoView: View {
 
     init(cid: String, name: String, photoUrl: String?, posterUrl: String? = nil,
          source: ProfileSource = .chat, isSelf: Bool = false,
+         previewUid: String? = nil,
          onSearch: @escaping () -> Void = {}) {
+        self.previewUid = previewUid
         self.cid = cid
         self.name = name
         self.photoUrl = photoUrl
@@ -56,7 +68,7 @@ struct ContactInfoView: View {
         self.isSelf = isSelf
         self.onSearch = onSearch
         let me = AuthService.shared.uid ?? ""
-        let other = cid.split(separator: "_").map(String.init).first { $0 != me } ?? ""
+        let other = previewUid ?? (cid.split(separator: "_").map(String.init).first { $0 != me } ?? "")
         // PREFER THE CONVERSATION'S OWN COPY over the url this screen was pushed with. Both are
         // mirrors, but not equally fresh: the conversation's is rewritten by the same operation that
         // writes the users document, while a call record keeps the photo somebody had at the time of
@@ -86,9 +98,16 @@ struct ContactInfoView: View {
         // server, but it can only REPLACE a group now, never conjure one out of nothing while
         // somebody is looking at the bar.
         let optedOut = UserDefaults.standard.bool(forKey: "storiesOptedOut")
-        _publicStory = State(initialValue: (isSelf || optedOut)
-            ? nil
-            : StoriesRepository.shared.others.first { $0.authorUid == other && !$0.stories.isEmpty })
+        // A preview reads MY OWN group: `others` is everybody but me, so it would always answer nil
+        // and the preview would claim I have no story while my ring is on the row behind it.
+        _publicStory = State(initialValue: {
+            if isSelf || optedOut { return nil }
+            if previewUid != nil {
+                let mine = StoriesRepository.shared.mine
+                return (mine?.stories.isEmpty == false) ? mine : nil
+            }
+            return StoriesRepository.shared.others.first { $0.authorUid == other && !$0.stories.isEmpty }
+        }())
     }
 
     @State private var handle = ""
@@ -273,9 +292,15 @@ struct ContactInfoView: View {
     // The grouped-list page behind the cards (light grey / true black), like Settings.
     private var pageBackground: Color { Color(uiColor: .systemGroupedBackground) }
     private var otherUid: String {
+        // In preview there is no conversation to read a partner out of: the person being looked at
+        // is me. See `previewUid`.
+        if let previewUid { return previewUid }
         let me = AuthService.shared.uid ?? ""
         return cid.split(separator: "_").map(String.init).first { $0 != me } ?? ""
     }
+
+    /// Am I looking at my own profile as somebody else would see it?
+    private var isPreview: Bool { previewUid != nil }
 
     // Split into layers so the type-checker doesn't time out on one giant modifier chain.
     var body: some View {
@@ -330,7 +355,7 @@ struct ContactInfoView: View {
         }
         if source == .calls, lastCall != nil { callLogCard }
         notesCard.padding(.top, 8)   // between the tiles and the settings card (owner's screenshot)
-        if !isSelf { settingsCard.padding(.top, 8) }
+        if !isSelf { settingsCard.padding(.top, 8).allowsHitTesting(!isPreview) }
         // Reserved on the FIRST frame from the remembered count, so the page never shifts when the
         // real media arrives. No media ever sent → mediaHint is 0 and nothing is drawn, ever.
         // A HEADED section gets the reference app's taller run-up: their header inset is
@@ -350,7 +375,8 @@ struct ContactInfoView: View {
             }
             .padding(.top, 12)
         }
-        if !isSelf { dangerCard.padding(.top, 8) }
+        // Blocking or reporting yourself is not a thing a preview should offer.
+        if !isSelf && !isPreview { dangerCard.padding(.top, 8) }
     }
 
     // Block / Report always VISIBLE at the bottom of the profile (the reference app pattern, user
@@ -435,7 +461,7 @@ struct ContactInfoView: View {
     }
 
     @ToolbarContentBuilder private var navTrailing: some ToolbarContent {
-        if !isSelf && !chromeHiddenForPhoto {   // no Edit floating over the open photo
+        if !isSelf && !isPreview && !chromeHiddenForPhoto {   // no Edit floating over the open photo
             ToolbarItem(placement: .topBarTrailing) {
                 // `.white` rather than `.primary` on the adaptive page: the bar's scheme is
                 // flipped to light on iOS 26 for the material's sake (see `barScheme`), and
@@ -1350,6 +1376,13 @@ struct ContactInfoView: View {
     /// Every rule the pills enforced is enforced here: a blocked person cannot be called, your own
     /// profile cannot call itself, and Search only appears where there is a chat to search.
     private var glassActions: some View {
+        // ⚠️ `allowsHitTesting`, NOT `.disabled`. Disabled would grey every circle out, and the whole
+        // point of the preview is to show what these look like to somebody else. They are drawn
+        // exactly as they are and simply do not answer a finger.
+        actionsRow.allowsHitTesting(!isPreview)
+    }
+
+    private var actionsRow: some View {
         HStack(spacing: 0) {
             // ⛔ MESSAGE IS THE FIRST ACTION ANYWHERE THERE IS NO CHAT ALREADY UNDER THE PROFILE —
             // his 2026-08-18 report: opening somebody's profile from their story left him with no way
