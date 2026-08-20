@@ -653,7 +653,12 @@ final class StoriesService {
         }
     }
 
-    private func resolveAudience(me: String, excluded: Set<String>, included: Set<String>) async throws -> (Set<String>, String) {
+    /// `applyHiddenFrom` is TRUE only for an Everyone post. The hide list is Everyone's own — see
+    /// `StoryAudience.appliesGlobalHide`. It used to be subtracted from the pool for every audience,
+    /// which is the upload-time half of the leak the sheet had: hiding somebody from the crowd also
+    /// removed them from a My Friends post they belonged in.
+    private func resolveAudience(me: String, excluded: Set<String>, included: Set<String>,
+                                 applyHiddenFrom: Bool) async throws -> (Set<String>, String) {
         // BLOCKING IS SYMMETRIC FOR BROADCAST CONTENT, and it was not.
         //
         // This filtered `isBlockedByMe` — chats where I blocked THEM — and never asked the other
@@ -714,7 +719,8 @@ final class StoriesService {
         // The global hide list, applied here as well as at the picker. This function is the one
         // place that resolves an audience against the LIVE chat list at upload time, so a story
         // queued before somebody was hidden must not reach them when it finally goes up.
-        let hidden = await MainActor.run { StoryAudienceStore.shared.hiddenFrom }
+        let hidden = applyHiddenFrom ? await MainActor.run { StoryAudienceStore.shared.hiddenFrom }
+                                     : Set<String>()
         let pool = allContacts.subtracting(hidden)
         // ⚠️ AN EXPLICIT LIST IS NOT FILTERED BY THE HIDE LIST — `allContacts`, not `pool`. This is
         // the upload-time half of the same rule `StoryAudienceStore.recipients` carries, and the two
@@ -884,7 +890,8 @@ final class StoriesService {
         //
         // What the old order bought was one main-actor hop of overlap on the warm path (the wait loop
         // does not run when the list is already there), which is not worth an orphaned file.
-        let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included)
+        let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included,
+                                                     applyHiddenFrom: everyone)
 
         async let uploadedJPEG: Void = {
             try Task.checkCancellation()
@@ -1156,7 +1163,8 @@ final class StoriesService {
         let storyId = UUID().uuidString
         let videoPath = "stories/\(storyId)/video.mp4"
         let thumbPath = "stories/\(storyId)/thumb.jpg"
-        let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included)
+        let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included,
+                                                     applyHiddenFrom: everyone)
         // Made once and used twice — the document and, for an "Everyone" story, the public mirror.
         let cover = Self.blurThumbBase64(prepared.thumbnail)
         // ONE DEADLINE, EVALUATED ONCE — see the photo path for what two of them cost.
@@ -1309,7 +1317,8 @@ final class StoriesService {
         // A one-time story's audience is spent as it is watched — see the note above, and the rule
         // that refuses it on the server whatever this does.
         guard !story.oneTime else { throw PostRefusal.oneTimeAudienceFrozen }
-        let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included)
+        let (recipients, mode) = try await resolveAudience(me: me, excluded: excluded, included: included,
+                                                     applyHiddenFrom: everyone)
         // ⛔ AN EDIT MUST NOT QUIETLY AIM A LIVE STORY AT NOBODY. The post path refuses this case
         // (`resolveAudience` throws when the chat list has not loaded); this one can still resolve to
         // an empty set from a list whose members have all been blocked or have left. Posting to
@@ -1888,7 +1897,11 @@ final class StoriesRepository {
     /// Drop `uid` from the audience of every story I currently have live. Called when I block them:
     /// the audience is written once at post time, so without this a freshly blocked person keeps
     /// seeing (and view-receipting) my active stories until they expire.
-    func revokeAudience(for uid: String) async {
+    /// `publicOnly` narrows the sweep to EVERYONE stories. Hiding somebody uses it: the hide list
+    /// belongs to the Everyone audience (see `StoryAudience.appliesGlobalHide`), so it must not reach
+    /// into a live custom or one-time story that named that person on purpose. A BLOCK still sweeps
+    /// everything, because a block is not an audience rule.
+    func revokeAudience(for uid: String, publicOnly: Bool = false) async {
         let me = AuthService.shared.uid ?? ""
         guard !me.isEmpty, !uid.isEmpty else { return }
         guard let snap = try? await db.collection("stories")
@@ -1897,6 +1910,7 @@ final class StoriesRepository {
         for doc in snap.documents {
             // Only live ones — expired docs are cleaned up on their own schedule.
             if let exp = (doc.data()["expiresAt"] as? Timestamp)?.dateValue(), exp <= now { continue }
+            if publicOnly, (doc.data()["public"] as? Bool ?? false) == false { continue }
             // ONLY the audience list. NOT the `public` flag: clearing that would pull the story from
             // every other non-contact's profile ring as well, which is not what blocking one person
             // means. An "Everyone" story stays public, and the blocked person is turned away at read

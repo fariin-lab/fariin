@@ -112,8 +112,23 @@ struct StoryAudience: Identifiable, Codable, Equatable {
         // Blocks are NOT affected: those are removed from `contacts` before this is called, in both
         // directions, and no list can put them back.
         let raw = rawRecipients(contacts: contacts)
-        return namesPeopleExplicitly ? raw : raw.subtracting(hiddenFrom)
+        return appliesGlobalHide ? raw.subtracting(hiddenFrom) : raw
     }
+
+    /// ⛔ THE HIDE LIST BELONGS TO **EVERYONE**, AND TO NOTHING ELSE (owner, 2026-08-20).
+    ///
+    /// Each audience keeps its own exclusions and they do not leak into one another. "Hide my
+    /// stories from X" is reached from the Everyone page and answers one question — "when I post to
+    /// everybody, who is not part of everybody". My Friends already carries its own except-list, a
+    /// custom list is a set of names somebody typed, and a one-time story is a person chosen by
+    /// hand; none of those should inherit a rule written for the crowd.
+    ///
+    /// Before this, the hide was subtracted from every audience that did not explicitly name people,
+    /// so hiding A from Everyone also removed A from a My Friends post, and the one-time flow
+    /// subtracted the list before it even reached here — which is how a story addressed to exactly
+    /// one person resolved to nobody and refused to post.
+    var appliesGlobalHide: Bool { kind == .everyone }
+
 
     /// Does this audience NAME people, or describe a crowd? A named set beats the global hide list;
     /// a crowd does not. See `recipients`.
@@ -278,9 +293,11 @@ final class StoryAudienceStore {
 
     /// "Hide my stories from X", and the same door back out again.
     ///
-    /// GLOBAL, not per-audience. A custom list narrows one story; this one says "not this person,
-    /// ever", and it has to survive whichever audience is picked next — which is why it is its own
-    /// list and why `recipients(contacts:)` subtracts it for every kind including Everyone.
+    /// ⛔ THIS LIST IS THE **EVERYONE** AUDIENCE'S, AND NO OTHER AUDIENCE INHERITS IT (owner,
+    /// 2026-08-20, reversing the earlier "not this person, ever" reading). Each audience keeps its
+    /// own exclusions: My Friends has its except-list, a custom story has the names in it, a one-time
+    /// story has the person picked for it. Hiding somebody from the crowd is not an instruction about
+    /// a list you then build by hand. See `StoryAudience.appliesGlobalHide`.
     func setHidden(_ uid: String, _ hidden: Bool) {
         guard !uid.isEmpty else { return }
         if hidden { hiddenFrom.insert(uid) } else { hiddenFrom.remove(uid) }
@@ -304,7 +321,9 @@ final class StoryAudienceStore {
         // that moment, not addressed to them, and silently restoring reach to something posted
         // while they were excluded is the surprise in the other direction.
         if hidden {
-            Task { await StoriesRepository.shared.revokeAudience(for: uid) }
+            // `publicOnly`: this list is the EVERYONE audience's. Pulling somebody out of a live
+            // custom or one-time story that named them would be the same leak, one day later.
+            Task { await StoriesRepository.shared.revokeAudience(for: uid, publicOnly: true) }
         }
     }
 

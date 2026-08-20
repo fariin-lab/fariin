@@ -637,10 +637,11 @@ struct ShareStorySheet: View {
         // list holding somebody you blocked five minutes ago from reaching them. Everything above is
         // a nicer way of arriving at these three values.
         let everyone = a.isPublic
-        // "Hide my stories from X" rides along as an exclusion, so it applies to EVERY audience —
-        // Everyone and custom lists included, not just My Friends' own except-list.
-        let excluded: Set<String> = ((a.kind == .myFriends && a.mode == .except)
-                                     ? Set(a.members) : []).union(store.hiddenFrom)
+        // ⛔ EACH AUDIENCE'S OWN EXCLUSIONS, AND NOBODY ELSE'S (owner, 2026-08-20). The hide list is
+        // Everyone's — see `StoryAudience.appliesGlobalHide`. My Friends brings its own except-list
+        // and inherits nothing; a custom list brings names, which need no exclusions at all.
+        let ownExcept: Set<String> = (a.kind == .myFriends && a.mode == .except) ? Set(a.members) : []
+        let excluded: Set<String> = a.appliesGlobalHide ? ownExcept.union(store.hiddenFrom) : ownExcept
         let included: Set<String> = {
             if a.kind == .custom { return Set(a.members) }
             if a.kind == .myFriends && a.mode == .only { return Set(a.members) }
@@ -732,10 +733,12 @@ struct ShareStorySheet: View {
         posting = true
 
         let everyone = !multi && a.isPublic
-        // "Hide my stories from X" rides along as an exclusion here too, so it applies to whichever
-        // audience the story is moved to rather than only to My Friends' own except-list.
-        let excluded: Set<String> = ((!multi && a.kind == .myFriends && a.mode == .except)
-                                     ? Set(a.members) : []).union(store.hiddenFrom)
+        // Each audience's own exclusions and nobody else's — see `StoryAudience.appliesGlobalHide`.
+        // A multi-list edit names people, so it carries none at all.
+        let ownExcept: Set<String> = (!multi && a.kind == .myFriends && a.mode == .except)
+                                     ? Set(a.members) : []
+        let excluded: Set<String> = (!multi && a.appliesGlobalHide)
+                                    ? ownExcept.union(store.hiddenFrom) : ownExcept
         let included: Set<String> = {
             if multi { return lists.reduce(into: Set<String>()) { $0.formUnion(Set($1.members)) } }
             if a.kind == .custom { return Set(a.members) }
@@ -835,7 +838,9 @@ struct ShareStorySheet: View {
         posting = true
 
         let included = lists.reduce(into: Set<String>()) { $0.formUnion(Set($1.members)) }
-        let excluded = store.hiddenFrom
+        // A custom list is a set of names somebody typed. Everyone's hide list has no business in it
+        // — see `StoryAudience.appliesGlobalHide`.
+        let excluded: Set<String> = []
         let replies = lists.allSatisfy { $0.allowReplies }
         // The header badge reads every list it went to. Device-local, like every custom name.
         let tag = StoryAudienceTag(label: "custom",
@@ -887,7 +892,13 @@ struct ShareStorySheet: View {
     /// it is checked anyway rather than trusted, because this is the one path where an empty audience
     /// would post a story nobody can ever open and the author could not tell.
     private func postOneTime() {
-        let people = oneTimeViewers.subtracting(store.hiddenFrom)
+        // ⛔ NOT SUBTRACTED BY THE HIDE LIST, AND THIS WAS THE BUG HE PHOTOGRAPHED. A one-time story
+        // is addressed to people picked one at a time, by hand, in this sheet. Subtracting Everyone's
+        // hide list from that could empty an audience of exactly the person just chosen, and the
+        // sheet then refused to post with "No one will see this" — refusing an instruction it had
+        // just watched him give. Picking somebody outranks a standing rule about crowds; a BLOCK
+        // still beats everything and is removed from the pool long before this.
+        let people = oneTimeViewers
         guard !people.isEmpty else {
             UINotificationFeedbackGenerator().notificationOccurred(.warning)
             emptyAudienceAlert = true
@@ -900,12 +911,12 @@ struct ShareStorySheet: View {
             StoriesService.shared.postVideoStoryBackground(
                 videoURL: video.url, thumbnail: video.thumbnail, muted: video.muted,
                 burn: video.burn, trim: video.trim, caption: caption, stickers: stickers,
-                excluded: store.hiddenFrom, included: people, everyone: false,
+                excluded: [], included: people, everyone: false,
                 allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected)
         } else {
             StoriesService.shared.postStoryBackground(
                 image: image, caption: caption, stickers: stickers,
-                excluded: store.hiddenFrom, included: people, everyone: false,
+                excluded: [], included: people, everyone: false,
                 allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected)
         }
         for extra in extras {
@@ -913,12 +924,12 @@ struct ShareStorySheet: View {
                 StoriesService.shared.postVideoStoryBackground(
                     videoURL: v.url, thumbnail: v.thumbnail, muted: v.muted, burn: v.burn, trim: v.trim,
                     caption: extra.caption, stickers: extra.stickers,
-                    excluded: store.hiddenFrom, included: people, everyone: false,
+                    excluded: [], included: people, everyone: false,
                     allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected)
             } else if let p = extra.photo {
                 StoriesService.shared.postStoryBackground(
                     image: p, caption: extra.caption, stickers: extra.stickers,
-                    excluded: store.hiddenFrom, included: people,
+                    excluded: [], included: people,
                     everyone: false, allowsReplies: true, tag: StoryAudienceTag(label: "oneTime"), captureProtected: captureProtected)
             }
         }
