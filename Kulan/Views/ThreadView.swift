@@ -7464,9 +7464,14 @@ struct MessageBubble: View, Equatable {
                     StoryImage(url: thumb)
                         .frame(width: 30, height: 38)
                         .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                        // Unique per MESSAGE (two replies can quote the same story — two rectangles
-                        // under one key would let the story fly home to the wrong bubble).
-                        .modifier(ReplyStoryAnchor(active: storyQuoteOpens, id: "reply-\(message.id)",
+                        // ⛔ ITS OWN KEY, NOT THE HEADER CARD'S. Unique per MESSAGE was right and not
+                        // enough: ONE message can carry BOTH anchors — the big "replied to their
+                        // story" card above the bubble and this small thumbnail inside the quote —
+                        // and `MediaOpenRects` holds one view per key. They were both `reply-<id>`,
+                        // so whichever mounted last owned the key and the story flew out of the
+                        // wrong one of the two. That is the owner's "sometimes it opens from the
+                        // top". Two views, two keys, and each tap names the one it is on.
+                        .modifier(ReplyStoryAnchor(active: storyQuoteOpens, id: "replyquote-\(message.id)",
                                                    cornerRadius: 5))
                 } else if let o = original, !o.deleted {
                     // Photo / GIF / video / album reply → real thumbnail (reference-style preview).
@@ -7510,7 +7515,9 @@ struct MessageBubble: View, Equatable {
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .contentShape(Rectangle())
             .onTapGesture {
-                if reply.isStatus { onTapStory(reply.id, reply.authorId, "reply-\(message.id)") }   // open the status (or "no longer available")
+                // The quote's OWN anchor, so the flight leaves from this thumbnail and lands back
+                // on it — see the note on its `ReplyStoryAnchor`.
+                if reply.isStatus { onTapStory(reply.id, reply.authorId, "replyquote-\(message.id)") }
                 else { onJumpTo(reply.id) }                                  // jump to the original message
             }
             // Publishes this box's window rect so the list's tap-to-dismiss refuses to begin here: the
