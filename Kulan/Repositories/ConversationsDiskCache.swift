@@ -39,6 +39,9 @@ final class ConversationsDiskCache {
     /// and is stronger than the default Firestore's own cache uses.
     private let protection = FileProtectionType.completeUntilFirstUserAuthentication
 
+    /// Hash of the last blob actually written, so an unchanged list is not written again. Read and
+    /// written only on `io`, which is serial.
+    private var lastWritten: Int?
     private let io = DispatchQueue(label: "fariin.chatlist.cache", qos: .utility)
 
     // MARK: - Where
@@ -102,6 +105,18 @@ final class ConversationsDiskCache {
             guard let blob = try? PropertyListSerialization.data(fromPropertyList: trimmed,
                                                                  format: .binary, options: 0)
             else { return }
+            // ⛔ ONLY WHEN IT ACTUALLY CHANGED. This is called from the conversations SNAPSHOT
+            // handler, and that fires for everything: somebody starts typing, presence flips, a read
+            // receipt lands, an unread count moves. Every one of those rewrote the whole capped list
+            // — and `.atomic` writes a temp file and renames it, so each rewrite costs the blob
+            // twice. iOS filed a disk-writes report against the app for 1.07 GB in under six hours,
+            // about 53 KB a second sustained, which is this.
+            //
+            // `ThreadMessageCache` already guards its own write exactly this way; this one never
+            // did. Comparing the encoded bytes is the honest test: it is the thing being written.
+            let stamp = blob.hashValue
+            guard stamp != self.lastWritten else { return }
+            self.lastWritten = stamp
             // Atomic: a launch reading this file while it is being replaced must see the whole old
             // one or the whole new one, never half of either.
             try? blob.write(to: url, options: [.atomic])
