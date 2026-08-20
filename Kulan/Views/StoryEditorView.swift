@@ -2330,7 +2330,12 @@ struct StoryEditorView: View {
         guard let item = previewPlayer?.currentItem else { return }
         guard !StoryVideoBrightness.isNeutral(value) else { item.videoComposition = nil; return }
         brightnessTask = Task { [weak item] in
-            try? await Task.sleep(nanoseconds: 90_000_000)
+            // ⚠️ 35ms, NOT 90. Building an `AVVideoComposition` is not free, so the dial's per-touch
+            // reports still have to be coalesced — but at 90 the picture arrived a tenth of a second
+            // behind the thumb and the whole thing read as steps rather than a slide. 35 is short
+            // enough to feel attached to the finger and still collapses a fast drag into a handful of
+            // builds instead of one per touch.
+            try? await Task.sleep(nanoseconds: 35_000_000)
             guard !Task.isCancelled, let item, let asset = item.asset as AVAsset? else { return }
             let comp = await StoryVideoBrightness.composition(for: asset, value: value)
             guard !Task.isCancelled else { return }
@@ -4630,54 +4635,97 @@ struct CropCorners: Shape {
 private struct BrightnessDial: View {
     @Binding var value: Double            // -1…1, 0 = untouched
     @State private var dragStart: Double?
+    @State private var dragging = false
+    @State private var lastTick = 0
 
     private let ticks = 41
+
+    /// Which tick the mark is nearest. Drives both the haptic and how the ruler lights up around it.
+    private var markTick: Double { (Double(ticks - 1) / 2) * (1 + value) }
 
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
+            let travel = w / 2 - 8
             ZStack {
                 HStack(spacing: 0) {
                     ForEach(0..<ticks, id: \.self) { i in
-                        // The centre tick is taller: it is the only value worth finding by eye.
-                        let centre = i == ticks / 2
-                        Rectangle()
-                            .fill(Color.white.opacity(centre ? 0.9 : 0.45))
-                            .frame(width: 1.5, height: centre ? 26 : 16)
-                            .frame(maxWidth: .infinity)
+                        tick(i)
                     }
                 }
-                // The mark sits where the value is, so the ruler reads as something being pushed
-                // rather than a static row with a number attached to it.
+                // ⛔ NO IMPLICIT ANIMATION ON THE MARK WHILE A FINGER IS DOWN. It had an easeOut on
+                // every value change, so the mark arrived a tenth of a second after the thumb — which
+                // reads as the control being slow rather than smooth. A dragged control follows the
+                // finger exactly; only the moments nobody is touching it are animated.
                 Rectangle()
                     .fill(Color.white)
-                    .frame(width: 2.5, height: 34)
-                    .offset(x: CGFloat(value) * (w / 2 - 8))
-                    .animation(.easeOut(duration: 0.12), value: value)
+                    .frame(width: 3, height: 36)
+                    .offset(x: CGFloat(value) * travel)
+                    .animation(dragging ? nil : .spring(duration: 0.28, bounce: 0.18), value: value)
+                    .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { g in
-                        // Anchored on the value the drag STARTED from, not on the finger's absolute
+                        // Anchored on the value the drag STARTED from, not the finger's absolute
                         // position: a ruler you push should follow your thumb by the distance it
-                        // moved, and jumping to wherever the first touch landed is how a control
-                        // like this loses a setting somebody had already dialled in.
+                        // moved, and jumping to wherever the first touch landed is how a control like
+                        // this loses a setting somebody had already dialled in.
                         let start = dragStart ?? value
-                        if dragStart == nil { dragStart = start }
+                        if dragStart == nil {
+                            dragStart = start
+                            dragging = true
+                            lastTick = Int(markTick.rounded())
+                        }
                         let span = max(1, w - 16)
                         value = min(1, max(-1, start + Double(g.translation.width / span) * 2))
+                        // ⛔ ONE TAP PER TICK CROSSED. This is what a ruler is missing when it feels
+                        // dead: the eye sees the mark move, the hand feels nothing. `.selection` is
+                        // the light one Apple uses for pickers, not the heavier impact used for a
+                        // button, so a long drag is a run of ticks and not a rattle.
+                        let t = Int(markTick.rounded())
+                        if t != lastTick {
+                            lastTick = t
+                            UISelectionFeedbackGenerator().selectionChanged()
+                        }
                     }
                     .onEnded { _ in
                         dragStart = nil
-                        // Snap the last sliver back to neutral, so "put it back" does not need a
-                        // steady hand.
-                        if abs(value) < 0.03 { value = 0 }
+                        dragging = false
+                        // Snap the last sliver back to neutral, so "put it back" needs no steady hand,
+                        // and let the spring above carry it there.
+                        if abs(value) < 0.03 {
+                            withAnimation(.spring(duration: 0.28, bounce: 0.18)) { value = 0 }
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        }
                     }
             )
             // Double tap is the reset every dial of this kind has.
-            .onTapGesture(count: 2) { withAnimation(.easeOut(duration: 0.18)) { value = 0 } }
+            .onTapGesture(count: 2) {
+                guard value != 0 else { return }
+                withAnimation(.spring(duration: 0.3, bounce: 0.2)) { value = 0 }
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            }
         }
     }
+
+    /// ⛔ THE RULER ANSWERS THE MARK. Ticks near it stand taller and brighter and fall away with
+    /// distance, so the thing moving under the thumb is the whole control rather than one line
+    /// travelling across a static row. The falloff is smooth, which is what makes a drag read as
+    /// continuous even though the ticks themselves are discrete.
+    @ViewBuilder private func tick(_ i: Int) -> some View {
+        let centre = i == ticks / 2
+        let d = abs(Double(i) - markTick)
+        let near = max(0, 1 - d / 4)                 // 1 at the mark, 0 four ticks away
+        let lift = near * near                       // squared: the response stays tight to the thumb
+        Rectangle()
+            .fill(Color.white.opacity((centre ? 0.85 : 0.35) + lift * 0.5))
+            .frame(width: centre ? 2 : 1.5,
+                   height: (centre ? 26 : 16) + lift * 12)
+            .frame(maxWidth: .infinity)
+            .animation(.easeOut(duration: 0.12), value: lift)
+    }
 }
+
