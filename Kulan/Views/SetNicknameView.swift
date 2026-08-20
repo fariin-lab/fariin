@@ -51,10 +51,23 @@ struct SetNicknameView: View {
             // identical for free.
             Form {
                 Section {
-                    AvatarView(name: profileName, photoUrl: photoUrl, size: 96)
+                    // ⛔ 120, AND NO ROOM AROUND IT BUT ITS OWN (owner, 2026-08-20: "big empty space
+                    // up and buttom, also avater looks small").
+                    //
+                    // 96 in a Section of its own is the smallest picture on a screen about one
+                    // person, and a Form gives every section a header gap above and a footer gap
+                    // below whether or not it has either — so a bare circle came with roughly 45pt
+                    // of nothing on both sides. Zeroing the row's insets and asking for compact
+                    // section spacing takes that back.
+                    //
+                    // 120 is the number he approved on Edit Profile, which is this same screen for
+                    // your own name. Two screens that do the same job should not have two circles.
+                    AvatarView(name: profileName, photoUrl: photoUrl, size: 120)
                         .frame(maxWidth: .infinity)
                         .listRowBackground(Color.clear)   // sits on the grouped background, no card
+                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 4, trailing: 0))
                 }
+                .listSectionSpacing(.compact)
 
                 Section {
                     TextField("First name", text: $first)
@@ -100,6 +113,10 @@ struct SetNicknameView: View {
                     }
                 }
             }
+            // And the gap ABOVE the circle, which belongs to the scroll rather than to the section:
+            // a grouped Form starts its content well below the bar to leave room for a first
+            // section's header, and this one has none.
+            .contentMargins(.top, 8, for: .scrollContent)
             .navigationTitle("Set nickname")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
