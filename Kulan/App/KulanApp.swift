@@ -51,6 +51,13 @@ struct KulanApp: App {
                     StoryUIImages.store = { image, data, url in
                         DiskImageCache.shared.store(image, data: data, for: url)
                     }
+                    // And the no-photo circle. `AvatarView` with NO url renders exactly its letter
+                    // fallback and never touches the network, so the story header gets the real
+                    // component rather than a second drawing of it — same initial, same gradient,
+                    // same person, same colour as the chat list and the profile.
+                    StoryUIImages.avatarFallback = { name, size in
+                        AnyView(AvatarView(name: name, photoUrl: nil, size: size))
+                    }
                 }
         }
         .onChange(of: scenePhase) { _, phase in

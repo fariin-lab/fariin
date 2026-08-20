@@ -24,15 +24,32 @@ public enum StoryUIImages {
     public static var cached: ((String) async -> UIImage?)?
     /// Hand back what was downloaded, so the next surface to ask gets a hit instead of a fetch.
     public static var store: ((UIImage, Data, String) -> Void)?
+    /// ⛔ AND THE NO-PHOTO CIRCLE, WHICH IS NOT A GREY DISC ANYWHERE ELSE IN THE APP.
+    ///
+    /// Every other avatar falls back to the person's initial on a gradient keyed off their name, so
+    /// the same person is always the same colour. This package could not see that rule, so a story
+    /// header was the one place a removed profile picture came out as flat grey (owner: "when i
+    /// remove profile picture then i open my story top avater its grey … it should use the color i
+    /// am using when i dont have profile").
+    ///
+    /// A VIEW, not a bitmap: the app hands back its own `AvatarView` fallback, so this is the real
+    /// component at the size asked for rather than a copy of it that can drift. Nil is still a
+    /// working configuration — it means grey, the way it always was.
+    public static var avatarFallback: ((String, CGFloat) -> AnyView)?
 }
 
 struct CacheAsyncImage: View {
     private let urlString: String?
+    /// Whose circle this is — the only thing needed to draw the fallback, since the letter and the
+    /// gradient are both derived from the name.
+    private let name: String
+    private let size: CGFloat = 38
     /// Seeded synchronously so a cached photo is on screen in the FIRST frame, with no grey at all.
     @State private var image: UIImage?
 
-    init(urlString: String?) {
+    init(urlString: String?, name: String = "") {
         self.urlString = urlString
+        self.name = name
         _image = State(initialValue: urlString.flatMap { StoryUIImages.cachedNow?($0) })
     }
 
@@ -42,11 +59,17 @@ struct CacheAsyncImage: View {
                 Image(uiImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
+            } else if !name.isEmpty, let fallback = StoryUIImages.avatarFallback {
+                // ⚠️ THIS ALSO COVERS A URL THAT LOADS NOTHING, not just an absent one. A removed
+                // photo can leave a stale link behind on a story already posted, and the download
+                // for it fails; both roads end here with no bitmap, which is the state the letter
+                // is for.
+                fallback(name, size)
             } else {
                 Color.gray.opacity(0.8)
             }
         }
-        .frame(width: 38, height: 38)
+        .frame(width: size, height: size)
         .clipShape(Circle())
         // ⚠️ `.task(id:)`, NOT A MODEL BUILT IN `init`. This used to hold an `@ObservedObject`
         // constructed in the initialiser, and this view's parent re-renders on the progress tick —

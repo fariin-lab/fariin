@@ -107,7 +107,7 @@ struct UserView: View {
         HStack(spacing: Constant.UserView.hStackSpace) {
             // Tappable header block (avatar 38pt + name 14pt + timestamp 12pt) → profile.
             HStack(spacing: Constant.UserView.hStackSpace) {
-                CacheAsyncImage(urlString: image)   // 38×38 circle
+                CacheAsyncImage(urlString: image, name: name)   // 38×38 circle
                 VStack(alignment: .leading, spacing: 2) {
                     // TWO SHAPES, AND THE AUDIENCE DECIDES WHICH. With a line to fit underneath,
                     // the name and the time share the top row: the time is a detail about the name,
