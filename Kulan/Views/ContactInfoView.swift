@@ -423,25 +423,24 @@ struct ContactInfoView: View {
     /// is already at the compiler's type-checking limit — three ternaries added to it in the body was
     /// enough to tip it into "unable to type-check this expression in reasonable time". Plain typed
     /// properties cost the inference engine nothing.
-    /// ⛔ THE MENUS ARE NOT IN THIS VIEW TREE, WHICH IS WHY THEY CAME OUT LIGHT — and the first fix
-    /// for it was worse than the fault.
+    /// ⛔ THE PROFILE'S MENUS FOLLOW THE PHONE, AND TWO ATTEMPTS TO CHANGE THAT BOTH MADE THINGS
+    /// WORSE. Do not try a third without reading this.
     ///
-    /// The page pins `\.colorScheme` to dark for its own subtree, and that is all a subtree value can
-    /// do: a `Menu`'s contents are presented by UIKit in its own platform presentation, outside this
-    /// environment, so Mute's durations and the More menu drew in the device's style.
+    /// The page pins `\.colorScheme` to dark for its own subtree. A `Menu`'s contents are presented
+    /// by UIKit in its OWN platform presentation, outside that environment, so Mute's durations and
+    /// the More menu draw in the device's style. A subtree value cannot reach them; that is the
+    /// whole of it.
     ///
-    /// ⚠️ IT USED TO SET THE WHOLE WINDOW DARK AND PUT IT BACK IN `onDisappear`. That fixed the menus
-    /// and broke something far more visible: `onDisappear` runs AFTER the next screen has drawn, so
-    /// going back to a chat rendered the entire conversation dark for a beat before it snapped to
-    /// light. His report, and a regression I caused.
+    /// ⚠️ WHAT WAS TRIED. (1) Setting the WINDOW dark while the page was up and restoring it in
+    /// `onDisappear` — which runs after the next screen has drawn, so going back to a chat rendered
+    /// the whole conversation dark for a beat. (2) Setting the override on this page's own view
+    /// CONTROLLER instead — but SwiftUI does not give each destination its own controller here, so
+    /// the override reached every screen pushed from this one and All Media came up with a dark bar
+    /// on a light page. Both fixes were more visible than the fault.
     ///
-    /// Scoped to this page's own view controller now. The override lives on the controller rather
-    /// than the window, so it dies with the page and no other screen can inherit it — a pushed chat
-    /// is a different controller and is never touched. A presented menu takes its traits from the
-    /// controller it is presented FROM, which is the one being overridden here.
-    private var darkTraitScope: some View {
-        DarkTraitScope(active: useAdaptive)
-    }
+    /// A menu cannot be styled per-presentation from SwiftUI. The only honest way to have dark menus
+    /// on this page is to stop using system menus here and present our own sheet, which is a design
+    /// change and needs the owner's word rather than a third guess.
 
     private var barGlyph: Color { useAdaptive ? .white : .primary }
     private var barTint: Color? { useAdaptive ? .white : nil }
@@ -570,7 +569,6 @@ struct ContactInfoView: View {
         // The system back chevron takes its colour from here, not from the bar's scheme, so it stays
         // white through the iOS 26 material flip above.
         .tint(barTint)
-        .background(darkTraitScope)
         .toolbar { navTrailing }
         // The photo viewer's X, as a BAR ITEM in the back button's place. The top strip belongs to
         // the navigation bar, which sits above the viewer overlay and eats its touches — an X drawn
@@ -1843,52 +1841,4 @@ struct ProfilePhotoViewer: View {
     }
 }
 
-/// Puts a dark trait override on the CONTROLLER this view lives in, and takes it off when the view
-/// goes away. See `ContactInfoView.darkTraitScope` for what it is for and what it replaced.
-///
-/// A controller, deliberately, and never the window: a window override outlives the screen that set
-/// it and paints whatever is drawn next — which is exactly how going back to a chat came to flash
-/// dark for a beat.
-private struct DarkTraitScope: UIViewRepresentable {
-    let active: Bool
 
-    func makeUIView(context: Context) -> UIView {
-        let v = UIView()
-        v.isUserInteractionEnabled = false
-        v.isHidden = true
-        return v
-    }
-
-    func updateUIView(_ v: UIView, context: Context) {
-        // On the next turn: the view is not in a controller yet on the pass that creates it.
-        DispatchQueue.main.async {
-            guard let host = v.owningController else { return }
-            let want: UIUserInterfaceStyle = active ? .dark : .unspecified
-            if host.overrideUserInterfaceStyle != want { host.overrideUserInterfaceStyle = want }
-            context.coordinator.host = host
-        }
-    }
-
-    static func dismantleUIView(_ v: UIView, coordinator: Coordinator) {
-        coordinator.host?.overrideUserInterfaceStyle = .unspecified
-        coordinator.host = nil
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    final class Coordinator {
-        weak var host: UIViewController?
-    }
-}
-
-private extension UIView {
-    /// The nearest view controller up the responder chain.
-    var owningController: UIViewController? {
-        var r: UIResponder? = self
-        while let next = r?.next {
-            if let vc = next as? UIViewController { return vc }
-            r = next
-        }
-        return nil
-    }
-}
