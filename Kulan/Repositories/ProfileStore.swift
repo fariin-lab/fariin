@@ -333,8 +333,18 @@ final class ProfileStore {
     func uploadProfileImages(circle: UIImage, poster: UIImage?) async throws {
         guard let uid = Auth.auth().currentUser?.uid else { return }
         // Off the main actor: this is the resize and the only JPEG encode either crop gets.
+        // ⚠️ THE CIRCLE IS NOT A POSTER AND MUST NOT BE UPLOADED LIKE ONE. Both crops went over at
+        // 1280 and quality 0.85, and the two upload in parallel, so what you wait on is the LARGER
+        // of them — but the circle is never drawn above 120pt (360px on a 3x screen), so more than
+        // half of every profile save was bytes for pixels no screen ever shows. 640 is still nearly
+        // double what the biggest circle needs.
+        //
+        // The poster keeps its 1280, because that one IS drawn full width. Its quality comes down to
+        // 0.78: the bottom half of it is deliberately blurred into the page, and the top half at 0.78
+        // is indistinguishable at this size while costing roughly a third less to send.
         let encoded = await Task.detached(priority: .userInitiated) { () -> (Data?, Data?) in
-            (Self.squareJPEG(circle), poster.flatMap { Self.squareJPEG($0) })
+            (Self.squareJPEG(circle, maxSide: 640, quality: 0.8),
+             poster.flatMap { Self.squareJPEG($0, maxSide: 1280, quality: 0.78) })
         }.value
         guard let circleData = encoded.0 else { return }
         let posterData = encoded.1

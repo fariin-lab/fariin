@@ -1377,6 +1377,16 @@ struct EditProfileView: View {
     private var hasUnsavedText: Bool {
         firstName != origFirst || lastName != origLast || handle != origHandle || about != origAbout
     }
+
+    /// ⚠️ THE WHOLE NAME, BECAUSE THE LETTER AVATAR'S COLOUR IS HASHED FROM IT. The two pictures of
+    /// the same account disagreed: the page behind this sheet draws `me.name` ("adnan abdi") and this
+    /// sheet drew `firstName` alone ("adnan"), so `AvatarPalette.gradient(for:)` was hashing two
+    /// different strings and answering two different colours — teal on the page, blue in the sheet,
+    /// same person, same letter. This is the SAME composition `save` writes, so it follows the
+    /// fields while they are edited and equals `me.name` the moment it lands.
+    private var editingName: String {
+        "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces)
+    }
     /// Anything Save would write. The photo counts now that it is no longer applied the instant it
     /// is cropped, which is what makes X a real cancel rather than a late goodbye.
     private var hasUnsavedChanges: Bool { hasUnsavedText || pendingPhoto != nil || pendingRemove }
@@ -1439,7 +1449,7 @@ struct EditProfileView: View {
                             ZStack {
                                 // `pendingRemove` blanks the url so you see the letter you are about
                                 // to end up with, rather than the photo you just asked to delete.
-                                AvatarView(name: firstName,
+                                AvatarView(name: editingName,
                                            photoUrl: pendingRemove ? nil : profile.me?.photoUrl,
                                            size: 100)
                                 if let pendingPhoto {
@@ -1483,7 +1493,7 @@ struct EditProfileView: View {
                         case .remove:  confirmRemovePhoto = true
                         }
                     }) {
-                        ProfilePhotoSheet(name: firstName,
+                        ProfilePhotoSheet(name: editingName,
                                           photoUrl: pendingRemove ? nil : profile.me?.photoUrl,
                                           pendingImage: pendingPhoto,
                                           canRemove: hasPictureToRemove,

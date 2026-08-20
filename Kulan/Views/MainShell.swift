@@ -245,7 +245,15 @@ struct MainShell: View {
     }
 
     private func loadSettingsIcon() async {
-        guard let s = profile.me?.photoUrl, let url = URL(string: s) else { return }
+        // ⚠️ NO PHOTO MEANS TAKE THE OLD ONE DOWN, and that is the half this was missing. Removing
+        // your picture writes an EMPTY `photoUrl`, so this ran, failed to make a URL out of "", and
+        // returned — leaving `settingsIcon` holding the photograph that had just been deleted. The
+        // tab kept showing it for the rest of the session, and it is the one place in the app that
+        // draws your picture without going through `AvatarView`.
+        guard let s = profile.me?.photoUrl, !s.isEmpty, let url = URL(string: s) else {
+            await MainActor.run { settingsIcon = nil }
+            return
+        }
         // Persistent cache first (same store as every other avatar) — was a raw URLSession fetch that
         // re-downloaded my own profile photo on every launch.
         var img = await DiskImageCache.shared.image(for: s)
