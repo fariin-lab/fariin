@@ -382,10 +382,6 @@ struct StoryLibraryPicker: View {
                 // the camera's CAMERA/TEXT bar got to the same number he approved there.
                 //
                 // Horizontal is deliberately NOT fixed: the segments still split the full width.
-                GlassSegmentedSwitch(titles: ["Photos", "Collections"], selection: $tab)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 16).padding(.vertical, 8)
-
                 if tab == 0 { photosTab } else { collectionsTab }
                 if allowsMultiple, !picked.isEmpty { selectionBar }
             }
@@ -403,9 +399,26 @@ struct StoryLibraryPicker: View {
             .background(Color(.systemBackground))
             .toolbarBackground(Color(.systemBackground), for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
-            .navigationTitle("Add to Story")
+            // ⛔ NO TITLE, AND THE SWITCH RIDES THE BAR (owner, 2026-08-20, with the reference shot).
+            // "Add to Story" was a word for a screen that is obviously a picker: it took the middle
+            // of the bar, pushed the Photos/Collections switch onto a row of its own underneath, and
+            // cost the grid a whole band of height to say something the grid already says.
+            //
+            // One row now: the app's standard glass X on the left, the switch in the middle. Both
+            // are Liquid Glass, which is what the rest of this app's sheets use and what the
+            // reference shows.
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarLeading) { Button { dismiss() } label: { Image(systemName: "xmark") } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { CloseXButton { dismiss() } }
+                ToolbarItem(placement: .principal) {
+                    // `.fixedSize(vertical:)` and NOT `.frame(height:)` — a frame gives the
+                    // representable a 40pt slot and lets UIKit centre a shorter control inside it,
+                    // which is how this bar came out at 34 with dead space the first time.
+                    GlassSegmentedSwitch(titles: ["Photos", "Collections"], selection: $tab)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             .navigationDestination(item: $openAlbum) { album in albumGrid(album) }
             .overlay { if loadingVideo { ProgressView().controlSize(.large).tint(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity).background(.black.opacity(0.35)) } }
