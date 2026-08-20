@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // "Go to Chat" event: the open ThreadView for `cid` pops back to itself (out of the profile/gallery
 // push) and scrolls to + flashes `messageId`. The standard behavior â€” return to the conversation at
@@ -52,10 +53,34 @@ struct MediaGalleryView: View {
     @State private var confirmDelete = false
 
     @Environment(\.colorScheme) private var scheme
+    @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
+
+    /// ⛔ WHAT THE PHONE IS SET TO — asked of the phone, not of the environment.
+    ///
+    /// `scheme` above cannot answer this. It reports what this view INHERITED, and this view is
+    /// pushed from the profile, which pins its whole subtree to dark by the owner's standing rule.
+    /// So on a light-mode phone `scheme` says dark here, and everything drawn from it comes out
+    /// white on a white page: the title gone entirely, the count a ghost, white glyphs in the bar
+    /// (his screenshot).
+    ///
+    /// The previous attempt at this was `.toolbarColorScheme(nil)`, and nil means "follow the
+    /// environment" — it asked the same question of the same liar and got the same answer, which
+    /// is why the bar never changed.
+    ///
+    /// The app's own setting is the authority: Light and Dark answer outright, System defers to the
+    /// window's trait, which no SwiftUI subtree override can reach.
+    private var pageScheme: ColorScheme {
+        if let fixed = AppAppearance(rawValue: appearanceRaw)?.colorScheme { return fixed }
+        let style = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }?
+            .keyWindow?.traitCollection.userInterfaceStyle
+        return style == .dark ? .dark : .light
+    }
     @Environment(\.dismiss) private var dismiss
     // Same zoom hero as the profile photo / chat bubbles: the viewer grows out of the tapped
     // tile and the drag-down close shrinks back into it.
-    private var dark: Bool { scheme == .dark }
+    private var dark: Bool { pageScheme == .dark }
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 2), count: 4)
 
     // MARK: - Derived lists (gifs get their own tab, so they're excluded from Media)
@@ -144,9 +169,17 @@ struct MediaGalleryView: View {
         // Media" and a white count on a white bar: his screenshot, where the title is not faint but
         // simply gone.
         //
-        // `nil` is "follow the environment", which is what every other pushed screen gets by not
-        // having been pushed from a page with an opinion.
-        .toolbarColorScheme(nil, for: .navigationBar)
+        // `nil` was the first attempt and it could not work: nil is "follow the environment", and
+        // the environment here is the profile's dark override. It asked the same question of the
+        // same liar. `pageScheme` asks the phone instead — see it above.
+        //
+        // All three, because the leak arrives by three roads. The environment scheme is what the
+        // title, the count and every `.primary` in the page read; the toolbar scheme is what the
+        // bar's own material and its glass buttons read; and the tint is what the back chevron
+        // reads, which the profile pins to white so it survives its own bar's material flip.
+        .environment(\.colorScheme, pageScheme)
+        .toolbarColorScheme(pageScheme, for: .navigationBar)
+        .tint(Color.accentColor)
         .toolbar { toolbar }
         .safeAreaInset(edge: .bottom) { if selecting { selectionToolbar } }
         .task {
