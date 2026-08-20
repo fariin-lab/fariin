@@ -659,6 +659,9 @@ struct CallContainer<Content: View>: View {
     // Minimizing used to drop every call into that same bar, so a video call looked like it had
     // turned into a voice one — the video was still running, nothing on screen was showing it.
     private var showsFloatingVideo: Bool { isActive && call.minimized && call.isVideo }
+    /// Held at the root because the cover is declared here; handed to the buttons through the
+    /// environment. See `CallZoomNamespaceKey`.
+    @Namespace private var callZoom
 
     var body: some View {
         VStack(spacing: 0) {
@@ -702,14 +705,54 @@ struct CallContainer<Content: View>: View {
             }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.82), value: showsFloatingVideo)
+        .environment(\.callZoomNamespace, callZoom)
         .fullScreenCover(isPresented: Binding(
             get: { isActive && !call.minimized },
             set: { _ in }
         )) {
+            // GROWS OUT OF THE BUTTON THAT WAS PRESSED (owner, 2026-08-20), rather than sliding up
+            // from the bottom edge. `call.isVideo` is already decided by the time this presents, so
+            // it names the matching source of the two.
+            //
+            // ⚠️ Safe here in a way it was NOT on the media viewer, and the difference is worth
+            // stating: the system zoom brings its own dismiss pan, which fought that screen's
+            // MediaDismissHost drag. This screen has no drag of its own — it is left by a button —
+            // so there is nothing for it to fight.
             CallView()
+                .navigationTransition(.zoom(sourceID: CallZoomSource.id(video: call.isVideo),
+                                            in: callZoom))
         }
         .fullScreenCover(isPresented: $showGroupRestore) { GroupCallView() }
     }
+}
+
+// MARK: - The zoom source
+
+/// ⛔ THE NAMESPACE THE CALL SCREEN GROWS OUT OF, CARRIED IN THE ENVIRONMENT.
+///
+/// A zoom transition needs the source and the presentation to share one `Namespace`, and these two
+/// are nowhere near each other: the button is in the profile, and the cover that answers it is
+/// declared once at the root so a call can be restored from any screen. Neither can hold the
+/// namespace for the other, so the root holds it and hands it down.
+///
+/// Nil is a working configuration and most callers are exactly that. The Calls tab, the chat header
+/// and an incoming call have no button to grow out of, and a zoom with no source falls back to the
+/// ordinary presentation on its own.
+private struct CallZoomNamespaceKey: EnvironmentKey {
+    static let defaultValue: Namespace.ID? = nil
+}
+
+extension EnvironmentValues {
+    var callZoomNamespace: Namespace.ID? {
+        get { self[CallZoomNamespaceKey.self] }
+        set { self[CallZoomNamespaceKey.self] = newValue }
+    }
+}
+
+/// One id per button, because there are two of them side by side and the page has to grow out of
+/// the one that was pressed — not out of whichever was registered last.
+enum CallZoomSource {
+    static func id(video: Bool) -> String { video ? "call.video" : "call.voice" }
 }
 
 // MARK: - FloatingCallWindow

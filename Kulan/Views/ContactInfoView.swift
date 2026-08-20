@@ -1429,14 +1429,23 @@ struct ContactInfoView: View {
             // them, not theirs about me, and a button that says "you blocked this person" is not
             // information anybody needs on their own screen.
             if !isSelf && !blocked {
+                // THE CALL SCREEN GROWS OUT OF THESE TWO (owner, 2026-08-20). The cover itself is
+                // declared at the root so a call can be restored from any screen, so the namespace
+                // it zooms in comes down through the environment — see `CallZoomNamespaceKey`. A
+                // separate id each, or the page would grow out of whichever was registered last
+                // instead of the one under his thumb.
                 Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl,
                                                       fromProfile: true) } label: {
                     PosterActionIcon(icon: "phone.fill")
-                }.tint(.primary)
+                }
+                .tint(.primary)
+                .modifier(CallZoomSourceModifier(video: false))
                 Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl,
                                                       video: true, fromProfile: true) } label: {
                     PosterActionIcon(icon: "video.fill")
-                }.tint(.primary)
+                }
+                .tint(.primary)
+                .modifier(CallZoomSourceModifier(video: true))
             }
             if !isSelf {
                 Menu { muteMenuItems } label: {
@@ -1877,3 +1886,22 @@ struct ProfilePhotoViewer: View {
 }
 
 
+/// Marks a call button as the thing the call screen grows out of.
+///
+/// A modifier rather than the call written inline twice, because it has a condition in it: the
+/// namespace is nil on any screen that does not host the cover's environment, and
+/// `matchedTransitionSource` needs a real one. Nil simply means no zoom source, and a zoom with no
+/// source falls back to the ordinary presentation.
+private struct CallZoomSourceModifier: ViewModifier {
+    let video: Bool
+    @Environment(\.callZoomNamespace) private var namespace
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let namespace {
+            content.matchedTransitionSource(id: CallZoomSource.id(video: video), in: namespace)
+        } else {
+            content
+        }
+    }
+}
