@@ -1545,6 +1545,21 @@ struct StoryEditorView: View {
                     // `penCanvasSize`. At a zoom of 1 or more this is exactly the card.
                     .frame(width: penCanvas.width, height: penCanvas.height)
                     .scaleEffect(photoZoom).offset(photoOffset)
+                    // ⛔ AND THEN BACK TO THE CARD'S SIZE FOR LAYOUT, WHICH IS THE TEXT MOVING BY
+                    // ITSELF (owner, 2026-08-20: "when i make zoom out image Aa text is moving up …
+                    // never move that text").
+                    //
+                    // A ZStack takes the size of its LARGEST child, and at a zoom below 1 this
+                    // canvas is deliberately larger than the card — that is what lets the surround
+                    // be drawn on. So the whole card stack grew with it, and every `.position()` in
+                    // that stack — the text overlays, the stickers, the alignment guides — is
+                    // measured from the stack's top-left corner, which had just moved up and to the
+                    // left of the card's. The text did not move; the space it is positioned in did.
+                    //
+                    // A second frame reports the card's size to the layout and lets this one
+                    // overflow it visually, which is exactly what it needs to do. `scaleEffect` is
+                    // already a render-time transform and never reported its shrink here either.
+                    .frame(width: card.width, height: card.height)
             } else if !drawing.bounds.isEmpty {
                 // Bug fix: after "Done", keep the markup VISIBLE in the preview (it used to vanish because
                 // the canvas only existed in edit mode). Render the saved strokes as a static image, same
@@ -1571,6 +1586,8 @@ struct StoryEditorView: View {
                                    relay: photoTransform,
                                    scale: photoZoom, offset: photoOffset)
                     .frame(width: penCanvas.width, height: penCanvas.height)
+                    // The card's size for layout — same reason as the live canvas above.
+                    .frame(width: card.width, height: card.height)
                     .allowsHitTesting(false)
             }
 
