@@ -194,6 +194,8 @@ struct StoryEditorView: View {
     /// The one composition the dial drives, and the live exposure inside it. Built on the first
     /// touch of the dial and dropped with the player — see `applyPreviewBrightness`.
     @State private var brightnessLive: StoryVideoBrightness.LiveExposure?
+    /// Which way the next still-frame nudge steps — see `nudgePreviewFrame`.
+    @State private var nudgeForward = false
     /// Builds that one composition — see `applyPreviewBrightness`.
     @State private var brightnessTask: Task<Void, Never>?
     @State private var trimStart: Double = 0
@@ -2393,10 +2395,26 @@ struct StoryEditorView: View {
     /// Make a stopped player show the frame it is already on, once, through whatever the composition
     /// now says. Zero tolerance on both sides or AVFoundation is free to answer with the frame it has
     /// already drawn, which is the one being replaced.
+    /// ⛔ THE SEEK HAS TO ASK FOR A DIFFERENT TIME, OR THERE IS NOTHING FOR AVFOUNDATION TO DO.
+    ///
+    /// This asked for the time the item was already at, and that is a no-op: same time, and — since
+    /// the composition is built once and only its exposure changes inside — the same composition
+    /// object too. Nothing about the request differs from the frame already on screen, so the
+    /// rendered frame is reused and the dial does nothing. Which is exactly what he reported: live
+    /// while the clip plays, because playback runs every frame through the handler regardless, and
+    /// dead the moment he pauses.
+    ///
+    /// A time one six-hundredth of a second away is a DIFFERENT frame request, so the pipeline
+    /// decodes and runs the handler, which reads the exposure as it now stands. It alternates either
+    /// side of where the playhead is rather than always stepping one way, so a long drag cannot walk
+    /// the clip forward: the most it is ever off is that one step, and the next move puts it back.
     private func nudgePreviewFrame(_ item: AVPlayerItem) {
         guard previewPlayer?.rate == 0 else { return }   // playing already draws every frame
-        item.seek(to: item.currentTime(), toleranceBefore: .zero, toleranceAfter: .zero,
-                  completionHandler: nil)
+        let epsilon = CMTime(value: 1, timescale: 600)   // ~1.7ms, under half a frame at 240fps
+        let now = item.currentTime()
+        let target = nudgeForward ? CMTimeAdd(now, epsilon) : CMTimeSubtract(now, epsilon)
+        nudgeForward.toggle()
+        item.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero, completionHandler: nil)
     }
 
     private func openTrim() {
