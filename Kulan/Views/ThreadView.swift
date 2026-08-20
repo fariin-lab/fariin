@@ -6866,9 +6866,28 @@ struct MessageBubble: View, Equatable {
                 // 1.3 rather than a free rein: the bubble still has to read as a message in a list
                 // and not as a full-screen page, and a picture that keeps growing pushes the rest of
                 // the conversation off the screen.
-                let tallMax = boxMax * 1.3
-                var h = aspect < 1 ? tallMax : boxMax
+                // ⚠️ AND THE EXTRA HEIGHT IS EARNED, NOT GIVEN TO EVERY PORTRAIT (owner, 2026-08-20:
+                // "keep the 9:16 images exactly as they are … for all other image aspect ratios, do
+                // not enlarge them").
+                //
+                // The first version of this fix was `aspect < 1 ? tallMax : boxMax`, which handed
+                // the full 1.3 to ANY picture taller than it is wide. A 3:4 photo does not have the
+                // problem this exists to solve — at `h = boxMax` it is already 0.75 of the box
+                // across, a perfectly good bubble — and it came out a third larger for no reason.
+                //
+                // The rule is width, not orientation: start at the height every image has always
+                // had, and only grow one that would otherwise be too NARROW to read. `comfortW` is
+                // the width a 9:16 has today at the 1.3 cap, so 9:16 lands on exactly the size he
+                // approved, anything taller is capped there, anything between ramps smoothly, and
+                // 3:4, square and every landscape ratio are left exactly as they were.
+                let maxH = boxMax * 1.3
+                let comfortW = maxH * (9.0 / 16.0)
+                var h = boxMax
                 var w = h * aspect
+                if w < comfortW {
+                    h = min(maxH, comfortW / aspect)
+                    w = h * aspect
+                }
                 w = max(w, minW)
                 if w > boxMax { w = boxMax; h = w / aspect }
                 // Anti-upscale: never enlarge a tiny original (but never drop below 150pt either).
