@@ -83,6 +83,10 @@ final class CallService: NSObject {
                 stopLinkMonitor()
                 calleeRinging = false; calleeAccepted = false; wasAccepted = false; recordWritten = false; minimized = false; liveRingRowId = nil
                 endReason = .none; negotiationVersion = 0; appliedRemoteRestart = 0
+                // ⚠️ RESET WITH EVERYTHING ELSE. A timeline left standing would measure the second
+                // call of a session from the first call's origin, which is worse than no measurement
+                // at all: the numbers still look like numbers.
+                timeline = [:]; timelineOrigin = nil; timelineWritten = false
                 pendingOffer = nil
                 pendingRemoteCandidates = []; localCandidateBuffer = []; callDocCreated = false
                 stopRingback(); stopTone(); cancelTimers()
@@ -115,6 +119,46 @@ final class CallService: NSObject {
     var connectedDate: Date?
     var endReason: EndReason = .none // last/in-progress end reason (UI reads it for the label)
     private var recordWritten = false
+
+    // MARK: - Where the seconds actually go
+    //
+    // WHY THIS EXISTS. "Connecting… takes a bit" is a real report and nothing in this app could say
+    // WHICH part is slow. The candidates are all plausible and they are not the same fix: the offer
+    // round trip, the relay credentials, building the connection, the candidate exchange crossing
+    // Firestore in Doha, the connectivity checks crossing an ocean, or the encrypt handshake. Tuning
+    // by guess on a file this heavily iterated is how a call system gets worse while being improved.
+    //
+    // So: a handful of milestones per call, in milliseconds from the first one, written ONCE.
+    //
+    // WRITTEN TO ITS OWN COLLECTION, never onto the call document. Both phones hold a live listener
+    // on the call doc; an extra field there would push a snapshot to both mid-call for nothing —
+    // the same reason the announcement push markers live apart from the announcements.
+    //
+    // Costs one small write per call, on connect only. Nothing reads it in the app; it is there to
+    // be queried from a desk after a real call between two real countries.
+    private var timeline: [String: Int] = [:]
+    private var timelineOrigin: Date?
+    private var timelineWritten = false
+
+    private func mark(_ label: String) {
+        let now = Date()
+        if timelineOrigin == nil { timelineOrigin = now }
+        guard let origin = timelineOrigin, timeline[label] == nil else { return }
+        timeline[label] = Int(now.timeIntervalSince(origin) * 1000)
+    }
+
+    /// Flushed when the media path comes up, which is the moment the user stops waiting.
+    private func writeTimeline() {
+        guard !timelineWritten, let id = callId, !timeline.isEmpty else { return }
+        timelineWritten = true
+        var payload: [String: Any] = timeline
+        payload["role"] = isCaller ? "caller" : "callee"
+        payload["at"] = FieldValue.serverTimestamp()
+        // Merged, and keyed by role, so the two sides land in one document without racing each
+        // other. Failures are ignored: a measurement must never be able to disturb a live call.
+        db.collection("callTiming").document(id)
+            .setData([isCaller ? "caller" : "callee": payload], merge: true)
+    }
     /// EITHER side accepted this call (callee: the tap; caller: the acceptedAt signal). The standard messengers'
     /// record rule, adopted on his order: an accepted call that then FAILS logs as a plain call,
     /// never as "missed" — the person answered, and a red "Missed call · Call back" in the
@@ -1439,6 +1483,7 @@ final class CallService: NSObject {
             // where activation never comes, so the caller can never sit in true silence either.
             self.armRingbackFallback()
             self.startNoAnswerTimeout() // give up after ~45s -> Missed
+            self.mark("dialled")   // the caller's origin: everything on this side is measured from here
             let ref = self.db.collection("calls").document()
             self.callId = ref.documentID
             self.pc = self.makePeerConnection()
@@ -1697,6 +1742,53 @@ final class CallService: NSObject {
                 return
             }
             self.markRinging()   // allowed — only now does the caller hear it ring
+            self.mark("ring")
+            // ⭐ THE OFFER, FETCHED WHILE IT IS STILL RINGING.
+            //
+            // The foreground listener path has cached it since it was written (`pendingOffer`, in
+            // observeIncoming), so answering a call that rang while the app was open takes the fast
+            // path in `answer()`. This path — a VoIP push, app killed, which is how most real
+            // incoming calls arrive — cached nothing, so `answer()` fell through to
+            // `fetchOfferWithRetry` and paid a round trip to Doha AFTER the finger landed, with up
+            // to three attempts over three seconds if the radio was still waking up. That wait is
+            // spent staring at "Connecting…".
+            //
+            // Nothing here is new work: it is the same read, moved into the ring, where the phone
+            // is awake and doing nothing anyway. By pickup the fast path applies to both routes in.
+            self.prefetchOffer(callId: callId, attempt: 1)
+        }
+    }
+
+    /// Pull the offer into `pendingOffer` during the ring. Retried, because the push can beat the
+    /// caller's own write of the offer onto the document, and a ring lasts long enough to try again.
+    ///
+    /// Every exit is silent on purpose. This is an optimisation, not a step: if it never lands,
+    /// `answer()` falls back to the fetch it always did and the call is exactly as it was before.
+    private func prefetchOffer(callId: String, attempt: Int) {
+        guard attempt <= 4, pendingOffer == nil else { return }
+        db.collection("calls").document(callId).getDocument(source: .server) { [weak self] snap, _ in
+            guard let self else { return }
+            // Still the same call, still ringing. A late reply must not write over a call that has
+            // since been answered, cancelled or replaced by a different one.
+            guard self.state == .incoming, self.callId == callId, self.pendingOffer == nil else { return }
+            if let d = snap?.data(), let offer = d["offer"] as? [String: String], offer["sdp"] != nil {
+                self.pendingOffer = offer
+                self.mark("offerReady")   // if this lands before "answerTapped", the prefetch paid off
+                // Take the type and the camera state from the document too. The push payload is the
+                // caller's word for these; the document is the record.
+                if let t = d["type"] as? String {
+                    self.startedAsVideo = (t == "video")
+                    self.cameraOn = self.startedAsVideo
+                    self.noteVideo()
+                }
+                if let cams = d["cams"] as? [String: Bool], let on = cams[self.otherUid] {
+                    self.remoteCameraOn = on
+                }
+                return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.prefetchOffer(callId: callId, attempt: attempt + 1)
+            }
         }
     }
 
@@ -1765,6 +1857,7 @@ final class CallService: NSObject {
 
     func answer() {
         guard let id = callId else { return }
+        mark("answerTapped")   // everything after this is time the user spends watching "Connecting…"
         ringingWatcher?.remove(); ringingWatcher = nil   // observeCallDoc (attached below) takes over
         callDocCreated = true   // callee: the caller already created the doc, so candidates can write now
         state = .active   // present the call screen immediately; SDP fills in below
@@ -1821,14 +1914,17 @@ final class CallService: NSObject {
     }
 
     private func completeAnswer(ref: DocumentReference, offerSdp: String) {
+        mark("offerInHand")   // gap from answerTapped = what the offer fetch cost, if anything
         Task { @MainActor in
             await self.awaitIceServers()
+            self.mark("relayCredsReady")   // gap from offerInHand = what the TURN fetch cost
             guard self.state == .active else { return }   // ended while we waited
             self.buildAnswer(ref: ref, offerSdp: offerSdp)
         }
     }
 
     private func buildAnswer(ref: DocumentReference, offerSdp: String) {
+        mark("buildingAnswer")
         pc = makePeerConnection()   // cameraOn is already known → the local video track is added if it's a video call
         guard let pc else { hangUp(); return }
         let remote = RTCSessionDescription(type: .offer, sdp: offerSdp)
@@ -2201,6 +2297,9 @@ extension CallService: RTCPeerConnectionDelegate {
                 // First real media connect → NOW the call is truly connected: start the timer + tell CallKit.
                 if self.connectedDate == nil {
                     self.connectedDate = Date()
+                    // The moment the waiting stops. Everything above is now measurable against it.
+                    self.mark("mediaUp")
+                    self.writeTimeline()
                     CallKitManager.shared.reportConnected()
                     // The live row goes "Ringing" → "Ongoing". Caller only — one writer, and it is
                     // the device that created the row.

@@ -1079,6 +1079,25 @@ service cloud.firestore {
     // Calls: ephemeral WebRTC signaling (offer/answer + ICE candidates). Scoped to the
     // TWO participants only — otherwise any signed-in user could read SDP/ICE (eavesdrop),
     // inject candidates, force-end strangers' calls, or spoof caller-ID via the VoIP push.
+    // HOW LONG A CALL TOOK TO CONNECT, and nothing else. Milliseconds between milestones on each
+    // side, written once when the media path comes up, so "Connecting… takes a bit" can be answered
+    // with a number instead of a guess.
+    //
+    // A SEPARATE COLLECTION, not a field on the call. Both phones hold a live listener on the call
+    // document and an extra field there would push a snapshot to both of them mid-call for nothing.
+    //
+    // WRITE-ONLY FROM A PHONE, AND NEVER READABLE BY ONE. There is nothing here a client needs, and
+    // a call id is guessable enough that a readable timing document would tell a stranger when two
+    // people spoke. It is read from the console with an admin credential and nowhere else.
+    // No delete either: nothing on a phone should be able to erase a measurement.
+    match /callTiming/{callId} {
+      allow read, delete: if false;
+      allow create, update: if signedIn()
+        && exists(/databases/$(database)/documents/calls/$(callId))
+        && (request.auth.uid == get(/databases/$(database)/documents/calls/$(callId)).data.caller
+            || request.auth.uid == get(/databases/$(database)/documents/calls/$(callId)).data.callee);
+    }
+
     match /calls/{callId} {
       function parties() {
         return get(/databases/$(database)/documents/calls/$(callId)).data;
