@@ -564,6 +564,10 @@ struct ThreadView: View {
             // and it too was a proxy.scrollTo NO-OP that never executed (the "tap input → conversation
             // doesn't move" report).
             .onChange(of: inputFocused) { _, focused in
+                // Wake the Taptic Engine while the keyboard is coming up. `prepare()` has to run
+                // BEFORE the interaction, not at the moment of it — called on the tap it is worth
+                // nothing. Opening the composer is the earliest honest signal that a send is coming.
+                if focused { Haptics.prepare(.light) }
                 guard focused, isAtBottom else { return }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                     nativeScrollTarget = "BOTTOM"
@@ -3552,7 +3556,7 @@ struct ThreadView: View {
             try? await PHPhotoLibrary.shared().performChanges {
                 for image in images { PHAssetChangeRequest.creationRequestForAsset(from: image) }
             }
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            Haptics.notify(.success)
             return
         }
         var ui: UIImage?
@@ -3570,7 +3574,7 @@ struct ThreadView: View {
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else { return }
         try? await PHPhotoLibrary.shared().performChanges { PHAssetChangeRequest.creationRequestForAsset(from: image) }
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        Haptics.notify(.success)
     }
 
     private func deliver(text: String, reply: ReplyRef?, clientId: String, mentions: [String] = [],
@@ -5352,12 +5356,12 @@ struct ThreadView: View {
             withAnimation(.easeIn(duration: 0.25)) { holdHint = false }
         }
     }
-    private func impact(_ s: UIImpactFeedbackGenerator.FeedbackStyle) {
-        UIImpactFeedbackGenerator(style: s).impactOccurred()
-    }
-    private func notify(_ t: UINotificationFeedbackGenerator.FeedbackType) {
-        UINotificationFeedbackGenerator().notificationOccurred(t)
-    }
+    // Through the shared, kept-warm generators. These used to build a generator, fire it and drop
+    // it, which is the pattern Apple's documentation warns against: the engine is asleep, waking it
+    // costs tens of milliseconds, and on a busy frame the tap is dropped outright. See Haptics.swift
+    // for why that matters more than a sound does.
+    private func impact(_ s: UIImpactFeedbackGenerator.FeedbackStyle) { Haptics.impact(s) }
+    private func notify(_ t: UINotificationFeedbackGenerator.FeedbackType) { Haptics.notify(t) }
 
     private func timeString(_ t: TimeInterval) -> String {
         let s = Int(t); return String(format: "%d:%02d", s / 60, s % 60)
@@ -5926,7 +5930,7 @@ struct MessageBubble: View, Equatable {
         .highPriorityGesture(
             TapGesture(count: 2).onEnded {
                 guard message.sendState == nil, !restricted, !message.deleted else { return }
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                Haptics.impact(.light)
                 let quick = QuickReaction.current
                 onReact(myReaction == quick ? nil : quick)
             }
@@ -6255,7 +6259,7 @@ struct MessageBubble: View, Equatable {
                     .highPriorityGesture(
                         TapGesture(count: 2).onEnded {
                             guard message.sendState == nil, !restricted, !message.deleted else { return }   // not until on server; muted can't react
-                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            Haptics.impact(.light)
                             let quick = QuickReaction.current
                             onReact(myReaction == quick ? nil : quick)
                         },
@@ -6355,7 +6359,7 @@ struct MessageBubble: View, Equatable {
                 // buzzed after release, so on those you couldn't feel the threshold at all.
                 if dragX <= -50, !swipeArmed {
                     swipeArmed = true
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    Haptics.impact(.light)
                 } else if dragX > -50, swipeArmed {
                     swipeArmed = false
                 }
@@ -6828,7 +6832,7 @@ struct MessageBubble: View, Equatable {
             .highPriorityGesture(
                 TapGesture(count: 2).onEnded {
                     guard isMe || viewed, message.sendState == nil, !restricted, !message.deleted else { return }
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    Haptics.impact(.light)
                     let quick = QuickReaction.current
                     onReact(myReaction == quick ? nil : quick)
                 },
