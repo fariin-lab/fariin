@@ -31,7 +31,8 @@
 //  exactly the same thing rather than calling a separate animator.
 //
 //  THE NUMBERS ARE THEIRS: commit at |fraction| >= 0.3 or |velocity| >= 100pt/s; settle over 0.4s on
-//  a spring of mass 3, stiffness 1000, damping 500; rubber-band only at the ends, coefficient 0.4
+//  a spring of mass 3, stiffness 1000, damping 500 (ours is 900 on his order — see
+//  `springStiffness`); rubber-band only at the ends, coefficient 0.4
 //  over a range of 600; at most three peers alive; hit testing restricted to the focused peer; the
 //  face tint a black axial gradient 1.0 -> 0.8 -> 0.5 at |fraction| x 1.3.
 //
@@ -475,7 +476,8 @@ final class StoryCubePagerVC: UIViewController {
         if finishing { done?() }
     }
 
-    /// THEIR SPRING, SAMPLED — `CASpringAnimation(mass: 3, stiffness: 1000, damping: 500)`.
+    /// THEIR SPRING, SAMPLED — `CASpringAnimation(mass: 3, stiffness: 1000, damping: 500)`,
+    /// with the stiffness softened to 900 on the owner's 2026-08-21 order. See `springStiffness`.
     ///
     /// ⚠️ THE SPRING IS IN THE VALUES, NOT IN THE TIMING. They sample it into a keyframe track and
     /// replay that track LINEARLY; applying a spring timing function to sprung values double-applies
@@ -491,9 +493,34 @@ final class StoryCubePagerVC: UIViewController {
     }
 
     private static let springDuration: CGFloat = 0.5
-    /// Roots of the characteristic equation for mass 3, stiffness 1000, damping 500.
-    private static let r1: CGFloat = -2.024770
-    private static let r2: CGFloat = -164.642500
+
+    /// ⛔ STIFFNESS 1000 → 900 (owner, 2026-08-21), AND IT IS THE SAME KNOB, TURNED THE SAME WAY,
+    /// AS THE STORY OPEN'S 530 → 480. He asked for it in exactly those words.
+    ///
+    /// Mass and damping are untouched, which is the point. Spring time goes as 1/√k, so ten percent
+    /// off the stiffness is only about five percent longer overall — but a spring does not spend that
+    /// extra time evenly. It spends it at the END, in the approach, because that is where it is
+    /// moving slowest, and lowering k while holding c also pushes the damping ratio further into
+    /// overdamped, which lengthens the slow exponential specifically. Sampled against the old curve:
+    ///
+    ///     u     old     new
+    ///     0.50  0.6165  0.6045
+    ///     0.90  0.9380  0.9346
+    ///     0.95  0.9698  0.9680
+    ///     1.00  1.0000  1.0000
+    ///
+    /// Behind at every point and equal at the end, so more of the turn is left for the last stretch.
+    /// That is his "the last 10% settles more smoothly" and it is why stiffness is the right lever
+    /// rather than the duration — his 0.165s is untouched and is not up for changing.
+    ///
+    /// ONE NUMBER TO TURN, the same as its counterpart: too floaty, back up towards 1000; still too
+    /// abrupt, down to 850. The roots below are solved FROM it (3s² + 500s + k = 0) and must be
+    /// recomputed together — they are not independent numbers to nudge.
+    private static let springStiffness: CGFloat = 900
+
+    /// Roots of the characteristic equation for mass 3, stiffness 900, damping 500.
+    private static let r1: CGFloat = -1.819872
+    private static let r2: CGFloat = -164.846795
     /// What the un-normalised curve has reached at `springDuration`.
     private static let springFinal: CGFloat =
         1 - (r2 * exp(r1 * springDuration) - r1 * exp(r2 * springDuration)) / (r2 - r1)
