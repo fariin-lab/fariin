@@ -668,6 +668,20 @@ struct StoryRowLongPress: UIViewRepresentable {
                                shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
             guard !(other is UIPanGestureRecognizer) else { return false }
             guard let host, let otherView = other.view else { return false }
+            // ⛔ NEVER THE SCROLL VIEW'S OWN RECOGNISERS, AND THIS GUARD IS A SHIPPED REGRESSION.
+            //
+            // `isDescendant(of:)` answers TRUE FOR THE VIEW ITSELF, and this press is installed ON
+            // the scroll view — so `host` matched itself and every recogniser UIKit puts on that
+            // scroll view was made to wait 0.32s for our press to fail. Its pan was exempt by the
+            // line above, but a scroll view carries more than a pan (the private delayed-touches
+            // recogniser among them), and holding those back breaks the scroll: the owner reported
+            // the story row no longer swiping at all.
+            //
+            // Excluding `UIScrollView` outright as well as identity, because the intent was only
+            // ever the CONTENT inside the strip — the SwiftUI `Button` in each card, which is the
+            // one thing that was stealing the press. A nested scroller has its own gestures to run
+            // and none of them are ours to delay.
+            guard otherView !== host, !(otherView is UIScrollView) else { return false }
             return otherView.isDescendant(of: host)
         }
 
