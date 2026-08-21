@@ -103,8 +103,18 @@ struct MyQRView: View {
                 // `onMyCode: dismiss` on the scanner we open ourselves: its "My code" button comes
                 // back HERE instead of presenting a second copy of this screen on top of this one.
                 ScanQRView(onMyCode: { showScanner = false }) { user in
-                    showScanner = false
-                    dismiss()
+                    // ⚠️ ROUTE FIRST, THEN ONE DISMISS, and do NOT close the cover by hand on the
+                    // way. `showScanner = false` followed by `dismiss()` is the trap
+                    // BottomActionSheet.swift already carries a note about: acting on a presenter
+                    // while the thing it presented is still animating away is how a dismiss gets
+                    // swallowed, and here that would leave this screen sitting over the chat it
+                    // just routed to. Dismissing this view takes its cover with it, so one call
+                    // does both.
+                    //
+                    // The route is set before the dismiss because the shell consumes
+                    // `pendingChatId` once the list is up; setting it after would race the
+                    // teardown of the view still holding the closure.
+                    //
                     // The same two steps New Chat takes: route to the conversation id, and create
                     // the conversation behind it in case these two have never spoken. Routing alone
                     // would open a chat whose document does not exist yet.
@@ -112,6 +122,7 @@ struct MyQRView: View {
                     AppRouter.shared.pendingChatName = user.name.isEmpty ? user.handle : user.name
                     AppRouter.shared.pendingChatPhoto = user.photoUrl
                     Task { try? await ChatService.openConversation(other: user) }
+                    dismiss()
                 }
             }
         }

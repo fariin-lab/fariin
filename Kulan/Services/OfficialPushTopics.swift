@@ -66,24 +66,56 @@ enum OfficialPushTopics {
         let target = wanted(muted: muted, signedIn: signedIn)
         guard joined != target else { return }
 
+        // ⚠️ RECORDED OPTIMISTICALLY, THEN TAKEN BACK ON FAILURE, and the order matters.
+        //
+        // Writing the target and leaving it there would be a silent, permanent hole: a subscribe
+        // that failed on a bad connection would still be remembered as joined, every later sync
+        // would compare equal and return at the guard above, and this phone would never be asked
+        // again. On `sec_all` that is a phone that quietly stops receiving security alerts, with
+        // nothing anywhere saying so — the exact failure this whole file exists to prevent.
+        //
+        // Recording first and undoing on failure, rather than recording only on success, because the
+        // callbacks are asynchronous: a sync that ran again before they landed would see an empty
+        // set and subscribe to everything a second time.
+        defaults.set(Array(target), forKey: joinedKey)
+
         for topic in target.subtracting(joined) {
             Messaging.messaging().subscribe(toTopic: topic) { error in
-                if let error { print("official push: could not join \(topic):", error) }
+                guard let error else { return }
+                print("official push: could not join \(topic):", error)
+                forget(topic)
             }
         }
         for topic in joined.subtracting(target) {
             Messaging.messaging().unsubscribe(fromTopic: topic) { error in
-                if let error { print("official push: could not leave \(topic):", error) }
+                guard let error else { return }
+                print("official push: could not leave \(topic):", error)
+                // Still listed as joined, because it still is. Better a topic we keep trying to
+                // leave than one we believe we left and did not.
+                remember(topic)
             }
         }
-        // Written even if a call above fails. The alternative is retrying forever on a topic Firebase
-        // has already dropped, and the next sync re-derives the whole set anyway.
-        defaults.set(Array(target), forKey: joinedKey)
     }
 
     /// Sign-out, account switch, or the app-wide notification switch going off. The next account on
     /// this phone must not inherit the last one's alerts.
     static func leaveAll() {
         sync(muted: true, signedIn: false)
+    }
+
+    /// Drop a topic from the record so the next sync tries to join it again.
+    private static func forget(_ topic: String) {
+        let defaults = UserDefaults.standard
+        var joined = Set(defaults.stringArray(forKey: joinedKey) ?? [])
+        guard joined.remove(topic) != nil else { return }
+        defaults.set(Array(joined), forKey: joinedKey)
+    }
+
+    /// Put a topic back in the record so the next sync tries to leave it again.
+    private static func remember(_ topic: String) {
+        let defaults = UserDefaults.standard
+        var joined = Set(defaults.stringArray(forKey: joinedKey) ?? [])
+        guard joined.insert(topic).inserted else { return }
+        defaults.set(Array(joined), forKey: joinedKey)
     }
 }
