@@ -1161,14 +1161,14 @@ struct ChatsView: View {
                         .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(.secondary)
                     Spacer(minLength: 8)
-                    if !archivedChats.isEmpty {
-                        Text("\(archivedChats.count)")
-                            .font(.system(size: 15))
-                            // `Theme.accent(dark)`, which is the SAME colour `Color.accentColor` was
-                            // giving here, spelled so it cannot drift: the List now sets a tint of
-                            // its own for the selection tick, and accentColor would have followed it.
-                            .foregroundStyle(archivedUnread ? Theme.accent(dark) : Color.secondary)
-                    }
+                    // ⛔ NO COUNT (his order, 2026-08-21, circled). It was the number of archived
+                    // chats, tinted accent when any of them were unread.
+                    //
+                    // ⚠️ THAT NUMBER WAS ALSO THE ONLY UNREAD SIGNAL THIS ROW HAD, and with the row
+                    // itself now behind a pull-down gesture there is nothing left on this screen to
+                    // say an archived chat has something new in it. He asked for the number gone, so
+                    // it is gone; if the signal is wanted back it should be a dot rather than a
+                    // count, which is a different request and not one to make on his behalf.
                 }
                 .padding(.vertical, 11)
                 .padding(.horizontal, 16)   // the chat row's gutter, for the same reason (row insets are zero)
