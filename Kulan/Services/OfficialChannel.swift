@@ -504,6 +504,12 @@ final class OfficialChannelStore {
                 // write to be left alone.
                 self.state = OfficialChannelState(data: snap?.data() ?? [:])
                 self.recompute()
+                // THE ONLY PLACE THAT DECIDES WHAT THIS PHONE HEARS. Put here rather than in
+                // `setMuted` because this fires for all three ways the answer can change: the app
+                // launching, this phone muting, and the account's OTHER phone muting. A mute made on
+                // one device that left the other still being knocked on would read as the switch
+                // being broken.
+                OfficialPushTopics.sync(muted: self.state.muted)
             }
 
         // A scheduled announcement becomes due while the app is open, and no snapshot fires for the
@@ -538,6 +544,9 @@ final class OfficialChannelStore {
         visible = []
         state = OfficialChannelState()
         hasLoaded = false
+        // Topics outlive a sign-out: they are attached to the phone's FCM token, not to the account.
+        // Left alone, the next person to sign in on this handset would inherit the last one's alerts.
+        OfficialPushTopics.leaveAll()
     }
 
     // MARK: The filter
@@ -677,6 +686,11 @@ final class OfficialChannelStore {
     func setMuted(_ muted: Bool) {
         state.muted = muted
         stateRef?.setData(["muted": muted], merge: true)
+        // Locally too, not only through the listener above. The write has to reach Doha and come
+        // back before that fires, and on a bad connection that is seconds in which the bell reads
+        // OFF while an announcement could still knock. Both calls land on the same set, and the
+        // second one is free.
+        OfficialPushTopics.sync(muted: muted)
     }
 
     /// Mark Unread from the chat list: pull the watermark back behind the newest announcement so

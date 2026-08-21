@@ -242,6 +242,16 @@ enum Push {
             guard granted else { return }
             DispatchQueue.main.async { UIApplication.shared.registerForRemoteNotifications() }
         }
+        // The official channel's topics read the same switch, and nothing else would put this phone
+        // back in them: they are a Firebase-side subscription, not a token, so turning Show
+        // Notifications off and on again leaves the announcement side silent forever unless it is
+        // re-derived here.
+        //
+        // Boot calls this before anybody is signed in, hence the explicit check: a phone sitting on
+        // the sign-in screen must not be in a topic. Once signed in, the channel's own state
+        // listener takes over and syncs on every launch anyway.
+        OfficialPushTopics.sync(muted: OfficialChannelStore.shared.state.muted,
+                                signedIn: Auth.auth().currentUser != nil)
     }
 
     /// Stop push to this device: drop its FCM token so the Cloud Function skips it,
@@ -250,6 +260,10 @@ enum Push {
     // Async so sign-out can AWAIT the removals — fire-and-forget writes raced signOut
     // and lost auth mid-flight, leaving stale tokens (ghost pushes after logout).
     static func unregister() async {
+        // BEFORE the uid guard. Dropping the tokens is an account-scoped job and rightly gives up
+        // without one, but a topic subscription belongs to the handset: it would survive the
+        // sign-out and keep announcing to whoever picks the phone up next.
+        OfficialPushTopics.leaveAll()
         guard let uid = Auth.auth().currentUser?.uid else { return }
         let db = Firestore.firestore()
         let doc = db.collection("users").document(uid)

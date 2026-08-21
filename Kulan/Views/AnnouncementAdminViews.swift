@@ -364,6 +364,20 @@ struct AnnouncementComposeView: View {
                     Text(audienceFooter)
                 }
 
+                // WHAT THE PHONE WILL DO WITH IT, said before Send is tapped rather than found out
+                // afterwards. It sits under the audience because that is what decides it: the two
+                // silent cases are both targeting choices, and this is the row you have just come
+                // back from setting them on.
+                Section {
+                    Label {
+                        Text(draft.pushNote).font(.footnote).foregroundStyle(.secondary)
+                    } icon: {
+                        Image(systemName: draft.pushNote.hasPrefix("No notification")
+                              ? "bell.slash" : (draft.kind == .security ? "bell.badge" : "bell"))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Section {
                     Toggle("Send later", isOn: $scheduleOn)
                         .disabled(!admin.can(.schedule))

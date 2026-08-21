@@ -154,6 +154,34 @@ enum AnnouncementAdmin {
 
         var isScheduled: Bool { publishAt.timeIntervalSinceNow > 60 }
 
+        /// Whether sending this will actually knock on anybody's phone, and in plain words why not
+        /// when it will not.
+        ///
+        /// ⚠️ THIS MUST AGREE WITH `skipReason()` IN `functions-announcements/functions/index.js`.
+        /// Two copies of one rule, in two languages, because the compose screen has to say what the
+        /// server is going to do before Send is tapped rather than leave the sender wondering
+        /// afterwards. If you change one, change the other.
+        ///
+        /// The rule itself follows from the channel's architecture and is not a limitation to be
+        /// engineered away later. The PHONE decides who an announcement is for: a partial rollout is
+        /// SHA256(id + uid) and a minimum build is the build number, and neither of those exists on
+        /// the server, deliberately, because that is what stops it knowing who saw what. A push has
+        /// to be addressed before it leaves. So for those two the server sends nothing, because
+        /// waking somebody for a chat that then shows them nothing is worse than staying quiet.
+        var pushNote: String {
+            if audience.ppm < 1_000_000 {
+                return "No notification. A partial rollout is decided on each phone, so there is no way to notify only the people who will see it."
+            }
+            let minBuild = minBuildOverride ?? audience.minBuild
+            if minBuild > 0 {
+                return "No notification. A minimum build is checked on each phone, so there is no way to notify only the people who will see it."
+            }
+            if kind == .security {
+                return "Notifies everyone it reaches, including people who muted or blocked this chat. Security alerts are the one thing that breaks through."
+            }
+            return "Notifies the people it reaches who have turned this chat's bell on. It is off for everybody by default."
+        }
+
         /// What stops the Send button being tappable. Returns nil when the draft is sendable.
         var problem: String? {
             if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Give it a title." }
