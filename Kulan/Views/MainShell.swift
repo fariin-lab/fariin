@@ -2018,31 +2018,60 @@ struct ArchivedChatsView: View {
     /// what he photographed. As an overlay with a matching bottom content margin, the chats scroll
     /// UNDER the bar and the glass finally has something to bend.
     private var archiveSearchBar: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Search", text: $archiveQuery)
-                .focused($archiveSearchFocused)
-                .submitLabel(.search)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            // ⛔ THE ✕ IS THERE WHENEVER THE BAR IS IN USE, not only once something is typed (his
-            // report: "when i open search bar theres no X button"). It was gated on the text being
-            // non-empty, so tapping into an empty field gave a keyboard and no way back out of it
-            // except the return key. Focused counts as in use.
-            if !archiveQuery.isEmpty || archiveSearchFocused {
+        HStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search", text: $archiveQuery)
+                    .focused($archiveSearchFocused)
+                    .submitLabel(.search)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                // ⛔ THIS ONE CLEARS THE TEXT AND THAT IS ALL IT DOES NOW. It used to double as the
+                // way out of the keyboard, appearing on focus as well as on text, and that is exactly
+                // what he could not find: a small glyph INSIDE the pill, in the position every text
+                // field in iOS puts a clear button, reads as "erase what I typed" no matter what it
+                // is wired to. He looked straight at it and reported the button missing.
+                if !archiveQuery.isEmpty {
+                    Button { archiveQuery = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .font(.system(size: 16))
+            .padding(.horizontal, 14)
+            .frame(height: 44)
+            .liquidGlass(Capsule())
+
+            // ⛔ AND THIS ONE ENDS THE SEARCH — OUTSIDE THE PILL, WHICH IS THE WHOLE POINT.
+            //
+            // His reference shot: the field shortens and a round X stands beside it. Being its own
+            // button, at the field's own 44pt, in its own glass circle, it cannot be mistaken for
+            // part of the field — and there is now exactly one thing on screen that means "close
+            // this" instead of two glyphs a few points apart meaning different things.
+            //
+            // Only while focused. At rest the bar is a search field alone and there is nothing to
+            // end, which is also what keeps the resting layout he already approved unchanged.
+            if archiveSearchFocused {
                 Button {
                     archiveQuery = ""
                     archiveSearchFocused = false
                 } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    Image(systemName: "xmark")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 44, height: 44)
+                        // NON-interactive glass, the same trap the call screen's buttons hit:
+                        // `.interactive()` glass takes the touch itself and the wrapping Button never
+                        // fires. `contentShape` is what makes the whole circle the target rather than
+                        // just the drawn glyph.
+                        .liquidGlass(Circle(), interactive: false)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .transition(.scale.combined(with: .opacity))
             }
         }
-        .font(.system(size: 16))
-        .padding(.horizontal, 14)
-        .frame(height: 44)
-        .liquidGlass(Capsule())
         // ⛔ 32 AT REST, 16 WITH THE KEYBOARD UP (his order, 2026-08-21). A search bar sitting alone
         // above the home indicator can afford to be inset and look deliberate; the moment it is
         // being TYPED into it is the only thing on that half of the screen and wants the room, so it
@@ -2053,7 +2082,7 @@ struct ArchivedChatsView: View {
         // and one of them is already state we hold.
         //
         // Animated on the same easing SwiftUI gives the keyboard, so the bar widens WITH it instead
-        // of snapping before it.
+        // of snapping before it — and the X now rides in on that same curve.
         .padding(.horizontal, archiveSearchFocused ? 16 : 32)
         .animation(.easeOut(duration: 0.25), value: archiveSearchFocused)
         .padding(.bottom, 8)
