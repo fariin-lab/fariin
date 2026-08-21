@@ -993,10 +993,29 @@ final class CallService: NSObject {
     /// say so, instead of leaving them with silence they cannot distinguish from a broken connection.
     /// `isMuted` is untouched, so unholding restores the user's OWN choice rather than guessing.
     private(set) var isHeld = false
+    /// Held by the system, which on iOS means one thing in practice: a phone call arrived on the
+    /// cellular line and the person chose "Hold & Accept". iOS raises that sheet itself and calls
+    /// this through CallKit; the app does not get to decide it.
+    ///
+    /// ⛔ THE CAMERA USED TO KEEP RUNNING. This method disabled the microphone and nothing else, so
+    /// somebody who took a phone call in the middle of a video call went on broadcasting their face
+    /// to the other person for the entire length of the phone call — while believing the call was on
+    /// hold, and while the other side's screen showed nothing wrong. Their mic was off, so they could
+    /// not even be told.
+    ///
+    /// Held is not the same as the camera being turned off: the intent to be on camera survives, so
+    /// unholding restores it. That is exactly what the weak-link pause already does, so this reuses
+    /// it rather than inventing a second paused state that could disagree with the first.
     func setHeld(_ held: Bool) {
         guard isHeld != held else { return }
         isHeld = held
         localAudioTrack?.isEnabled = !(isMuted || isHeld)
+        if held { pauseVideoForWeakLink() } else { resumeVideoAfterWeakLink() }
+        // NOT TRACKING WHO PAUSED IT, on purpose. The only case the two owners can disagree about is
+        // a weak link AND a phone call at the same moment, where unholding would restore a camera
+        // the network cannot carry. `sampleLinkQuality` is still running and pauses it again within
+        // its next tick. A brief flap in a rare combination beats a second paused-state machine that
+        // can drift out of step with the first one.
         broadcastMuteState()
     }
 
