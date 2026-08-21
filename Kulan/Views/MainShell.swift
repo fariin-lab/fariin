@@ -1972,6 +1972,9 @@ struct ArchivedChatsView: View {
     @State private var prefsTick = 0              // re-render after Unhide
     /// The strip floats over the list and travels with it — see the ZStack in `content`. Its own
     /// pair, not the chat list's: a different strip, a different height, a different List.
+    /// The long press's ramp, read by the archive cards so a held one squeezes and dims. Shared, and
+    /// harmless where it is not read — see `StoryPressVisual`.
+    @ObservedObject private var pressVisual = StoryPressVisual.shared
     @State private var archiveScrollY: CGFloat = 0
     @State private var archiveStripHeight: CGFloat = 0
     /// What is typed in the bar at the bottom of the page. Empty = every archived chat.
@@ -2186,6 +2189,26 @@ struct ArchivedChatsView: View {
                         }
                     }
                     .buttonStyle(.plain)
+                    // ⛔ THE LONG-PRESS RAMP. WITHOUT THESE TWO LINES THE PRESS HAS NO ANIMATION AT ALL.
+                    //
+                    // His report the moment the press itself started working: "now long press is
+                    // working but there's no animation". There never was one here. The chat list's
+                    // cards are UIKit `UIControl`s, so they get `isHighlighted` on touch-down for
+                    // free and the row springs them to 0.92 from it; these are a SwiftUI `Button`
+                    // with `.plain`, which has no visible pressed state whatsoever.
+                    //
+                    // The scale rule is the reference's and not a number: "take fifteen points off
+                    // the width, floor at 0.7", so a wide card barely moves and a narrow one shrinks
+                    // hard. Their own card is 60pt and lands on 0.75; ours is not 60, which is
+                    // exactly why the RULE is copied rather than their answer.
+                    //
+                    // Neither line carries an `.animation` modifier on purpose. Press and release
+                    // use different curves — linear in, easeOut back — and one modifier cannot say
+                    // both; the animation lives in `StoryPressVisual`'s setters instead.
+                    .scaleEffect(pressVisual.squeezedKey == MediaOpenRects.key(.storyRow, "arch-\(g.id)")
+                                 ? StoryPressRamp.minScale(width: storyCardW) : 1)
+                    .opacity(pressVisual.dimmedKey == MediaOpenRects.key(.storyRow, "arch-\(g.id)")
+                             ? StoryPressRamp.pressedAlpha : 1)
                     // The flight's source. Same 24 the card is actually drawn with, so the story
                     // lands as a CARD here rather than the circle a ringed avatar gets — the shape
                     // is read from this number and nowhere else.

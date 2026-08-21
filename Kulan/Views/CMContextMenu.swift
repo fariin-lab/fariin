@@ -250,78 +250,70 @@ final class CMOverlay: UIView {
             bar.alpha = 0
         }
 
-        // ⚠️ ONE RUNLOOP LATER, AND THAT IS THE WHOLE FIX. His 2026-08-08 report: the blur "is coming
-        // one time feeling like pop", not gradually.
+        // ⛔ THE BLUR IS BUILT FULLY FORMED AND FADED IN BY ALPHA. IT IS NOT INTERPOLATED.
         //
-        // The numbers here were never wrong — they are the reference app's, `animationDuration / 2.0`
-        // = 0.2, plain ease-in-out, and their code animates `blurView.effect` in exactly this way.
-        // What differs is WHEN. Theirs runs in `viewDidAppear`, so by the time it starts, their view
-        // is in the window, laid out, and has already rendered a frame with `effect == nil`. Ours ran
-        // in the same runloop turn as `addSubview`, when the blur view had never been drawn at all —
-        // and a `UIVisualEffectView` can only interpolate an effect change if it has already
-        // rendered the effect it is coming FROM. With no starting frame there is nothing to
-        // interpolate, so UIKit applies the blur in one step. That is the pop.
+        // Three attempts at one symptom, so the reasoning is written out rather than the answer.
         //
-        // `layoutIfNeeded` puts the geometry in place now; the hop to the next turn is what lets a
-        // frame be committed at effect-nil first. This is the same moment `viewDidAppear` would be,
-        // reached the way a view added straight to the window has to reach it.
+        // Round 1 animated `blurView.effect` from nil in the same runloop turn as `addSubview`, and
+        // it popped: a `UIVisualEffectView` can only interpolate an effect change if it has already
+        // rendered the effect it is coming FROM, and with no committed frame there is nothing to
+        // interpolate. A runloop hop fixed the pop.
+        //
+        // Round 2 fixed a WHITE flash by stripping UIKit's tint plate inside the animation block
+        // instead of its completion. It did not work, and he reported the flash again on 629. The
+        // reason is the same fact as round 1 seen from the other side: setting `effect` inside a
+        // `UIView.animate` block hands it to the animation machinery, so the effect view's children
+        // are not built by the time the very next line runs. `layoutIfNeeded` had nothing to lay out
+        // and the strip found nothing to strip — leaving the completion, 0.2s later, as the first
+        // moment it took, which is the whole visible flash.
+        //
+        // Round 3 stops interpolating the effect at all, which is what the reference does anyway and
+        // what the note at the bottom of this block always said: their backdrop "deliberately does
+        // NOT spring while the menu does — ContextSourceContainer.swift:485 animates the whole thing
+        // as one alpha". So the blur is applied NOW, at alpha 0, where nobody can see it; the tint
+        // plate is stripped NOW, synchronously, with the children genuinely built because no
+        // animation is holding them; and the only thing that animates is alpha, which cannot flash
+        // because every frame it fades in is already the finished, stripped blur.
+        //
+        // This also retires the pop reasoning entirely. There is no from-effect to render first when
+        // nothing is interpolating.
+        //
+        // ⛔ THEIR BACKDROP, READ FROM SOURCE (2026-08-21, five readers over the reference app's source).
+        // His report was "the brightness effect looks like a blur", and he was right about the
+        // symptom for a reason nobody had guessed: OURS WAS LIGHTENING THE SCREEN.
+        //
+        // ⚠️ THE TINT WAS `white 0.2` IN DARK MODE — white, at 20%, laid over a `.regular` blur.
+        // A milky veil. Theirs is `UIColor(rgb: 0x000000, alpha: 0.6)` — BLACK at sixty percent
+        // (DefaultDarkPresentationTheme.swift:767, and the same literal in the tinted dark theme).
+        // That is why theirs reads as a dim and ours reads as fog: opposite ends of the scale.
+        //
+        // ⚠️ AND THE BLUR STYLE IS `.light` IN BOTH THEMES, which looks wrong written down and is
+        // right on screen — NavigationBackgroundView.swift:69, no branch on appearance anywhere. The
+        // darkness is the tint's job; the blur only softens what is behind it. `.regular` resolves
+        // dark-on-dark and fights the tint for the same job.
+        //
+        // Light theme is a very slightly blue black at only 20% (0x000a26, DefaultDay:1044) — in
+        // light mode most of the separation comes from the blur desaturating the page, not from the
+        // tint.
+        blurView.alpha = 0
+        blurView.effect = UIBlurEffect(style: .light)
+        blurView.backgroundColor = UIColor { tc in
+            tc.userInterfaceStyle == .dark ? UIColor(white: 0, alpha: 0.6)
+                                           : UIColor(red: 0, green: 0.039, blue: 0.149, alpha: 0.2)
+        }
         layoutIfNeeded()
-        DispatchQueue.main.async { [weak self] in
-            // Dismissed inside that one turn (a press cancelled immediately): there is nothing left
-            // to blur and turning it on now would light up an overlay on its way out.
-            guard let self, !self.dismissing, self.superview != nil else { return }
-            // ⛔ THEIR BACKDROP, READ FROM SOURCE (2026-08-21, five readers over the reference app's source).
-            // His report was "the brightness effect looks like a blur", and he was right about the
-            // symptom for a reason nobody had guessed: OURS WAS LIGHTENING THE SCREEN.
-            //
-            // ⚠️ THE TINT WAS `white 0.2` IN DARK MODE — white, at 20%, laid over a `.regular` blur.
-            // A milky veil. Theirs is `UIColor(rgb: 0x000000, alpha: 0.6)` — BLACK at sixty percent
-            // (DefaultDarkPresentationTheme.swift:767, and the same literal in the tinted dark theme).
-            // That is why theirs reads as a dim and ours reads as fog: opposite ends of the scale.
-            //
-            // ⚠️ AND THE BLUR STYLE IS `.light` IN BOTH THEMES, which looks wrong written down and is
-            // right on screen — NavigationBackgroundView.swift:69, no branch on appearance anywhere.
-            // The darkness is the tint's job; the blur only softens what is behind it. `.regular`
-            // resolves dark-on-dark and fights the tint for the same job.
-            //
-            // Light theme is a very slightly blue black at only 20% (0x000a26, DefaultDay:1044) —
-            // in light mode most of the separation comes from the blur desaturating the page, not
-            // from the tint.
-            //
-            // 0.2s, and their own note is that the backdrop deliberately does NOT spring while the
-            // menu does — ContextSourceContainer.swift:485 animates the whole thing as one alpha.
-            UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseInOut]) {
-                self.blurView.effect = UIBlurEffect(style: .light)
-                self.blurView.backgroundColor = UIColor { tc in
-                    tc.userInterfaceStyle == .dark ? UIColor(white: 0, alpha: 0.6)
-                                                   : UIColor(red: 0, green: 0.039, blue: 0.149, alpha: 0.2)
-                }
-                // ⛔ STRIPPED HERE, INSIDE THE ANIMATION, AND NOT IN THE COMPLETION. THAT WAS THE
-                // WHITE FLASH.
-                //
-                // His 2026-08-21 report, with two photographs: the first long press showed a pale
-                // grey wash that then settled to the correct black. The wash was UIKit's own tint
-                // plate, and it was on screen for the entire 0.2s because the strip that removes it
-                // used to run in this animation's `completion` — which is by definition after every
-                // frame the person actually watched. Later presses looked right only because they
-                // were re-entering an overlay whose plate had already been hidden, which is exactly
-                // why it read as a FIRST-time bug rather than a permanent one.
-                //
-                // `layoutIfNeeded` is what makes it possible to do it this early: UIKit builds the
-                // effect view's children during layout after `effect` is set, so forcing that layout
-                // now brings them into existence in this same turn, while the old note's claim that
-                // there is "nothing to strip until completion" only held because nobody had asked
-                // for the layout. Hiding a subview is not an animatable change, so doing it inside
-                // the block costs the fade nothing.
-                self.blurView.layoutIfNeeded()
-                self.stripSystemTint()
-                self.setPreviewShadow(true)
-            } completion: { _ in
-                // The same call again, as a belt. It is idempotent, and a device that deferred the
-                // effect view's children past our forced layout would otherwise keep the old bug
-                // with no way to see it had happened.
-                self.stripSystemTint()
-            }
+        stripSystemTint()
+
+        // 0.2s, the reference's `animationDuration / 2.0`, plain ease-in-out.
+        UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseInOut]) {
+            self.blurView.alpha = 1
+            self.setPreviewShadow(true)
+        } completion: { _ in
+            // Idempotent belt. If some future iOS defers the effect view's children past the
+            // synchronous layout above, this is the fallback — and unlike round 2 it is no longer
+            // load-bearing, because the blur it would be correcting has been at full alpha only
+            // since this completion fired.
+            self.stripSystemTint()
         }
 
         // THE .fromRest CASE TAKES THE MENU'S ALPHA OUT OF THE SPRING. It is opaque in 0.05 and its whole
@@ -438,8 +430,13 @@ final class CMOverlay: UIView {
         if motion == .fromRest {
             UIView.animate(withDuration: 0.2, delay: 0,
                            options: [.curveEaseInOut, .beginFromCurrentState]) {
-                self.blurView.effect = nil
-                self.blurView.backgroundColor = nil
+                // ⚠️ ALPHA, MATCHING THE WAY IT CAME IN. Setting `effect = nil` inside an animation
+                // is the same trap the entrance fell into three times: it hands the change to the
+                // animation machinery, which rebuilds the effect view's children — and children
+                // rebuilt here arrive WITH UIKit's tint plate restored, so the blur can flash pale
+                // on its way out for exactly the reason it used to flash pale on its way in. Fading
+                // the alpha of an already-stripped blur cannot do that.
+                self.blurView.alpha = 0
                 self.setPreviewShadow(false)
                 self.previewView.frame = home
                 self.card.transform = CGAffineTransform(scaleX: 0.01, y: 0.01)
@@ -458,8 +455,8 @@ final class CMOverlay: UIView {
         // background wobble back in; a flat ease-out over the full 0.4 is what actually reads as
         // the reference app. The shadow rides here too, exactly as their `previewShadowVisible = false` does.
         UIView.animate(withDuration: springDuration) {
-            self.blurView.effect = nil
-            self.blurView.backgroundColor = nil
+            // Alpha, for the same reason as the .fromRest close above — see the note there.
+            self.blurView.alpha = 0
             self.setPreviewShadow(false)
         }
 

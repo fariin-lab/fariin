@@ -288,6 +288,90 @@ enum StoryPressRamp {
     }
 }
 
+/// ⛔ THE PRESS RAMP'S ONE OUTPUT, FOR CARDS THAT ARE NOT UIKit CONTROLS.
+///
+/// The chat list's cards never needed this: they are `UIControl`s, so UIKit gives them
+/// `isHighlighted` on touch-down for free and the row springs them to 0.92 from there
+/// (`StoriesRowUIKit`, and he approved that dip long ago). The ARCHIVE's cards are a SwiftUI
+/// `Button` with `.plain`, which has no visible pressed state whatsoever — so its long press had no
+/// animation at all, which is exactly what he reported the moment the press itself started working.
+///
+/// Two values rather than one, because the reference does not move them together: the scale waits
+/// out a dead beat and then ramps, while the alpha drops the INSTANT the finger lands. See
+/// `StoryPressRamp` for where each number comes from.
+///
+/// A card opts in by reading this and comparing keys; nothing that does not read it is affected, so
+/// publishing on a chat-list press is simply a no-op. The animation lives in the SETTER — press and
+/// release use different curves and a single `.animation` modifier cannot express both.
+/// ⚠️ DELIBERATELY NOT `@MainActor`-ANNOTATED. Every caller is a UIKit gesture callback or a
+/// main-queue hop, so the isolation buys nothing real, and annotating it makes `shared` unreachable
+/// from a SwiftUI `View`'s stored-property initialiser without ceremony that would obscure what this
+/// is. If that ever needs revisiting, move the isolation onto the methods rather than the type.
+final class StoryPressVisual: ObservableObject {
+    static let shared = StoryPressVisual()
+    private init() {}
+
+    /// The card being squeezed, or nil. Written inside a linear animation, cleared inside an easeOut.
+    @Published var squeezedKey: String?
+    /// The card being dimmed. Set with no animation at all — theirs is instant on touch down.
+    @Published var dimmedKey: String?
+
+    func fingerDown(_ key: String) {
+        dimmedKey = key
+    }
+
+    func rampBegan(_ key: String) {
+        // Linear, per their `DisplayLinkAnimator`. A spring here is the single most common way to
+        // get this wrong — the note on `StoryPressRamp.rampDuration` says so outright.
+        withAnimation(.linear(duration: StoryPressRamp.rampDuration)) { squeezedKey = key }
+    }
+
+    /// The finger left without opening anything. Scale eases back over 0.2s; the dim takes 0.25s, so
+    /// the card finishes growing before it finishes brightening, which is their ordering.
+    func fingerUp() {
+        withAnimation(.easeOut(duration: StoryPressRamp.releaseDuration)) { squeezedKey = nil }
+        withAnimation(.easeOut(duration: StoryPressRamp.alphaRestoreDuration)) { dimmedKey = nil }
+    }
+
+    /// The menu took over. The card is hidden and lifted from here, so both states are dropped
+    /// WITHOUT animation — animating a view that is already being covered is work nobody sees.
+    func menuTookOver() {
+        squeezedKey = nil
+        dimmedKey = nil
+    }
+}
+
+/// A long press that also reports the touch going DOWN.
+///
+/// `UILongPressGestureRecognizer` reaches `.began` only after `minimumPressDuration`, which here is
+/// the full 0.32s — by which point the ramp should already have finished. There is no state, no
+/// KVO and no delegate callback for "a finger has landed", so the only way to start a ramp on time
+/// is to see the touch itself. Overriding is safe: every override calls super and changes no state
+/// the recogniser owns.
+final class StoryPressGesture: UILongPressGestureRecognizer {
+    /// Raised on touch-down with the touch's window point, and again when it leaves without winning.
+    var onTouchDown: ((CGPoint) -> Void)?
+    var onTouchUp: (() -> Void)?
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesBegan(touches, with: event)
+        // First finger only. A second one landing mid-press is not a new press and must not restart
+        // the ramp underneath the first.
+        guard numberOfTouches == 1, let t = touches.first else { return }
+        onTouchDown?(t.location(in: nil))
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesEnded(touches, with: event)
+        onTouchUp?()
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesCancelled(touches, with: event)
+        onTouchUp?()
+    }
+}
+
 struct StoryRowLongPress: UIViewRepresentable {
     /// Which card is under this window point, and what its menu is. Asked at press time, so it
     /// always answers about the row as it stands right now rather than as it stood at layout.
@@ -365,6 +449,10 @@ struct StoryRowLongPress: UIViewRepresentable {
         private weak var overlay: CMOverlay?
         private weak var host: UIView?
         private var press: UILongPressGestureRecognizer?
+        /// The card this touch landed on, held only for the life of one press. It is what stops a
+        /// delayed ramp firing after the finger has gone, and what tells `onTouchUp` whether there
+        /// is anything to undo.
+        private var rampKey: String?
         /// Whether a recogniser is live — the Anchor's retry loop stops asking once it is.
         var isInstalled: Bool { press != nil }
 
@@ -431,7 +519,31 @@ struct StoryRowLongPress: UIViewRepresentable {
                                               ? "window (gated)"
                                               : "scroll view \(type(of: anchor))")
             origin = view
-            let g = UILongPressGestureRecognizer(target: self, action: #selector(pressed(_:)))
+            let g = StoryPressGesture(target: self, action: #selector(pressed(_:)))
+            // ⛔ THE RAMP, DRIVEN FROM THE TOUCH RATHER THAN FROM THE RECOGNISER'S STATE.
+            //
+            // `.began` does not arrive until the full 0.32s, by which point the squeeze should
+            // already be finished — that is the entire reason `StoryPressGesture` exists. The dim is
+            // instant on touch-down, then the scale ramps after the 0.12s dead beat, which is their
+            // ordering exactly (see `StoryPressRamp`).
+            //
+            // The delayed work is keyed on the card, so a finger that lands somewhere with no card
+            // under it starts nothing at all, and a press that has already ended or been taken over
+            // by the menu cannot have its ramp fire late behind it.
+            g.onTouchDown = { [weak self] p in
+                guard let self, let t = self.target(p) else { return }
+                self.rampKey = t.key
+                StoryPressVisual.shared.fingerDown(t.key)
+                DispatchQueue.main.asyncAfter(deadline: .now() + StoryPressRamp.beginDelay) { [weak self] in
+                    guard let self, self.rampKey == t.key else { return }
+                    StoryPressVisual.shared.rampBegan(t.key)
+                }
+            }
+            g.onTouchUp = { [weak self] in
+                guard let self, self.rampKey != nil else { return }
+                self.rampKey = nil
+                StoryPressVisual.shared.fingerUp()
+            }
             // ⛔ 0.32, NOT 0.2, AND IT IS TWO NUMBERS ADDED TOGETHER (read from the reference app's source,
             // 2026-08-21). Theirs is `beginDelay = 0.12` (Display/Source/ContextGesture.swift:77) of
             // dead time in which nothing whatsoever happens, then a `DisplayLinkAnimator` of exactly
@@ -698,6 +810,11 @@ struct StoryRowLongPress: UIViewRepresentable {
                 // WITH THE NAME, because this lift carries one. A story flight does not, and hiding
                 // the name for it is what made the name come back late after a close — see
                 // `MediaSourceVisibility.hidesLabel`.
+                // The menu owns the card from here: it is hidden below and lifted into the
+                // overlay, so the ramp's own scale and dim are dropped without animating. Cleared
+                // before the hide, or the card would brighten in the one frame between the two.
+                rampKey = nil
+                StoryPressVisual.shared.menuTookOver()
                 MediaSourceVisibility.shared.hide(t.key, withLabel: true)
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.8)
                 o.present(in: window, startAtSqueeze: true)
@@ -706,6 +823,11 @@ struct StoryRowLongPress: UIViewRepresentable {
                 overlay?.fingerMoved(to: p)
 
             case .ended, .cancelled, .failed:
+                // Belt for the ramp. `onTouchUp` covers the ordinary lift, but a recogniser can be
+                // failed by the arbitration without its touches ever reaching us — a scroll taking
+                // the press away is the normal case — and a squeeze left standing then would never
+                // come back up.
+                if rampKey != nil { rampKey = nil; StoryPressVisual.shared.fingerUp() }
                 StoryRowPress.ended()
                 overlay?.fingerEnded(at: p)
 
