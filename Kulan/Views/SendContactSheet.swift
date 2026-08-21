@@ -29,6 +29,9 @@ struct SendContactSheet: View {
     @State private var sending = false
     @State private var copied = false
     @State private var showSystemShare = false
+    /// The grid's own width, so the bottom button can line its edges up with the avatar circles
+    /// rather than with the page margin. See `sideInset`.
+    @State private var gridWidth: CGFloat = 0
     @FocusState private var searchFocused: Bool
     private var me: String { AuthService.shared.uid ?? "" }
 
@@ -47,11 +50,19 @@ struct SendContactSheet: View {
             bottomButton
         }
         .animation(.easeOut(duration: 0.2), value: searching)
-        // ⛔ A REAL SYSTEM MATERIAL, NOT A FLAT GREY. `presentationBackground` is the only thing that
-        // reaches a sheet's own backing view; a `.background()` inside the content paints over it and
-        // leaves the real one opaque underneath. Regular rather than ultraThin: this panel carries a
-        // grid of names over whatever page is behind it.
-        .presentationBackground(.regularMaterial)
+        // ⛔ ULTRA-THIN, NOT REGULAR (his second report on this sheet: "now looks grey plz make it
+        // liquid glass").
+        //
+        // `.regularMaterial` IS a real material and that is exactly why it came out grey: a thick
+        // material over a dark page resolves to dark grey, because there is barely any of the page
+        // left in it to tint the glass. Thin is the one that carries the picture through, and a
+        // material you can see the wallpaper in is what reads as glass rather than as a panel.
+        //
+        // ⚠️ THE COST IS THE ONE I CHOSE AGAINST THIS MORNING, and it is his call to overrule: the
+        // names sit over whatever photograph is behind the sheet, and the thinner the material the
+        // more of that photograph competes with them. If they turn out hard to read on a busy
+        // picture, the answer is a shadow on the labels rather than going back to grey.
+        .presentationBackground(.ultraThinMaterial)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(sending)
@@ -91,9 +102,9 @@ struct SendContactSheet: View {
     private func circleButton(_ icon: String, _ tap: @escaping () -> Void) -> some View {
         Button(action: tap) {
             Image(systemName: icon)
-                .font(.system(size: 17, weight: .medium))
+                .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(.primary)
-                .frame(width: 38, height: 38)
+                .frame(width: 48, height: 48)
                 .liquidGlass(Circle())
                 .contentShape(Circle())
         }
@@ -126,14 +137,26 @@ struct SendContactSheet: View {
 
     // MARK: - The people
 
-    /// FIVE ACROSS (his reference, counted off the frame). It was four; five is what puts three rows
-    /// of people above the fold, which is the point of the layout.
-    private static let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 5)
+    /// FIVE ACROSS (his reference, counted off the frame).
+    private static let columns = Array(repeating: GridItem(.flexible(), spacing: gutter), count: 5)
+    private static let gutter: CGFloat = 8
+    private static let pageInset: CGFloat = 16
 
-    /// The face, sized to what five columns leave: the narrowest phone is 320pt wide, less 32 of page
-    /// margin and 32 of gutter, over five — about 51 there and 62 on a modern phone. 60 is the
-    /// largest circle that never overflows the small one.
-    private static let face: CGFloat = 60
+    /// ⛔ 52, AND THE REFERENCE'S OWN 60 IS WHY IT IS NOT 60.
+    ///
+    /// Read from their source rather than guessed: their peer cell is a 60pt avatar sitting at x=13
+    /// inside an 86pt item, with an 11pt regular name 4pt under it. So the avatar is 0.70 of its
+    /// cell — that gap on each side is what stops a row of faces reading as one stripe.
+    ///
+    /// ⚠️ AT FIVE PER ROW THAT RATIO CANNOT SURVIVE A 60pt AVATAR, and this is the whole of his
+    /// "avatar size" note. Five 86pt cells need 430pt and the widest phone gives the sheet 393. Ours
+    /// were 60 in a 66pt cell — 0.91 — which is why they nearly touch in his screenshot. He asked
+    /// for five per row before he asked for their sizing, so the count is kept and the avatar is
+    /// scaled to their PROPORTION instead: 52 in a 66pt cell is 0.79, and 0.84 on the narrowest
+    /// phone the app still runs on.
+    ///
+    /// The name is 11pt regular and the gap is 4pt, which ARE their numbers exactly.
+    private static let face: CGFloat = 52
 
     private var peopleGrid: some View {
         // THE ORDER IS THE CHAT LIST'S: `people` sorts on `displayUpdatedAt`, the same key MainShell
@@ -146,7 +169,8 @@ struct SendContactSheet: View {
                         .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, Self.pageInset)
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { gridWidth = $0 }
             .padding(.top, 4)
             .padding(.bottom, 12)
         }
@@ -155,7 +179,7 @@ struct SendContactSheet: View {
 
     @ViewBuilder private func personTile(_ c: Conversation) -> some View {
         let picked = selected.contains(c.id)
-        VStack(spacing: 6) {
+        VStack(spacing: 4) {   // their gap, from source: avatar, 4pt, name
             ZStack(alignment: .bottomTrailing) {
                 AvatarView(name: c.displayName(me), photoUrl: c.displayPhoto(me), size: Self.face)
                     .overlay {
@@ -185,6 +209,23 @@ struct SendContactSheet: View {
 
     // MARK: - The one button
 
+    /// ⛔ WHERE THE AVATARS ACTUALLY START, which is not where the page margin is.
+    ///
+    /// His second note: the Copy Link button's left and right edges must line up with the circles
+    /// above it. They did not, and the reason is that a `.flexible()` column is wider than the
+    /// avatar in it — the first face is centred in its cell, so it begins a few points inside the
+    /// margin the grid itself is padded to. A button padded to the same 16 therefore reaches past
+    /// every circle above it on both sides.
+    ///
+    /// The gap is the cell's own leftover, halved. Measured rather than assumed: the grid reports
+    /// its width and the cell is that width less the two page insets and the four gutters, over
+    /// five — the same arithmetic `columns` performs, from the same numbers, so the two cannot drift.
+    private var sideInset: CGFloat {
+        guard gridWidth > 0 else { return Self.pageInset }
+        let cell = (gridWidth - Self.pageInset * 2 - Self.gutter * 4) / 5
+        return Self.pageInset + max(0, (cell - Self.face) / 2)
+    }
+
     /// ⛔ ONE WIDE BUTTON, which in his frame says Copy Link. It says Send once anybody is picked,
     /// because the redesign took away the row of small circles that used to hold the send arrow and
     /// this is now the only way to send — a selection with no way to act on it is worse than either
@@ -207,7 +248,8 @@ struct SendContactSheet: View {
         .buttonStyle(.plain)
         .disabled(sending)
         .animation(.easeOut(duration: 0.18), value: selected.isEmpty)
-        .padding(.horizontal, 16)
+        // ⛔ THE AVATARS EDGES, NOT THE PAGE MARGIN. See sideInset above.
+        .padding(.horizontal, sideInset)
         .padding(.top, 4)
         .padding(.bottom, 14)
     }

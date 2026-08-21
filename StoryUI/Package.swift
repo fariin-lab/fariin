@@ -14,10 +14,14 @@ let package = Package(
     // that has cost a CI round trip before. The reply pill needs `TextField(axis:)` and a
     // `lineLimit` RANGE, both iOS 16.
     //
-    // ⚠️ 17 RATHER THAN THE APP'S 26 ON PURPOSE. The floor only has to clear what this package
-    // actually uses, and every step up is another thing that can be unavailable in whatever tools
-    // version the runner brings. 26 was tried first and is what broke the build.
-    platforms: [.iOS(.v17)],
+    // ⚠️ 16 AND NOT A POINT HIGHER, AND THAT IS A COMPILE-TIME DECISION RATHER THAN A TASTE ONE.
+    // 26 was tried first and does not exist at this tools version. 17 does, and it broke the build a
+    // different way: at 17 the OLD `onChange(of:perform:)` is deprecated and a NEW two-parameter
+    // overload appears, so every one of this package's `onChange` call sites suddenly has two
+    // candidates to choose between — and `StoryDetailView.body`, which has several, went straight
+    // past the type-checker's budget ("unable to type-check this expression in reasonable time").
+    // 16 clears everything the package actually uses and introduces no new overloads.
+    platforms: [.iOS(.v16)],
     products: [
         // Products define the executables and libraries a package produces, and make them visible to other packages.
         .library(
