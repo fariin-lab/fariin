@@ -88,7 +88,10 @@ private extension MessageView {
                     likeButton
                 }
             }
-            .frame(height: Constant.MessageView.height)
+            // ⛔ A MINIMUM HERE TOO, for the same reason: this is the whole reply ROW, and a fixed
+            // 44 would clip the pill the moment it grew to a second line. The bar rises with the
+            // field and the send circle stays centred against it.
+            .frame(minHeight: Constant.MessageView.height)
         } else {
             EmptyView()
         }
@@ -131,7 +134,22 @@ private extension MessageView {
         // adding .focused() no longer pushes the pill's chain past the type-checker's time limit.
         // .placeholder is defined on TextField specifically, so it must come FIRST (before .focused,
         // which returns some View).
-        TextField("", text: $text, onCommit: onCommitAction)
+        //
+        // ⛔ IT GROWS TO FIVE LINES NOW, and it used to be one (his 2026-08-21 screenshot: a long
+        // reply scrolled sideways inside a 44pt pill, with the beginning of his own sentence gone).
+        // `axis: .vertical` plus a lineLimit RANGE is the whole mechanism; the pill's fixed height
+        // became a MINIMUM in `ReplyPillStyle` so it has somewhere to grow into.
+        //
+        // ⛔ AND `onCommit:` IS GONE, WHICH IS THE CRASH. His .ips: EXC_BAD_ACCESS with a pointer
+        // authentication failure, and the top of the faulting stack is
+        // `PlatformTextFieldCoordinator.triggerPrimaryAction()` → `StateOrBinding.wrappedValue.setter`
+        // → `AnyLocation.set`. That is the return key running the send, the send tearing this view
+        // down, and SwiftUI then writing back through a binding whose storage has gone. A vertical
+        // field has no primary action at all — Return inserts a newline — so the path the crash
+        // travelled does not exist any more, and the arrow beside the pill is the one way to send,
+        // which is what a multi-line composer does everywhere else.
+        TextField("", text: $text, axis: .vertical)
+            .lineLimit(1...5)
             .placeholder(when: text.isEmpty, view: {
                 Text(placeholder).foregroundColor(Color.white)
                     .shadow(color: Color.black.opacity(0.45), radius: 1.5)   // readable on white photos
@@ -156,7 +174,13 @@ private struct ReplyPillStyle: ViewModifier {
             .foregroundColor(Color.white)
             .shadow(color: Color.black.opacity(0.45), radius: 1.5)   // typed text stays readable on white photos
             .padding(.leading, 10)                              // small left space so text isn't flush to the edge
-            .frame(height: Constant.MessageView.height)
+            // ⛔ A MINIMUM, NOT A HEIGHT. It was `.frame(height:)`, which is what pinned the field to
+            // one line and made a long reply scroll sideways inside it. The pill starts at the same
+            // 44 and grows with the text, up to the five lines the field allows.
+            .frame(minHeight: Constant.MessageView.height)
+            // Room above and below once there is more than one line, so the words are not touching
+            // the capsule. The leading and trailing numbers are the constant's, unchanged.
+            .padding(.vertical, 6)
             .padding(Constant.MessageView.padding)
             .background(Capsule().fill(Color.black.opacity(0.38)))   // filled pill, more native than a bare stroke
             .overlay(Capsule().stroke(Color.white.opacity(0.5), lineWidth: 1))
