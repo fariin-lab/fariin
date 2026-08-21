@@ -381,8 +381,18 @@ struct CallView: View {
 
     private func topCircle(_ icon: String) -> some View {
         Image(systemName: icon)
-            .font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
-            .frame(width: 40, height: 40)   // 40px top buttons (owner, 2026-08-20; was 48)
+            // 18, WHICH IS THE APP'S OWN NUMBER FOR A 48pt HEADER CIRCLE — the share sheet's search
+            // and share buttons are exactly 48 and 18, set by him the same week. Left at the old 15
+            // the glyph would be 0.31 of the circle instead of 0.375, so growing the button alone
+            // would have made these read as two big empty discs rather than as bigger buttons.
+            .font(.system(size: 18, weight: .semibold)).foregroundStyle(.white)
+            // ⛔ 48, AND THIS IS THE OWNER REVERSING HIS OWN CALL — DO NOT "RESTORE" THE 40.
+            // 48 was the original, he set it to 40 on 2026-08-20, and on 2026-08-21 he circled both
+            // buttons and asked for 48 back. Two deliberate decisions a day apart, so the number is
+            // not drift and the later one wins. It also puts these two back in step with every other
+            // header pair in the app — the share sheet's search and share circles are 48 on his order
+            // from the same week.
+            .frame(width: 48, height: 48)
             // NON-interactive glass: `.interactive()` glass consumes the touch itself, so the
             // wrapping Button's action never fired — the minimize chevron did nothing when tapped.
             .liquidGlass(Circle(), interactive: false)
