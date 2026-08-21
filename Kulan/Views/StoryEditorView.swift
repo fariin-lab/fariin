@@ -1540,6 +1540,10 @@ struct StoryEditorView: View {
             // ABOVE THE INK WHEN THE INK WAS NOT THE LAST THING TOUCHED. See `drawingOnTop`.
             .zIndex(drawingOnTop ? 2 : 4)
 
+            // ⚠️ A `Group`, because a modifier cannot be attached to an `if` in a ViewBuilder —
+            // "instance member 'zIndex' cannot be used on type 'View'". The wrapper is the one thing
+            // that gives the branch a value to hang it on.
+            Group {
             if isDrawing {
                 // ⛔ THE STROKES BELONG TO THE PICTURE, NOT TO THE CARD — his 2026-08-18 "if I zoom
                 // in, the line must stay on that same part of the image". READ THIS BEFORE MOVING
@@ -1637,6 +1641,7 @@ struct StoryEditorView: View {
             // the drawing, then the text — so text has always come out ABOVE the ink in the posted
             // story while sitting UNDER it in the preview. One of the two was wrong about the other
             // whatever anybody chose; they are driven by the same flag now.
+            }
             .zIndex(drawingOnTop ? 5 : 0)
 
             // Center alignment guides + trash zone (only while dragging an overlay).
@@ -3658,6 +3663,10 @@ struct StoryEditorView: View {
                     .position(s.center)
             }
             .zIndex(drawingOnTop ? 1 : 3)
+            // ⚠️ A `Group`, because a modifier cannot be attached to an `if` in a ViewBuilder —
+            // "instance member 'zIndex' cannot be used on type 'View'". The wrapper is the one thing
+            // that gives the branch a value to hang it on.
+            Group {
             if !drawing.bounds.isEmpty {
                 // ⚠️ THE PHOTO'S TRANSFORM, THE SAME TWO LINES IT CARRIES ABOVE. The pen layer is
                 // anchored to the picture on screen now (see the note in `cardContent`), so leaving
@@ -3674,6 +3683,7 @@ struct StoryEditorView: View {
             // decision, and before this they disagreed: the screen put the ink over the text and
             // this put the text over the ink, so a posted story never looked like the one that was
             // composed. Whichever was touched last is on top, in both.
+            }
             .zIndex(drawingOnTop ? 5 : 0)
             // Bake the text overlays — same builder + transforms as on-screen → WYSIWYG.
             ForEach(overlays) { o in

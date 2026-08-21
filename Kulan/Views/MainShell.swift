@@ -2307,7 +2307,15 @@ struct ArchivedChatsView: View {
                     }
                     // Native bottom toolbar, same as the main chat list selection mode.
                     ToolbarItemGroup(placement: .bottomBar) {
-                        Button { unarchiveSelected() } label: { Image(systemName: "tray.and.arrow.up") }
+                        // ⛔ OUR OWN ICON, THE ONE THE CHAT LIST ALREADY USES (his order, 2026-08-21).
+                        // It was `tray.and.arrow.up`, an Apple symbol, sitting in the same position as
+                        // the chat list's `ic_archive` and drawn in a different hand — two bottom bars
+                        // that do the opposite halves of one action, looking like two different apps.
+                        // Same asset, same 22pt, same template rendering as the chat list's.
+                        Button { unarchiveSelected() } label: {
+                            Image("ic_archive").renderingMode(.template).resizable().scaledToFit()
+                                .frame(width: 22, height: 22)
+                        }
                             .tint(.primary).disabled(selection.isEmpty)
                         Spacer()
                         Button(readTitle) { markReadTargets() }.tint(.primary).disabled(readTargets.isEmpty)
