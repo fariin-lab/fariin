@@ -72,7 +72,9 @@ struct DisappearingMessagesView: View {
                     ToolbarItem(placement: .cancellationAction) { CloseXButton { dismiss() } }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button { onApply(selected); dismiss() } label: { Image(systemName: "checkmark").font(.headline) }
+                    Button { onApply(selected); dismiss() } label: {
+                        Image(systemName: "checkmark").font(.headline).foregroundStyle(Color.accentColor)
+                    }
                 }
             }
             .sheet(isPresented: $showCustom) {
@@ -118,26 +120,60 @@ private struct CustomTimePicker: View {
         case seconds, minutes, hours, days, weeks
         var id: String { rawValue }
         var mult: Int { switch self { case .seconds: 1; case .minutes: 60; case .hours: 3600; case .days: 86400; case .weeks: 604800 } }
+
+        /// ⛔ THE NUMBERS THIS UNIT IS ALLOWED TO TAKE (owner, 2026-08-21: "custom 1 secends
+        /// 2 secemds upto 5 remove plz lets start 30secemds").
+        ///
+        /// Seconds start at THIRTY, which is where the preset list starts as well, so the two halves
+        /// of this screen finally agree on a floor. Anything shorter was never a real timer: a
+        /// message is not always on screen when it is written, and five seconds is gone before the
+        /// person it was sent to has looked at their phone.
+        ///
+        /// Every unit stops where the next one begins rather than running to 99. Sixty seconds IS a
+        /// minute and twenty-four hours IS a day, and offering both spellings of the same duration
+        /// is how a picker ends up with two ways to say one thing and a label that disagrees with
+        /// what was chosen. Weeks stop at twelve because the longest preset is four.
+        var range: ClosedRange<Int> {
+            switch self {
+            case .seconds: 30...59
+            case .minutes: 1...59
+            case .hours:   1...23
+            case .days:    1...30
+            case .weeks:   1...12
+            }
+        }
     }
+
+    /// The smallest timer this screen will produce, in seconds. The preset list uses it too, so
+    /// there is one number rather than two that have to be kept level.
+    static let floorSeconds = 30
 
     init(seconds: Int, onDone: @escaping (Int) -> Void) {
         self.onDone = onDone
-        // Seed the wheels from the current value (largest whole unit that fits).
-        let s = max(1, seconds)
+        // Seed the wheels from the current value (largest whole unit that fits), never below the
+        // floor — an old chat set to 5 seconds opens on 30 rather than on a wheel with no selection.
+        let s = max(Self.floorSeconds, seconds)
         let u: Unit = [.weeks, .days, .hours, .minutes, .seconds].first { s % $0.mult == 0 && s / $0.mult >= 1 } ?? .seconds
         _unit = State(initialValue: u)
-        _value = State(initialValue: max(1, s / u.mult))
+        _value = State(initialValue: min(max(s / u.mult, u.range.lowerBound), u.range.upperBound))
     }
 
     var body: some View {
         NavigationStack {
             HStack(spacing: 0) {
                 Picker("", selection: $value) {
-                    ForEach(1...99, id: \.self) { Text("\($0)").tag($0) }
+                    ForEach(Array(unit.range), id: \.self) { Text("\($0)").tag($0) }
                 }.pickerStyle(.wheel).frame(maxWidth: .infinity)
                 Picker("", selection: $unit) {
                     ForEach(Unit.allCases) { Text($0.rawValue.capitalized).tag($0) }
                 }.pickerStyle(.wheel).frame(maxWidth: .infinity)
+            }
+            // ⚠️ THE NUMBER WHEEL HAS TO BE PULLED BACK INTO RANGE WHEN THE UNIT MOVES, or a wheel
+            // sitting on 45 that is switched to Hours holds a value its own list no longer contains:
+            // the wheel draws blank, nothing is selected, and Set commits the number that is not
+            // there. This is why every unit's range starts at its own lower bound rather than at 1.
+            .onChange(of: unit) { _, u in
+                value = min(max(value, u.range.lowerBound), u.range.upperBound)
             }
             .padding()
             .navigationTitle("Custom Time")
@@ -145,7 +181,12 @@ private struct CustomTimePicker: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Set") { onDone(value * unit.mult); dismiss() }.fontWeight(.semibold)
+                    // BLUE, like every confirm on iOS and like the checkmark on the screen behind
+                    // it (his ask). A toolbar confirmationAction draws in the label's own colour,
+                    // and plain `Button("Set")` inherits the sheet's, which came out black.
+                    Button("Set") { onDone(value * unit.mult); dismiss() }
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Color.accentColor)
                 }
             }
             .presentationDetents([.height(320)])

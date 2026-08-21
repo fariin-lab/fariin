@@ -27,8 +27,14 @@ struct SoundsNotificationsView: View {
             VStack(spacing: 0) {
                 row("Message Sound", "ic_sound_message", value: messageSound.name) { picker = .message }
                 Divider().padding(.leading, 56)
-                row("Call Sound", "ic_sound_call", value: callSound.name) { picker = .call }
-                Divider().padding(.leading, 56)
+                // ⛔ HIDDEN ON HIS ORDER, 2026-08-21, and the divider goes with it or the list ends
+                // on a line under nothing. The picker, the seven tones and the per-chat storage are
+                // all still here — `SoundStore.callSoundPickerEnabled` is the one switch, and while
+                // it is off every call rings the phone's own ringtone.
+                if SoundStore.callSoundPickerEnabled {
+                    row("Call Sound", "ic_sound_call", value: callSound.name) { picker = .call }
+                    Divider().padding(.leading, 56)
+                }
                 // Native dropdown Menu (real Apple context menu), not a popover dialog.
                 Menu {
                     if muted { Button("Unmute") { setMute(0) } }

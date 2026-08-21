@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import FirebaseAuth
 import FirebaseFirestore
+import FirebaseFunctions
 
 // Locally-hidden message ids ("delete for me"): the message doc stays in Firestore for the other
 // person, but we never show it here. Persisted in UserDefaults, cached in memory for cheap reads.
@@ -154,6 +155,8 @@ final class ThreadRepository {
     var iBlocked = false
     var disappearSeconds = 0
     private var expiryTimer: Timer?
+    /// Fires ONCE, at the exact second the next message is due. See `scheduleNextBurn`.
+    private var burnTimer: Timer?
     private var otherUid = ""
     private var myBlockedAtMillis: Double = 0       // when I blocked
     private var myBlockClearedAtMillis: Double = 0  // when I unblocked (end of the hide window)
@@ -863,13 +866,60 @@ final class ThreadRepository {
     // Nor does this call `deleteMessage`, which would be the obvious shortcut for making my own copy
     // go sooner: that leaves a TOMBSTONE, and a chat filling with "this message was deleted" every
     // time a timer runs out is worse than the bug. A timer expiring is not an event worth marking.
+
+    // ⛔ REALTIME, THE WAY THE APP THAT DELETES ON THE DEVICE DOES IT (his order, 2026-08-21:
+    // "Every message Disappearing realtime").
     //
-    // So all this does is take a message off the screen the moment it is due, rather than leaving it
-    // sitting there for up to the five minutes until the next server sweep.
+    // A five-minute sweep is fine for a chat set to a day. For a chat set to thirty seconds it is
+    // the whole feature failing: the message sits there for minutes after it was supposed to be
+    // gone, which is exactly what "the custom time is not working" was. So whichever phone has the
+    // chat open now fires at the exact second, takes the message off the screen, and asks the server
+    // to burn it for both people.
+    //
+    // ⚠️ THE SERVER STILL DOES THE DELETING and that is not a detour. A recipient's phone is not
+    // allowed to delete the sender's message (`allow delete` is author-only), and NO phone is
+    // allowed to delete anything from Storage (`storage.rules` permits a write only when
+    // `resource == null`, which is create-only). `burnExpiredMessages` re-reads every id and refuses
+    // anything whose expiry has not really passed, so this can never remove something the five
+    // minute sweep would not have removed on its own.
+    //
+    // One timer, not a poll, and it is rescheduled from `rebuild()` every time the message set
+    // changes. `sweepExpired` below stays as the coarse safety net for a missed fire or a clock that
+    // moved.
+    private func scheduleNextBurn() {
+        burnTimer?.invalidate(); burnTimer = nil
+        let now = Date()
+        guard let next = byId.values.compactMap({ $0.expiresAt }).filter({ $0 > now }).min() else { return }
+        // A fifth of a second past the mark, so the message is genuinely due when it is looked at
+        // rather than a millisecond short of it.
+        let delay = max(0.2, next.timeIntervalSince(now) + 0.2)
+        burnTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            self?.burnDue()
+        }
+    }
+
+    /// Everything due right now: off the screen first, then gone for both people.
+    private func burnDue() {
+        let now = Date()
+        let due = byId.values.filter { m in m.expiresAt.map { now >= $0 } ?? false }.map(\.id)
+        // The redraw happens whether or not the call lands. Hiding is ours and cannot fail; the
+        // deleting is the server's and might have to wait for a network.
+        rebuild()
+        guard !due.isEmpty else { return }
+        // Fire and forget. The other phone is very likely making the same call a second either side
+        // of this one, and the second one to arrive finds nothing left and says so — deleting twice
+        // is not an error, it is the end state already being true.
+        Functions.functions(region: "me-central1").httpsCallable("burnExpiredMessages")
+            .call(["cid": cid, "ids": Array(due.prefix(200))]) { _, _ in }
+    }
+
+    // The COARSE net behind `scheduleNextBurn`, still on its fifteen-second tick. It catches a timer
+    // that never fired: a phone that was asleep, a clock that moved, or a message paged in from
+    // history that was already due before this chat was opened.
     private func sweepExpired() {
         let now = Date()
         guard byId.values.contains(where: { ($0.expiresAt.map { now >= $0 }) == true }) else { return }
-        rebuild()
+        burnDue()
     }
 
     private func rebuild() {
@@ -927,6 +977,8 @@ final class ThreadRepository {
         messages = sorted
         ThreadMessageCache.shared.store(cid, messages)   // keep the warm cache fresh for the next open (instant render)
         refreshItems()
+        // The message set just changed, so the next expiry may have too. Cheap: one timer.
+        scheduleNextBurn()
     }
 
     // Silent block: hide the other person's messages that landed during the block.
@@ -991,8 +1043,9 @@ final class ThreadRepository {
         userListener?.remove(); userListener = nil
         presenceListener?.remove(); presenceListener = nil
         expiryTimer?.invalidate(); expiryTimer = nil
+        burnTimer?.invalidate(); burnTimer = nil
         typingExpiry?.invalidate(); typingExpiry = nil
     }
 
-    deinit { listener?.remove(); convListener?.remove(); userListener?.remove(); presenceListener?.remove(); expiryTimer?.invalidate(); typingExpiry?.invalidate() }
+    deinit { listener?.remove(); convListener?.remove(); userListener?.remove(); presenceListener?.remove(); expiryTimer?.invalidate(); burnTimer?.invalidate(); typingExpiry?.invalidate() }
 }

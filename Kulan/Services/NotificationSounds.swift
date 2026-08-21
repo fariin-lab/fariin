@@ -150,6 +150,18 @@ struct NotificationSound: Identifiable, Equatable {
 
 // Per-chat sound preferences, stored locally (UserDefaults). Keyed by cid + kind (message/call).
 enum SoundStore {
+    /// ⛔ THE CALL SOUND PICKER IS HIDDEN, NOT DELETED (owner, 2026-08-21: "call sound Hide that
+    /// feature Plz dont delete the code just hide we will use feature but now hide plz and Use only
+    /// iphone sound").
+    ///
+    /// Flip this back to true and the whole feature returns exactly as it was: the row in Sounds &
+    /// Notifications, the picker, the seven tones, the per-chat storage. Nothing about it has been
+    /// removed and `NotificationSound.ringtones` is still the list it will come back with.
+    ///
+    /// While it is false, EVERY call rings the phone's own ringtone — `ringtoneFile` returns nil for
+    /// every chat, which is what hands the choice to iOS. Any per-chat tone somebody already picked
+    /// is left in UserDefaults untouched and starts working again the moment this is true.
+    static let callSoundPickerEnabled = false
     enum Kind: String, Identifiable { case message, call; var id: String { rawValue } }
     private static func key(_ cid: String, _ kind: Kind) -> String { "sound_\(kind.rawValue)_\(cid)" }
 
@@ -169,8 +181,13 @@ enum SoundStore {
         // a different one — the preview was already calling resolveMessageTone; this was not.
         return kind == .call ? NotificationSound.resolveRingtone(id) : NotificationSound.resolveMessageTone(id)
     }
-    /// The bundle filename CallKit should ring for this chat (nil → the app default).
+    /// The bundle filename CallKit should ring for this chat, or nil to let the phone choose.
     static func ringtoneFile(_ cid: String?) -> String? {
+        // ⛔ HIDDEN MEANS HIDDEN EVERYWHERE, not just on the settings screen. With the picker put
+        // away, a chat that was set to Ripple last week must not go on ringing Ripple — he asked for
+        // the phone's own sound and this is the one line that delivers it. The stored choice is not
+        // erased; it simply is not consulted until the flag comes back.
+        guard callSoundPickerEnabled else { return nil }
         guard let cid else { return NotificationSound.defaultRingtone.bundleFile }
         let s = sound(cid, .call)
         // ⚠️ NIL DOES NOT MEAN SILENCE, whatever the old comment here said. CallKit rings SOMETHING
