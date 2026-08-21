@@ -58,6 +58,21 @@ struct MediaTabBar: View {
         // replaces it", but the call was only removed from that file's notes and not from here, so
         // the bug it describes has been live the whole time.
         .frame(height: Self.barHeight)
+        // ⛔ A COMPACT CENTRED PILL, WHICH IS THE LAST THING SEPARATING THIS FROM THE OTHER TWO
+        // (owner, 2026-08-21: "make it use the same design as the Photo/Collection or All/Missed
+        // bars … do not change its position").
+        //
+        // Both of those set their own width — 150 for All/Missed, 220 for Photos/Collections — and
+        // sit in the middle of their row. This one stretched the full 361pt of the page, and a
+        // segmented control pulled that wide stops reading as a control and starts reading as a grey
+        // band across the screen. Nothing moves: same row, same height, same vertical position, and
+        // the strip it lives in is unchanged.
+        //
+        // 330 rather than a fixed number like theirs, because five words need about 303 and the
+        // rest is room for larger text before anything truncates. It is a CEILING, not a width, so
+        // a 320pt phone simply takes what it has instead of overflowing.
+        .frame(maxWidth: 330)
+        .frame(maxWidth: .infinity)   // ...and centred in whatever is left
         // FIFTH SWING, AND IT IS THE LAST SHAPE COMING OFF (owner 2026-08-13, our bar beside theirs:
         // "it has duplicate… it has both, one and the other one").
         //
