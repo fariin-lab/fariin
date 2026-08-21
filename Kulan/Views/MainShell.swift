@@ -787,7 +787,6 @@ struct ChatsView: View {
     /// time this flips true the finger has already dragged the content down past the row's own
     /// height, so a 44pt row appearing at the top fills a gap that is already there instead of
     /// shoving every chat down. That is why there is no animation on it: the finger is the animation.
-    @State private var archiveRevealed = false
     @State private var storiesRowHeight: CGFloat = (UIScreen.main.bounds.width - 54) / 4 * 1.46 + 41
     // Stories opt-out (Settings > Stories > Turn Off Stories): the row disappears and chat-row
     // rings go dark — the whole surface, not a hidden-but-alive row.
@@ -1120,15 +1119,16 @@ struct ChatsView: View {
         // moving anything. It carries no tag and takes `selectionDisabled`, so it never grows a
         // checkbox and can never end up in a selection.
         //
-        // ⛔ AND IT IS HIDDEN UNTIL THE LIST IS PULLED DOWN (his order, 2026-08-21: copy the
-        // reference app's "how its hidden and how it's shown", and change nothing else about the
-        // row). `archiveRevealed` is the whole of it — see its own note and the two thresholds in
-        // `onScrollGeometryChange`. Nothing about how this row LOOKS is touched.
+        // ⛔ ALWAYS ON, AND THE PULL-TO-REVEAL GATE THAT WAS HERE IS GONE (his order, 2026-08-21
+        // evening, with the row circled: "make it how it was before, now hide and show remove").
+        // That reverses his own order from the same morning to copy the reference app's hide/show,
+        // and both were deliberate, so the later one stands. See the note in `onScrollGeometryChange`
+        // for what the gate cost and why it went.
         //
-        // ⚠️ WHAT THIS COSTS, so it is not discovered later: an unread archived chat is now behind a
-        // gesture. Theirs has the same trade and answers it with a badge on the row once it is
-        // revealed, which ours already draws. There is no other way in from this screen.
-        archiveRevealed && chatFilter == 0 && (!archivedChats.isEmpty || hasArchivedStories)
+        // One thing it quietly gives back: an unread archived chat is reachable again without
+        // knowing to pull the list down for it. That trade was recorded when the gate went in and is
+        // worth naming now that it is paid off.
+        chatFilter == 0 && (!archivedChats.isEmpty || hasArchivedStories)
     }
     /// 22pt of icon between two 11pt paddings. Only the empty-state overlay needs the number, and it
     /// needs it BEFORE layout, which is why it is written down rather than measured.
@@ -1568,57 +1568,25 @@ struct ChatsView: View {
                                                 of: { $0.contentOffset.y + $0.contentInsets.top },
                                                 action: { _, y in
                             chatScrollY = y
-                            // ⛔ THE ARCHIVE ROW'S WHOLE MECHANISM, and it is two numbers.
+                            // ⛔ THE PULL-TO-REVEAL MACHINERY IS GONE, AND IT IS THE OWNER REVERSING
+                            // HIS OWN CALL — BOTH TIMES DELIBERATE, THE LATER ONE WINS.
                             //
-                            // `y` is 0 at the top and goes NEGATIVE as the list is pulled down past
-                            // it. Past the row's own height plus a little, the pull is deliberate
-                            // rather than a bounce, and the row appears in the gap the finger has
-                            // already opened.
+                            // 2026-08-21, morning: "go read the reference app, how it's hidden and how
+                            // it's shown, copy that". So the row was hidden until the list was pulled
+                            // down past a threshold, with a dead band across zero to stop it
+                            // flickering. 2026-08-21, evening, with the row circled: "make it how it
+                            // was before, now hide and show remove".
                             //
-                            // ⚠️ THE TWO THRESHOLDS ARE NOT THE SAME NUMBER on purpose. Revealing at
-                            // -56 and hiding at +24 leaves a dead band across zero, so a list
-                            // resting at the top — or springing back after a pull — cannot sit on
-                            // the boundary and flicker the row in and out. One number would.
+                            // Everything that machinery cost is worth writing down, because it is why
+                            // he changed his mind: the row is a real row INSIDE the list, so revealing
+                            // it grew the content by 44pt mid-drag and the scroll view stepped its
+                            // offset to absorb that. That step is what jumped the stories row, what
+                            // opened the gap under it, and what made the row vanish while it was still
+                            // half on screen. Three separate reports, all of them downstream of
+                            // inserting a row into a scroll view somebody is currently dragging.
                             //
-                            // ⚠️ AND HIDING IS NOT ANIMATED EITHER. By the time y is past +24 the
-                            // row is already off the top of the screen, so animating its removal
-                            // would be animating something nobody can see while shifting everything
-                            // that IS on screen.
-                            //
-                            // ⛔ AND THE REVEAL IS ANIMATED, WHICH THE HIDE STILL IS NOT.
-                            //
-                            // The row is a real row inside the list, so appearing costs the content 44pt
-                            // and the scroll view absorbs that by stepping its offset — in one frame,
-                            // under a finger that is mid-pull. His 2026-08-21 report calls it exactly
-                            // what it is: the chat list JUMPING down rather than scrolling down. The
-                            // stories row above it no longer moves at all (see the clamp on its offset),
-                            // so this is the whole of what is left to smooth.
-                            //
-                            // 0.22s ease-out, matched to the pull rather than sprung: a spring overshoots,
-                            // and an overshoot here would push the list back past the threshold that
-                            // revealed the row and set it flickering against its own hysteresis.
-                            //
-                            // ⛔ NOT ANIMATED, AND THE `withAnimation` THAT WAS HERE IS REVERTED. It
-                            // wrapped a List INSERTION that happens mid-drag, and animating the
-                            // content growing while the scroll view is still tracking is what left
-                            // the list resting at an offset it should never have had — his gap.
-                            //
-                            // ⛔ AND THE HIDE THRESHOLD IS THE ROW'S OWN HEIGHT NOW, NOT 24.
-                            //
-                            // At 24 the row was removed while it was still HALF ON SCREEN: it sits at
-                            // the top of the content and stands 44pt tall, so 24pt of scroll leaves
-                            // 20pt of it visible, and then it vanished under his thumb. That is his
-                            // "when i scroll up small, archive row is hidden automatic". Hiding at
-                            // its full height plus the same 12pt margin the reveal uses means the row
-                            // is genuinely off the top before it is taken away, so the removal is
-                            // something nobody can see — which is what the original note here
-                            // intended and got wrong by a number.
-                            //
-                            // The dead band across zero survives and is now symmetric: reveal below
-                            // -56, hide above +56. A list resting at the top cannot sit on either
-                            // boundary, which is the whole reason the two are not one number.
-                            if y < -(archivedRowHeight + 12) { archiveRevealed = true }
-                            else if y > archivedRowHeight + 12 { archiveRevealed = false }
+                            // `chatScrollY` above stays — the stories row rides it, and it was never
+                            // part of this.
                         })
 
                           // Stories row stays OUTSIDE the List so EACH card long-presses on its
