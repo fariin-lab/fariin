@@ -2006,7 +2006,19 @@ struct ArchivedChatsView: View {
         .padding(.horizontal, 14)
         .frame(height: 44)
         .liquidGlass(Capsule())
-        .padding(.horizontal, 32)
+        // ⛔ 32 AT REST, 16 WITH THE KEYBOARD UP (his order, 2026-08-21). A search bar sitting alone
+        // above the home indicator can afford to be inset and look deliberate; the moment it is
+        // being TYPED into it is the only thing on that half of the screen and wants the room, so it
+        // widens to the page margin the chat rows use.
+        //
+        // Focus rather than a keyboard-height observer: this field is the only thing on the page
+        // that can raise a keyboard, so being focused and the keyboard being up are the same fact,
+        // and one of them is already state we hold.
+        //
+        // Animated on the same easing SwiftUI gives the keyboard, so the bar widens WITH it instead
+        // of snapping before it.
+        .padding(.horizontal, archiveSearchFocused ? 16 : 32)
+        .animation(.easeOut(duration: 0.25), value: archiveSearchFocused)
         .padding(.bottom, 8)
     }
 
