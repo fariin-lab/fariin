@@ -558,6 +558,26 @@ struct CallHistoryRow: View {
     // outgoing call reads "Outgoing" like every big app (was wrongly red before).
     private var directionText: String { call.mine ? "Outgoing" : (call.missed ? "Missed" : "Incoming") }
 
+    /// HOW LONG IT LASTED, which the entry has carried in `durationSec` since the call log was
+    /// built and nothing has ever drawn. A call history that says only who and when is missing the
+    /// third thing anybody looks one up for: whether the call actually happened. "Outgoing" alone
+    /// cannot tell a four-minute conversation from one that rang out — both rows look identical.
+    ///
+    /// ONLY ON A SINGLE CALL. A collapsed "name (3)" row covers three calls with three different
+    /// lengths; printing one of them beside the count would be a number that belongs to a call the
+    /// reader cannot see, and adding them up would read as one long call rather than three.
+    /// A missed call has no duration to report, and a zero-second answered one has nothing worth
+    /// reporting.
+    private var durationText: String? {
+        guard count == 1, !call.missed, call.durationSec > 0 else { return nil }
+        let secs = call.durationSec
+        if secs < 60 { return "\(secs) sec" }
+        let mins = secs / 60
+        if mins < 60 { return "\(mins) min" }
+        let hours = mins / 60, rest = mins % 60
+        return rest == 0 ? "\(hours) hr" : "\(hours) hr \(rest) min"
+    }
+
     var body: some View {
         HStack(spacing: 12) {
             // Whole left area (avatar, name, direction, time) → opens the contact profile.
@@ -574,7 +594,12 @@ struct CallHistoryRow: View {
                         }
                         HStack(spacing: 4) {
                             Image(systemName: directionIcon).font(.system(size: 11, weight: .semibold))
-                            Text(directionText).font(.system(size: 14))
+                            // One Text, not two: "Outgoing" and "(4 min)" are one sentence about one
+                            // call, and as separate views the line could break between them and put
+                            // a bare bracketed number on a row of its own.
+                            Text(durationText.map { "\(directionText) (\($0))" } ?? directionText)
+                                .font(.system(size: 14))
+                                .lineLimit(1)
                         }
                         .foregroundStyle(.secondary)
                     }
