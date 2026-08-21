@@ -2430,13 +2430,10 @@ struct ArchivedChatsView: View {
                             .disabled(selection.isEmpty)
                     }
                 } else {
-                    // Select moved off the left and into the menu, where the reference app keeps it —
-                    // two doors into one mode is clutter. Done stays exactly where it was.
-                    // ⚠️ NO "..." WITH NOTHING IN IT. Select is the menu's only entry now and there
-                    // is nothing to select in an empty archive, so the button would open a menu with
-                    // no children — which is a control that does nothing at all when tapped.
+                    // Select is named outright here rather than hidden behind a "…" — see
+                    // `archiveSelectButton`. Done stays exactly where it was.
                     if hasAnyArchived {
-                        ToolbarItem(placement: .topBarTrailing) { archiveMenu }
+                        ToolbarItem(placement: .topBarTrailing) { archiveSelectButton }
                     }
                     // Pushed, the back chevron is the way out and a Done beside it is a second one.
                     if !pushed {
@@ -2465,24 +2462,25 @@ struct ArchivedChatsView: View {
             .onAppear { repo.start() }
     }
 
-    /// The page's own menu, and Select is all that is left in it.
+    /// ⛔ A "SELECT" BUTTON, NOT A "…" MENU, AND THE MENU IS GONE ENTIRELY.
     ///
-    /// ⛔ ARCHIVE SETTINGS AND HOW DOES IT WORK ARE GONE, on his order (2026-08-21, both circled).
-    /// Nothing is lost with them: the auto-archive switch they opened is the SAME `@AppStorage` key
-    /// Settings > Chats writes, so it is still there and still one setting. `ArchiveSettingsView.swift`
-    /// went with them rather than staying as two screens nothing can reach.
+    /// His question, 2026-08-21, and it answers itself: "why is there a 3-dot button now when the
+    /// only option inside it is Select?" A disclosure control exists to hold a CHOICE. Archive
+    /// settings and How does it work were removed from here earlier the same day (both circled by
+    /// him), which left one entry behind a control whose entire job is to say there are several —
+    /// so every tap cost a menu, an animation and a second tap to reach the one thing it could do.
     ///
-    /// ⚠️ AND THE "..." GOES WHEN THE MENU WOULD BE EMPTY. Select is the only entry now and it is
-    /// gated on there being something to select, so an empty archive would have left a Menu with no
-    /// children — which renders as a button that does nothing whatsoever when tapped. The gallery's
-    /// `showsMoreMenu` learned this same lesson on the Files tab; the answer is the same one.
-    private var archiveMenu: some View {
-        Menu {
-            Button { withAnimation(.smooth(duration: 0.35)) { selecting = true } } label: {
-                Label { Text("Select Chats") } icon: { MenuIcon(system: "checkmark.circle") }
-            }
+    /// Named outright now. The label is the action, one tap performs it, and the note that used to
+    /// stand here about never shipping an EMPTY "…" is moot: there is no menu left to be empty.
+    ///
+    /// Still gated on `hasAnyArchived` at the call site, for the reason that gate has always had —
+    /// nothing to select in an empty archive — but now the gate hides a button that would be dead
+    /// rather than one that would open onto nothing.
+    private var archiveSelectButton: some View {
+        Button {
+            withAnimation(.smooth(duration: 0.35)) { selecting = true }
         } label: {
-            Image(systemName: "ellipsis").font(.system(size: 18))
+            Text("Select")
         }
         .tint(.primary)
     }
