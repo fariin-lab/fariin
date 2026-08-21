@@ -773,6 +773,21 @@ struct ChatsView: View {
     // long-press dies inside a List row — build 147) but is offset 1:1 by the list's
     // scroll, and the List gets a matching top margin so rows start below it.
     @State private var chatScrollY: CGFloat = 0
+    /// ⛔ THE ARCHIVE ROW IS HIDDEN UNTIL THE LIST IS PULLED DOWN — the reference app's behaviour,
+    /// which he asked for by name and asked me to change nothing else about the row.
+    ///
+    /// Theirs is not a disclosure control and there is nothing to tap: the row lives above the first
+    /// chat, off the top of the list, and the only way to it is to overscroll. Pull down and it is
+    /// there; scroll back down and it is gone again until the next pull. Their own documentation for
+    /// it is one line — "pull down on the inbox list to unhide the archived chats folder, as well as
+    /// pull up on the list to temporarily hide it" — and once it goes out of view it returns to
+    /// hidden rather than staying put.
+    ///
+    /// ⚠️ IT IS INSERTED WHILE THE LIST IS ALREADY PULLED OPEN, and that is the whole trick. By the
+    /// time this flips true the finger has already dragged the content down past the row's own
+    /// height, so a 44pt row appearing at the top fills a gap that is already there instead of
+    /// shoving every chat down. That is why there is no animation on it: the finger is the animation.
+    @State private var archiveRevealed = false
     @State private var storiesRowHeight: CGFloat = (UIScreen.main.bounds.width - 54) / 4 * 1.46 + 41
     // Stories opt-out (Settings > Stories > Turn Off Stories): the row disappears and chat-row
     // rings go dark — the whole surface, not a hidden-but-alive row.
@@ -1104,7 +1119,16 @@ struct ChatsView: View {
         // tap Edit reads as something you broke; theirs dims it, which says "not this one" without
         // moving anything. It carries no tag and takes `selectionDisabled`, so it never grows a
         // checkbox and can never end up in a selection.
-        chatFilter == 0 && (!archivedChats.isEmpty || hasArchivedStories)
+        //
+        // ⛔ AND IT IS HIDDEN UNTIL THE LIST IS PULLED DOWN (his order, 2026-08-21: copy the
+        // reference app's "how its hidden and how it's shown", and change nothing else about the
+        // row). `archiveRevealed` is the whole of it — see its own note and the two thresholds in
+        // `onScrollGeometryChange`. Nothing about how this row LOOKS is touched.
+        //
+        // ⚠️ WHAT THIS COSTS, so it is not discovered later: an unread archived chat is now behind a
+        // gesture. Theirs has the same trade and answers it with a badge on the row once it is
+        // revealed, which ours already draws. There is no other way in from this screen.
+        archiveRevealed && chatFilter == 0 && (!archivedChats.isEmpty || hasArchivedStories)
     }
     /// 22pt of icon between two 11pt paddings. Only the empty-state overlay needs the number, and it
     /// needs it BEFORE layout, which is why it is written down rather than measured.
@@ -1542,7 +1566,27 @@ struct ChatsView: View {
                         .scrollEdgeEffectStyle(.soft, for: .top)
                         .onScrollGeometryChange(for: CGFloat.self,
                                                 of: { $0.contentOffset.y + $0.contentInsets.top },
-                                                action: { _, y in chatScrollY = y })
+                                                action: { _, y in
+                            chatScrollY = y
+                            // ⛔ THE ARCHIVE ROW'S WHOLE MECHANISM, and it is two numbers.
+                            //
+                            // `y` is 0 at the top and goes NEGATIVE as the list is pulled down past
+                            // it. Past the row's own height plus a little, the pull is deliberate
+                            // rather than a bounce, and the row appears in the gap the finger has
+                            // already opened.
+                            //
+                            // ⚠️ THE TWO THRESHOLDS ARE NOT THE SAME NUMBER on purpose. Revealing at
+                            // -56 and hiding at +24 leaves a dead band across zero, so a list
+                            // resting at the top — or springing back after a pull — cannot sit on
+                            // the boundary and flicker the row in and out. One number would.
+                            //
+                            // ⚠️ AND HIDING IS NOT ANIMATED EITHER. By the time y is past +24 the
+                            // row is already off the top of the screen, so animating its removal
+                            // would be animating something nobody can see while shifting everything
+                            // that IS on screen.
+                            if y < -(archivedRowHeight + 12) { archiveRevealed = true }
+                            else if y > 24 { archiveRevealed = false }
+                        })
 
                           // Stories row stays OUTSIDE the List so EACH card long-presses on its
                           // own. Inside a List, the whole row lifts as one cell (the bug). (Build 147.)
