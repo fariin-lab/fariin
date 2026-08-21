@@ -1963,20 +1963,23 @@ struct ArchivedChatsView: View {
         }
     }
 
-    /// ⛔ THE SEARCH BAR, AT THE BOTTOM OF THE PAGE (his order, 2026-08-21, circled at the foot of
-    /// the screen).
+    /// The bar's own height plus its air, so the list can be told how much to leave clear of it.
+    private static let archiveSearchSlot: CGFloat = 44 + 16
+
+    /// ⛔ THE SEARCH BAR, AT THE BOTTOM OF THE PAGE (his order, circled at the foot of the screen).
     ///
-    /// ⚠️ OURS AND NOT `.searchable`, and that is a decision rather than a shortcut. `.searchable`
-    /// decides its own placement: on a page that is PUSHED, with no tab bar under it, iOS puts it in
-    /// the navigation bar — which is the top of the screen, not where he pointed. There is no
-    /// modifier that reliably moves it down on this kind of page, so the bar is drawn where it was
-    /// asked for.
+    /// ⚠️ OURS AND NOT `.searchable`. That modifier picks its own placement, and on a page that is
+    /// PUSHED with no tab bar under it, iOS puts the field in the NAVIGATION BAR — the top of the
+    /// screen, not where he pointed.
     ///
-    /// A `safeAreaInset` rather than an overlay: the list has to be able to scroll clear of it, and
-    /// an inset is what tells the scroll view how much room to leave.
+    /// ⛔ 32 EACH SIDE, HIS NUMBER (2026-08-21). It was 16, the page margin the chat rows use.
     ///
-    /// The same shape the app's other search fields wear — glass capsule, leading glass, a clear
-    /// button that only exists while there is something to clear.
+    /// ⛔ AND IT IS AN OVERLAY NOW, NOT A `safeAreaInset`, WHICH IS THE WHOLE OF HIS "no effect".
+    /// A safe-area inset RESERVES a strip: the list stops above the bar and nothing ever passes
+    /// behind it. Liquid Glass refracts what is behind it, so a glass capsule with a strip of empty
+    /// page behind it has nothing to work with and renders as a flat grey pill — which is exactly
+    /// what he photographed. As an overlay with a matching bottom content margin, the chats scroll
+    /// UNDER the bar and the glass finally has something to bend.
     private var archiveSearchBar: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -1985,8 +1988,15 @@ struct ArchivedChatsView: View {
                 .submitLabel(.search)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
-            if !archiveQuery.isEmpty {
-                Button { archiveQuery = "" } label: {
+            // ⛔ THE ✕ IS THERE WHENEVER THE BAR IS IN USE, not only once something is typed (his
+            // report: "when i open search bar theres no X button"). It was gated on the text being
+            // non-empty, so tapping into an empty field gave a keyboard and no way back out of it
+            // except the return key. Focused counts as in use.
+            if !archiveQuery.isEmpty || archiveSearchFocused {
+                Button {
+                    archiveQuery = ""
+                    archiveSearchFocused = false
+                } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
@@ -1996,7 +2006,7 @@ struct ArchivedChatsView: View {
         .padding(.horizontal, 14)
         .frame(height: 44)
         .liquidGlass(Capsule())
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 32)
         .padding(.bottom, 8)
     }
 
@@ -2012,6 +2022,12 @@ struct ArchivedChatsView: View {
         }
     }
 
+    /// Is the story strip on screen at all — asked in two places (the strip itself and the top
+    /// content margin that makes room for it), so it is one answer rather than two that can drift.
+    private var archiveStripShowing: Bool {
+        !archivedStories.isEmpty && archiveQuery.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
     /// The story strip, floating over the list and travelling with it.
     ///
     /// ⛔ LIFTED OUT OF `content` FOR THE TYPE-CHECKER, which gave up on that expression the moment
@@ -2019,7 +2035,10 @@ struct ArchivedChatsView: View {
     /// file's budget is a known cost and the documented answer is to split values out; it costs
     /// nothing at runtime. The same reason `loadedChatList` exists.
     @ViewBuilder private var archivedStripOverlay: some View {
-        if !archivedStories.isEmpty {
+        // ⛔ THE STRIP GOES WHILE SEARCHING (his order): a search on this page is a question about
+        // CHATS, and leaving a row of story cards above the answer is the same clutter the chat
+        // list's own filters already refuse. `archiveQuery` empty = not searching.
+        if archiveStripShowing {
             VStack(spacing: 0) {
                 archivedStoriesRow
                 // ⚠️ TEMPORARY — comes out with `StoryPressDebug.on`. See the note above it.
@@ -2245,7 +2264,12 @@ struct ArchivedChatsView: View {
                         // Room for the strip, so the first chat starts under it rather than behind
                         // it. The height is measured rather than guessed — the card is sized off the
                         // screen width and the label under it wraps.
-                        .contentMargins(.top, archivedStories.isEmpty ? 0 : archiveStripHeight,
+                        // ⚠️ THE SAME CONDITION THE STRIP ITSELF USES. Searching hides the strip, so
+                        // reserving its height would leave a band of nothing above the results.
+                        .contentMargins(.top, archiveStripShowing ? archiveStripHeight : 0,
+                                        for: .scrollContent)
+                        // Room for the search bar the chats now scroll BEHIND — see `archiveSearchBar`.
+                        .contentMargins(.bottom, hasAnyArchived ? Self.archiveSearchSlot : 0,
                                         for: .scrollContent)
                         .onScrollGeometryChange(for: CGFloat.self,
                                                 of: { $0.contentOffset.y + $0.contentInsets.top },
@@ -2260,7 +2284,11 @@ struct ArchivedChatsView: View {
             // that mode already owns the bottom of the screen with unarchive, read and delete, and
             // two bars stacked there is one too many. Not on an empty archive either — a field that
             // searches nothing.
-            .safeAreaInset(edge: .bottom) {
+            // ⛔ AN OVERLAY, SO THE CHATS PASS BEHIND THE GLASS. See `archiveSearchBar` — a
+            // `safeAreaInset` reserved a strip and left the bar with nothing behind it to refract,
+            // which is why it rendered as a flat pill. The matching bottom margin on the List is
+            // what still lets the last row scroll clear of it.
+            .overlay(alignment: .bottom) {
                 if !selecting && hasAnyArchived { archiveSearchBar }
             }
             .navigationTitle("Archived")
