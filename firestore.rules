@@ -346,12 +346,20 @@ service cloud.firestore {
         function windowLength() {
           return name == 'storiesDaily' ? duration.value(24, 'h') : duration.value(1, 'h');
         }
+        // ⛔ `storiesActive` IS THE SERVER'S AND NO CLIENT MAY TOUCH IT. It is not a window counter
+        // like the two below — it is how many of this account's stories are alive right now, kept by
+        // `onStoryCreated` and `onStoryDeleted` with admin rights, and it has to go DOWN as well as
+        // up. The shapes below can only ever count upward, which is right for a rate limit and
+        // useless for this one, and a client that could write it could hold its own number at zero
+        // and post for ever.
         allow read: if signedIn() && request.auth.uid == uid;
         allow create: if signedIn() && request.auth.uid == uid
+          && name != 'storiesActive'
           && request.resource.data.keys().hasOnly(['windowStart', 'count'])
           && request.resource.data.windowStart == request.time
           && request.resource.data.count == 1;
         allow update: if signedIn() && request.auth.uid == uid
+          && name != 'storiesActive'
           && request.resource.data.keys().hasOnly(['windowStart', 'count'])
           && (
                // Same window, one more.
@@ -1153,20 +1161,43 @@ service cloud.firestore {
         return get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/stories).data;
       }
       /// The same, over a day rather than an hour — see the second clause of the create rule.
+      /// HOW MANY OF THIS ACCOUNT'S STORIES ARE ALIVE RIGHT NOW.
+      ///
+      /// A rule cannot run a query, so it cannot count anything — it can only read one document. So
+      /// the number is kept in one: `users/{uid}/limits/storiesActive`, incremented by
+      /// `onStoryCreated` and decremented by `onStoryDeleted`, both with admin rights, and refused
+      /// to every client by the rules on that path.
+      ///
+      /// ⚠️ A MISSING DOCUMENT IS ZERO, not "allow anything". That is not the fail-open the two
+      /// budget counters carry: an account the server has never counted a story for genuinely has
+      /// none alive, so zero is the correct answer rather than a shrug.
+      function activeStories() {
+        return exists(/databases/$(database)/documents/users/$(request.auth.uid)/limits/storiesActive)
+          ? get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/storiesActive).data.get('count', 0)
+          : 0;
+      }
       function dailyStoryBudget() {
         return get(/databases/$(database)/documents/users/$(request.auth.uid)/limits/storiesDaily).data;
       }
       allow create: if signedIn()
         && request.auth.uid == request.resource.data.authorUid
-        // ⛔ WHO MAY POST A STORY AT ALL, DECIDED ON THE SERVER, WITH NO BUILD (owner, 2026-08-21:
-        // "I need to test If i can Off upload Story all user by server that whithout no need update
-        // app"). `config/limits.stories_enabled`, and it has three states:
+        // ⛔ WHO MAY POST A STORY AT ALL, DECIDED ON THE SERVER, WITH NO BUILD. Two switches, one
+        // per kind of account, and they are INDEPENDENT (owner, 2026-08-21: "Disable Stories for all
+        // users … only for verified users … only for normal users … Enable Stories for one user type
+        // while keeping them disabled for another").
         //
-        //   0  nobody can post a story
-        //   1  everybody can          (the fallback: absent, or any value nothing recognises)
-        //   2  only verified accounts can
+        //   config/limits.stories_enabled_default    0 = ordinary accounts cannot post
+        //   config/limits.stories_enabled_verified   0 = verified accounts cannot post
         //
-        // ⚠️ IT IS ITS OWN CLAUSE AND THAT IS THE ENTIRE POINT. Setting the daily ceiling to zero
+        // ⚠️ TWO SWITCHES RATHER THAN ONE SETTING WITH THREE VALUES, and the difference is the
+        // fourth case. This started as `stories_enabled` with 0/1/2 — nobody, everybody, verified
+        // only — copied from the reference app's own `stories_posting` (enabled / premium /
+        // disabled). Three values can express three of the four combinations he asked for and not
+        // the fourth: there is no way to say "ordinary accounts yes, verified accounts no". A pair
+        // of independent flags gives all four and needs no new mechanism, because every other limit
+        // on this document is already a `_default` / `_verified` pair.
+        //
+        // ⚠️ THIS IS ITS OWN CLAUSE AND THAT IS THE ENTIRE POINT. Setting the daily ceiling to zero
         // looks like it should do this and does not: the two budget clauses below open with
         // `!exists(the counter)`, a deliberate fail-open — an app that has never written a counter
         // must not be an app that cannot post — so an account that has never posted a story, or
@@ -1176,19 +1207,43 @@ service cloud.firestore {
         // worse than no switch, because it reads as working. So this sits in front, joined with
         // `&&`, where nothing can short-circuit around it.
         //
-        // ⛔ THE THIRD STATE IS THE REFERENCE APP'S AND WE DID NOT HAVE IT. Their key is
-        // `stories_posting`, documented as taking exactly three values — enabled, premium, disabled
-        // — one per tier. The middle one is what is worth copying: it is how a feature gets rolled
-        // out to a small group, or pulled back to one, without going dark for everybody and without
-        // a release. Two states can only do all or nothing.
+        // ⚠️ ANYTHING THAT IS NOT A ZERO IS ON, and that is the whole safety of it. The reference
+        // app's version is a string and ours is a number for the reason written up in `appLimit`: a
+        // field typed in a console is text unless somebody says otherwise, and text falls back. So a
+        // typo, a missing key, or a 3 that means nothing all land on "can post". The one thing that
+        // cannot happen by accident is the feature going dark.
         //
-        // ⚠️ ANYTHING UNRECOGNISED IS ON, and that is the whole safety of it. Theirs is a string and
-        // ours is a number for the reason written up in `appLimit`: a field typed in a console is
-        // text unless somebody says otherwise, and text falls back. So a typo, a missing key, or a 3
-        // that means nothing all land on "everybody can post". The one thing that cannot happen by
-        // accident is the feature going dark.
-        && appLimit('stories_enabled', 1) != 0
-        && (appLimit('stories_enabled', 1) != 2 || isVerifiedCaller())
+        // The user document read costs nothing extra: `isBanned()` further down reads the same
+        // document and rule evaluation caches it, so this is the same one read either way.
+        && ( isVerifiedCaller()
+               ? appLimit('stories_enabled_verified', 1) != 0
+               : appLimit('stories_enabled_default', 1) != 0 )
+        // ⛔ HOW MANY STORIES MAY BE ALIVE AT ONCE — a different question from how many were POSTED
+        // today, and it has its own pair of settings (owner, 2026-08-21, after reading the reference
+        // app's list: "It should control the maximum number of active stories a user can have at the
+        // same time").
+        //
+        //   config/limits.story_expiring_limit_default    ordinary accounts
+        //   config/limits.story_expiring_limit_verified   verified accounts
+        //
+        // Their key is `story_expiring_limit_default` / `_premium` and it sits beside their
+        // sent-per-week and sent-per-month limits for exactly this reason: an account can post
+        // fifty in a day and delete forty-nine, or post ten and keep all ten up for the full
+        // twenty-four hours. Only one of those fills a viewer's tray.
+        //
+        // ⚠️ THE DEFAULTS MATCH THE DAILY CEILINGS ON PURPOSE, so this changes nothing for anybody
+        // the day it ships. A story lives 24 hours, so an account's active count can never exceed
+        // what it posted in the last day anyway — which makes 50 and 100 exactly as permissive as
+        // today, and leaves the setting there to be turned DOWN when he wants it.
+        //
+        // ⚠️ THE COUNT IS A DOCUMENT, NOT A QUERY, and it is written a moment AFTER the story it is
+        // counting — a rule cannot count and a trigger is not instant. So a burst of posts fired
+        // inside that moment can each read the same number and land. It is a ceiling on how many
+        // stories somebody keeps up, not a security boundary, and the sweep behind it is the daily
+        // counter which does not have that gap.
+        && ( isVerifiedCaller()
+               ? activeStories() < appLimit('story_expiring_limit_verified', 100)
+               : activeStories() < appLimit('story_expiring_limit_default', 50) )
         // ⛔ A CEILING ON HOW FAST STORIES CAN BE POSTED, AND IT FAILS OPEN ON PURPOSE.
         //
         // There was no limit of any kind: one loop in a client, ours or anybody's, could write

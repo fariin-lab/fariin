@@ -748,6 +748,8 @@ struct ChatsView: View {
     @State private var showDeleteSelected = false
     @State private var showCompose = false
     @State private var storyLimitReached = false
+    /// The server says this account may not post a story at all — see `AppLimits.storiesEnabled`.
+    @State private var storiesOff = false
     /// Observed, so the button closes the moment the fiftieth story lands rather than at the next
     /// launch — `StoriesService` is `@Observable` and this reads its two counter properties.
     private var storyBudget: StoriesService { StoriesService.shared }
@@ -1685,6 +1687,14 @@ struct ChatsView: View {
             // instead, a person has already opened the picker, chosen twenty photos, waited for
             // them to resolve and pressed the button — all of it spent on a post the database was
             // always going to refuse. See `composeStory`.
+            // ⛔ AT THE TAP, BEFORE THE PICKER (owner, 2026-08-21: "the user must be informed before
+            // selecting a photo or video … Show this message immediately when they tap Add Story").
+            // His sentence, and no reason given with it: the reason is ours, it changes, and "the
+            // server says no" is not something to put in front of somebody who only wants to know
+            // whether to keep tapping.
+            .alert(AppLimits.storiesOffMessage, isPresented: $storiesOff) {
+                Button("OK", role: .cancel) {}
+            }
             .alert("That's today's limit", isPresented: $storyLimitReached) {
                 Button("OK", role: .cancel) {}
             } message: {
@@ -1790,6 +1800,9 @@ struct ChatsView: View {
     /// The database is still the enforcement and this is not a second one: `dailyLimitReached` is
     /// false whenever the count is unknown, so nothing here can lock somebody out on its own.
     private func composeStory() {
+        // THE FEATURE FIRST, THE ALLOWANCE SECOND. Being told "that is today's limit" when stories
+        // are switched off for everybody would be a true sentence about the wrong thing.
+        guard AppLimits.shared.storiesEnabled else { storiesOff = true; return }
         if storyBudget.dailyLimitReached {
             storyLimitReached = true
             // The cached count said full — confirm it against the server, so a window that rolled

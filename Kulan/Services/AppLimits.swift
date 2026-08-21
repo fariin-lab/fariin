@@ -89,6 +89,21 @@ final class AppLimits {
         return n
     }
 
+    /// ⛔ A SWITCH, NOT A CEILING, AND ZERO IS THE WHOLE POINT OF IT.
+    ///
+    /// `number` above throws away a 0 on purpose — a ceiling of zero is indistinguishable from a
+    /// mistake and the mistake locks everybody out of a feature. For a switch that reasoning
+    /// inverts: 0 IS the setting, and dropping it would mean the off switch silently did nothing on
+    /// every phone while the database refused every post. That is the worst of both, and it is
+    /// exactly what would have shipped if these two had shared one reader.
+    ///
+    /// Everything else about it is the same: not an integer, missing, or any other number all land
+    /// on the fallback, which for every switch is on.
+    private func flag(_ key: String, _ fallback: Int) -> Int {
+        guard let n = values[key] as? Int else { return fallback }
+        return n
+    }
+
     /// Does the SIGNED-IN account carry an active badge?
     ///
     /// Read live off the profile rather than cached, so a badge granted while the app is open takes
@@ -115,6 +130,33 @@ final class AppLimits {
         guard amVerified else { return ordinary }
         return max(ordinary, number("\(base)_verified", verifiedFallback))
     }
+
+    // MARK: - Is the feature on at all
+
+    /// ⛔ MAY THIS ACCOUNT POST A STORY, decided on the server and read before anything opens
+    /// (owner, 2026-08-21: "the app should check it before opening the photo/video picker").
+    ///
+    /// Two INDEPENDENT switches, one per kind of account, so all four states are reachable: off for
+    /// everybody, on for everybody, verified only, ordinary only. A single three-valued setting —
+    /// which is what the reference app uses — cannot express the fourth.
+    ///
+    /// ⚠️ FAILS OPEN, and every road to this answer does. An unknown value, a value typed as text, a
+    /// listener that has not answered yet, a profile that has not loaded: all of them land on true.
+    /// The database is the enforcement and it refuses on its own; the only thing this decides is
+    /// whether somebody is told before or after choosing a photo, and being told too late is a
+    /// smaller failure than a phone that will not let you post when the server says you can.
+    ///
+    /// ⚠️ AND IT IS THE SAME `!= 0` THE RULE USES, deliberately, not `== 1`. A 3 that means nothing
+    /// has to read as ON in both halves or they disagree about who is locked out.
+    var storiesEnabled: Bool {
+        let key = amVerified ? "stories_enabled_verified" : "stories_enabled_default"
+        return flag(key, 1) != 0
+    }
+
+    /// What to say when it is off. One sentence, his words, and deliberately not a reason: the
+    /// reason is ours and it changes, and "the server says no" is not something to put in front of
+    /// somebody who only wants to know whether to keep tapping.
+    static let storiesOffMessage = "Can't upload story right now."
 
     // MARK: - The limits themselves
 

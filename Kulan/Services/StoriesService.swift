@@ -694,6 +694,11 @@ final class StoriesService {
         //
         // The day is tested first because it is the longer window: if the day is spent, "wait a
         // little" is a lie that has him back here in ten minutes to be refused again.
+        // ⛔ IS THE FEATURE OFF AT ALL, asked first, because it is the only one of these that is not
+        // about this person. `composeStory` catches it at the tap and this catches everything that
+        // gets past there: a build that predates the switch, a phone whose listener had not answered
+        // when the button was pressed, or the switch being thrown mid-upload.
+        guard AppLimits.shared.storiesEnabled else { return AppLimits.storiesOffMessage }
         let budget = StoriesService.shared
         if budget.dailyLimitReached {
             return "You've posted \(dailyStoryLimit) stories today, which is the daily limit. "
