@@ -40,7 +40,22 @@ struct SendContactSheet: View {
             if !searchFocused { actionBar.transition(.move(edge: .bottom).combined(with: .opacity)) }
         }
         .animation(.easeOut(duration: 0.2), value: searchFocused)
-        .background(Color(.systemBackground))
+        // ⛔ THE PANEL IS A REAL SYSTEM MATERIAL NOW, NOT A FLAT GREY (his order, 2026-08-21:
+        // "shete profile sheet now looks Different profile fixnplz use real apple native glass").
+        //
+        // `Color(.systemBackground)` is one opaque colour and it is the same opaque colour on every
+        // screen in the app, which is exactly why this sheet looked like it had been lifted out of
+        // somewhere else and dropped on his profile. A profile page is washed in a colour pulled out
+        // of that person's own photograph; a slab of system grey sitting on top of it belongs to
+        // nothing.
+        //
+        // `presentationBackground` is the only thing that reaches the sheet's OWN backing view — a
+        // `.background()` inside the content paints over it and leaves the real one still opaque
+        // underneath. `.regularMaterial` rather than `.ultraThinMaterial`: this panel carries a grid
+        // of names over whatever photograph is behind it, and the thin one lets enough of a picture
+        // through to fight the text. Regular still takes the tint of the page under it, which is the
+        // whole point — the sheet goes green on a green profile.
+        .presentationBackground(.regularMaterial)
         // Half height, and draggable to full — his first bullet. `.medium` is the system's own half
         // detent rather than a hand-picked number, so it is right on every screen size.
         .presentationDetents([.medium, .large])
@@ -72,7 +87,7 @@ struct SendContactSheet: View {
         .font(.system(size: 16))
         .padding(.horizontal, 14)
         .frame(height: 44)
-        .background(Color.secondary.opacity(0.12), in: Capsule())
+        .liquidGlass(Capsule())
         .padding(.horizontal, 16)
         .padding(.top, 14)
         .padding(.bottom, 6)
@@ -129,7 +144,11 @@ struct SendContactSheet: View {
         .padding(.horizontal, 24)
         .padding(.top, 12)
         .padding(.bottom, 10)
-        .background(.bar)
+        // ⛔ NO SECOND SLAB. This was `.background(.bar)`, which paints its own material on top of
+        // the sheet's — two greys of different thickness meeting on a straight line, which is the
+        // seam that made the panel look like a different app from the profile behind it. The sheet's
+        // own glass carries this row now, and a hairline is all the separation a bottom bar needs.
+        .overlay(alignment: .top) { Divider().opacity(0.5) }
         .sheet(isPresented: $showSystemShare) { SystemShareSheet(items: [link]) }
     }
 
@@ -154,7 +173,7 @@ struct SendContactSheet: View {
                     .font(.system(size: 25, weight: .regular))
                     .foregroundStyle(.primary)
                     .frame(width: Self.action, height: Self.action)
-                    .background(Color.secondary.opacity(0.15), in: Circle())
+                    .liquidGlass(Circle())
                 Text(title).font(.system(size: 13)).foregroundStyle(.primary)
             }
         }

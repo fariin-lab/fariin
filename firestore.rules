@@ -1158,6 +1158,26 @@ service cloud.firestore {
       }
       allow create: if signedIn()
         && request.auth.uid == request.resource.data.authorUid
+        // ⛔ THE OFF SWITCH FOR STORIES, FOR EVERYBODY, WITH NO BUILD (owner, 2026-08-21: "I need to
+        // test If i can Off upload Story all user by server that whithout no need update app").
+        //
+        // `config/limits.stories_enabled = 0` and nobody can post a story from this moment. Set it
+        // back to 1, or delete the key, and everybody can again.
+        //
+        // ⚠️ IT IS ITS OWN CLAUSE AND THAT IS THE ENTIRE POINT. Setting the daily ceiling to zero
+        // looks like it should do this and does not: the two budget clauses below open with
+        // `!exists(the counter)`, which is a deliberate fail-open — an app that has never written a
+        // counter must not be an app that cannot post — so an account that has never posted a story,
+        // or whose 24-hour window has rolled over, sails past the ceiling without it ever being
+        // read. MEASURED, not reasoned: with the daily limit at 0, an account with a live counter is
+        // refused and an account with no counter document is ALLOWED. A switch with a hole in it is
+        // worse than no switch, because it reads as working.
+        //
+        // So this sits in front, joined with `&&`, where nothing can short-circuit around it.
+        //
+        // ⚠️ ABSENT MEANS ON. The fallback is 1 and a key typed as text falls back too, so the one
+        // thing that can never happen by accident is the whole feature going dark.
+        && appLimit('stories_enabled', 1) != 0
         // ⛔ A CEILING ON HOW FAST STORIES CAN BE POSTED, AND IT FAILS OPEN ON PURPOSE.
         //
         // There was no limit of any kind: one loop in a client, ours or anybody's, could write

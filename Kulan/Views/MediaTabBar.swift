@@ -101,24 +101,37 @@ struct MediaTabBar: View {
     }
 }
 
-/// ⛔ CLEARS THE SEGMENTED CONTROL'S TRACK AND KEEPS ITS SELECTION.
+/// ⛔ CLEARS THE SEGMENTED CONTROL'S TRACK AND DRAWS THE SELECTION ITSELF.
 ///
-/// Two things, and the second is the one both earlier attempts missed:
+/// ⚠️ THE THIRD ATTEMPT AND THE REAL MECHANISM. `selectedSegmentTintColor` was added last round and
+/// the selection STILL did not appear, because that property is only honoured while the control is
+/// in its default state. The moment ANY background image is set — which is exactly what clearing the
+/// track does — UIKit switches the control into its customised path and stops consulting the tint
+/// entirely, taking its selected surface from `setBackgroundImage(for: .selected)` instead. Clearing
+/// the track and setting a tint are mutually exclusive, which is why this bar has lost its
+/// highlight three times running.
 ///
-///   • `setBackgroundImage(UIImage(), for: .normal)` removes the opaque track, so the glass capsule
-///     behind the control is what is seen rather than a grey slab sitting on top of it.
-///   • `selectedSegmentTintColor` draws the selected capsule, and it does NOT come from the
-///     background image — which is why clearing that image on its own left every tab looking
-///     unselected, twice.
+/// So both images are supplied here and nothing is left to the tint:
 ///
-/// The tint is a translucent white so the glass reads THROUGH the pill rather than the pill being a
-/// solid lid on it: nearly opaque on a light page where the glass is pale anyway, and a fifth of
-/// white on a dark one, which is how the system's own glass segmented control sits on a bar.
+///   • `.normal` is a fully transparent image, so the glass capsule behind the control is what shows
+///     instead of a grey slab on top of it.
+///   • `.selected` is a translucent white capsule, drawn here, inset three points from the top and
+///     bottom so it sits INSIDE the glass rather than covering its edges — the same relationship
+///     Apple's own pill has to its track.
+///   • The divider images go too, or a hairline is drawn between every pair of words.
 ///
-/// ⚠️ `DispatchQueue.main.async` and a walk up from this background view, because SwiftUI's
-/// `Picker` gives no handle on the UIKit control it builds. The traversal is the one from
-/// `7a136a9d`, which did find the control — that attempt failed on the missing tint, not on this.
+/// Both are resizable with cap insets, so one 42pt square stretches to a segment of any width.
+///
+/// The titles are coloured explicitly for the same reason: on the customised path the control stops
+/// deciding, and unselected words came out the same weight as the selected one.
+///
+/// ⚠️ `DispatchQueue.main.async` and a walk up from this background view, because SwiftUI's `Picker`
+/// gives no handle on the UIKit control it builds. `colorScheme` is read even though nothing here
+/// uses it directly: it is what makes `updateUIView` run again when the phone changes theme, and the
+/// images are baked for one theme at a time.
 private struct SegmentedGlassTrack: UIViewRepresentable {
+    @Environment(\.colorScheme) private var scheme
+
     func makeUIView(context: Context) -> UIView {
         let v = UIView(frame: .zero)
         v.isUserInteractionEnabled = false
@@ -127,24 +140,55 @@ private struct SegmentedGlassTrack: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: UIView, context: Context) {
+        let dark = scheme == .dark
         DispatchQueue.main.async {
             guard let root = uiView.superview?.superview ?? uiView.superview else { return }
-            Self.style(in: root)
+            Self.style(in: root, dark: dark)
         }
     }
 
-    private static func style(in view: UIView) {
+    /// A capsule of `color`, inset vertically, resizable from the middle. Square so the caps can be
+    /// generous without meeting: 20 and 20 on a 42pt image leaves two points to stretch, which is
+    /// all a flat fill needs.
+    private static func pill(_ color: UIColor, height: CGFloat, inset: CGFloat) -> UIImage {
+        let size = CGSize(width: height, height: height)
+        let img = UIGraphicsImageRenderer(size: size).image { _ in
+            let rect = CGRect(x: 0, y: inset, width: height, height: height - inset * 2)
+            color.setFill()
+            UIBezierPath(roundedRect: rect, cornerRadius: rect.height / 2).fill()
+        }
+        return img
+            .resizableImage(withCapInsets: UIEdgeInsets(top: 0, left: 20, bottom: 0, right: 20),
+                            resizingMode: .stretch)
+            .withRenderingMode(.alwaysOriginal)
+    }
+
+    private static func style(in view: UIView, dark: Bool) {
         if let seg = view as? UISegmentedControl {
+            let h = MediaTabBar.barHeight
             seg.backgroundColor = .clear
-            seg.setBackgroundImage(UIImage(), for: .normal, barMetrics: .default)
-            // THE LINE BOTH EARLIER ATTEMPTS WERE MISSING.
-            seg.selectedSegmentTintColor = UIColor { t in
-                t.userInterfaceStyle == .dark
-                    ? UIColor.white.withAlphaComponent(0.20)
-                    : UIColor.white.withAlphaComponent(0.92)
+            seg.setBackgroundImage(pill(.clear, height: h, inset: 0), for: .normal, barMetrics: .default)
+            // A fifth of white on a dark page, nearly opaque on a light one — the glass reads THROUGH
+            // the pill on dark, where it is the only thing giving the bar depth, and a light page's
+            // glass is pale enough already that a pale pill would not be visible at all.
+            seg.setBackgroundImage(pill(dark ? UIColor.white.withAlphaComponent(0.22)
+                                             : UIColor.white.withAlphaComponent(0.92),
+                                        height: h, inset: 3),
+                                   for: .selected, barMetrics: .default)
+            for state: UIControl.State in [.normal, .selected, [.selected, .highlighted], .highlighted] {
+                seg.setDividerImage(pill(.clear, height: h, inset: 0),
+                                    forLeftSegmentState: state, rightSegmentState: state, barMetrics: .default)
             }
+            seg.setTitleTextAttributes([
+                .foregroundColor: UIColor.secondaryLabel,
+                .font: UIFont.systemFont(ofSize: 15, weight: .regular),
+            ], for: .normal)
+            seg.setTitleTextAttributes([
+                .foregroundColor: dark ? UIColor.white : UIColor.label,
+                .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
+            ], for: .selected)
             return
         }
-        for sub in view.subviews { style(in: sub) }
+        for sub in view.subviews { style(in: sub, dark: dark) }
     }
 }

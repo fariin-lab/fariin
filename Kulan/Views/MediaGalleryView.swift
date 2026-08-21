@@ -181,6 +181,7 @@ struct MediaGalleryView: View {
         .toolbarColorScheme(pageScheme, for: .navigationBar)
         .tint(Color.accentColor)
         .toolbar { toolbar }
+        .background { NavBarNoHairline() }   // no hairline under the header (see below)
         .safeAreaInset(edge: .bottom) { if selecting { selectionToolbar } }
         .task {
             // STABLE via a persistent-backed store, so reopen is instant: render the cached list
@@ -326,6 +327,16 @@ struct MediaGalleryView: View {
         } label: {
             Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold)).foregroundStyle(.primary)
         }
+        // ⛔ IT PRESSES NOW (owner, 2026-08-21: "thers no affect back button has effect couse is
+        // native lets add effect like that").
+        //
+        // The back button beside it is the system's own, so it dims and its glass reacts under a
+        // finger for free. A `Menu` does not: it opens on touch-DOWN and, left in its automatic
+        // style, never enters a pressed state at all, so the one control on this bar that is ours
+        // was the one control that felt dead. `.button` hands it the same button styling the bar
+        // gives everything else, which is where that reaction lives — rather than us drawing a
+        // second circle behind a circle the toolbar has already drawn.
+        .menuStyle(.button)
     }
 
     /// Items on the visible tab (drives whether "Select" is offered).
@@ -811,5 +822,62 @@ struct MediaGalleryView: View {
               let det = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return nil }
         let range = NSRange(text.startIndex..., in: text)
         return det.firstMatch(in: text, range: range)?.url
+    }
+}
+
+/// ⛔ TAKES THE HAIRLINE OFF THIS SCREEN'S NAVIGATION BAR (owner, 2026-08-21: "toheader has broder
+/// ios 26 never had top border").
+///
+/// The line under the header is the bar's SHADOW, which UIKit draws whenever content scrolls beneath
+/// it. There is no SwiftUI modifier for it: `.toolbarBackground(.hidden)` takes the material away
+/// with it and leaves photographs sliding raw behind the title, which is the opposite of what this
+/// screen wants. The one property is `UINavigationBarAppearance.shadowColor`.
+///
+/// ⚠️ IT IS SET ON THE NAVIGATION ITEM, NOT THE BAR. The bar is shared by every screen in the stack,
+/// so clearing it there would silently take the hairline off the pages this one was pushed from and
+/// leave it off after popping back. An appearance on `navigationItem` belongs to this screen alone
+/// and is put back by the system on the way out.
+///
+/// ⚠️ AND IT IS A COPY OF WHAT IS ALREADY THERE, not a fresh appearance. A new
+/// `UINavigationBarAppearance()` starts transparent and would take this bar's glass with it — the
+/// same trade the segmented control lost twice. Only `shadowColor` changes.
+private struct NavBarNoHairline: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView(frame: .zero)
+        v.isUserInteractionEnabled = false
+        v.backgroundColor = .clear
+        return v
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        // Next runloop turn: SwiftUI has not attached this view to its hosting controller yet on the
+        // pass that builds it, so the responder chain has nowhere to walk.
+        DispatchQueue.main.async {
+            var responder: UIResponder? = uiView
+            while let next = responder?.next {
+                if let vc = next as? UIViewController, vc.navigationController != nil {
+                    Self.strip(vc); return
+                }
+                responder = next
+            }
+        }
+    }
+
+    private static func strip(_ vc: UIViewController) {
+        guard let bar = vc.navigationController?.navigationBar else { return }
+        func cleared(_ source: UINavigationBarAppearance?) -> UINavigationBarAppearance {
+            let a = (source?.copy() as? UINavigationBarAppearance) ?? {
+                let fresh = UINavigationBarAppearance()
+                fresh.configureWithDefaultBackground()
+                return fresh
+            }()
+            a.shadowColor = .clear
+            a.shadowImage = UIImage()
+            return a
+        }
+        let item = vc.navigationItem
+        item.standardAppearance   = cleared(bar.standardAppearance)
+        item.scrollEdgeAppearance = cleared(bar.scrollEdgeAppearance ?? bar.standardAppearance)
+        item.compactAppearance    = cleared(bar.compactAppearance ?? bar.standardAppearance)
     }
 }
