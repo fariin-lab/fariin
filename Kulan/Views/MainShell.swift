@@ -1982,7 +1982,17 @@ struct ArchivedChatsView: View {
 
     // Horizontal cards of hidden people; tap to view, long-press to Unhide.
     private var archivedStoriesRow: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        // ⛔ A SCROLL VIEW WE OWN, NOT ONE THE PRESS HAS TO GO LOOKING FOR (his order, 2026-08-21:
+        // "make the archive stories row use the same UIKit"). This was a SwiftUI `ScrollView` with
+        // `StoryRowLongPress` hung off it as a `.background`, which had to CLIMB to find the scroller
+        // and install a recogniser on whatever it found. Four reports, three fixes, all of them
+        // patches on that climb. See `ArchiveStripScroller` for the whole account.
+        //
+        // ⚠️ THE CARDS BELOW ARE UNTOUCHED. Only the scroller changed hands.
+        ArchiveStripScroller(target: archivedMenuTarget,
+                             // The card, its label, and the strip's own vertical padding — the same
+                             // numbers the card's frame two dozen lines down is built from.
+                             height: storyCardW * 1.46 + 6 + 16 + 20) {
             HStack(alignment: .top, spacing: 10) {
                 // KEYED ON `authorUid`, THE SAME THING THE `.id()` BELOW SETS, and that mismatch is
                 // his "long press the first story and it opens the second".
@@ -2027,10 +2037,10 @@ struct ArchivedChatsView: View {
                     // is already stable. Declaring it twice was the whole problem.
                 }
             }
-            // ONE recogniser for the whole strip, on its scroll view, exactly as the stories row
-            // does it — never one per card. A recogniser that lives on a card has to be
-            // hit-testable, and then the card's own Button never sees the tap.
-            .background(StoryRowLongPress(target: archivedMenuTarget))
+            // ONE recogniser for the whole strip, never one per card: a recogniser that lives on a
+            // card has to be hit-testable, and then the card's own Button never sees the tap. It is
+            // installed by `ArchiveStripScroller` on the scroll view it owns — the `.background`
+            // that used to sit here is gone with the climb it depended on.
             .padding(.horizontal, 12).padding(.vertical, 10)
         }
     }
