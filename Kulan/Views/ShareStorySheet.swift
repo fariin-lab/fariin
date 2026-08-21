@@ -8,7 +8,11 @@ import UIKit
 /// photo, adding a video, then deleting the photo — the X on the thumbnail strip does exactly that.
 struct StoryShareData: Identifiable {
     let id = UUID()
-    let data: Data
+    /// ⚠️ A `var`, AND THE SHEET OPENING EARLY IS WHY. The editor presents this sheet before the
+    /// picture has been rendered and fills the bytes in a moment later; mutating the property keeps
+    /// the SAME `id`, so `.sheet(item:)` updates the sheet in place instead of dismissing it and
+    /// presenting a second one, which is what a fresh value would do.
+    var data: Data
     var caption: String = ""
     var video: StoryVideoPayload? = nil
     /// The Link and Location stickers on this item — see `StoryTapTarget`.
@@ -582,16 +586,34 @@ struct ShareStorySheet: View {
         }
     }
 
+    /// ⛔ THE SHEET NOW OPENS BEFORE THE PICTURE EXISTS, so this is the one control that has to know
+    /// (2026-08-21: "when i click Next, share story sheet is coming late, feeling lag").
+    ///
+    /// The editor used to render every item — a `flatten` per photo, a burn-in per video — and only
+    /// then hand the finished bytes over, so the tap on Next bought a wait with nothing on screen but
+    /// a spinner where the word had been. It presents immediately now and the render lands a moment
+    /// later, which means for that moment `image` is empty.
+    ///
+    /// ⚠️ AND AN EMPTY POST IS THE ONE THING THAT MUST NOT GET THROUGH. `send` has always ended with
+    /// `guard !data.isEmpty` for exactly that reason; with the sheet up early, the guard has to be
+    /// HERE too or a fast thumb posts a zero-byte story. Editing an existing story is exempt: it
+    /// uploads nothing and only changes who can see what is already up.
+    private var isPreparing: Bool { editing == nil && image.isEmpty }
+
     private var postButton: some View {
         Button { post() } label: {
             // UPDATE, NOT POST — his word, and the honest one: nothing is uploaded and no second
             // story is made, the one already up simply changes who can see it.
-            Text(editing == nil ? "Post Story" : "Update").font(.headline).foregroundStyle(.white)
+            Group {
+                if isPreparing { ProgressView().tint(.white) }
+                else { Text(editing == nil ? "Post Story" : "Update").font(.headline) }
+            }
+            .foregroundStyle(.white)
                 .frame(maxWidth: .infinity).frame(height: 52)
                 .background(.blue, in: Capsule())
         }
         .buttonStyle(StoryPressStyle())
-        .disabled(posting)
+        .disabled(posting || isPreparing)
         .padding(.horizontal, 16).padding(.vertical, 10)
         .background(Color(.systemGroupedBackground))
     }

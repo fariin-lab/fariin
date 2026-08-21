@@ -3389,9 +3389,27 @@ struct StoryEditorView: View {
 
     // MARK: - Send
     private func send() async {
-        posting = true
         stashCurrent()
         let keep = index
+
+        // ⛔ THE SHEET GOES UP FIRST, EMPTY, AND THE PICTURE CATCHES IT UP (owner, 2026-08-21: "when
+        // i click Next, share story sheet is coming late, feeling lag").
+        //
+        // Every item used to be rendered before this line — a `flatten` per photo, a burn-in per
+        // video — and only then was the sheet allowed to appear. So the tap on Next bought a wait
+        // with nothing on screen but a spinner where the word had been, and the wait grows with the
+        // number of pictures in the post. The sheet does not draw the picture at all: it is an
+        // audience list, a switch and a button, and none of them need a single byte.
+        //
+        // The payload's `id` is stable and `data` is a `var`, so filling it in below updates the
+        // sheet in place. A fresh value would have a fresh id, which `.sheet(item:)` reads as a
+        // different sheet — dismiss, present, and a worse flicker than the wait it replaced.
+        //
+        // ⚠️ POST STORY IS DISABLED UNTIL THE BYTES ARRIVE. `send` has always ended with
+        // `guard !data.isEmpty`, and with the sheet up early that guard has to exist on the button
+        // as well or a fast thumb posts a zero-byte story. See `ShareStorySheet.isPreparing`.
+        pendingShare = StoryShareData(data: Data())
+        pendingExtras = []
 
         // EVERY item is rendered HERE, at post time, from the edits stored beside it — which is what
         // being able to un-crop after switching costs: the work moves from "on the way out of an
@@ -3418,10 +3436,11 @@ struct StoryEditorView: View {
         }
         index = keep
         restoreCurrent()
-        posting = false
 
         let data = rendered.first?.data ?? Data()
-        guard !data.isEmpty else { postError = true; return }   // never hand off a zero-byte (broken) image
+        // Never hand off a zero-byte (broken) image. The sheet is already up, so it comes down with
+        // the error rather than the error arriving instead of it.
+        guard !data.isEmpty else { pendingShare = nil; postError = true; return }
 
         var extras: [StoryExtra] = []
         for r in rendered.dropFirst() {
@@ -3440,15 +3459,15 @@ struct StoryEditorView: View {
             guard let u = r.video else { return nil }
             return StoryVideoPayload(url: u, thumbnail: r.data, muted: r.muted, trim: r.trim, burn: r.burn)
         }
-        // Caption travels as TEXT (rendered as an overlay in the viewer), NOT baked into the photo —
-        // baking it clipped the text when the image was cropped to fit.
-        pendingShare = StoryShareData(data: data,
-                                      // The FIRST ITEM's caption, which is not necessarily the one in
-                                      // the pill: `send` walks every item and leaves the tools on
-                                      // whichever was on screen.
-                                      caption: rendered.first?.caption ?? "",
-                                      video: leadVideo,
-                                      stickers: rendered.first?.taps ?? [])
+        // ⛔ FILLED IN, NOT REPLACED. The sheet has been on screen since before any of this ran; a
+        // fresh `StoryShareData` would carry a fresh `id`, which `.sheet(item:)` reads as a different
+        // sheet and answers by dismissing this one and presenting another. Mutating keeps the id.
+        pendingShare?.data = data
+        // The FIRST ITEM's caption, which is not necessarily the one in the pill: `send` walks every
+        // item and leaves the tools on whichever was on screen.
+        pendingShare?.caption = rendered.first?.caption ?? ""
+        pendingShare?.video = leadVideo
+        pendingShare?.stickers = rendered.first?.taps ?? []
         pendingExtras = extras
     }
 
