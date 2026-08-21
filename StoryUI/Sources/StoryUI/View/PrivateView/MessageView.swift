@@ -148,12 +148,16 @@ private extension MessageView {
         // field has no primary action at all — Return inserts a newline — so the path the crash
         // travelled does not exist any more, and the arrow beside the pill is the one way to send,
         // which is what a multi-line composer does everywhere else.
+        // ⚠️ `.placeholder` COMES FIRST AND `.lineLimit` AFTER IT. The note above this line has
+        // always said so and I put the lineLimit above it anyway: `.placeholder` is declared on
+        // `TextField` itself, not on `View`, so anything that returns `some View` before it takes
+        // the member away — "value of type 'some View' has no member 'placeholder'".
         TextField("", text: $text, axis: .vertical)
-            .lineLimit(1...5)
             .placeholder(when: text.isEmpty, view: {
                 Text(placeholder).foregroundColor(Color.white)
                     .shadow(color: Color.black.opacity(0.45), radius: 1.5)   // readable on white photos
             })
+            .lineLimit(1...5)
             .focused($replyFocused)
             .modifier(ReplyPillStyle())
             .onChange(of: text, perform: { newValue in showEmoji = newValue.isEmpty })
