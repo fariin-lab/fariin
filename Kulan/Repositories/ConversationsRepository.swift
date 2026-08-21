@@ -45,8 +45,9 @@ final class ConversationsRepository {
     }
 
     func start() {
-        // demo data already injected; don't let Firebase overwrite it. No longer `#if DEBUG` —
-        // `active` is false in every build until the demo username is typed at sign-up.
+        // The full demo takeover (the demo login) has already put its data in; there is no account
+        // to listen to. This is NOT the "Demo chats" switch, which leaves the real listener running
+        // and has its rows added in `publish`.
         if DemoMode.active { hasLoaded = true; return }
         // Safety net FIRST — before the uid guard / listener — so the chat-list skeleton can NEVER spin
         // forever: even if auth isn't ready yet, or Firestore's realtime channel is blocked/slow (a cloud
@@ -164,7 +165,11 @@ final class ConversationsRepository {
         }
     }
 
-    private func publish(_ convs: [Conversation]) {
+    private func publish(_ raw: [Conversation]) {
+        // The demo chats are added HERE and nowhere else. The live listener reassigns the whole
+        // array on every snapshot, so injecting them at the switch would have them wiped a second
+        // later by the next presence or typing flag. A no-op unless the switch is on.
+        let convs = DemoMode.withDemoChats(raw)
         if !convs.isEmpty { rememberHadChats() }
         prefetchArrivedVoice(convs)
         guard convs != conversations else { hasLoaded = true; return }   // no-op snapshot → no re-render
@@ -197,6 +202,18 @@ final class ConversationsRepository {
     func stop() {
         listener?.remove()
         listener = nil
+    }
+
+    /// The "Demo chats" switch was flipped. Redraw the list from what is already in memory rather
+    /// than asking the server for anything: `publish` is where the demo rows are added and removed,
+    /// so handing it the real ones is the whole operation.
+    ///
+    /// The filter matters on the way OFF. `publish` bails early when the array it is given equals
+    /// the one on screen, and the array on screen still has the demo rows in it, so passing the
+    /// current value unfiltered would compare equal and nothing would happen.
+    @MainActor
+    func refreshForDemo() {
+        publish(conversations.filter { !DemoMode.isDemoConversation($0.id) })
     }
 
     /// Sign-out/delete: drop the previous account's chats so the next account on this

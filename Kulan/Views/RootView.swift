@@ -280,6 +280,12 @@ struct RootView: View {
         }
         let ready = ProfileStore.shared.me?.handle.isEmpty == false
         if ready {
+            // "Demo chats" survives a restart like any other setting. Rebuilt HERE rather than
+            // inside the repository because building the rows needs the main actor and a uid, and
+            // this is the first point in the launch where both are true.
+            if DemoMode.isAvailable, UserDefaults.standard.bool(forKey: "demoChats") {
+                await MainActor.run { DemoMode.setChats(true) }
+            }
             Push.register(); Push.saveVoipToken()   // notifications + VoIP token now that we're signed in
             DeviceRegistry.shared.start()
             startOfficialChannel()
@@ -584,11 +590,12 @@ struct OnboardingView: View {
         // can be taken off a real phone. Accept it in EITHER field (name or username), trimmed, so
         // a wrong-field tap still works.
         //
-        // ⛔ This used to be `#if DEBUG` and is now live in TestFlight too, gated on one flag in
-        // DemoMode. Set `DemoMode.reachableInRelease` to false before the App Store submission and
-        // this branch goes dead again. The reasoning is written out at the top of DemoMode.swift.
+        // Was `#if DEBUG`, which put it in no build he can run. Now gated on `DemoMode.isAvailable`,
+        // which is debug or TestFlight and never the App Store. Note this screen only appears AFTER
+        // a real sign-in has succeeded, so it is the long way round; the switch in Settings is how
+        // he actually gets there.
         let nameTrim = name.trimmingCharacters(in: .whitespaces).lowercased()
-        if DemoMode.reachableInRelease, handle.lowercased() == "apple" || nameTrim == "apple" {
+        if DemoMode.isAvailable, handle.lowercased() == "apple" || nameTrim == "apple" {
             // Firebase-free demo: DemoMode.activate() sets AuthService.shared.uid itself.
             await MainActor.run { DemoMode.activate(); onDone() }
             return

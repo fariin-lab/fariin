@@ -3,17 +3,15 @@ import UIKit
 import FirebaseAuth
 import FirebaseFirestore
 
-// ⛔ TEMPORARY: THIS NOW COMPILES INTO TESTFLIGHT. It was wrapped in `#if DEBUG` and it is not any
-// more, because the owner takes the website screenshots on his own phone through TestFlight and
-// there was no way to put this data in front of him there.
+// TESTFLIGHT AND DEBUG, NEVER THE APP STORE. This was wrapped in `#if DEBUG`, which put it in no
+// build the owner can run: the TestFlight lane builds Release and he has no Mac. `DemoStoryMedia`
+// already hit this and already fixed it properly, so `isAvailable` below just borrows its answer.
+// Nothing here needs anybody to remember to flip a switch before submitting.
 //
-// TURNING IT OFF IS ONE LINE: set `reachableInRelease` to false below and the sign-up screen stops
-// recognising the demo username in every build. DO THAT BEFORE THE APP STORE SUBMISSION. A
-// shipping messenger should not carry a username that fills itself with invented conversations,
-// however well hidden it is.
-//
-// The visible "Preview demo" button on the login screen is deliberately still `#if DEBUG`, so no
-// tester ever sees a way in. The only door is typing the demo username at sign-up.
+// HOW HE ACTUALLY REACHES IT: Settings, "Demo chats". Six local chats appear in his own list next
+// to his real ones, he takes the pictures, he switches it off. He never signs out and his account
+// is never touched. The demo LOGIN below still exists for the browser simulator, but it is the long
+// way round on a phone, because the username screen only appears after a real sign-in succeeds.
 //
 // A cloud simulator can't do Firebase Storage uploads, so real media can't be sent or fetched
 // there. This fills the repos with FULLY LOCAL demo data (own + friends' stories, plus a set of
@@ -54,9 +52,52 @@ import FirebaseFirestore
 // Anything missing falls back to the drawn version, so the demo never breaks for want of an image.
 // ---------------------------------------------------------------------------------------------
 enum DemoMode {
-    /// ⛔ The whole switch. False and the demo login stops working in every build, debug included.
-    /// Set it false before submitting to the App Store. See the note above.
-    static let reachableInRelease = true
+    /// Debug or TestFlight, NEVER the App Store. Borrowed wholesale from `DemoStoryMedia`, which
+    /// already had to solve exactly this and solved it correctly: the receipt name is the honest
+    /// test for "this build came from TestFlight", and it needs nobody to remember to flip a switch
+    /// before submitting. Do not replace this with a hand-set Bool.
+    static var isAvailable: Bool { DemoStoryMedia.isAvailable }
+
+    /// THE ONE HE ACTUALLY USES. A switch in Settings turns this on and six demo chats appear in
+    /// his own chat list, next to his real ones. He stays signed in, nothing is written anywhere,
+    /// and turning it off puts the list back.
+    ///
+    /// This exists because the other door — sign out, sign up, type the demo username — is behind a
+    /// screen that only appears AFTER a real sign-in succeeds. Reaching it means making a second
+    /// Apple or Google account, which is an absurd price for looking at demo data on your own phone.
+    nonisolated(unsafe) static var chatsInjected = false
+
+    /// The six rows, built once when the switch goes on and held here.
+    ///
+    /// They are CACHED rather than rebuilt per call for one reason that is not performance:
+    /// `withDemoChats` is called from `ConversationsRepository.publish`, and that class is not
+    /// main-actor isolated. Building the rows needs the signed-in uid and draws the fallback
+    /// portraits with UIKit, so it has to happen on the main actor, at the moment of the tap.
+    /// Reading a finished array afterwards needs no isolation at all.
+    nonisolated(unsafe) static var demoChats: [Conversation] = []
+
+    /// Whether a conversation id belongs to the demo set. Everything downstream asks THIS rather
+    /// than the global `active` flag, so a demo chat and a real chat can sit in one list without the
+    /// demo rules leaking onto the real one. Get this wrong and every real preview renders as
+    /// ciphertext.
+    static func isDemoConversation(_ cid: String) -> Bool { cid.hasPrefix("demo-") }
+
+    /// Turn the switch on: build the rows now, on the main actor, while there is a uid to build
+    /// them against. Off clears them, so nothing is left holding memory or waiting to reappear.
+    @MainActor
+    static func setChats(_ on: Bool) {
+        demoChats = on ? demoConversations() : []
+        chatsInjected = on
+    }
+
+    /// Called from `ConversationsRepository.publish`. A no-op unless the switch is on, so it costs
+    /// one Bool check on the hot path. It has to live there rather than at the toggle, because the
+    /// live Firestore listener reassigns the whole array on every snapshot and would otherwise wipe
+    /// the demo rows a second after they appeared.
+    static func withDemoChats(_ convs: [Conversation]) -> [Conversation] {
+        guard chatsInjected, !demoChats.isEmpty else { return convs }
+        return demoChats + convs.filter { !isDemoConversation($0.id) }
+    }
 
     // A plain flag the repos can read synchronously from anywhere; written once on the main actor.
     nonisolated(unsafe) static var active = false
@@ -83,8 +124,6 @@ enum DemoMode {
         // Profile portraits. Built here so the chat list and the story rings hand the same url to
         // the poster header, and so the whole set exists before any row asks for it.
         let mePhoto     = profilePhoto("demo-face-me",     "me",     .systemIndigo, .systemPurple, "K")
-        let hooyoPhoto  = profilePhoto("demo-face-hooyo",  "hooyo",  .systemOrange, .systemYellow, "H")
-        let ayaanPhoto  = profilePhoto("demo-face-ayaan",  "ayaan",  .systemBlue,   .systemCyan,   "A")
         let cabdiPhoto  = profilePhoto("demo-face-cabdi",  "cabdi",  .systemGreen,  .systemTeal,   "C")
         let khadraPhoto = profilePhoto("demo-face-khadra", "khadra", .systemPink,   .systemRed,    "K")
 
@@ -112,12 +151,32 @@ enum DemoMode {
                        lastViewedAt: nil, isMine: false),
         ]
 
-        // The chat list, top to bottom. The preview strings are written the way ChatService itself
-        // writes them, markers and all, so the row renders exactly as a real one does.
-        //
-        // Hooyo carries 2 unread. That is deliberate: the badge is half of what makes a chat list
-        // look like somebody's phone rather than a screenshot of an empty app.
-        ConversationsRepository.shared.conversations = [
+        ConversationsRepository.shared.conversations = demoConversations()
+        ConversationsRepository.shared.hasLoaded = true
+    }
+
+    /// The chat list, top to bottom. The preview strings are written the way ChatService itself
+    /// writes them, markers and all, so each row renders exactly as a real one does.
+    ///
+    /// Hooyo carries 2 unread. That is deliberate: the badge is half of what makes a chat list look
+    /// like somebody's phone rather than a screenshot of an empty app.
+    ///
+    /// Built fresh on every call because the times are relative to now — a list built at launch and
+    /// kept would drift to "3h" while he is still lining up the shot.
+    @MainActor
+    static func demoConversations() -> [Conversation] {
+        // Whoever is signed in. In the injected case that is his real uid, so the demo rows sit in
+        // his own list correctly and every bubble resolves to the right side; in the full takeover
+        // there is no Firebase user and it falls back to "demo-me".
+        let signedIn = AuthService.shared.uid ?? ""
+        let me = signedIn.isEmpty ? meUid : signedIn
+        meUid = me
+        let now = Date()
+        let hooyoPhoto  = profilePhoto("demo-face-hooyo",  "hooyo",  .systemOrange, .systemYellow, "H")
+        let ayaanPhoto  = profilePhoto("demo-face-ayaan",  "ayaan",  .systemBlue,   .systemCyan,   "A")
+        let cabdiPhoto  = profilePhoto("demo-face-cabdi",  "cabdi",  .systemGreen,  .systemTeal,   "C")
+        let khadraPhoto = profilePhoto("demo-face-khadra", "khadra", .systemPink,   .systemRed,    "K")
+        return [
             chat("demo-hooyo",  me, "demo-hooyo",  "Hooyo",         now.addingTimeInterval(-260),
                  "Ma soo gaadhay guriga?", hooyoPhoto, unread: 2),
             chat("demo-ayaan",  me, "demo-ayaan",  "Ayaan Warsame", now.addingTimeInterval(-2100),
@@ -128,12 +187,11 @@ enum DemoMode {
                  "📷 Photo", khadraPhoto),
             chat("demo-ilhan",  me, "demo-ilhan",  "Ilhan",         now.addingTimeInterval(-93000),
                  "Mahadsanid walaal", ""),
-            // Deliberately LEFT WITHOUT A PHOTO, so the preview also shows the other half of the
-            // rule: no picture means the classic coloured circle, never an empty poster.
+            // Deliberately LEFT WITHOUT A PHOTO, so the list also shows the other half of the rule:
+            // no picture means the classic coloured circle, never an empty poster.
             chat("demo-faarax", me, "demo-faarax", "Faarax",        now.addingTimeInterval(-176400),
                  "Berri ma is aragnaa?", ""),
         ]
-        ConversationsRepository.shared.hasLoaded = true
     }
 
     private static func chat(_ id: String, _ me: String, _ other: String, _ name: String, _ at: Date,

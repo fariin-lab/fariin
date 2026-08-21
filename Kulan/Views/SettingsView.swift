@@ -50,6 +50,10 @@ struct SettingsView: View {
     private var profile = ProfileStore.shared
     private var admin = AdminStore.shared   // @Observable: the Official Announcements section appears only for admins
     @AppStorage("appearance") private var appearanceRaw = AppAppearance.system.rawValue
+    /// Six local chats for taking the website screenshots. Read back into `DemoMode.chatsInjected`
+    /// at launch, so the switch survives a restart the way every other setting does. The row that
+    /// shows it is gated on `DemoMode.isAvailable` — debug or TestFlight, never the App Store.
+    @AppStorage("demoChats") private var demoChats = false
     @State private var showEdit = false
     @State private var showQR = false
     @State private var showPhoto = false          // tap the avatar → full-screen photo morph
@@ -156,6 +160,29 @@ struct SettingsView: View {
                     ShareLink(item: inviteText) { SettingsRowLabel("Invite Friends", "ic_invite_friends") }
                     NavigationLink { AboutView() } label: {
                         SettingsRowLabel("Help & About", system: "questionmark.circle")
+                    }
+                }
+
+                // TESTFLIGHT AND DEBUG, NEVER THE APP STORE — the same gate as "Demo story people"
+                // in Story settings, and for the same reason.
+                //
+                // Six chats that live only in this phone's memory, added to the list above your
+                // real ones so the website screenshots can be taken without signing out of your own
+                // account. Nothing is written, nothing is uploaded, and nobody else can see them.
+                // They are gone the moment the switch goes off or the app restarts.
+                //
+                // This is here rather than behind a demo LOGIN because that screen only appears
+                // after a real sign-in succeeds, so reaching it meant making a second Apple or
+                // Google account first. A switch in your own settings is one tap.
+                if DemoMode.isAvailable {
+                    Section {
+                        Toggle("Demo chats", isOn: $demoChats).tint(.orange)
+                            .onChange(of: demoChats) { _, on in
+                                DemoMode.setChats(on)
+                                ConversationsRepository.shared.refreshForDemo()
+                            }
+                    } footer: {
+                        Text("Testers only. Adds six local chats to your list for taking screenshots. They are made on this device, never uploaded, and nobody else can see them. Your own chats are not touched.")
                     }
                 }
             }

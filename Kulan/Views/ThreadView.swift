@@ -3209,10 +3209,10 @@ struct ThreadView: View {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         impact(.light)   // tactile send (parity with voice release)
-        // Demo: echo locally, no encryption and no Firestore. Un-guarded from `#if DEBUG` along
-        // with the rest of the demo path — without it, typing in a demo chat would run the real
-        // send against a uid that does not exist on the server.
-        if DemoMode.active {
+        // Demo: echo locally, no encryption and no Firestore. Keyed on the conversation, so typing
+        // in a real chat is completely untouched by this — without it, a message typed into a demo
+        // chat would be encrypted and sent to a person who does not exist.
+        if DemoMode.isDemoConversation(cid) {
             input = ""; typingSent = false
             repo.addDemoMessage(text, from: me)
             return

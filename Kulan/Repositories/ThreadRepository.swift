@@ -420,10 +420,10 @@ final class ThreadRepository {
     func removePending(clientId: String) { pending.removeAll { $0.clientId == clientId }; refreshItems() }
 
     func start() {
-        // Demo: serve the local conversation directly — no Firestore, no decryption. No longer
-        // `#if DEBUG`; the whole demo is gated on DemoMode.reachableInRelease now, and `active` is
-        // false in every build until somebody types the demo username at sign-up.
-        if DemoMode.active {
+        // Demo: serve the local conversation directly — no Firestore, no decryption. Keyed on the
+        // conversation, not on a global flag, because a demo chat now opens from a list that also
+        // holds real ones and only this one may skip the real path.
+        if DemoMode.isDemoConversation(cid) {
             messages = DemoMode.messages(for: cid)
             didInitialLoad = true
             canLoadOlder = false
