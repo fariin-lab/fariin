@@ -72,7 +72,7 @@ struct StoryPager: UIViewControllerRepresentable {
     /// `UIPageViewController`'s private turn duration to answer his 2026-08-11 "approximately 0.10
     /// seconds".
     ///
-    /// Telegram's peer turn — tap and finger-lift alike, it is literally one code path — settles
+    /// The reference app's peer turn — tap and finger-lift alike, it is literally one code path — settles
     /// over **0.4s on a spring** (`ComponentTransition(animation: .curve(duration: 0.4, curve:
     /// .spring))` in `commitHorizontalPan`, where a tap is a synthesised zero-length pan committed
     /// with velocity ±200). UIKit's own `.scroll` turn runs within a frame or two of that, so the
@@ -108,9 +108,31 @@ struct StoryPager: UIViewControllerRepresentable {
     /// built — the same belt `dismissActive` has.
     static var personTurnActive = false
 
+    /// ⛔ THE LIVE COORDINATOR, SO A TAP CAN START THE CUBE BEFORE IT WRITES THE MODEL.
+    ///
+    /// This exists for one reason and it is the owner's "swipe is smooth, tap lags". The two
+    /// gestures were doing the SAME work in the OPPOSITE ORDER:
+    ///
+    ///   · SWIPE — the container turns first and reports `didFocus` on the frame the picture
+    ///     changes, so `currentStoryUser` is written while the cube is already moving. Every
+    ///     SwiftUI body that depends on it (three full-screen pages, `StoryView`, and the host's
+    ///     whole `onUserChanged` bundle) is re-evaluated DURING the animation, where it is hidden.
+    ///
+    ///   · TAP — `getNextStory` wrote `currentStoryUser` itself, and the container only heard
+    ///     about it afterwards through `updateUIViewController` → `syncIfNeeded` → `navigate`. So
+    ///     that identical pile of work ran BEFORE anything moved: press, screen sits still, then
+    ///     the cube starts. That pause is the whole of the reported lag, and it is not a slow
+    ///     animation — it is a stall in front of a correct one.
+    ///
+    /// Weak, and a plain static rather than an environment value, because the caller is a SwiftUI
+    /// view deep inside the page being turned AWAY from — it has no path to the representable that
+    /// owns it. Cleared on dismantle with the other flags.
+    static weak var liveCoordinator: Coordinator?
+
     func makeUIViewController(context: Context) -> StoryPagerHostVC {
         StoryPager.dismissActive = false   // fresh viewer never inherits a stale flag
         StoryPager.personTurnActive = false
+        StoryPager.liveCoordinator = context.coordinator
         // ⚠️ NO UIPageViewController. See `StoryCubePager.swift` — the fold is ours now, driven by
         // one pan and one number, which is what makes the finger move it and what removes the
         // model-versus-presentation disagreement that flashed at the end of every turn.
@@ -198,6 +220,13 @@ struct StoryPager: UIViewControllerRepresentable {
         // they are raised by a turn, which cannot have happened yet.
         StoryPager.personTurnActive = false
         StoryPager.dismissActive = false
+        // ⚠️ IDENTITY-CHECKED, FOR THE ORDERING REASON SPELLED OUT ABOUT `heroDismissActive` ABOVE.
+        // SwiftUI builds the replacement representable BEFORE it dismantles this one, so by the time
+        // this line runs the static may already be pointing at the NEW viewer's coordinator. Zeroing
+        // it unconditionally would leave the incoming viewer with no direct tap route on its very
+        // first turn — the tap would silently fall back to the slow model-first order, which is the
+        // exact thing the hook exists to remove and the hardest kind of regression to see.
+        if StoryPager.liveCoordinator === coordinator { StoryPager.liveCoordinator = nil }
         // The card is going away. Leaving a stale transform on a recycled view would open the next
         // story already shrunken, and the reference is weak but the MASK is not: detach clears both.
         //
@@ -246,17 +275,61 @@ struct StoryPager: UIViewControllerRepresentable {
     /// centre, ±1 = edge-on. The face push (+w/2 in z) is the reference implementation's
     /// face-transform value, set on the CONTENT view while the cube goes on its parent; concatenating it first here is the same
     /// composition on one layer, and it is what makes the centred page sit at exactly full size.
+    /// ⛔ EVERYTHING IN THE TRANSFORM THAT DOES NOT DEPEND ON `t`, WORKED OUT ONCE PER WIDTH.
+    ///
+    /// `cubeSideAngle` is a sqrt, five pows and an atan, and it is a pure function of the screen
+    /// width and a constant 40. It was being solved again for EVERY FACE on EVERY FRAME of every
+    /// turn, along with a cos, a sin and a tan of its result and the whole of `backDistance` — all
+    /// of which are equally fixed for the life of a turn, because the width does not change while
+    /// the cube is rotating.
+    ///
+    /// The width is the key, so a rotation on an iPad or a resized window recomputes on its first
+    /// frame and then holds. What is left inside the per-frame path is one `sin` and some multiplies.
+    /// This is main-thread-only (UIKit drives every caller), so the single slot needs no locking.
+    private struct CubeConstants {
+        let width: CGFloat
+        /// Angle a face is turned through across a whole turn: a right angle plus the side stand-off.
+        let turnAngle: CGFloat
+        /// `cos(sideAngle + π/4)`, the fixed half of `cubeDistance_a`.
+        let cosSidePlusQuarter: CGFloat
+        /// `sideAngle + π/2`, the fixed coefficient of `absT` inside `cubeDistance_b`'s sine.
+        let sineCoefficient: CGFloat
+        /// How far the cube is pushed back so the faces meet `sideDistance` inside the screen edge.
+        let backDistance: CGFloat
+
+        init(width w: CGFloat) {
+            let sideAngle = StoryPager.cubeSideAngle(width: w, sideDistance: StoryPager.cubeSideDistance)
+            self.width = w
+            // ⚠️ THE COMMENT THAT STOOD HERE CLAIMED THIS TURN IS WIDER THAN A RIGHT ANGLE, AND IT IS NOT.
+            // The closed form returns a NEGATIVE side angle on a phone — about -0.53 rad at a 393pt
+            // width — so a whole turn is roughly 59°, not 90° and not more. That is also what the
+            // reference app measures out at on the same widths, so the maths was always right and
+            // only the description was wrong. Do not "fix" the sign to match the old note.
+            self.turnAngle = .pi / 2 + sideAngle
+            self.cosSidePlusQuarter = cos(sideAngle + 0.785398163397448)
+            self.sineCoefficient = sideAngle + 1.5707963267949
+            self.backDistance = w / 2.0 + w * (tan(sideAngle) / 2.0) - w / (2.0 * cos(sideAngle))
+        }
+    }
+
+    private static var cubeConstantsCache: CubeConstants?
+
+    private static func cubeConstants(width w: CGFloat) -> CubeConstants {
+        if let c = cubeConstantsCache, c.width == w { return c }
+        let c = CubeConstants(width: w)
+        cubeConstantsCache = c
+        return c
+    }
+
     static func cubeTransform(_ t: CGFloat, width w: CGFloat) -> CATransform3D {
         let tc = max(-1, min(1, t))
         let absT = abs(tc)
-        let sideAngle = cubeSideAngle(width: w, sideDistance: cubeSideDistance)
-        // ⚠️ THE TURN IS WIDER THAN A RIGHT ANGLE. A cube whose faces stand off the screen edge has
-        // to rotate past 90° to bring the next one square to the camera.
-        let currentAngle = tc * (.pi / 2 + sideAngle)
-        let cubeDistance_a = -1.4142135623731 * absT * cos(sideAngle + 0.785398163397448)
-        let cubeDistance_b = sin(sideAngle * absT + 1.5707963267949 * absT + 0.785398163397448)
+        let k = cubeConstants(width: w)
+        let currentAngle = tc * k.turnAngle
+        let cubeDistance_a = -1.4142135623731 * absT * k.cosSidePlusQuarter
+        let cubeDistance_b = sin(k.sineCoefficient * absT + 0.785398163397448)
         let cubeDistance = 0.5 * w * (cubeDistance_a + absT + 1.4142135623731 * cubeDistance_b - 1.0)
-        let backDistance = w / 2.0 + w * (tan(sideAngle) / 2.0) - w / (2.0 * cos(sideAngle))
+        let backDistance = k.backDistance
         var perspective = CATransform3DIdentity
         perspective.m34 = -1.0 / cubePerspective
         var target = CATransform3DTranslate(perspective, 0, 0, -w * 0.5)
@@ -429,6 +502,66 @@ struct StoryPager: UIViewControllerRepresentable {
             let sheetUp = StoryCardMorph.shared.sheetFraction > 0.001
             let single = parent.viewModel.stories.count <= 1
             pager.swipeEnabled = !single && !sheetUp
+        }
+
+        /// ⛔ THE TAP'S OWN WAY IN, AND IT EXISTS PURELY TO REVERSE AN ORDER.
+        ///
+        /// Everything below is what `syncIfNeeded` already does for a tap — the same guards, the
+        /// same `isTurning`, the same `pendingLanding`, the same `navigate`. The ONLY difference is
+        /// when it happens relative to the model write, and that difference is the reported lag:
+        ///
+        ///   was  —  write `currentStoryUser` → SwiftUI re-evaluates three full-screen pages and
+        ///           the host's whole `onUserChanged` bundle → `updateUIViewController` →
+        ///           `syncIfNeeded` → `navigate`. The screen is STILL while all of that runs.
+        ///   now  —  `navigate` → the cube is already turning → `didFocus` writes
+        ///           `currentStoryUser` on the frame the picture changes → the same SwiftUI work
+        ///           happens underneath a moving animation, exactly where a swipe has always put it.
+        ///
+        /// No number changed. His 0.165s settle is untouched, the spring is untouched, the angle is
+        /// untouched. The turn simply starts first.
+        ///
+        /// Returns false when it cannot take the turn — no pager yet, a turn already running, the
+        /// person is not adjacent, the container has nobody that way — and the caller then does the
+        /// plain model write it always did. A refusal must never swallow the navigation.
+        func turnDirectly(_ direction: StoryCubePagerVC.Direction, expecting expectedID: String) -> Bool {
+            guard let pager, !isTurning, !pager.isActive else { return false }
+            guard let shown = (pager.focused as? StoryPageHostVC)?.bucketID,
+                  let from = index(of: shown) else { return false }
+            let j = direction == .next ? from + 1 : from - 1
+            guard parent.viewModel.stories.indices.contains(j) else { return false }
+            let next = parent.viewModel.stories[j].id
+            // ⚠️ THE CONTAINER'S ANSWER MUST MATCH THE CALLER'S, OR NOBODY MOVES.
+            //
+            // The caller worked its destination out from ITS OWN page (`model.id`); this works one
+            // out from whatever the container currently has focused. They agree in every ordinary
+            // case — `updateStory` will not call through unless the two are the same person — but
+            // the whole class of bug this file already carries scars from is a tap resolving against
+            // the page being LEFT and navigating somewhere nobody asked for. A disagreement here is
+            // a refusal, and a refusal simply falls back to the plain model write, which cannot go
+            // to the wrong person because it names the person outright.
+            guard next == expectedID else { return false }
+            // ⚠️ RAISED BEFORE `navigate`, THE SAME WAY AND FOR THE SAME REASON AS THE SYNC PATH.
+            // The page being turned away from stays on screen for the length of the settle and goes
+            // on answering taps; these two are what stop a second tap computing its destination from
+            // it. See `StoryPager.personTurnActive`.
+            isTurning = true
+            StoryPager.personTurnActive = true
+            let land: () -> Void = { [weak self] in
+                StoryPager.personTurnActive = false
+                guard let self else { return }
+                self.isTurning = false
+                self.prewarmNeighbours(of: next)
+                self.replayPendingSync()
+            }
+            pendingLanding = land
+            if pager.navigate(direction) { return true }
+            // The container refused (it has no peer that way). Put every flag back exactly as it was
+            // and let the caller fall through — a half-raised turn that never lands would drop every
+            // later tap for the life of the viewer.
+            pendingLanding = nil
+            isTurning = false
+            StoryPager.personTurnActive = false
+            return false
         }
 
         func syncIfNeeded() {

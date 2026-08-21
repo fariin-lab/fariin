@@ -78,6 +78,19 @@ targets:
         # answered in ASC for build 363, and Apple's own dialog directs declaring it in the plist
         # so every future build auto-clears instead of sitting "Missing Compliance". Hence:
         ITSAppUsesNonExemptEncryption: false
+        # ⛔ THE 120Hz OPT-IN, AND WITHOUT IT A PROMOTION PHONE RUNS THIS APP AT 60.
+        # iOS caps every app to a 60Hz maximum frame duration unless this key says otherwise; it is
+        # not a hint and there is no code-side substitute. The story cube is what forced it: a peer
+        # turn is 0.165s, so at the 60Hz cap a whole face is about TEN frames, and the owner reads
+        # those ten frames as lag on a tap (a swipe hides it, because the finger has already done
+        # most of the rotation before the clock starts). Doubling the frame budget is his own
+        # instruction, verbatim: "use the speed you used before, just make it smooth and more fps".
+        #
+        # ⚠️ THE KEY ALONE IS ONLY HALF. It lifts the ceiling; each CADisplayLink still has to ASK
+        # for the higher rate through `preferredFrameRateRange`, which the cube's settle now does.
+        # A link that does not ask keeps running at 60 with the key set, which is exactly how this
+        # looks like it did nothing.
+        CADisableMinimumFrameDuration: true
         # NOTE: this is the owner's export-compliance declaration. If the app's crypto or its
         # distribution (e.g. enabling France, or a stricter reading of E2EE as non-exempt) changes,
         # revisit this — the earlier stance treated E2EE as NON-exempt (would be `true` + an

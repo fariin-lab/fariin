@@ -1661,7 +1661,13 @@ private extension StoryDetailView {
             // So the spring drove no visible motion and only held the state change, and everything
             // waiting behind it, in a slow transaction. Measured against the reference app's ~0.3s
             // peer-to-peer move, this was the largest single piece of our ~0.9s.
-            viewModel.currentStoryUser = viewModel.stories[bundleIndex - 1].id
+            // Same reversal as the forward tap above, and it has to be both or tapping back
+            // would keep the old stall while tapping forward lost it — two gestures that look
+            // identical behaving differently is the report this is fixing, not a new one to open.
+            let prevUser = viewModel.stories[bundleIndex - 1].id
+            if StoryPager.liveCoordinator?.turnDirectly(.previous, expecting: prevUser) != true {
+                viewModel.currentStoryUser = prevUser
+            }
         } else {
             let index = getCurrentIndex()
             let story = getStory(with: index)
@@ -1721,7 +1727,22 @@ private extension StoryDetailView {
                 // So the spring drove no visible motion and only held the state change, and everything
                 // waiting behind it, in a slow transaction. Measured against the reference app's ~0.3s
                 // peer-to-peer move, this was the largest single piece of our ~0.9s.
-                viewModel.currentStoryUser = viewModel.stories[bundleIndex + 1].id
+                // ⛔ THE CUBE STARTS FIRST, AND THE TURN WRITES THE MODEL. His "swipe is smooth,
+                // tap lags" — which was never a slow animation, but a stall in front of a correct
+                // one. Writing `currentStoryUser` here re-evaluated three full-screen SwiftUI pages
+                // and the host's entire `onUserChanged` bundle BEFORE the container heard about the
+                // move at all, so the picture sat still for that whole pile of work and only then
+                // began to turn. A swipe never had the problem because the container turns first and
+                // reports the new person on the frame the picture changes, which puts the identical
+                // work underneath a moving animation.
+                //
+                // `turnDirectly` is that same swipe order, asked for deliberately. Its `didFocus`
+                // writes `currentStoryUser` a moment from now. Nothing about the animation changed:
+                // same settle, same spring, same angle. It just is not waiting any more.
+                let nextUser = viewModel.stories[bundleIndex + 1].id
+                if StoryPager.liveCoordinator?.turnDirectly(.next, expecting: nextUser) != true {
+                    viewModel.currentStoryUser = nextUser
+                }
             }
         }
     }

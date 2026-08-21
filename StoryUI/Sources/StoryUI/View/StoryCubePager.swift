@@ -417,6 +417,18 @@ final class StoryCubePagerVC: UIViewController {
         settleSpan = Self.span(forDistance: target - panFraction)
         settleDone = done
         let link = CADisplayLink(target: self, selector: #selector(stepSettle))
+        // ⛔ ASK FOR 120Hz, BECAUSE THE PLIST KEY ONLY LIFTS THE CEILING.
+        //
+        // `CADisableMinimumFrameDuration` in the Info.plist stops iOS capping the app at 60, but a
+        // display link still runs at whatever rate it ASKS for, and the default ask is the old 60.
+        // Both halves are required and neither does anything alone. This is the whole of the owner's
+        // "make it smooth and more fps": the turn keeps his 0.165s exactly, and a full face stops
+        // being ten frames and becomes twenty.
+        //
+        // The minimum is 80 rather than 60 so the system cannot quietly drop this to half rate to
+        // save power while a turn is on screen; `preferred: 120` is what it targets. On a 60Hz phone
+        // the range is clamped to what the display has and this line costs nothing.
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
         // `.common` so a settle that overlaps anything else on the main runloop still runs.
         link.add(to: .main, forMode: .common)
         settleLink = link
