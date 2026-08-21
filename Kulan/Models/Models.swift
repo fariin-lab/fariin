@@ -159,6 +159,18 @@ struct Message: Identifiable, Equatable, Codable {
     /// `isPendingImage` instead; nothing else needs to know.
     var uploading: Bool = false
     var clientTs: Date? = nil               // sender's tap time (ms epoch on the wire) — display order is send order
+    /// WHEN THE DISAPPEARING TIMER TAKES THIS MESSAGE, or nil for a chat with no timer and for every
+    /// message sent before the timer was made real (2026-08-21).
+    ///
+    /// ⛔ IT IS THE SERVER'S FIELD AND ONLY THE SERVER'S. `onNewMessage` writes it from the
+    /// conversation's `disappearSeconds` the moment the message lands, `cleanupExpiringMessages`
+    /// deletes on it, and the rules refuse it from any client at create and from every update
+    /// branch. So it is fixed at send time: changing the chat's timer afterwards does not move a
+    /// message that is already here, in either direction.
+    ///
+    /// The app reads it to hide a message the instant it is due rather than waiting up to five
+    /// minutes for the sweep. The DELETING is the server's; this is only the drawing.
+    var expiresAt: Date? = nil
 
     var isImage: Bool { (type == "image" && (imageUrl?.isEmpty == false)) || (localImageData != nil && type != "video") }
     var isAudio: Bool { (type == "audio" && (audioUrl?.isEmpty == false)) || localAudioData != nil }
@@ -515,6 +527,8 @@ struct Message: Identifiable, Equatable, Codable {
             // the ordering knows this is not the server speaking.
             self.createdAt = Date()
         }
+        // Written by the server, never by us — see the property's own note.
+        if let ts = data["expiresAt"] as? Timestamp { self.expiresAt = ts.dateValue() }
         if let ms = (data["clientTs"] as? NSNumber)?.doubleValue {
             self.clientTs = Date(timeIntervalSince1970: ms / 1000)
         }

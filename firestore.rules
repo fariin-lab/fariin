@@ -915,6 +915,15 @@ service cloud.firestore {
         allow create: if signedIn()
           && request.auth.uid == request.resource.data.authorId
           && request.auth.uid in convData().users
+          // ⛔ `expiresAt` BELONGS TO THE SERVER. It is the disappearing-message timer, written by
+          // `onNewMessage` out of the conversation's own `disappearSeconds` the moment a message
+          // lands, and swept by `cleanupExpiringMessages`. A client that could set it could send a
+          // message into a chat with a timer on and give it any lifetime it liked — including one
+          // in the year 3000, which is a message that never disappears in a chat that promises it
+          // will. Refusing it at create is what makes the field's presence proof the server put it
+          // there. Every UPDATE branch below is an affectedKeys whitelist and none of them names
+          // it, so it cannot be changed afterwards either.
+          && !('expiresAt' in request.resource.data)
           // ⛔ "Allow replies" OFF NOW STOPS A REPLY, AND IT ONLY EVER HID OUR OWN BUTTON.
           //
           // A story reply is an ordinary 1:1 message carrying `replyTo.isStatus == true` and the

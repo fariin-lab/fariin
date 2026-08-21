@@ -851,15 +851,24 @@ final class ThreadRepository {
         canLoadOlder = true   // the dropped history can page back in on scroll
     }
 
-    // Periodic sweep so messages disappear over time even while the chat is open;
-    // also deletes my own expired messages from Firestore.
+    // ⛔ THE SWEEP DOES NOT DELETE ANY MORE. THE SERVER DOES.
+    //
+    // What was here deleted only messages THIS phone had written, only while this chat was open on
+    // it, and left everything else to a display filter — so the feature hid content instead of
+    // removing it, and the other person's copy never went anywhere. It could not have been fixed
+    // here: `allow delete` on a message is author-only, so a recipient's phone is not permitted to
+    // delete the sender's message and never will be. `cleanupExpiringMessages` on the server owns it
+    // now and hard-deletes for both people, along with the media, the pin and the chat-list preview.
+    //
+    // Nor does this call `deleteMessage`, which would be the obvious shortcut for making my own copy
+    // go sooner: that leaves a TOMBSTONE, and a chat filling with "this message was deleted" every
+    // time a timer runs out is worse than the bug. A timer expiring is not an event worth marking.
+    //
+    // So all this does is take a message off the screen the moment it is due, rather than leaving it
+    // sitting there for up to the five minutes until the next server sweep.
     private func sweepExpired() {
-        guard disappearSeconds > 0 else { return }
-        let cutoff = Date().addingTimeInterval(-Double(disappearSeconds))
-        let me = Auth.auth().currentUser?.uid
-        for m in byId.values where m.authorId == me && m.createdAt < cutoff {
-            Task { await ChatService.deleteMessage(cid: cid, messageId: m.id) }
-        }
+        let now = Date()
+        guard byId.values.contains(where: { ($0.expiresAt.map { now >= $0 }) == true }) else { return }
         rebuild()
     }
 
@@ -875,10 +884,21 @@ final class ThreadRepository {
         if !locallyDeleted.isEmpty {
             msgs = msgs.map { locallyDeleted.contains($0.id) && !$0.deleted ? $0.tombstoned() : $0 }
         }
-        if disappearSeconds > 0 {   // hide messages past the disappearing timer
-            let cutoff = Date().addingTimeInterval(-Double(disappearSeconds))
-            msgs = msgs.filter { $0.createdAt >= cutoff }
-        }
+        // ⛔ HIDE WHAT THE SERVER IS ABOUT TO DELETE, AND NOTHING ELSE.
+        //
+        // This used to read `createdAt >= now - disappearSeconds`, which had two faults. It hid
+        // messages that were never going to be deleted by anybody, so the timer LOOKED like it was
+        // working while every word was still in Firestore and still on the other person's phone.
+        // And it was retroactive: setting a chat to 30 seconds blanked its entire history on sight,
+        // then handed it all back if the timer was turned off again.
+        //
+        // A message's own `expiresAt` is the only thing consulted now. The server stamps it at send
+        // time and deletes on it, so what is hidden here is exactly what is going, within the five
+        // minutes to the next sweep. A message without one is not expiring — it was sent before the
+        // timer was turned on, or before any of this existed — and it stays visible, which is the
+        // honest answer even though it shows more than the old code did.
+        let now = Date()
+        msgs = msgs.filter { m in m.expiresAt.map { now < $0 } ?? true }
         if iBlocked {
             // Also silence the blocked person's reactions on my messages (their activity is hidden).
             msgs = msgs.map { m in
