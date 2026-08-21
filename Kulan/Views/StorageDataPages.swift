@@ -14,6 +14,17 @@ struct StorageDataView: View {
     @AppStorage("sentMediaQuality") private var quality = "standard"
     @AppStorage("calls.lessData") private var lessData = "never"
 
+    /// Nothing to reset. Same rule the owner asked for on Notifications ("the Reset text is always
+    /// red, even when all settings are already at their default values") — this row was the other
+    /// half of that complaint and was left live, so it invited a tap that could never change
+    /// anything and gave no sign either way.
+    private var autoDownloadIsDefault: Bool {
+        pPhotos == AutoDownloadPrefs.Kind.photos.defaultPolicy
+            && pVideos == AutoDownloadPrefs.Kind.videos.defaultPolicy
+            && pAudio == AutoDownloadPrefs.Kind.audio.defaultPolicy
+            && pDocs == AutoDownloadPrefs.Kind.documents.defaultPolicy
+    }
+
     var body: some View {
         List {
             Section {
@@ -35,6 +46,7 @@ struct StorageDataView: View {
                     pDocs = AutoDownloadPrefs.Kind.documents.defaultPolicy
                 }
                 .foregroundStyle(.primary)
+                .disabled(autoDownloadIsDefault)
             } header: {
                 Text("Media auto-download")
             } footer: {

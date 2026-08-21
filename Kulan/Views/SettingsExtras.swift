@@ -288,10 +288,11 @@ struct DevicesView: View {
                         Text(Self.autoLabel(d)).tag(d)
                     }
                 }
-                // Explicitly .menu. Left to .automatic, a Picker that cannot fit its label and value
-                // on one line silently falls back to stacking them, which is what this row was
-                // doing: a heading with a value floating under it, the only thing on the screen not
-                // shaped like a settings row.
+                // The row was stacking its label above its value: a Picker whose label and value
+                // cannot share a line gives up the inline layout and goes vertical, and "Sign out
+                // inactive devices" + "After 6 months" cannot share one. Shortening both halves is
+                // what fixes it — .menu is pinned only so the style cannot be re-resolved into
+                // something else later and quietly change the width budget again.
                 .pickerStyle(.menu)
                 .disabled(!autoLoaded)
             } header: {
@@ -330,10 +331,16 @@ struct DevicesView: View {
             guard autoLoaded else { return }
             run { try await DeviceRegistry.shared.setAutoSignOutDays(days) }
         }
-        .confirmationDialog("Sign out this device?",
-                            isPresented: Binding(get: { pendingSignOut != nil },
-                                                 set: { if !$0 { pendingSignOut = nil } }),
-                            titleVisibility: .visible) {
+        // ALERTS, NOT confirmationDialogs. On iOS 26 a confirmationDialog attached to a plain view
+        // renders as an anchored popover and DROPS its cancel button, because a popover expects to
+        // be dismissed by tapping outside it. The owner photographed exactly that on the official
+        // chat's Block sheet, and ChatsSettingsView carries the same note over "Delete Everything".
+        // These two are the same shape of mistake waiting to happen: one red button that signs a
+        // device out of the account, in a bubble with no visible way back. Nothing on this page is
+        // a multi-option chooser, so a plain alert is the right container anyway.
+        .alert("Sign out this device?",
+               isPresented: Binding(get: { pendingSignOut != nil },
+                                    set: { if !$0 { pendingSignOut = nil } })) {
             Button("Sign out", role: .destructive) {
                 if let s = pendingSignOut { run { try await DeviceRegistry.shared.signOut(deviceId: s.id) } }
                 pendingSignOut = nil
@@ -342,8 +349,7 @@ struct DevicesView: View {
         } message: {
             Text("It will stop receiving messages and calls, and will be signed out the next time it is opened.")
         }
-        .confirmationDialog("Sign out all other devices?", isPresented: $confirmSignOutAll,
-                            titleVisibility: .visible) {
+        .alert("Sign out all other devices?", isPresented: $confirmSignOutAll) {
             Button("Sign out all", role: .destructive) {
                 let list = others
                 run { try await DeviceRegistry.shared.signOutAllOthers(list) }

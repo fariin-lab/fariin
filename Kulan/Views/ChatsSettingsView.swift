@@ -44,6 +44,13 @@ struct ChatsSettingsView: View {
                     }
                 }
                 .disabled(clearing || chatCount == 0)
+            } footer: {
+                // The only red row in Settings with nothing written under it. Every other one says
+                // what it does before you touch it — Reset All Notifications, Turn Off Stories,
+                // Delete Account — and this is the most destructive of the lot. Saying it only
+                // inside the confirm means the first time you learn what the button does is after
+                // you have already pressed it.
+                Text("Deletes every message, photo, video and call from all your devices. It cannot be undone.")
             }
         }
         .navigationTitle("Chats")

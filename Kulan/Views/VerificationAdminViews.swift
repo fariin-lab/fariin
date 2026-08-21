@@ -274,8 +274,11 @@ struct VerificationDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .disabled(working)
         .overlay { if working { ProgressView().controlSize(.large) } }
-        .confirmationDialog("Remove this account's verification?",
-                            isPresented: $confirmingWithdraw, titleVisibility: .visible) {
+        // ALERT, same reason as the rest of the app's destructive confirms: on iOS 26 a
+        // confirmationDialog attached to a plain view renders as an anchored popover and drops its
+        // cancel button. Taking a badge off somebody is not a thing to leave in a bubble whose only
+        // visible button does it.
+        .alert("Remove this account's verification?", isPresented: $confirmingWithdraw) {
             Button("Remove verification", role: .destructive) { act(.withdrawn, status: .revoked) }
             Button("Cancel", role: .cancel) {}
         } message: {

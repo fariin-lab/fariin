@@ -1464,7 +1464,13 @@ struct EditProfileView: View {
             }
             // On the SCREEN, with the X that raises it, so it works from either tab.
             .interactiveDismissDisabled(hasUnsavedChanges)
-            .confirmationDialog("Discard changes?", isPresented: $confirmDiscard, titleVisibility: .visible) {
+            // ALERT, for the reason ChatsSettingsView spells out over "Delete Everything": on iOS 26
+            // a confirmationDialog attached to a plain view renders as an anchored popover and drops
+            // its cancel button. Here that would leave "Discard Changes" as the only thing on
+            // screen, on the one prompt whose entire purpose is offering the way back. The rest of
+            // the guard is already right — interactiveDismissDisabled stops the swipe — so losing
+            // "Keep Editing" would be the only hole left in it.
+            .alert("Discard changes?", isPresented: $confirmDiscard) {
                 Button("Discard Changes", role: .destructive) { dismiss() }
                 Button("Keep Editing", role: .cancel) {}
             } message: {
