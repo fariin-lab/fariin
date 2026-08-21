@@ -226,7 +226,7 @@ struct DevicesView: View {
                         }
                         .padding(.vertical, 4)
                     } else {
-                        Text("Loadingâ€¦").foregroundStyle(.secondary)
+                        Text("Loading…").foregroundStyle(.secondary)
                     }
                 } else {
                     ForEach(others) { s in
@@ -244,7 +244,11 @@ struct DevicesView: View {
             } header: {
                 Text("Other devices")
             } footer: {
-                Text("If you do not recognise a device, sign it out. A device that is switched off is signed out the next time it opens, but it stops receiving messages and calls straight away.")
+                // CUT FROM FOUR LINES TO TWO. The clause about a switched-off device signing out on
+                // its next launch is true and was answering a question nobody asks standing here.
+                // This screen was three paragraphs of grey for two rows of content, and the sentence
+                // that matters ("it stops straight away") was buried at the end of the longest one.
+                Text("If you do not recognise a device, sign it out. It stops receiving messages and calls straight away.")
             }
 
             if !others.isEmpty {
@@ -261,22 +265,27 @@ struct DevicesView: View {
             }
 
             Section {
-                Picker("Sign out inactive devices", selection: $autoDays) {
+                Picker("Sign out after", selection: $autoDays) {
                     ForEach(DeviceRegistry.autoSignOutOptions, id: \.self) { d in
                         Text(Self.autoLabel(d)).tag(d)
                     }
                 }
+                // Explicitly .menu. Left to .automatic, a Picker that cannot fit its label and value
+                // on one line silently falls back to stacking them, which is what this row was
+                // doing: a heading with a value floating under it, the only thing on the screen not
+                // shaped like a settings row.
+                .pickerStyle(.menu)
                 .disabled(!autoLoaded)
             } header: {
                 Text("Automatic sign-out")
             } footer: {
-                Text("A device that is not opened for this long is signed out on its own. The device you are using stays signed in as long as you keep using it.")
+                Text("A device not opened for this long signs itself out. The one you are using stays signed in.")
             }
 
             Section {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "lock.fill").font(.caption)
-                    Text("Messages are end-to-end encrypted and stored on each device. Signing a device out stops it receiving anything new, but the messages already on it stay there.")
+                    Text("Messages are end-to-end encrypted and stored on each device. Signing one out stops it receiving anything new. What is already on it stays.")
                 }
                 .font(.footnote).foregroundStyle(.secondary)
                 .listRowBackground(Color.clear)
@@ -329,7 +338,7 @@ struct DevicesView: View {
 
     private func row(_ s: DeviceSession) -> some View {
         HStack(spacing: 14) {
-            // A colored device tile â€” the flat grey glyph read as unfinished (user feedback,
+            // A colored device tile — the flat grey glyph read as unfinished (user feedback,
             // the reference app's device tiles as the reference; our green, our glyph).
             Image(systemName: "iphone")
                 .font(.system(size: 20, weight: .medium))
@@ -340,18 +349,13 @@ struct DevicesView: View {
                                    startPoint: .top, endPoint: .bottom),
                     in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(s.model).font(.body.weight(.semibold))
-                    if s.isThisDevice {
-                        Text("This device")
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 7).padding(.vertical, 2)
-                            .background(Color.accentColor.opacity(0.15), in: Capsule())
-                            .foregroundStyle(Color.accentColor)
-                    }
-                }
+                // NO "This device" PILL. It could only ever appear in the section whose header
+                // already says "This device", so it was the same two words twice, eight points
+                // apart, and it put a second coloured shape in a row that already has a green tile
+                // and a green status dot.
+                Text(s.model).font(.body.weight(.semibold))
                 Text([s.os, s.appVersion.isEmpty ? nil : "Fariin \(s.appVersion)"]
-                        .compactMap { $0 }.joined(separator: " Â· "))
+                        .compactMap { $0 }.joined(separator: " · "))
                     .font(.caption).foregroundStyle(.secondary)
                 statusLine(s)
             }
@@ -376,14 +380,18 @@ struct DevicesView: View {
     /// inside this window by definition, and one that has not is genuinely not in front of anybody.
     private static let activeWindow: TimeInterval = 360
 
+    /// NO "After" ON THE VALUE. The row now reads "Sign out after · 6 months", and "After 6 months"
+    /// there said it twice. It also made the pair too wide for one line, which is why the picker was
+    /// giving up on the inline layout and stacking the label above the value — the one row on the
+    /// screen that looked broken.
     static func autoLabel(_ days: Int) -> String {
         switch days {
         case 0:   return "Never"
-        case 30:  return "After 1 month"
-        case 90:  return "After 3 months"
-        case 180: return "After 6 months"
-        case 365: return "After 1 year"
-        default:  return "After \(days) days"
+        case 30:  return "1 month"
+        case 90:  return "3 months"
+        case 180: return "6 months"
+        case 365: return "1 year"
+        default:  return "\(days) days"
         }
     }
 
@@ -395,7 +403,7 @@ struct DevicesView: View {
         if s.lastSeenAt > Date().addingTimeInterval(-Self.activeWindow) { return "Active now" }
         let last = s.lastSeenAt.formatted(.relative(presentation: .named))
         guard let created = s.createdAt else { return "Last active \(last)" }
-        return "Last active \(last) Â· signed in \(created.formatted(.dateTime.day().month(.abbreviated).year()))"
+        return "Last active \(last) · signed in \(created.formatted(.dateTime.day().month(.abbreviated).year()))"
     }
 
     private func run(_ op: @escaping () async throws -> Void) {
