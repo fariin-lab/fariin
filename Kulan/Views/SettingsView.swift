@@ -1184,26 +1184,56 @@ struct AboutView: View {
     private var buildNumber: String {
         (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "1"
     }
+    /// The build number is the first thing support has to ask for and the last thing anybody can
+    /// read off their own phone, so it travels in the subject line instead.
+    private var reportURL: URL {
+        let subject = "Fariin \(appVersion) (\(buildNumber)) problem report"
+        guard let encoded = subject.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "mailto:support@fariin.com?subject=\(encoded)") else {
+            return URL(string: "mailto:support@fariin.com")!
+        }
+        return url
+    }
+
+    /// A row that LEAVES THE APP, and says so.
+    ///
+    /// Every one of these was a bare `Link`, which draws nothing at all: four rows that hand you to
+    /// Safari or to Mail looked exactly like the Version row, which does nothing. A chevron would be
+    /// the wrong fix — that promises another screen inside the app and this is a door out of it.
+    private func outLink(_ title: String, _ url: URL) -> some View {
+        Link(destination: url) {
+            HStack {
+                Text(title).foregroundStyle(.primary)
+                Spacer()
+                Image(systemName: "arrow.up.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+        }
+    }
+
     var body: some View {
         List {
             Section {
-                Link(destination: URL(string: "https://fariin.com")!) {
-                    Text("Support Center").foregroundStyle(.primary)
-                }
-                Link(destination: URL(string: "mailto:support@fariin.com")!) {
-                    Text("Report a Problem").foregroundStyle(.primary)
-                }
+                // /support, NOT the site root. The root has been a holding page since the landing
+                // page was pulled, so "Support Center" opened a page reading "Working on it." — the
+                // one link somebody taps when they are already stuck. The real page exists and has
+                // for a while.
+                outLink("Support Center", URL(string: "https://fariin.com/support")!)
+                outLink("Report a Problem", reportURL)
+            } header: {
+                Text("Help")
             } footer: {
                 Text("Fariin has zero tolerance for objectionable content or abusive behavior. Reports are reviewed within 24 hours.")
             }
             Section {
+                // Selectable so it can be copied into a support mail. It is the one value on this
+                // screen somebody else will ask them to read out.
                 LabeledContent("Version", value: "\(appVersion) (\(buildNumber))")
-                Link(destination: URL(string: "https://fariin.com/privacy")!) {
-                    Text("Privacy Policy").foregroundStyle(.primary)
-                }
-                Link(destination: URL(string: "https://fariin.com/terms")!) {
-                    Text("Terms & Conditions").foregroundStyle(.primary)
-                }
+                    .textSelection(.enabled)
+                outLink("Privacy Policy", URL(string: "https://fariin.com/privacy")!)
+                outLink("Terms & Conditions", URL(string: "https://fariin.com/terms")!)
             } header: {
                 Text("About")
             } footer: {
