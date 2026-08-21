@@ -959,8 +959,16 @@ struct StoryEditorView: View {
             if isDrawing {
                 // The pen's own top bar, on the same terms as its bottom one: opacity rather than an
                 // `if`, so nothing about the canvas's layout changes mid-stroke.
+                //
+                // ⛔ AND AT THE EDITOR'S OWN TOP-ROW HEIGHT, not at the top of the screen (his
+                // 2026-08-21: "check story editor page X button position then like that position
+                // use"). It was `.padding(.top, 8)` on a VStack in a ZStack that ignores the safe
+                // area, so undo and Clear All sat up level with the status bar and read as a system
+                // header rather than as this screen's controls. `max(windowSafeTop - 22, 10)` is
+                // copied from the editor's own top controls, character for character, so the two
+                // rows cannot drift apart — press ✕ and press undo and your thumb is in one place.
                 VStack { penTopBar; Spacer() }
-                    .padding(.top, 8)
+                    .padding(.top, max(windowSafeTop - 22, 10))
                     .opacity(strokeInFlight ? 0 : 1)
                 VStack { Spacer(); penBar.padding(.bottom, 8) }
                     .ignoresSafeArea(.keyboard, edges: .bottom)
