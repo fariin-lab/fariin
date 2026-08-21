@@ -162,7 +162,13 @@ struct StoryStickerSheet: View {
     /// choose from. Recent is one tap away and it is where you go deliberately. Popular is the
     /// endpoint's own trending, it is never empty, and it is cached for the life of the app — so this
     /// is also the only opening tab that costs no round trip on a second open.
-    @State private var tab: StickerTab = .popular
+    /// ⛔ OPENS ON OURS (his order, 2026-08-21: "my static sticker always selected by default now").
+    ///
+    /// It opened on the endpoint's trending, which meant the first thing this tray ever showed was
+    /// somebody else's pictures fetched over the network — blank on a bad signal, and never the pack
+    /// that ships in the binary. Ours is in the app, it is instant, and it is the only tab whose
+    /// contents nobody can change under us.
+    @State private var tab: StickerTab = .builtIn
     @State private var query = ""
     @State private var stickers: [GiphyService.Gif] = []
     @State private var loading = false
