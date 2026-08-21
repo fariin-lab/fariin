@@ -173,21 +173,42 @@ private extension MessageView {
 
 // The reply pill's visual styling, extracted so the type-checker handles it as one bounded unit.
 private struct ReplyPillStyle: ViewModifier {
+    /// Half the resting height, so a one-line pill is identical to the capsule this replaced, and a
+    /// grown one keeps the same corner instead of stretching it. The caption bar's own number is 26
+    /// for the same reason and against its own taller resting height.
+    private static let pill = RoundedRectangle(cornerRadius: Constant.MessageView.height / 2,
+                                               style: .continuous)
+
     func body(content: Content) -> some View {
         content
             .foregroundColor(Color.white)
             .shadow(color: Color.black.opacity(0.45), radius: 1.5)   // typed text stays readable on white photos
             .padding(.leading, 10)                              // small left space so text isn't flush to the edge
-            // ⛔ A MINIMUM, NOT A HEIGHT. It was `.frame(height:)`, which is what pinned the field to
+            // ⛔ THE PADDING IS INSIDE THE MINIMUM NOW, AND THAT ORDER IS THE WHOLE SIZE FIX.
+            //
+            // These two lines were the other way round, so the 6pt of breathing room was added
+            // OUTSIDE the 44pt floor and a one-line pill stood 56 — his "you changed the size of the
+            // bar, make it the size it was before". Padding first, floor second: one line is
+            // `max(lineHeight + 12, 44)`, which is 44 exactly as it always was, and a pill that has
+            // grown past the floor still keeps its words off the edges.
+            .padding(.vertical, 6)
+            // A MINIMUM, NOT A HEIGHT. It was `.frame(height:)`, which is what pinned the field to
             // one line and made a long reply scroll sideways inside it. The pill starts at the same
             // 44 and grows with the text, up to the five lines the field allows.
             .frame(minHeight: Constant.MessageView.height)
-            // Room above and below once there is more than one line, so the words are not touching
-            // the capsule. The leading and trailing numbers are the constant's, unchanged.
-            .padding(.vertical, 6)
             .padding(Constant.MessageView.padding)
-            .background(Capsule().fill(Color.black.opacity(0.38)))   // filled pill, more native than a bare stroke
-            .overlay(Capsule().stroke(Color.white.opacity(0.5), lineWidth: 1))
+            // ⛔ NOT A CAPSULE, FOR THE REASON THE CAPTION BAR IS NOT ONE EITHER.
+            //
+            // His report: at three lines the bar still wears full round ends, and it should behave
+            // like the caption bar. It should, and the caption bar already wrote down why — a
+            // capsule's radius is half its height, so a field that GROWS turns its ends into huge
+            // lozenges as it goes. That bar settled on a fixed continuous radius for exactly this.
+            //
+            // 22 is not a new look at rest: the pill's resting height is 44, so a capsule was
+            // already drawing a 22pt radius there. One line is unchanged and only the tall states
+            // differ, which is the half he asked about.
+            .background(Self.pill.fill(Color.black.opacity(0.38)))   // filled pill, more native than a bare stroke
+            .overlay(Self.pill.stroke(Color.white.opacity(0.5), lineWidth: 1))
             // Deeper soft shadow (user round 2: still read flat over bright media) — the pill
             // lifts clearly off any photo; effectively invisible on dark ones.
             .shadow(color: Color.black.opacity(0.5), radius: 10, y: 3)
