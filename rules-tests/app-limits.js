@@ -1,7 +1,10 @@
 // Read or change `config/limits` — the live ceilings the app and the rules both read.
 //
 //   node app-limits.js                              # show what is set right now
-//   node app-limits.js stories_per_day_default=0     # set one or more, as integers
+//   node app-limits.js stories_per_day_default=200   # set one or more
+//   node app-limits.js stories_enabled=off           # nobody can post a story, right now
+//   node app-limits.js stories_enabled=verified      # only verified accounts can
+//   node app-limits.js stories_enabled=on            # everybody again
 //   node app-limits.js --clear                      # delete the document, back to the built-in numbers
 //
 // ⛔ THIS IS LIVE AND IT IS EVERY USER, the moment it lands. There is no build, no rollout and no
@@ -31,6 +34,12 @@ const DOC = `https://firestore.googleapis.com/v1/projects/${PROJECT}/databases/(
 
 // Every key the two halves know about, with the number that applies when it is absent. Kept here so
 // this script can refuse a typo instead of quietly writing a key nothing will ever read.
+// Words for the tri-state, so a command reads like an instruction instead of a magic number. The
+// WIRE stays an integer — see `appLimit` in firestore.rules for why a string on that document is
+// ignored by both halves on purpose — but nobody has to remember that 2 means verified.
+const WORDS = { off: 0, disabled: 0, on: 1, everyone: 1, enabled: 1, verified: 2, premium: 2 };
+const STATE = { 0: 'OFF — nobody can post a story', 1: 'on — everybody', 2: 'VERIFIED ACCOUNTS ONLY' };
+
 const KNOWN = {
   stories_per_day_default: 50,
   stories_per_day_verified: 100,
@@ -60,10 +69,13 @@ const KNOWN = {
     for (const pair of sets) {
       const [k, v] = pair.split('=');
       if (!(k in KNOWN)) { console.error(`unknown key "${k}". Known: ${Object.keys(KNOWN).join(', ')}`); process.exit(1); }
-      if (!/^-?\d+$/.test(v)) { console.error(`"${k}" must be a whole number, got "${v}"`); process.exit(1); }
+      // A word where one exists, a plain number otherwise. `stories_enabled=off` beats
+      // `stories_enabled=0` at the moment somebody is typing it under pressure.
+      const n = v in WORDS ? WORDS[v] : (/^-?\d+$/.test(v) ? parseInt(v, 10) : null);
+      if (n === null) { console.error(`"${k}" wants a whole number, or one of: ${Object.keys(WORDS).join(', ')}`); process.exit(1); }
       // integerValue, NOT stringValue. A string is ignored by both halves on purpose, so writing one
       // here would look like an edit that did nothing.
-      fields[k] = { integerValue: String(parseInt(v, 10)) };
+      fields[k] = { integerValue: String(n) };
     }
     const mask = Object.keys(fields).map((k) => `updateMask.fieldPaths=${k}`).join('&');
     const res = await fetch(`${DOC}?${mask}`, { method: 'PATCH', headers: auth, body: JSON.stringify({ fields }) });
@@ -78,8 +90,11 @@ const KNOWN = {
   console.log('');
   for (const [k, fallback] of Object.entries(KNOWN)) {
     const f = live[k];
-    const shown = f ? (f.integerValue !== undefined ? f.integerValue : `⚠️ ${JSON.stringify(f)} (not an integer — IGNORED)`)
-                    : `${fallback}  (not set, built-in)`;
+    const raw = f ? (f.integerValue !== undefined ? Number(f.integerValue) : null) : fallback;
+    const note = f ? (f.integerValue !== undefined ? '' : ' ⚠️ not an integer — IGNORED, the built-in applies')
+                   : '  (not set, built-in)';
+    const word = k === 'stories_enabled' && raw !== null ? `  ${STATE[raw] || 'unrecognised — reads as ON'}` : '';
+    const shown = (raw === null ? JSON.stringify(f) : raw) + note + word;
     console.log(`  ${k.padEnd(26)} ${shown}`);
   }
   const unknown = Object.keys(live).filter((k) => !(k in KNOWN));
