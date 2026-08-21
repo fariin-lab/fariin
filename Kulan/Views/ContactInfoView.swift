@@ -982,13 +982,29 @@ struct ContactInfoView: View {
                        ])
             // shownName, not the raw name (audit): renamed to "Mom", the button said "Block Mom"
             // but this safety-critical confirm asked about "ayaan_99" — reads as a different person.
+            // LEADS WITH WHAT IT DOES TO THEM, because that is the question being asked. It used to
+            // open on what you lose ("You won't be able to send messages…"), which answers a
+            // question nobody is standing here asking: somebody about to block a stranger wants to
+            // know whether that stranger can still reach them, and whether they will find out.
+            // What you give up is real and stays, third, where it belongs.
             .darkAlert("Block \(shownName)?",
-                       message: "You won't be able to send messages in this chat until you unblock. \(shownName) won't be told they were blocked.",
+                       message: "\(shownName) cannot call you, and nothing they send will reach you. They are not told. You cannot message them until you unblock.",
                        isPresented: $showBlock,
                        actions: [
                         .cancel(),
                         .destructive("Block") {
                             Task { await ChatService.setBlocked(cid, true); blocked = true }
+                        },
+                        // The same pair the Report confirm already offers, from the other side. The
+                        // two doors were not symmetrical: reporting could also block, but blocking
+                        // could not also report, and blocking is the door people actually walk
+                        // through first — you stop somebody reaching you, and only then think about
+                        // telling anyone. Without this that thought costs finding a second screen.
+                        .destructive("Block and Report") {
+                            Task {
+                                await ChatService.setBlocked(cid, true); blocked = true
+                                await ChatService.report(reportedUid: otherUid, cid: cid, reason: "user")
+                            }
                         },
                        ])
             .darkAlert("Report \(shownName)?",

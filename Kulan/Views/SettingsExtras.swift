@@ -416,6 +416,10 @@ struct BlockedUsersView: View {
     @State private var toUnblock: Conversation?   // row awaiting the "Unblock?" confirm
     @State private var search = ""
     @State private var showPicker = false
+    /// Not SwiftUI's `EditMode`. That one is welded to `.onDelete`, whose button says "Delete" and
+    /// cannot be renamed — the wrong word entirely for taking a block off somebody, and on this
+    /// screen the wrong word is the whole problem.
+    @State private var editing = false
     /// uid → @handle, filled once per person. A conversation carries a name and a photo but not a
     /// username, and the username is what tells two people with the same display name apart — which
     /// on a BLOCK list is the difference that matters most.
@@ -435,6 +439,24 @@ struct BlockedUsersView: View {
 
     private func blockedRow(_ conv: Conversation) -> some View {
         HStack(spacing: 12) {
+            // THE SWIPE IS INVISIBLE, and that was the hole. Swiping left has been the only way to
+            // unblock anybody, so somebody who does not already know the gesture cannot undo a block
+            // at all — on the one screen in the app whose entire job is undoing something. This is
+            // the same red minus every iOS list has used for a decade, and it goes through the exact
+            // same confirm the swipe does, so nothing is undone by a mis-tap either way.
+            if editing {
+                Button { toUnblock = conv } label: {
+                    Image(systemName: "minus.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.red)
+                        .contentShape(Rectangle())
+                }
+                // .borderless, not .plain: inside a List a plain button hands its tap to the row, so
+                // the minus would fire wherever you touched the row and the avatar would become a
+                // trigger for unblocking.
+                .buttonStyle(.borderless)
+                .transition(.move(edge: .leading).combined(with: .opacity))
+            }
             AvatarView(name: conv.name(for: me), photoUrl: conv.photoUrl(for: me), size: 44)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
@@ -501,10 +523,37 @@ struct BlockedUsersView: View {
                 }
             } header: {
                 if !blocked.isEmpty { Text("Blocked") }
+            } footer: {
+                // WHAT BLOCKING ACTUALLY DOES, on the screen about blocking. It was written nowhere
+                // in the app: you could block somebody without ever being told what you had just
+                // done to them, and the one question people actually have here — "will they know?" —
+                // had no answer anywhere.
+                //
+                // Every sentence is checked against the code rather than copied off another app.
+                // Calls: `CallService.decideAllowed` refuses an incoming call from anyone you have
+                // blocked. Messages: `ChatService.setBlocked` stamps `blockedAt`, and everything
+                // that lands after it stays hidden even once you unblock. Stories: the same
+                // function calls `revokeAudience`, which reaches back and pulls your live ones. Not
+                // told: nothing is written to their side at all.
+                Text("Blocked people cannot call you, and nothing they send will reach you. They lose your stories straight away. They are never told they were blocked.")
             }
         }
         .listStyle(.insetGrouped)
         .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search")
+        .toolbar {
+            if !blocked.isEmpty || editing {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(editing ? "Done" : "Edit") {
+                        withAnimation(.snappy(duration: 0.22)) { editing.toggle() }
+                    }
+                }
+            }
+        }
+        // Unblocking the last person leaves Edit mode with nothing to edit and no button left to
+        // press to get out of it.
+        .onChange(of: blocked.isEmpty) { _, empty in
+            if empty { withAnimation(.snappy(duration: 0.22)) { editing = false } }
+        }
         .sheet(isPresented: $showPicker) { BlockPickerView() }
         .task(id: repo.conversations.count) { await loadHandles() }
         .navigationTitle("Blocked Users")
