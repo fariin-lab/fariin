@@ -92,13 +92,13 @@ final class CMOverlay: UIView {
 
     /// WHOSE ANIMATION THIS MENU OPENS AND CLOSES WITH.
     ///
-    /// The chat's long-press menu runs the .signal case's numbers and all, and he has judged it already — it does
-    /// not change. The STORY ROW's runs the .telegram case's, on his 2026-08-08 order ("make it like the reference app…
+    /// The chat's long-press menu runs the .launched case's numbers and all, and he has judged it already — it does
+    /// not change. The STORY ROW's runs the .fromRest case's, on his 2026-08-08 order ("make it like the reference app…
     /// dont chnage my design just Long pres how to work long press and Close both"). The design is
     /// untouched either way; this is only what moves and how long it takes.
     ///
     /// **Read out of the reference app's own source, not guessed** — the reference implementation
-    /// (the context-menu presentation node backing the .telegram motion):
+    /// (the context-menu presentation node backing the .fromRest motion):
     ///
     /// - **IN** `duration 0.42`, `CASpringAnimation(mass 5, stiffness 900, damping 104)`, from REST.
     ///   Critical damping there is `2·√(900·5) = 134.16`, so their ratio is `104/134.16 = 0.775` —
@@ -111,7 +111,7 @@ final class CMOverlay: UIView {
     ///
     /// The close is where ours was furthest away: a 0.4s spring at damping 0.8 takes twice as long
     /// AND overshoots on the way back. That is the wobble he reported.
-    enum Motion { case signal, telegram }
+    enum Motion { case launched, fromRest }
 
     private let motion: Motion
 
@@ -135,12 +135,12 @@ final class CMOverlay: UIView {
 
     // The two openings are near twins — 0.42 against 0.4, ratio 0.775 against 0.8 — which is why the
     // way IN only needed the menu's own numbers moved. The way OUT is a different animation entirely.
-    private var openDuration: TimeInterval { motion == .telegram ? 0.42 : springDuration }
-    private var openDamping: CGFloat { motion == .telegram ? 0.775 : springDamping }
-    /// The .telegram case's springs start from rest; the .signal case's are launched with velocity.
-    private var openVelocity: CGFloat { motion == .telegram ? 0 : 1.0 }
-    /// The .telegram case grows the menu out of nothing, the .signal case out of a fifth of itself.
-    private var cardMinScale: CGFloat { motion == .telegram ? 0.01 : 0.2 }
+    private var openDuration: TimeInterval { motion == .fromRest ? 0.42 : springDuration }
+    private var openDamping: CGFloat { motion == .fromRest ? 0.775 : springDamping }
+    /// The .fromRest case's springs start from rest; the .launched case's are launched with velocity.
+    private var openVelocity: CGFloat { motion == .fromRest ? 0 : 1.0 }
+    /// The .fromRest case grows the menu out of nothing, the .launched case out of a fifth of itself.
+    private var cardMinScale: CGFloat { motion == .fromRest ? 0.01 : 0.2 }
 
     private var fingerExitedDeadZone = false
     private var initialFingerPoint: CGPoint?
@@ -157,7 +157,7 @@ final class CMOverlay: UIView {
          alignRight: Bool,
          actions: [CMAction],
          react: CMReactConfig?,
-         motion: Motion = .signal,
+         motion: Motion = .launched,
          onDismissed: @escaping () -> Void) {
         self.motion = motion
         self.previewView = previewView
@@ -224,11 +224,11 @@ final class CMOverlay: UIView {
         let frames = computeFrames(in: bounds)
         // Everything starts where the real bubble is; the spring carries it to the computed place.
         previewView.frame = sourceFrame
-        // THE .TELEGRAM CASE'S LIFT DOES NOT SCALE. Its extracted content animates `position` and nothing
+        // THE .fromRest CASE'S LIFT DOES NOT SCALE. Its extracted content animates `position` and nothing
         // else; the squeeze belongs to the press gesture, before the menu exists. Releasing a 0.95
         // squeeze here with no squeeze before it is a card that pops BIGGER under the finger, which
         // is not what its story row does.
-        if startAtSqueeze, motion == .signal {
+        if startAtSqueeze, motion == .launched {
             previewView.transform = CGAffineTransform(scaleX: 0.95, y: 0.95)
         }
 
@@ -270,7 +270,7 @@ final class CMOverlay: UIView {
             // Dismissed inside that one turn (a press cancelled immediately): there is nothing left
             // to blur and turning it on now would light up an overlay on its way out.
             guard let self, !self.dismissing, self.superview != nil else { return }
-            // ⛔ THEIR BACKDROP, READ FROM SOURCE (2026-08-21, five readers over Telegram-iOS master).
+            // ⛔ THEIR BACKDROP, READ FROM SOURCE (2026-08-21, five readers over the reference app's source).
             // His report was "the brightness effect looks like a blur", and he was right about the
             // symptom for a reason nobody had guessed: OURS WAS LIGHTENING THE SCREEN.
             //
@@ -296,33 +296,38 @@ final class CMOverlay: UIView {
                     tc.userInterfaceStyle == .dark ? UIColor(white: 0, alpha: 0.6)
                                                    : UIColor(red: 0, green: 0.039, blue: 0.149, alpha: 0.2)
                 }
+                // ⛔ STRIPPED HERE, INSIDE THE ANIMATION, AND NOT IN THE COMPLETION. THAT WAS THE
+                // WHITE FLASH.
+                //
+                // His 2026-08-21 report, with two photographs: the first long press showed a pale
+                // grey wash that then settled to the correct black. The wash was UIKit's own tint
+                // plate, and it was on screen for the entire 0.2s because the strip that removes it
+                // used to run in this animation's `completion` — which is by definition after every
+                // frame the person actually watched. Later presses looked right only because they
+                // were re-entering an overlay whose plate had already been hidden, which is exactly
+                // why it read as a FIRST-time bug rather than a permanent one.
+                //
+                // `layoutIfNeeded` is what makes it possible to do it this early: UIKit builds the
+                // effect view's children during layout after `effect` is set, so forcing that layout
+                // now brings them into existence in this same turn, while the old note's claim that
+                // there is "nothing to strip until completion" only held because nobody had asked
+                // for the layout. Hiding a subview is not an animatable change, so doing it inside
+                // the block costs the fade nothing.
+                self.blurView.layoutIfNeeded()
+                self.stripSystemTint()
                 self.setPreviewShadow(true)
             } completion: { _ in
-                // ⚠️ AFTER THE EFFECT EXISTS, NEVER BEFORE. UIKit builds the effect view's children
-                // when the effect is set, so there is nothing to strip until this point.
-                //
-                // Their `.light` blur only stops looking milky once UIKit's own tint plate is taken
-                // off it and the backdrop's filter list is cut to the blur itself
-                // (NavigationBackgroundView.swift:71-99). Without this the system lays its own light
-                // wash under our black and the two cancel out — which is the same fog by another
-                // road.
-                for sub in self.blurView.subviews where String(describing: type(of: sub)).contains("VisualEffectSubview") {
-                    sub.isHidden = true
-                }
-                if let backdrop = self.blurView.subviews.first?.layer,
-                   let filters = backdrop.filters as? [NSObject] {
-                    backdrop.filters = filters.filter {
-                        let n = String(describing: $0)
-                        return n.contains("gaussianBlur") || n.contains("colorSaturate")
-                    }
-                }
+                // The same call again, as a belt. It is idempotent, and a device that deferred the
+                // effect view's children past our forced layout would otherwise keep the old bug
+                // with no way to see it had happened.
+                self.stripSystemTint()
             }
         }
 
-        // THE .TELEGRAM CASE TAKES THE MENU'S ALPHA OUT OF THE SPRING. It is opaque in 0.05 and its whole
+        // THE .fromRest CASE TAKES THE MENU'S ALPHA OUT OF THE SPRING. It is opaque in 0.05 and its whole
         // entrance is the growth from 0.01; ours faded across the full spring, so the menu arrived by
-        // materialising rather than by opening. The .signal case keeps its fade, inside the spring below.
-        if motion == .telegram {
+        // materialising rather than by opening. The .launched case keeps its fade, inside the spring below.
+        if motion == .fromRest {
             UIView.animate(withDuration: 0.05) { self.card.alpha = 1 }
         }
 
@@ -332,7 +337,7 @@ final class CMOverlay: UIView {
             self.previewView.transform = .identity
             self.previewView.frame = frames.preview
             self.card.transform = .identity
-            if self.motion == .signal { self.card.alpha = 1 }
+            if self.motion == .launched { self.card.alpha = 1 }
             self.card.frame = frames.menu
         }
 
@@ -347,6 +352,35 @@ final class CMOverlay: UIView {
 
         UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.8)
         UIAccessibility.post(notification: .screenChanged, argument: card)
+    }
+
+    /// ⛔ TAKE UIKIT'S OWN LIGHT WASH OFF A `.light` BLUR.
+    ///
+    /// The darkness in this backdrop is OURS — the black `backgroundColor` set alongside the effect.
+    /// The system blur is only there to soften what is behind it, and a `.light` blur ships with a
+    /// tint plate and a stack of backdrop filters that between them lay a pale wash over everything.
+    /// Left in place, that wash and our black cancel toward grey, which is the fog the whole backdrop
+    /// rewrite was about (NavigationBackgroundView.swift:71-99 cuts exactly the same two things).
+    ///
+    /// Idempotent on purpose: it is called inside the entrance animation AND from its completion, so
+    /// it must be safe to run on an already-stripped view. Both operations are simple assignments to
+    /// the state they should already hold, so a second run is a no-op.
+    ///
+    /// ⚠️ EVERYTHING HERE IS MATCHED BY CLASS AND FILTER NAME, WHICH IS PRIVATE SHAPE. It degrades
+    /// the right way: if a future iOS renames either, the loops simply match nothing and the backdrop
+    /// falls back to looking as it did before this existed. Nothing throws and nothing is forced.
+    private func stripSystemTint() {
+        for sub in blurView.subviews
+        where String(describing: type(of: sub)).contains("VisualEffectSubview") {
+            sub.isHidden = true
+        }
+        if let backdrop = blurView.subviews.first?.layer,
+           let filters = backdrop.filters as? [NSObject] {
+            backdrop.filters = filters.filter {
+                let n = String(describing: $0)
+                return n.contains("gaussianBlur") || n.contains("colorSaturate")
+            }
+        }
     }
 
     /// the reference app's `previewShadowVisible`: the lifted message drops a shadow on older systems, and none
@@ -392,7 +426,7 @@ final class CMOverlay: UIView {
         bar?.playDismissal(duration: 0.2)
         let home = liveSourceFrame?() ?? sourceFrame
 
-        // THE .TELEGRAM CASE'S CLOSE, WHOLE. One animation, 0.2s, plain ease-in-out, nothing springing: the
+        // THE .fromRest CASE'S CLOSE, WHOLE. One animation, 0.2s, plain ease-in-out, nothing springing: the
         // card slides home, the menu shrinks to nothing and fades, the blur goes, and they all land
         // together. The reference implementation's close runs at `duration = 0.2` with `easeInEaseOut` and every layer
         // driven by `layer.animate(...)`, not `animateSpring`.
@@ -400,8 +434,8 @@ final class CMOverlay: UIView {
         // ⚠️ THE ABSENCE OF THE SPRING IS THE POINT, not the shorter clock. A spring returning home
         // overshoots the slot and settles back into it, and on a card landing in a row of other
         // cards that reads as the thing bouncing — his report. Do not "improve" this by giving it a
-        // gentle damping; there is no spring in the .telegram case's close at all.
-        if motion == .telegram {
+        // gentle damping; there is no spring in the .fromRest case's close at all.
+        if motion == .fromRest {
             UIView.animate(withDuration: 0.2, delay: 0,
                            options: [.curveEaseInOut, .beginFromCurrentState]) {
                 self.blurView.effect = nil

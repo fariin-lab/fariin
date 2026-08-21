@@ -247,7 +247,7 @@ enum StoryCardShot {
 }
 
 /// Installs the row's press recogniser. Draws nothing and never takes a touch of its own.
-/// ⛔ THEIR PRESS RAMP, FROM SOURCE (Telegram-iOS master, read 2026-08-21).
+/// ⛔ THEIR PRESS RAMP, FROM SOURCE (the reference app's source, read 2026-08-21).
 ///
 /// The numbers are not ours and are not tuned by eye. Every one has a file and a line behind it, and
 /// the shape they make is what he asked to be copied rather than approximated.
@@ -432,7 +432,7 @@ struct StoryRowLongPress: UIViewRepresentable {
                                               : "scroll view \(type(of: anchor))")
             origin = view
             let g = UILongPressGestureRecognizer(target: self, action: #selector(pressed(_:)))
-            // ⛔ 0.32, NOT 0.2, AND IT IS TWO NUMBERS ADDED TOGETHER (read from Telegram-iOS master,
+            // ⛔ 0.32, NOT 0.2, AND IT IS TWO NUMBERS ADDED TOGETHER (read from the reference app's source,
             // 2026-08-21). Theirs is `beginDelay = 0.12` (Display/Source/ContextGesture.swift:77) of
             // dead time in which nothing whatsoever happens, then a `DisplayLinkAnimator` of exactly
             // 0.2s (line 143) ramping a progress value 0→1 — LINEAR, per frame, no easing
@@ -613,7 +613,7 @@ struct StoryRowLongPress: UIViewRepresentable {
                                   react: nil,
                                   // THE REFERENCE APP'S OPEN AND CLOSE, on his order. The chat's menu keeps
                                   // the other app's, which he has already judged — see `CMOverlay.Motion`.
-                                  motion: .telegram) { [weak self] in
+                                  motion: .fromRest) { [weak self] in
                     self?.overlay = nil
                 }
                 // The card comes back as the return spring STARTS, not after the lift is gone — a
