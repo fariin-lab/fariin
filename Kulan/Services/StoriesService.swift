@@ -699,7 +699,11 @@ final class StoriesService {
             return "You've posted \(dailyStoryLimit) stories today, which is the daily limit. "
                  + "You can post again in about \(budget.dailyLimitHoursLeft) hours."
         }
-        return "You've posted a lot of stories in the last hour. Wait a little and try again."
+        // The day is not spent, so the hour is what refused it — that is the reasoning above, and it
+        // is why the number can be named. It is read from the same place the rule reads its own, so
+        // the sentence cannot go stale when the ceiling is raised on the server.
+        return "You've hit the limit of \(AppLimits.shared.storiesPerHour) stories an hour. "
+             + "Wait a little and try again."
     }
 
     enum PostRefusal: LocalizedError {
@@ -885,10 +889,15 @@ final class StoriesService {
     /// picker"). Finding out after choosing twenty photos and pressing Upload is the version of this
     /// that wastes the most of somebody's time.
     ///
-    /// ⚠️ MUST MATCH `firestore.rules`. The rule holds its own copy of this number — it cannot read
-    /// Swift — so the two are changed together or the app refuses at a different point than the
-    /// database does.
-    static let dailyStoryLimit = 50
+    /// ⛔ IT IS NOT A CONSTANT ANY MORE — the owner sets it on the server (2026-08-21). 50 a day,
+    /// 100 with a badge, until `config/limits` says otherwise. See AppLimits.swift for the whole
+    /// arrangement and why it is shaped the way the reference app shapes it.
+    ///
+    /// ⚠️ STILL MUST MATCH `firestore.rules`, which now means the FALLBACKS must match: both halves
+    /// read the same document, but each carries its own copy of the numbers to use before that
+    /// document exists. A rule cannot read Swift. If those two sets drift, the app refuses at a
+    /// different point than the database does.
+    static var dailyStoryLimit: Int { AppLimits.shared.storiesPerDay }
 
     private(set) var dailyStoriesUsed = 0
     private(set) var dailyWindowStart: Date?

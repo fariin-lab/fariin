@@ -288,14 +288,18 @@ struct RootView: View {
         phase = ready ? .main : .onboarding
     }
 
-    /// The official channel, the admin permissions that decide whether the compose screens exist, and
-    /// the one piece of config the "Update Now" button needs. All three are cheap listeners on small
-    /// documents, and all three must be running before the chat list draws its first frame — the
-    /// channel is a row in that list.
+    /// The official channel, the admin permissions that decide whether the compose screens exist, the
+    /// one piece of config the "Update Now" button needs, and the limits the server sets. All four
+    /// are cheap listeners on small documents, and all four must be running before the chat list
+    /// draws its first frame — the channel is a row in that list.
     private func startOfficialChannel() {
         OfficialChannelStore.shared.start()
         AdminStore.shared.start()
         OfficialConfig.shared.start()
+        // The server's copy of every limit the app enforces. Cheapest of the lot — one document,
+        // usually a handful of numbers — and it has to be running before Add Story can be pressed,
+        // because that button asks it whether there is any allowance left before it opens anything.
+        AppLimits.shared.start()
         // The story audiences, for the same reason: the share sheet opens on a tap and must already
         // know what to draw. It starts from its own disk mirror, so this listener is a correction
         // rather than a load — see StoryAudienceStore.

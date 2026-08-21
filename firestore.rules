@@ -73,6 +73,57 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('banned', false) == true;
     }
 
+    // ⛔ THE LIMITS ARE A DOCUMENT NOW, NOT A NUMBER IN THIS FILE (owner, 2026-08-21).
+    //
+    // Read from the reference app, which keeps every ceiling it enforces in one server-delivered
+    // blob of named values rather than in the client or in a rule. Their client fetches it at
+    // startup and again whenever the server says it changed, and their own documentation states the
+    // rule for a key that is not there: "a default value must be used". That is the whole design,
+    // and it is why they can widen a limit for everybody on a Tuesday without anybody installing
+    // anything.
+    //
+    // Ours is `config/limits`, one document, owner-writable and readable by every signed-in phone.
+    // The app listens to it (see AppLimits.swift) and this file reads it here, so ONE edit in the
+    // console moves both halves at once. Nothing has to be built and nothing has to be shipped.
+    //
+    // ⚠️ EVERY CALLER PASSES ITS OWN FALLBACK AND THAT FALLBACK IS THE REAL LIMIT until the
+    // document exists. A missing document, a missing key, or a key somebody typed as text instead
+    // of a number all land on it — the last one matters, because a hand-edited console field is a
+    // string by default, and `count < 'fifty'` does not evaluate to false, it ERRORS, which denies
+    // the write and would look like an outage rather than a typo.
+    //
+    // ⚠️ THE FALLBACKS HERE AND THE ONES IN AppLimits.swift ARE THE SAME NUMBERS AND MUST STAY
+    // THAT WAY. A rule cannot read Swift. If they drift, the app refuses at a different point than
+    // the database does, which is the one failure this arrangement can produce.
+    function limitsExist() {
+      return exists(/databases/$(database)/documents/config/limits);
+    }
+    function limitsData() {
+      return get(/databases/$(database)/documents/config/limits).data;
+    }
+    function appLimit(key, fallback) {
+      return limitsExist() && limitsData().get(key, fallback) is int
+        ? limitsData().get(key, fallback)
+        : fallback;
+    }
+
+    // Does the CALLER carry an active badge? Costs nothing extra wherever `isBanned()` is already
+    // in the same expression — both read the same user document and rule evaluation caches it.
+    //
+    // ⚠️ `verification` is in `serverOnlyUserFields()` above, which is the only reason this is safe
+    // to hang a raised limit on: no client can write its own badge, so no client can grant itself
+    // the larger allowance. If that entry is ever removed, this becomes a self-service upgrade.
+    //
+    // The stored `isVerified` flag is what is read, not the status string. It is written alongside
+    // `status` precisely so a rule can ask this question without parsing anything, and it is false
+    // for a suspended or revoked badge — see VerificationAdmin.swift.
+    function isVerifiedCaller() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && 'verification' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data
+        && get(/databases/$(database)/documents/users/$(request.auth.uid))
+             .data.verification.get('isVerified', false) == true;
+    }
+
     // Profiles: any signed-in user can look up a handle to start a chat,
     // but you can only create/edit your OWN profile.
     match /users/{uid} {
@@ -446,6 +497,24 @@ service cloud.firestore {
     // Where "Update Now" sends people. Not hardcoded, because the app has no App Store id yet and a
     // button that opens nothing is a fake feature. Owner sets it once; everybody reads it.
     match /config/official {
+      allow read: if signedIn();
+      allow write: if adminIsOwner();
+    }
+
+    // ⛔ EVERY CEILING THE APP ENFORCES, IN ONE DOCUMENT THE OWNER CAN EDIT WITHOUT A RELEASE.
+    // See `appLimit()` at the top of this file for the whole reasoning. Read by every signed-in
+    // phone and by the rules themselves; written by the owner alone, from the console or from the
+    // admin screen, and by nobody else — a limit anyone could raise is not a limit.
+    //
+    // Keys are `<thing>_default` and `<thing>_verified`, the same pairing the reference app uses
+    // for its own two tiers, so a new limit is a new pair and never a new mechanism:
+    //   stories_per_day_default    50    stories_per_day_verified    100
+    //   stories_per_hour_default   40    stories_per_hour_verified    40
+    //
+    // ⚠️ WRITE THEM AS NUMBERS. The console types a new field as a string unless it is told
+    // otherwise, and a string here is ignored — `appLimit()` falls back rather than erroring, so a
+    // limit typed as text looks like an edit that did nothing.
+    match /config/limits {
       allow read: if signedIn();
       allow write: if adminIsOwner();
     }
@@ -1098,12 +1167,21 @@ service cloud.firestore {
         && (
              !exists(/databases/$(database)/documents/users/$(request.auth.uid)/limits/stories)
              || storyBudget().get('windowStart', request.time) < request.time - duration.value(1, 'h')
-             || storyBudget().get('count', 0) < 40
+             || storyBudget().get('count', 0) < appLimit('stories_per_hour_default', 40)
+             // The same two tiers as the day below, and for the same reason. Both numbers are 40
+             // today, so this clause changes nothing until somebody sets them apart in
+             // `config/limits` — it exists so that a raise is an edit rather than a release.
+             || (
+                  isVerifiedCaller()
+                  && storyBudget().get('count', 0) < appLimit('stories_per_hour_verified', 40)
+                )
            )
         // ⛔ AND A CEILING ON THE WHOLE DAY (owner, 2026-08-20), because the hour above does not
         // bound one. Forty an hour is nine hundred and sixty a day: an account that simply keeps
         // posting under the hourly ceiling never trips it, and every story fans out to a thousand
-        // recipients. Fifty a day is his number.
+        // recipients. Fifty a day was his number and it still is, but it is no longer written here:
+        // both ceilings are read from `config/limits` now, with the numbers below as the fallback,
+        // so raising them is a field in the console rather than a build.
         //
         // A SECOND COUNTER, not a longer window on the first. They answer different questions — how
         // fast, and how much — and a single window cannot hold both without one of them becoming
@@ -1115,7 +1193,22 @@ service cloud.firestore {
         && (
              !exists(/databases/$(database)/documents/users/$(request.auth.uid)/limits/storiesDaily)
              || dailyStoryBudget().get('windowStart', request.time) < request.time - duration.value(24, 'h')
-             || dailyStoryBudget().get('count', 0) < 50
+             || dailyStoryBudget().get('count', 0) < appLimit('stories_per_day_default', 50)
+             // ⛔ AND A VERIFIED ACCOUNT GETS A BIGGER DAY (owner, 2026-08-21): "verify usars
+             // upload story dalily limit make it 100 ... normal user dont have verify make it 50".
+             //
+             // A badge is granted by us and by nobody else, and `verification` sits in
+             // `serverOnlyUserFields()`, so this is the one thing about an account that a client
+             // cannot claim for itself — which is what makes it safe to hang a raised limit on.
+             //
+             // ⚠️ THE ORDER OF THESE TWO CLAUSES IS THE COST CONTROL. `||` short-circuits, so the
+             // user document is not read at all until the ordinary allowance is spent, which is
+             // every post up to the fiftieth. Past that it is free anyway — `isBanned()` further
+             // down reads the same document and rule evaluation caches it.
+             || (
+                  isVerifiedCaller()
+                  && dailyStoryBudget().get('count', 0) < appLimit('stories_per_day_verified', 100)
+                )
            )
         // PUBLIC STORIES ARE BACK, on the owner's explicit order of 2026-08-06, and the rule that
         // refused them is gone with the audience option that was removed alongside it.

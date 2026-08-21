@@ -23,6 +23,12 @@ enum SessionWipe {
         OfficialChannelStore.clearCachedEntry()
         AdminStore.shared.reset()
         OfficialConfig.shared.stop()
+        // The limits listener goes with it. Its VALUES are left where they are on purpose — they
+        // describe the app rather than the person, so there is nothing here for the next account on
+        // this phone to inherit, and dropping them would put a raised limit back to the shipped one
+        // for the gap between this sign-out and the next snapshot. Which tier they resolve to is
+        // read live off `ProfileStore.me`, and that is nil'd a few lines below.
+        AppLimits.shared.stop()
         // The story audiences are a list of the last person's friends by name, mirrored to disk so
         // the share sheet can open instantly. Left behind, the next account's Share Story sheet
         // would open holding a stranger's custom lists.
