@@ -789,10 +789,6 @@ struct ChatsView: View {
     /// shoving every chat down. That is why there is no animation on it: the finger is the animation.
     @State private var archiveRevealed = false
     @State private var storiesRowHeight: CGFloat = (UIScreen.main.bounds.width - 54) / 4 * 1.46 + 41
-    /// The archive page keeps its own pair — its strip is a different height from the chat list's
-    /// and its List is a different List. See `archivedStoriesRow`.
-    @State private var archiveScrollY: CGFloat = 0
-    @State private var archiveStripHeight: CGFloat = 0
     // Stories opt-out (Settings > Stories > Turn Off Stories): the row disappears and chat-row
     // rings go dark — the whole surface, not a hidden-but-alive row.
     @AppStorage("storiesOptedOut") private var storiesOptedOut = false
@@ -1924,6 +1920,10 @@ struct ArchivedChatsView: View {
     @State private var showDeleteSelected = false
     @State private var pendingDelete: Conversation?     // one chat, from the swipe or the row menu
     @State private var prefsTick = 0              // re-render after Unhide
+    /// The strip floats over the list and travels with it — see the ZStack in `content`. Its own
+    /// pair, not the chat list's: a different strip, a different height, a different List.
+    @State private var archiveScrollY: CGFloat = 0
+    @State private var archiveStripHeight: CGFloat = 0
 
     private var me: String { AuthService.shared.uid ?? "" }
     private var dark: Bool { scheme == .dark }
@@ -1957,6 +1957,26 @@ struct ArchivedChatsView: View {
         // a chat could go with one tap and no question.
         Button(role: .destructive) { pendingDelete = conv } label: {
             Label { Text("Delete") } icon: { MenuIcon(system: "trash.fill") }
+        }
+    }
+
+    /// The story strip, floating over the list and travelling with it.
+    ///
+    /// ⛔ LIFTED OUT OF `content` FOR THE TYPE-CHECKER, which gave up on that expression the moment
+    /// this was inlined into it ("unable to type-check this expression in reasonable time"). This
+    /// file's budget is a known cost and the documented answer is to split values out; it costs
+    /// nothing at runtime. The same reason `loadedChatList` exists.
+    @ViewBuilder private var archivedStripOverlay: some View {
+        if !archivedStories.isEmpty {
+            VStack(spacing: 0) {
+                archivedStoriesRow
+                // ⚠️ TEMPORARY — comes out with `StoryPressDebug.on`. See the note above it.
+                StoryPressDebugReadout()
+            }
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { archiveStripHeight = $0 }
+            // Travels with the content. Negative, because a list scrolled DOWN has a positive
+            // offset and the strip has to move UP by the same amount.
+            .offset(y: -archiveScrollY)
         }
     }
 
@@ -2166,18 +2186,7 @@ struct ArchivedChatsView: View {
                                                 of: { $0.contentOffset.y + $0.contentInsets.top },
                                                 action: { _, y in archiveScrollY = y })
 
-                        if !archivedStories.isEmpty {
-                            VStack(spacing: 0) {
-                                archivedStoriesRow
-                                // ⚠️ TEMPORARY — comes out with `StoryPressDebug.on`. Fourth report
-                                // on this row's long press. See the note above `StoryPressDebug`.
-                                StoryPressDebugReadout()
-                            }
-                            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { archiveStripHeight = $0 }
-                            // Travels with the content. Negative, because a list scrolled DOWN has a
-                            // positive offset and the strip has to move UP by the same amount.
-                            .offset(y: -archiveScrollY)
-                        }
+                        archivedStripOverlay
                     }
                 }
             }
