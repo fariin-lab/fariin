@@ -45,6 +45,9 @@ struct MediaTabBar: View {
     private static let pageInset: CGFloat = 16
 
     @Namespace private var pill
+    /// True only between a segment tap and the auto-scroll that answers it — see the note on
+    /// `onChange(of: selection)`. A swipe never sets it, which is what keeps the commit frame cheap.
+    @State private var tapDriven = false
 
     var body: some View {
         // ⚠️ A ScrollView, AND IT IS THE POINT RATHER THAN A PRECAUTION. Content-sized segments only
@@ -75,10 +78,29 @@ struct MediaTabBar: View {
             // glance.
             .liquidGlass(Capsule())
             .padding(.horizontal, Self.pageInset)
-            // Tapping a half-visible segment brings it into view, which is the only way the ones
-            // past the right edge are reachable with a thumb.
+            // ⛔ THE AUTO-SCROLL ANIMATES FOR A TAP AND NEVER FOR A SWIPE, AND THAT SPLIT IS A BUG FIX.
+            //
+            // The gallery hosting this bar carries a warning in its own file that I then walked
+            // straight into: a paged `TabView` flips its selection AS YOUR FINGER CROSSES THE
+            // MIDPOINT, while the drag is still live, so anything animated hung off that value runs
+            // on the commit frame — the one frame that is already the most expensive of the gesture.
+            // Its note ends "nothing heavy on the commit frame", and an animated `scrollTo` is heavy.
+            // That is his "swiping pages lags".
+            //
+            // A swipe needs no animation anyway: the page is already moving under the finger and the
+            // pill has `matchedGeometryEffect`, so the bar tracks it either way. The animation only
+            // ever existed for the other case — tapping a segment that is half off the right edge,
+            // where the scroll is the whole feedback and a jump would read as a glitch.
+            //
+            // `tapDriven` is set by the segment button one line before it writes the selection, so it
+            // is true only on that path and is cleared the moment it is spent.
             .onChange(of: selection) { _, i in
-                withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(i, anchor: .center) }
+                if tapDriven {
+                    tapDriven = false
+                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(i, anchor: .center) }
+                } else {
+                    proxy.scrollTo(i, anchor: .center)
+                }
             }
         }
     }
@@ -86,6 +108,8 @@ struct MediaTabBar: View {
     private func segment(_ title: String, index: Int) -> some View {
         let on = selection == index
         return Button {
+            // Set BEFORE the write, because the write is what fires the `onChange` that reads it.
+            tapDriven = true
             // The pill travels on a spring; the label's weight changes with it rather than after.
             withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) { selection = index }
         } label: {
