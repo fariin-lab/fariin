@@ -69,6 +69,25 @@ struct NotificationSound: Identifiable, Equatable {
 
     static let defaultRingtone = ringtones[0]
 
+    /// THE PHONE'S OWN RINGTONE — Reflection, Buoyant, Dreamer, Pond, Surge, whatever the person
+    /// has chosen in Settings > Sounds & Haptics > Ringtone.
+    ///
+    /// This is the ONLY way an app can ring with one of Apple's tones, and it is worth writing down
+    /// why the obvious version is impossible. `CXProviderConfiguration.ringtoneSound` is, in Apple's
+    /// own words, "the name of the sound resource in the app bundle" — a filename, nothing else. It
+    /// cannot take a path, a URL or a system sound id. Apple's ringtones are `.m4r` files under
+    /// `/Library/Ringtones`, outside our sandbox, and copying them into our bundle would be shipping
+    /// Apple's audio inside our binary. So a picker listing them by name cannot exist.
+    ///
+    /// What CAN happen: leave `ringtoneSound` nil and CallKit rings whatever the phone is set to.
+    /// One row, not seven, and we never learn which tone it is — which is also why tapping this row
+    /// previews nothing. There is no API to read the choice, let alone play it.
+    ///
+    /// ⚠️ NOT DOCUMENTED BY APPLE. The nil case is not written down anywhere; it is how every CallKit
+    /// app that never sets a ringtone behaves. NEEDS ONE DEVICE CHECK: pick this, ring yourself, and
+    /// confirm you hear the phone's ringtone rather than silence.
+    static let systemRingtone = NotificationSound(id: "system", name: "iPhone Ringtone")
+
     // MESSAGE TONES — OUR OWN bundled sounds, and deliberately the SAME list Settings > Notifications >
     // Sound offers. Those two screens used to show completely different catalogues for the same setting:
     // Settings offered these bundled files (and stores the choice in `notif.sound`, which the server puts
@@ -105,7 +124,9 @@ struct NotificationSound: Identifiable, Equatable {
     /// Resolve a stored id against the RINGTONE list (calls), not the alert list.
     static func resolveRingtone(_ id: String?) -> NotificationSound {
         guard let id else { return .defaultRingtone }
-        if id == "none" { return .none }
+        if id == "system" { return .systemRingtone }
+        // Kept for accounts that picked the old "None" row, which rang the phone's tone anyway.
+        if id == "none" { return .systemRingtone }
         if id.hasPrefix("custom:") {
             let path = String(id.dropFirst("custom:".count))
             return NotificationSound(id: id, name: (path as NSString).lastPathComponent, customPath: path)
@@ -143,7 +164,12 @@ enum SoundStore {
     static func ringtoneFile(_ cid: String?) -> String? {
         guard let cid else { return NotificationSound.defaultRingtone.bundleFile }
         let s = sound(cid, .call)
-        if s.id == "none" { return nil }                     // muted ring for this chat
+        // ⚠️ NIL DOES NOT MEAN SILENCE, whatever the old comment here said. CallKit rings SOMETHING
+        // for every incoming call, and with no bundle filename to ring it falls back to the tone the
+        // phone is set to. That is the whole mechanism behind `systemRingtone`, and it means the old
+        // "None" row never muted a call — it handed the ring to iOS. Both ids land here for that
+        // reason: they have always done the same thing, and now only one of them is offered.
+        if s.id == "none" || s.id == "system" { return nil }
         return s.bundleFile ?? NotificationSound.defaultRingtone.bundleFile
     }
     static func set(_ cid: String, _ kind: Kind, _ sound: NotificationSound) {
@@ -185,7 +211,9 @@ final class SoundPlayer {
     private var registered: [String: SystemSoundID] = [:]
 
     func play(_ sound: NotificationSound, loop: Bool = false) {
-        guard sound.id != "none" else { return }
+        // Neither of these is a file we hold. "None" is silence by definition, and the phone's own
+        // ringtone cannot be read by an app at all, let alone played — see `systemRingtone`.
+        guard sound.id != "none", sound.id != "system" else { return }
         // A bundled ringtone is a real file — play it directly (this is the preview you hear in the
         // Call Sound picker; CallKit plays the same file when the phone actually rings).
         if let file = sound.bundleFile,

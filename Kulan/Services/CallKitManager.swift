@@ -16,8 +16,13 @@ final class CallKitManager: NSObject {
     private(set) var activeUUID: UUID?
     private(set) var activeCallId: String?   // maps the system call UUID to our callId
 
-    /// Provider config for a given ringtone file. CallKit can only ring a file that ships in the app
-    /// bundle, which is why the Call Sound picker offers bundled ringtones rather than system tones.
+    /// Provider config for a given ringtone file.
+    ///
+    /// ⛔ CALLKIT WILL ONLY RING A FILE THAT SHIPS IN OUR BUNDLE. Apple's own words for this
+    /// property: "the name of the sound resource in the app bundle". Not a path, not a URL, not a
+    /// system sound id — which is why the Call Sound picker cannot list Reflection, Buoyant, Pond or
+    /// any other iOS ringtone by name. Passing nil is the one route to those, and it hands the
+    /// choice to the phone rather than making it here; see `NotificationSound.systemRingtone`.
     private static func makeConfig(ringtone: String?) -> CXProviderConfiguration {
         let config = CXProviderConfiguration()
         config.supportsVideo = true
@@ -37,8 +42,13 @@ final class CallKitManager: NSObject {
         RTCAudioSession.sharedInstance().isAudioEnabled = false
     }
 
-    /// Point the provider at whatever ringtone this chat is set to (nil ringtone = this chat's ring
-    /// is set to None, so CallKit shows the call silently).
+    /// Point the provider at whatever ringtone this chat is set to.
+    ///
+    /// ⚠️ NIL IS NOT SILENCE. It used to say here that a nil ringtone meant this chat was set to
+    /// None and the call would arrive quietly. CallKit rings something for every incoming call, and
+    /// with no bundle filename it rings whatever the phone is set to in Settings — which is exactly
+    /// why nil is now offered on purpose, under the name it deserves. See
+    /// `NotificationSound.systemRingtone`.
     private func applyRingtone(callerUid: String?) {
         let cid: String? = {
             guard let callerUid, !callerUid.isEmpty, let me = AuthService.shared.uid else { return nil }

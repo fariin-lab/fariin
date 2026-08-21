@@ -115,22 +115,37 @@ struct SoundPickerView: View {
     init(cid: String, kind: SoundStore.Kind, title: String, onDone: @escaping () -> Void) {
         self.cid = cid; self.kind = kind; self.title = title; self.onDone = onDone
         // Resolve the STORED id to one this list actually contains, or an old value (a "default"
-        // from when Apple's Note was offered) ticks nothing and the screen looks unset.
+        // from when Apple's Note was offered) ticks nothing and the screen looks unset. A stored
+        // "none" on a CALL resolves to "system": that row never muted anything, it handed the ring
+        // to iOS, and this is where it picks up its honest name.
         let stored = SoundStore.soundId(cid, kind)
-        _selectedId = State(initialValue: stored == "none" ? "none"
-            : (kind == .call ? NotificationSound.resolveRingtone(stored).id
-                             : NotificationSound.resolveMessageTone(stored).id))
+        _selectedId = State(initialValue: kind == .call
+            ? NotificationSound.resolveRingtone(stored).id
+            : (stored == "none" ? "none" : NotificationSound.resolveMessageTone(stored).id))
     }
 
     var body: some View {
         NavigationStack {
             List {
-                soundRow(.none)
-                // Calls get REAL ringtones (long, looping, melodic); messages get our own bundled tones -
-                // the SAME list Settings > Notifications > Sound shows, so the two screens finally agree.
-                // They used to disagree completely: Settings offered these files while this picker offered
-                // Apple's system alert tones, so a per-chat choice could never match what a push played.
-                ForEach(kind == .call ? NotificationSound.ringtones : NotificationSound.messageTones) { soundRow($0) }
+                Section {
+                    // FIRST ROW. For a call it is the phone's own ringtone (Reflection, Buoyant,
+                    // Pond, whatever they picked in iOS Settings) — the only route to one of Apple's
+                    // tones, because CallKit will only name a file inside our bundle. For a message
+                    // it is real silence. See `NotificationSound.systemRingtone` for the whole
+                    // reason there is one row here and not a list of seven.
+                    soundRow(kind == .call ? .systemRingtone : .none)
+                    // Calls get REAL ringtones (long, looping, melodic); messages get our own bundled tones -
+                    // the SAME list Settings > Notifications > Sound shows, so the two screens finally agree.
+                    // They used to disagree completely: Settings offered these files while this picker offered
+                    // Apple's system alert tones, so a per-chat choice could never match what a push played.
+                    ForEach(kind == .call ? NotificationSound.ringtones : NotificationSound.messageTones) { soundRow($0) }
+                } footer: {
+                    // Says it on the screen rather than leaving somebody to wonder why their
+                    // ringtone is not in the list.
+                    if kind == .call {
+                        Text("iPhone Ringtone plays whatever you have chosen in Settings > Sounds & Haptics. Apple's ringtones can only be used that way, so they cannot be listed here one by one.")
+                    }
+                }
             }
             .listStyle(.insetGrouped)
             .navigationTitle(title)
@@ -171,9 +186,11 @@ struct SoundPickerView: View {
     private func commit() {
         // Custom imported sounds are gone on purpose: only tones that ship with the app, so every sound
         // is one we control and a call tone is always a file CallKit can actually play from the bundle.
-        let s: NotificationSound = selectedId == "none" ? .none
-            : (kind == .call ? NotificationSound.resolveRingtone(selectedId)
-                             : NotificationSound.resolveMessageTone(selectedId))
+        // A CALL id always goes through resolveRingtone, which is what turns an old stored "none"
+        // into `systemRingtone`. Only a message can actually be silent.
+        let s: NotificationSound = kind == .call
+            ? NotificationSound.resolveRingtone(selectedId)
+            : (selectedId == "none" ? .none : NotificationSound.resolveMessageTone(selectedId))
         SoundStore.set(cid, kind, s)
         onDone(); dismiss()
     }
