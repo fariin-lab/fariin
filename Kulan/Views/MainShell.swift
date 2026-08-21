@@ -1597,12 +1597,28 @@ struct ChatsView: View {
                             // 0.22s ease-out, matched to the pull rather than sprung: a spring overshoots,
                             // and an overshoot here would push the list back past the threshold that
                             // revealed the row and set it flickering against its own hysteresis.
-                            if y < -(archivedRowHeight + 12) {
-                                if !archiveRevealed {
-                                    withAnimation(.easeOut(duration: 0.22)) { archiveRevealed = true }
-                                }
-                            }
-                            else if y > 24 { archiveRevealed = false }
+                            //
+                            // ⛔ NOT ANIMATED, AND THE `withAnimation` THAT WAS HERE IS REVERTED. It
+                            // wrapped a List INSERTION that happens mid-drag, and animating the
+                            // content growing while the scroll view is still tracking is what left
+                            // the list resting at an offset it should never have had — his gap.
+                            //
+                            // ⛔ AND THE HIDE THRESHOLD IS THE ROW'S OWN HEIGHT NOW, NOT 24.
+                            //
+                            // At 24 the row was removed while it was still HALF ON SCREEN: it sits at
+                            // the top of the content and stands 44pt tall, so 24pt of scroll leaves
+                            // 20pt of it visible, and then it vanished under his thumb. That is his
+                            // "when i scroll up small, archive row is hidden automatic". Hiding at
+                            // its full height plus the same 12pt margin the reveal uses means the row
+                            // is genuinely off the top before it is taken away, so the removal is
+                            // something nobody can see — which is what the original note here
+                            // intended and got wrong by a number.
+                            //
+                            // The dead band across zero survives and is now symmetric: reveal below
+                            // -56, hide above +56. A list resting at the top cannot sit on either
+                            // boundary, which is the whole reason the two are not one number.
+                            if y < -(archivedRowHeight + 12) { archiveRevealed = true }
+                            else if y > archivedRowHeight + 12 { archiveRevealed = false }
                         })
 
                           // Stories row stays OUTSIDE the List so EACH card long-presses on its
@@ -1637,27 +1653,24 @@ struct ChatsView: View {
                                      // closure is more work for it. Same rule as the other handlers above.
                                      onOpenUploading: { openUploadingStory() })
                             .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { storiesRowHeight = $0 }
-                            // ⛔ `max(0, …)` — THE ROW FOLLOWS THE LIST UPWARDS AND IGNORES IT DOWNWARDS.
+                            // ⛔ A BARE `-chatScrollY`, AND THE CLAMP THAT WAS HERE IS REVERTED.
                             //
-                            // It was a bare `-chatScrollY`, which ties this row to the scroll offset in
-                            // BOTH directions, and that is what made it jump. Two things move it during
-                            // an archive pull and neither should:
+                            // I clamped this at zero on 2026-08-21 to stop the row jumping when the
+                            // archive row appears, and it broke the thing that matters more: he
+                            // reported the stories row no longer following the scroll at all, with a
+                            // gap opening between it and the list. The clamp is not wrong on its own
+                            // — for a positive offset it is the identical value — but it MASKS a list
+                            // that has come to rest at a negative one, and a frozen row over a
+                            // displaced list is exactly what he photographed.
                             //
-                            //   · the rubber band. A pull past the top drives `chatScrollY` negative, so
-                            //     the row slid DOWN with the content — the stories drifting away from the
-                            //     header while the finger is asking for the archive.
-                            //   · the reveal itself. `archivedEntryRow` is a real row INSIDE the list, so
-                            //     the moment it appears the content grows by its 44pt and the scroll view
-                            //     shifts its offset to absorb it. `chatScrollY` steps by 44 in ONE frame,
-                            //     and this offset stepped the stories row 44pt the other way with it.
-                            //     That is his "story row jumping up", and it is a step, not a slide, so
-                            //     no easing could have hidden it.
-                            //
-                            // Clamped at zero, both disappear at once: below the top the row is exactly
-                            // where the header leaves it, whatever the list does underneath. Scrolling UP
-                            // is untouched — `chatScrollY` is positive there and this is the same value it
-                            // always was, so the melt-away slide and the fade below behave identically.
-                            .offset(y: -max(0, chatScrollY))
+                            // The jump it was aiming at is real and is still unfixed. It is not
+                            // fixable from this line: it comes from `archivedEntryRow` being a real
+                            // row INSIDE the list, so revealing it grows the content by 44pt and the
+                            // scroll view steps its offset to absorb that. The honest fix is to stop
+                            // inserting the row — keep it permanently in the tree and hide it above
+                            // the fold — which is a layout change, not an offset tweak. Until then a
+                            // small jump is the lesser bug and this line stays as it always was.
+                            .offset(y: -chatScrollY)
                             // NO clip and NO mask on the stories row (user's 3-stage proof, build 225):
                             // ANY truncation chops the card images in a straight line while they slide
                             // away — that visible cut WAS the "top border" all along. Unclipped, the
