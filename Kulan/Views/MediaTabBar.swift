@@ -49,14 +49,25 @@ struct MediaTabBar: View {
             }
         }
         .pickerStyle(.segmented)
-        // NO `ClearSegmentedTrack` HERE ANY MORE, AND THAT IS THE MISSING HIGHLIGHT.
+        // ⛔ THE TRACK IS CLEARED AGAIN — AND THIS TIME THE PILL IS GIVEN A COLOUR OF ITS OWN.
         //
-        // It erased the control's `.normal` background image so a hand-made glass capsule behind it
-        // could show through. iOS draws the SELECTED PILL as part of that same surface, so clearing
-        // it took the pill with it and every tab looked unselected — which is exactly what the owner
-        // photographed. MediaGalleryView's own comment already records this and says "nothing
-        // replaces it", but the call was only removed from that file's notes and not from here, so
-        // the bug it describes has been live the whole time.
+        // Clearing the track has been tried twice and cost a build both times: iOS draws the
+        // selected pill as part of the same surface as the track, so erasing that surface erased the
+        // selection with it and every tab looked unselected. The note that used to sit here said so
+        // and concluded a grey track with a visible selection beats a glass track with none.
+        //
+        // ⚠️ THE CONCLUSION WAS RIGHT AND THE PREMISE WAS WRONG. Neither attempt set
+        // `selectedSegmentTintColor`, which draws the selected capsule INDEPENDENTLY of the
+        // background image — I checked both commits (`7a136a9d`, `eef48188`) and the property does
+        // not appear in either. The trade was never "glass or a pill". It was "glass or forgetting
+        // one line".
+        //
+        // So: the control's own track goes, our glass capsule is what you see behind the words, and
+        // the pill is drawn by the control from the tint below. There is no second shape to nest
+        // inside the first, which was his other complaint about this bar — the duplicate pill came
+        // from our capsule sitting OUTSIDE the control's own opaque track, and there is no longer
+        // one.
+        .background { SegmentedGlassTrack() }
         .frame(height: Self.barHeight)
         // ⛔ A COMPACT CENTRED PILL, WHICH IS THE LAST THING SEPARATING THIS FROM THE OTHER TWO
         // (owner, 2026-08-21: "make it use the same design as the Photo/Collection or All/Missed
@@ -73,8 +84,9 @@ struct MediaTabBar: View {
         // a 320pt phone simply takes what it has instead of overflowing.
         .frame(maxWidth: 330)
         .frame(maxWidth: .infinity)   // ...and centred in whatever is left
-        // FIFTH SWING, AND IT IS THE LAST SHAPE COMING OFF (owner 2026-08-13, our bar beside theirs:
-        // "it has duplicate… it has both, one and the other one").
+        // THE HISTORY OF THIS ONE LINE, because it has been added and removed twice (owner
+        // 2026-08-13, our bar beside theirs: "it has duplicate… it has both, one and the other
+        // one").
         //
         // `.liquidGlass(Capsule())` used to sit here. It made sense only while `ClearSegmentedTrack`
         // was erasing the control's own track — capsule outside, nothing inside. That erase was
@@ -82,9 +94,57 @@ struct MediaTabBar: View {
         // behind. So the bar has been drawing OUR rounded shape with APPLE'S rounded track nested
         // inside it, one pill inside another, which is exactly what he circled.
         //
-        // Nothing replaces it. The slot already carries `.background(.bar)` across its full width
-        // (see MediaGalleryView.tabBar), which is the material the nav bar above uses, so the strip
-        // still reads as one surface with the header — and what sits on it is one control with one
-        // track and one pill, the same as the Calls page bar he pointed at in the first place.
+        // It is back, and the reason is at the top of `body`: with the control's own track cleared
+        // there is nothing for it to nest inside, so this is the one surface behind the words — the
+        // same shape the Photos/Collections bar wears in the navigation bar.
+        .liquidGlass(Capsule())
+    }
+}
+
+/// ⛔ CLEARS THE SEGMENTED CONTROL'S TRACK AND KEEPS ITS SELECTION.
+///
+/// Two things, and the second is the one both earlier attempts missed:
+///
+///   • `setBackgroundImage(UIImage(), for: .normal)` removes the opaque track, so the glass capsule
+///     behind the control is what is seen rather than a grey slab sitting on top of it.
+///   • `selectedSegmentTintColor` draws the selected capsule, and it does NOT come from the
+///     background image — which is why clearing that image on its own left every tab looking
+///     unselected, twice.
+///
+/// The tint is a translucent white so the glass reads THROUGH the pill rather than the pill being a
+/// solid lid on it: nearly opaque on a light page where the glass is pale anyway, and a fifth of
+/// white on a dark one, which is how the system's own glass segmented control sits on a bar.
+///
+/// ⚠️ `DispatchQueue.main.async` and a walk up from this background view, because SwiftUI's
+/// `Picker` gives no handle on the UIKit control it builds. The traversal is the one from
+/// `7a136a9d`, which did find the control — that attempt failed on the missing tint, not on this.
+private struct SegmentedGlassTrack: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView(frame: .zero)
+        v.isUserInteractionEnabled = false
+        v.backgroundColor = .clear
+        return v
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        DispatchQueue.main.async {
+            guard let root = uiView.superview?.superview ?? uiView.superview else { return }
+            Self.style(in: root)
+        }
+    }
+
+    private static func style(in view: UIView) {
+        if let seg = view as? UISegmentedControl {
+            seg.backgroundColor = .clear
+            seg.setBackgroundImage(UIImage(), for: .normal, barMetrics: .default)
+            // THE LINE BOTH EARLIER ATTEMPTS WERE MISSING.
+            seg.selectedSegmentTintColor = UIColor { t in
+                t.userInterfaceStyle == .dark
+                    ? UIColor.white.withAlphaComponent(0.20)
+                    : UIColor.white.withAlphaComponent(0.92)
+            }
+            return
+        }
+        for sub in view.subviews { style(in: sub) }
     }
 }
