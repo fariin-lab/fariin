@@ -1652,6 +1652,34 @@ struct StoryEditorView: View {
             }
             .zIndex(drawingOnTop ? 5 : 0)
 
+            // ⛔ THE WAY OUT OF THE KEYBOARD, ABOVE EVERYTHING THE CANVAS CAN CARRY.
+            //
+            // His report: place a sticker, scale it up until it fills the screen, type a caption —
+            // and then nothing will close the keyboard. The tap that dismisses it lives on
+            // `ZoomableImageView`, which is the PHOTO, and the photo is the bottom of this stack. A
+            // sticker is above it (zIndex 1 or 3) and takes its own touches, so once one is big
+            // enough to cover the card there is no photo left to tap and the keyboard is trapped.
+            // Text overlays and the ink layer would do exactly the same at full size; the sticker is
+            // simply the easiest one to grow.
+            //
+            // So the dismiss stops being the photo's job. While — and only while — the caption is
+            // focused, this sits over the whole card above every other layer and takes one tap. It
+            // cannot swallow anything the rest of the time because it does not exist the rest of the
+            // time, so dragging, pinching and tapping a sticker are untouched.
+            //
+            // ⚠️ zIndex 6, WHICH MUST STAY ABOVE THE HIGHEST NUMBER IN THIS STACK. The others run
+            // 0–5 and swap around `drawingOnTop`; if a layer is ever added above 5, this has to move
+            // with it or the bug comes straight back in whatever that new layer is.
+            //
+            // The photo's own `onTap` keeps its `captionFocused = false` — it is still correct, it
+            // is just no longer the only way out.
+            if captionFocused {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { captionFocused = false }
+                    .zIndex(6)
+            }
+
             // Center alignment guides + trash zone (only while dragging an overlay).
             if draggingID != nil {
                 if guideV { Rectangle().fill(.yellow.opacity(0.9)).frame(width: 1).frame(maxHeight: .infinity).position(x: card.width / 2, y: card.height / 2) }
