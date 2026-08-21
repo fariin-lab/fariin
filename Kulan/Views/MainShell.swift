@@ -789,6 +789,10 @@ struct ChatsView: View {
     /// shoving every chat down. That is why there is no animation on it: the finger is the animation.
     @State private var archiveRevealed = false
     @State private var storiesRowHeight: CGFloat = (UIScreen.main.bounds.width - 54) / 4 * 1.46 + 41
+    /// The archive page keeps its own pair — its strip is a different height from the chat list's
+    /// and its List is a different List. See `archivedStoriesRow`.
+    @State private var archiveScrollY: CGFloat = 0
+    @State private var archiveStripHeight: CGFloat = 0
     // Stories opt-out (Settings > Stories > Turn Off Stories): the row disappears and chat-row
     // rings go dark — the whole surface, not a hidden-but-alive row.
     @AppStorage("storiesOptedOut") private var storiesOptedOut = false
@@ -2066,18 +2070,27 @@ struct ArchivedChatsView: View {
                     EmptyStateView(title: "Nothing archived", icon: "archivebox",
                                    text: "Chats you archive and stories you hide will show here.")
                 } else {
-                    VStack(spacing: 0) {
+                    // ⛔ THE STRIP FLOATS OVER THE LIST AND MOVES WITH IT (his 2026-08-21: "when i
+                    // scroll up archive chats is entering under story, story never moving").
+                    //
+                    // It was a VStack, so the strip was a SIBLING of the List: pinned, while the
+                    // chats scrolled underneath it and disappeared behind it. This is the same
+                    // arrangement the main chat list has used since its own stories row landed — a
+                    // ZStack, a top content margin the height of the strip so the first chat starts
+                    // below it, and the strip offset by the negative scroll so it travels with the
+                    // content and leaves the top of the screen with it.
+                    //
+                    // ⚠️ IT STAYS OUTSIDE THE LIST. Inside one, a long press lifts the WHOLE CELL as
+                    // a single preview and every card in the strip rises together — the note above
+                    // the main row has said so since build 147. The offset is what makes an outside
+                    // view behave like an inside one.
+                    ZStack(alignment: .top) {
                         // THE STORIES ROW SITS OUTSIDE THE LIST, exactly as it does on the main
                         // chat page, and for the reason written there since build 147: inside a
                         // List a long press lifts the WHOLE CELL as one preview, so every card in
                         // the row rises together and the menu belongs to the row rather than to the
                         // story you pressed. That is what he is seeing. Out here each card carries
                         // its own menu, and `.id(authorUid)` keeps that menu bound to its person.
-                        if !archivedStories.isEmpty { archivedStoriesRow }
-                        // ⚠️ TEMPORARY — comes out with `StoryPressDebug.on`. Fourth report on this
-                        // row's long press, three source-reasoned fixes shipped and reported dead.
-                        // See the note above `StoryPressDebug`.
-                        if !archivedStories.isEmpty { StoryPressDebugReadout() }
                         List(selection: $selection) {   // stable binding (Set selects only in edit mode) -> smooth edit transition
                             ForEach(archived) { conv in
                                 Button {
@@ -2144,6 +2157,27 @@ struct ArchivedChatsView: View {
                         .environment(\.editMode, .constant(selecting ? .active : .inactive))
                         // The selection tick, same as the calls list. See the note there.
                         .tint(Theme.defaultBubble(dark))
+                        // Room for the strip, so the first chat starts under it rather than behind
+                        // it. The height is measured rather than guessed — the card is sized off the
+                        // screen width and the label under it wraps.
+                        .contentMargins(.top, archivedStories.isEmpty ? 0 : archiveStripHeight,
+                                        for: .scrollContent)
+                        .onScrollGeometryChange(for: CGFloat.self,
+                                                of: { $0.contentOffset.y + $0.contentInsets.top },
+                                                action: { _, y in archiveScrollY = y })
+
+                        if !archivedStories.isEmpty {
+                            VStack(spacing: 0) {
+                                archivedStoriesRow
+                                // ⚠️ TEMPORARY — comes out with `StoryPressDebug.on`. Fourth report
+                                // on this row's long press. See the note above `StoryPressDebug`.
+                                StoryPressDebugReadout()
+                            }
+                            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { archiveStripHeight = $0 }
+                            // Travels with the content. Negative, because a list scrolled DOWN has a
+                            // positive offset and the strip has to move UP by the same amount.
+                            .offset(y: -archiveScrollY)
+                        }
                     }
                 }
             }
