@@ -298,6 +298,8 @@ struct StoryEditorView: View {
     /// while it is true (owner 2026-08-03: "when i start to use pen all buttons hide, when i remove
     /// my finger show again") — you cannot draw across a corner your own toolbar is sitting on.
     @State private var strokeInFlight = false
+    /// Clear All asked before it throws every stroke away — see `penTopBar`.
+    @State private var showClearAll = false
     @State private var editedCache: UIImage?         // filtered+cropped; recomputed only on tool change
     /// The reference app's two canvas colours for the picture as it stands. Held rather than derived on each
     /// layout pass, and rewritten by `recomputeEdited` — a filter changes the picture, so it changes
@@ -955,6 +957,11 @@ struct StoryEditorView: View {
             // Bottom chrome. While DRAWING, our pen bar takes the bottom instead; it stays pinned
             // because a drawing screen has no keyboard and the canvas must not move under a stroke.
             if isDrawing {
+                // The pen's own top bar, on the same terms as its bottom one: opacity rather than an
+                // `if`, so nothing about the canvas's layout changes mid-stroke.
+                VStack { penTopBar; Spacer() }
+                    .padding(.top, 8)
+                    .opacity(strokeInFlight ? 0 : 1)
                 VStack { Spacer(); penBar.padding(.bottom, 8) }
                     .ignoresSafeArea(.keyboard, edges: .bottom)
                     // OPACITY, not an `if`: removing the bar from the tree mid-stroke would relayout
@@ -1317,6 +1324,13 @@ struct StoryEditorView: View {
         // screenshot is a pale grey panel with black text over a black editor, which disproves it.
         // A SwiftUI alert is presented into its own context, so the trait pinned on this screen
         // never reaches it. See `darkConfirm`.
+        // ⛔ CLEAR ALL ASKS, and it asks with `darkConfirm` for the reason written twenty lines up:
+        // a `confirmationDialog` over a full-screen presentation renders as a centred POPOVER, and
+        // popovers hide role-cancel buttons — which would leave "Clear All" as the only way out of a
+        // Clear All prompt. Same helper, same darkness, same shape as the two questions above it.
+        .darkConfirm("Clear all drawing?", isPresented: $showClearAll,
+                     destructive: "Clear All", cancel: "Cancel",
+                     onDestructive: { drawing = PKDrawing() })
         .darkConfirm("Discard this story?", isPresented: $showDiscard,
                      destructive: "Discard", onDestructive: { dismiss() })
         // THE PEN'S OWN CANCEL, asked the same way and drawn the same way. It is a smaller question
@@ -2793,6 +2807,48 @@ struct StoryEditorView: View {
     }
 
     /// OUR pen bar, the same one the chat's image editor uses: a colour track, undo, pen vs
+    /// ⛔ THE PEN'S TOP BAR: undo on the left, Clear All on the right (owner, 2026-08-21, with the
+    /// reference in front of him). The undo that used to sit in the bottom tool group is gone — one
+    /// undo, in the place he put it.
+    ///
+    /// ⚠️ NEITHER APPEARS UNTIL THERE IS SOMETHING TO ACT ON ("only appearing after when user used
+    /// pen"). An undo with nothing to undo and a Clear All with nothing to clear are two controls
+    /// that exist to tell you they cannot be used — the same rule the trim screen's undo already
+    /// follows and the same one that took the "..." off an empty archive.
+    @ViewBuilder private var penTopBar: some View {
+        if !drawing.strokes.isEmpty {
+            HStack {
+                Button {
+                    var s = drawing.strokes
+                    if !s.isEmpty { s.removeLast(); drawing = PKDrawing(strokes: s) }
+                } label: {
+                    Image(systemName: "arrow.uturn.backward").font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .liquidGlass(Circle(), interactive: true)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 8)
+
+                // ⛔ IT ASKS FIRST. Clear All throws away every stroke of the sitting and the only
+                // way back would be tapping undo once per stroke, which is not a way back.
+                Button { showClearAll = true } label: {
+                    Text("Clear All")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .frame(height: 40)
+                        .liquidGlass(Capsule(), interactive: true)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
     /// highlighter, a width that cycles, and a tick to finish. Nothing here is Apple's palette.
     private var penBar: some View {
         let currentColor = penHue == 0 ? Color.white : Color(hue: penHue, saturation: 1, brightness: 1)
@@ -2820,10 +2876,9 @@ struct StoryEditorView: View {
                 Spacer(minLength: 8)
 
                 HStack(spacing: 22) {
-                    capsuleTool("arrow.uturn.backward", active: false, tint: Color(hex: 0x3DA1FD)) {
-                        var strokes = drawing.strokes
-                        if !strokes.isEmpty { strokes.removeLast(); drawing = PKDrawing(strokes: strokes) }
-                    }
+                    // ⛔ NO UNDO HERE ANY MORE. It moved to the top bar on his order (2026-08-21) and
+                    // there is exactly one of it: two undo buttons on one screen is two answers to
+                    // the same question. See `penTopBar`.
                     capsuleTool("pencil.tip", active: !isHighlighter, tint: Color(hex: 0x3DA1FD)) { isHighlighter = false }
                     capsuleTool("highlighter", active: isHighlighter, tint: Color(hex: 0x3DA1FD)) { isHighlighter = true }
                     // The width, which is also the only place the chosen colour is shown as a
