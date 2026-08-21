@@ -50,19 +50,23 @@ struct SendContactSheet: View {
             bottomButton
         }
         .animation(.easeOut(duration: 0.2), value: searching)
-        // ⛔ ULTRA-THIN, NOT REGULAR (his second report on this sheet: "now looks grey plz make it
-        // liquid glass").
+        // ⛔ NO `presentationBackground` AT ALL, AND THE ABSENCE IS THE FIX.
         //
-        // `.regularMaterial` IS a real material and that is exactly why it came out grey: a thick
-        // material over a dark page resolves to dark grey, because there is barely any of the page
-        // left in it to tint the glass. Thin is the one that carries the picture through, and a
-        // material you can see the wallpaper in is what reads as glass rather than as a panel.
+        // This line has now been `.regularMaterial` (read as grey), then `.ultraThinMaterial` (still
+        // read as grey), and the reason neither worked is that BOTH of them replace the sheet's own
+        // chrome. A system sheet on iOS 26 already draws Liquid Glass; setting any background at all
+        // — material or colour — takes that away and paints a flat pane where the glass was. Two
+        // rounds of picking a thinner material were two rounds of choosing between shades of the
+        // wrong thing.
         //
-        // ⚠️ THE COST IS THE ONE I CHOSE AGAINST THIS MORNING, and it is his call to overrule: the
-        // names sit over whatever photograph is behind the sheet, and the thinner the material the
-        // more of that photograph competes with them. If they turn out hard to read on a busy
-        // picture, the answer is a shadow on the labels rather than going back to grey.
-        .presentationBackground(.ultraThinMaterial)
+        // His instruction, 2026-08-21: "make it liquid glass exactly like chat wallpaper sheet". So
+        // the answer is literally what that sheet does — `WallpaperPickerSheet` sets no presentation
+        // background whatsoever, keeps `.presentationDragIndicator(.visible)`, and lets the system
+        // own the surface. Copied here by deleting rather than by adding.
+        //
+        // ⚠️ DO NOT PUT A MATERIAL BACK TO "FIX" CONTRAST. If the names are ever hard to read over a
+        // busy photograph, the fix is on the labels (a shadow), not on the surface — covering the
+        // glass is what he has rejected twice.
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(sending)
@@ -142,21 +146,28 @@ struct SendContactSheet: View {
     private static let gutter: CGFloat = 8
     private static let pageInset: CGFloat = 16
 
-    /// ⛔ 52, AND THE REFERENCE'S OWN 60 IS WHY IT IS NOT 60.
+    /// ⛔ 60. THEIR NUMBER, FLAT, AND THE 52 THAT STOOD HERE WAS REASONED FROM A LAYOUT THEY DO NOT USE.
     ///
-    /// Read from their source rather than guessed: their peer cell is a 60pt avatar sitting at x=13
-    /// inside an 86pt item, with an 11pt regular name 4pt under it. So the avatar is 0.70 of its
-    /// cell — that gap on each side is what stops a row of faces reading as one stripe.
+    /// The note this replaces argued that their 60pt avatar lives in an 86pt cell, that the avatar is
+    /// therefore 0.70 of its cell, and that five across on a 393pt phone leaves only 66pt of cell — so
+    /// holding the RATIO meant shrinking the avatar to 52. Every one of those numbers is real. The
+    /// conclusion still does not follow, because their cell has two avatar frames and the reasoning
+    /// only ever looked at one:
     ///
-    /// ⚠️ AT FIVE PER ROW THAT RATIO CANNOT SURVIVE A 60pt AVATAR, and this is the whole of his
-    /// "avatar size" note. Five 86pt cells need 430pt and the widest phone gives the sheet 393. Ours
-    /// were 60 in a 66pt cell — 0.91 — which is why they nearly touch in his screenshot. He asked
-    /// for five per row before he asked for their sizing, so the count is kept and the avatar is
-    /// scaled to their PROPORTION instead: 52 in a 66pt cell is 0.79, and 0.84 on the narrowest
-    /// phone the app still runs on.
+    ///     let iconFrame = CGRect(x: 13.0, y: 4.0, width: 60.0, height: 60.0)                 // 86pt cell
+    ///     let iconFrame = CGRect(x: (bounds.width - 60.0) / 2.0, y: 4.0, width: 60.0, height: 60.0)
     ///
-    /// The name is 11pt regular and the gap is 4pt, which ARE their numbers exactly.
-    private static let face: CGFloat = 52
+    /// The second is the one that runs when the cell is not 86 wide, and it CENTRES a 60pt avatar in
+    /// whatever width it is given. The size is a constant in both. So their avatar does not scale with
+    /// the cell at all, the 0.70 ratio is an artifact of one particular width, and five across on a
+    /// phone gives them exactly what it gives us: 60pt faces with the slack spent on the gaps.
+    ///
+    /// Owner, 2026-08-21, holding the two sheets side by side: "avatars look too small, I think it is
+    /// 60pt, check first". He was right, and this is the check.
+    ///
+    /// The name is 11pt regular and the gap is 4pt, which ARE their numbers exactly, and `sideInset`
+    /// re-derives itself from this constant so the first face still lines up with the header button.
+    private static let face: CGFloat = 60
 
     private var peopleGrid: some View {
         // THE ORDER IS THE CHAT LIST'S: `people` sorts on `displayUpdatedAt`, the same key MainShell
