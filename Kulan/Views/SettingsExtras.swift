@@ -46,6 +46,17 @@ struct NotificationsSettingsView: View {
                     .onChange(of: pushOn) { _, on in
                         if on { Push.register() } else { Task { await Push.unregister() } }   // unregister is now async
                     }
+            } footer: {
+                // EVERYTHING BELOW HANGS OFF THIS SWITCH, and the page never said so. Turning it off
+                // drops this device's push tokens, so the server stops sending — and the in-app
+                // banner is not a separate feed that survives that. `InAppNotify.process` has no
+                // caller left; the only thing that raises a banner is `PushManager.willPresent`,
+                // which is a push arriving while the app happens to be open. No push, no banner.
+                //
+                // So with this off, all five switches underneath do nothing at all. They used to
+                // stay lit and fully tappable, which is a page inviting somebody to set five
+                // preferences that cannot take effect.
+                Text("Everything below depends on this. With it off, Fariin does not notify you at all, on the lock screen or inside the app.")
             }
 
             Section {
@@ -69,8 +80,12 @@ struct NotificationsSettingsView: View {
                     }
                 }
             } header: {
-                Text("Options")
+                // "Options" named nothing. Every row on a settings page is an option, so the header
+                // was a label that could have sat above any section on the screen, including the two
+                // it was there to distinguish these rows from.
+                Text("Message Notifications")
             }
+            .disabled(!pushOn)
 
             Section {
                 Toggle("In-App Sounds", isOn: $inAppSound).tint(.green)
@@ -84,6 +99,9 @@ struct NotificationsSettingsView: View {
                 // three are real: `InAppNotify` and `PushManager` both read them.
                 Text("How a message announces itself while you already have Fariin open. Preview shows the sender and the message in the banner; with it off the banner says only that something arrived.")
             }
+            // Dead without push, for the reason in the footer under Show Notifications: the banner
+            // IS a push, arriving while the app is open.
+            .disabled(!pushOn)
 
             Section {
                 Button(role: .destructive) { confirmReset = true } label: {
