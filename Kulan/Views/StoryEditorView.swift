@@ -3017,6 +3017,11 @@ struct StoryEditorView: View {
     /// the tray is already on this phone by the time it is tapped, so placing one usually costs no
     /// network at all.
     private static func stickerStill(_ url: String) async -> UIImage? {
+        // ⛔ OURS FIRST, AND IT NEVER TOUCHES THE NETWORK. `sticker://` is not a real scheme — see
+        // `BuiltInStickers` — so this has to come before anything that would treat the string as a
+        // url. It is also why a built-in works in the recents tab with no extra code: recents store
+        // the `Gif`, and both places that touch bytes ask this question.
+        if let own = BuiltInStickers.image(url) { return own }
         if let data = GifBytesCache.data(url) { return firstFrame(data) }
         guard let u = URL(string: url),
               let (data, _) = try? await URLSession.shared.data(from: u) else { return nil }

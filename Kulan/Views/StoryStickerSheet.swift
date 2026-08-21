@@ -70,6 +70,9 @@ enum StickerRecents {
 /// call site is what stops "recent" ever being sent to Giphy as a word.
 enum StickerTab: Identifiable, Equatable {
     case recent
+    /// ⛔ OURS. The seven drawings that ship inside the app — see `BuiltInStickers`. It is the only
+    /// tab that works with no signal, and the only one whose contents nobody can change under us.
+    case builtIn
     /// ⚠️ THE FIRST VALUE IS AN SF SYMBOL NAME NOW, NOT AN EMOJI — his 2026-08-17 "use real sticker
     /// icons, don't use emoji".
     ///
@@ -87,12 +90,14 @@ enum StickerTab: Identifiable, Equatable {
     var id: String {
         switch self {
         case .recent: return "recent"
+        case .builtIn: return "builtIn"
         case .term(let icon, _): return icon
         }
     }
     var query: String? {
         switch self {
         case .recent: return nil
+        case .builtIn: return nil
         case .term(_, let q): return q
         }
     }
@@ -104,6 +109,10 @@ enum StickerTab: Identifiable, Equatable {
     /// empty on the first day and full of one joke by the third.
     static let all: [StickerTab] = [
         .recent,
+        // SECOND, not first: the clock is where somebody looks for what they just used, and our own
+        // pack is what is worth finding when that is empty. Ahead of trending because trending is
+        // somebody else's and needs the network.
+        .builtIn,
         popular,
         .term("face.smiling.fill", "laughing"),
         .term("heart.fill", "love"),
@@ -333,7 +342,16 @@ struct StoryStickerSheet: View {
             // `fill: false` and no placeholder — a sticker is cut out, so anything behind it is a box
             // around it and anything cropped off it is the shape it was cut into. See
             // `AnimatedGifView`, which also has to be told to accept the size it is offered.
-            .overlay { AnimatedGifView(url: s.url, fill: false, placeholder: .clear) }
+            //
+            // ⛔ OURS ARE NOT FETCHED. `sticker://` is our own scheme and handing it to the animated
+            // view would send it to the network as a url, which it is not. See `BuiltInStickers`.
+            .overlay {
+                if let own = BuiltInStickers.image(s.url) {
+                    Image(uiImage: own).renderingMode(.original).resizable().scaledToFit()
+                } else {
+                    AnimatedGifView(url: s.url, fill: false, placeholder: .clear)
+                }
+            }
             // ⚠️ THE SECOND HALF OF "the stickers are overlapping each other". An overlay is NOT
             // clipped to what it overlays, so a representable reporting more than its square drew
             // exactly what it asked for — over its neighbours.
@@ -384,6 +402,15 @@ struct StoryStickerSheet: View {
                             Group {
                                 if case .recent = t {
                                     Image(systemName: "clock").font(.system(size: 17, weight: .semibold))
+                                } else if case .builtIn = t {
+                                    // ⛔ A REAL PACK THUMBNAIL, WHICH THE NOTE ON `StickerTab` SAID WE COULD NOT
+                                    // HAVE. It could not, then: the tray was a search endpoint and a category has
+                                    // no artwork of its own. This tab is a PACK, so it can be drawn the way his
+                                    // reference draws every tab — the first sticker in it.
+                                    Image(uiImage: BuiltInStickers.image(BuiltInStickers.gifs[0].url) ?? UIImage())
+                                        .renderingMode(.original)
+                                        .resizable().scaledToFit()
+                                        .frame(width: 27, height: 27)
                                 } else if case .term(let icon, _) = t {
                                     // The same size and weight as the clock beside it: one row of
                                     // controls drawn by the system, not a clock and ten pictures.
@@ -426,6 +453,11 @@ struct StoryStickerSheet: View {
         }
         if case .recent = tab {
             stickers = StickerRecents.all()
+            return
+        }
+        // No network, no loading state, no empty message: the pack is in the binary.
+        if case .builtIn = tab {
+            stickers = BuiltInStickers.gifs
             return
         }
         let isTrending = tab.query?.isEmpty ?? false
