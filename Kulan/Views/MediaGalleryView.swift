@@ -237,7 +237,16 @@ struct MediaGalleryView: View {
         MediaTabBar(titles: Tab.allCases.map(\.label),
                     selection: Binding(get: { Tab.allCases.firstIndex(of: tab) ?? 0 },
                                        set: { tab = Tab.allCases[$0] }))
-        .padding(.horizontal, 16)
+        // ⛔ NO HORIZONTAL PADDING HERE — IT WAS BEING APPLIED TWICE AND THAT IS THE WHOLE BUG.
+        //
+        // `MediaTabBar` already keeps its own 16pt page margin (`pageInset`, on the track itself).
+        // This line added a second 16 outside it, so the track actually stood 32pt in while the
+        // header's back button sits on the navigation bar's standard 16pt margin. That is his
+        // "angel space make it the space back button is using": the two were never going to line up
+        // while one of them was paying the margin twice.
+        //
+        // ⚠️ FIX IT IN ONE PLACE ONLY. If this ever needs changing again, change `pageInset` in
+        // `MediaTabBar` — putting a number back here is how it became 32 the first time.
         .padding(.vertical, 8)   // together with barHeight this is MediaTabBar.slotHeight
         // NO BACKDROP ACROSS THE SLOT ANY MORE (his call, 2026-08-14: "can you make the capsule
         // float over the grid, now it looks like it has a background"). The full-width `.bar` band
@@ -247,8 +256,10 @@ struct MediaGalleryView: View {
         // control already carries an opaque track with the selected pill on it, so it is a capsule
         // floating over the photos, and the gap beside it is meant to show them.
         //
-        // ⚠️ Do NOT put a glass capsule back around it to "help". That is the fifth-swing bug: our
-        // capsule around Apple's track drew one pill inside another, which is what he circled.
+        // ⚠️ Do NOT put a glass capsule back around it "to help" — that was the fifth-swing bug, our
+        // capsule around Apple's track drawing one pill inside another. It reads differently now
+        // that the track is ours: the glass IS the track (see `MediaTabBar`), so there is no second
+        // shape. The rule that survives is the one that mattered: never two nested capsules.
         .frame(maxWidth: .infinity)
     }
 

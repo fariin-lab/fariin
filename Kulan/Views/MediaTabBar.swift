@@ -61,8 +61,19 @@ struct MediaTabBar: View {
                 .padding(Self.pillInset)
             }
             .frame(height: Self.barHeight)
-            // The track. A capsule, so its ends are as round as the pill inside it.
-            .background(Color.primary.opacity(0.10), in: Capsule())
+            // ⛔ GLASS, AND THE OLD "DO NOT PUT GLASS ON THIS" WARNING NO LONGER APPLIES.
+            //
+            // That warning is real and it is still in the gallery beside the call site, but it was
+            // written about a DIFFERENT control. While this was Apple's stock segmented control, a
+            // glass capsule around it drew our pill outside Apple's own track — one pill inside
+            // another, which is what he circled on the fifth swing. There is no stock track any more.
+            // This bar draws its own, so glass REPLACES the flat fill rather than wrapping a second
+            // shape around a first, and there is nothing left to nest.
+            //
+            // The selected pill below stays a solid rather than becoming glass too: glass on glass
+            // is what has no edge, and the pill is the one thing on this bar that must read at a
+            // glance.
+            .liquidGlass(Capsule())
             .padding(.horizontal, Self.pageInset)
             // Tapping a half-visible segment brings it into view, which is the only way the ones
             // past the right edge are reachable with a thumb.
