@@ -3267,7 +3267,26 @@ struct StoryViewer: View {
             // is out in the room. Matching his reference screenshot, where the page behind the growing
             // circle is clearly dimmed.
             runHero(to: 0, center: rest, alpha: 1, velocity: 0,
-                    stiffness: 530, settle: 0.0015,
+            //
+            // ⛔ 530 → 480 (owner, 2026-08-21: "when story open when open 90% or 100% plz add
+            // animation that makes smooth, not much, just a small one … i just need to test how it
+            // will be").
+            //
+            // Spring time goes as 1/√k, so this is about five percent longer overall — but the time
+            // is not spread evenly, and that is why it is the right knob for what he asked. A spring
+            // spends most of its extra softness at the END, in the approach, because that is where
+            // it is moving slowest. The first 90% barely changes; the last 10% is where the landing
+            // stops arriving and starts settling.
+            //
+            // ⚠️ THE EPSILON IS DELIBERATELY UNTOUCHED at 0.0015, and it must stay that way. It is
+            // the other lever on this exact stretch, and it goes the wrong way: the note above
+            // records that 0.0008 left the last of the run as sub-pixel motion "nobody can see but
+            // everybody can feel", which was HIS complaint and this is the fix for it. Making the
+            // tail softer is not the same as making it longer; lowering the epsilon would undo a
+            // decision rather than tune one.
+            //
+            // ONE NUMBER TO TURN. Too floaty, put it back up; still too abrupt, take it to 440.
+                    stiffness: 480, settle: 0.0015,
                     cover: heroCoverOut, crop: heroCoverOut, dimFloor: { $0 }) {
                 hero.live = false
                 hero.cover = false
