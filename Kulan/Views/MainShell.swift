@@ -1924,6 +1924,9 @@ struct ArchivedChatsView: View {
     /// pair, not the chat list's: a different strip, a different height, a different List.
     @State private var archiveScrollY: CGFloat = 0
     @State private var archiveStripHeight: CGFloat = 0
+    /// What is typed in the bar at the bottom of the page. Empty = every archived chat.
+    @State private var archiveQuery = ""
+    @FocusState private var archiveSearchFocused: Bool
 
     private var me: String { AuthService.shared.uid ?? "" }
     private var dark: Bool { scheme == .dark }
@@ -1957,6 +1960,55 @@ struct ArchivedChatsView: View {
         // a chat could go with one tap and no question.
         Button(role: .destructive) { pendingDelete = conv } label: {
             Label { Text("Delete") } icon: { MenuIcon(system: "trash.fill") }
+        }
+    }
+
+    /// ⛔ THE SEARCH BAR, AT THE BOTTOM OF THE PAGE (his order, 2026-08-21, circled at the foot of
+    /// the screen).
+    ///
+    /// ⚠️ OURS AND NOT `.searchable`, and that is a decision rather than a shortcut. `.searchable`
+    /// decides its own placement: on a page that is PUSHED, with no tab bar under it, iOS puts it in
+    /// the navigation bar — which is the top of the screen, not where he pointed. There is no
+    /// modifier that reliably moves it down on this kind of page, so the bar is drawn where it was
+    /// asked for.
+    ///
+    /// A `safeAreaInset` rather than an overlay: the list has to be able to scroll clear of it, and
+    /// an inset is what tells the scroll view how much room to leave.
+    ///
+    /// The same shape the app's other search fields wear — glass capsule, leading glass, a clear
+    /// button that only exists while there is something to clear.
+    private var archiveSearchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Search", text: $archiveQuery)
+                .focused($archiveSearchFocused)
+                .submitLabel(.search)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            if !archiveQuery.isEmpty {
+                Button { archiveQuery = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .font(.system(size: 16))
+        .padding(.horizontal, 14)
+        .frame(height: 44)
+        .liquidGlass(Capsule())
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+    }
+
+    /// A search that found nothing has to say so. Without this the page just empties, which reads as
+    /// the archive having been cleared rather than as a query matching no one.
+    @ViewBuilder private var archiveNoResults: some View {
+        if archived.isEmpty, !archiveQuery.trimmingCharacters(in: .whitespaces).isEmpty {
+            Text("No chats found.")
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+                .padding(.top, archiveStripHeight + 40)
+                .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 
@@ -2082,10 +2134,13 @@ struct ArchivedChatsView: View {
     private var archived: [Conversation] {
         // The official channel can be archived like any other chat, so it has to be findable here or
         // archiving it would look like deleting it.
-        (repo.conversations + [OfficialChannelStore.shared.listEntry].compactMap { $0 })
+        let all = (repo.conversations + [OfficialChannelStore.shared.listEntry].compactMap { $0 })
             .filter { $0.isArchived(me) && !$0.isCleared(me) }
             .filter { Flags.groupsEnabled || !$0.isGroup }
             .sorted { $0.displayUpdatedAt(me) > $1.displayUpdatedAt(me) }
+        let q = archiveQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !q.isEmpty else { return all }
+        return all.filter { $0.displayName(me).lowercased().contains(q) }
     }
 
     var body: some View {
@@ -2196,9 +2251,17 @@ struct ArchivedChatsView: View {
                                                 of: { $0.contentOffset.y + $0.contentInsets.top },
                                                 action: { _, y in archiveScrollY = y })
 
+                        archiveNoResults
                         archivedStripOverlay
                     }
                 }
+            }
+            // ⛔ THE BAR SITS UNDER THE LIST AND THE LIST SCROLLS CLEAR OF IT. Not while SELECTING:
+            // that mode already owns the bottom of the screen with unarchive, read and delete, and
+            // two bars stacked there is one too many. Not on an empty archive either — a field that
+            // searches nothing.
+            .safeAreaInset(edge: .bottom) {
+                if !selecting && hasAnyArchived { archiveSearchBar }
             }
             .navigationTitle("Archived")
             .navigationBarTitleDisplayMode(.inline)
