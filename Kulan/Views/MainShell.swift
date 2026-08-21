@@ -2165,18 +2165,14 @@ struct ArchivedChatsView: View {
                     // free and the row springs them to 0.92 from it; these are a SwiftUI `Button`
                     // with `.plain`, which has no visible pressed state whatsoever.
                     //
-                    // The scale rule is the reference's and not a number: "take fifteen points off
-                    // the width, floor at 0.7", so a wide card barely moves and a narrow one shrinks
-                    // hard. Their own card is 60pt and lands on 0.75; ours is not 60, which is
-                    // exactly why the RULE is copied rather than their answer.
+                    // 0.92 on a 0.28/0.7 spring, which is the CHAT ROW'S dip and not the reference
+                    // app's ramp — his order after seeing the two side by side. The same row on two
+                    // screens has to press the same way; see `StoryPressVisual.fingerDown`.
                     //
-                    // Neither line carries an `.animation` modifier on purpose. Press and release
-                    // use different curves — linear in, easeOut back — and one modifier cannot say
-                    // both; the animation lives in `StoryPressVisual`'s setters instead.
+                    // No `.animation` modifier on purpose: the spring lives in that setter, so the
+                    // press and the release cannot drift apart from each other here.
                     .scaleEffect(pressVisual.squeezedKey == MediaOpenRects.key(.storyRow, "arch-\(g.id)")
-                                 ? StoryPressRamp.minScale(width: storyCardW) : 1)
-                    .opacity(pressVisual.dimmedKey == MediaOpenRects.key(.storyRow, "arch-\(g.id)")
-                             ? StoryPressRamp.pressedAlpha : 1)
+                                 ? StoryPressVisual.dipScale : 1)
                     // The flight's source. Same 24 the card is actually drawn with, so the story
                     // lands as a CARD here rather than the circle a ringed avatar gets — the shape
                     // is read from this number and nowhere else.

@@ -100,7 +100,7 @@ enum StoryRowPress {
     ///
     /// ⚠️ IT GOES BACK TO false BEFORE ANYTHING SHIPS TO ANYBODY BUT HIM, along with the whole
     /// section this sits in. It is a debug band drawn over a real page.
-    static let on = true
+    static let on = false
 
     @Published var anchor = "anchor  —"
     @Published var gate   = "gate    —"
@@ -296,9 +296,8 @@ enum StoryPressRamp {
 /// `Button` with `.plain`, which has no visible pressed state whatsoever — so its long press had no
 /// animation at all, which is exactly what he reported the moment the press itself started working.
 ///
-/// Two values rather than one, because the reference does not move them together: the scale waits
-/// out a dead beat and then ramps, while the alpha drops the INSTANT the finger lands. See
-/// `StoryPressRamp` for where each number comes from.
+/// One value, because the dip it drives is one thing: a scale, sprung, with no separate dim. See
+/// `fingerDown` for why this is the chat row's dip rather than the reference's ramp.
 ///
 /// A card opts in by reading this and comparing keys; nothing that does not read it is affected, so
 /// publishing on a chat-list press is simply a no-op. The animation lives in the SETTER — press and
@@ -313,31 +312,48 @@ final class StoryPressVisual: ObservableObject {
 
     /// The card being squeezed, or nil. Written inside a linear animation, cleared inside an easeOut.
     @Published var squeezedKey: String?
-    /// The card being dimmed. Set with no animation at all — theirs is instant on touch down.
-    @Published var dimmedKey: String?
 
+    /// ⛔ THE CHAT ROW'S DIP, NOT THE REFERENCE RAMP — HIS ORDER, 2026-08-21, AFTER SEEING BOTH.
+    ///
+    /// The first version of this was the reference app's own ramp, read from source and correct on
+    /// its own terms: instant dim to 0.7, a 0.12s dead beat, then a LINEAR 0.2s squeeze whose depth
+    /// is "take fifteen points off the width, floor at 0.7". He looked at it beside the chat list
+    /// and said plainly: make the archive use the same one as the main story row.
+    ///
+    /// He is right, and it matters more than matching the reference here. The two rows are the same
+    /// object on two screens; a press that behaves differently on one of them reads as a bug however
+    /// well sourced the numbers are. Consistency inside the app beats fidelity to somebody else's.
+    ///
+    /// So these are the chat row's numbers exactly, from `StoryPeerCardView.isHighlighted`:
+    /// scale 0.92 flat, `StorySpring.run(response: 0.28, damping: 0.7)`, starting the instant the
+    /// finger lands. No dead beat, and NO DIM — the chat row does not dim, and adding one here
+    /// would be the same mismatch in the other direction.
+    ///
+    /// `StoryPressRamp` is kept even though nothing reads it any more: it is the reference's ramp
+    /// worked out from source with a file and a line behind every number, and re-deriving it if he
+    /// ever asks for it back is an afternoon's work. It is documentation, not dead code.
     func fingerDown(_ key: String) {
-        dimmedKey = key
+        withAnimation(.spring(response: Self.dipResponse, dampingFraction: Self.dipDamping)) {
+            squeezedKey = key
+        }
     }
 
-    func rampBegan(_ key: String) {
-        // Linear, per their `DisplayLinkAnimator`. A spring here is the single most common way to
-        // get this wrong — the note on `StoryPressRamp.rampDuration` says so outright.
-        withAnimation(.linear(duration: StoryPressRamp.rampDuration)) { squeezedKey = key }
-    }
-
-    /// The finger left without opening anything. Scale eases back over 0.2s; the dim takes 0.25s, so
-    /// the card finishes growing before it finishes brightening, which is their ordering.
+    /// The finger left without opening anything — same spring back, which is what the chat row does.
     func fingerUp() {
-        withAnimation(.easeOut(duration: StoryPressRamp.releaseDuration)) { squeezedKey = nil }
-        withAnimation(.easeOut(duration: StoryPressRamp.alphaRestoreDuration)) { dimmedKey = nil }
+        withAnimation(.spring(response: Self.dipResponse, dampingFraction: Self.dipDamping)) {
+            squeezedKey = nil
+        }
     }
+
+    /// The chat row's own two numbers. Named here rather than written twice.
+    static let dipScale: CGFloat = 0.92
+    static let dipResponse: Double = 0.28
+    static let dipDamping: Double = 0.7
 
     /// The menu took over. The card is hidden and lifted from here, so both states are dropped
     /// WITHOUT animation — animating a view that is already being covered is work nobody sees.
     func menuTookOver() {
         squeezedKey = nil
-        dimmedKey = nil
     }
 }
 
@@ -533,11 +549,10 @@ struct StoryRowLongPress: UIViewRepresentable {
             g.onTouchDown = { [weak self] p in
                 guard let self, let t = self.target(p) else { return }
                 self.rampKey = t.key
+                // Straight in, no delayed stage. The chat row's dip starts on touch-down, and the
+                // 0.12s dead beat that used to be scheduled here belonged to the reference's ramp,
+                // which this no longer follows — see `StoryPressVisual.fingerDown`.
                 StoryPressVisual.shared.fingerDown(t.key)
-                DispatchQueue.main.asyncAfter(deadline: .now() + StoryPressRamp.beginDelay) { [weak self] in
-                    guard let self, self.rampKey == t.key else { return }
-                    StoryPressVisual.shared.rampBegan(t.key)
-                }
             }
             g.onTouchUp = { [weak self] in
                 guard let self, self.rampKey != nil else { return }
