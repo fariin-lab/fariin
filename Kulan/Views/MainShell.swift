@@ -1919,8 +1919,6 @@ struct ArchivedChatsView: View {
     @State private var selection = Set<String>()
     @State private var showDeleteSelected = false
     @State private var pendingDelete: Conversation?     // one chat, from the swipe or the row menu
-    @State private var showArchiveSettings = false
-    @State private var showHowItWorks = false
     @State private var prefsTick = 0              // re-render after Unhide
 
     private var me: String { AuthService.shared.uid ?? "" }
@@ -2177,6 +2175,12 @@ struct ArchivedChatsView: View {
             // (No story cover here any more: the archived card opens through `StoryDoor`, which is
             // the same presentation, the same flight and the same drag-down close as every other
             // door in the app. See the Button above.)
+            // ⛔ ONE WAY OUT OF SELECT MODE, NOT TWO (his screenshot: the chevron and the ✕ side by
+            // side). The ✕ is added as a leading item while selecting, but the system back button is
+            // still there underneath it, so both drew — and they do different things: one leaves the
+            // mode, the other leaves the page with a selection still made. Same line the media
+            // gallery already carries for the same reason.
+            .navigationBarBackButtonHidden(selecting)
             .toolbar {
                 if selecting {
                     ToolbarItem(placement: .topBarLeading) {
@@ -2198,7 +2202,12 @@ struct ArchivedChatsView: View {
                 } else {
                     // Select moved off the left and into the menu, where the reference app keeps it —
                     // two doors into one mode is clutter. Done stays exactly where it was.
-                    ToolbarItem(placement: .topBarTrailing) { archiveMenu }
+                    // ⚠️ NO "..." WITH NOTHING IN IT. Select is the menu's only entry now and there
+                    // is nothing to select in an empty archive, so the button would open a menu with
+                    // no children — which is a control that does nothing at all when tapped.
+                    if hasAnyArchived {
+                        ToolbarItem(placement: .topBarTrailing) { archiveMenu }
+                    }
                     // Pushed, the back chevron is the way out and a Done beside it is a second one.
                     if !pushed {
                         ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
@@ -2223,26 +2232,24 @@ struct ArchivedChatsView: View {
             } message: {
                 Text("This removes the chat from your list. It comes back if you get a new message.")
             }
-            .sheet(isPresented: $showArchiveSettings) { ArchiveSettingsView() }
-            .sheet(isPresented: $showHowItWorks) { ArchiveHelpView() }
             .onAppear { repo.start() }
     }
 
-    /// The page's own menu. Everything it holds was already in the app and unreachable from here:
-    /// the auto-archive switch lived three taps away in Settings > Chats, nothing explained what the
-    /// drawer does, and Select was a word in the corner (owner 2026-08-13).
+    /// The page's own menu, and Select is all that is left in it.
+    ///
+    /// ⛔ ARCHIVE SETTINGS AND HOW DOES IT WORK ARE GONE, on his order (2026-08-21, both circled).
+    /// Nothing is lost with them: the auto-archive switch they opened is the SAME `@AppStorage` key
+    /// Settings > Chats writes, so it is still there and still one setting. `ArchiveSettingsView.swift`
+    /// went with them rather than staying as two screens nothing can reach.
+    ///
+    /// ⚠️ AND THE "..." GOES WHEN THE MENU WOULD BE EMPTY. Select is the only entry now and it is
+    /// gated on there being something to select, so an empty archive would have left a Menu with no
+    /// children — which renders as a button that does nothing whatsoever when tapped. The gallery's
+    /// `showsMoreMenu` learned this same lesson on the Files tab; the answer is the same one.
     private var archiveMenu: some View {
         Menu {
-            Button { showArchiveSettings = true } label: {
-                Label { Text("Archive Settings") } icon: { MenuIcon(system: "slider.horizontal.3") }
-            }
-            Button { showHowItWorks = true } label: {
-                Label { Text("How Does It Work?") } icon: { MenuIcon(system: "questionmark.circle") }
-            }
-            if hasAnyArchived {
-                Button { withAnimation(.smooth(duration: 0.35)) { selecting = true } } label: {
-                    Label { Text("Select Chats") } icon: { MenuIcon(system: "checkmark.circle") }
-                }
+            Button { withAnimation(.smooth(duration: 0.35)) { selecting = true } } label: {
+                Label { Text("Select Chats") } icon: { MenuIcon(system: "checkmark.circle") }
             }
         } label: {
             Image(systemName: "ellipsis").font(.system(size: 18))
