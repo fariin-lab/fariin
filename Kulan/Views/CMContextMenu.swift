@@ -270,13 +270,52 @@ final class CMOverlay: UIView {
             // Dismissed inside that one turn (a press cancelled immediately): there is nothing left
             // to blur and turning it on now would light up an overlay on its way out.
             guard let self, !self.dismissing, self.superview != nil else { return }
-            UIView.animate(withDuration: 0.2) {
-                self.blurView.effect = UIBlurEffect(style: .regular)
+            // ⛔ THEIR BACKDROP, READ FROM SOURCE (2026-08-21, five readers over Telegram-iOS master).
+            // His report was "the brightness effect looks like a blur", and he was right about the
+            // symptom for a reason nobody had guessed: OURS WAS LIGHTENING THE SCREEN.
+            //
+            // ⚠️ THE TINT WAS `white 0.2` IN DARK MODE — white, at 20%, laid over a `.regular` blur.
+            // A milky veil. Theirs is `UIColor(rgb: 0x000000, alpha: 0.6)` — BLACK at sixty percent
+            // (DefaultDarkPresentationTheme.swift:767, and the same literal in the tinted dark theme).
+            // That is why theirs reads as a dim and ours reads as fog: opposite ends of the scale.
+            //
+            // ⚠️ AND THE BLUR STYLE IS `.light` IN BOTH THEMES, which looks wrong written down and is
+            // right on screen — NavigationBackgroundView.swift:69, no branch on appearance anywhere.
+            // The darkness is the tint's job; the blur only softens what is behind it. `.regular`
+            // resolves dark-on-dark and fights the tint for the same job.
+            //
+            // Light theme is a very slightly blue black at only 20% (0x000a26, DefaultDay:1044) —
+            // in light mode most of the separation comes from the blur desaturating the page, not
+            // from the tint.
+            //
+            // 0.2s, and their own note is that the backdrop deliberately does NOT spring while the
+            // menu does — ContextSourceContainer.swift:485 animates the whole thing as one alpha.
+            UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseInOut]) {
+                self.blurView.effect = UIBlurEffect(style: .light)
                 self.blurView.backgroundColor = UIColor { tc in
-                    tc.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.2)
-                                                   : UIColor(white: 0, alpha: 0.2)
+                    tc.userInterfaceStyle == .dark ? UIColor(white: 0, alpha: 0.6)
+                                                   : UIColor(red: 0, green: 0.039, blue: 0.149, alpha: 0.2)
                 }
                 self.setPreviewShadow(true)
+            } completion: { _ in
+                // ⚠️ AFTER THE EFFECT EXISTS, NEVER BEFORE. UIKit builds the effect view's children
+                // when the effect is set, so there is nothing to strip until this point.
+                //
+                // Their `.light` blur only stops looking milky once UIKit's own tint plate is taken
+                // off it and the backdrop's filter list is cut to the blur itself
+                // (NavigationBackgroundView.swift:71-99). Without this the system lays its own light
+                // wash under our black and the two cancel out — which is the same fog by another
+                // road.
+                for sub in self.blurView.subviews where String(describing: type(of: sub)).contains("VisualEffectSubview") {
+                    sub.isHidden = true
+                }
+                if let backdrop = self.blurView.subviews.first?.layer,
+                   let filters = backdrop.filters as? [NSObject] {
+                    backdrop.filters = filters.filter {
+                        let n = String(describing: $0)
+                        return n.contains("gaussianBlur") || n.contains("colorSaturate")
+                    }
+                }
             }
         }
 

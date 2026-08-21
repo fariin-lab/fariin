@@ -247,6 +247,47 @@ enum StoryCardShot {
 }
 
 /// Installs the row's press recogniser. Draws nothing and never takes a touch of its own.
+/// ⛔ THEIR PRESS RAMP, FROM SOURCE (Telegram-iOS master, read 2026-08-21).
+///
+/// The numbers are not ours and are not tuned by eye. Every one has a file and a line behind it, and
+/// the shape they make is what he asked to be copied rather than approximated.
+///
+///   beginDelay      0.12s  Display/Source/ContextGesture.swift:77 — dead time. Nothing moves. A
+///                          finger that leaves inside this window has done nothing at all.
+///   rampDuration    0.2s   ContextGesture.swift:143, a DisplayLinkAnimator 0→1. LINEAR, per frame,
+///                          no easing whatsoever (DisplayLinkAnimator.swift:316-319). This is the
+///                          part everybody gets wrong by reaching for a spring.
+///   release         0.2s   easeOut back to identity, ContextControllerSourceNode.swift:128. NOT a
+///                          spring — it does not overshoot on the way back.
+///   alpha           0.7    StoryPeerListItemComponent.swift:607-618. Set INSTANTLY on touch down,
+///                          before the 0.12 has even elapsed, and restored over 0.25s — deliberately
+///                          slower than the scale, so the item brightens after it has finished
+///                          growing rather than with it.
+///
+/// ⚠️ THE SCALE IS NOT A FIXED 0.9. It is "take fifteen points off the width, floor at 0.7"
+/// (ContextControllerSourceNode.swift:97-99), which means a big view barely moves and a small one
+/// shrinks a lot. Their story card is 60pt wide, so it lands on 0.75 — but the rule is what is
+/// copied here, not the answer, because our cards are not 60 and a hardcoded 0.75 would be a
+/// coincidence rather than a match.
+enum StoryPressRamp {
+    static let beginDelay: TimeInterval = 0.12
+    static let rampDuration: TimeInterval = 0.2
+    static let releaseDuration: TimeInterval = 0.2
+    static let pressedAlpha: CGFloat = 0.7
+    static let alphaRestoreDuration: TimeInterval = 0.25
+
+    /// `max(0.7, (w - 15) / w)` — their expression, unchanged.
+    static func minScale(width: CGFloat) -> CGFloat {
+        guard width > 0 else { return 0.7 }
+        return max(0.7, (width - 15.0) / width)
+    }
+
+    /// Linear interpolation, because their ramp is linear.
+    static func scale(width: CGFloat, progress: CGFloat) -> CGFloat {
+        1.0 * (1.0 - progress) + minScale(width: width) * progress
+    }
+}
+
 struct StoryRowLongPress: UIViewRepresentable {
     /// Which card is under this window point, and what its menu is. Asked at press time, so it
     /// always answers about the row as it stands right now rather than as it stood at layout.
@@ -391,7 +432,16 @@ struct StoryRowLongPress: UIViewRepresentable {
                                               : "scroll view \(type(of: anchor))")
             origin = view
             let g = UILongPressGestureRecognizer(target: self, action: #selector(pressed(_:)))
-            g.minimumPressDuration = 0.2      // the reference app's number, and the chat menu's
+            // ⛔ 0.32, NOT 0.2, AND IT IS TWO NUMBERS ADDED TOGETHER (read from Telegram-iOS master,
+            // 2026-08-21). Theirs is `beginDelay = 0.12` (Display/Source/ContextGesture.swift:77) of
+            // dead time in which nothing whatsoever happens, then a `DisplayLinkAnimator` of exactly
+            // 0.2s (line 143) ramping a progress value 0→1 — LINEAR, per frame, no easing
+            // (DisplayLinkAnimator.swift:316-319). The menu opens in that animator's completion.
+            //
+            // So a finger that has been down for 0.25s has NOT opened anything in their app, and
+            // ours was opening at 0.2. The squeeze below is what fills those 200ms — it is the whole
+            // reason a longer press does not feel longer.
+            g.minimumPressDuration = StoryPressRamp.beginDelay + StoryPressRamp.rampDuration
             g.delegate = self
             anchor.addGestureRecognizer(g)
             host = anchor
