@@ -2798,11 +2798,16 @@ struct StoryViewer: View {
     /// the target's ASPECT (square, for an avatar) is what crops the story to fill as it rounds. Card
     /// from the row, circle from an avatar, one system, no per-site branch.
     private var heroLandingRadius: CGFloat {
-        let key = MediaOpenRects.key(.storyRow, heroKeyNow())
-        // A source that never registered a radius answers 14, which is not this screen's default, so
-        // fall back to the row card's 24 rather than to the chat bubble's number.
-        let r = MediaOpenRects.cornerRadius(key)
-        return r == 14 ? 24 : r
+        // ⚠️ THIS USED TO READ `r == 14 ? 24 : r` and that is the corner bug he photographed. 14 is
+        // what `MediaOpenRects` answers when NOBODY registered a radius, and it is also a real number
+        // that a real view reports: the story reply card in a chat is drawn at exactly 14 and says
+        // so. The line could not tell those apart, so it overrode the one source that had told the
+        // truth — the story flew all the way home wearing the story row's 24pt corners and then
+        // snapped to the card's 14 on landing. `registeredCornerRadius` is nil only for silence.
+        //
+        // 24 stays as the fallback for genuine silence, because an unregistered source answering
+        // `cornerRadius` gets the CHAT BUBBLE's 14, which is not this screen's number.
+        MediaOpenRects.registeredCornerRadius(MediaOpenRects.key(.storyRow, heroKeyNow())) ?? 24
     }
 
     private func applyHero() {

@@ -239,11 +239,17 @@ enum StoryDoor {
     }
 
     /// The radius the source is drawn with, so the cover shot can be cut to it and its corners can
-    /// never carry the chat list into the flight. 14 is `MediaOpenRects`' "nobody said", which is the
-    /// chat bubble's number and not this screen's — fall back to the story card's 24.
+    /// never carry the chat list into the flight.
+    ///
+    /// ⚠️ IT USED TO READ `r == 14 ? 24 : r`, and 14 is not a sentinel. It is what `MediaOpenRects`
+    /// answers when nobody registered a radius AND it is a real number that real views report — the
+    /// story reply card in a chat is drawn at exactly 14. So that line quietly rewrote the one source
+    /// that had told the truth, and the story flew home with the story row's 24pt corners onto a card
+    /// with 14pt ones. `registeredCornerRadius` returns nil for silence, which is the only way to
+    /// tell the two apart. 24 stays as the fallback for genuine silence: it is this screen's number,
+    /// not the chat bubble's.
     private static func sourceRadius(_ key: String) -> CGFloat {
-        let r = MediaOpenRects.cornerRadius(MediaOpenRects.key(.storyRow, key))
-        return r == 14 ? 24 : r
+        MediaOpenRects.registeredCornerRadius(MediaOpenRects.key(.storyRow, key)) ?? 24
     }
 
     /// Every exit runs this: put the tapped view back, release the row order, and reload the rings

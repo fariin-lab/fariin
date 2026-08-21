@@ -129,6 +129,19 @@ import UIKit
     /// different bubble radius visibly changed shape at the moment the copy took over.
     static func cornerRadius(_ key: String) -> CGFloat { radii[key] ?? 14 }
 
+    /// ⛔ THE SAME NUMBER, WITHOUT THE 14 MEANING TWO THINGS.
+    ///
+    /// The reader above answers 14 for a source that never registered a radius, and 14 is also a real
+    /// radius that real views really report. Two callers took that at face value and rewrote it —
+    /// `StoryDoor.sourceRadius` and `StoriesViews.heroLandingRadius` both read "if it says 14, nobody
+    /// said, so use the story card's 24". That is right for a source that is silent and WRONG for the
+    /// story reply card in a chat, which is drawn at exactly 14 and says so. Its corners were being
+    /// flown at 24 the whole way home and then snapped to 14 on landing — the owner's "when is going
+    /// back postion after using other cormers szie".
+    ///
+    /// nil is the honest answer to "did anybody say". A caller that wants a fallback names its own.
+    static func registeredCornerRadius(_ key: String) -> CGFloat? { radii[key] }
+
     /// The visible message viewport in window coordinates — the reference app's `clippingAreaInsets`, as a rect.
     /// Published by the message list controller on every layout pass. The transition's flying copy is
     /// clipped to this region at the bubble end of BOTH directions, so a bubble half-scrolled under the
