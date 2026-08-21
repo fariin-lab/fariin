@@ -141,8 +141,16 @@ struct SendContactSheet: View {
 
     // MARK: - The people
 
-    /// FIVE ACROSS (his reference, counted off the frame).
-    private static let columns = Array(repeating: GridItem(.flexible(), spacing: gutter), count: 5)
+    /// ⛔ FOUR ACROSS (his order, 2026-08-21). It was five, counted off his own earlier reference
+    /// frame, and he has changed it having seen ours at the reference's real 60pt avatar.
+    ///
+    /// The two decisions are connected and that is worth saying: at five, a 60pt avatar left about
+    /// 3pt of slack per side and the faces nearly touched. At four the cell is roughly 84pt, so the
+    /// same 60pt avatar sits with about 12pt either side — which is close to what the reference's
+    /// own grid gives it. The avatar size does NOT change with this; `face` stays 60 and `sideInset`
+    /// re-derives itself, so the first face still lines up under the header's search button.
+    private static let perRow = 4
+    private static let columns = Array(repeating: GridItem(.flexible(), spacing: gutter), count: perRow)
     private static let gutter: CGFloat = 8
     private static let pageInset: CGFloat = 16
 
@@ -233,7 +241,9 @@ struct SendContactSheet: View {
     /// five — the same arithmetic `columns` performs, from the same numbers, so the two cannot drift.
     private var sideInset: CGFloat {
         guard gridWidth > 0 else { return Self.pageInset }
-        let cell = (gridWidth - Self.pageInset * 2 - Self.gutter * 4) / 5
+        // Derived from `perRow` rather than written out, because this arithmetic and `columns` have
+        // to agree and they drifted the last time the count changed by hand.
+        let cell = (gridWidth - Self.pageInset * 2 - Self.gutter * CGFloat(Self.perRow - 1)) / CGFloat(Self.perRow)
         return Self.pageInset + max(0, (cell - Self.face) / 2)
     }
 
@@ -249,7 +259,12 @@ struct SendContactSheet: View {
             Text(selected.isEmpty ? (copied ? "Copied" : "Copy Link")
                                   : "Send to \(selected.count)")
                 .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(selected.isEmpty ? Color.accentColor : .white)
+                // ⛔ WHITE IN BOTH STATES (his order, 2026-08-21). It was the accent colour while
+                // nothing was picked, which made "Copy Link" the only blue text on a sheet whose
+                // every other label is white — it read as a link inside a button rather than as the
+                // button's own title. The tinted fill behind it already says the button is the
+                // quieter of the two states; the text does not have to say it twice.
+                .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
                 .background(selected.isEmpty ? Color.accentColor.opacity(0.14) : Color.accentColor,

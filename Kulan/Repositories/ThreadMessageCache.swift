@@ -22,8 +22,28 @@ final class ThreadMessageCache {
         // chat after backgrounding is still instant, but trim each chat to ~2 screens of messages so a
         // backgrounded app isn't holding thousands of decrypted Message structs under memory/thermal
         // pressure (the SwiftUI-layout watchdog kill happened exactly there).
+        // ⛔ `queue: nil`, NOT `.main`, AND IT IS THE ONE LINE IN A WATCHDOG KILL'S STACK.
+        //
+        // Crash report 2026-08-21, build 631: `0x8BADF00D`, scene-update, ten seconds exhausted in
+        // the BACKGROUND — with the app on 0.02s of CPU, 0%, so nothing of ours was computing. The
+        // main thread was parked in `-[NSOperation waitUntilFinished]`, inside `_CFXNotificationPost`,
+        // inside `-[UIApplication _applicationDidEnterBackground]`. This observer is that operation.
+        //
+        // Passing a queue makes NotificationCenter wrap the block in an `NSOperation`, enqueue it and
+        // WAIT. But `didEnterBackground` is posted on the main thread, so the run loop that would run
+        // that operation is the very one blocked waiting for it. On a healthy phone it turns over
+        // fast enough not to matter; on a thermally throttled one (this report: state "serious") the
+        // wait is what runs out the ten-second allowance.
+        //
+        // `nil` runs the block synchronously on the POSTING thread, which for this notification is
+        // always main anyway — so it lands on the same thread at the same moment, with no operation
+        // and nothing to wait on. The work is a dictionary trim; inline is where it belongs.
+        //
+        // ⚠️ The other `queue: .main` observers in the app are deliberately left alone. They hang off
+        // foreground, become-active, memory-warning and player notifications, none of which run
+        // against a hard suspend deadline. This one does, which is the whole reason it is different.
         NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification,
-                                               object: nil, queue: .main) { [weak self] _ in
+                                               object: nil, queue: nil) { [weak self] _ in
             guard let self else { return }
             for (cid, msgs) in self.byCid where msgs.count > self.backgroundCap {
                 self.byCid[cid] = Array(msgs.suffix(self.backgroundCap))

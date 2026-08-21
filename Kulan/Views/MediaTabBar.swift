@@ -115,10 +115,21 @@ struct MediaTabBar: View {
         } label: {
             Text(title)
                 .font(.system(size: 16, weight: on ? .semibold : .regular))
-                // ⚠️ NOT `.primary` / `.secondary`. Those are HIERARCHICAL styles and resolve against
-                // a Button's tint, so inside a tinted List they come out coloured — the same trap
-                // the archive's context-menu icons fell into. Spelled explicitly, they cannot.
-                .foregroundStyle(on ? Color.white : Color.white.opacity(0.55))
+                // ⛔ THE SYSTEM LABEL COLOURS, AND HARDCODED WHITE WAS THE BUG HE PHOTOGRAPHED.
+                //
+                // These were `Color.white` and `Color.white.opacity(0.55)`, which is fine on a dark
+                // page and invisible on a light one: his light-mode screenshot is a glass capsule
+                // with nothing legible in it at all, "Media" included, because white text on
+                // near-white glass has no contrast to give. Real system glass adapts and so must
+                // whatever sits on it — that is most of what he means by "native, not custom".
+                //
+                // ⚠️ STILL NOT `.primary` / `.secondary`, and the old note's reason stands: those are
+                // HIERARCHICAL styles that resolve against a Button's tint, so inside a tinted
+                // container they come out coloured — the trap the archive's context-menu icons fell
+                // into. `UIColor.label` and `.secondaryLabel` are concrete adaptive colours, not
+                // hierarchy, so they follow light and dark WITHOUT following the tint. Both problems,
+                // one substitution.
+                .foregroundStyle(on ? Color(uiColor: .label) : Color(uiColor: .secondaryLabel))
                 .lineLimit(1)
                 .fixedSize()                       // each segment is as wide as its own words
                 .padding(.horizontal, Self.segmentHPad)
@@ -129,7 +140,10 @@ struct MediaTabBar: View {
                     // one; two pills cross-fading is the cheap version and reads as a blink.
                     if on {
                         Capsule()
-                            .fill(Color.primary.opacity(0.16))
+                            // The system's own selected-segment fill rather than a hand-mixed
+                            // opacity: it is already defined against both appearances and against
+                            // glass, which a `primary.opacity` is not.
+                            .fill(Color(uiColor: .tertiarySystemFill))
                             .matchedGeometryEffect(id: "mediaTabPill", in: pill)
                     }
                 }
