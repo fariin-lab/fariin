@@ -2618,9 +2618,9 @@ struct ChatRow: View, Equatable {
     }
 
     private var decodedLast: String {
-        #if DEBUG
-        if DemoMode.active { return conv.lastMessageCipher }   // demo previews are stored plaintext
-        #endif
+        // demo previews are stored plaintext. Un-guarded from `#if DEBUG`: without this every row
+        // in the demo chat list runs a plaintext preview through the decryptor and comes back blank.
+        if DemoMode.active { return conv.lastMessageCipher }
         // The official channel is a public broadcast, so its preview is already plaintext — there is
         // no key and nothing to decrypt. Running it through the decryptor would return an empty
         // string and the row would show a blank line.

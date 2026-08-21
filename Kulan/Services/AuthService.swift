@@ -25,9 +25,9 @@ final class AuthService: NSObject {
     /// Adopt an existing session (anonymous tester or real account). Does NOT create
     /// anything — a signed-out app shows the Welcome screen instead.
     func bootstrap() async {
-        #if DEBUG
-        if DemoMode.active { return }   // Firebase-free demo already set its own uid
-        #endif
+        // Firebase-free demo already set its own uid. No longer `#if DEBUG` — `active` is false in
+        // every build until the demo username is typed at sign-up.
+        if DemoMode.active { return }
         uid = Auth.auth().currentUser?.uid
     }
 

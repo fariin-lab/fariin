@@ -2222,9 +2222,9 @@ final class StoriesRepository {
     // Kept for every existing call site: first call goes LIVE (attaches the listeners); later
     // calls just regroup (refilter expiry, pick up renamed profiles) — no network round-trip.
     func load(force: Bool = false) async {
-        #if DEBUG
-        if DemoMode.active { return }   // demo stories injected; don't let Firebase overwrite them
-        #endif
+        // demo stories injected; don't let Firebase overwrite them. Un-guarded from `#if DEBUG`
+        // so the demo works in TestFlight; `active` is false until the demo username is typed.
+        if DemoMode.active { return }
         guard let me = Auth.auth().currentUser?.uid else { return }
         if listeningUid != me {
             // ⚠️ THE PAINT COMES FIRST, BEFORE THE HOUSEKEEPING BELOW. It used to come after, and
@@ -2277,9 +2277,9 @@ final class StoriesRepository {
     /// thread, before anything is drawn. Re-entry is free — `seedFromDisk` refuses to do anything
     /// once the row has content.
     @MainActor func seedRowFromDisk() {
-        #if DEBUG
-        if DemoMode.active { return }   // demo stories are injected; a disk row would fight them
-        #endif
+        // demo stories are injected; a disk row would fight them. Un-guarded from `#if DEBUG` for
+        // the same reason as `load()` above.
+        if DemoMode.active { return }
         guard let me = Auth.auth().currentUser?.uid else { return }
         seedFromDisk(me)
     }

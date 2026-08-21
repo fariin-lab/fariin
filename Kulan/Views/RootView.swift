@@ -579,17 +579,20 @@ struct OnboardingView: View {
     }
 
     private func save() async {
-        #if DEBUG
-        // Preview demo login (Appetize): "apple" loads a fully-local demo account (stories + chats)
-        // with no Firebase, so the app can be tried where Storage uploads don't work. Debug-only.
-        // Accept it in EITHER field (name or username), trimmed — so a wrong-field tap still works.
+        // Demo login: "apple" loads a fully-local demo account (stories + chats) with no Firebase,
+        // so the app can be shown where Storage uploads don't work and so the website screenshots
+        // can be taken off a real phone. Accept it in EITHER field (name or username), trimmed, so
+        // a wrong-field tap still works.
+        //
+        // ⛔ This used to be `#if DEBUG` and is now live in TestFlight too, gated on one flag in
+        // DemoMode. Set `DemoMode.reachableInRelease` to false before the App Store submission and
+        // this branch goes dead again. The reasoning is written out at the top of DemoMode.swift.
         let nameTrim = name.trimmingCharacters(in: .whitespaces).lowercased()
-        if handle.lowercased() == "apple" || nameTrim == "apple" {
+        if DemoMode.reachableInRelease, handle.lowercased() == "apple" || nameTrim == "apple" {
             // Firebase-free demo: DemoMode.activate() sets AuthService.shared.uid itself.
             await MainActor.run { DemoMode.activate(); onDone() }
             return
         }
-        #endif
         let n = name.trimmingCharacters(in: .whitespaces)
         let h = ChatService.sanitizeHandle(handle)
         guard !n.isEmpty else { error = "Enter your name"; return }

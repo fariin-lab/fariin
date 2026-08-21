@@ -407,12 +407,12 @@ final class ThreadRepository {
         guard locallyDeleted.remove(id) != nil else { return }
         rebuild()
     }
-    #if DEBUG
+    // Un-guarded from `#if DEBUG`: ThreadView's demo send calls this, and that path is live in
+    // TestFlight now. Nothing reaches it unless DemoMode.active is true.
     func addDemoMessage(_ text: String, from authorId: String) {
         messages.append(Message(demoId: UUID().uuidString, from: authorId, text, Date()))
         refreshItems()
     }
-    #endif
     func markFailed(clientId: String) {
         if let i = pending.firstIndex(where: { $0.clientId == clientId }) { pending[i].sendState = .failed }
         refreshItems()
@@ -420,9 +420,10 @@ final class ThreadRepository {
     func removePending(clientId: String) { pending.removeAll { $0.clientId == clientId }; refreshItems() }
 
     func start() {
-        #if DEBUG
+        // Demo: serve the local conversation directly — no Firestore, no decryption. No longer
+        // `#if DEBUG`; the whole demo is gated on DemoMode.reachableInRelease now, and `active` is
+        // false in every build until somebody types the demo username at sign-up.
         if DemoMode.active {
-            // Preview: serve the local demo conversation directly — no Firestore, no decryption.
             messages = DemoMode.messages(for: cid)
             didInitialLoad = true
             canLoadOlder = false
@@ -430,7 +431,6 @@ final class ThreadRepository {
             refreshItems()
             return
         }
-        #endif
         skeletonArmed = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
             guard let self, !self.didInitialLoad else { return }   // cache already answered

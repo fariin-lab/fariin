@@ -3205,13 +3205,14 @@ struct ThreadView: View {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         impact(.light)   // tactile send (parity with voice release)
-        #if DEBUG
-        if DemoMode.active {   // preview: echo locally, no encryption/Firestore
+        // Demo: echo locally, no encryption and no Firestore. Un-guarded from `#if DEBUG` along
+        // with the rest of the demo path — without it, typing in a demo chat would run the real
+        // send against a uid that does not exist on the server.
+        if DemoMode.active {
             input = ""; typingSent = false
             repo.addDemoMessage(text, from: me)
             return
         }
-        #endif
         // Resolve which inserted @mentions are still present in the final text.
         let mentions = mentionMap.compactMap { text.contains("@\($0.key)") ? $0.value : nil }
         mentionMap = [:]

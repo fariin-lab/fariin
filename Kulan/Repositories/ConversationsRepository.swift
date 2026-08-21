@@ -45,9 +45,9 @@ final class ConversationsRepository {
     }
 
     func start() {
-        #if DEBUG
-        if DemoMode.active { hasLoaded = true; return }   // demo data already injected; don't let Firebase overwrite it
-        #endif
+        // demo data already injected; don't let Firebase overwrite it. No longer `#if DEBUG` —
+        // `active` is false in every build until the demo username is typed at sign-up.
+        if DemoMode.active { hasLoaded = true; return }
         // Safety net FIRST — before the uid guard / listener — so the chat-list skeleton can NEVER spin
         // forever: even if auth isn't ready yet, or Firestore's realtime channel is blocked/slow (a cloud
         // simulator like Appetize, or a brand-new user on a poor connection). Real chats clear it sooner.
