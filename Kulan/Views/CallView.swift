@@ -716,9 +716,25 @@ struct CallContainer<Content: View>: View {
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.82), value: showsFloatingVideo)
         .environment(\.callZoomNamespace, callZoom)
+        // ⛔ THE SETTER SWALLOWED THE DISMISS, AND THAT LOST THE CALL.
+        //
+        // The comment below says this screen "is left by a button", and that stopped being true the
+        // moment it was presented with a zoom transition: the system zoom brings its own
+        // swipe-down-to-dismiss, which the note itself acknowledges. So the cover could be dismissed
+        // by a swipe, SwiftUI reported it through this setter, and `set: { _ in }` threw it away —
+        // the screen went, `minimized` stayed false, and the green return bar keys on `minimized`.
+        // Result: an active call with nothing anywhere on screen pointing back to it. The owner's
+        // report, exactly: "when i swipe down the call, that call will not show in chatlist on top
+        // like when you tap X".
+        //
+        // A swipe now means what the X means. Guarded on `isActive` so the dismissal that happens
+        // because the call ENDED does not mark a finished call as minimized on its way out.
         .fullScreenCover(isPresented: Binding(
             get: { isActive && !call.minimized },
-            set: { _ in }
+            set: { presented in
+                guard !presented, isActive else { return }
+                withAnimation(.easeInOut(duration: 0.25)) { call.minimized = true }
+            }
         )) {
             // GROWS OUT OF THE BUTTON THAT WAS PRESSED (owner, 2026-08-20), rather than sliding up
             // from the bottom edge. `call.isVideo` is already decided by the time this presents, so
@@ -726,13 +742,23 @@ struct CallContainer<Content: View>: View {
             //
             // ⚠️ Safe here in a way it was NOT on the media viewer, and the difference is worth
             // stating: the system zoom brings its own dismiss pan, which fought that screen's
-            // MediaDismissHost drag. This screen has no drag of its own — it is left by a button —
-            // so there is nothing for it to fight.
+            // MediaDismissHost drag. This screen has no drag of its own, so there is nothing for it
+            // to fight.
+            //
+            // It does NOT follow that this screen is only ever left by a button — that is what the
+            // note used to claim and it is why the dismiss was thrown away above. The zoom's pan is
+            // a second way out, and it has to mean the same thing the button means.
             CallView()
                 .navigationTransition(.zoom(sourceID: CallZoomSource.id(video: call.isVideo),
                                             in: callZoom))
         }
-        .fullScreenCover(isPresented: $showGroupRestore) { GroupCallView() }
+        // THE SAME HOLE ON THE GROUP SIDE. Tapping the bar clears `minimized` and presents this;
+        // GroupCallView's own swipe-down sets `minimized` back to true, but a swipe on the COVER
+        // itself only closes the cover, and `minimized` was already false — so the group call lost
+        // its return bar too. Restoring the flag on dismiss puts the bar back either way.
+        .fullScreenCover(isPresented: $showGroupRestore, onDismiss: {
+            if group.isActive { group.minimized = true }
+        }) { GroupCallView() }
     }
 }
 
