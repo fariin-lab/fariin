@@ -167,6 +167,20 @@ struct StoryEditorView: View {
 
     @State private var caption = ""
     @State private var drawing = PKDrawing()
+    /// ⛔ WHICH LAYER IS ON TOP, AND IT IS WHICHEVER WAS TOUCHED LAST (owner, 2026-08-21: "when i use
+    /// pen then i try to use Aa the text are entering UNDER pen … always the one is the last one
+    /// become up").
+    ///
+    /// The drawing was permanently above the text and the stickers, because it is declared after
+    /// them in the ZStack and a ZStack draws in declaration order. So a caption written after a
+    /// scribble went under the scribble, every time, with no way to bring it forward.
+    ///
+    /// ⚠️ IT IS ONE FLAG AND NOT A z PER ITEM, and that is the architecture rather than a shortcut.
+    /// Every stroke lives in ONE `PKDrawing` on ONE canvas — there is no such thing as putting a
+    /// caption between two strokes, because the strokes are not separable layers. So the honest
+    /// question is the only one that can be answered: was the last thing you did a stroke, or a
+    /// thing you placed. His sentence is exactly that question.
+    @State private var drawingOnTop = true
     @State private var isDrawing = false
     /// The strokes as they were when the pen was opened, so its ✕ can put them back. Nil whenever
     /// the pen is shut — see `closePen`.
@@ -1480,6 +1494,9 @@ struct StoryEditorView: View {
                     }
                 )
             }
+            // Still under the text either way — a caption is the thing you want readable when the
+            // two land on each other, and `flatten` bakes the same order.
+            .zIndex(drawingOnTop ? 1 : 3)
 
             // Text overlays — above the photo, below the drawing canvas + controls.
             ForEach($overlays) { $o in
@@ -1506,6 +1523,8 @@ struct StoryEditorView: View {
                 )
                 .opacity(editingID == o.id ? 0 : 1)   // hide the one being edited (it lives in the editor)
             }
+            // ABOVE THE INK WHEN THE INK WAS NOT THE LAST THING TOUCHED. See `drawingOnTop`.
+            .zIndex(drawingOnTop ? 2 : 4)
 
             if isDrawing {
                 // ⛔ THE STROKES BELONG TO THE PICTURE, NOT TO THE CARD — his 2026-08-18 "if I zoom
@@ -1541,6 +1560,8 @@ struct StoryEditorView: View {
                               inkType: isHighlighter ? .marker : .pen,
                               penWidth: penWidth,
                               onStroke: { drawing in
+                                  // A stroke is the last thing touched, so the ink comes forward.
+                                  drawingOnTop = true
                                   withAnimation(.easeInOut(duration: 0.15)) { strokeInFlight = drawing }
                               })
                     // Big enough to STILL cover the card once the zoom has shrunk it — see
@@ -1592,6 +1613,17 @@ struct StoryEditorView: View {
                     .frame(width: card.width, height: card.height)
                     .allowsHitTesting(false)
             }
+            // ⛔ THE INK GOES OVER OR UNDER EVERYTHING PLACED, DEPENDING ON WHICH CAME LAST.
+            //
+            // It used to be neither: the canvas is declared after the text and the stickers and a
+            // ZStack draws in declaration order, so the ink was permanently on top and a caption
+            // written after a scribble went under it with no way to bring it forward.
+            //
+            // ⚠️ AND THE EXPORT ALREADY DISAGREED WITH THE SCREEN. The bake puts stickers, then
+            // the drawing, then the text — so text has always come out ABOVE the ink in the posted
+            // story while sitting UNDER it in the preview. One of the two was wrong about the other
+            // whatever anybody chose; they are driven by the same flag now.
+            .zIndex(drawingOnTop ? 5 : 0)
 
             // Center alignment guides + trash zone (only while dragging an overlay).
             if draggingID != nil {
@@ -2955,6 +2987,8 @@ struct StoryEditorView: View {
     private func addTextOverlay() {
         captionFocused = false
         let o = TextOverlay(center: CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2))
+        // Placed last, so text and stickers come forward over the ink. See `drawingOnTop`.
+        drawingOnTop = false
         overlays.append(o)
         selectedID = o.id
         editingID = o.id   // open the editor immediately
@@ -3008,6 +3042,7 @@ struct StoryEditorView: View {
     @MainActor private func addSticker(_ g: GiphyService.Gif) async {
         guard let image = await Self.stickerStill(g.url) else { return }
         let width = min(180, max(90, (canvasSize == .zero ? 390 : canvasSize.width) * 0.42))
+        drawingOnTop = false
         stickers.append(StickerOverlay(image: image, center: canvasCentre, baseWidth: width))
     }
 
@@ -3046,6 +3081,7 @@ struct StoryEditorView: View {
         r.scale = 3        // it is text at sticker size; a 1x bake of that is a smudge
         r.isOpaque = false
         guard let img = r.uiImage else { return }
+        drawingOnTop = false
         stickers.append(StickerOverlay(image: img, center: canvasCentre,
                                        baseWidth: img.size.width, action: action,
                                        chip: recipe))
@@ -3566,6 +3602,7 @@ struct StoryEditorView: View {
                     .rotationEffect(s.rotation)
                     .position(s.center)
             }
+            .zIndex(drawingOnTop ? 1 : 3)
             if !drawing.bounds.isEmpty {
                 // ⚠️ THE PHOTO'S TRANSFORM, THE SAME TWO LINES IT CARRIES ABOVE. The pen layer is
                 // anchored to the picture on screen now (see the note in `cardContent`), so leaving
@@ -3578,6 +3615,11 @@ struct StoryEditorView: View {
                     .scaleEffect(photoZoom).offset(photoOffset)
                     .frame(width: size.width, height: size.height).clipped()
             }
+            // The same flag the screen uses. The bake and the preview are two drawings of one
+            // decision, and before this they disagreed: the screen put the ink over the text and
+            // this put the text over the ink, so a posted story never looked like the one that was
+            // composed. Whichever was touched last is on top, in both.
+            .zIndex(drawingOnTop ? 5 : 0)
             // Bake the text overlays — same builder + transforms as on-screen → WYSIWYG.
             ForEach(overlays) { o in
                 storyStyledText(o, maxWidth: size.width * 0.9)
@@ -3585,6 +3627,7 @@ struct StoryEditorView: View {
                     .rotationEffect(o.rotation)
                     .position(o.center)
             }
+            .zIndex(drawingOnTop ? 2 : 4)
             // (Caption is NOT baked here — it's posted as text and drawn as an overlay.)
         }
         .frame(width: size.width, height: size.height)
