@@ -516,6 +516,49 @@ struct StoryRowLongPress: UIViewRepresentable {
             other is UIPanGestureRecognizer
         }
 
+        /// ⛔ THE ARCHIVE STRIP'S PRESS, AND THE ACTUAL ROOT CAUSE AFTER FOUR WRONG ONES.
+        ///
+        /// Reported dead five times. Four fixes shipped and died, and every one of them was aimed at
+        /// the ANCHOR — the climb, a retry, a second retry, a liveness check, a gated window
+        /// fallback. The debug overlay finally settles it: on the failing screen the anchor is found
+        /// on the first step and reads `scroll view UIScrollView`, gate `open (scroll anchor, no
+        /// gate)`. The recogniser is installed, on the right view, ungated. It was never missing. It
+        /// was losing an arbitration.
+        ///
+        /// WHY THIS SCREEN AND NOT THE CHAT LIST. The chat list's cards are UIKit `UIControl`s
+        /// (`addTarget(… .touchUpInside)`), and a control takes its input through touch DELIVERY, not
+        /// through a recogniser — so there is nothing for this press to compete with and it has never
+        /// failed there. The archive's cards are a SwiftUI `Button` inside a `UIHostingController`,
+        /// and a SwiftUI Button is backed by a real `UIGestureRecognizer`. `shouldRecognizeSimultaneously`
+        /// above answers false for it (deliberately, see its note), so the two are mutually exclusive;
+        /// SwiftUI's begins on touch-DOWN to drive the pressed state, and a recogniser that begins
+        /// cancels every exclusive recogniser analysing the same touches. Ours is cancelled at
+        /// touch-down and never reaches its 0.32s.
+        ///
+        /// THE OWNER'S OWN REPRODUCTION IS THE PROOF: swipe with one finger, hold, then press with a
+        /// second — and it works. A begun pan makes the scroll view cancel the touches it delivered
+        /// into the hosting view, which kills SwiftUI's recogniser, and the second finger arrives with
+        /// no competitor. That is not a quirk, it is the mechanism stated backwards.
+        ///
+        /// THE FIX IS THE DEPENDENCY, NOT SIMULTANEITY. Granting simultaneity is what was tried
+        /// before and it caused its own regression — the tap kept tracking, so lifting off the menu
+        /// opened the story behind it (see the note above). Requiring the other recogniser to wait
+        /// for OUR failure gives both halves at once: hold past 0.32s and we recognise, so the Button
+        /// is cancelled and no stray tap fires; lift early and we fail, so the Button proceeds and the
+        /// story opens exactly as it always did.
+        ///
+        /// ⚠️ SCOPED TO OUR OWN STRIP, deliberately. `host` is the scroll view this recogniser was
+        /// installed on, so only recognisers living INSIDE it are made to wait. This class is shared
+        /// with the chat list's press, and a blanket rule would hand every unrelated recogniser in the
+        /// app a 0.32s delay. The pan is excluded for the reason it is excluded above: a horizontal
+        /// scroll must still be able to take the press away.
+        func gestureRecognizer(_ g: UIGestureRecognizer,
+                               shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+            guard !(other is UIPanGestureRecognizer) else { return false }
+            guard let host, let otherView = other.view else { return false }
+            return otherView.isDescendant(of: host)
+        }
+
         @objc private func pressed(_ g: UILongPressGestureRecognizer) {
             let p = g.location(in: nil)
             switch g.state {
