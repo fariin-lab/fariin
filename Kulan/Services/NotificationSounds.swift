@@ -58,8 +58,17 @@ struct NotificationSound: Identifiable, Equatable {
     // A ring has to be a LONG, LOOPING, melodic phrase, and CallKit will only play a file that ships
     // in the app bundle. These are our own synthesised tones (Kulan/Resources/Ringtones), so there's
     // no licensing question and nothing is copied from another app.
+    //
+    // TIDE IS THE DEFAULT AND IT IS THE NEWEST (owner, 2026-08-21). He asked for one more in the same
+    // family, a little different from the six, and sent a recording of the tone he rings with on his
+    // own phone. Two things were measured off that recording and both are in this one: its pulse is
+    // exactly two a second, and it is far warmer than anything we had. So Tide keeps the house shape
+    // and opens an octave and a half below the rest, on a low A3, where none of the others go.
+    // `tools/make-ringtone.js` renders it and holds the whole reasoning. Nothing about it is copied:
+    // the notes are A major, the chord the app's first ringtone was already built from.
     static let ringtones: [NotificationSound] = [
-        NotificationSound(id: "kulan",   name: "Fariin (default)", bundleFile: "kulan_ringtone.wav"),
+        NotificationSound(id: "tide",    name: "Tide (default)", bundleFile: "ring_tide.wav"),
+        NotificationSound(id: "kulan",   name: "Fariin",  bundleFile: "kulan_ringtone.wav"),
         NotificationSound(id: "ascend",  name: "Ascend",  bundleFile: "ring_ascend.wav"),
         NotificationSound(id: "beacon",  name: "Beacon",  bundleFile: "ring_beacon.wav"),
         NotificationSound(id: "ripple",  name: "Ripple",  bundleFile: "ring_ripple.wav"),
