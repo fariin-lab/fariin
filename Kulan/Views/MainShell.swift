@@ -1942,24 +1942,24 @@ struct ArchivedChatsView: View {
     /// makes no sense on a chat that is already archived.
     @ViewBuilder private func archivedMenu(_ conv: Conversation) -> some View {
         Button { Task { await ChatService.setArchived(conv.id, false) } } label: {
-            Label { Text("Unarchive") } icon: { MenuIcon("ic_archive") }
+            Label { Text("Unarchive") } icon: { MenuIcon("ic_archive", ink: .label) }
         }
         if conv.hasUnreadMark(me) {
             Button {
                 Task { await ChatService.resetUnread(conv.id); await ChatService.markRead(conv.id) }
             } label: {
-                Label { Text("Read") } icon: { MenuIcon("ic_menu_unread") }
+                Label { Text("Read") } icon: { MenuIcon("ic_menu_unread", ink: .label) }
             }
         } else {
             Button { Task { await ChatService.markUnread(conv.id) } } label: {
-                Label { Text("Unread") } icon: { MenuIcon("ic_menu_unread") }
+                Label { Text("Unread") } icon: { MenuIcon("ic_menu_unread", ink: .label) }
             }
         }
         // Through the same confirmation the swipe uses, and the same one the chat list has always
         // had. This one deleted on the spot, which made the archive the only place in the app where
         // a chat could go with one tap and no question.
         Button(role: .destructive) { pendingDelete = conv } label: {
-            Label { Text("Delete") } icon: { MenuIcon(system: "trash.fill") }
+            Label { Text("Delete") } icon: { MenuIcon(system: "trash.fill", ink: .systemRed) }
         }
     }
 

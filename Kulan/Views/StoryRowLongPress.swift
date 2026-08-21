@@ -85,7 +85,22 @@ enum StoryRowPress {
     /// valuable thing in it. Flip this one word to bring the readout back; do not rebuild it from
     /// scratch, and do not delete it on a tidy-up pass. `StoryPressDebugReadout` returns nothing at
     /// all while this is false, and the `note…` calls are writes to an object nobody renders.
-    static let on = false
+    /// ⛔ ON, FOR ONE BUILD, ON PURPOSE (2026-08-21). The archive strip's long press has now been
+    /// reported dead FIVE times and four source-reasoned fixes have shipped and died — the latest
+    /// being the port that gave the strip a scroll view of its own, which should have settled it.
+    ///
+    /// This readout exists for exactly this situation and has been compiled OUT the entire time,
+    /// which is why every one of those fixes shipped blind. It prints three lines on the archive
+    /// page: which anchor the press installed on, whether the gate let a press through, and whether
+    /// one began. That names the failure instead of leaving it to be reasoned about again:
+    ///
+    ///   "scroll view UIScrollView"  the install worked — the fault is downstream, in the hit test
+    ///   "window (gated)"            the climb still found nothing and fell back
+    ///   "NONE — no scroll view…"    nothing to anchor on at all
+    ///
+    /// ⚠️ IT GOES BACK TO false BEFORE ANYTHING SHIPS TO ANYBODY BUT HIM, along with the whole
+    /// section this sits in. It is a debug band drawn over a real page.
+    static let on = true
 
     @Published var anchor = "anchor  —"
     @Published var gate   = "gate    —"
