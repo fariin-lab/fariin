@@ -37,19 +37,27 @@ import FirebaseFirestore
 //   4. a call running                    -> NOT here. Calls are live, shoot a real one.
 //   5. a story open                      -> tap Cabdi's ring.
 //
-// REAL PHOTOGRAPHS. Every picture below is drawn in code, which is fine for testing layout and
-// wrong for a website: a gradient with a word on it does not read as a photograph. Drop real
-// JPEGs into the asset catalogue with these names and they are used instead, with no code change:
+// REAL PHOTOGRAPHS. Anything missing falls back to a drawing — a gradient with the name and an
+// elapsed-second counter painted on it, which is fine for checking layout and useless for the
+// website screenshots this exists to produce. Drop a JPEG into the asset catalogue under the name
+// the code asks for and it is used instead, with no code change.
 //
-//      demo-photo-wedding    the photo sent in the Ayaan chat
-//      demo-story-cabdi      Cabdi's story
-//      demo-story-mine       your own story
-//      demo-face-hooyo       profile pictures, one per person
-//      demo-face-ayaan
-//      demo-face-cabdi
-//      demo-face-khadra
+// ⚠️ THIS COMMENT USED TO LIST THE NAMES AND THE LIST WAS WRONG. It named seven; the code reaches
+// for more than twenty, and the three it missed (`demo-story-khadra`, `demo-face-me`,
+// `demo-photo-dinner`) stayed as gradients through a whole round of "the photos are done". A list
+// maintained by hand next to code that keeps growing is a list that lies. Ask the source instead:
 //
-// Anything missing falls back to the drawn version, so the demo never breaks for want of an image.
+//   comm -23 <(grep -o '"demo-\(story\|face\|photo\)-[a-z0-9-]*"' Kulan/Services/DemoMode.swift \
+//                | tr -d '"' | sort -u) \
+//            <(ls -d Kulan/Resources/Assets.xcassets/demo-*.imageset \
+//                | sed 's|.*/||;s|\.imageset||' | sort)
+//
+// Anything it prints is a picture the demo wants and does not have.
+//
+// WHAT MAY GO IN HERE. The owner's own AI-made images can show people, because there is no real
+// person in them to clear. Bought or free stock may NOT be used for a face: the licence covers the
+// photograph, not the human being in it, and these end up on a public marketing page. Everything
+// sourced from Pexels here is deliberately scenery and objects.
 // ---------------------------------------------------------------------------------------------
 enum DemoMode {
     /// Debug or TestFlight, NEVER the App Store. Borrowed wholesale from `DemoStoryMedia`, which
