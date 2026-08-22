@@ -1647,6 +1647,13 @@ struct StoryEditorView: View {
                               showsToolPicker: false,
                               inkType: isHighlighter ? .marker : .pen,
                               penWidth: penWidth,
+                              // ⛔ ZOOM WHILE THE PEN IS OPEN. The canvas covers the photo, so it
+                              // carries the two-finger gestures and hands them to the photo's own
+                              // coordinator — see `PhotoTransformRelay.drivePinch`. Nothing about
+                              // where the ink LANDS changes: the strokes already wear this same
+                              // transform (the long note above), and PencilKit goes on recording in
+                              // its own untransformed space, which is the picture's space.
+                              photoRelay: photoTransform,
                               onStroke: { drawing in
                                   // A stroke is the last thing touched, so the ink comes forward.
                                   drawingOnTop = true
@@ -4538,6 +4545,22 @@ struct StoryPressStyle: ButtonStyle {
 final class PhotoTransformRelay {
     /// Set by whoever is riding along. Called on every frame of the gesture, on the main thread.
     var apply: ((CGFloat, CGSize) -> Void)?
+
+    /// ⛔ AND THE OTHER DIRECTION, WHICH IS WHAT LETS THE PEN PAGE ZOOM (owner 2026-08-22: "in the pen
+    /// page I can't zoom the image").
+    ///
+    /// The photo's pinch and pan live on the photo's own container, and while the pen is open the
+    /// PencilKit canvas covers it. Gesture recognisers only ever see touches delivered to their own
+    /// view or its descendants, and the canvas is a SIBLING — so the photo's recognisers were not
+    /// being refused the pinch, they were never offered it. Enabling them would have changed nothing.
+    ///
+    /// So the canvas grows its own two-finger recognisers and hands them to the photo's coordinator
+    /// through here. The photo keeps ALL the arithmetic — clamping, limits, the spring on release —
+    /// and there is no second implementation of any of it to drift. `UIGestureRecognizer` reports
+    /// scale and translation relative to whichever view it is asked about, so a recogniser living on
+    /// the canvas answers the photo's questions exactly as the photo's own would.
+    var drivePinch: ((UIPinchGestureRecognizer) -> Void)?
+    var drivePan: ((UIPanGestureRecognizer) -> Void)?
     /// The last transform published, so a rider that appears mid-gesture starts in the right place.
     private(set) var last: (scale: CGFloat, offset: CGSize) = (1, .zero)
 
@@ -4719,6 +4742,10 @@ struct ZoomableImageView: UIViewRepresentable {
         context.coordinator.container = container
         context.coordinator.imageView = iv
         context.coordinator.clipView = clip
+        // The pen page's canvas covers this view and takes the touches, so it grows its own two-finger
+        // recognisers and calls straight into these. See `PhotoTransformRelay.drivePinch`.
+        relay?.drivePinch = { [weak c = context.coordinator] g in c?.handlePinch(g) }
+        relay?.drivePan = { [weak c = context.coordinator] g in c?.handlePan(g) }
 
         let pinch = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePinch(_:)))
         let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
@@ -4901,6 +4928,10 @@ struct DrawingCanvas: UIViewRepresentable {
     var penWidth: CGFloat = 6
     /// True while a stroke is being drawn. The editor uses it to clear its chrome out of the way.
     var onStroke: (Bool) -> Void = { _ in }
+    /// ⛔ ZOOM WHILE DRAWING (owner 2026-08-22). Nil for every other user of this canvas — the chat
+    /// image editor has no zoom of its own to drive — so they are untouched.
+    var photoRelay: PhotoTransformRelay? = nil
+
     func makeUIView(context: Context) -> PKCanvasView {
         let v = PKCanvasView()
         v.drawingPolicy = .anyInput
@@ -4909,6 +4940,27 @@ struct DrawingCanvas: UIViewRepresentable {
         v.tool = PKInkingTool(inkType, color: penColor ?? .white, width: penWidth)
         v.delegate = context.coordinator
         if showsToolPicker { context.coordinator.toolPicker.addObserver(v) }   // native PencilKit tool palette
+        // ⚠️ TWO FINGERS ONLY, AND THAT IS THE WHOLE ARBITRATION. PencilKit draws from a SINGLE-touch
+        // gesture, so a recogniser with a floor of two can never be the thing that stole a stroke —
+        // the two simply cannot both be describing the same touches. No simultaneity to grant, no
+        // failure requirement to set, and nothing here that can delay a line by waiting to find out.
+        //
+        // The same floor the photo's own pan already carries, for the same reason it carries it.
+        if photoRelay != nil {
+            let pinch = UIPinchGestureRecognizer(target: context.coordinator,
+                                                 action: #selector(Coordinator.penPinch(_:)))
+            let pan = UIPanGestureRecognizer(target: context.coordinator,
+                                             action: #selector(Coordinator.penPan(_:)))
+            pan.minimumNumberOfTouches = 2
+            pan.maximumNumberOfTouches = 2
+            // A pinch and a two-finger pan are one motion — you scale and reposition with the same
+            // pair of fingers — so they have to be allowed to run together, exactly as they are on
+            // the photo itself.
+            pinch.delegate = context.coordinator
+            pan.delegate = context.coordinator
+            v.addGestureRecognizer(pinch)
+            v.addGestureRecognizer(pan)
+        }
         return v
     }
     func updateUIView(_ v: PKCanvasView, context: Context) {
@@ -4928,10 +4980,23 @@ struct DrawingCanvas: UIViewRepresentable {
         coordinator.toolPicker.setVisible(false, forFirstResponder: uiView)
         uiView.resignFirstResponder()
     }
-    final class Coordinator: NSObject, PKCanvasViewDelegate {
+    final class Coordinator: NSObject, PKCanvasViewDelegate, UIGestureRecognizerDelegate {
         let parent: DrawingCanvas
         let toolPicker = PKToolPicker()
         init(_ p: DrawingCanvas) { parent = p }
+
+        /// Handed straight to the photo's own coordinator, which owns every number involved — the
+        /// limits, the clamp, the spring on release. See `PhotoTransformRelay.drivePinch`.
+        @objc func penPinch(_ g: UIPinchGestureRecognizer) { parent.photoRelay?.drivePinch?(g) }
+        @objc func penPan(_ g: UIPanGestureRecognizer) { parent.photoRelay?.drivePan?(g) }
+
+        func gestureRecognizer(_ g: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            // Only with each OTHER. Saying yes to everything would include PencilKit's own drawing
+            // gesture, and a stroke recorded during a pinch is a line nobody asked for.
+            (g is UIPinchGestureRecognizer || g is UIPanGestureRecognizer)
+                && (other is UIPinchGestureRecognizer || other is UIPanGestureRecognizer)
+        }
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) { parent.drawing = canvasView.drawing }
 
         // PencilKit's own "a stroke is happening" pair. Reporting it is what lets the editor get its
