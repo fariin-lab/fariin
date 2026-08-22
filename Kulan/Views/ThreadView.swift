@@ -4632,8 +4632,30 @@ struct ThreadView: View {
     /// number and is what this is set to; the measurement is written down so the difference is a
     /// decision rather than a drift.
     private static let composerSideInset: CGFloat = 30
+    /// ⛔ AND IT NARROWS AGAIN WHILE TYPING, WHICH I HAD REMOVED AND SHOULD NOT HAVE (owner
+    /// 2026-08-22: "before opening the keyboard the composer is correct, after opening it must use
+    /// the left and right space it used before, I think 16pt").
+    ///
+    /// I read his "make it 30 left and right, the same on every phone" as also meaning the same in
+    /// every STATE, and dropped the focused case with the number. It was his own 2026-08-02 rule and
+    /// he still wants it: the bar gets wider exactly when you are typing into it, which is the moment
+    /// the field needs the room. "The same on every phone" was about phones, not about states.
+    private static let composerSideInsetTyping: CGFloat = 16
     private static let composerBottomTarget: CGFloat = 30
+    /// Above the KEYS, which is a different question from above the screen.
+    ///
+    /// ⛔ AND ZERO IS THE WRONG ANSWER TO IT — this is the "now it is entering under the keyboard"
+    /// half of his 2026-08-22 report, and I caused it. The rule below measures against the home
+    /// indicator so that every phone ends up the same distance from the BOTTOM OF THE SCREEN. With
+    /// the keyboard up there is no home indicator in play at all: the window still reports its 34,
+    /// the subtraction still clamps this to 0, and the bar comes to rest flush on the keyboard —
+    /// which on iOS 26 has rounded top corners, so the bar's own corners tuck in behind them.
+    ///
+    /// 8 is what shipped here for months before I touched it, and nobody reported it.
+    private static let composerKeyboardGap: CGFloat = 8
     private var composerBottomGap: CGFloat {
+        // The keyboard is the floor now, not the screen.
+        if inputFocused { return Self.composerKeyboardGap }
         let inset = (UIApplication.shared.connectedScenes
             .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
             .first) ?? 0
@@ -4647,17 +4669,16 @@ struct ThreadView: View {
                 if recordLocked { lockedRecordingBar } else { inputRow }
             }
         }
-        // ⛔ 30 EITHER SIDE, AND IT NO LONGER MOVES WITH THE KEYBOARD (owner 2026-08-22: "make it
-        // left and right 30pt"). It was 24 at rest and 16 once the keyboard was up — his own
-        // 2026-08-02 request — but that was a bar with two widths, and what he is asking for now is
-        // one bar that is the same on every phone and in every state. A margin that changes when you
-        // tap the field is the opposite of that, so the ternary goes with the number.
-        .padding(.horizontal, Self.composerSideInset)
+        // ⛔ 30 AT REST, 16 WHILE TYPING. The 30 is his 2026-08-22 number and the 16 is his own
+        // 2026-08-02 rule, which I removed with the old 24 and should not have — see
+        // `composerSideInsetTyping`. The bar gets wider exactly when you are typing into it, which is
+        // the moment the field needs the room.
+        .padding(.horizontal, inputFocused ? Self.composerSideInsetTyping : Self.composerSideInset)
         .padding(.top, 6)
         .padding(.bottom, composerBottomGap)
-        // The focus animation stays. Nothing keyed to it moves any more, but the bar's CONTENT still
-        // changes with it — the send button appears, the mic leaves — and those still ride the
-        // keyboard's own curve rather than snapping a frame before or after it.
+        // Both margins move with the focus again, so they ride the keyboard's own curve instead of
+        // snapping a frame before or after it. The bar's CONTENT changes on the same value — the send
+        // button appears, the mic leaves — so one animation covers the lot.
         .animation(.easeOut(duration: 0.25), value: inputFocused)
         .overlay(alignment: .top) {
             if holdHint {
