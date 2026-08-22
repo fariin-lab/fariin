@@ -88,25 +88,37 @@ enum StoryVideoBrightness {
         let live = LiveExposure()
         let comp = try? await AVMutableVideoComposition.videoComposition(with: asset) { request in
             var img = request.sourceImage
+
+            // ⛔ SHRINK FIRST, FILTER SECOND, AND THE ORDER IS THE WHOLE POINT (owner 2026-08-22,
+            // THIRD report on this freeze — my last fix had these the wrong way round).
+            //
+            // The cap was already here, but it was applied AFTER the exposure. So the filter still
+            // ran over every pixel of a 3840-wide frame and only the finished result was shrunk —
+            // the expensive part was never actually capped. Core Image is lazy and MAY fold a
+            // trailing scale back into the graph, but "may" is not a guarantee to hang a stall on,
+            // and written this way there is nothing left to hope for: the exposure sees about one
+            // million pixels instead of eight.
+            //
+            // ⚠️ THE SCALE CANNOT BE LEFT TO `renderSize` ALONE. Shrinking the render size only
+            // shrinks the BUFFER the frame is drawn into; the source keeps its own size and is drawn
+            // at the origin, so the cap on its own would post a crop of the top-left corner. Read off
+            // the request rather than captured, so it is an identity transform whenever the cap below
+            // did not apply and cannot fall out of step with it.
+            let target = request.renderSize
+            let w = max(1, img.extent.width), h = max(1, img.extent.height)
+            let s = min(target.width / w, target.height / h)
+            if s < 0.999 { img = img.transformed(by: CGAffineTransform(scaleX: s, y: s)) }
+
             let ev = live.ev
             if abs(ev) > 0.001 {
                 let f = CIFilter.exposureAdjust()
                 f.inputImage = img
                 f.ev = ev
-                // ⚠️ CROPPED BACK TO THE SOURCE EXTENT. A colour filter can hand back an image with a
-                // different or infinite extent, and a composition given one of those renders a frame
-                // that does not line up with the one before it.
+                // ⚠️ CROPPED BACK TO THE EXTENT IT WAS GIVEN. A colour filter can hand back an image
+                // with a different or infinite extent, and a composition given one of those renders a
+                // frame that does not line up with the one before it.
                 img = (f.outputImage ?? img).cropped(to: img.extent)
             }
-            // ⚠️ THE SCALING IS DONE HERE, NOT BY `renderSize` ALONE. Shrinking `renderSize` only
-            // shrinks the BUFFER the frame is rendered into; the source image keeps its own size and
-            // is drawn at the origin, so a smaller buffer alone would post a crop of the top-left
-            // corner. Read off the request rather than captured, so this is an identity transform
-            // whenever the cap below did not apply and cannot fall out of step with it.
-            let target = request.renderSize
-            let w = max(1, img.extent.width), h = max(1, img.extent.height)
-            let s = min(target.width / w, target.height / h)
-            if s < 0.999 { img = img.transformed(by: CGAffineTransform(scaleX: s, y: s)) }
             request.finish(with: img, context: ciContext)
         }
         guard let comp else { return nil }
