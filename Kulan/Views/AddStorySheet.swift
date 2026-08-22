@@ -195,7 +195,7 @@ struct AddStorySheet: View {
             },
             // TEXT is a mode of the camera page now, not a cover raised over it, so the finished
             // story arrives here already rendered and goes straight to the audience sheet.
-            onTextStory: { d in shareTextStory = StoryShareData(data: d) },
+            onTextStory: { d, taps in shareTextStory = StoryShareData(data: d, stickers: taps) },
             onLibrary: { showLibrary = true })
         // These two are the CAMERA's editors. A photo taken here closes back to the camera, which is
         // where it was taken. The library has its own pair, presented from the library itself.
@@ -234,7 +234,11 @@ struct AddStorySheet: View {
         }
         // Text story → audience sheet (was posting straight to "everyone", ignoring audience — M4).
         .sheet(item: $shareTextStory) { s in
-            ShareStorySheet(image: s.data, onPosted: { onPosted(); dismiss() })
+            // ⚠️ AND ITS TAP AREAS. This dropped them on the floor until a text story could carry a
+            // link: the photo editor reaches the same sheet by its own route (see `StoryEditorView`)
+            // and passes them, so the field existed and this call simply never used it.
+            ShareStorySheet(image: s.data, stickers: s.stickers,
+                            onPosted: { onPosted(); dismiss() })
         }
     }
 

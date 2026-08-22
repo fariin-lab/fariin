@@ -19,6 +19,18 @@ import UIKit
 /// with. One constant now, so they cannot part again.
 enum StoryText {
     static let charLimit = 720
+
+    /// WHERE A LINK CARD SITS, AS FRACTIONS, AND THE TWO PLACES THAT DRAW IT BOTH READ THESE.
+    ///
+    /// The composer card is roughly the phone's shape and the posted file is a fixed 1:2.5 (see
+    /// `renderTextStory`), so the only way for what he composes and what he posts to be the same
+    /// picture is for the card's place to be described in terms both shapes share. A fraction is
+    /// that; a point measurement is right on exactly one of them.
+    ///
+    /// It is also what the tap area is built from, so a viewer's finger and the drawing agree by
+    /// construction rather than by two sets of arithmetic being kept in step by hand.
+    static let linkCardWidthFraction: CGFloat = 0.72
+    static let linkCardCentreY: CGFloat = 0.62
 }
 
 /// One background and the ink that stays legible on it. Paired deliberately: a palette that only
@@ -140,7 +152,12 @@ struct StoryTextCard: View {
     @Binding var fontIndex: Int
     /// Mirrors the keyboard for the page above, which hides its bottom bar while you type.
     @Binding var typing: Bool
+    /// The one link this status carries, or none. Owned by the page above because it is part of what
+    /// gets POSTED, and this card is only where it is edited. See `StoryTextLink`.
+    @Binding var link: StoryTextLink?
     var onClose: () -> Void
+
+    @State private var showLinkSheet = false
 
     /// ⚠️ PLAIN `@State`, NOT `@FocusState`. The words are a `UITextView` now (`StoryTextEditor`), and
     /// focus there is `becomeFirstResponder` rather than SwiftUI's focus system — one of the two has
@@ -263,6 +280,26 @@ struct StoryTextCard: View {
             // The extra 68 clears the Aa / colour / ✓ row, which rides just above the keys.
             .padding(.bottom, keyboardOverlap > 0 ? keyboardOverlap + 68 : 0)
 
+            // THE LINK CARD, AT THE SAME FRACTION OF THE CARD THAT THE BAKE PUTS IT AT.
+            //
+            // ⚠️ POSITIONED BY FRACTION RATHER THAN STACKED UNDER THE WORDS, and that is what keeps
+            // the composed card and the posted picture the same picture. They are not the same
+            // SHAPE — this card is roughly the phone's aspect and the export is a fixed 1:2.5 (see
+            // `renderTextStory`) — so anything laid out by flow lands somewhere else in the file
+            // than it does here. A fraction of the height means the same thing in both.
+            //
+            // Hidden while typing: the keyboard has taken the bottom half of the card and the words
+            // are what is being worked on.
+            if let link, !focused {
+                GeometryReader { g in
+                    StoryTextLinkPreview(draft: link.draft,
+                                         width: g.size.width * StoryText.linkCardWidthFraction,
+                                         onRemove: { withAnimation(.smooth(duration: 0.2)) { self.link = nil } })
+                        .position(x: g.size.width / 2, y: g.size.height * StoryText.linkCardCentreY)
+                }
+                .transition(.opacity)
+            }
+
             VStack(spacing: 0) {
                 HStack {
                     Button { close() } label: { glassCircle { Image(systemName: "xmark") } }
@@ -293,6 +330,20 @@ struct StoryTextCard: View {
                         Button { styleIndex += 1 } label: {
                             glassCircle {
                                 Circle().strokeBorder(style.ink, lineWidth: 2).frame(width: 21, height: 21)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        // THE LINK, third in the same reach. It belongs with these two rather than
+                        // in a corner: all three change what the finished status is made of, and the
+                        // corners are kept for the two controls that LEAVE.
+                        //
+                        // It re-opens with the current address when there is one, which is how a
+                        // link gets EDITED — there is no second control for that, and the card's own
+                        // ✕ is how it is removed.
+                        Button { showLinkSheet = true } label: {
+                            glassCircle {
+                                Image(systemName: "link")
+                                    .foregroundStyle(link == nil ? style.ink : Color.accentColor)
                             }
                         }
                         .buttonStyle(.plain)
@@ -367,6 +418,13 @@ struct StoryTextCard: View {
                      destructive: "Discard",
                      onDestructive: { onClose() },
                      onCancel: { focused = true })
+        // A sheet rather than a page pushed inside the card: this card is the picture being
+        // composed, and a form drawn on top of it would be part of what he is looking at.
+        .sheet(isPresented: $showLinkSheet) {
+            StoryTextLinkSheet { l in withAnimation(.smooth(duration: 0.25)) { link = l } }
+                .presentationDetents([.medium])
+                .presentationBackground(.black)
+        }
     }
 
     private func close() {
@@ -546,7 +604,18 @@ struct StoryTextEditor: UIViewRepresentable {
 /// any image at least as tall as itself. Rendering at the author's own aspect broke on
 /// differently-proportioned viewers, which showed as blur bars. The text is centred, so the small
 /// top and bottom crop never touches it.
-@MainActor func renderTextStory(text: String, styleIndex: Int, fontIndex: Int) -> Data? {
+/// What a rendered text story hands back: the picture, and where the link card landed inside it.
+///
+/// The rectangle is normalised 0-1 and goes straight into a `StoryTapTarget`, which is how the card
+/// stays tappable after the post. There is nothing else it could be: the picture is flat by then, so
+/// the only thing that knows a link is there is this rectangle travelling beside it.
+struct RenderedTextStory {
+    var data: Data
+    var linkTap: StoryTapTarget?
+}
+
+@MainActor func renderTextStory(text: String, styleIndex: Int, fontIndex: Int,
+                                link: StoryTextLink? = nil) -> RenderedTextStory? {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
     let style = TextStoryStyles.style(styleIndex)
@@ -558,6 +627,23 @@ struct StoryTextEditor: UIViewRepresentable {
     // sizes for the same status, and neither knew about the other. One function answers for both now;
     // the ratios in it are what make the answer come out the same. See `fittedSize`.
     let size = TextStoryStyles.fittedSize(for: trimmed, boxWidth: renderW - pad * 2, fontIndex: fontIndex)
+    let renderH = renderW * 2.5
+
+    // ⚠️ THE LINK CARD IS DRAWN TO ITS OWN PICTURE FIRST, AND ONLY THEN INTO THE STORY. Not for
+    // speed — because its HEIGHT is not known until something has laid it out, and the height is
+    // what the tap rectangle is made of. Rendering it once answers both questions at the same moment
+    // and with the same numbers, where measuring separately would be a second answer to drift from.
+    let cardW = renderW * StoryText.linkCardWidthFraction
+    var linkArt: UIImage?
+    if let draft = link?.draft {
+        let r = ImageRenderer(content: StoryTextLinkPreview(draft: draft, width: cardW))
+        r.scale = 1
+        r.isOpaque = false
+        linkArt = r.uiImage
+    }
+    let cardH = linkArt?.size.height ?? 0
+    let cardCentreY = renderH * StoryText.linkCardCentreY
+
     let card = ZStack {
         style.bg
         Text(trimmed)
@@ -568,10 +654,235 @@ struct StoryTextEditor: UIViewRepresentable {
             // SwiftUI's, and the last line must never be the one that gets clipped.
             .minimumScaleFactor(0.85)
             .padding(pad)
+            // The words give up the bottom of the picture when a card is standing there, so the two
+            // cannot land on each other. Nothing changes at all when there is no link.
+            .padding(.bottom, linkArt == nil ? 0 : renderH - (cardCentreY - cardH / 2) + 40)
+        if let linkArt {
+            Image(uiImage: linkArt)
+                .position(x: renderW / 2, y: cardCentreY)
+        }
     }
-    .frame(width: renderW, height: renderW * 2.5)
+    .frame(width: renderW, height: renderH)
 
     let renderer = ImageRenderer(content: card)
     renderer.scale = 1
-    return renderer.uiImage?.jpegData(compressionQuality: 0.9)
+    guard let data = renderer.uiImage?.jpegData(compressionQuality: 0.9) else { return nil }
+    let tap = link.map { l in
+        StoryTapTarget(x: 0.5,
+                       y: StoryText.linkCardCentreY,
+                       w: StoryText.linkCardWidthFraction,
+                       h: cardH / renderH,
+                       rotation: 0,
+                       url: l.url.absoluteString)
+    }
+    return RenderedTextStory(data: data, linkTap: tap)
+}
+
+// MARK: - A link on a text story
+
+/// A link the author attached to a text story, with the page's own card already fetched.
+///
+/// ⚠️ ONE PER STORY, AND ATTACHED TO THE STORY RATHER THAN TO A RANGE OF THE WORDS. That is the
+/// reference app's shape, read from its source before this was built: its text attachment carries a
+/// single optional preview, its composer holds one draft, and the card is laid out as its own view
+/// under the text rather than as an attribute inside it. It also has no separate display text — you
+/// type a URL and what you see is the page's own title. Copying that exactly was the owner's call on
+/// 2026-08-22, in preference to the linked-words idea he first described.
+///
+/// The draft is carried whole because the card is drawn from it twice: once live on the composer and
+/// once into the posted picture. Fetching again for the second would be a second answer to a question
+/// already asked, and the page could have changed in between.
+struct StoryTextLink: Equatable {
+    var draft: LinkPreviewService.LinkDraft
+    var url: URL { draft.url }
+}
+
+/// The preview card as it appears on a text story, in the composer and in the posted picture.
+///
+/// Their numbers: 18pt corners for a full card, 12 when the fetch came back with nothing but a host,
+/// 12pt of side padding and 8pt top and bottom on the text block, title and description clamped to
+/// two lines each, the host underneath them both.
+///
+/// ⚠️ SIZED IN POINTS AGAINST A GIVEN WIDTH, not against the screen. The composer draws it at card
+/// width and the renderer draws it at 1080; one number in and everything else follows, which is what
+/// keeps the two pictures the same picture.
+struct StoryTextLinkPreview: View {
+    let draft: LinkPreviewService.LinkDraft
+    /// The width the card is being drawn at. 1 unit of scale = the composer's own size.
+    var width: CGFloat
+    /// The composer shows a remove button; the bake never does.
+    var onRemove: (() -> Void)?
+
+    /// Nothing came back but a host — their `.domainOnly` card, and it is deliberately still a card.
+    /// A link that silently vanishes because a site would not answer is worse than a plain one.
+    private var domainOnly: Bool { draft.title.isEmpty && draft.desc.isEmpty }
+
+    private var k: CGFloat { width / 300 }      // everything below is quoted at a 300pt reference
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let img = draft.image, !domainOnly {
+                Image(uiImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: width, height: 150 * k)
+                    .clipped()
+            }
+            VStack(alignment: .leading, spacing: 2 * k) {
+                if !draft.title.isEmpty {
+                    Text(draft.title)
+                        .font(.system(size: 15 * k, weight: .semibold))
+                        .lineLimit(2)
+                }
+                if !draft.desc.isEmpty {
+                    Text(draft.desc)
+                        .font(.system(size: 13 * k))
+                        .lineLimit(2)
+                }
+                Text(draft.host)
+                    .font(.system(size: 13 * k))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12 * k)
+            .padding(.vertical, 8 * k)
+        }
+        .frame(width: width)
+        .background(Color(white: 0.97))
+        .foregroundStyle(.black)
+        .clipShape(RoundedRectangle(cornerRadius: (domainOnly ? 12 : 18) * k, style: .continuous))
+        // ⚠️ THE REMOVE BUTTON IS AN OVERLAY, so it takes no part in the layout and the card measures
+        // the same with and without it. That matters: the composer and the bake have to agree on the
+        // card's height or the tap area lands somewhere the picture does not.
+        .overlay(alignment: .topTrailing) {
+            if let onRemove {
+                Button(action: onRemove) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 26, height: 26)
+                        .background(Color.black.opacity(0.55), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .padding(8)
+            }
+        }
+    }
+}
+
+/// Typing or pasting the URL.
+///
+/// ⛔ THE CONFIRM BUTTON IS GATED ON THE FETCH, NOT ON THE TEXT, and that is their rule verbatim:
+/// "if case .draft = newState { isDoneEnabled = true }". There is no regex and no scheme check in
+/// their view controller at all — the typed string is handed to the fetcher on every keystroke and
+/// the only test that counts is whether a page answered. It is a better test than a pattern: a
+/// well-formed address for a site that does not exist passes every regex ever written.
+///
+/// `https://` is prepended when no scheme was typed, which is their Android client's rule
+/// (`TextStoryPostLinkEntryFragment`) and the way people actually type an address.
+struct StoryTextLinkSheet: View {
+    var onDone: (StoryTextLink) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var text = ""
+    @State private var draft: LinkPreviewService.LinkDraft?
+    @State private var fetching = false
+    /// The URL the visible draft belongs to. Compared before anything is shown, so a reply that
+    /// arrives after the field has moved on cannot put a stale card under a different address.
+    @State private var draftURL: URL?
+    @FocusState private var focused: Bool
+
+    private var typedURL: URL? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.count >= 4 else { return nil }
+        let withScheme = t.contains("://") ? t : "https://\(t)"
+        guard let u = URL(string: withScheme), let host = u.host, host.contains(".") else { return nil }
+        return u
+    }
+    private var ready: LinkPreviewService.LinkDraft? {
+        guard let d = draft, d.url == draftURL, draftURL == typedURL else { return nil }
+        return d
+    }
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "link")
+                .font(.system(size: 22))
+                .foregroundStyle(.white.opacity(0.75))
+                .padding(.top, 26)
+            Text("Share a link with viewers of your story")
+                .font(.system(size: 15))
+                .foregroundStyle(.white.opacity(0.6))
+
+            HStack(spacing: 12) {
+                TextField("", text: $text,
+                          prompt: Text("Type or paste a URL").foregroundStyle(.white.opacity(0.4)))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    .submitLabel(.done)
+                    .onSubmit { commit() }
+                    .focused($focused)
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .frame(height: 46)
+                    .background(Color.white.opacity(0.12), in: Capsule())
+
+                Button(action: commit) {
+                    Group {
+                        if fetching {
+                            ProgressView().tint(.white)
+                        } else {
+                            Image(systemName: "checkmark").font(.system(size: 16, weight: .bold))
+                        }
+                    }
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(ready == nil ? Color.white.opacity(0.14) : Color.accentColor, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(ready == nil)
+            }
+            .padding(.horizontal, 16)
+
+            if let d = ready {
+                StoryTextLinkPreview(draft: d, width: 260)
+                    .padding(.horizontal, 16)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+        .background(Color.black.opacity(0.92).ignoresSafeArea())
+        .animation(.smooth(duration: 0.22), value: ready)
+        .onAppear { focused = true }
+        // THE FETCH FOLLOWS THE TYPING, one behind. Their composer asks on every `.editingChanged`
+        // and lets the service dedupe; ours does the same and `LinkPreviewService` already holds an
+        // in-flight table keyed by URL, so a fast typist makes one request per address rather than
+        // one per keystroke.
+        .onChange(of: text) { _, _ in
+            guard let u = typedURL else { draft = nil; draftURL = nil; return }
+            fetching = true
+            Task {
+                let d = await LinkPreviewService.shared.draft(for: u)
+                await MainActor.run {
+                    // Still the address being asked about? A slower answer for a URL the field has
+                    // already left is thrown away rather than shown.
+                    guard typedURL == u else { return }
+                    fetching = false
+                    draft = d
+                    draftURL = d == nil ? nil : u
+                }
+            }
+        }
+    }
+
+    private func commit() {
+        guard let d = ready else { return }
+        onDone(StoryTextLink(draft: d))
+        dismiss()
+    }
 }

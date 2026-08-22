@@ -806,7 +806,10 @@ struct StoryCameraView: View {
     /// A recorded clip, on its way to the same video editor a library video opens in.
     var onVideo: (URL) -> Void = { _ in }
     /// A finished TEXT story, already rendered to the image the pipeline posts.
-    var onTextStory: (Data) -> Void = { _ in }
+    /// ⚠️ THE TAP AREAS TRAVEL WITH THE PICTURE. A text story with a link is a flat JPEG like any
+    /// other, so the rectangle the card landed on has to go beside it or the link is a photograph of
+    /// a card. Same channel a photo story's Link sticker already uses — see `StoryTapTarget`.
+    var onTextStory: (Data, [StoryTapTarget]) -> Void = { _, _ in }
     /// Bottom-left. Opens the photo/album grid rather than Apple's picker, so a story can still be a
     /// VIDEO — the system picker here would hand back an image and quietly drop that.
     var onLibrary: () -> Void = {}
@@ -824,6 +827,9 @@ struct StoryCameraView: View {
     // Text mode's state lives HERE, not in the card, so switching to the camera and back does not
     // throw away what he typed.
     @State private var storyText = ""
+    /// The one link this status carries. Lives here rather than in the card because it is part of
+    /// what gets posted, and this is the page that posts. See `StoryTextLink`.
+    @State private var storyLink: StoryTextLink?
     @State private var styleIndex = 0
     @State private var fontIndex = 0
     @State private var typing = false
@@ -933,7 +939,7 @@ struct StoryCameraView: View {
                     preview
                         .offset(x: mode == .camera ? 0 : -pageSlide)
                     StoryTextCard(text: $storyText, styleIndex: $styleIndex,
-                                  fontIndex: $fontIndex, typing: $typing,
+                                  fontIndex: $fontIndex, typing: $typing, link: $storyLink,
                                   onClose: { onClose() })
                         .offset(x: mode == .text ? 0 : pageSlide)
                 }
@@ -1775,8 +1781,9 @@ struct StoryCameraView: View {
                 // word was doing no work the arrow was not already doing, and a wide pill beside a
                 // capsule switch made the bottom row read as two competing bars.
                 Button {
-                    if let data = renderTextStory(text: storyText, styleIndex: styleIndex, fontIndex: fontIndex) {
-                        onTextStory(data)
+                    if let out = renderTextStory(text: storyText, styleIndex: styleIndex,
+                                                 fontIndex: fontIndex, link: storyLink) {
+                        onTextStory(out.data, out.linkTap.map { [$0] } ?? [])
                     }
                 } label: {
                     // Two different backgrounds, so two different arrows. The idle disc is a
