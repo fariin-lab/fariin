@@ -381,9 +381,27 @@ struct StoryEditorView: View {
     /// ⚠️ EVERY PLACE THE DRAWING IS RENDERED HAS TO ASK THIS, not `card` — the live canvas, the
     /// still that replaces it after Done, `flatten`, and the video burn-in. They share one
     /// coordinate space or the strokes land somewhere other than where they were drawn.
+    ///
+    /// ⛔ AND IT NO LONGER DEPENDS ON THE ZOOM, WHICH IS THE OWNER'S 2026-08-22 "the pen is not part
+    /// of the image, it is going up". IT IS A CONSEQUENCE OF LETTING THE PEN PAGE ZOOM AT ALL.
+    ///
+    /// A `PKDrawing`'s coordinates are relative to its CANVAS. While the canvas was sized `card / z`,
+    /// every change of zoom resized the canvas underneath a drawing that had already been made — so
+    /// a stroke stayed at the same canvas point while that point came to mean somewhere else on the
+    /// card. Crossing z = 1 downward grows the canvas by up to two and a half times, and the ink
+    /// slides toward its origin: up and to the left, exactly as he describes.
+    ///
+    /// It could not show before, because the pen page could not be zoomed. Enabling the zoom is what
+    /// made a latent rule wrong, not the zoom itself.
+    ///
+    /// ⚠️ THE COST, AND IT IS DELIBERATE: at a zoom below 1 the picture is smaller than the card and
+    /// the surround around it can no longer be drawn on, because there is no canvas out there any
+    /// more. That surround is what the division was added for. It is the right thing to give up — a
+    /// stroke on the surround is a stroke on nothing, and "the pen is part of the image" is the rule
+    /// he has now stated twice. One space, fixed to the card, that no zoom can move.
     static func penCanvasSize(card: CGSize, zoom: CGFloat) -> CGSize {
-        let z = min(1, max(0.01, zoom))
-        return CGSize(width: card.width / z, height: card.height / z)
+        _ = zoom   // kept in the signature so every call site still reads as "ask, do not assume"
+        return card
     }
 
     static func cardSize(in space: CGSize, top: CGFloat) -> CGSize {
