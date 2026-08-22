@@ -351,6 +351,10 @@ final class StoryRowItemView: UIView {
         host.view.isHidden = on
     }
 
+    /// Clear air between the bottom of a card and its own count. Scales with the card, because it is
+    /// laid out inside the card's transform — see `layoutSubviews`.
+    private static let countGap: CGFloat = 10
+
     init(storyId: String, media: StoryRowCardMedia) {
         self.storyId = storyId
         self.host = UIHostingController(rootView: media)
@@ -397,8 +401,20 @@ final class StoryRowItemView: UIView {
         super.layoutSubviews()
         host.view.frame = bounds
         let size = count.fittedSize()
+        // ⛔ BELOW THE CARD, NOT INSIDE IT (owner 2026-08-22, with the design zoomed in so there was
+        // no doubt: every thumbnail carries its own count in the black underneath, the way the
+        // centre one already does).
+        //
+        // It used to be `bounds.height - size.height - 10`, i.e. sitting ON the picture ten points up
+        // from its bottom edge — over somebody's photograph, which is what he means by the numbers
+        // "entering inside the image". Ten points BELOW the edge instead. Safe because this view does
+        // not clip: only `host.view` does, deliberately, so that the corner radius cuts the PICTURE
+        // and not the count's shadow. See the note in `init`.
+        //
+        // It still rides the card's own transform, so a side card's count is smaller than the centre
+        // one's in the same proportion its picture is — which is what the design shows.
         count.frame = CGRect(x: (bounds.width - size.width) / 2,
-                             y: bounds.height - size.height - 10,   // `.padding(.bottom, 10)`
+                             y: bounds.height + Self.countGap,
                              width: size.width, height: size.height)
     }
 }
