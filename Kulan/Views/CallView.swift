@@ -123,13 +123,32 @@ struct CallView: View {
         default:            return ""
         }
     }
+    /// ⛔ "NO ANSWER" WAS TELLING THE CALLER SOMETHING THAT WAS NOT TRUE, and it cost the owner
+    /// months of chasing a bug that was partly not ours.
+    ///
+    /// Two completely different things were showing the same two words:
+    ///
+    ///   • their phone rang for 45 seconds and nobody picked up      → "No answer" is correct
+    ///   • their phone NEVER RANG — silenced by Focus, or iOS refused
+    ///     to report the call at all — and ours ended it in 24ms      → "No answer" is a lie
+    ///
+    /// The second one reads as "he saw me calling and ignored me", which is exactly how the owner
+    /// read it, night after night, while the other person's phone had been quiet the whole time.
+    /// Measured 2026-08-22: the failed calls ended 0–24ms after arriving. Nobody declines that fast.
+    ///
+    /// `calleeRinging` is set the moment the other side writes `ringingAt`, so the caller already
+    /// knew which of the two had happened and simply never said. Never rang and never accepted
+    /// means we could not reach them — their phone, their settings, their signal, and none of it
+    /// something either person did.
     private var endedText: String {
+        let neverRang = !call.calleeRinging && !call.calleeAccepted
         switch call.endReason {
         case .busy:     return "Busy"
-        // A decline reads as a ring-out (owner's order): rejections are never exposed.
-        case .declined: return "No answer"
+        // A decline reads as a ring-out (owner's order): rejections are never exposed. That rule is
+        // untouched — this only splits the case where there was nothing to decline.
+        case .declined: return neverRang ? "Couldn't reach them" : "No answer"
         case .failed:   return "Call failed"
-        case .missed:   return "No answer"
+        case .missed:   return neverRang ? "Couldn't reach them" : "No answer"
         default:        return "Call ended"
         }
     }
