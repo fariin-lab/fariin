@@ -92,6 +92,11 @@ final class CallService: NSObject {
                 // and a stale `mediaReady` would start a call the instant it is accepted, before any
                 // media exists. Both silent, both only visible on the SECOND call of a session.
                 preNegotiated = false; mediaReady = false
+                // Belongs to the peer connection that just died. Held across calls it would be a
+                // closed channel the next call quietly tries to send its accept down — the accept
+                // would silently never arrive and the blink would come back, on some calls only,
+                // which is the worst kind of bug to chase.
+                acceptChannel?.close(); acceptChannel = nil
                 pendingOffer = nil
                 pendingRemoteCandidates = []; localCandidateBuffer = []; callDocCreated = false
                 stopRingback(); stopTone(); cancelTimers()
@@ -167,6 +172,26 @@ final class CallService: NSObject {
     //      until `didActivate` fires, which only happens on a real answer
     // If either is ever removed, this feature becomes a bug that records people before they answer.
 
+    // MARK: - Telling the caller "I answered" down the fast road
+    //
+    // ⭐ THE LAST VISIBLE DELAY, AND IT IS NOT THE NETWORK. The caller cannot start its timer until
+    // it is TOLD the callee accepted, and that message travels Uganda → Firestore in Doha → USA.
+    // Measured by the owner on a good connection on both ends: 0.67 seconds of "Connecting…" on
+    // every single call, while the two phones were already connected and his voice was arriving.
+    // The sound takes the direct road; the news takes the slow one.
+    //
+    // So the accept also goes over the peer connection itself, which is already up by then.
+    //
+    // ⛔ THIS IS AN ACCELERATOR AND NOTHING DEPENDS ON IT. The Firestore `acceptedAt` write and the
+    // listener that reads it are untouched and still authoritative — this just usually gets there
+    // first. If the channel never opens, never negotiates, or the message is lost, the caller falls
+    // back to exactly today's behaviour: 0.67s instead of instant. Never make correctness rest on
+    // it. It is also backward compatible: a phone on an older build simply never opens the channel
+    // and the call proceeds as before.
+    private var acceptChannel: RTCDataChannel?
+    private static let acceptChannelLabel = "accept"
+    private static let acceptMessage = "accepted"
+
     /// The media path is up. Says nothing about whether a human has accepted.
     private var mediaReady = false
     /// This side built its peer connection during the ring rather than at the tap.
@@ -175,6 +200,28 @@ final class CallService: NSObject {
     /// Has this call actually been accepted by a person? The callee's own tap, or — on the caller —
     /// the callee's `acceptedAt` landing. Media being ready is not acceptance.
     private var callAccepted: Bool { isCaller ? calleeAccepted : wasAccepted }
+
+    /// Callee: say "I answered" straight down the connection. Best effort by design — a failure here
+    /// costs the caller nothing except the 0.67s it already pays through Firestore.
+    private func sendAcceptOverChannel() {
+        guard !isCaller, let ch = acceptChannel, ch.readyState == .open else { return }
+        let data = Data(Self.acceptMessage.utf8)
+        ch.sendData(RTCDataBuffer(data: data, isBinary: false))
+    }
+
+    /// Caller: the accept arrived over the connection instead of through Doha. Everything below is
+    /// the same work the Firestore listener does — deliberately, so the two paths cannot drift — and
+    /// `calleeAccepted` is the latch that makes whichever arrives second a no-op.
+    private func acceptArrivedOverChannel() {
+        guard isCaller, !calleeAccepted, state != .ended else { return }
+        mark("acceptSeenFast")
+        calleeAccepted = true
+        wasAccepted = true
+        stopRingback()
+        noAnswerWork?.cancel()
+        startAcceptedConnectTimeout()
+        beginConnectedCallIfAccepted()
+    }
 
     /// Promote a warm media path into a running call. Called from both directions: the path may come
     /// up before the accept (the normal case now) or after it (a slow network), and whichever
@@ -462,6 +509,16 @@ final class CallService: NSObject {
         // renegotiation (which is fragile + glare-prone) and no black-remote-on-re-toggle bugs.
         addLocalVideo(to: connection)
         applyDataSaver(to: connection)
+        // The CALLER opens it, because the caller writes the offer and the channel has to be in that
+        // offer to be negotiated at all. The callee receives it through `didOpen` instead.
+        if isCaller, let connection {
+            let cfg = RTCDataChannelConfiguration()
+            cfg.isOrdered = true            // one tiny message; ordering is free and delivery matters
+            if let ch = connection.dataChannel(forLabel: Self.acceptChannelLabel, configuration: cfg) {
+                ch.delegate = self
+                acceptChannel = ch
+            }
+        }
         return connection
     }
 
@@ -2000,6 +2057,10 @@ final class CallService: NSObject {
                 // been disabled since it was created, so the connection that has been up for the
                 // last ten seconds has been carrying silence.
                 self.localAudioTrack?.isEnabled = !self.isMuted
+                // Down the direct connection, which beats the Firestore write to the caller by the
+                // better part of a second. The `acceptedAt` write above still happens and is still
+                // what the caller ultimately trusts; this only usually arrives first.
+                self.sendAcceptOverChannel()
                 self.beginConnectedCallIfAccepted()
             }
             return
@@ -2530,7 +2591,16 @@ extension CallService: RTCPeerConnectionDelegate {
     func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
+    /// The callee's end of the accept channel. Only ever used to SEND, once, on accept.
+    func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {
+        guard dataChannel.label == Self.acceptChannelLabel else { return }
+        DispatchQueue.main.async {
+            dataChannel.delegate = self
+            self.acceptChannel = dataChannel
+            // Answered already? Then the channel opened late and the message is owed right now.
+            if self.wasAccepted { self.sendAcceptOverChannel() }
+        }
+    }
 
     // Unified-plan remote track arrival: grab the remote video track for rendering.
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams mediaStreams: [RTCMediaStream]) {
@@ -2539,5 +2609,29 @@ extension CallService: RTCPeerConnectionDelegate {
             // the initial call type) — NOT flipped here, so an unsolicited track can't force video on.
             DispatchQueue.main.async { self.remoteVideoTrack = track }
         }
+    }
+}
+
+// MARK: - RTCDataChannelDelegate (the accept accelerator)
+//
+// One message, one direction: the callee says "accepted" and the caller acts on it. See the note on
+// `acceptChannel` — this is an accelerator with no correctness resting on it, so every path here
+// fails silently back to the Firestore route.
+extension CallService: RTCDataChannelDelegate {
+    func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
+        guard dataChannel.label == Self.acceptChannelLabel else { return }
+        // The channel can open AFTER the person has already tapped, on a slow negotiation. Owed
+        // message goes out the moment it can.
+        DispatchQueue.main.async {
+            if dataChannel.readyState == .open, !self.isCaller, self.wasAccepted {
+                self.sendAcceptOverChannel()
+            }
+        }
+    }
+
+    func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
+        guard dataChannel.label == Self.acceptChannelLabel, !buffer.isBinary,
+              String(data: buffer.data, encoding: .utf8) == Self.acceptMessage else { return }
+        DispatchQueue.main.async { self.acceptArrivedOverChannel() }
     }
 }
