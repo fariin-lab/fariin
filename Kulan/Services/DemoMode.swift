@@ -221,6 +221,46 @@ enum DemoMode {
         ConversationsRepository.shared.hasLoaded = true
     }
 
+    /// ⭐ THE SAME STORIES, FOR THE SETTINGS SWITCH RATHER THAN THE FULL DEMO LOGIN.
+    ///
+    /// `activate()` above is the takeover: it replaces the whole app with a demo, and it is reached
+    /// only by signing out. The switch in Settings does something much smaller — it injects rows
+    /// into the real account — and it injected CHATS ONLY. So Cabdi and Khadra existed in the chat
+    /// list with their photographs while the story row above them showed a different, older set of
+    /// demo people with drawn placeholders. Different names, different faces, same screen.
+    ///
+    /// This hands the story row the same two people the chat list already has.
+    ///
+    /// `mine` is deliberately NOT touched. The owner has a real story of his own, and replacing it
+    /// with a demo one to take a screenshot of his own app would be the wrong trade.
+    @MainActor
+    static func demoStoryPeople(now: Date = Date()) -> [StoryGroup] {
+        let cabdiPhoto  = profilePhoto("demo-face-cabdi",  "cabdi",  .systemGreen, .systemTeal, "C")
+        let khadraPhoto = profilePhoto("demo-face-khadra", "khadra", .systemPink,  .systemRed,  "K")
+        func s(_ n: Int, _ uid: String, _ asset: String, _ ago: Double, _ caption: String?) -> Story {
+            Story(id: "demo-\(uid)-\(n)", authorUid: uid,
+                  createdAt: now.addingTimeInterval(-ago),
+                  expiresAt: now.addingTimeInterval(24 * 3600 - ago),
+                  mediaUrl: story(asset, .systemBlue, .systemTeal, caption ?? ""),
+                  allowsReplies: true, caption: caption)
+        }
+        return [
+            StoryGroup(authorUid: "demo-cabdi", name: "Cabdi", photoUrl: cabdiPhoto, stories: [
+                s(1, "demo-cabdi", "demo-story-cabdi",   25200, "Habeenkii Muqdisho"),
+                s(2, "demo-cabdi", "demo-story-cabdi-2", 18000, "Duurka"),
+                s(3, "demo-cabdi", "demo-story-cabdi-3", 10800, "Geeljire"),
+                s(4, "demo-cabdi", "demo-story-cabdi-4",  5400, nil),
+                s(5, "demo-cabdi", "demo-story-cabdi-5",  3600, "Waddada"),
+            ], lastViewedAt: nil, isMine: false),
+            StoryGroup(authorUid: "demo-khadra", name: "Khadra", photoUrl: khadraPhoto, stories: [
+                s(1, "demo-khadra", "demo-story-khadra",   28800, "Casarkii"),
+                s(2, "demo-khadra", "demo-story-khadra-2", 21600, "Suuqa"),
+                s(3, "demo-khadra", "demo-story-khadra-3", 14400, nil),
+                s(4, "demo-khadra", "demo-story-khadra-4",  9000, "Xeebta"),
+            ], lastViewedAt: nil, isMine: false),
+        ]
+    }
+
     /// The chat list, top to bottom. The preview strings are written the way ChatService itself
     /// writes them, markers and all, so each row renders exactly as a real one does.
     ///

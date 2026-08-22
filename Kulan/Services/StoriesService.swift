@@ -2482,6 +2482,12 @@ final class StoriesRepository {
             else if !blockedAuthors.contains(author) { groups.append(g) }
         }
         if Self.injectDemoStories { groups.append(contentsOf: Self.demoGroups(now: now)) }   // TEMP test data
+        // ⭐ THE STORY ROW AND THE CHAT LIST NOW SHOW THE SAME PEOPLE. Settings > Demo chats injected
+        // chats only, so Cabdi and Khadra sat in the chat list with their photographs while the row
+        // above them showed a different, older set of demo people carrying drawn placeholders.
+        // Different names and different faces on one screen, which is the one thing a screenshot
+        // cannot have. Gated on the same switch, so one toggle produces a coherent phone.
+        if DemoMode.chatsInjected { groups.append(contentsOf: DemoMode.demoStoryPeople(now: now)) }
 
         // Unseen first, then by most-recent story. (Watermarks are applied on commit below,
         // so hasUnseen here can be pessimistic — the row re-sorts from live state anyway.)

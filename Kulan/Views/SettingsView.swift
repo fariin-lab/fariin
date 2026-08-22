@@ -180,9 +180,13 @@ struct SettingsView: View {
                             .onChange(of: demoChats) { _, on in
                                 DemoMode.setChats(on)
                                 ConversationsRepository.shared.refreshForDemo()
+                                // The story row is built by its own repository and would not have
+                                // noticed until the next launch, so the switch would have looked
+                                // half-broken: chats appear at once, stories only tomorrow.
+                                StoriesRepository.shared.refreshForDemo()
                             }
                     } footer: {
-                        Text("Testers only. Adds six local chats to your list for taking screenshots. They are made on this device, never uploaded, and nobody else can see them. Your own chats are not touched.")
+                        Text("Testers only. Adds seven local chats to your list and two people to the story row, for taking screenshots. They are made on this device, never uploaded, and nobody else can see them. Your own chats and your own story are not touched.")
                     }
                 }
             }
