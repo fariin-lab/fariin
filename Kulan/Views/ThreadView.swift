@@ -4795,7 +4795,12 @@ struct ThreadView: View {
                     // Field content swaps between the text field and the recording bar…
                     if recordingHeld { recordingHoldRow } else { messageField }
                     // …sticker + camera show only when idle & empty…
-                    if !recordingHeld && !hasText { inFieldGif; inFieldCamera }
+                    // ⛔ NO CAMERA HERE (owner 2026-08-22: "the camera is already inside the photo
+                    // picker, remove the one inside the composer"). It was a second door to the same
+                    // room standing next to the first: "+" opens the picker and the picker has its
+                    // own camera tile. `showCamera` and its cover stay — the picker's tile is what
+                    // raises them now, and that path was always the one that mattered.
+                    if !recordingHeld && !hasText { inFieldGif }
                     // …and the MIC lives INSIDE the pill (clean idle: sticker · camera · mic in one bar).
                     // ONE stable slot gated by !hasText (unchanged during a recording) + a stable .id so
                     // the DragGesture survives record-start; zIndex keeps the red circle in front of the
@@ -4880,33 +4885,6 @@ struct ThreadView: View {
     // Camera lives INSIDE the field (right), only when not typing/recording.
     // Solid, high-contrast icon (.primary = white in dark / black in light, 100% opacity) in a
     // a 40x40 tap target.
-    private var inFieldCamera: some View {
-        Button {
-            // Same as "+": fully resign the keyboard BEFORE presenting, or iOS remembers the field
-            // as first responder and flashes the keyboard back when the cover closes.
-            inputFocused = false
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-            showCamera = true
-        } label: {
-            Image("ic_camera").renderingMode(.template).resizable().scaledToFit()
-                .frame(width: 24, height: 24).foregroundStyle(.primary)
-                .frame(width: 40, height: 40)
-        }
-        // ⚠️ `.tint`, AND `.foregroundStyle` INSIDE THE LABEL IS NOT ENOUGH — his 2026-08-18
-        // screenshot with both icons circled blue.
-        //
-        // A `Button` tints its own label with the ambient accent, and that tint is applied around
-        // what the label asked for rather than under it, so a template image inside a button comes
-        // out accent-coloured however the image is styled. This app's accent is `.primary`, which is
-        // why these two looked right everywhere it reaches — but the chat opened from a STORY is
-        // presented out of the story's own UIKit host, and the root tint does not follow it there.
-        // The system's blue is what is left.
-        //
-        // The `+` beside them has carried `.tint(.primary)` for exactly this reason since it was
-        // written; these two were the pair that never got it. The mic is not a `Button` at all, which
-        // is why it stayed black in the same screenshot and is the third answer to the same question.
-        .tint(.primary)
-    }
     // One-tap GIFs from the field (big apps keep GIFs next to the camera, not buried in +).
     /// HIS ORDER, 2026-08-14: back to what it was before tonight. Tap it, the keyboard goes, the
     /// picker opens as its own page.
@@ -4926,7 +4904,17 @@ struct ThreadView: View {
                 .frame(width: 24, height: 24).foregroundStyle(.primary)
                 .frame(width: 40, height: 40)
         }
-        .tint(.primary)   // see `inFieldCamera` — same button, same accent, same answer
+        // ⚠️ `.tint`, AND `.foregroundStyle` INSIDE THE LABEL IS NOT ENOUGH — his 2026-08-18
+        // screenshot with the in-field icons circled blue. A `Button` tints its own label with the
+        // ambient accent, applied AROUND what the label asked for rather than under it, so a
+        // template image inside a button comes out accent-coloured however the image is styled.
+        //
+        // This app's accent is `.primary`, which is why it looked right everywhere that reaches —
+        // but a chat opened from a STORY is presented out of the story's own UIKit host and the root
+        // tint does not follow it there, leaving the system's blue. The `+` has carried this line for
+        // the same reason since it was written. (The camera button beside this one carried it too,
+        // and its removal is why the reasoning now lives here rather than being pointed at.)
+        .tint(.primary)
     }
 
     /// One send for both GIF routes (the composer's panel and the attach sheet's tile).
