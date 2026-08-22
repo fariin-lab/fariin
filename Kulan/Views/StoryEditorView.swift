@@ -1514,6 +1514,15 @@ struct StoryEditorView: View {
                     onTapChip: { cycleChipColour(s.id) },
                     onDragChange: { live in
                         draggingID = s.id
+                        // ⛔ THE HINT GOES THE MOMENT ANYTHING IS DRAGGED (owner 2026-08-22, with the
+                        // words stranded in mid-air beside a badge he had moved). It is drawn from
+                        // the sticker's COMMITTED centre, which does not move until the finger lifts,
+                        // so during a drag it could only ever be in the wrong place — and following
+                        // the badge would be the wrong answer anyway: the hint is there to explain a
+                        // badge that just appeared, and somebody dragging it has plainly understood.
+                        if linkHintStickerID != nil {
+                            withAnimation(.smooth(duration: 0.2)) { linkHintStickerID = nil }
+                        }
                         let hot = isOverTrash(live)
                         if hot != trashHot { trashHot = hot; if hot { UIImpactFeedbackGenerator(style: .medium).impactOccurred() } }
                     },
@@ -3338,19 +3347,26 @@ struct StoryEditorView: View {
     /// Solid white with black on it, and that is a decision rather than a default: these two sit on
     /// somebody's photograph and have to be legible on a snowfield and in a night club alike. Glass
     /// takes its colour from what is behind it, which is exactly the wrong property here.
+    /// ⚠️ THE SIZES BELOW WERE STEPPED UP ON 2026-08-22 ("default size link badge is small"). Measured
+    /// off his screenshot before and after: the badge stood 123 × 34pt and now stands about 150 × 44,
+    /// which puts it at the height iOS gives a control you are meant to hit.
+    ///
+    /// One set of numbers for all three chips, because a link, a place and a clock are one family and
+    /// two of them at a different size would read as a mistake rather than as a choice. If only the
+    /// link was meant to grow, that is a different shape and worth saying so.
     @ViewBuilder private func stickerChip(symbol: String, text: String,
                                           style: StoryChipStyle = .white) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: symbol).font(.system(size: 15, weight: .bold))
+        HStack(spacing: 7) {
+            Image(systemName: symbol).font(.system(size: 18, weight: .bold))
                 // Only the chain takes a colour of its own, and only on a chip that IS a link —
                 // `symbol` is the whole test, because it is the one thing that differs between a
                 // link, a pin and a clock. See `StoryChipStyle.linkGlyph`.
                 .foregroundStyle(symbol == "link" ? style.linkGlyph : style.ink)
-            Text(text).font(.system(size: 15, weight: .bold)).lineLimit(1)
+            Text(text).font(.system(size: 18, weight: .bold)).lineLimit(1)
                 .foregroundStyle(style.ink)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 11)
         .background(style.background, in: Capsule())
     }
 
