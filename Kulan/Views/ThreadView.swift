@@ -4614,7 +4614,31 @@ struct ThreadView: View {
     ///
     /// The keyboard case is the same 8, and now for a reason rather than by exception: up there the
     /// bar rides the keyboard, which is simply a different edge to rest on.
-    private var composerBottomGap: CGFloat { 8 }
+    /// ⛔ 30pt FROM THE SCREEN'S BOTTOM ON EVERY PHONE, NOT 30pt ON TOP OF WHATEVER THE PHONE HAS
+    /// (owner 2026-08-22: "bottom make also 30pt like iMessage… I want every phone it's most same").
+    ///
+    /// ⚠️ THE HOME INDICATOR IS THE WHOLE PROBLEM. It is 34pt on a phone that has one and 0 on a
+    /// phone that does not, and this padding sits ON TOP of it — so the flat 8 that used to be here
+    /// put the bar 42pt up on his phone and 8pt up on a home-button phone. Same number, two very
+    /// different bars, which is exactly what he is asking to stop.
+    ///
+    /// Subtracting the inset makes the TOTAL the constant instead. A phone with an indicator taller
+    /// than the target clamps at zero and keeps its 34, because there is nothing below the indicator
+    /// to give back — 34 against 30 is as close as the two can be made, and it is close.
+    /// Left and right. One number, both sides, every state — see the note where it is applied.
+    ///
+    /// ⚠️ APPLE'S OWN IS NARROWER. Measured off his iMessage screenshot, which is an exact 3× shot of
+    /// a 428pt phone: their pill's right edge sits 76px from the screen, which is 25.3pt. 30 is his
+    /// number and is what this is set to; the measurement is written down so the difference is a
+    /// decision rather than a drift.
+    private static let composerSideInset: CGFloat = 30
+    private static let composerBottomTarget: CGFloat = 30
+    private var composerBottomGap: CGFloat {
+        let inset = (UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
+            .first) ?? 0
+        return max(0, Self.composerBottomTarget - inset)
+    }
 
     private var composer: some View {
         VStack(spacing: 6) {
@@ -4623,13 +4647,17 @@ struct ThreadView: View {
                 if recordLocked { lockedRecordingBar } else { inputRow }
             }
         }
-        // 24 at rest, 16 once the keyboard is up (owner 2026-08-02). The composer gets a little wider
-        // exactly when you are typing into it, which is the moment the field needs the room.
-        .padding(.horizontal, inputFocused ? 16 : 24)
+        // ⛔ 30 EITHER SIDE, AND IT NO LONGER MOVES WITH THE KEYBOARD (owner 2026-08-22: "make it
+        // left and right 30pt"). It was 24 at rest and 16 once the keyboard was up — his own
+        // 2026-08-02 request — but that was a bar with two widths, and what he is asking for now is
+        // one bar that is the same on every phone and in every state. A margin that changes when you
+        // tap the field is the opposite of that, so the ternary goes with the number.
+        .padding(.horizontal, Self.composerSideInset)
         .padding(.top, 6)
         .padding(.bottom, composerBottomGap)
-        // Both margins move with the focus, so they ride the keyboard's own curve instead of snapping
-        // a frame before or after it.
+        // The focus animation stays. Nothing keyed to it moves any more, but the bar's CONTENT still
+        // changes with it — the send button appears, the mic leaves — and those still ride the
+        // keyboard's own curve rather than snapping a frame before or after it.
         .animation(.easeOut(duration: 0.25), value: inputFocused)
         .overlay(alignment: .top) {
             if holdHint {
