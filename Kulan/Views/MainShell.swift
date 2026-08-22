@@ -2393,6 +2393,23 @@ struct ArchivedChatsView: View {
                             }
                         }
                         .listStyle(.plain)
+                        // ⛔ THE GREY THAT SURVIVES A ROUND TRIP (owner 2026-08-22: "I click a chat,
+                        // open it, press back, and the highlight is still there").
+                        //
+                        // The row's Button pushes the chat — but the tap ALSO sets this List's
+                        // selection, and SwiftUI does not clear that on the way back. The row is then
+                        // genuinely SELECTED, and selected renders as a permanent grey fill. It is not
+                        // a press highlight at all, which is why it outlives the press.
+                        //
+                        // Outside edit mode there is no such thing as a selected chat, so say so.
+                        // These are the chat list's own two handlers, verbatim, added there for this
+                        // exact report and never copied here — the same gap as the row structure was.
+                        .onChange(of: selection) { _, sel in
+                            if !selecting, !sel.isEmpty { selection.removeAll() }
+                        }
+                        .onChange(of: selecting) { _, on in
+                            if !on, !selection.isEmpty { selection.removeAll() }   // leaving edit mode clears it
+                        }
                         .environment(\.editMode, .constant(selecting ? .active : .inactive))
                         // The selection tick, same as the calls list. See the note there.
                         .tint(Theme.defaultBubble(dark))
