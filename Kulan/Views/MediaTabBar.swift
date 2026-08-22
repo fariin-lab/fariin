@@ -62,6 +62,21 @@ struct MediaTabBar: View {
                     }
                 }
                 .padding(Self.pillInset)
+                // ⛔ THE PILL'S OWN ANIMATION, SO IT NO LONGER DEPENDS ON HOW `selection` WAS WRITTEN
+                // (owner 2026-08-22: "when I swipe the page the active tab is jumping to the next tab,
+                // make it smooth").
+                //
+                // The note below says a swipe needs no animation because "the pill has
+                // matchedGeometryEffect, so the bar tracks it either way". That is the mistake.
+                // `matchedGeometryEffect` does not follow a drag — it interpolates between two
+                // layouts only when the change that caused them is inside an animation. A tap wrapped
+                // its write in one, so the pill sprang; a paged TabView writes the selection raw, so
+                // the pill teleported. One path was animated and the other never was.
+                //
+                // Attached to the ROW rather than to the write, so both paths get it from one place
+                // and neither call site can forget. The tap's own `withAnimation` is gone with it —
+                // two sources for one movement is how they drift.
+                .animation(.spring(response: 0.34, dampingFraction: 0.86), value: selection)
             }
             .frame(height: Self.barHeight)
             // ⛔ GLASS, AND THE OLD "DO NOT PUT GLASS ON THIS" WARNING NO LONGER APPLIES.
@@ -110,8 +125,9 @@ struct MediaTabBar: View {
         return Button {
             // Set BEFORE the write, because the write is what fires the `onChange` that reads it.
             tapDriven = true
-            // The pill travels on a spring; the label's weight changes with it rather than after.
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) { selection = index }
+            // ⚠️ A PLAIN WRITE. The spring lives on the row now (see the note beside it), so a tap
+            // and a swipe move the pill by the same rule and there is nothing here to keep in step.
+            selection = index
         } label: {
             Text(title)
                 .font(.system(size: 16, weight: on ? .semibold : .regular))
