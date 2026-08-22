@@ -1127,7 +1127,10 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             // A card hides its own small count as it reaches the centre, where the big count below
             // takes over. Ported from the row's old `centreDistance` visual effect, which measured
             // the card's midpoint against the screen's.
-            let dist = min(abs(p.center.x - screenW / 2) / (screenW * 0.42), 1)
+            // Distance from the centre in CARD STEPS, unclamped — the fade below needs to know the
+            // difference between one card out and three, and a value that saturates at 1 cannot.
+            let steps = abs(p.center.x - screenW / 2) / (screenW * 0.42)
+            let dist = min(steps, 1)
             // ⛔ A RAMP, NOT A SWITCH (owner 2026-08-22: "when I swipe it must use good transition,
             // view and love just follow the preview thumbnail I swipe"). This was `dist < 0.35 ? 0 : 1`,
             // so the count did not follow the swipe at all — it sat at full strength and then vanished
@@ -1137,7 +1140,20 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             //
             // The band starts inside the old threshold and ends outside it, so the point at which the
             // big count below is fully in charge has not moved; only the way it gets there has.
-            let countAlpha: CGFloat = min(1, max(0, (dist - 0.20) / 0.30))
+            // ⛔ AND IT FADES WITH DISTANCE (owner 2026-08-22: "there is no reason for 3 eyes when I
+            // swipe… read the reference and you will understand"). Read, and it says something neither
+            // of us did: the reference shows THREE counts too — one per card, no shared one — but they
+            // are not equally loud. Its own rule is `1 - min(1, distanceToCentre / 3)`, so the
+            // neighbour either side sits at about two thirds, the next at a third, and the third out
+            // at nothing. Ours were all at full strength, which is what made three of them read as
+            // clutter rather than as depth.
+            //
+            // Two factors, and they answer different questions. `rise` is ours and stays: the centred
+            // card gives its count up because the big row below takes over, which is our two-view
+            // spelling of the single panel the reference morphs. `decay` is theirs, ported as written.
+            let rise: CGFloat = min(1, max(0, (dist - 0.20) / 0.30))
+            let decay: CGFloat = max(0, 1 - steps / 3)
+            let countAlpha: CGFloat = rise * decay
             // The card's own size. Set OUTSIDE the animation and only when it differs: a bounds
             // change re-lays-out the hosted content, and it changes for one reason (the sheet's slot
             // was re-measured) which is not something a scroll ever does.
