@@ -231,7 +231,10 @@ final class StoryRowCountView: UIView {
         eye.image = UIImage(systemName: "eye.fill", withConfiguration: symbol)
         eye.tintColor = .white
         heart.image = UIImage(systemName: "heart.fill", withConfiguration: symbol)
-        heart.tintColor = .systemRed
+        // ⛔ WHITE, NOT RED (owner 2026-08-22). The eye beside it is white and the two are one
+        // reading — a red heart made the number look like an alert rather than a count, and it was
+        // the only coloured mark on a strip that is otherwise white over a photograph.
+        heart.tintColor = .white
         for l in [views, likes] {
             l.font = font
             l.textColor = .white
@@ -1098,7 +1101,16 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             // takes over. Ported from the row's old `centreDistance` visual effect, which measured
             // the card's midpoint against the screen's.
             let dist = min(abs(p.center.x - screenW / 2) / (screenW * 0.42), 1)
-            let countAlpha: CGFloat = dist < 0.35 ? 0 : 1
+            // ⛔ A RAMP, NOT A SWITCH (owner 2026-08-22: "when I swipe it must use good transition,
+            // view and love just follow the preview thumbnail I swipe"). This was `dist < 0.35 ? 0 : 1`,
+            // so the count did not follow the swipe at all — it sat at full strength and then vanished
+            // in one frame the instant the card's midpoint crossed an invisible line, and reappeared
+            // the same way coming back. Interpolated, it fades out as the card takes the centre and
+            // back in as it leaves, which is the finger's own movement rather than a threshold.
+            //
+            // The band starts inside the old threshold and ends outside it, so the point at which the
+            // big count below is fully in charge has not moved; only the way it gets there has.
+            let countAlpha: CGFloat = min(1, max(0, (dist - 0.20) / 0.30))
             // The card's own size. Set OUTSIDE the animation and only when it differs: a bounds
             // change re-lays-out the hosted content, and it changes for one reason (the sheet's slot
             // was re-measured) which is not something a scroll ever does.
