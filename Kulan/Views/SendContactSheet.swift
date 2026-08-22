@@ -308,11 +308,16 @@ struct SendContactSheet: View {
                 // `tertiarySystemFill` rather than a grey of ours: it is the system's own wash for
                 // exactly this, it follows the theme, and it carries the same visual weight as the
                 // 0.14 it replaces, so nothing but the hue changes.
-                // `systemGray5` in light: a real grey rather than a wash, so the pill has an edge
-                // to be seen by on a bright sheet. Dark keeps the system's own wash, which reads
-                // perfectly well there and is what he signed off.
+                // ⚠️ `systemGray3`, TWO STEPS DARKER THAN MY FIRST ANSWER (owner 2026-08-22: "that
+                // button you made too white, make it grey"). `systemGray5` is 229 of 255 — a grey on
+                // paper, and effectively white against the pale glass this sheet actually sits on.
+                // The sheet's own tint is what decides whether a light grey reads as grey at all, and
+                // it does not. 199 does.
+                //
+                // Dark keeps the system's own wash, which reads perfectly well there and is what he
+                // signed off.
                 .background(selected.isEmpty
-                            ? (dark ? Color(.tertiarySystemFill) : Color(.systemGray5))
+                            ? (dark ? Color(.tertiarySystemFill) : Color(.systemGray3))
                             : Color.accentColor,
                             in: Capsule())
                 .contentShape(Capsule())
