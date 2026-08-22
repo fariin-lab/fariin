@@ -130,7 +130,7 @@ struct StoryStickerSheet: View {
     /// A sticker was chosen. The editor downloads it, takes a frame and places it — the tray does not
     /// know what a canvas is.
     var onSticker: (GiphyService.Gif) -> Void
-    var onLink: (URL) -> Void
+    var onLink: (URL, String) -> Void
     var onPlace: (String, CLLocationCoordinate2D) -> Void
     var onTime: () -> Void
 
@@ -204,7 +204,7 @@ struct StoryStickerSheet: View {
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: Route.self) { r in
                 switch r {
-                case .link:  LinkStickerScreen { url in close(); onLink(url) }
+                case .link:  LinkStickerScreen { url, name in close(); onLink(url, name) }
                 case .place: PlaceStickerScreen { name, coord in close(); onPlace(name, coord) }
                 }
             }
@@ -579,10 +579,16 @@ private struct TrayPushHeader: View {
 }
 
 private struct LinkStickerScreen: View {
-    var onDone: (URL) -> Void
+    var onDone: (URL, String) -> Void
 
     @State private var text = ""
-    @FocusState private var focused: Bool
+    /// What the badge will say instead of the host. Optional by design — see `StoryLinkSticker.label(for:name:)`.
+    @State private var name = ""
+    private enum Field: Hashable { case url, name }
+    @FocusState private var field: Field?
+    /// Kept so the geometry hook below still has one boolean to test. The page raises the URL field,
+    /// never the name one: the link is the thing without which nothing can be added.
+    private var focused: Bool { field != nil }
     /// The last frame this page reported. Two agreeing readings at rest mean the push has landed —
     /// see the note on the geometry hook below, which is what raises the keyboard.
     @State private var lastFrame: CGRect = .null
@@ -606,9 +612,9 @@ private struct LinkStickerScreen: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .keyboardType(.URL)
-                .submitLabel(.done)
-                .onSubmit { if let u = resolved { onDone(u) } }
-                .focused($focused)
+                .submitLabel(.next)
+                .onSubmit { field = .name }
+                .focused($field, equals: .url)
                 .font(.system(size: 17))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16)
@@ -624,7 +630,39 @@ private struct LinkStickerScreen: View {
                 // the tray's own search bar are the same object at last.
                 .background(Color(.tertiarySystemFill), in: Capsule())
 
-            Button { if let u = resolved { onDone(u) } } label: {
+            // WHAT THE BADGE SAYS, AND IT IS ALLOWED TO BE EMPTY. Second field rather than a mode
+            // switch: a link always has an address and only sometimes has a name, so the two are not
+            // alternatives and a control that made them alternatives would be lying about the shape.
+            //
+            // The badge only ever has room for one line, so the cap is a layout rule — see
+            // `StoryLinkSticker.nameMaxChars`. Refused at the keystroke, the way the reference does
+            // it, because silently dropping the tail of what somebody typed is worse than not taking
+            // it: they can see the field stop.
+            VStack(alignment: .leading, spacing: 8) {
+                TextField("", text: $name,
+                          prompt: Text("Link name (optional)").foregroundStyle(.white.opacity(0.4)))
+                    .autocorrectionDisabled()
+                    .submitLabel(.done)
+                    .onSubmit { add() }
+                    .focused($field, equals: .name)
+                    .onChange(of: name) { _, v in
+                        if v.count > StoryLinkSticker.nameMaxChars {
+                            name = String(v.prefix(StoryLinkSticker.nameMaxChars))
+                        }
+                    }
+                    .font(.system(size: 17))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 16)
+                    .frame(height: 52)
+                    .background(Color(.tertiarySystemFill), in: Capsule())
+
+                Text("Leave this empty and the badge shows the site's name.")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.45))
+                    .padding(.horizontal, 16)
+            }
+
+            Button(action: add) {
                 Text("Add link")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(resolved == nil ? Color.white.opacity(0.4) : .black)
@@ -662,9 +700,15 @@ private struct LinkStickerScreen: View {
         // and it cannot race a duration it does not depend on.
         .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { f in
             guard !focused else { return }
-            if f.minX <= 0.5, f == lastFrame { focused = true }
+            if f.minX <= 0.5, f == lastFrame { field = .url }
             lastFrame = f
         }
+    }
+
+    /// One door out, whichever control opened it, so the Return key and the button cannot drift.
+    private func add() {
+        guard let u = resolved else { return }
+        onDone(u, name)
     }
 }
 
@@ -848,4 +892,23 @@ enum StoryLinkSticker {
         let host = url.host()?.replacingOccurrences(of: "www.", with: "") ?? url.absoluteString
         return host.uppercased()
     }
+
+    /// The same answer once a person has been allowed to name the link themselves. An empty name is
+    /// not an error and not a blank badge — it falls back to the host, which is the reference app's
+    /// own rule and the behaviour every link sticker had before the field existed.
+    ///
+    /// Uppercased either way, because the badge has always been uppercase and a custom name is the
+    /// same badge. This is also what the reference does: it uppercases the name it was given.
+    static func label(for url: URL, name: String) -> String {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return n.isEmpty ? label(for: url) : n.uppercased()
+    }
+
+    /// ⚠️ 48, AND IT IS THE REFERENCE APP'S NUMBER, not a guess. Their name field refuses the
+    /// keystroke that would cross it, which is what `onChange` does here.
+    ///
+    /// A badge is one line that has to stay readable at sticker size, so this is a layout limit
+    /// rather than a storage one — the URL field beside it has no cap at all, for the same reason in
+    /// reverse: nobody reads the URL off the badge.
+    static let nameMaxChars = 48
 }

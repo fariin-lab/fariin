@@ -209,6 +209,15 @@ struct StoryEditorView: View {
     /// touch of the dial and dropped with the player — see `applyPreviewBrightness`.
     @State private var brightnessLive: StoryVideoBrightness.LiveExposure?
     /// Which way the next still-frame nudge steps — see `nudgePreviewFrame`.
+    /// The link badge currently wearing "Tap for more", or nil. See `showLinkHint`.
+    @State private var linkHintStickerID: UUID?
+    /// How far above the badge's top edge the hint floats.
+    private static let linkHintGap: CGFloat = 14
+    /// How long it stays. The owner's number, from his own reference picture — there is nothing to
+    /// copy here: the app this badge is modelled on shows no such hint at all, which was checked in
+    /// the three files that build and manage it before this was written.
+    private static let linkHintSeconds: TimeInterval = 5
+
     @State private var nudgeForward = false
     /// True while a still-frame redraw is being seeked. The dial keeps writing the exposure through
     /// it; only the redraw is dropped. See `nudgePreviewFrame`.
@@ -1142,7 +1151,7 @@ struct StoryEditorView: View {
         .storyTray(isPresented: $showStickers, heightFraction: 0.8) {
             StoryStickerSheet(
                 onSticker: { g in Task { await addSticker(g) } },
-                onLink: { url in addLinkSticker(url) },
+                onLink: { url, name in addLinkSticker(url, name: name) },
                 onPlace: { name, coord in addPlaceSticker(name, coord) },
                 onTime: { addTimeSticker() },
                 // The tray has no system sheet to dismiss itself out of any more, so the close is
@@ -1525,6 +1534,30 @@ struct StoryEditorView: View {
             // Still under the text either way — a caption is the thing you want readable when the
             // two land on each other, and `flatten` bakes the same order.
             .zIndex(drawingOnTop ? 1 : 3)
+
+            // THE HINT OVER A JUST-ADDED LINK. See `showLinkHint`.
+            //
+            // ⚠️ IT IS NOT A STICKER AND IT MUST NEVER BECOME ONE. `flatten` bakes `stickers`, so
+            // anything living in that array is posted; this is a note to the person composing and
+            // has no business in the picture. Drawn as its own layer, from its own state, and gone
+            // before the story could be sent.
+            if let hinted = stickers.first(where: { $0.id == linkHintStickerID }) {
+                Text("Tap for more")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
+                    .fixedSize()
+                    // Centred on the badge and lifted clear of its top edge: half the badge's drawn
+                    // height carries it to the edge, and the gap is added past that. Read off the
+                    // sticker's live geometry so it follows one that is dragged while the hint is up.
+                    .position(x: hinted.center.x,
+                              y: hinted.center.y
+                                 - hinted.drawnSize.height * hinted.scale / 2
+                                 - Self.linkHintGap)
+                    .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .bottom)))
+                    .allowsHitTesting(false)   // the badge under it stays the target
+                    .zIndex(6)
+            }
 
             // Text overlays — above the photo, below the drawing canvas + controls.
             ForEach($overlays) { $o in
@@ -3227,10 +3260,35 @@ struct StoryEditorView: View {
                                        chip: recipe))
     }
 
-    @MainActor private func addLinkSticker(_ url: URL) {
-        let text = StoryLinkSticker.label(for: url)
+    /// ⚠️ THE NAME NEVER LEAVES THE PICTURE, AND THAT IS NOT A SHORTCUT. A chip is baked into the
+    /// posted image, and what the story carries to the server is a tappable rectangle plus a URL
+    /// (`StoryTapTarget`) — there is no label field on it and the reference app has none either: its
+    /// own custom name exists only as pixels and in the local draft. So the name is spent here, on
+    /// the bake, and nothing downstream has to learn a new word.
+    @MainActor private func addLinkSticker(_ url: URL, name: String) {
+        let text = StoryLinkSticker.label(for: url, name: name)
         chipSticker(action: .link(url), recipe: .init(symbol: "link", text: text)) {
             stickerChip(symbol: "link", text: text)
+        }
+        // The badge has just landed in the middle of somebody's picture with no explanation. See
+        // `linkHintStickerID`.
+        showLinkHint()
+    }
+
+    /// "Tap for more" over the badge that was just added, for five seconds.
+    ///
+    /// ⚠️ THE TIMER IS KEYED TO THE BADGE, NOT TO THE CLOCK. Adding a second link inside the five
+    /// seconds moves the hint to the new one and the first badge's countdown must not then take the
+    /// hint off the second — so the guard is "am I still the sticker that asked for this", which is
+    /// a question about identity rather than about time.
+    ///
+    /// It only ever hides the WORDS. The badge is a real sticker and stays exactly where it landed.
+    @MainActor private func showLinkHint() {
+        guard let id = stickers.last?.id else { return }
+        withAnimation(.smooth(duration: 0.25)) { linkHintStickerID = id }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.linkHintSeconds) {
+            guard linkHintStickerID == id else { return }
+            withAnimation(.smooth(duration: 0.3)) { linkHintStickerID = nil }
         }
     }
 
@@ -4129,6 +4187,25 @@ struct StickerOverlayView: View {
         snappedPure(CGPoint(x: sticker.center.x + dragT.width, y: sticker.center.y + dragT.height))
     }
 
+    /// THE TAP HAS TO LOOK LIKE IT LANDED (owner 2026-08-22: "there is almost no visual feedback").
+    /// Multiplied into the live scale rather than replacing it, so a chip that has been pinched or
+    /// turned dips from wherever it actually is.
+    @State private var tapBounce: CGFloat = 1
+
+    /// The reference app's own numbers, and it is a keyframe dip rather than a spring: scale runs
+    /// `[s, s × 0.93, s]` at key times `[0, 0.33, 1]` over 0.30s, interpolated LINEARLY (their
+    /// `animateKeyframes` sets `calculationMode = .linear`). Split at the key time, that is 0.099s
+    /// down and 0.201s back — the asymmetry is what stops it reading as a wobble.
+    ///
+    /// ⚠️ NO HAPTIC HERE. Theirs fires none on this tap, and ours already buzzes inside
+    /// `cycleChipColour` for the colour change; two on one tap is a stutter, not emphasis.
+    private func bounce() {
+        withAnimation(.linear(duration: 0.099)) { tapBounce = 0.93 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.099) {
+            withAnimation(.linear(duration: 0.201)) { tapBounce = 1 }
+        }
+    }
+
     var body: some View {
         storyStickerImage(sticker)
             // ⛔ THIS IS ALSO WHY PINCHING A STICKER USED TO ZOOM THE PHOTOGRAPH (owner 2026-08-22).
@@ -4144,7 +4221,7 @@ struct StickerOverlayView: View {
             // to. See `StoryOverlayTouch.pad`.
             .padding(StoryOverlayTouch.pad)
             .contentShape(Rectangle())
-            .scaleEffect(max(0.3, sticker.scale * gScale))
+            .scaleEffect(max(0.3, sticker.scale * gScale) * tapBounce)
             .rotationEffect(sticker.rotation + gRot)
             .position(liveCenter)
             .allowsHitTesting(interactive)
@@ -4152,7 +4229,7 @@ struct StickerOverlayView: View {
             // ⚠️ AFTER the drag, and it does not fight it: `DragGesture(minimumDistance: 2)` never
             // begins for a finger that does not move, so a tap falls through to here. Only a chip
             // answers — a picture off the tray has no colours of ours to cycle.
-            .onTapGesture { if sticker.chip != nil { onTapChip() } }
+            .onTapGesture { if sticker.chip != nil { bounce(); onTapChip() } }
     }
 
     private var transform: some Gesture {

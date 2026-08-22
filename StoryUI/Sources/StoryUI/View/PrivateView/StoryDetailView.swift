@@ -257,6 +257,9 @@ struct StoryDetailView: View {
     @State private var isTapDisabled: Bool = false
     @State private var showEmoji: Bool = true
     @State private var isPaused: Bool = false   // hold-to-pause
+    /// The link area waiting for its second tap, or nil. See `armTapArea` — the first tap on a link
+    /// asks, it does not leave the app.
+    @State private var armedTapID: String?
     @State private var isHolding: Bool = false  // TRUE only after the long-press engages → drives the
                                                 // chrome fade, so a quick tap doesn't flicker the header/bars
     /// A hero open or close is in the air (host posts `storyFlightActive`).
@@ -1357,7 +1360,16 @@ private extension StoryDetailView {
                             .rotationEffect(.radians(t.rotation))
                             .position(x: geo.size.width * t.x, y: geo.size.height * t.y)
                             .allowsHitTesting(true)
-                            .onTapGesture { openTapArea(t) }
+                            .onTapGesture { armTapArea(t) }
+                    }
+                    // THE CONFIRMATION, AND THE TAP THAT DISMISSES IT. The catcher is a sibling of
+                    // the areas rather than a wrapper so it does not swallow their touches when it
+                    // is not there; it exists only while something is armed.
+                    if let armed = story.taps.first(where: { $0.id == armedTapID }) {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onTapGesture { disarmTapArea() }
+                        visitLinkBubble(for: armed, in: geo.size)
                     }
                 }
             }
@@ -1365,12 +1377,65 @@ private extension StoryDetailView {
         }
     }
 
+    /// "Visit link ›" over the badge that was tapped.
+    ///
+    /// ⚠️ IT FLIPS NEAR THE TOP. Sitting on the badge's top edge is the resting arrangement, but a
+    /// badge placed high on the picture would put this off the screen, so above a threshold it goes
+    /// underneath with its tail turned over. That is the reference app's own rule and the only reason
+    /// a tail direction is a variable here rather than a constant.
+    @ViewBuilder
+    private func visitLinkBubble(for t: StoryTapArea, in canvas: CGSize) -> some View {
+        let badgeTop = canvas.height * t.y - max(24, canvas.height * t.h) / 2
+        let below = badgeTop < Self.visitBubbleHeight + Self.visitBubbleMargin
+        VisitLinkBubble(tailDown: !below) { open(t.url) }
+            .position(x: min(max(canvas.width * t.x, Self.visitBubbleMargin),
+                             canvas.width - Self.visitBubbleMargin),
+                      y: below
+                         ? canvas.height * t.y + max(24, canvas.height * t.h) / 2 + Self.visitBubbleHeight / 2
+                         : badgeTop - Self.visitBubbleHeight / 2)
+            // Spring in, plain fade out — theirs is 0.4s springing up from half its own height, and
+            // 0.2s of nothing but alpha on the way out.
+            .transition(.asymmetric(
+                insertion: .scale(scale: 0.2, anchor: below ? .top : .bottom).combined(with: .opacity),
+                removal: .opacity))
+    }
+
+    /// FIRST TAP ARMS, SECOND TAP OPENS (owner 2026-08-22). A link on somebody else's story used to
+    /// launch the browser on one touch of a picture people are already tapping to move through — the
+    /// tap that advances a story and the tap that leaves the app were the same gesture.
+    ///
+    /// ⛔ AND THE STORY PAUSES WHILE IT IS ARMED, which is what makes the second tap possible at all:
+    /// without it the bar keeps running and the story it belongs to can advance out from under the
+    /// question. Same pause the rest of this screen uses, so a hold or a sheet cannot double it.
+    private func armTapArea(_ t: StoryTapArea) {
+        guard armedTapID != t.id else { return }
+        NotificationCenter.default.post(name: .pauseStory, object: nil)
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.72)) { armedTapID = t.id }
+    }
+
+    private func disarmTapArea() {
+        guard armedTapID != nil else { return }
+        withAnimation(.easeOut(duration: 0.2)) { armedTapID = nil }
+        NotificationCenter.default.post(name: .resumeStory, object: nil)
+    }
+
     /// Opening one. The library has no idea what is at the other end and does not need to: the URL
     /// was already narrowed to http/https on the way in (see the host's `StoryTapTarget.from`), and a
     /// place sticker is a maps URL, which is the same kind of thing.
-    private func openTapArea(_ t: StoryTapArea) {
-        UIApplication.shared.open(t.url)
+    ///
+    /// The story is left PAUSED on the way out: the app is about to go to the background, and a
+    /// story that ran on while a browser covered it would be finished by the time anybody came back.
+    private func open(_ url: URL) {
+        armedTapID = nil
+        UIApplication.shared.open(url)
     }
+
+    /// The bubble's own height, which the placement above needs before the thing has been laid out —
+    /// hence a constant rather than a measurement. 50pt of body plus the 9pt tail, the reference's
+    /// numbers for a single row with no subtitle.
+    static let visitBubbleHeight: CGFloat = 59
+    /// The closest it is allowed to come to any edge of the picture.
+    static let visitBubbleMargin: CGFloat = 60
 
     // The caption component: 16pt regular white text with a soft shadow, left-aligned,
     // 16pt side padding, sitting over a 128pt black gradient (0 → 80%). Collapsed to 3 lines; tap to expand.
@@ -2155,6 +2220,12 @@ private extension StoryDetailView {
     }
     
     func start(index: Int) {
+        // ⛔ AN ARMED LINK BELONGS TO THE ITEM THAT WAS SHOWING WHEN IT WAS TAPPED. Arming pauses the
+        // story, so the ordinary way out is the second tap or a tap outside — but a delete, a jump
+        // or a host-driven move can still change the item underneath it, and a bubble left standing
+        // would then be offering a link that is no longer on the screen. Cleared without animating:
+        // the thing it was pointing at has already gone.
+        armedTapID = nil
         // ⚠️ THE READY FLAG IS WRITTEN ONE TURN LATER, AND THAT ONE HOP IS THE WHOLE FIX for his
         // 2026-08-09 repro: "first open works, REOPENING the same story sits paused."
         //
@@ -2384,4 +2455,83 @@ private extension StoryDetailView {
 struct StoryFoldKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// The "Visit link ›" confirmation that stands over a tapped link badge.
+///
+/// Drawn rather than assembled from a shape and a triangle view, because the tail has to be part of
+/// the same filled path as the body — two overlapping shapes at the same colour show their seam the
+/// moment anything behind them is bright, and a story is the brightest thing there is.
+///
+/// The numbers are the reference app's own context menu, which is what its story links raise: 10pt
+/// corner radius, a tail 18 wide by 9 tall, a 50pt row, and a 17pt regular label. Dark and blurred,
+/// so it reads as chrome over the picture rather than as part of it.
+struct VisitLinkBubble: View {
+    /// False when the bubble had to flip under the badge, which turns the tail over with it.
+    var tailDown: Bool
+    var onTap: () -> Void
+
+    private static let radius: CGFloat = 10
+    private static let tailW: CGFloat = 18
+    private static let tailH: CGFloat = 9
+    private static let rowH: CGFloat = 50
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 6) {
+                Text("Visit link")
+                    .font(.system(size: 17))
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .opacity(0.6)
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 18)
+            .frame(height: Self.rowH)
+            .background(
+                BubbleShape(tailDown: tailDown, radius: Self.radius,
+                            tailW: Self.tailW, tailH: Self.tailH)
+                    .fill(.ultraThinMaterial)
+                    .environment(\.colorScheme, .dark)
+                    .shadow(color: .black.opacity(0.2), radius: 10, y: 5)
+            )
+            // The tail lives OUTSIDE the row, so the shape is drawn into a taller box and the label
+            // keeps the whole 50pt to itself.
+            .padding(tailDown ? .bottom : .top, Self.tailH)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Body plus tail as ONE path. The tail is centred, which is right for a badge in the middle of
+    /// the picture and close enough at the edges — the reference slides its body and keeps the tail
+    /// on the badge, and that only starts to matter for a bubble wider than this one ever gets.
+    private struct BubbleShape: Shape {
+        var tailDown: Bool
+        var radius: CGFloat
+        var tailW: CGFloat
+        var tailH: CGFloat
+
+        func path(in rect: CGRect) -> Path {
+            // The body is the whole rect minus the strip the tail stands on.
+            let body = CGRect(x: rect.minX,
+                              y: tailDown ? rect.minY : rect.minY + tailH,
+                              width: rect.width,
+                              height: rect.height - tailH)
+            var p = Path(roundedRect: body, cornerRadius: radius, style: .continuous)
+            let midX = rect.midX
+            var tail = Path()
+            if tailDown {
+                tail.move(to: CGPoint(x: midX - tailW / 2, y: body.maxY - 1))
+                tail.addLine(to: CGPoint(x: midX + tailW / 2, y: body.maxY - 1))
+                tail.addLine(to: CGPoint(x: midX, y: body.maxY + tailH))
+            } else {
+                tail.move(to: CGPoint(x: midX - tailW / 2, y: body.minY + 1))
+                tail.addLine(to: CGPoint(x: midX + tailW / 2, y: body.minY + 1))
+                tail.addLine(to: CGPoint(x: midX, y: body.minY - tailH))
+            }
+            tail.closeSubpath()
+            p.addPath(tail)
+            return p
+        }
+    }
 }
