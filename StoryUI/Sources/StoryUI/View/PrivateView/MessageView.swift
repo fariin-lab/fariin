@@ -90,7 +90,7 @@ private extension MessageView {
             }
             // ⛔ A MINIMUM HERE TOO, for the same reason: this is the whole reply ROW, and a fixed
             // 44 would clip the pill the moment it grew to a second line. The bar rises with the
-            // field and the send circle stays centred against it.
+            // field and the send circle hangs from the bottom of it (see `sendInset`).
             .frame(minHeight: Constant.MessageView.height)
         } else {
             EmptyView()
@@ -98,13 +98,24 @@ private extension MessageView {
     }
     
     
+    /// ⚠️ THE SIDE BUTTON HANGS FROM THE BOTTOM, NOT THE MIDDLE (owner 2026-08-22: at five lines
+    /// "sand button is canter… dont move real postion"). The pill is a growing field and the button
+    /// is a fixed circle, so a centred row slides the circle up the pill's flank as the text grows
+    /// and it ends up opposite the middle of the message instead of opposite the line being typed.
+    ///
+    /// The `sendInset` puts the resting position back exactly where it was: half the difference
+    /// between the row's 44pt minimum and the 40pt circle is what centring used to give it at one
+    /// line, so at one line nothing moves at all and only the grown states change.
+    private var sendInset: CGFloat { (Constant.MessageView.height - Constant.MessageView.sendSize) / 2 }
+
     func messageViewBuilder(_ config: StoryInteractionConfig?, _ placeholder: String) -> some View {
-        HStack(spacing: 12) {   // 12pt between the pill and the side icon — 8 left the heart cramped
+        HStack(alignment: .bottom, spacing: 12) {   // 12pt between the pill and the side icon — 8 left the heart cramped
             replyPill(placeholder)
 
             // Send button appears once you've typed (heart shows when empty) — was Return-key only.
             if text.isEmpty {
                 buttonViewBuilder(config)
+                    .padding(.bottom, sendInset)
             } else {
                 Button(action: onCommitAction) {
                     // His 2026-08-18: an arrow, not a paper plane. `arrow.up.circle.fill` is the
@@ -123,6 +134,7 @@ private extension MessageView {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .padding(.bottom, sendInset)
             }
         }
     }
