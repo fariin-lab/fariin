@@ -47,9 +47,19 @@ struct SendContactSheet: View {
             header
             if searching { searchRow.transition(.move(edge: .top).combined(with: .opacity)) }
             peopleGrid
-            bottomButton
+            // ⚠️ GONE WHILE THE KEYBOARD IS UP (owner 2026-08-22). The sheet is lifted above the
+            // keys as one piece, so this button was not hidden BY the keyboard — it was parked on
+            // top of it, eating the room the search results need while you are still typing.
+            //
+            // Safe to drop rather than disable: picking anybody goes through `toggle(_:)`, which
+            // already resigns the field for exactly this reason, so the moment the button has
+            // something to send the keyboard is on its way down and the button is on its way back.
+            if !searchFocused {
+                bottomButton.transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .animation(.easeOut(duration: 0.2), value: searching)
+        .animation(.easeOut(duration: 0.2), value: searchFocused)
         // ⛔ NO `presentationBackground` AT ALL, AND THE ABSENCE IS THE FIX.
         //
         // This line has now been `.regularMaterial` (read as grey), then `.ultraThinMaterial` (still
