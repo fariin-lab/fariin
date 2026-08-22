@@ -4887,32 +4887,41 @@ struct ZoomableImageView: UIViewRepresentable {
             default: break
             }
         }
+        /// ⛔ TWO FINGERS ZOOM. THEY DO NOT MOVE THE PICTURE — owner, 2026-08-22, and this recogniser
+        /// now measures a drag only so that nothing else can claim it.
+        ///
+        /// His report: pinching the picture zooms it, but it also slides left or right while the
+        /// fingers are down, and then jumps back to the middle when they lift. He asked for zoom in
+        /// and zoom out, centred, and for the picture never to travel in any direction.
+        ///
+        /// ⚠️ THE PINCH WAS NEVER THE DRIFT. `handlePinch` writes `curScale` and nothing else, and
+        /// `applyTransform` scales about the view's own centre, so a pinch on its own is already the
+        /// pure centred zoom he is asking for — it cannot move a picture even when the fingers are
+        /// nowhere near the middle. The travel came from THIS recogniser running beside it. The pan
+        /// is two-finger (see the floor in `makeUIView`) and `shouldRecognizeSimultaneouslyWith`
+        /// lets both read the same two touches, so every pinch was also a drag: two fingers never
+        /// close symmetrically, and whatever the midpoint drifted while they moved was banked as
+        /// framing. The jump home on release is `clampOffset` — as the scale settles there is less
+        /// picture than card to spare, the allowance falls to zero, and the spring takes it back.
+        ///
+        /// ⚠️ THE RECOGNISER IS KEPT AND NEUTERED RATHER THAN REMOVED, deliberately. It holds a place
+        /// in the arbitration above it: with a two-finger floor and a two-finger ceiling it is the
+        /// thing that stops a two-finger motion reaching the one-touch tap and the flick to the next
+        /// picture. Deleting it would hand those touches to recognisers written for one finger, which
+        /// is a second bug to fix in exchange for a few lines. It reads the drag and drops it.
+        ///
+        /// This does cost the ability to reframe a zoomed picture — zoom in and you get the middle of
+        /// it, with no way to choose a different part. That is what he asked for in as many words
+        /// ("never go left or right or up and down, just make zoom out and zoom in"), so it is what
+        /// this does; the framing is one line away if he ever wants it back.
         @objc func handlePan(_ g: UIPanGestureRecognizer) {
+            // Taken and thrown away on every pass, for the same reason the old code took it above
+            // its guard: an unread translation is a banked one, and banked travel lands in a single
+            // jump the moment anything reads it again.
+            g.setTranslation(.zero, in: container)
             switch g.state {
             case .began: active = true
-            case .changed:
-                let t = g.translation(in: container)
-                g.setTranslation(.zero, in: container)
-                // A FITTED PICTURE HAS NOWHERE TO GO — and that is decided HERE, not by refusing to
-                // begin. It used to be a `gestureRecognizerShouldBegin` gate, and once the pan needs
-                // two fingers that gate turns into a bug: a two-finger motion that starts as a drag
-                // and becomes a pinch would have had the pan marked FAILED for the whole sequence
-                // before the zoom arrived, so the fingers that just zoomed in could not then move
-                // the picture without lifting off. Refusing the movement instead of refusing the
-                // gesture leaves the pan alive and waiting for the scale to cross.
-                //
-                // The translation is taken and thrown away above the guard on purpose: without
-                // that, everything the fingers travelled while still at 1x would be banked and
-                // land in one jump the instant the pinch crossed.
-                guard curScale > 1.01 else { break }
-                curOffset.x += t.x; curOffset.y += t.y
-                applyTransform()
-            case .ended, .cancelled:
-                active = false
-                clampOffset()
-                UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.82, initialSpringVelocity: 0.3,
-                               options: [.allowUserInteraction]) { self.applyTransform() }
-                parent.offset = CGSize(width: curOffset.x, height: curOffset.y)
+            case .ended, .cancelled: active = false
             default: break
             }
         }
@@ -4925,9 +4934,9 @@ struct ZoomableImageView: UIViewRepresentable {
         // THE PAN USED TO REFUSE TO BEGIN BELOW 1.01x (`gestureRecognizerShouldBegin`), because it
         // was live at every zoom level on ONE finger and so ate the sideways flick to the next
         // picture. The two-finger floor in `makeUIView` is a better answer to that same problem —
-        // the flick is one touch and the pan can no longer see it at all — and the old gate would
-        // now cost more than it saves, so the "is there anything to move" question moved into
-        // `handlePan`'s `.changed`. See the note there.
+        // the flick is one touch and the pan can no longer see it at all — so the gate went. The
+        // question it asked is moot now in any case: the pan moves nothing at any scale. See
+        // `handlePan`.
 
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool {
             !(g is UITapGestureRecognizer || o is UITapGestureRecognizer)
