@@ -5160,91 +5160,78 @@ struct ThreadView: View {
     ///
     /// Pause opens the review; the red mic records the next stretch; send stitches. See
     /// AudioRecorder's segment note for why pause and append can never share one file.
+    /// ⛔ ONE ROW, WITH THE PAUSE FLOATING ABOVE IT (owner 2026-08-22, with both layouts side by
+    /// side). It was a full-width pill with three buttons in a row underneath. His arrangement puts
+    /// the wave BETWEEN the two decisions — throw it away on the left, send it on the right — so the
+    /// two things you might do with the recording sit either side of the recording itself, and the
+    /// one control that only changes the recording's state stands out of that line entirely.
     private var lockedRecordingBar: some View {
         VStack(spacing: 10) {
-            // THE STRIP: the wave owns the width.
-            HStack(spacing: 8) {
-                if reviewingNote {
-                    // REVIEWING: play it back. The waveform is the finished one, not the live meter —
-                    // same component the sent bubble uses, so what you check is what they will see.
-                    Button { togglePreview() } label: {
-                        Image(systemName: previewPlaying ? "pause.fill" : "play.fill")
-                            .font(.system(size: 15)).foregroundStyle(Theme.accent(dark))
-                            .frame(width: 22, height: 22)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    // SCRUBBABLE — his order with the reference's review open ("can we move sound
-                    // wherever we want?"), reversing the old checking-is-not-editing stance. Same
-                    // gesture machinery as the sent bubble: tap lands, horizontal drag scrubs,
-                    // vertical is refused so nothing else moves.
-                    WaveformBars(bars: previewWaveform.isEmpty ? Array(repeating: 30, count: 28) : previewWaveform,
-                                 progress: previewProgress,
-                                 played: Theme.accent(dark),
-                                 unplayed: Theme.accent(dark).opacity(0.35),
-                                 onSeek: { pct in seekPreview(pct) })
-                        .frame(height: 22).frame(maxWidth: .infinity)
-                    // Total on the right, the reference's order: play · wave · time.
-                    Text(timeString(recorder.elapsed)).font(.system(size: 15).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                } else {
-                    // RECORDING: timer · live wave, the reference's order.
-                    RecordTimerText(recorder: recorder)
-                    RecordWaveform(recorder: recorder, color: Theme.accent(dark))
-                        .frame(maxWidth: .infinity)
-                }
-                // ONE-TIME LISTEN — the "1" at the strip's end, both states, fill-when-armed like
-                // the photo picker's badge. Arming it flashes the little confirmation over the bar.
-                Button {
-                    voiceViewOnce.toggle()
-                    if voiceViewOnce {
-                        withAnimation(.easeOut(duration: 0.2)) { voiceOnceToast = true }
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-                            withAnimation(.easeIn(duration: 0.25)) { voiceOnceToast = false }
-                        }
-                    }
-                } label: {
-                    Image(systemName: voiceViewOnce ? "1.circle.fill" : "1.circle")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(voiceViewOnce ? Color(hex: 0x3DA1FD) : .primary)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(voiceViewOnce ? "One-time listen on" : "One-time listen off")
+            // Pause (or continue) rides above, on the send's side. Not part of the row below: it
+            // does not dispose of the note or commit it, and lining it up with the two that do is
+            // what made three equal circles out of two decisions and a toggle.
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                recordStateButton
             }
-            .padding(.horizontal, 14).frame(minHeight: 40)
-            .liquidGlass(Capsule(), interactive: true)
-            .clipShape(Capsule())   // keep the dotted waveform fully inside the pill's rounded edges
-
-            // THE CONTROLS: trash · pause-or-mic · send, each in its own corner of the row.
-            HStack {
+            HStack(spacing: 10) {
                 Button { cancelRecording() } label: {
                     Image(systemName: "trash.fill").font(.system(size: 18)).foregroundStyle(.red)
                         .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true)
                 }
-                Spacer()
-                if reviewingNote {
-                    // CONTINUE RECORDING — the reference's centre red mic. The next stretch; the
-                    // stitcher joins them at send.
-                    Button { resumeRecording() } label: {
-                        Image(systemName: "mic.fill")
-                            .font(.system(size: 18)).foregroundStyle(.red)
-                            .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true)
-                            .contentShape(Circle())
+                // THE STRIP: the wave owns whatever the two buttons leave.
+                HStack(spacing: 8) {
+                    if reviewingNote {
+                        // REVIEWING: play it back. The waveform is the finished one, not the live meter —
+                        // same component the sent bubble uses, so what you check is what they will see.
+                        Button { togglePreview() } label: {
+                            Image(systemName: previewPlaying ? "pause.fill" : "play.fill")
+                                .font(.system(size: 15)).foregroundStyle(Theme.accent(dark))
+                                .frame(width: 22, height: 22)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        // SCRUBBABLE — his order with the reference's review open ("can we move sound
+                        // wherever we want?"), reversing the old checking-is-not-editing stance. Same
+                        // gesture machinery as the sent bubble: tap lands, horizontal drag scrubs,
+                        // vertical is refused so nothing else moves.
+                        WaveformBars(bars: previewWaveform.isEmpty ? Array(repeating: 30, count: 28) : previewWaveform,
+                                     progress: previewProgress,
+                                     played: Theme.accent(dark),
+                                     unplayed: Theme.accent(dark).opacity(0.35),
+                                     onSeek: { pct in seekPreview(pct) })
+                            .frame(height: 22).frame(maxWidth: .infinity)
+                        // Total on the right, the reference's order: play · wave · time.
+                        Text(timeString(recorder.elapsed)).font(.system(size: 15).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    } else {
+                        // RECORDING: timer · live wave, the reference's order.
+                        RecordTimerText(recorder: recorder)
+                        RecordWaveform(recorder: recorder, color: Theme.accent(dark))
+                            .frame(maxWidth: .infinity)
                     }
-                    .accessibilityLabel("Continue recording")
-                } else {
-                    // PAUSE IS THE ONE RECORDING CONTROL: it lands on the review with everything
-                    // waiting. RED, not the accent — red is the recording signal everywhere here.
-                    Button { beginPreview() } label: {
-                        Image(systemName: "pause.fill")
-                            .font(.system(size: 16, weight: .semibold)).foregroundStyle(.red)
-                            .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true)
-                            .contentShape(Circle())
+                    // ONE-TIME LISTEN — the "1" at the strip's end, both states, fill-when-armed like
+                    // the photo picker's badge. Arming it flashes the little confirmation over the bar.
+                    Button {
+                        voiceViewOnce.toggle()
+                        if voiceViewOnce {
+                            withAnimation(.easeOut(duration: 0.2)) { voiceOnceToast = true }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+                                withAnimation(.easeIn(duration: 0.25)) { voiceOnceToast = false }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: voiceViewOnce ? "1.circle.fill" : "1.circle")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(voiceViewOnce ? Color(hex: 0x3DA1FD) : .primary)
+                            .contentShape(Rectangle())
                     }
-                    .accessibilityLabel("Pause and listen back")
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(voiceViewOnce ? "One-time listen on" : "One-time listen off")
                 }
-                Spacer()
+                .padding(.horizontal, 14).frame(minHeight: 40)
+                .liquidGlass(Capsule(), interactive: true)
+                .clipShape(Capsule())   // keep the dotted waveform fully inside the pill's rounded edges
                 Button { sendRecording() } label: {
                     // BLUE send button (white arrow on blue Liquid Glass), matching the composer send.
                     Image(systemName: "arrow.up").font(.system(size: 18, weight: .bold))
@@ -5256,6 +5243,32 @@ struct ThreadView: View {
             }
         }
         .animation(.spring(response: 0.28, dampingFraction: 0.85), value: reviewingNote)
+    }
+
+    /// Pause while recording, continue while reviewing. Extracted only so the layout above reads as
+    /// the arrangement it is; the two branches are untouched.
+    @ViewBuilder private var recordStateButton: some View {
+        if reviewingNote {
+            // CONTINUE RECORDING — the reference's centre red mic. The next stretch; the
+            // stitcher joins them at send.
+            Button { resumeRecording() } label: {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 18)).foregroundStyle(.red)
+                    .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true)
+                    .contentShape(Circle())
+            }
+            .accessibilityLabel("Continue recording")
+        } else {
+            // PAUSE IS THE ONE RECORDING CONTROL: it lands on the review with everything
+            // waiting. RED, not the accent — red is the recording signal everywhere here.
+            Button { beginPreview() } label: {
+                Image(systemName: "pause.fill")
+                    .font(.system(size: 16, weight: .semibold)).foregroundStyle(.red)
+                    .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true)
+                    .contentShape(Circle())
+            }
+            .accessibilityLabel("Pause and listen back")
+        }
     }
 
     /// Pause: close the current stretch and show the review. NOT one-way any more — the red mic on
