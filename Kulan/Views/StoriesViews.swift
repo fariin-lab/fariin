@@ -5279,17 +5279,36 @@ struct MyStoriesCarousel: View {
     /// ⚠️ SEEDED, NOT WRITTEN OVER. `loadAll` still runs and still refreshes this id along with the
     /// others; a seed that is stale by a view or two is corrected a moment later, and until then it
     /// is far closer to the truth than a zero.
-    @MainActor private func seedCurrentCount() {
+    @MainActor private func seedKnownCounts() {
+        // ⛔ EVERY CARD, FROM THE CACHE THAT ALREADY HOLDS THEM (owner 2026-08-22: the left and right
+        // thumbnails' views and loves appear late).
+        //
+        // The first pass at this seeded only the CENTRED story, from the owner bar's model, because
+        // the bar is where I noticed the number already existed. That fixed the card he was looking
+        // at and left every other one blank until the network answered — which is the same fault one
+        // card over, and he reported it as such.
+        //
+        // `StoryCountCache.summary(for:)` answers from memory with no network at all: it is the
+        // store the counts land in when they are fetched, so a story whose numbers have been seen
+        // once in this session can say so instantly. Nothing is being invented — this is the app
+        // remembering what it already knows instead of asking twice.
+        for st in stories where counts[st.id] == nil {
+            if let v = StoryCountCache.summary(for: st.id) {
+                counts[st.id] = StoryRowCounts(views: v.count, likes: v.reactionCount)
+            }
+        }
+        // The owner bar stays as the fallback for the CURRENT story, and it is not redundant: on the
+        // very first open of a session the cache is empty, and the bar has still had this one story's
+        // summary since the page appeared.
         let id = activeId
-        guard !id.isEmpty else { return }
-        guard counts[id] == nil else { return }   // a real answer already landed; leave it alone
+        guard !id.isEmpty, counts[id] == nil else { return }
         let m = StoryOwnerBarModel.shared
         guard m.count > 0 || m.reactions > 0 else { return }
         counts[id] = StoryRowCounts(views: m.count, likes: m.reactions)
     }
 
     private func loadAll() async {
-        await MainActor.run { seedCurrentCount() }
+        await MainActor.run { seedKnownCounts() }
         await withTaskGroup(of: (String, StoryViewSummary?).self) { group in
             for s in stories { group.addTask { (s.id, await StoryViewer.viewSummaryPublic(storyId: s.id)) } }
             // Reduced to numbers HERE, once per fetch, rather than in `body` once per frame.
