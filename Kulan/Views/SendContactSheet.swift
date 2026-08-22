@@ -33,6 +33,10 @@ struct SendContactSheet: View {
     /// rather than with the page margin. See `sideInset`.
     @State private var gridWidth: CGFloat = 0
     @FocusState private var searchFocused: Bool
+    /// Told what was sent and to whom, so the page underneath can say so. The sheet does not show it
+    /// itself — it is closing, and a message that leaves with the thing it is about is not a message.
+    var onSent: (String) -> Void = { _ in }
+
     /// ⛔ LIGHT MODE NEEDS DIFFERENT PAINT ON THE QUIET BUTTON, and this is the risk I flagged when
     /// the fill went from a blue wash to a neutral one (owner 2026-08-22: "in dark mode it is good,
     /// in light mode the grey I cannot see very well… also make the text black").
@@ -89,12 +93,13 @@ struct SendContactSheet: View {
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(sending)
-        .overlay {
-            if sending {
-                ProgressView().padding(20)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-            }
-        }
+        // ⛔ NO SPINNER (owner 2026-08-22: "when I send, it is loading — no need loading"). A wheel
+        // over the faces said "wait" for something nobody is waiting on: the sheet is about to close
+        // and the sending is the app's problem, not his. The confirmation now arrives afterwards, on
+        // the page he lands back on, which is where it is actually read — see `onSent`.
+        //
+        // `sending` still guards the button and the drag-to-dismiss, so a double tap cannot send
+        // twice; it simply no longer draws anything.
         .sheet(isPresented: $showSystemShare) { SystemShareSheet(items: [link]) }
     }
 
@@ -347,13 +352,34 @@ struct SendContactSheet: View {
 
     private func sendAll() async {
         sending = true
+        // The first name is captured BEFORE the sending, while the selection is still whole and in
+        // the order the grid shows it — afterwards there is nothing left to name.
+        let firstName = selected.compactMap { id in
+            repo.conversations.first { $0.id == id }
+        }.first.map { $0.displayName(me) } ?? "chat"
+        let count = selected.count
         for cid in selected {
             let conv = repo.conversations.first { $0.id == cid }
             try? await ChatService.sendText(cid: cid, text: contactText,
                                             group: conv?.isGroup == true ? conv?.users : nil)
         }
         sending = false
+        onSent(Self.sentMessage(first: firstName, count: count))
         dismiss()
+    }
+
+    /// "Link sent to Vzet and 5 other chats." — his wording, 2026-08-22.
+    ///
+    /// Singular and plural both spelled out rather than an "s" glued on a number: one other chat is
+    /// a sentence people read, and "1 other chats" is the kind of thing that makes an app look
+    /// unfinished for the sake of one branch.
+    static func sentMessage(first: String, count: Int) -> String {
+        switch count {
+        case ..<1:  return "Link sent."
+        case 1:     return "Link sent to \(first)."
+        case 2:     return "Link sent to \(first) and 1 other chat."
+        default:    return "Link sent to \(first) and \(count - 1) other chats."
+        }
     }
 }
 

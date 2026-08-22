@@ -127,6 +127,9 @@ struct ContactInfoView: View {
     @State private var showBlock = false
     @State private var showReport = false
     @State private var showShare = false
+    /// What the share sheet said it did, shown briefly after it closes. Empty = nothing to say.
+    @State private var shareToast = ""
+    @State private var shareToastShown = false
     @State private var openChat = false
     @State private var showAllMedia = false
     @State private var showVerify = false
@@ -953,7 +956,27 @@ struct ContactInfoView: View {
                     Task { await ChatService.setDisappear(cid, seconds: s) }
                 }
             }
-            .sheet(isPresented: $showShare) { SendContactSheet(contactText: shareText) }
+            // ⛔ THE CONFIRMATION LANDS HERE, NOT IN THE SHEET (owner 2026-08-22: "when I send there
+            // is no notification"). The sheet is closing as the send finishes, and a message that
+            // leaves with the thing it is about is not a message — so the sheet reports what it did
+            // and this page is what says it.
+            .sheet(isPresented: $showShare) {
+                SendContactSheet(contactText: shareText, onSent: { flashShareToast($0) })
+            }
+            // Same shape the story viewer's own toast uses — a capsule at the bottom, up on a
+            // spring, gone on a fade after a second and a half.
+            .overlay(alignment: .bottom) {
+                if shareToastShown {
+                    Text(shareToast)
+                        .font(.subheadline.weight(.medium)).foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 18).padding(.vertical, 10)
+                        .background(.black.opacity(0.75), in: Capsule())
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 40)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
             .sheet(isPresented: $showAddGroup) {
                 AddToGroupView(contactUid: otherUid, contactName: shownName, contactPhoto: photoUrl)
                     .presentationDetents([.medium, .large])   // small sheet by default (user request)
@@ -1338,6 +1361,16 @@ struct ContactInfoView: View {
     /// migration, it fixes every old bio at once including ones written by people who never update,
     /// and a page that cannot be broken by the data it is given is worth more than a one-off sweep
     /// through the database.
+    /// Raise the confirmation, then take it away. Deliberately the same 1.5s and the same pair of
+    /// curves the story viewer's `flashSentToast` uses, so the app has one way of saying "done".
+    private func flashShareToast(_ text: String) {
+        shareToast = text
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { shareToastShown = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            withAnimation(.easeOut(duration: 0.25)) { shareToastShown = false }
+        }
+    }
+
     private var gatedAbout: String {
         guard PrivacyPrefs.allows(targetPrivacy, "bio", contactOfMine: iAmContact) else { return "" }
         return Limits.oneParagraph(about, max: Limits.bioChars)
