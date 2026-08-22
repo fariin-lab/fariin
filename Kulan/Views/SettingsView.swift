@@ -1687,47 +1687,61 @@ struct EditProfileView: View {
                 }
 
                 Section {
-                    TextField("A few words about you", text: $about, axis: .vertical)
-                        .lineLimit(1...5)
-                        .focused($bioFocused)
-                        .id(Self.bioAnchor)
-                        .onChange(of: about) { _, v in
-                            // ⚠️ THE LIMIT IS A CHARACTER COUNT, AND BLANKS ARE CHARACTERS — WHICH IS
-                            // WHY IT NEVER HELD (owner 2026-08-22: "User bio can make unlimited
-                            // space"). `.lineLimit(1...5)` caps the box at five lines but not the
-                            // string, so Return could push a bio to any length inside the budget and
-                            // the profile page, which clamps nothing, drew the whole empty column.
-                            // Tidied first, then measured: see `tidyBio`.
-                            let tidied = Self.tidyBio(v)
-                            if tidied != v { about = tidied; return }   // the rewrite re-enters here
-                            // Follow the cursor DOWN: anchor .bottom keeps the newest line just
-                            // above the keyboard rather than centring the whole field.
-                            if bioFocused { withAnimation(.easeOut(duration: 0.2)) { scroller.scrollTo(Self.bioAnchor, anchor: .bottom) } }
-                        }
-                        .onChange(of: bioFocused) { _, focused in
-                            // On focus too: the field can already be several lines tall when you
-                            // come back to edit it, and that lands under the keyboard immediately.
-                            guard focused else { return }
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                                withAnimation(.easeOut(duration: 0.2)) { scroller.scrollTo(Self.bioAnchor, anchor: .bottom) }
+                    // ⛔ THE COUNTER LIVES IN THE CARD (owner 2026-08-22: "count characters bio put
+                    // inside the card"). It was the Section's FOOTER, which draws below the white
+                    // shape, so the number floated on the grey with nothing to belong to. Inside the
+                    // row it is part of the field it is counting.
+                    VStack(alignment: .trailing, spacing: 4) {
+                        // ⛔ TIDIED IN THE SETTER, NOT IN `onChange`, AND THAT IS THE WHOLE OF HIS
+                        // "click the arrow, page is doing scroll down then scroll up".
+                        //
+                        // `onChange` runs AFTER the binding has been written and the view laid out.
+                        // So Return really did insert a newline: the field grew a line, the form
+                        // scrolled to keep the caret above the keyboard, and only then did the tidy
+                        // replace the newline with a space, shrinking the field and scrolling back.
+                        // Down, then up, every time — and the 0.2s animation on the scroll made sure
+                        // both halves were visible.
+                        //
+                        // A filtering binding closes the gap: the newline is gone before `about` ever
+                        // holds it, so there is no taller layout to lay out and nothing to undo.
+                        TextField("A few words about you",
+                                  text: Binding(get: { about },
+                                                set: { about = Self.tidyBio($0) }),
+                                  axis: .vertical)
+                            .lineLimit(1...5)
+                            .focused($bioFocused)
+                            .onChange(of: about) { _, _ in
+                                // Follow the cursor DOWN: anchor .bottom keeps the newest line just
+                                // above the keyboard rather than centring the whole field.
+                                if bioFocused { withAnimation(.easeOut(duration: 0.2)) { scroller.scrollTo(Self.bioAnchor, anchor: .bottom) } }
                             }
+                            .onChange(of: bioFocused) { _, focused in
+                                // On focus too: the field can already be several lines tall when you
+                                // come back to edit it, and that lands under the keyboard immediately.
+                                guard focused else { return }
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                                    withAnimation(.easeOut(duration: 0.2)) { scroller.scrollTo(Self.bioAnchor, anchor: .bottom) }
+                                }
+                            }
+                        // The same counter rule the username field already uses: nothing at all until
+                        // you are near the ceiling, then a number counting DOWN. A counter that is
+                        // always on screen is a number that means nothing for the hundred characters
+                        // nobody is near the limit.
+                        if bioRemaining <= Self.bioCounterAppearsAt {
+                            Text("\(bioRemaining)")
+                                .font(.footnote)
+                                .monospacedDigit()      // so the row does not jog as 10 becomes 9
+                                .foregroundStyle(bioRemaining == 0 ? .red : .secondary)
+                                .transition(.opacity)
+                                .accessibilityLabel("\(bioRemaining) characters left")
                         }
+                    }
+                    // ⚠️ THE ANCHOR MOVED OUT TO THE WHOLE ROW. It was on the field alone, and the
+                    // counter now sits under it inside the same card — scrolling the field to the
+                    // bottom of the visible area would have parked the counter behind the keyboard.
+                    .id(Self.bioAnchor)
                 } header: {
                     Text("Bio")
-                } footer: {
-                    // The same counter rule the username field already uses: nothing at all until
-                    // you are near the ceiling, then a number counting DOWN. A counter that is
-                    // always on screen is a number that means nothing for the hundred characters
-                    // nobody is near the limit. Trailing, because that is the corner the eye checks.
-                    if bioRemaining <= Self.bioCounterAppearsAt {
-                        Text("\(bioRemaining)")
-                            .font(.subheadline)
-                            .monospacedDigit()          // so the row does not jog as 10 becomes 9
-                            .foregroundStyle(bioRemaining == 0 ? .red : .secondary)
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                            .transition(.opacity)
-                            .accessibilityLabel("\(bioRemaining) characters left")
-                    }
                 }
                 .animation(.smooth(duration: 0.22), value: bioRemaining <= Self.bioCounterAppearsAt)
 
