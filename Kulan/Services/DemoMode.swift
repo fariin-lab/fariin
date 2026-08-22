@@ -126,10 +126,14 @@ enum DemoMode {
         let myStory2   = story("demo-story-mine-2", .systemOrange, .systemRed,  "Qorrax dhac")
         let myStory3   = story("demo-story-mine-3", .systemIndigo, .systemPurple, "Habeenkii")
         let myStory4   = story("demo-story-mine-4", .systemGray,  .systemBlue,  "Roob")
+        // The owner's own image, AI-made, so there is no real person in it and nothing to clear.
+        // First in his list on purpose: it is what appears the instant you tap his ring, which is
+        // the frame a screenshot is actually taken of.
         let cabdiStory = story("demo-story-cabdi", .systemBlue,   .systemTeal,  "Habeenkii Muqdisho")
         let cabdiStory2 = story("demo-story-cabdi-2", .systemOrange, .systemYellow, "Duurka")
         let cabdiStory3 = story("demo-story-cabdi-3", .systemBrown, .systemOrange, "Geeljire")
         let cabdiStory4 = story("demo-story-cabdi-4", .systemTeal, .systemBlue,  "Masaajidka")
+        let cabdiStory5 = story("demo-story-cabdi-5", .systemBrown, .systemOrange, "Waddada")
         let khadraStory = story("demo-story-khadra", .systemPink, .systemOrange, "Casarkii")
         let khadraStory2 = story("demo-story-khadra-2", .systemGreen, .systemYellow, "Suuqa")
         let khadraStory3 = story("demo-story-khadra-3", .systemYellow, .systemOrange, "Bacaadka")
@@ -179,6 +183,10 @@ enum DemoMode {
                               createdAt: now.addingTimeInterval(-5400),
                               expiresAt: now.addingTimeInterval(19 * 3600),
                               mediaUrl: cabdiStory4, allowsReplies: true),
+                        Story(id: "demo-c5", authorUid: "demo-cabdi",
+                              createdAt: now.addingTimeInterval(-3600),
+                              expiresAt: now.addingTimeInterval(20 * 3600),
+                              mediaUrl: cabdiStory5, allowsReplies: true, caption: "Waddada"),
                        ], lastViewedAt: nil, isMine: false),
             StoryGroup(authorUid: "demo-khadra", name: "Khadra", photoUrl: khadraPhoto,
                        stories: [
