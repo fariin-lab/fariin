@@ -1771,6 +1771,18 @@ final class CallService: NSObject {
                     CallKitManager.shared.reportIncoming(callId: doc.documentID, name: self.otherName,
                                                         video: isVideoCall, callerUid: caller)
                     self.markRinging()
+                    self.mark("ring")
+                    // ⛔ PRE-NEGOTIATE HERE TOO. A call arrives by two different routes — a VoIP
+                    // push when the app is closed, and this listener when it is open — and the
+                    // first version of pre-negotiation was wired only into the push path, because
+                    // that is where the offer prefetch lives. The app-open path already HAS the
+                    // offer (cached two lines above), so it needed no prefetch and silently got no
+                    // pre-negotiation either. Measured on two phones: every mark from the ring
+                    // window was missing and the wait was unchanged. The path that needed the fix
+                    // least is the one that got it.
+                    if let sdp = self.pendingOffer?["sdp"] {
+                        self.preNegotiate(callId: doc.documentID, offerSdp: sdp)
+                    }
                     self.watchRingingCancel(doc.documentID)   // tear down if the caller cancels before I answer
                     self.armCalleeRingTimeout(doc.documentID) // and end as MISSED if nobody ever does either
                 }
