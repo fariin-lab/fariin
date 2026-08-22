@@ -473,51 +473,23 @@ struct ContactInfoView: View {
 
     private var barGlyph: Color { useAdaptive ? .white : .primary }
 
-    /// ⛔ THE GLASS FOR BACK AND EDIT, AND IT IS A TINT — the same answer, from the same colour,
-    /// as the five round buttons under the name.
+    /// ⛔ BACK AND EDIT ARE NOT TINTED. DO NOT GIVE THEM A TINT AGAIN — owner, 2026-08-22, twice.
     ///
-    /// Neither of the system's two appearances is right on iOS 26. `.dark` gives near black discs on
-    /// a bright page; `.light` gives the cream capsules with a black chevron he photographed
-    /// ("looks light mode"). That is not a bug in the choice — 26's glass does not read the backdrop
-    /// the way 27's does, so there is nothing behind it for either appearance to answer to.
+    /// There was a `barGlassTint` here: `palette.card`, the extracted backdrop colour, handed to
+    /// hand-built glass on our own chevron and our own Edit capsule. The reasoning was that iOS 26's
+    /// glass does not read its backdrop the way 27's does, so `.dark` gives near-black discs on a
+    /// bright page and `.light` gives cream ones — and that `PosterGlassSchemeFix` had solved exactly
+    /// that for the five round buttons by handing 26 the colour itself, a row he approved.
     ///
-    /// `PosterGlassSchemeFix` solved exactly this for the round buttons by handing 26 the backdrop
-    /// colour itself, and he approved that row. These two now take the identical colour from the
-    /// identical place, so the bar and the row cannot drift apart.
+    /// It does not follow for the bar, and he said so plainly. He photographed those two as tinted;
+    /// shown a version that kept the colour and only changed the scheme it resolved in, he said no
+    /// to that as well, in terms that leave nothing to interpret: he does not want the colour
+    /// managed, he wants Apple's material. Both buttons are the system's own items again.
     ///
-    /// Nil on a page with no photo, and nil on iOS 27, which reads the backdrop itself and is
-    /// already right — overriding it there would re-break what this exists to match.
-    private var barGlassTint: Color? {
-        if #available(iOS 27.0, *) { return nil }
-        guard useAdaptive, let palette else { return nil }
-        return Color(palette.card)
-    }
+    /// ⚠️ THE ROUND ROW IS A SEPARATE DECISION AND STAYS AS IT IS. `PosterGlassSchemeFix` still tints
+    /// those five, he approved them, and he ruled this change to the bar alone ("dont tuch other
+    /// buttins only that buttons"). The bar and the row are allowed to differ; that is his call.
     private var barTint: Color? { useAdaptive ? .white : nil }
-
-    /// ⛔ THE TWO BAR BUTTONS RESOLVE THEIR GLASS IN THE PAGE'S SCHEME, NOT THE BAR'S.
-    ///
-    /// This is the last difference between them and the round row, and it is why he photographed a
-    /// flat grey chevron and a flat grey "Edit" sitting above five circles that look right.
-    ///
-    /// They already take the identical tint from the identical place (`barGlassTint`, the extracted
-    /// `palette.card`), so the colour was never the problem. But a tint is not a colour on its own —
-    /// the material resolves it against `\.colorScheme`, and these two are the only glass on the page
-    /// that resolves it against a DIFFERENT one. The page pins itself to `.dark` (line ~589); the
-    /// navigation bar is pinned to `.light` on iOS 26 (`barScheme`, applied at ~825). Light-scheme
-    /// glass over a tint comes out opaque — the cream capsule — where dark-scheme glass over the same
-    /// tint stays translucent, which is the row he approved.
-    ///
-    /// ⚠️ ONLY THE TWO BUTTONS, on his instruction ("dont tuch other buttins only that buttons").
-    /// `.toolbarColorScheme` is left exactly as it is, so anything else the bar draws is untouched;
-    /// this rides on the button itself and reaches no further.
-    ///
-    /// ⚠️ The glyph does not follow it. `.tint(barGlyph)` is already an explicit `.white` on the
-    /// adaptive page, so flipping the scheme underneath it cannot darken the chevron or the word —
-    /// which was the failure mode of the two scheme attempts this file's notes record.
-    ///
-    /// iOS 27 never reaches here: `barGlassTint` is nil there, so both buttons take their plain
-    /// branch and the system's own glass is left to read the backdrop the way it already does right.
-    private var barGlassScheme: ColorScheme { .dark }
 
     private var barColorScheme: ColorScheme? { useAdaptive ? Self.barScheme : nil }
 
@@ -531,29 +503,27 @@ struct ContactInfoView: View {
     private var showsEdit: Bool { !isSelf && !isPreview && !chromeHiddenForPhoto }
 
     @ToolbarContentBuilder private var navTrailing: some ToolbarContent {
-        if showsEdit, barGlassTint != nil {
-            ToolbarItem(placement: .topBarTrailing) { tintedEditButton }
-                .sharedBackgroundVisibility(.hidden)
-        } else if showsEdit {
+        if showsEdit {
             ToolbarItem(placement: .topBarTrailing) { plainEditButton }
         }
     }
 
-    /// ⚠️ `sharedBackgroundVisibility(.hidden)` GOES WITH THIS ONE, OR THERE ARE TWO CAPSULES. From
-    /// 26 a toolbar item draws its own glass behind whatever it holds, so this tinted capsule would
-    /// sit inside the system's untinted one — the same trap the story picker's X fell into.
-    private var tintedEditButton: some View {
-        Button("Edit") { showRename = true }
-            .tint(barGlyph)
-            .padding(.horizontal, Self.barItemTextInset)
-            .frame(height: Self.barItemSide)
-            .liquidGlass(Capsule(), interactive: true, tint: barGlassTint)
-            // Outside the glass so the glass is what reads it. See `barGlassScheme`.
-            .environment(\.colorScheme, barGlassScheme)
-    }
-
-    /// `.white` rather than `.primary` on the adaptive page: the bar's scheme is flipped to light on
-    /// iOS 26 for the material's sake (see `barScheme`), and `.primary` would follow it to black.
+    /// ⛔ NOTHING IS DRAWN BEHIND THE WORD. THE BAR DRAWS IT — owner, 2026-08-22.
+    ///
+    /// This slot held a hand-built capsule for a while: our own Liquid Glass, tinted with the
+    /// extracted `palette.card`, and `sharedBackgroundVisibility(.hidden)` on the item so the
+    /// system's capsule got out of its way. That is what he photographed and called tinted, and
+    /// when he was shown a version that kept the tint and only changed the scheme it resolves in,
+    /// he said no to that too: he does not want the colour handled, he wants Apple's material.
+    ///
+    /// So the item is a plain button again and the bar puts it in its own glass, which is the
+    /// untinted one, reading whatever backdrop iOS gives it. There is nothing here to keep in step
+    /// with the round row below — that row still has its own treatment and is untouched, on his
+    /// instruction ("dont tuch other buttins only that buttons").
+    ///
+    /// ⚠️ `.tint(barGlyph)` is the LETTERS, not the capsule. `.white` rather than `.primary` on the
+    /// adaptive page: the bar's scheme is flipped to light on iOS 26 for the material's sake (see
+    /// `barScheme`), and `.primary` would follow it to black on a photograph.
     private var plainEditButton: some View {
         Button("Edit") { showRename = true }.tint(barGlyph)
     }
@@ -646,66 +616,39 @@ struct ContactInfoView: View {
     /// at the limit is what tipped it over twice in a row, first as one expression and then
     /// again after it had been cut in half. `navTrailing` has been a property since the first
     /// time this happened; these two join it.
-    /// ⛔ TWO BRANCHES, AND EACH BODY LIVES OUTSIDE THE BUILDER. The third rewrite of this slot,
-    /// and the reason is written here so it is not attempted a fourth time.
+    /// ⛔ NO BRANCHES LEFT IN THIS BUILDER, AND KEEP IT THAT WAY. The fourth rewrite of this slot,
+    /// and the reason is written here so the fifth does not undo it.
     ///
-    /// It was three `ToolbarItem` branches with their views written inline. Every branch of a
-    /// `ToolbarContentBuilder` is a distinct type the checker has to reconcile, and one of them
-    /// carries `sharedBackgroundVisibility`, which is another wrapper around another type — in a
-    /// file that has hit "unable to type-check this expression in reasonable time" three separate
-    /// times. Splitting the chain in two did not fix it, splitting it in three did not fix it, and
-    /// lifting these closures out of the chain did not fix it. The branches themselves were the
-    /// cost.
+    /// It was three `ToolbarItem` branches with their views written inline, then two with the bodies
+    /// lifted out. Every branch of a `ToolbarContentBuilder` is a distinct type the checker has to
+    /// reconcile, and one of them carried `sharedBackgroundVisibility`, which is another wrapper
+    /// around another type — in a file that has hit "unable to type-check this expression in
+    /// reasonable time" three separate times. Splitting the chain in two did not fix it, splitting
+    /// it in three did not fix it, and lifting the closures out did not fix it. The branches
+    /// themselves were the cost.
     ///
-    /// So: one boolean decides, the two buttons are ordinary view properties, and the builder holds
-    /// nothing but the choice.
-    private var showsTintedBack: Bool {
-        !chromeHiddenForPhoto && !isPreview && barGlassTint != nil
-    }
-
+    /// Dropping our tinted chevron took the last of them: one item, always, and the choosing moved
+    /// inside `leadingCloseButton` where it is a plain `@ViewBuilder` and costs nothing.
     @ToolbarContentBuilder private var navLeading: some ToolbarContent {
-        if showsTintedBack {
-            ToolbarItem(placement: .topBarLeading) { tintedBackButton }
-                .sharedBackgroundVisibility(.hidden)
-        } else {
-            ToolbarItem(placement: .topBarLeading) { leadingCloseButton }
-        }
+        ToolbarItem(placement: .topBarLeading) { leadingCloseButton }
     }
 
-    /// OUR BACK CHEVRON, so it can carry the same tinted glass as Edit opposite it. The system's own
-    /// item cannot be reached by any modifier — it belongs to the navigation stack, not to this
-    /// view, which is the same reason the page's `\.colorScheme` never touched it.
+    /// ⛔ THERE IS NO CHEVRON OF OURS ANY MORE, AND THAT IS THE POINT.
     ///
-    /// Only the surface changes. Same chevron, same place, same size, and `dismiss()` is what the
-    /// system button calls, so the swipe back from the screen edge is untouched.
-    /// ⛔ THE SYSTEM'S OWN MEASUREMENTS, TAKEN OFF HIS TWO SCREENSHOTS OF THIS BAR.
+    /// One stood here: a 43pt circle with `chevron.backward` in it, calling `dismiss()`, wearing our
+    /// own Liquid Glass tinted with the extracted palette, with the system's item hidden behind it.
+    /// It existed only to carry that tint, and the tint is what he rejected — twice, counting the
+    /// version that kept it and only changed the scheme it resolved in.
     ///
-    /// Only the COLOUR was ever wrong here, and the first attempt changed the geometry with it: the
-    /// chevron came out at 28pt against the system's 43, and Edit at 88pt wide against its 58 — a
-    /// small circle beside an oversized capsule, which is what he photographed and called custom.
+    /// With it gone this slot is empty on a normal pushed profile, which is what puts the system's
+    /// own back button back on screen: real Apple glass, untinted, reading its own backdrop, and
+    /// laid out by the bar rather than by hand. The 43 and the 58 measured off his screenshots went
+    /// with it — they were only ever written down because an item that hides its shared background
+    /// stops being laid out by it.
     ///
-    /// Both shots are 921px for a 393pt screen. The bar the system drew: a 43pt circle, and a
-    /// capsule 43 tall by 58 wide around the word "Edit". So the circle is 43 and the capsule is 43
-    /// tall with 13 either side of the text, which lands on 58 for four letters at the bar's font.
+    /// ⚠️ It still gets its colour from `.tint(barTint)` further down, not from the bar's scheme, so
+    /// it stays white over a photograph through the iOS 26 material flip.
     ///
-    /// ⚠️ These are the SYSTEM's numbers, not a taste. They are only written by hand because a
-    /// toolbar item that hides its shared background stops being laid out by it, and this one must,
-    /// or the tinted glass sits inside the untinted glass the system draws.
-    private static let barItemSide: CGFloat = 43
-    private static let barItemTextInset: CGFloat = 13
-
-    private var tintedBackButton: some View {
-        Button { dismiss() } label: {
-            Image(systemName: "chevron.backward")
-                .font(.system(size: 17, weight: .semibold))
-                .frame(width: Self.barItemSide, height: Self.barItemSide)
-                .liquidGlass(Circle(), interactive: true, tint: barGlassTint)
-        }
-        .tint(barGlyph)
-        // Outside the glass so the glass is what reads it. See `barGlassScheme`.
-        .environment(\.colorScheme, barGlassScheme)
-    }
-
     /// The X, in the two states that have one — and nothing at all in the state that does not, which
     /// is a plain page where the system's own chevron is still in this slot.
     ///
@@ -782,9 +725,11 @@ struct ContactInfoView: View {
         // Hide the back chevron while the photo viewer is open so it doesn't float over the photo.
         // We hide the ITEMS, never the bar itself — toggling bar visibility changes the scroll
         // inset, which is what used to jump the whole page.
-        // Ours replaces it wherever the tinted glass applies — see `barGlassTint`. `dismiss()` is
-        // what the system item calls, and hiding the item does not touch the screen-edge swipe.
-        .navigationBarBackButtonHidden(chromeHiddenForPhoto || barGlassTint != nil)
+        // That viewer is the ONLY reason left to hide it. There was a second: a hand-built chevron
+        // of ours stood in this slot to carry tinted glass, and the system's had to be out of the
+        // way for it. He asked for the system's material instead, so ours is gone and this is back
+        // to the one case it was written for.
+        .navigationBarBackButtonHidden(chromeHiddenForPhoto)
         // The system back chevron takes its colour from here, not from the bar's scheme, so it stays
         // white through the iOS 26 material flip above.
         .tint(barTint)
