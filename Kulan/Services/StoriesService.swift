@@ -242,6 +242,45 @@ struct StoryViewSummary {
 /// way the reference app's own story object carries it — a denormalised field on the story document,
 /// which is a server change and the owner's call (it is item 3B of the open season). Until then the
 /// first ever look at a story still pays one round trip, and every look after it is instant.
+/// ⛔ WHO WATCHED A STORY, HELD BETWEEN OPENINGS OF THE VIEWERS SHEET (owner 2026-08-22: "viewers,
+/// they have a cache, make it like that, cache each story").
+///
+/// Read from the reference on his instruction, and it is a small thing done in a particular place.
+/// It keeps a live per-story list context in a dictionary keyed by story id, in memory, owned by the
+/// STORY SCREEN — so dismissing the viewers sheet and pulling it up again shows the people at once,
+/// and only closing the story entirely forgets them. Its promise replays the last value to any new
+/// subscriber, which is what stops the shimmer appearing on a reopen.
+///
+/// ⚠️ WE ALREADY HAD EVERYTHING BUT THE LIFETIME. The sheet's coordinator held exactly this
+/// dictionary, warmed the two neighbours the same way, showed a hit without a spinner and refused to
+/// remember a failed read. But SwiftUI builds that coordinator fresh for every presentation, so every
+/// reopen was a cold start. Moving the dictionary out here is the whole fix.
+///
+/// ⚠️ MEMORY ONLY, LIKE THEIRS, AND THAT IS A DECISION. A viewer list on disk would outlive the
+/// story it belongs to — stories last a day — and the worst failure of a cache like this is showing
+/// somebody a list of watchers that is quietly wrong. A relaunch clearing it is the cheapest possible
+/// correctness guarantee.
+///
+/// ⚠️ THE COUNTS LIVE SOMEWHERE ELSE (`StoryCountCache`), and that split is theirs too: they persist
+/// the numbers with the story item and keep only the people in memory. The numbers are small, they
+/// are needed before the sheet is ever opened, and they are what the row draws.
+enum StoryViewerListCache {
+    private static var store: [String: [StoryViewerInfo]] = [:]
+
+    static func get(_ storyId: String) -> [StoryViewerInfo]? { store[storyId] }
+
+    /// ⚠️ ONLY EVER A REAL ANSWER. A failed read must not be written here as an empty list — that is
+    /// how "No views yet" once appeared under a card reading one view, and it poisoned the entry for
+    /// the rest of the sitting. The caller checks; this is the reminder for the next one.
+    static func put(_ people: [StoryViewerInfo], for storyId: String) { store[storyId] = people }
+
+    /// Drop one story's list. For the two moments its audience can genuinely change out from under
+    /// the list — the story being deleted, or its audience edited.
+    static func forget(_ storyId: String) { store.removeValue(forKey: storyId) }
+
+    static func clear() { store.removeAll() }
+}
+
 enum StoryCountCache {
     /// ⚠️ v2 BECAUSE THE ENTRY GAINED THE UIDS. The v1 key is abandoned rather than migrated: it
     /// holds two integers per story that the next fetch replaces anyway, and stories live 24 hours,
@@ -1524,6 +1563,10 @@ final class StoriesService {
         // make that untrue, and deleting their receipt would take a real view out of the author's own
         // history. Seen-by is a record of what happened, not a mirror of who can still open it.
         StoryCountCache.forget(story.id)
+        // The people list goes with the numbers. Narrowing an audience does not change who already
+        // watched — the note above says why the receipts stay — but the LIST the sheet shows is
+        // filtered by audience, so a held one would answer the old question.
+        StoryViewerListCache.forget(story.id)
         if everyone {
             await writePublicMirror(storyId: story.id, me: me, mediaUrl: story.mediaUrl,
                                     thumbUrl: story.thumbUrl, blurThumb: story.blurThumb,

@@ -1345,9 +1345,6 @@ struct StoryViewersSheet: UIViewRepresentable {
         private var activeId = ""
         private var prevId = ""
         private var nextId = ""
-        /// Viewers by story id. Small (a story's whole audience) and short-lived (this sheet), and it
-        /// is what lets a panel that has never been on screen arrive with its people already in it.
-        private var cache: [String: [StoryViewerInfo]] = [:]
         /// One fetch per story at a time. Scrubbing the carousel walks `activeId` across every card,
         /// and without this each pass would start the same three reads again.
         private var tasks: [String: Task<Void, Never>] = [:]
@@ -1371,15 +1368,32 @@ struct StoryViewersSheet: UIViewRepresentable {
         /// - Parameter force: ask again even when a list is already held. Used when the story's own
         ///   view COUNT has moved under an open sheet — see `refreshIfCountMoved`.
         private func fill(_ id: String, force: Bool = false) {
-            if !force, let hit = cache[id] {
+            // ⛔ A HIT IS SHOWN AT ONCE AND STILL REFRESHED BEHIND (owner 2026-08-22: "viewers,
+            // they have a cache, make it like that, cache each story").
+            //
+            // Read on his instruction: the reference keeps a live list context per story id, in
+            // memory, on the STORY SCREEN — so dismissing the viewers sheet and opening it again
+            // shows the people instantly, and only closing the story entirely forgets them. Its
+            // promise replays the last value to a new subscriber, which is what suppresses the
+            // shimmer. Ours had all of that except the lifetime: the cache sat on this coordinator,
+            // which SwiftUI builds fresh for every presentation of the sheet, so every reopen was a
+            // cold start with a spinner.
+            //
+            // ⚠️ AND OURS REFRESHES ON A HIT, WHICH THEIRS DOES NOT. Theirs can afford not to because
+            // its cache dies with the screen; a longer-lived one that never re-asks would show a
+            // list that is quietly out of date. Showing the held list first and correcting it behind
+            // is the same felt behaviour with none of that risk — and it is already the rule the
+            // forced path below follows for exactly this reason.
+            if let hit = StoryViewerListCache.get(id) {
                 view?.setViewers(hit, for: id)
                 view?.setLoading(false, for: id)
-                return
+                guard tasks[id] == nil else { return }
+                // fall through and re-ask quietly, with the list already on screen
             }
             guard tasks[id] == nil else { return }
             // A forced re-ask keeps the list that is already on screen rather than emptying it behind
             // a spinner: the people who watched are still the people who watched, plus whoever is new.
-            if cache[id] == nil { view?.setLoading(true, for: id) }
+            if StoryViewerListCache.get(id) == nil { view?.setLoading(true, for: id) }
             tasks[id] = Task { [weak self] in
                 let people = await StoriesService.shared.fetchViewers(storyId: id)
                 await MainActor.run {
@@ -1394,7 +1408,7 @@ struct StoryViewersSheet: UIViewRepresentable {
                     // "nobody watched this" AND made sure the panel never asked again for the whole
                     // sitting, beside a count that had been fetched successfully a moment earlier.
                     guard let people else { return }
-                    self.cache[id] = people
+                    StoryViewerListCache.put(people, for: id)
                     self.view?.setViewers(people, for: id)
                 }
             }
