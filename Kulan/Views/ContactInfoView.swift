@@ -1325,8 +1325,23 @@ struct ContactInfoView: View {
     private var gatedPosterUrl: String? {
         PrivacyPrefs.allows(targetPrivacy, "photo", contactOfMine: iAmContact) ? headerFacts.posterUrl : nil
     }
+    /// ⛔ TIDIED ON THE WAY OUT, BECAUSE THE STORED STRING CANNOT BE REACHED (owner 2026-08-22: "old
+    /// users still using bio spaces, can you clear that bio").
+    ///
+    /// The bio field refuses blank lines now and cleans its own on save, but that only ever helps the
+    /// person doing the typing. A bio written before the rule is on somebody ELSE's account: nobody
+    /// here can edit it, and it will keep arriving with its blank lines until its owner happens to
+    /// open their own profile and press Save. His screenshot is one of those — a stranger's bio
+    /// spreading four words down a whole page.
+    ///
+    /// So the READER tidies it. Display-side is the right side for this anyway: it needs no
+    /// migration, it fixes every old bio at once including ones written by people who never update,
+    /// and a page that cannot be broken by the data it is given is worth more than a one-off sweep
+    /// through the database.
     private var gatedAbout: String {
-        PrivacyPrefs.allows(targetPrivacy, "bio", contactOfMine: iAmContact) ? about : ""
+        guard PrivacyPrefs.allows(targetPrivacy, "bio", contactOfMine: iAmContact) else { return "" }
+        return Limits.oneParagraph(about, max: Limits.bioChars)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// The backdrop behind the hero: their own photo, blurred, fading into the page.

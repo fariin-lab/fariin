@@ -319,7 +319,15 @@ struct MyProfileView: View {
         ScrollView {
             VStack(spacing: 16) {
                 hero
-                if let about = profile.me?.about, !about.isEmpty { bioCard(about) }
+                // Tidied here too, and for the same reason as `ContactInfoView.gatedAbout`: my own
+                // bio written before the rule is still stored with its blank lines until the day I
+                // next press Save, and this page should not be waiting on that to look right.
+                // Trimmed as well, so a bio that is nothing but blanks draws no card at all.
+                if let raw = profile.me?.about {
+                    let about = Limits.oneParagraph(raw, max: Limits.bioChars)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !about.isEmpty { bioCard(about) }
+                }
                 storiesSection
             }
             .padding(.horizontal, 16)
