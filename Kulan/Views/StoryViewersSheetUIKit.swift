@@ -1427,7 +1427,7 @@ struct StoryViewersSheet: UIViewRepresentable {
             let first = lastTick == nil
             lastTick = tick
             // The first tick is the listener attaching, which tells us nothing we did not just fetch.
-            guard !first, !active.isEmpty, cache[active] != nil else { return }
+            guard !first, !active.isEmpty, StoryViewerListCache.get(active) != nil else { return }
             fill(active, force: true)
         }
         private var lastTick: Int?
