@@ -207,8 +207,6 @@ struct StoryEditorView: View {
     @State private var trimTab: TrimTab = .video
     /// The one composition the dial drives, and the live exposure inside it. Built on the first
     /// touch of the dial and dropped with the player — see `applyPreviewBrightness`.
-    @State private var brightnessLive: StoryVideoBrightness.LiveExposure?
-    /// Which way the next still-frame nudge steps — see `nudgePreviewFrame`.
     /// The chip currently wearing "Tap for more", or nil. See `showChipHint`.
     ///
     /// ⚠️ ANY CHIP, NOT ONLY A LINK (owner 2026-08-22: "that feature is only available when I am
@@ -228,15 +226,8 @@ struct StoryEditorView: View {
     /// The photo's transform per frame, for the pen layer only — see `PhotoLiveTransform`.
     @StateObject private var penLive = PhotoLiveTransform()
 
-    @State private var nudgeForward = false
     /// True while a still-frame redraw is being seeked. The dial keeps writing the exposure through
-    /// it; only the redraw is dropped. See `nudgePreviewFrame`.
-    @State private var nudgeInFlight = false
-    /// A redraw asked for while one was already running. Redeemed by the in-flight seek's completion
-    /// so the last position of a drag always gets a frame.
-    @State private var nudgePending = false
     /// Builds that one composition — see `applyPreviewBrightness`.
-    @State private var brightnessTask: Task<Void, Never>?
     @State private var trimStart: Double = 0
     @State private var trimEnd: Double = 0
     @State private var trimOpenedStart: Double = 0   // what X puts back
@@ -1491,6 +1482,12 @@ struct StoryEditorView: View {
                               scale: $photoZoom, offset: $photoOffset,
                               maxScale: 4, interactive: !isDrawing && editingID == nil,
                               relay: photoTransform,
+                              // The dial's value and whether the clip is running — both plain inputs
+                              // the renderer reads. See `StoryVideoPreviewView`.
+                              videoExposureEV: currentIsVideo
+                                  ? StoryVideoBrightness.exposureEV(for: items.indices.contains(index) ? items[index].brightness : 0)
+                                  : 0,
+                              videoPlaying: previewPlaying,
                               onTap: {
                                   captionFocused = false; selectedID = nil
                                   // ⚠️ PLAY AND PAUSE ARE BOTH THE WHOLE FRAME, AND BOTH BELONG TO
@@ -2005,15 +2002,8 @@ struct StoryEditorView: View {
     /// diagnosis; this is the one door it has to be applied at.
     private func playPreview(_ p: AVPlayer) {
         StoryPreviewAudio.prepare()
-        // ⛔ CLEAR THE STILL-FRAME WORK BEFORE ASKING FOR MOTION. Whatever exact seeks the brightness
-        // dial left behind are for a frame nobody is going to look at any more — the next thing on
-        // screen is the clip running — but the video pipeline would finish them first while the
-        // audio, which carries no filter, started at once. That gap is the owner's "I can hear sound
-        // but video is not running". Cancelling is safe: `play()` resumes from wherever the item
-        // actually is, and a nudge is under two milliseconds from there. See `nudgePreviewFrame`.
-        p.currentItem?.cancelPendingSeeks()
-        nudgeInFlight = false
-        nudgePending = false
+        // (The seek-cancelling that used to be here is gone with the seeks. The brightness dial no
+        //  longer touches the player at all — see `applyPreviewBrightness`.)
         p.play()
         // THE NET, because CallKit cannot be the whole answer: an app that does not report its calls
         // — or anything else sitting on a session it will not release — would leave the clip exactly
@@ -2052,9 +2042,6 @@ struct StoryEditorView: View {
         // ⚠️ AND THE LIVE EXPOSURE, or the next clip previewed finds a handle to a composition that
         // is no longer attached to anything: the dial would set a value nothing reads and stay dead
         // for that clip, with no way back short of leaving the editor.
-        brightnessTask?.cancel()
-        brightnessTask = nil
-        brightnessLive = nil
     }
 
     @ViewBuilder private var itemStrip: some View {
@@ -2602,101 +2589,31 @@ struct StoryEditorView: View {
     /// **And the composition was rebuilt per touch.** A composition bakes its filter in at build
     /// time, so following the dial meant an asynchronous build between every move of his thumb and
     /// the picture, which is what the 35ms coalesce was papering over. It is built ONCE now and
-    /// reads its exposure live — see `StoryVideoBrightness.LiveExposure` — so every move after the
-    /// first is a float and a redraw, with nothing to wait for and nothing to coalesce.
+    /// (Both of those are history now. There is no composition on the preview item at all — the
+    /// renderer owns the frames and the exposure is a float it reads. See `applyPreviewBrightness`.)
+    /// ⛔ ONE FLOAT. NO COMPOSITION, NO SEEK, NOTHING TO REBUILD.
+    ///
+    /// This used to build an `AVMutableVideoComposition` with a Core Image handler, hang it on the
+    /// player item, and then force a redraw with a zero-tolerance seek per touch. Four reports and
+    /// three fixes of mine went into making that cheaper — a shared Metal context, a 1280 cap, the
+    /// filter moved ahead of the downscale, the seeks coalesced — and none of them was the problem.
+    /// Attaching any composition takes playback off AVFoundation's direct path and puts a per-frame
+    /// render in front of every frame, and priming one is a multi-second stall with the audio already
+    /// running. His clue was right from the first report: it only ever happened at the ends of the
+    /// dial, because the middle short-circuited the filter.
+    ///
+    /// The frames are ours now (`StoryVideoPreviewView`), so the exposure is a property the renderer
+    /// reads on its next frame. Writing it cannot stall anything because nothing is built. The value
+    /// reaches the view through `ZoomableImageView.videoExposureEV`, which SwiftUI hands over on the
+    /// same pass that already re-renders for the dial.
+    ///
+    /// ⚠️ THE EXPORT IS UNCHANGED and still uses `StoryVideoBrightness.composition(for:value:)`. A
+    /// composition is the right tool there: it renders once, offline, with nobody waiting on a frame.
+    /// Preview and post agree because both apply `exposureAdjust` with `exposureEV(for:)`.
     private func applyPreviewBrightness(_ value: Double) {
-        guard let item = previewPlayer?.currentItem else { return }
-        let ev = StoryVideoBrightness.exposureEV(for: value)
-        if let live = brightnessLive {
-            live.ev = ev
-            nudgePreviewFrame(item)
-            return
-        }
-        // First touch of the dial for this clip: build the one composition, then never again.
-        //
-        // ⛔ A BUILD ALREADY RUNNING IS LEFT ALONE. This used to cancel and start over on every touch
-        // the dial reported, and a fast first drag reports dozens — so the one composition everything
-        // waits for was repeatedly thrown away a moment before it finished, and did not exist until
-        // the finger stopped moving. Nothing is lost by waiting: the block below reads the dial's
-        // CURRENT value when it lands, not the one this call carried.
-        guard brightnessTask == nil else { return }
-        brightnessTask = Task { [weak item] in
-            var built: (AVVideoComposition, StoryVideoBrightness.LiveExposure)?
-            if let item, let asset = item.asset as AVAsset? {
-                built = await StoryVideoBrightness.liveComposition(for: asset)
-            }
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                // ⚠️ FREED WHETHER OR NOT IT WORKED, and every early exit above now comes through
-                // here to do it. The guard on the way in treats a non-nil task as "a build is
-                // running", so a build that failed and left the slot occupied would lock the dial
-                // out of ever trying again for this clip.
-                brightnessTask = nil
-                guard let item, let built else { return }
-                let (comp, live) = built
-                // The dial may have moved on while this was building; take the value as it stands
-                // rather than the one this call was made with.
-                live.ev = StoryVideoBrightness.exposureEV(
-                    for: items.indices.contains(index) ? items[index].brightness : Double(ev))
-                brightnessLive = live
-                item.videoComposition = comp
-                nudgePreviewFrame(item)
-            }
-        }
-    }
-
-    /// Make a stopped player show the frame it is already on, once, through whatever the composition
-    /// now says. Zero tolerance on both sides or AVFoundation is free to answer with the frame it has
-    /// already drawn, which is the one being replaced.
-    /// ⛔ THE SEEK HAS TO ASK FOR A DIFFERENT TIME, OR THERE IS NOTHING FOR AVFOUNDATION TO DO.
-    ///
-    /// This asked for the time the item was already at, and that is a no-op: same time, and — since
-    /// the composition is built once and only its exposure changes inside — the same composition
-    /// object too. Nothing about the request differs from the frame already on screen, so the
-    /// rendered frame is reused and the dial does nothing. Which is exactly what he reported: live
-    /// while the clip plays, because playback runs every frame through the handler regardless, and
-    /// dead the moment he pauses.
-    ///
-    /// A time one six-hundredth of a second away is a DIFFERENT frame request, so the pipeline
-    /// decodes and runs the handler, which reads the exposure as it now stands. It alternates either
-    /// side of where the playhead is rather than always stepping one way, so a long drag cannot walk
-    /// the clip forward: the most it is ever off is that one step, and the next move puts it back.
-    /// ⛔ ONE NUDGE AT A TIME, AND THE REASON IS THE OWNER'S 2026-08-22 REPORT: brightness dragged
-    /// fast to full, then play, and the sound started while the picture stayed on one frame for
-    /// several seconds. Only ever after using the dial, and never once the page had been left.
-    ///
-    /// A zero-tolerance seek is expensive here in a way it is not anywhere else in the app, because
-    /// this item is carrying a Core Image `videoComposition`: every one of them decodes to an exact
-    /// frame and runs the filter over it. They were issued one per touch delivery with no completion
-    /// handler and no coalescing, so a full-range drag left a deep queue of exact seeks behind it.
-    /// `play()` then started the audio immediately — audio has no composition on it — while the
-    /// video pipeline was still working through that queue. The clip was never stuck; it was busy.
-    ///
-    /// The flag is what the screen's own `seekPreview`/`drainSeeks` coalescer does, applied to the
-    /// path that was bypassing it: while a nudge is in flight the dial keeps writing `live.ev`, so
-    /// the exposure stays live and only the redraw is dropped, which is invisible on a still frame.
-    private func nudgePreviewFrame(_ item: AVPlayerItem) {
-        guard previewPlayer?.rate == 0 else { return }   // playing already draws every frame
-        // ⚠️ THE DROPPED ONE IS REMEMBERED, NOT LOST. Coalescing without this would swallow the LAST
-        // move of a drag — the finger stops, the final exposure never gets a frame, and the picture
-        // sits one dial-step behind where the dial is. The trailing redraw is the whole difference
-        // between coalescing and skipping.
-        guard !nudgeInFlight else { nudgePending = true; return }
-        let epsilon = CMTime(value: 1, timescale: 600)   // ~1.7ms, under half a frame at 240fps
-        let now = item.currentTime()
-        let target = nudgeForward ? CMTimeAdd(now, epsilon) : CMTimeSubtract(now, epsilon)
-        nudgeForward.toggle()
-        nudgeInFlight = true
-        item.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-            // Back on the main actor: these are read and written only from there, and a completion
-            // handler is not promised any particular queue.
-            Task { @MainActor in
-                nudgeInFlight = false
-                guard nudgePending else { return }
-                nudgePending = false
-                nudgePreviewFrame(item)
-            }
-        }
+        // Nothing to do here any more. The value already lives in `items[index].brightness`, which
+        // the card reads on this same pass — see the `videoExposureEV:` argument on the photo view.
+        _ = value
     }
 
     private func openTrim() {
@@ -4512,29 +4429,10 @@ struct TextOverlayView: View {
 // `resignFirstResponder` for Done. Its header holds all four mechanisms and where each was read from.
 
 // Springy press feedback for the story-editor controls.
-/// An AVPlayerLayer sized to its view. Deliberately tiny: the composer needs to SEE the clip, and a
-/// full `AVPlayerViewController` would bring its own controls, its own gestures and its own idea of
-/// full screen to a canvas that already has three tools competing for the same touches.
-struct ClipPreviewLayer: UIViewRepresentable {
-    let player: AVPlayer
-
-    final class LayerView: UIView {
-        override class var layerClass: AnyClass { AVPlayerLayer.self }
-        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
-    }
-
-    func makeUIView(context: Context) -> LayerView {
-        let v = LayerView()
-        v.backgroundColor = .clear
-        v.playerLayer.videoGravity = .resizeAspect   // the poster underneath is aspect-fit too
-        v.playerLayer.player = player
-        return v
-    }
-
-    func updateUIView(_ v: LayerView, context: Context) {
-        if v.playerLayer.player !== player { v.playerLayer.player = player }
-    }
-}
+// `ClipPreviewLayer` lived here — a representable whose layer WAS an `AVPlayerLayer`. The trim
+// preview draws its own frames now (`StoryVideoPreviewView`), so there is no player layer left in
+// this editor and nothing for it to wrap. Deleted rather than left unreferenced: a "removed" thing
+// still in the file is how `ClearSegmentedTrack` stayed live for two rounds.
 
 /// ⛔ THE TRIM PLAYHEAD, HELD OUTSIDE THE EDITOR'S OWN STATE. Read the long note on
 /// `StoryEditorView.trimPlayhead` before moving it back.
@@ -4791,6 +4689,12 @@ struct ZoomableImageView: UIViewRepresentable {
     /// order, and it reads better before two multi-line closures than wedged between them.
     /// See `PhotoTransformRelay`.
     var relay: PhotoTransformRelay? = nil
+    /// The brightness dial's value, in stops, handed straight to the renderer — see
+    /// `StoryVideoPreviewView.exposureEV`. Zero for a photo and for an untouched clip.
+    var videoExposureEV: Float = 0
+    /// Whether the clip is running, so the renderer's display link exists only while there is motion
+    /// to follow. A paused editor costs nothing.
+    var videoPlaying: Bool = false
     var onTap: () -> Void = {}
     /// SWIPE TO THE NEXT PICTURE, +1 forward and -1 back (owner 2026-08-04: "when i swipe touching
     /// screen nothing happens… it most work swipe to next image").
@@ -4819,9 +4723,11 @@ struct ZoomableImageView: UIViewRepresentable {
         // A view-backed layer on purpose (`layerClass`), not a bare sublayer: UIKit turns implicit
         // animations off for those, and a loose AVPlayerLayer would quarter-second-lag every frame
         // of the pinch behind the poster it is supposed to be sitting on.
-        let clip = ClipPreviewLayer.LayerView()
+        // ⛔ OUR OWN RENDERER, NOT AN `AVPlayerLayer` — see `StoryVideoPreviewView` for the whole
+        // reason. The player still decodes and still keeps time; only what DISPLAYS its frames
+        // changed, which is why trim, the playhead and the scrubber needed nothing.
+        let clip = StoryVideoPreviewView(device: nil)
         clip.backgroundColor = .clear
-        clip.playerLayer.videoGravity = .resizeAspect
         clip.isUserInteractionEnabled = false
         clip.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(clip)
@@ -4831,7 +4737,7 @@ struct ZoomableImageView: UIViewRepresentable {
             clip.topAnchor.constraint(equalTo: container.topAnchor),
             clip.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
-        clip.playerLayer.player = player
+        clip.setPlayer(player)
         clip.isHidden = player == nil
 
         context.coordinator.container = container
@@ -4878,7 +4784,11 @@ struct ZoomableImageView: UIViewRepresentable {
         let c = context.coordinator
         c.parent = self
         if c.imageView?.image !== image { c.imageView?.image = image }
-        if c.clipView?.playerLayer.player !== player { c.clipView?.playerLayer.player = player }
+        c.clipView?.setPlayer(player)
+        // The exposure is a plain float the renderer reads on its next frame. No composition to
+        // install, nothing to re-prime, and nothing that can stall because the number moved.
+        c.clipView?.exposureEV = videoExposureEV
+        c.clipView?.setPlaying(videoPlaying)
         // Hidden rather than removed: a photo item has no clip and must not have an empty player
         // layer sitting over its picture, but the view stays so the constraints never rebuild.
         c.clipView?.isHidden = player == nil
@@ -4912,7 +4822,7 @@ struct ZoomableImageView: UIViewRepresentable {
         var parent: ZoomableImageView
         weak var container: UIView?
         weak var imageView: UIImageView?
-        weak var clipView: ClipPreviewLayer.LayerView?
+        weak var clipView: StoryVideoPreviewView?
         var pinch: UIPinchGestureRecognizer?
         var pan: UIPanGestureRecognizer?
         var curScale: CGFloat
