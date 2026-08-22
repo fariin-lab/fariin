@@ -2510,12 +2510,27 @@ struct StoryEditorView: View {
             return
         }
         // First touch of the dial for this clip: build the one composition, then never again.
-        brightnessTask?.cancel()
+        //
+        // ⛔ A BUILD ALREADY RUNNING IS LEFT ALONE. This used to cancel and start over on every touch
+        // the dial reported, and a fast first drag reports dozens — so the one composition everything
+        // waits for was repeatedly thrown away a moment before it finished, and did not exist until
+        // the finger stopped moving. Nothing is lost by waiting: the block below reads the dial's
+        // CURRENT value when it lands, not the one this call carried.
+        guard brightnessTask == nil else { return }
         brightnessTask = Task { [weak item] in
-            guard let item, let asset = item.asset as AVAsset? else { return }
-            guard let (comp, live) = await StoryVideoBrightness.liveComposition(for: asset) else { return }
+            var built: (AVVideoComposition, StoryVideoBrightness.LiveExposure)?
+            if let item, let asset = item.asset as AVAsset? {
+                built = await StoryVideoBrightness.liveComposition(for: asset)
+            }
             guard !Task.isCancelled else { return }
             await MainActor.run {
+                // ⚠️ FREED WHETHER OR NOT IT WORKED, and every early exit above now comes through
+                // here to do it. The guard on the way in treats a non-nil task as "a build is
+                // running", so a build that failed and left the slot occupied would lock the dial
+                // out of ever trying again for this clip.
+                brightnessTask = nil
+                guard let item, let built else { return }
+                let (comp, live) = built
                 // The dial may have moved on while this was building; take the value as it stands
                 // rather than the one this call was made with.
                 live.ev = StoryVideoBrightness.exposureEV(
