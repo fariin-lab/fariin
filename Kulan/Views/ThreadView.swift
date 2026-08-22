@@ -4651,12 +4651,26 @@ struct ThreadView: View {
     /// the subtraction still clamps this to 0, and the bar comes to rest flush on the keyboard —
     /// which on iOS 26 has rounded top corners, so the bar's own corners tuck in behind them.
     ///
-    /// ⚠️ 16, NOT 8, AND THE REASON IS THAT THE KEYBOARD IS NOT THE SAME HEIGHT ON EVERY iOS (owner
-    /// 2026-08-22: "you fixed it for iOS 27 users but iOS 26 users still see this").
+    /// ⛔ 8, AND PUTTING IT BACK IS THE FIX — owner 2026-08-22, after the 16 below shipped.
     ///
-    /// 8 clears the keys on 27 and does not on 26, which means the two versions hand SwiftUI's
-    /// keyboard avoidance slightly different numbers for where the keyboard begins — and on 26 the
-    /// bar comes to rest a few points into the keyboard's own rounded top corners.
+    /// I raised it to 16 believing the bar was landing a few points into the keyboard's rounded top
+    /// corners on iOS 26, and that one number big enough for both versions would cover it. That was
+    /// wrong twice over, and his two phones say so between them:
+    ///
+    ///   iPhone 13 Pro Max, iOS 27 — 8 looked right, 16 is visibly too much room. His words: go back.
+    ///   iPhone 13 Pro,     iOS 26 — the bar sits inside the keyboard at 8 AND STILL AT 16.
+    ///
+    /// ⚠️ THE SECOND LINE IS THE DIAGNOSIS. A bar a few points short is cleared by doubling the gap.
+    /// This one was not moved by doubling it, so whatever is wrong on that phone is larger than 16
+    /// and is not the size of this number — the number was never the mechanism. Raising it further
+    /// would only spend the Max's spacing to chase something that is not there, which is exactly the
+    /// trade he just rejected.
+    ///
+    /// So this goes back to the value the whole design is written around, and the 13 Pro is a
+    /// separate question with a separate answer. See the note above: 8 is the reference app's own
+    /// `vMargin`, 0.5 * (56 - 40), the pill centred inside a bar whose bottom rests on the edge it is
+    /// given. `safeAreaBar` supplies that edge — the safe area at rest, the keyboard while typing —
+    /// so the same 8 is correct in both states by construction rather than by exception.
     ///
     /// ⛔ WHY THIS IS A CONSTANT AND NOT A MEASUREMENT, WHICH IS THE HONEST ANSWER AND NOT THE
     /// TIDY ONE. `KeyboardWatcher.topOnScreen` exists precisely for this and the story text card uses
@@ -4664,10 +4678,8 @@ struct ThreadView: View {
     /// words, and that is the property that makes measuring safe there. This bar IS moved, by
     /// SwiftUI's avoidance, so a padding derived from its measured overlap would change the overlap
     /// it was derived from: add padding, the bar rises, the shortfall reads zero, the padding goes,
-    /// the bar drops. An oscillation is a worse bug than a gap two points larger than it needs to be.
-    ///
-    /// So: one number big enough for both, and 27 pays a few points it does not need.
-    private static let composerKeyboardGap: CGFloat = 16
+    /// the bar drops. An oscillation is a worse bug than a gap that is wrong by a fixed amount.
+    private static let composerKeyboardGap: CGFloat = 8
     private var composerBottomGap: CGFloat {
         // The keyboard is the floor now, not the screen.
         if inputFocused { return Self.composerKeyboardGap }
