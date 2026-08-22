@@ -4651,8 +4651,23 @@ struct ThreadView: View {
     /// the subtraction still clamps this to 0, and the bar comes to rest flush on the keyboard —
     /// which on iOS 26 has rounded top corners, so the bar's own corners tuck in behind them.
     ///
-    /// 8 is what shipped here for months before I touched it, and nobody reported it.
-    private static let composerKeyboardGap: CGFloat = 8
+    /// ⚠️ 16, NOT 8, AND THE REASON IS THAT THE KEYBOARD IS NOT THE SAME HEIGHT ON EVERY iOS (owner
+    /// 2026-08-22: "you fixed it for iOS 27 users but iOS 26 users still see this").
+    ///
+    /// 8 clears the keys on 27 and does not on 26, which means the two versions hand SwiftUI's
+    /// keyboard avoidance slightly different numbers for where the keyboard begins — and on 26 the
+    /// bar comes to rest a few points into the keyboard's own rounded top corners.
+    ///
+    /// ⛔ WHY THIS IS A CONSTANT AND NOT A MEASUREMENT, WHICH IS THE HONEST ANSWER AND NOT THE
+    /// TIDY ONE. `KeyboardWatcher.topOnScreen` exists precisely for this and the story text card uses
+    /// it, but that card's own frame never moves — the note on `keyboardOverlap` says so in as many
+    /// words, and that is the property that makes measuring safe there. This bar IS moved, by
+    /// SwiftUI's avoidance, so a padding derived from its measured overlap would change the overlap
+    /// it was derived from: add padding, the bar rises, the shortfall reads zero, the padding goes,
+    /// the bar drops. An oscillation is a worse bug than a gap two points larger than it needs to be.
+    ///
+    /// So: one number big enough for both, and 27 pays a few points it does not need.
+    private static let composerKeyboardGap: CGFloat = 16
     private var composerBottomGap: CGFloat {
         // The keyboard is the floor now, not the screen.
         if inputFocused { return Self.composerKeyboardGap }
