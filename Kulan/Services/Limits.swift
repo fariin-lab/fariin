@@ -72,4 +72,28 @@ enum Limits {
 
     // Anti-spam (rate limits enforced in Cloud Functions)
     static let reportsPerDay = 10
+
+    /// ⛔ A ONE-PARAGRAPH FIELD, TIDIED AND THEN MEASURED. Shared by the Bio and by a contact's
+    /// private Note, because they had the same hole and a second copy of this rule would be a second
+    /// thing to keep right (owner 2026-08-22, reported once for each field).
+    ///
+    /// ⚠️ THE HOLE: a character ceiling does not bound a field whose blanks are characters.
+    /// `.lineLimit(1...5)` caps the BOX and never the string, so Return could spend the whole budget
+    /// on nothing and the page that renders it — which clamps no lines — drew the entire empty
+    /// column. Every whitespace becomes a space, runs of blanks become one blank, and only what
+    /// survives is measured against the ceiling. Measuring first would let a hundred blank lines
+    /// truncate the words somebody actually typed.
+    ///
+    /// ⚠️ ONE TRAILING BLANK SURVIVES, and it has to: a space is its own keystroke and arrives alone,
+    /// so collapsing it would make it impossible to type a space between two words.
+    ///
+    /// ⚠️ USE IT FROM A BINDING'S SETTER, NOT FROM `onChange`. `onChange` runs after the value is
+    /// stored and the view laid out, so the newline is really inserted first — the field grows, the
+    /// form scrolls to follow the caret, and the rewrite then shrinks it and scrolls back. That
+    /// down-then-up was a reported bug in its own right.
+    static func oneParagraph(_ raw: String, max limit: Int) -> String {
+        var s = String(raw.map { $0.isWhitespace ? " " : $0 })   // isWhitespace covers newlines too
+        while s.contains("  ") { s = s.replacingOccurrences(of: "  ", with: " ") }
+        return s.count > limit ? String(s.prefix(limit)) : s
+    }
 }

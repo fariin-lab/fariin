@@ -1460,17 +1460,10 @@ struct EditProfileView: View {
         firstName != origFirst || lastName != origLast || handle != origHandle || about != origAbout
     }
 
-    /// A BIO IS ONE PARAGRAPH. Every line break becomes a space and every run of blanks becomes one
-    /// blank, so "unlimited space" stops being expressible, then the character ceiling is applied to
-    /// what is left. Done in this order on purpose: measuring first would let a hundred blank lines
-    /// spend the budget and truncate the words the person actually typed.
-    ///
-    /// ⚠️ ONE TRAILING BLANK SURVIVES, and it has to — collapsing it would make it impossible to type
-    /// a space between two words, because the space is its own keystroke and arrives alone.
+    /// A BIO IS ONE PARAGRAPH — the rule and the whole reason for it live in `Limits.oneParagraph`,
+    /// which a contact's private Note shares. This is the bio's ceiling applied to it.
     static func tidyBio(_ raw: String) -> String {
-        var s = String(raw.map { $0.isWhitespace ? " " : $0 })   // isWhitespace covers newlines too
-        while s.contains("  ") { s = s.replacingOccurrences(of: "  ", with: " ") }
-        return s.count > Limits.bioChars ? String(s.prefix(Limits.bioChars)) : s
+        Limits.oneParagraph(raw, max: Limits.bioChars)
     }
 
     /// ⚠️ THE WHOLE NAME, BECAUSE THE LETTER AVATAR'S COLOUR IS HASHED FROM IT. The two pictures of

@@ -88,12 +88,19 @@ struct SetNicknameView: View {
                     // GROWS INSTEAD OF SCROLLING SIDEWAYS. A one-line field pushed a long note off to
                     // the left as you typed, so you could not read back what you had written — the same
                     // shape the Bio field in Settings already solved with a vertical axis.
-                    TextField("Note", text: $note, axis: .vertical)
+                    // ⛔ TIDIED IN THE SETTER (owner 2026-08-22: "Profile notes space, there's no
+                    // limit"). The 100 was a ceiling on CHARACTERS, and blank lines are characters —
+                    // `.lineLimit(1...5)` bounds the box and never the string, so Return could spend
+                    // the whole budget on nothing and the profile card, which clamps no lines, drew
+                    // the empty column he photographed. Same rule the Bio uses, from one place:
+                    // see `Limits.oneParagraph`, whose note also explains why this is a binding
+                    // rather than an `onChange`.
+                    TextField("Note",
+                              text: Binding(get: { note },
+                                            set: { note = Limits.oneParagraph($0, max: Self.noteLimit) }),
+                              axis: .vertical)
                         .lineLimit(1...5)
                         .focused($focus, equals: .note)
-                        // 100 characters (owner's spec): the profile card shows 2 lines with More,
-                        // so the note has to stay short enough to read at a glance.
-                        .onChange(of: note) { _, v in if v.count > Self.noteLimit { note = String(v.prefix(Self.noteLimit)) } }
                 } footer: {
                     // A real section footer, so it takes the system's own inset and spacing rather than
                     // sitting under the card at a guessed padding. The counter appears only once the
@@ -148,7 +155,11 @@ struct SetNicknameView: View {
         ContactNames.shared.setCard(
             ContactCard(first: first.trimmingCharacters(in: .whitespaces),
                         last: last.trimmingCharacters(in: .whitespaces),
-                        note: note.trimmingCharacters(in: .whitespaces)),
+                        // Tidied again on the way out, not only as it is typed: a note written
+                        // before this rule existed still holds its blank lines, and this is the pass
+                        // that cleans it.
+                        note: Limits.oneParagraph(note, max: Self.noteLimit)
+                            .trimmingCharacters(in: .whitespaces)),
             for: uid)
         onSave()
         dismiss()
