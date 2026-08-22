@@ -1654,7 +1654,15 @@ final class CallService: NSObject {
             // moment THIS device answers (see completeAnswer), so still being .incoming while the doc says
             // active means someone else took it. Stop ringing without touching the doc: the device that
             // answered owns the call now, and writing anything here would fight it.
-            if (d["status"] as? String) == "active", self.state == .incoming {
+            // ⛔ NOT WHEN WE ARE THE ONES WHO MADE IT ACTIVE. This branch means "another of my
+            // devices picked up", and it infers that purely from the doc going active while this
+            // phone is still ringing. Pre-negotiation publishes from this very phone during the
+            // ring, so without this guard the phone reads its own write as somebody else answering
+            // and ends its own call. Belt as well as braces: buildAnswer no longer writes the
+            // status early either, and either fix alone would do.
+            if self.preNegotiated, !self.wasAccepted, self.state == .incoming {
+                // our own pre-negotiation is in flight — nobody else has answered anything
+            } else if (d["status"] as? String) == "active", self.state == .incoming {
                 self.ringingWatcher?.remove(); self.ringingWatcher = nil
                 // No tone (localUser: true) — I did answer, just on my other phone — and no doc write,
                 // which would fight the device that owns the call now. recordWritten is forced so we do
@@ -2080,7 +2088,16 @@ final class CallService: NSObject {
                 }
                 let local = self.withOpusDtxAndRed(answerSdp)
                 pc.setLocalDescription(local) { _ in
-                    var data: [String: Any] = ["answer": ["sdp": local.sdp, "type": "answer"], "status": "active"]
+                    // ⛔ "status": "active" IS ONLY WRITTEN BY A REAL ACCEPT. Writing it during
+                    // pre-negotiation made the phone hang up on itself: `watchRingingCancel` treats
+                    // status==active while still .incoming as "answered on my OTHER device, stop
+                    // ringing", ends the call with localUser: true, and that lands as `declined`.
+                    // Shipped for one build and it killed every incoming call — 685ms and 0ms to
+                    // "declined" in the timeline, with the ring-time marks proving pre-negotiation
+                    // had just run. The answer SDP itself is safe to publish early; the STATUS is a
+                    // statement that a person picked up, and that was never true yet.
+                    var data: [String: Any] = ["answer": ["sdp": local.sdp, "type": "answer"]]
+                    if self.wasAccepted { data["status"] = "active" }
                     data["cams.\(self.me)"] = self.cameraOn   // publish my camera state (per-side)
                     // NOT ENDED — deliberately no longer "== ringing" (his 3:48 AM two-phone
                     // report: he accepted, sat on Connecting… forever, and the CALLER kept
