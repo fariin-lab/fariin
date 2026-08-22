@@ -5230,7 +5230,11 @@ struct MyStoriesCarousel: View {
             Image(systemName: "eye.fill")
             Text(compactCount(views))
             if likes > 0 {
-                Image(systemName: "heart.fill").foregroundStyle(.red).padding(.leading, 4)
+                // ⛔ WHITE, LIKE THE SMALL ONE ON EVERY CARD (owner 2026-08-22). The eye beside it
+                // is white and the two are one reading; a red heart made the number look like an
+                // alert rather than a count. The `.foregroundStyle(.white)` below already covers it
+                // — the explicit red was the only thing overriding it.
+                Image(systemName: "heart.fill").padding(.leading, 4)
                 Text(compactCount(likes))
             }
         }

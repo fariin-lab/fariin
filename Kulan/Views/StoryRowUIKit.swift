@@ -239,6 +239,21 @@ final class StoryRowCountView: UIView {
             l.font = font
             l.textColor = .white
         }
+        // ⛔ THE GLYPHS KEEP THEIR OWN WIDTH (owner 2026-08-22: "left and right eyes icons sometimes
+        // change width"). A `UIStackView` squeezes whichever arranged view is cheapest to squeeze
+        // when it is handed less room than it asked for, and an image view's default resistance is
+        // low — so the eye, not the number, was the thing that got flattened.
+        //
+        // It only showed SOMETIMES because the shortage is momentary: the count's frame is set from
+        // `fittedSize()` by the card's `layoutSubviews`, and a new number arriving is measured on the
+        // next pass, so for one frame the stack is sized for the old text. Required resistance means
+        // that frame can be wrong without the icon paying for it, and `.center` keeps the drawn
+        // glyph its own size whatever box it ends up in.
+        for icon in [eye, heart] {
+            icon.contentMode = .center
+            icon.setContentCompressionResistancePriority(.required, for: .horizontal)
+            icon.setContentHuggingPriority(.required, for: .horizontal)
+        }
         stack.axis = .horizontal
         stack.alignment = .center
         stack.spacing = 5
@@ -279,6 +294,10 @@ final class StoryRowCountView: UIView {
         // `.padding(.leading, 4)` on the heart, which a stack expresses as custom spacing.
         stack.setCustomSpacing(showLikes ? 9 : 5, after: views)
         setNeedsLayout()
+        // ⚠️ AND THE CARD, because the card is what sets this view's FRAME from `fittedSize()`.
+        // Asking only ourselves to lay out re-flows the stack inside a box that is still measured for
+        // the previous number — which is the one frame the icon had to be squeezed into.
+        superview?.setNeedsLayout()
     }
 
     override func layoutSubviews() {
