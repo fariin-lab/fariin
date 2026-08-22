@@ -5258,7 +5258,34 @@ struct MyStoriesCarousel: View {
     ///
     /// ⚠️ AND A FAILED READ LEAVES THE OLD NUMBER ALONE. Nil is "no answer" (see `viewSummary`);
     /// writing a zero for it is how a card that had been counted correctly went back to 0.
+    /// ⛔ THE NUMBER THE BAR ALREADY HAD, BEFORE ANY OF THIS IS ASKED FOR (owner 2026-08-22: "before
+    /// scroll up it's showing count, after scroll it's showing 0 — why is only that eye coming late").
+    ///
+    /// He is right, and the reason is that the two halves of one screen were asking the same question
+    /// twice. The owner's bar below the story has held this story's summary since the page appeared —
+    /// it is what draws "1 View" — and pulling the sheet up threw that away and started a fresh round
+    /// trip per story, so the card he had JUST been looking at went back to 0 until the network
+    /// answered again.
+    ///
+    /// The reference app's behaviour he described is exactly this: read what you already have first,
+    /// then fetch the rest. So the current story is seeded from the bar's own model before `loadAll`
+    /// is even started — no request, no wait, and the number cannot disagree with the one an inch
+    /// below it because it IS that number.
+    ///
+    /// ⚠️ SEEDED, NOT WRITTEN OVER. `loadAll` still runs and still refreshes this id along with the
+    /// others; a seed that is stale by a view or two is corrected a moment later, and until then it
+    /// is far closer to the truth than a zero.
+    @MainActor private func seedCurrentCount() {
+        let id = activeId
+        guard !id.isEmpty else { return }
+        guard counts[id] == nil else { return }   // a real answer already landed; leave it alone
+        let m = StoryOwnerBarModel.shared
+        guard m.count > 0 || m.reactions > 0 else { return }
+        counts[id] = StoryRowCounts(views: m.count, likes: m.reactions)
+    }
+
     private func loadAll() async {
+        await MainActor.run { seedCurrentCount() }
         await withTaskGroup(of: (String, StoryViewSummary?).self) { group in
             for s in stories { group.addTask { (s.id, await StoryViewer.viewSummaryPublic(storyId: s.id)) } }
             // Reduced to numbers HERE, once per fetch, rather than in `body` once per frame.

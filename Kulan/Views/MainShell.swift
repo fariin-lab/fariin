@@ -2310,11 +2310,25 @@ struct ArchivedChatsView: View {
                         // its own menu, and `.id(authorUid)` keeps that menu bound to its person.
                         List(selection: $selection) {   // stable binding (Set selects only in edit mode) -> smooth edit transition
                             ForEach(archived) { conv in
+                                // ⛔ THE CHAT LIST'S OWN SHAPE, NOT A SECOND ONE (owner 2026-08-22,
+                                // third report: "a tap only highlights it, I have to tap again", and
+                                // "only sometimes, not all the time").
+                                //
+                                // This row used to carry the select branch INSIDE the button, which
+                                // is the arrangement `chatListRow` was deliberately moved away from
+                                // and its note explains why: SwiftUI disables a Button in a List's
+                                // edit mode, so a row that routes selection through its own button
+                                // is routing it through the one thing that has been switched off.
+                                // The chat list keeps the button permanently and lays a tap-catcher
+                                // over it instead, so one structure serves both modes and the row's
+                                // identity never changes underneath a finger — which is exactly the
+                                // "sometimes" in his report: an intermittent fault is a race, and
+                                // the race is a press whose button is rebuilt mid-touch.
+                                //
+                                // Same three lines, same order, same reasons. If this ever needs
+                                // changing again, change `chatListRow` and copy it here — or better,
+                                // make them one function.
                                 Button {
-                                    if selecting {   // whole row toggles in edit mode, not just the checkbox
-                                        toggleTick(conv.id, in: $selection)
-                                        return
-                                    }
                                     let t = ChatTarget(id: conv.id, name: conv.displayName(me),
                                                        photo: conv.displayPhoto(me))
                                     if let onOpenChat { onOpenChat(t) } else { path.append(t) }
@@ -2325,6 +2339,14 @@ struct ArchivedChatsView: View {
                                             voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
                                 }
                                 .buttonStyle(.plain)
+                                .allowsHitTesting(!selecting)
+                                .overlay {
+                                    if selecting {
+                                        Color.clear.contentShape(Rectangle())
+                                            .onTapGesture { toggleTick(conv.id, in: $selection) }
+                                    }
+                                }
+                                .moveDisabled(true)
                                 .tag(conv.id)
                                 .listRowInsets(EdgeInsets())
                                 .listRowSeparator(.hidden)
