@@ -247,6 +247,7 @@ enum DemoMode {
         // love, which means their list also has the colleague, the classmate, the neighbour where
         // they actually live. A demo of six Somali names would show only half of that life.
         let linneaPhoto = profilePhoto("demo-face-linnea", "linnea", .systemGreen,  .systemMint,   "L")
+        let ilhanPhoto  = profilePhoto("demo-face-ilhan",  "ilhan",  .systemPurple, .systemPink,   "I")
         return [
             chat("demo-hooyo",  me, "demo-hooyo",  "Hooyo",         now.addingTimeInterval(-260),
                  "Ma soo gaadhay guriga?", hooyoPhoto, unread: 2),
@@ -258,10 +259,15 @@ enum DemoMode {
                  "📷 Photo", khadraPhoto),
             chat("demo-linnea", me, "demo-linnea", "Linnea",        now.addingTimeInterval(-26000),
                  "See you at the library at 4?", linneaPhoto),
+            // Not a face, and that is not a compromise. A soft toy, a cup, a view: this is what a
+            // great many real profile pictures actually are, and a list where all seven are portraits
+            // would be the unrealistic one.
             chat("demo-ilhan",  me, "demo-ilhan",  "Ilhan",         now.addingTimeInterval(-93000),
-                 "Mahadsanid walaal", ""),
-            // Deliberately LEFT WITHOUT A PHOTO, so the list also shows the other half of the rule:
-            // no picture means the classic coloured circle, never an empty poster.
+                 "Mahadsanid walaal", ilhanPhoto),
+            // ⛔ THE LAST ONE STAYS WITHOUT A PHOTO ON PURPOSE — do not "finish" this by giving him
+            // one. Somebody with no picture is the commonest row in any real chat list, and the
+            // coloured letter circle is a piece of the design that has to be visible in a screenshot
+            // too. Six with pictures and one without is the honest ratio.
             chat("demo-faarax", me, "demo-faarax", "Faarax",        now.addingTimeInterval(-176400),
                  "Berri ma is aragnaa?", ""),
         ]
