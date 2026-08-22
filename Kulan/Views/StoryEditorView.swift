@@ -225,6 +225,9 @@ struct StoryEditorView: View {
     /// the three files that build and manage it before this was written.
     private static let chipHintSeconds: TimeInterval = 5
 
+    /// The photo's transform per frame, for the pen layer only — see `PhotoLiveTransform`.
+    @StateObject private var penLive = PhotoLiveTransform()
+
     @State private var nudgeForward = false
     /// True while a still-frame redraw is being seeked. The dial keeps writing the exposure through
     /// it; only the redraw is dropped. See `nudgePreviewFrame`.
@@ -1666,6 +1669,7 @@ struct StoryEditorView: View {
                 // OUR PEN, NOT APPLE'S PALETTE (owner 2026-08-03: "use my owner pen"). PencilKit still
                 // draws the strokes — it is the drawing engine, not a look — but its tool picker is off
                 // and the ink comes from our own bar, exactly as ChatImageEditor has always done it.
+                LivePenLayer(live: penLive, content:
                 DrawingCanvas(drawing: $drawing, isActive: true,
                               penColor: penHue == 0 ? .white
                                                     : UIColor(hue: penHue, saturation: 1, brightness: 1, alpha: 1),
@@ -1689,8 +1693,29 @@ struct StoryEditorView: View {
                               photoRelay: photoTransform)
                     // Big enough to STILL cover the card once the zoom has shrunk it — see
                     // `penCanvasSize`. At a zoom of 1 or more this is exactly the card.
-                    .frame(width: penCanvas.width, height: penCanvas.height)
-                    .scaleEffect(photoZoom).offset(photoOffset)
+                    .frame(width: penCanvas.width, height: penCanvas.height))
+                    // ⛔ THE TRANSFORM COMES FROM `penLive`, NOT FROM `photoZoom` (owner 2026-08-22:
+                    // the ink stands still through the pinch and pops into place at the end).
+                    //
+                    // `photoZoom` is written once, on gesture END — deliberately, so the editor does
+                    // not re-render sixty times a second under a pinch. Reading it here meant the ink
+                    // could only ever be right BETWEEN gestures; during one it sat still while the
+                    // photograph moved out from under it, and the write at the end WAS the pop.
+                    //
+                    // `LivePenLayer` carries the per-frame value instead, and only that small view
+                    // re-renders. Seeded from the committed pair and kept in step with it, so a zoom
+                    // changed by any other route — a reset, a new item — still lands here.
+                    .onAppear {
+                        penLive.scale = photoZoom
+                        penLive.offset = photoOffset
+                        photoTransform.applyPen = { s, o in
+                            penLive.scale = s
+                            penLive.offset = o
+                        }
+                    }
+                    .onDisappear { photoTransform.applyPen = nil }
+                    .onChange(of: photoZoom) { _, z in penLive.scale = z }
+                    .onChange(of: photoOffset) { _, o in penLive.offset = o }
                     // ⛔ AND THEN BACK TO THE CARD'S SIZE FOR LAYOUT, WHICH IS THE TEXT MOVING BY
                     // ITSELF (owner, 2026-08-20: "when i make zoom out image Aa text is moving up …
                     // never move that text").
@@ -4600,9 +4625,43 @@ final class PhotoTransformRelay {
     /// The last transform published, so a rider that appears mid-gesture starts in the right place.
     private(set) var last: (scale: CGFloat, offset: CGSize) = (1, .zero)
 
+    /// ⛔ THE PEN LAYER'S OWN SLOT, SEPARATE FROM `apply` ON PURPOSE. `apply` belongs to the still
+    /// image that stands in after Done; the live canvas is up at a different moment but the two are
+    /// one assignment apart from clobbering each other, and a single closure has no way to say so.
+    var applyPen: ((CGFloat, CGSize) -> Void)?
+
     func publish(scale: CGFloat, offset: CGSize) {
         last = (scale, offset)
         apply?(scale, offset)
+        applyPen?(scale, offset)
+    }
+}
+
+/// ⛔ THE PHOTO'S TRANSFORM AS IT IS RIGHT NOW, FOR THE PEN LAYER ALONE (owner 2026-08-22: the ink
+/// does not follow during the pinch and "pops" into place when the finger lifts).
+///
+/// `photoZoom` and `photoOffset` are written ONCE, on gesture end — that is deliberate and is what
+/// keeps the whole editor from re-rendering sixty times a second under a pinch. So the live pen
+/// canvas, which reads them through a SwiftUI `.scaleEffect`, could only ever be right BETWEEN
+/// gestures. During one it sat still while the photograph moved out from under it, and the write at
+/// the end is the jump he is describing.
+///
+/// This is the per-frame value instead. It is its own object, observed by its own small view, so a
+/// write invalidates the pen layer and nothing else — the editor's body is not in the path. That is
+/// the same reason `SheetCaptionFade` is a modifier rather than another `@State` on its screen.
+@MainActor final class PhotoLiveTransform: ObservableObject {
+    @Published var scale: CGFloat = 1
+    @Published var offset: CGSize = .zero
+}
+
+/// The pen canvas wearing `PhotoLiveTransform`. A separate view so only this subtree re-renders.
+private struct LivePenLayer<Content: View>: View {
+    @ObservedObject var live: PhotoLiveTransform
+    let content: Content
+    var body: some View {
+        content
+            .scaleEffect(live.scale)
+            .offset(live.offset)
     }
 }
 
