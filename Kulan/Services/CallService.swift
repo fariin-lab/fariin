@@ -147,12 +147,21 @@ final class CallService: NSObject {
         timeline[label] = Int(now.timeIntervalSince(origin) * 1000)
     }
 
-    /// Flushed when the media path comes up, which is the moment the user stops waiting.
-    private func writeTimeline() {
+    /// Flushed when the media path comes up, and again — for the first time — when a call ENDS
+    /// without ever getting there.
+    ///
+    /// ⛔ IT ONLY SAVED ON SUCCESS, WHICH IS BACKWARDS. A call that connects is the one you least
+    /// need to measure. A call that rings out, or fails, or is never answered is the one worth
+    /// reading, and it was throwing its numbers away — so dialling somebody who is asleep, which is
+    /// the easiest test there is to run alone, recorded nothing at all.
+    ///
+    /// `outcome` says which kind this was, so the two are never confused when read back.
+    private func writeTimeline(outcome: String = "connected") {
         guard !timelineWritten, let id = callId, !timeline.isEmpty else { return }
         timelineWritten = true
         var payload: [String: Any] = timeline
         payload["role"] = isCaller ? "caller" : "callee"
+        payload["outcome"] = outcome
         payload["at"] = FieldValue.serverTimestamp()
         // Merged, and keyed by role, so the two sides land in one document without racing each
         // other. Failures are ignored: a measurement must never be able to disturb a live call.
@@ -2238,6 +2247,11 @@ final class CallService: NSObject {
         if updateRemote, let id = callId {
             db.collection("calls").document(id).updateData(["status": "ended", "endReason": endReason.rawValue])
         }
+        // Save the measurement for a call that never connected. writeTimeline is once-only, so a
+        // call that DID connect already wrote its own and this is a no-op. Named by how it ended, so
+        // a ring-out is never read as a slow connect.
+        mark("ended")
+        writeTimeline(outcome: endReason == .none ? "ended" : endReason.rawValue)
         listeners.forEach { $0.remove() }
         listeners = []
         ringingWatcher?.remove(); ringingWatcher = nil
@@ -2303,7 +2317,20 @@ extension CallService: RTCPeerConnectionDelegate {
         // MAIN hop: this fires on WebRTC's signaling thread, but callDocCreated/localCandidateBuffer
         // are also touched from Firestore callbacks (main). Unsynchronized access raced — a candidate
         // generated at the wrong instant could be dropped (lost connectivity path) or crash.
+        // ⭐ THE TWO NUMBERS THAT SETTLE THE RELAY ARGUMENT, and they are readable from a call
+        // nobody answers — which is the only test that can be run alone, at night, with the other
+        // person asleep.
+        //
+        // `firstCandidate` is the phone finding its own address: near-instant, and a baseline.
+        // `firstRelayCandidate` is the relay answering, which means the credentials fetch, the
+        // journey to whichever relay we were given, and the allocation handshake, all in one
+        // number. If that is seconds, the relay is the problem and no amount of tuning here helps.
+        // If it is tens of milliseconds, the relay was never the problem and the answer is
+        // elsewhere.
+        let isRelay = candidate.sdp.contains(" typ relay")
         DispatchQueue.main.async {
+            self.mark("firstCandidate")
+            if isRelay { self.mark("firstRelayCandidate") }
             // Buffer until the call doc exists (else the write is rule-denied + lost — C2).
             if self.callDocCreated, let col = self.myCandidatesCollection { col.addDocument(data: data) }
             else { self.localCandidateBuffer.append(data) }
