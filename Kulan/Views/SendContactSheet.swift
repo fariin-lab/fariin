@@ -235,9 +235,13 @@ struct SendContactSheet: View {
             .frame(width: Self.face, height: Self.face)
             HStack(spacing: 2) {
                 Text(c.displayName(me))
-                    // Smaller as the face got bigger (owner 2026-08-22): the name is the caption of
-                    // the picture, and at the old size beside a 64pt circle the two were competing.
-                    .font(.system(size: 10))
+                    // ⚠️ 13, UP FROM 11 — AND I TOOK IT THE WRONG WAY FIRST. His "also name add size"
+                    // alongside the 64pt avatars meant make it BIGGER; I read it as "add a small
+                    // size" and took it to 10, which is what he then could not read (2026-08-22).
+                    //
+                    // A name under a 64pt face is not a caption to be tucked away, it is the only
+                    // thing telling you who you are about to send to.
+                    .font(.system(size: 13))
                     .foregroundStyle(.primary)
                     .lineLimit(2).multilineTextAlignment(.center)
                 if !c.isGroup { VerifiedMark(uid: c.otherUid(me), size: 9) }
