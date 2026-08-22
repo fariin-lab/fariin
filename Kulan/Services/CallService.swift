@@ -2208,6 +2208,12 @@ final class CallService: NSObject {
             //
             // `!calleeAccepted` alone is the correct latch — it is what makes this run once.
             if self.isCaller, d["acceptedAt"] != nil, !self.calleeAccepted, self.state != .ended {
+                // THE MARK THAT SETTLES WHAT THE CALLER'S REMAINING BLINK ACTUALLY IS. The caller
+                // starts its timer on whichever lands second: the media path coming up, or the news
+                // that a human accepted, which has to cross from Uganda to the USA through Doha.
+                // Against `mediaReady` this says outright which one the user is waiting on — and if
+                // it is this one, no amount of media tuning will ever shorten it.
+                self.mark("acceptSeen")
                 self.calleeAccepted = true
                 self.wasAccepted = true
                 self.stopRingback()
