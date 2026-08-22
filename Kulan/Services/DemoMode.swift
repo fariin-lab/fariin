@@ -35,7 +35,7 @@ import FirebaseFirestore
 //   2. the Sagal conversation            -> open Sagal. Voice note is in there.
 //   3. the Ayaan conversation            -> open Ayaan Warsame. Photo is in there.
 //   4. a call running                    -> NOT here. Calls are live, shoot a real one.
-//   5. a story open                      -> tap Cabdi's ring.
+//   5. a story open                      -> tap Dadir's ring.
 //
 // REAL PHOTOGRAPHS. Anything missing falls back to a drawing — a gradient with the name and an
 // elapsed-second counter painted on it, which is fine for checking layout and useless for the
@@ -183,7 +183,7 @@ enum DemoMode {
             ], lastViewedAt: nil, isMine: true)
 
         StoriesRepository.shared.others = [
-            StoryGroup(authorUid: "demo-cabdi", name: "Cabdi", photoUrl: cabdiPhoto,
+            StoryGroup(authorUid: "demo-cabdi", name: "Dadir", photoUrl: cabdiPhoto,
                        stories: [
                         Story(id: "demo-c1", authorUid: "demo-cabdi",
                               createdAt: now.addingTimeInterval(-25200),
@@ -284,7 +284,7 @@ enum DemoMode {
                 s(2, "demo-ilhan", "demo-story-ilhan-2", 17100, "Xeebta"),
                 s(3, "demo-ilhan", "demo-story-ilhan-3",  8100, "Baraf"),
             ], lastViewedAt: nil, isMine: false),
-            StoryGroup(authorUid: "demo-cabdi", name: "Cabdi", photoUrl: cabdiPhoto, stories: [
+            StoryGroup(authorUid: "demo-cabdi", name: "Dadir", photoUrl: cabdiPhoto, stories: [
                 s(1, "demo-cabdi", "demo-story-cabdi",   25200, "Night vibes"),
                 s(2, "demo-cabdi", "demo-story-cabdi-2", 18000, "Golden hour"),
                 s(3, "demo-cabdi", "demo-story-cabdi-3", 10800, "Home"),
@@ -332,7 +332,12 @@ enum DemoMode {
                  "Ma soo gaadhay guriga?", hooyoPhoto, unread: 2),
             chat("demo-ayaan",  me, "demo-ayaan",  "Ayaan Warsame", now.addingTimeInterval(-2100),
                  "I will call you after Maghrib", ayaanPhoto),
-            chat("demo-cabdi",  me, "demo-cabdi",  "Cabdi",         now.addingTimeInterval(-8000),
+            // ⚠️ HE IS CALLED DADIR ON SCREEN AND `cabdi` IN THE CODE. The uid, the asset names and
+            // the conversation id all still say cabdi, and that is deliberate: renaming five image
+            // sets and their references to change a label nobody sees buys nothing and risks a typo
+            // in a filename that only shows up as a grey square on a device. Display name here,
+            // identifiers left alone.
+            chat("demo-cabdi",  me, "demo-cabdi",  "Dadir",         now.addingTimeInterval(-8000),
                  "🎤 Voice message · 0:14", cabdiPhoto),
             chat("demo-khadra", me, "demo-khadra", "Khadra",        now.addingTimeInterval(-12000),
                  "📷 Photo", khadraPhoto),
@@ -408,7 +413,7 @@ enum DemoMode {
 
         case "demo-cabdi":
             return [
-                Message(demoId: "\(cid)-0", from: me, "Cabdi, ma maqashay warkii?", t(-12000)),
+                Message(demoId: "\(cid)-0", from: me, "Dadir, ma maqashay warkii?", t(-12000)),
                 Message(demoId: "\(cid)-1", from: "demo-cabdi", "Haa, waan maqlay", t(-11800)),
                 Message(demoId: "\(cid)-2", from: "demo-cabdi", "Sug, cod ayaan kuu dirayaa", t(-8200)),
                 Message(demoAudio: "\(cid)-3", from: "demo-cabdi", data: silence(seconds: 14),
