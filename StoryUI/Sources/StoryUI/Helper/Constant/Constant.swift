@@ -63,7 +63,10 @@ enum Constant {
     /// The media view and the page were BOTH cutting the same curve, and two antialiased edges on one
     /// arc multiply their coverage, so the boundary pixels came out at a quarter strength and the
     /// curve read as hard and slightly ragged. One mask cuts it now.
-    static let cardCornerRadius: CGFloat = 18
+    ///
+    /// 20 on his 2026-08-22 word, up from 18. The measurements above are the history of how the
+    /// SHAPE was settled and are left standing; this is only the size, which is his to call.
+    static let cardCornerRadius: CGFloat = 20
 
     enum UserView {
         static let hStackSpace: CGFloat = 13
