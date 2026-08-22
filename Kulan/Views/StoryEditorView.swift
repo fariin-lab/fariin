@@ -1537,6 +1537,13 @@ struct StoryEditorView: View {
                         if v && !guideV { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
                         if h && !guideH { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
                         guideV = v; guideH = h
+                    },
+                    // ⛔ THE BIN GOES AWAY WHEN THE HAND DOES, whichever gesture was holding it.
+                    // `onDragEnd` above still owns the DROP — whether this landed on the bin is a
+                    // question only a real drag release can answer — and this owns nothing but the
+                    // tidy-up, so the two cannot disagree about what happened.
+                    onRelease: {
+                        draggingID = nil; trashHot = false; guideV = false; guideH = false
                     }
                 )
             }
@@ -1589,6 +1596,13 @@ struct StoryEditorView: View {
                         if v && !guideV { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
                         if h && !guideH { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
                         guideV = v; guideH = h
+                    },
+                    // ⛔ THE BIN GOES AWAY WHEN THE HAND DOES, whichever gesture was holding it.
+                    // `onDragEnd` above still owns the DROP — whether this landed on the bin is a
+                    // question only a real drag release can answer — and this owns nothing but the
+                    // tidy-up, so the two cannot disagree about what happened.
+                    onRelease: {
+                        draggingID = nil; trashHot = false; guideV = false; guideH = false
                     }
                 )
                 .opacity(editingID == o.id ? 0 : 1)   // hide the one being edited (it lives in the editor)
@@ -4202,6 +4216,8 @@ struct StickerOverlayView: View {
     var onDragChange: (CGPoint) -> Void
     var onDragEnd: (CGPoint) -> Void
     var onSnap: (Bool, Bool) -> Void
+    /// Fired when the LAST finger leaves, whichever gesture it belonged to. See `touching`.
+    var onRelease: () -> Void = {}
 
     @GestureState private var dragT: CGSize = .zero
     @GestureState private var gScale: CGFloat = 1
@@ -4222,6 +4238,20 @@ struct StickerOverlayView: View {
     /// Multiplied into the live scale rather than replacing it, so a chip that has been pinched or
     /// turned dips from wherever it actually is.
     @State private var tapBounce: CGFloat = 1
+
+    /// ⛔ TRUE WHILE ANY FINGER OF THE TRANSFORM IS DOWN, AND THE BIN'S ONLY TRUSTWORTHY SIGNAL
+    /// (owner 2026-08-22: hold with one finger, pinch with a second, lift both, and the delete
+    /// button stayed).
+    ///
+    /// The bin was driven by the DRAG's own `.onEnded`, and that callback is not promised: when a
+    /// second finger lands, the pinch takes the sequence over and the drag can be cancelled rather
+    /// than ended, so nothing ever said the finger had gone. `@GestureState` has no such gap —
+    /// SwiftUI resets it to its initial value when the gesture finishes OR is cancelled, which is the
+    /// one question being asked here.
+    ///
+    /// A tap never sets it: the drag needs two points of travel before the composed gesture produces
+    /// a value at all, so `touching` stays false and nothing is released that was never held.
+    @GestureState private var touching = false
 
     /// The reference app's own numbers, and it is a keyframe dip rather than a spring: scale runs
     /// `[s, s × 0.93, s]` at key times `[0, 0.33, 1]` over 0.30s, interpolated LINEARLY (their
@@ -4257,6 +4287,9 @@ struct StickerOverlayView: View {
             .position(liveCenter)
             .allowsHitTesting(interactive)
             .gesture(transform, including: interactive ? .all : .none)
+            // Every route out of a gesture comes through here, including the ones that never call
+            // `.onEnded`. See `touching`.
+            .onChange(of: touching) { _, down in if !down { onRelease() } }
             // ⚠️ AFTER the drag, and it does not fight it: `DragGesture(minimumDistance: 2)` never
             // begins for a finger that does not move, so a tap falls through to here. Only a chip
             // answers — a picture off the tray has no colours of ours to cycle.
@@ -4290,6 +4323,8 @@ struct StickerOverlayView: View {
             .updating($gRot) { v, s, _ in s = v.rotation }
             .onEnded { v in sticker.rotation += v.rotation }
         return SimultaneousGesture(drag, SimultaneousGesture(mag, rot))
+            // ⛔ THE ONLY HONEST ANSWER TO "IS A FINGER STILL ON THIS" — see `touching`.
+            .updating($touching) { _, s, _ in s = true }
     }
 }
 
@@ -4306,10 +4341,16 @@ struct TextOverlayView: View {
     var onDragChange: (CGPoint) -> Void
     var onDragEnd: (CGPoint) -> Void
     var onSnap: (Bool, Bool) -> Void
+    /// Fired when the LAST finger leaves, whichever gesture it belonged to. See `touching`.
+    var onRelease: () -> Void = {}
 
     @GestureState private var dragT: CGSize = .zero
     @GestureState private var gScale: CGFloat = 1
     @GestureState private var gRot: Angle = .zero
+    /// Same flag, same reason as `StickerOverlayView.touching`: a drag whose sequence a pinch
+    /// took over may be cancelled rather than ended, so `.onEnded` cannot be the thing that puts
+    /// the bin away. Gesture state resets on both paths.
+    @GestureState private var touching = false
 
     private func snappedPure(_ p: CGPoint) -> CGPoint {
         let cx = canvasSize.width / 2, cy = canvasSize.height / 2, t: CGFloat = 12
@@ -4338,6 +4379,9 @@ struct TextOverlayView: View {
             .allowsHitTesting(interactive)
             .highPriorityGesture(TapGesture().onEnded { onTap() })
             .gesture(transform, including: interactive ? .all : .none)
+            // Every route out of a gesture comes through here, including the ones that never call
+            // `.onEnded`. See `touching`.
+            .onChange(of: touching) { _, down in if !down { onRelease() } }
     }
 
     private var transform: some Gesture {
@@ -4363,6 +4407,8 @@ struct TextOverlayView: View {
             .updating($gRot) { v, s, _ in s = v.rotation }
             .onEnded { v in overlay.rotation += v.rotation }
         return SimultaneousGesture(drag, SimultaneousGesture(mag, rot))
+            // ⛔ THE ONLY HONEST ANSWER TO "IS A FINGER STILL ON THIS" — see `touching`.
+            .updating($touching) { _, s, _ in s = true }
     }
 }
 
