@@ -209,14 +209,21 @@ struct StoryEditorView: View {
     /// touch of the dial and dropped with the player — see `applyPreviewBrightness`.
     @State private var brightnessLive: StoryVideoBrightness.LiveExposure?
     /// Which way the next still-frame nudge steps — see `nudgePreviewFrame`.
-    /// The link badge currently wearing "Tap for more", or nil. See `showLinkHint`.
-    @State private var linkHintStickerID: UUID?
+    /// The chip currently wearing "Tap for more", or nil. See `showChipHint`.
+    ///
+    /// ⚠️ ANY CHIP, NOT ONLY A LINK (owner 2026-08-22: "that feature is only available when I am
+    /// using link, please also add when I am using location and time"). The hint is about the badge
+    /// being TAPPABLE, and all three answer a tap by cycling their colour — so a link was never the
+    /// thing that qualified for it, being newly dropped on the picture was. The names said `link`
+    /// because a link is where it was written, which is exactly how a rule gets narrower than it
+    /// meant to be.
+    @State private var chipHintStickerID: UUID?
     /// How far above the badge's top edge the hint floats.
-    private static let linkHintGap: CGFloat = 14
+    private static let chipHintGap: CGFloat = 14
     /// How long it stays. The owner's number, from his own reference picture — there is nothing to
     /// copy here: the app this badge is modelled on shows no such hint at all, which was checked in
     /// the three files that build and manage it before this was written.
-    private static let linkHintSeconds: TimeInterval = 5
+    private static let chipHintSeconds: TimeInterval = 5
 
     @State private var nudgeForward = false
     /// True while a still-frame redraw is being seeked. The dial keeps writing the exposure through
@@ -1538,8 +1545,8 @@ struct StoryEditorView: View {
                         // so during a drag it could only ever be in the wrong place — and following
                         // the badge would be the wrong answer anyway: the hint is there to explain a
                         // badge that just appeared, and somebody dragging it has plainly understood.
-                        if linkHintStickerID != nil {
-                            withAnimation(.smooth(duration: 0.2)) { linkHintStickerID = nil }
+                        if chipHintStickerID != nil {
+                            withAnimation(.smooth(duration: 0.2)) { chipHintStickerID = nil }
                         }
                         let hot = isOverTrash(live)
                         if hot != trashHot { trashHot = hot; if hot { UIImpactFeedbackGenerator(style: .medium).impactOccurred() } }
@@ -1569,13 +1576,13 @@ struct StoryEditorView: View {
             // two land on each other, and `flatten` bakes the same order.
             .zIndex(drawingOnTop ? 1 : 3)
 
-            // THE HINT OVER A JUST-ADDED LINK. See `showLinkHint`.
+            // THE HINT OVER A JUST-ADDED LINK. See `showChipHint`.
             //
             // ⚠️ IT IS NOT A STICKER AND IT MUST NEVER BECOME ONE. `flatten` bakes `stickers`, so
             // anything living in that array is posted; this is a note to the person composing and
             // has no business in the picture. Drawn as its own layer, from its own state, and gone
             // before the story could be sent.
-            if let hinted = stickers.first(where: { $0.id == linkHintStickerID }) {
+            if let hinted = stickers.first(where: { $0.id == chipHintStickerID }) {
                 Text("Tap for more")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
@@ -1587,7 +1594,7 @@ struct StoryEditorView: View {
                     .position(x: hinted.center.x,
                               y: hinted.center.y
                                  - hinted.drawnSize.height * hinted.scale / 2
-                                 - Self.linkHintGap)
+                                 - Self.chipHintGap)
                     .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .bottom)))
                     .allowsHitTesting(false)   // the badge under it stays the target
                     .zIndex(6)
@@ -3357,24 +3364,26 @@ struct StoryEditorView: View {
             stickerChip(symbol: "link", text: text)
         }
         // The badge has just landed in the middle of somebody's picture with no explanation. See
-        // `linkHintStickerID`.
-        showLinkHint()
+        // `chipHintStickerID`.
+        showChipHint()
     }
 
     /// "Tap for more" over the badge that was just added, for five seconds.
     ///
-    /// ⚠️ THE TIMER IS KEYED TO THE BADGE, NOT TO THE CLOCK. Adding a second link inside the five
+    /// ⚠️ THE TIMER IS KEYED TO THE BADGE, NOT TO THE CLOCK. Adding a second chip inside the five
     /// seconds moves the hint to the new one and the first badge's countdown must not then take the
     /// hint off the second — so the guard is "am I still the sticker that asked for this", which is
-    /// a question about identity rather than about time.
+    /// a question about identity rather than about time. That already covered a link following a
+    /// link; it covers a location following a link now too, at no extra cost, because it never asked
+    /// what KIND of chip it was.
     ///
     /// It only ever hides the WORDS. The badge is a real sticker and stays exactly where it landed.
-    @MainActor private func showLinkHint() {
+    @MainActor private func showChipHint() {
         guard let id = stickers.last?.id else { return }
-        withAnimation(.smooth(duration: 0.25)) { linkHintStickerID = id }
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.linkHintSeconds) {
-            guard linkHintStickerID == id else { return }
-            withAnimation(.smooth(duration: 0.3)) { linkHintStickerID = nil }
+        withAnimation(.smooth(duration: 0.25)) { chipHintStickerID = id }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.chipHintSeconds) {
+            guard chipHintStickerID == id else { return }
+            withAnimation(.smooth(duration: 0.3)) { chipHintStickerID = nil }
         }
     }
 
@@ -3384,6 +3393,7 @@ struct StoryEditorView: View {
                     recipe: .init(symbol: "mappin.and.ellipse", text: text)) {
             stickerChip(symbol: "mappin.and.ellipse", text: text)
         }
+        showChipHint()
     }
 
     /// The time it is, stamped. ⚠️ `action: nil` — it is a picture, not a button, and that is the
@@ -3404,6 +3414,11 @@ struct StoryEditorView: View {
         chipSticker(action: nil, recipe: .init(symbol: "clock", text: text)) {
             stickerChip(symbol: "clock", text: text)
         }
+        // ⚠️ THE CLOCK TOO, AND `action: nil` IS NOT A REASON TO SKIP IT. What a chip does when it is
+        // tapped IN THE VIEWER is a different question from whether it answers a tap HERE — the note
+        // above this function already draws that line, and the clock cycles its colour like the other
+        // two. The hint is about the badge under the finger, not about what it opens later.
+        showChipHint()
     }
 
     /// Solid white with black on it, and that is a decision rather than a default: these two sit on
