@@ -2197,7 +2197,17 @@ final class CallService: NSObject {
             // seconds before the SDP answer can arrive. The no-answer timeout is replaced by a
             // SHORT one: an accepted call whose answer never lands must fail fast (his 12:27 call
             // rang the full timeout on a call that was picked up), not sit "Ringing" for 45s.
-            if self.isCaller, d["acceptedAt"] != nil, !self.calleeAccepted, self.state == .outgoing {
+            // ⛔ NO `state == .outgoing` HERE ANY MORE, and that clause is precisely what broke the
+            // caller's screen. It was safe when the answer SDP could only arrive AFTER a human
+            // accepted — the caller was necessarily still .outgoing at that moment. Pre-negotiation
+            // publishes the answer DURING the ring, the caller applies it and flips itself .active
+            // straight away, so by the time the real `acceptedAt` lands the guard is already false:
+            // `calleeAccepted` never got set, the call never started, and the caller sat on
+            // "Connecting…" through an entire working conversation with audio flowing both ways.
+            // Reported live, mid-call: "it shows me connecting still, he doesn't see it at all".
+            //
+            // `!calleeAccepted` alone is the correct latch — it is what makes this run once.
+            if self.isCaller, d["acceptedAt"] != nil, !self.calleeAccepted, self.state != .ended {
                 self.calleeAccepted = true
                 self.wasAccepted = true
                 self.stopRingback()
