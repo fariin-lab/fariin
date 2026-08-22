@@ -5131,8 +5131,6 @@ struct MyStoriesCarousel: View {
 
 
     var body: some View {
-        let focusedID = stories.indices.contains(index) ? stories[index].id : activeId
-        let focused = counts[focusedID] ?? .zero
         VStack(spacing: 12) {
             // THE ROW, IN UIKIT — see StoryRowUIKit.swift. What used to be here was a `ZStack` of
             // SwiftUI cards positioned from an `@State` the scroll view wrote on every frame, which
@@ -5173,28 +5171,19 @@ struct MyStoriesCarousel: View {
                      onActiveTap: { onActiveTap() })
                 .frame(maxWidth: .infinity)
                 .frame(height: slotH)
-            // ⛔ THE ONLY COUNT ON THIS SCREEN, AND IT BELONGS TO WHICHEVER CARD IS CENTRED (owner
-            // 2026-08-22, written as a spec: "at any moment there should be only one View/Like stats
-            // section, and it must belong to the currently focused centre card").
+            // ⛔ THE FIXED COUNT SECTION IS GONE, AND ITS BEING FIXED WAS THE FAULT (owner
+            // 2026-08-22, after seeing it: "they should not stay fixed in one place and then simply
+            // swap numbers after the swipe finishes").
             //
-            // The per-card badges are gone from the row entirely — see `addSubview` in the card
-            // item's init — so there is nothing left that could show a second answer, a stale one, or
-            // the wrong card's. One view, one story, by construction rather than by keeping several
-            // in step.
+            // It sat here, below the row, and showed whichever story the row reported as centred. It
+            // could not do otherwise: a view outside the row is only ever TOLD about a movement, so
+            // however smoothly it cross-faded, the numbers stood still while the cards slid past
+            // them and changed hands at the half-card.
             //
-            // ⚠️ KEYED ON THE STORY, NOT ON THE NUMBERS. `.id` makes this a NEW view when the centred
-            // story changes, so the transition below runs on the hand-over rather than on a digit —
-            // two stories with the same counts still cross-fade, and a count that ticks up on the
-            // story you are looking at does not.
-            //
-            // The swap point itself is unchanged: the row reports a new centre as it crosses the half
-            // card, which is what "immediately switch when another card reaches the centre" asks for.
-            // What is new is that it fades across instead of snapping, so nothing flickers at the
-            // moment the number changes hands.
-            countRow(views: focused.views, likes: focused.likes, big: true)
-                .id(focusedID)
-                .transition(.opacity)
-                .animation(.easeInOut(duration: 0.18), value: focusedID)
+            // The count now lives INSIDE each card, as a subview — see the card item's init in
+            // StoryRowUIKit. It travels with its own card because it is part of it, and it fades to
+            // nothing one card-step from the centre, so a resting row still shows exactly one set of
+            // numbers. Preview and counts are one unit, which is what he asked for twice.
         }
         // ⚠️ THE ONE VALUE SWIFTUI STILL INTERPOLATES BEHIND THE ROW'S BACK.
         //
@@ -5242,33 +5231,14 @@ struct MyStoriesCarousel: View {
     // count as it reached the centre — is two lines inside the layout pass, where it costs an alpha
     // write instead of a SwiftUI geometry read per card per frame.
 
-    // Eye + views + heart + likes, white over a soft shadow — the row's ONE count, under the cards.
-    //
-    // The per-card badge that used to sit inside every card is gone (owner 2026-08-22). `big: false`
-    // survives because this is still the shared drawing and a caller may yet want the small size;
-    // nothing passes it today.
-    private func countRow(views: Int, likes: Int, big: Bool) -> some View {
-        HStack(spacing: big ? 7 : 5) {
-            Image(systemName: "eye.fill")
-            Text(compactCount(views))
-            if likes > 0 {
-                // ⛔ WHITE, LIKE THE SMALL ONE ON EVERY CARD (owner 2026-08-22). The eye beside it
-                // is white and the two are one reading; a red heart made the number look like an
-                // alert rather than a count. The `.foregroundStyle(.white)` below already covers it
-                // — the explicit red was the only thing overriding it.
-                Image(systemName: "heart.fill").padding(.leading, 4)
-                Text(compactCount(likes))
-            }
-        }
-        .font(big ? .subheadline.weight(.bold) : .caption2.weight(.semibold))
-        .foregroundStyle(.white)
-        .shadow(color: .black.opacity(0.5), radius: 3)
-    }
+    // `countRow` lived here — the SwiftUI drawing for the count under the carousel. Nothing calls
+    // it any more: the count is a UIKit view inside each card now (`StoryRowCountView`), because a
+    // count that must travel with its card has to BE part of it. Deleted rather than left
+    // unreferenced, the same rule `ClearSegmentedTrack` earned.
 
-    private func compactCount(_ n: Int) -> String {
-        if n >= 1000 { return String(format: "%.1fK", Double(n) / 1000).replacingOccurrences(of: ".0K", with: "K") }
-        return "\(n)"
-    }
+
+    // (`compactCount` went with it. `StoryRowCountView.compact` is the surviving one, and it was
+    //  always the one doing this job for the badge that is now the only count on screen.)
 
     /// ⚠️ THE COUNTER DOCUMENT, NOT EVERY RECEIPT — and the old way was reading the entire viewer
     /// list of EVERY story just to show two integers under each card.

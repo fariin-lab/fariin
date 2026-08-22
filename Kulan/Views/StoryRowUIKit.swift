@@ -226,8 +226,12 @@ final class StoryRowCountView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
-        let font = UIFont.systemFont(ofSize: 11, weight: .semibold)   // .caption2.weight(.semibold)
-        let symbol = UIImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
+        // ⚠️ THE BIG ROW'S NUMBERS, because this IS the big row now — it is only ever seen at full
+        // size on the centred card, and the card's transform shrinks it on the way out. These match
+        // the fixed section this replaced: `.subheadline.weight(.bold)` is 15, and its symbols came
+        // out at the same point size.
+        let font = UIFont.systemFont(ofSize: 15, weight: .bold)
+        let symbol = UIImage.SymbolConfiguration(pointSize: 15, weight: .bold)
         eye.image = UIImage(systemName: "eye.fill", withConfiguration: symbol)
         eye.tintColor = .white
         heart.image = UIImage(systemName: "heart.fill", withConfiguration: symbol)
@@ -256,7 +260,7 @@ final class StoryRowCountView: UIView {
         }
         stack.axis = .horizontal
         stack.alignment = .center
-        stack.spacing = 5
+        stack.spacing = 7
         stack.addArrangedSubview(eye)
         stack.addArrangedSubview(views)
         stack.addArrangedSubview(heart)
@@ -292,7 +296,7 @@ final class StoryRowCountView: UIView {
         heart.isHidden = !showLikes
         likes.isHidden = !showLikes
         // `.padding(.leading, 4)` on the heart, which a stack expresses as custom spacing.
-        stack.setCustomSpacing(showLikes ? 9 : 5, after: views)
+        stack.setCustomSpacing(showLikes ? 11 : 7, after: views)
         setNeedsLayout()
         // ⚠️ AND THE CARD, because the card is what sets this view's FRAME from `fittedSize()`.
         // Asking only ourselves to lay out re-flows the stack inside a box that is still measured for
@@ -396,18 +400,21 @@ final class StoryRowItemView: UIView {
         // card a different shape from the card.
         host.safeAreaRegions = []
         addSubview(host.view)
-        // ⛔ THE PER-CARD BADGE IS NOT ADDED (owner 2026-08-22, as a written spec: "only the story
-        // card currently positioned in the centre should show its View and Like counts; side cards
-        // must not show their own").
+        // ⛔ THE COUNT IS A SUBVIEW OF THE CARD, AND THAT IS THE WHOLE MECHANISM (owner 2026-08-22,
+        // stated twice and confirmed: "Preview + its Views + its Likes = one unit that moves
+        // together. When the card moves, its counts move with it.").
         //
-        // ⚠️ THIS IS DELIBERATELY NOT WHAT THE REFERENCE DOES, and the difference is his call rather
-        // than an oversight. Its source was read on his instruction: every card there carries its own
-        // count and the centred one is not hidden, it morphs. He looked at that arrangement running
-        // and asked for the cleaner one — one stats line, belonging to whichever card is centred.
+        // Being a child is what makes it follow: the row moves a card by writing `center` and
+        // `transform` on the card, and every subview goes with it at the same instant, in the same
+        // frame, with no second value to keep in step. A count drawn outside the card — which is what
+        // the fixed section under the carousel was — can only ever be told about the movement
+        // afterwards, which is the "stays fixed then swaps numbers" he rejected.
         //
-        // The view is still built and still fed, because the FRAME it reports is what the card's
-        // layout is measured against and unpicking that buys nothing. It simply never joins the
-        // hierarchy, so there is nothing to hide, fade, or forget to hide.
+        // ⚠️ IT IS SIZED FOR THE CENTRE and shrinks with the card, because the card's own transform
+        // scales it. At the centre the scale is 1, so it draws at its full size and IS the single
+        // large section; a side card is smaller and so is its count. One view, two jobs, no
+        // hand-over.
+        addSubview(count)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -1154,6 +1161,21 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             // rendered height would be one the placement never asked for, and the tint, which is
             // FRAMED at `p.size` rather than transformed, would overhang the card it is dimming.
             let scale = p.size.width / max(1, geometry.slotW)
+            // ⛔ ONLY THE CENTRED CARD'S COUNT IS VISIBLE, AND IT FADES BY DISTANCE RATHER THAN BY A
+            // THRESHOLD (owner 2026-08-22, confirmed in as many words: mid-swipe the outgoing numbers
+            // fade out while the incoming fade in, both partly there for that moment).
+            //
+            // Measured in CARD STEPS off the row's own `fullDist` — the distance one card travels to
+            // become the next — so it is the row's real geometry rather than a fraction of the screen
+            // that happens to look right. One step out is zero, which is why a resting row shows
+            // exactly one set of numbers and reads as a single section.
+            //
+            // ⚠️ NOT `centredIndex`. That is a decision made at the half-card and it can only ever
+            // produce a swap. This is the card's own position, so the numbers are wherever the card
+            // is, at every frame of the gesture, which is the whole of what he asked for.
+            let step = max(1, geometry.fullDist)
+            let fromCentre = abs(p.center.x - screenW / 2) / step
+            let countAlpha = max(0, min(1, 1 - fromCentre))
             // The card's own size. Set OUTSIDE the animation and only when it differs: a bounds
             // change re-lays-out the hosted content, and it changes for one reason (the sheet's slot
             // was re-measured) which is not something a scroll ever does.
@@ -1175,6 +1197,9 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             let write = {
                 item.center = centre
                 item.transform = CGAffineTransform(scaleX: scale, y: scale)
+                // Inside `write`, so it rides the same animation the card does on a settle and is
+                // written raw on every frame of a drag — exactly like the card's own position.
+                item.count.alpha = countAlpha
                 if let tint {
                     // ⚠️ THE SAME BOUNDS, THE SAME POSITION AND THE SAME SCALE AS THE CARD — NOT A
                     // RECTANGLE WORKED OUT SEPARATELY. This is the whole of the 2026-08-13 seam fix.
