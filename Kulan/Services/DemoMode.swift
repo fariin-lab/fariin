@@ -84,6 +84,15 @@ enum DemoMode {
     /// Reading a finished array afterwards needs no isolation at all.
     nonisolated(unsafe) static var demoChats: [Conversation] = []
 
+    /// The story-row half of the same switch, cached for exactly the same reason: `StoriesService`
+    /// builds the row off the main actor, and making these needs UIKit to draw the fallback art.
+    /// Built at the tap, read anywhere afterwards.
+    ///
+    /// The times inside are fixed at the moment the switch goes on. That is correct rather than
+    /// merely convenient — a story row whose ages recomputed on every rebuild would drift out of
+    /// step with the "N hours ago" already on screen.
+    nonisolated(unsafe) static var demoStories: [StoryGroup] = []
+
     /// Whether a conversation id belongs to the demo set. Everything downstream asks THIS rather
     /// than the global `active` flag, so a demo chat and a real chat can sit in one list without the
     /// demo rules leaking onto the real one. Get this wrong and every real preview renders as
@@ -95,6 +104,7 @@ enum DemoMode {
     @MainActor
     static func setChats(_ on: Bool) {
         demoChats = on ? demoConversations() : []
+        demoStories = on ? demoStoryPeople() : []
         chatsInjected = on
     }
 

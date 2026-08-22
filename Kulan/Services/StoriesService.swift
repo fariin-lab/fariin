@@ -2487,7 +2487,9 @@ final class StoriesRepository {
         // above them showed a different, older set of demo people carrying drawn placeholders.
         // Different names and different faces on one screen, which is the one thing a screenshot
         // cannot have. Gated on the same switch, so one toggle produces a coherent phone.
-        if DemoMode.chatsInjected { groups.append(contentsOf: DemoMode.demoStoryPeople(now: now)) }
+        // Read from the cache, not built here: this method is not main-actor isolated and building
+        // them draws with UIKit. Same arrangement `demoChats` already uses.
+        if DemoMode.chatsInjected { groups.append(contentsOf: DemoMode.demoStories) }
 
         // Unseen first, then by most-recent story. (Watermarks are applied on commit below,
         // so hasUnseen here can be pessimistic — the row re-sorts from live state anyway.)
