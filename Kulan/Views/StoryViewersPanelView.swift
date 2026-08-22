@@ -45,6 +45,8 @@ final class StoryViewersPanelView: UIView {
     /// Asked on every scroll event: is the sheet itself the thing that owns the current drag? While
     /// it is, the list must not rubber-band upward past its top underneath it.
     var shouldPinScroll: (() -> Bool)?
+    /// Non-nil for exactly as long as a sideways page drag is in flight — see `freezeScroll`.
+    private var frozenOffsetY: CGFloat?
 
     // MARK: Contents
 
@@ -427,7 +429,29 @@ extension StoryViewersPanelView: UITableViewDataSource, UITableViewDelegate {
 
     /// The table's own scrolling is untouched while the list owns the drag; this only stops it
     /// rubber-banding UPWARD past its top while the sheet is the thing that should be moving.
+    ///
+    /// The freeze is checked FIRST and wins, because the two want different things: the sheet's
+    /// vertical drag wants the top of the list, a sideways page drag wants wherever the list already
+    /// was. See `freezeScroll`.
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        if let y = frozenOffsetY { scrollView.contentOffset.y = y; return }
         if shouldPinScroll?() == true { scrollView.contentOffset.y = 0 }
+    }
+
+    /// Hold this list exactly where it is for the length of a sideways page drag.
+    ///
+    /// ⚠️ IT CATCHES PROGRAMMATIC MOVEMENT TOO, WHICH IS HALF THE POINT. `scrollViewDidScroll` fires
+    /// for a `reloadData` that shifts content just as it does for a finger, so a batch of viewers
+    /// arriving for the story sliding in cannot drag the rows of the story sliding out.
+    ///
+    /// Idempotent on the way in: a second `true` must not re-read the offset, or a list that had
+    /// already been nudged would adopt the nudged position as its anchor.
+    func freezeScroll(_ on: Bool) {
+        if on {
+            guard frozenOffsetY == nil else { return }
+            frozenOffsetY = table.contentOffset.y
+        } else {
+            frozenOffsetY = nil
+        }
     }
 }

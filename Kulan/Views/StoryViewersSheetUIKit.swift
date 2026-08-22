@@ -711,6 +711,23 @@ final class StoryViewersSheetView: UIView {
         case .began:
             onDragActive?(true)
             suspendForeignPans()
+            // ⚠️ THE LISTS STOP MOVING VERTICALLY FOR THE WHOLE SIDEWAYS DRAG (owner 2026-08-22:
+            // "when I swipe left or right the viewers should stay completely fixed in place and must
+            // never move vertically"). Two things moved them and this holds both still:
+            //
+            //  · the finger. A sideways swipe is never perfectly level, and the table's own pan is a
+            //    separate recogniser that keeps its touches — with `alwaysBounceVertical` on, the
+            //    across-axis wobble rubber-banded the rows even when this recogniser had already
+            //    direction-locked to horizontal.
+            //  · the data. Viewers for the arriving story land mid-swipe, and a `reloadData` under
+            //    `automaticDimension` re-estimates every row it has not measured, which moves the
+            //    content under a scrolled list.
+            //
+            // ⛔ IT HOLDS THE CURRENT OFFSET, IT DOES NOT ZERO IT. `shouldPinScroll` zeroes, and that
+            // is right for the sheet's own vertical drag because the sheet only takes that drag when
+            // the list is already at its top. Here the list can be anywhere, and zeroing would BE
+            // the jump this is meant to prevent.
+            for p in panels.values { p.freezeScroll(true) }
             // A SETTLE STILL IN FLIGHT IS LANDED, NOT REVERSED. Theirs does exactly this — the
             // `.began` clears `isCompletingViewListPan` and starts from the current translation, so
             // the strip snaps to its resting layout and follows the new finger from there. It is
@@ -796,6 +813,10 @@ final class StoryViewersSheetView: UIView {
             onPageDrag?(pageOffset / pageTravel)
         case .ended, .cancelled:
             onDragActive?(false)
+            // Released here rather than after the settle: the panels are already where they belong
+            // by the time the spring runs, and holding the lists through the animation would swallow
+            // the first flick of a list somebody starts scrolling straight afterwards.
+            for p in panels.values { p.freezeScroll(false) }
             let tx = rawX - pageBaselineX
             let vx = g.velocity(in: self).x
             let dir = tx < 0 ? 1 : -1
