@@ -104,7 +104,11 @@ struct UserView: View {
     }
 
     var body: some View {
-        HStack(spacing: Constant.UserView.hStackSpace) {
+        // ⚠️ 12 SPELLED OUT HERE RATHER THAN TAKEN FROM `hStackSpace` (owner 2026-08-22: the gap
+        // between the two buttons goes 13 → 12). That constant is shared with the avatar-to-name gap
+        // on the very next line, and he asked for this one gap only — moving the constant would have
+        // pulled the name in against the picture as a side effect.
+        HStack(spacing: 12) {
             // Tappable header block (avatar 38pt + name 14pt + timestamp 12pt) → profile.
             HStack(spacing: Constant.UserView.hStackSpace) {
                 CacheAsyncImage(urlString: image, name: name)   // 38×38 circle
@@ -193,8 +197,13 @@ struct UserView: View {
 
             // Glyph in a 44×44 touch target. No plate behind it — the shadow is what carries it
             // over a bright picture (owner, 2026-08-22).
+            // ⚠️ 17 IS THE POINT SIZE, 14 IS THE MARK (owner 2026-08-22: the X goes 12pt → 14pt).
+            // A symbol's drawn glyph is smaller than the point size it is asked for — measured off
+            // his own screenshots, `xmark` comes out at about 0.83 of it, which is how the old 15
+            // produced the 12pt mark. 14 / 0.83 rounds to 17. Keep them in step: changing this
+            // number changes the mark by roughly five sixths of the change.
             Image(systemName: "xmark")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 17, weight: .semibold))
                 .foregroundColor(.white)
                 .frame(width: 32, height: 32)
                 .storyHeaderIconShadow()
@@ -225,11 +234,16 @@ private struct StoryMoreGlyph: View {
         .foregroundColor(.white)
     }
 
+    /// ⚠️ SCALED AS A WHOLE, NOT WIDENED (owner 2026-08-22: the mark goes 19pt → 21pt). Every number
+    /// below is the measured one multiplied by 21/19, so the two bars keep the proportions taken off
+    /// his mockup — the short bar stays the same fraction of the long one, and the bars stay the same
+    /// weight relative to their length. Stretching only the top bar would have made it a different
+    /// mark at the same size.
     private enum Metric {
-        static let topWidth: CGFloat = 19
-        static let bottomWidth: CGFloat = 13
-        static let thickness: CGFloat = 1.6
-        static let gap: CGFloat = 6.4
+        static let topWidth: CGFloat = 21
+        static let bottomWidth: CGFloat = 14.4
+        static let thickness: CGFloat = 1.8
+        static let gap: CGFloat = 7.1
     }
 }
 
