@@ -844,7 +844,13 @@ struct StoryRowLongPress: UIViewRepresentable {
                 // before the hide, or the card would brighten in the one frame between the two.
                 rampKey = nil
                 StoryPressVisual.shared.menuTookOver()
-                MediaSourceVisibility.shared.hide(t.key, withLabel: true)
+                // ⚠️ ONLY HIDE THE NAME IF A COPY OF IT WAS ACTUALLY LIFTED. This was an
+                // unconditional `true`, which is right for the chat-list row (it always hands over a
+                // `labelView`) and wrong for the archive row, which hands over none: its name was
+                // taken off the screen and nothing was raised in its place, so the card lost its
+                // name for the whole press. `labelView` is the same test the lift itself makes
+                // twenty lines up, so the two can no longer disagree.
+                MediaSourceVisibility.shared.hide(t.key, withLabel: t.labelView != nil)
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred(intensity: 0.8)
                 o.present(in: window, startAtSqueeze: true)
 

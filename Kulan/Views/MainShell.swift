@@ -2238,8 +2238,18 @@ struct ArchivedChatsView: View {
             // taken at the model rectangle lifts a magnified card (his 2026-08-09 zoom report). The
             // finger test stays on `liveRect`, which is what the flight flies to.
             let drawn = MediaOpenRects.drawnRect(key) ?? r
+            // ⚠️ THE CARD'S HEIGHT IS READ OFF THE DRAWN WIDTH, NEVER OFF `storyCardW` (owner
+            // 2026-08-22: the white border round a long-pressed archive card). `storyCardW * 1.46`
+            // is the card at REST, but `drawn` is the card mid-press-dip — so the clamp was ~8%
+            // taller than the thing on screen, and the strip it photographed below the card was
+            // archive-page background, which is near-white in light mode. Under the image view's own
+            // 24pt corner mask that came out as an outline.
+            //
+            // The button is exactly one card wide, so `drawn.width` carries whatever the dip is
+            // currently worth and `× 1.46` turns it into that same card's height. Self-correcting
+            // mid-spring, where any fixed factor would only be right at one instant.
             let cardRect = CGRect(x: drawn.minX, y: drawn.minY, width: drawn.width,
-                                  height: min(drawn.height, storyCardW * 1.46))
+                                  height: min(drawn.height, drawn.width * 1.46))
             return StoryMenuTarget(key: key, rect: cardRect, actions: [
                 CMAction(title: "Unhide Story", icon: "tray.and.arrow.up") {
                     StoryPrefs.toggleHidden(g.authorUid)
