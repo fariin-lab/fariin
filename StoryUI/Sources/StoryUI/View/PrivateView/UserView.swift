@@ -178,26 +178,26 @@ struct UserView: View {
 
             Spacer()
 
-            // "…" sits directly left of the X, same row, so they auto-align (no guessed padding).
+            // The "more" button sits directly left of the X, same row, so they auto-align (no
+            // guessed padding).
             if showMore {
-                // Tap "…" → the same native dropdown anchored under the button. Only the MENU moved
+                // Tap it → the same native dropdown anchored under the button. Only the MENU moved
                 // to UIKit, never the button — see `StoryMoreMenu` for the one reason it had to.
-                Image(systemName: "ellipsis")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.white)
+                StoryMoreGlyph()
                     .frame(width: 32, height: 32)
-                    .background(Circle().fill(.black.opacity(0.3)))   // subtle circle → clear on any photo
+                    .storyHeaderIconShadow()
                     .frame(width: 44, height: 44)                      // keep the 44pt tap target
                     .contentShape(Rectangle())
                     .overlay(StoryMoreMenu(items: moreItems).frame(width: 44, height: 44))
             }
 
-            // 18pt glyph in a 44×44 touch target, now inside a subtle circle for visibility.
+            // Glyph in a 44×44 touch target. No plate behind it — the shadow is what carries it
+            // over a bright picture (owner, 2026-08-22).
             Image(systemName: "xmark")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(.white)
                 .frame(width: 32, height: 32)
-                .background(Circle().fill(.black.opacity(0.3)))
+                .storyHeaderIconShadow()
                 .frame(width: 44, height: 44)
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -206,6 +206,45 @@ struct UserView: View {
                 }
         }
         .padding(.horizontal)
+    }
+}
+
+/// The story header's "more" mark: two left-aligned rounded bars, the lower one short.
+///
+/// Drawn rather than pulled from SF Symbols because no stock symbol is two bars of UNEQUAL length —
+/// `line.3.horizontal` is three, `equal` is two of the same width — and the difference between them
+/// is the whole shape. Numbers measured off the owner's 2026-08-22 mockup at 3× (56×4.5px over a
+/// 19px gap, then 38×4.5px) rather than guessed.
+private struct StoryMoreGlyph: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: Metric.gap) {
+            Capsule().frame(width: Metric.topWidth, height: Metric.thickness)
+            Capsule().frame(width: Metric.bottomWidth, height: Metric.thickness)
+        }
+        // A `Shape` fills with the foreground style, so this is what colours both bars.
+        .foregroundColor(.white)
+    }
+
+    private enum Metric {
+        static let topWidth: CGFloat = 19
+        static let bottomWidth: CGFloat = 13
+        static let thickness: CGFloat = 1.6
+        static let gap: CGFloat = 6.4
+    }
+}
+
+extension View {
+    /// What replaced the grey plate behind the story header's two icons (owner, 2026-08-22: white
+    /// icons only, no visible background, still readable when the story photo is white).
+    ///
+    /// TWO shadows, because one cannot do both jobs. The tight one at radius 1 draws an edge so a
+    /// 1.6pt white bar does not dissolve into white pixels; the soft one at radius 3 lifts the whole
+    /// glyph off the picture. Kept low in opacity — over a dark story neither is visible, which is
+    /// the point: this is insurance for the bright end, not a look.
+    func storyHeaderIconShadow() -> some View {
+        self
+            .shadow(color: .black.opacity(0.28), radius: 1, x: 0, y: 0)
+            .shadow(color: .black.opacity(0.38), radius: 3, x: 0, y: 1)
     }
 }
 
@@ -218,15 +257,15 @@ struct UserView: View {
 /// the same answer it reached (`NewAudienceButton`).
 ///
 /// ⚠️ THE BUTTON IS STILL THE SWIFTUI ONE, AND NOTHING ABOUT THE LOOK CHANGES. This is a
-/// transparent `UIButton` laid over the ellipsis that was already there, with
-/// `showsMenuAsPrimaryAction`, so the ellipsis, its circle and its 44pt target are drawn by exactly
-/// the same SwiftUI code as before. The dropdown is identical too — SwiftUI's `Menu` is a `UIMenu`
-/// underneath — which was his condition: the design does not move.
+/// transparent `UIButton` laid over the mark that was already there, with
+/// `showsMenuAsPrimaryAction`, so the glyph and its 44pt target are drawn by exactly the same
+/// SwiftUI code as before (`StoryMoreGlyph`). The dropdown is identical too — SwiftUI's `Menu` is a
+/// `UIMenu` underneath — which was his condition: the design does not move.
 ///
 /// ⚠️ IT IS GIVEN AN EXPLICIT FRAME BY ITS CALLER, and it needs one. SwiftUI sizes a
 /// representable from the view's intrinsic size, and a `UIButton` with no title barely has one —
 /// left to itself the tap target would be a few points across in the middle of the mark, and most
-/// taps on the ellipsis would land on nothing. (`sizeThatFits` would be the tidier answer and is
+/// taps on the glyph would land on nothing. (`sizeThatFits` would be the tidier answer and is
 /// iOS 16; this package is built for 15.)
 struct StoryMoreMenu: UIViewRepresentable {
 
@@ -365,7 +404,7 @@ struct StoryMoreMenu: UIViewRepresentable {
         // `UIButton` with no title and no image has a tiny intrinsic size, and SwiftUI sizes a
         // representable from that unless the view says it will take whatever it is given — so the
         // button would end up a few points across in the middle of a 44pt mark, and most taps on the
-        // ellipsis would miss it. The caller's `.frame(width: 44, height: 44)` is then the size.
+        // glyph would miss it. The caller's `.frame(width: 44, height: 44)` is then the size.
         for axis in [NSLayoutConstraint.Axis.horizontal, .vertical] {
             b.setContentHuggingPriority(.defaultLow, for: axis)
             b.setContentCompressionResistancePriority(.defaultLow, for: axis)
