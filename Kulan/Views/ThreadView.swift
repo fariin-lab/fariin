@@ -4791,7 +4791,10 @@ struct ThreadView: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                     Divider().padding(.horizontal, 12)
                 }
-                HStack(alignment: .bottom, spacing: 4) {
+                // 3, down from 4 (owner 2026-08-22). It is the only part of the gap between the two
+                // glyphs that is spacing at all — the other ~17pt is the empty room inside their two
+                // 40pt tap targets, which is not mine to take without making them harder to hit.
+                HStack(alignment: .bottom, spacing: 3) {
                     // Field content swaps between the text field and the recording bar…
                     if recordingHeld { recordingHoldRow } else { messageField }
                     // …sticker + camera show only when idle & empty…
@@ -4901,7 +4904,16 @@ struct ThreadView: View {
             showGifPicker = true
         } label: {
             Image("ic_gif").renderingMode(.template).resizable().scaledToFit()
-                .frame(width: 24, height: 24).foregroundStyle(.primary)
+                // ⛔ DIMMER THAN THE MIC, AND ONLY THIS ONE (owner 2026-08-22: "GIF icon make it low
+                // brightness but don't touch the voice recording icon"). The mic is the button people
+                // reach for without looking; the stickers are a browse. Two weights say which is
+                // which without moving or resizing anything.
+                //
+                // ⚠️ AN EXPLICIT `Color.primary.opacity`, NOT `.secondary`. The hierarchical styles
+                // resolve against a Button's TINT rather than against the label's own colour — the
+                // trap this app has already paid for once — and this button carries `.tint(.primary)`
+                // a few lines down. A plain colour cannot be reinterpreted by anything.
+                .frame(width: 24, height: 24).foregroundStyle(Color.primary.opacity(0.55))
                 .frame(width: 40, height: 40)
         }
         // ⚠️ `.tint`, AND `.foregroundStyle` INSIDE THE LABEL IS NOT ENOUGH — his 2026-08-18
