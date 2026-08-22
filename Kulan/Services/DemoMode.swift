@@ -117,9 +117,23 @@ enum DemoMode {
         let now = Date()
 
         // Stories. Mine first, then the two people who have posted today.
+        //
+        // FOUR EACH, NOT ONE. A single story per person leaves the viewer with no progress bar
+        // segments at the top — which is the one piece of chrome that says "story" rather than
+        // "photo" — and it makes tapping through impossible to demonstrate. Four gives a real
+        // segmented bar and something to advance to.
         let myStory    = story("demo-story-mine",  .systemIndigo, .systemBlue,  "Maanta")
+        let myStory2   = story("demo-story-mine-2", .systemOrange, .systemRed,  "Qorrax dhac")
+        let myStory3   = story("demo-story-mine-3", .systemIndigo, .systemPurple, "Habeenkii")
+        let myStory4   = story("demo-story-mine-4", .systemGray,  .systemBlue,  "Roob")
         let cabdiStory = story("demo-story-cabdi", .systemBlue,   .systemTeal,  "Habeenkii Muqdisho")
+        let cabdiStory2 = story("demo-story-cabdi-2", .systemOrange, .systemYellow, "Duurka")
+        let cabdiStory3 = story("demo-story-cabdi-3", .systemBrown, .systemOrange, "Geeljire")
+        let cabdiStory4 = story("demo-story-cabdi-4", .systemTeal, .systemBlue,  "Masaajidka")
         let khadraStory = story("demo-story-khadra", .systemPink, .systemOrange, "Casarkii")
+        let khadraStory2 = story("demo-story-khadra-2", .systemGreen, .systemYellow, "Suuqa")
+        let khadraStory3 = story("demo-story-khadra-3", .systemYellow, .systemOrange, "Bacaadka")
+        let khadraStory4 = story("demo-story-khadra-4", .systemTeal, .systemGreen, "Xeebta")
 
         // Profile portraits. Built here so the chat list and the story rings hand the same url to
         // the poster header, and so the whole set exists before any row asks for it.
@@ -129,26 +143,62 @@ enum DemoMode {
 
         StoriesRepository.shared.mine = StoryGroup(
             authorUid: me, name: "You", photoUrl: mePhoto,
+            // Oldest first. The viewer plays them in array order, so a shuffled list would run the
+            // evening shot before the afternoon one and the timestamps would read backwards.
             stories: [
-                Story(id: "demo-s1", authorUid: me, createdAt: now.addingTimeInterval(-2700),
-                      expiresAt: now.addingTimeInterval(21 * 3600), mediaUrl: myStory,
+                Story(id: "demo-s1", authorUid: me, createdAt: now.addingTimeInterval(-19800),
+                      expiresAt: now.addingTimeInterval(18 * 3600), mediaUrl: myStory,
                       allowsReplies: true, caption: "Maanta"),
+                Story(id: "demo-s2", authorUid: me, createdAt: now.addingTimeInterval(-12600),
+                      expiresAt: now.addingTimeInterval(20 * 3600), mediaUrl: myStory2,
+                      allowsReplies: true, caption: "Qorrax dhac"),
+                Story(id: "demo-s3", authorUid: me, createdAt: now.addingTimeInterval(-6300),
+                      expiresAt: now.addingTimeInterval(22 * 3600), mediaUrl: myStory3,
+                      allowsReplies: true),
+                Story(id: "demo-s4", authorUid: me, createdAt: now.addingTimeInterval(-2700),
+                      expiresAt: now.addingTimeInterval(23 * 3600), mediaUrl: myStory4,
+                      allowsReplies: true, caption: "Roob"),
             ], lastViewedAt: nil, isMine: true)
 
         StoriesRepository.shared.others = [
             StoryGroup(authorUid: "demo-cabdi", name: "Cabdi", photoUrl: cabdiPhoto,
-                       stories: [Story(id: "demo-c1", authorUid: "demo-cabdi",
-                                       createdAt: now.addingTimeInterval(-7200),
-                                       expiresAt: now.addingTimeInterval(16 * 3600),
-                                       mediaUrl: cabdiStory, allowsReplies: true,
-                                       caption: "Habeenkii Muqdisho")],
-                       lastViewedAt: nil, isMine: false),
+                       stories: [
+                        Story(id: "demo-c1", authorUid: "demo-cabdi",
+                              createdAt: now.addingTimeInterval(-25200),
+                              expiresAt: now.addingTimeInterval(13 * 3600),
+                              mediaUrl: cabdiStory, allowsReplies: true, caption: "Habeenkii Muqdisho"),
+                        Story(id: "demo-c2", authorUid: "demo-cabdi",
+                              createdAt: now.addingTimeInterval(-18000),
+                              expiresAt: now.addingTimeInterval(15 * 3600),
+                              mediaUrl: cabdiStory2, allowsReplies: true, caption: "Duurka"),
+                        Story(id: "demo-c3", authorUid: "demo-cabdi",
+                              createdAt: now.addingTimeInterval(-10800),
+                              expiresAt: now.addingTimeInterval(17 * 3600),
+                              mediaUrl: cabdiStory3, allowsReplies: true, caption: "Geeljire"),
+                        Story(id: "demo-c4", authorUid: "demo-cabdi",
+                              createdAt: now.addingTimeInterval(-5400),
+                              expiresAt: now.addingTimeInterval(19 * 3600),
+                              mediaUrl: cabdiStory4, allowsReplies: true),
+                       ], lastViewedAt: nil, isMine: false),
             StoryGroup(authorUid: "demo-khadra", name: "Khadra", photoUrl: khadraPhoto,
-                       stories: [Story(id: "demo-k1", authorUid: "demo-khadra",
-                                       createdAt: now.addingTimeInterval(-14400),
-                                       expiresAt: now.addingTimeInterval(9 * 3600),
-                                       mediaUrl: khadraStory, allowsReplies: true)],
-                       lastViewedAt: nil, isMine: false),
+                       stories: [
+                        Story(id: "demo-k1", authorUid: "demo-khadra",
+                              createdAt: now.addingTimeInterval(-28800),
+                              expiresAt: now.addingTimeInterval(8 * 3600),
+                              mediaUrl: khadraStory, allowsReplies: true, caption: "Casarkii"),
+                        Story(id: "demo-k2", authorUid: "demo-khadra",
+                              createdAt: now.addingTimeInterval(-21600),
+                              expiresAt: now.addingTimeInterval(10 * 3600),
+                              mediaUrl: khadraStory2, allowsReplies: true, caption: "Suuqa"),
+                        Story(id: "demo-k3", authorUid: "demo-khadra",
+                              createdAt: now.addingTimeInterval(-14400),
+                              expiresAt: now.addingTimeInterval(12 * 3600),
+                              mediaUrl: khadraStory3, allowsReplies: true),
+                        Story(id: "demo-k4", authorUid: "demo-khadra",
+                              createdAt: now.addingTimeInterval(-9000),
+                              expiresAt: now.addingTimeInterval(14 * 3600),
+                              mediaUrl: khadraStory4, allowsReplies: true, caption: "Xeebta"),
+                       ], lastViewedAt: nil, isMine: false),
         ]
 
         ConversationsRepository.shared.conversations = demoConversations()
