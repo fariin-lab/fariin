@@ -1644,9 +1644,23 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
     /// repo reloads and the watched people move behind the unwatched — a scroll OFFSET does not
     /// survive that, so the row would settle on whoever happened to land at those points. The person
     /// is restored instead, once, the frame the new order is drawn.
+    ///
+    /// ⛔ BUT NOT WHEN THEY HAVE JUST LEFT THE FRONT OF THE ROW (owner 2026-08-22: "story 1 going
+    /// last one, don't make swipe"). Watching somebody's last unseen story moves them behind every
+    /// person still unwatched — which is correct — and restoring them then dragged the row all the
+    /// way to the far end to keep them in sight. The card he actually wanted next, the one that had
+    /// just slid into the place he was already looking at, ended up a full row-swipe behind him.
+    ///
+    /// Doing nothing is the restore in that case, and it is exact rather than approximate: the cards
+    /// BEFORE the departing one do not move, so the offset that was right a moment ago is still
+    /// right, and the next unwatched person arrives in the seat the watched one vacated. This is only
+    /// safe because the row is kept in step with the viewer while it is open — see `activeChanged` —
+    /// so at the close the offset already describes where he is.
     private func restoreRowIfAsked() {
         guard !freezeOrder, let uid = doorState.restoreRowToUid, !uid.isEmpty else { return }
         doorState.restoreRowToUid = nil
+        // Still something unseen → they held their seat, and bringing them back is the old rule.
+        guard displayedOthers.first(where: { $0.authorUid == uid })?.hasUnseen == true else { return }
         scrollToAuthor(uid)
     }
 
