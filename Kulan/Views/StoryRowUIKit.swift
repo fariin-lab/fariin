@@ -258,7 +258,18 @@ final class StoryRowCountView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func set(views v: Int, likes l: Int) {
+    /// ⛔ NOT KNOWN YET IS NOT ZERO (owner 2026-08-22: "sometimes it says 0 but I have views… first
+    /// it says 0, in seconds it shows the real count").
+    ///
+    /// The counts arrive from the server a moment after the strip is built, and until they did the
+    /// card was handed `.zero` and printed a confident "0" over somebody's story. Nothing was wrong
+    /// with the number when it landed; the wrong part was answering at all before there was anything
+    /// to answer with. A blank space for a fraction of a second is honest, and a wrong count is not.
+    ///
+    /// A story that genuinely has no views still shows its 0 — that is a real answer and it stays.
+    func set(views v: Int, likes l: Int, known: Bool = true) {
+        isHidden = !known
+        guard known else { return }
         views.text = Self.compact(v)
         likes.text = Self.compact(l)
         // The SwiftUI original omitted the heart entirely at zero rather than showing "0".
@@ -631,8 +642,8 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         }
         if countsChanged {
             for (id, item) in items {
-                let c = counts[id] ?? .zero
-                item.count.set(views: c.views, likes: c.likes)
+                let c = counts[id]
+                item.count.set(views: c?.views ?? 0, likes: c?.likes ?? 0, known: c != nil)
             }
         }
 
@@ -1622,8 +1633,8 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
         addChild(item.host)
         view.addSubview(item)
         item.host.didMove(toParent: self)
-        let c = counts[story.id] ?? .zero
-        item.count.set(views: c.views, likes: c.likes)
+        let c = counts[story.id]
+        item.count.set(views: c?.views ?? 0, likes: c?.likes ?? 0, known: c != nil)
         items[story.id] = item
         // Their `contentTintLayer`, black at alpha 1 and revealed by its opacity — a sibling of the
         // card, added to the same container, so it can cover a card or the live story without

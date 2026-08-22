@@ -32,7 +32,16 @@ struct BottomRoundedShape: Shape {
 /// The header and the top scrim still flip on a boolean (`storyChromeHidden`) because they leave in
 /// one step and nobody has asked for anything else. The caption is the one the owner watched track
 /// the drag.
-private struct SheetCaptionFade: ViewModifier {
+/// ⚠️ NOT ONLY THE CAPTION'S ANY MORE. The owner's Views/trash bar takes the same fade on the same
+/// report — "when I start to scroll up, View and delete button is hidden one time, make it hide step
+/// by step" (2026-08-22), which is word for word the complaint the caption got on 2026-08-16. One
+/// mechanism, so a third thing asking for it does not become a third implementation.
+private struct SheetPullFade: ViewModifier {
+    /// The owner's bar keeps its OWN flight fade — a plain 0.15s, written on the same line as the
+    /// reply bar's so the pair cannot drift (his 2026-08-17 ruling). Passing false here leaves the
+    /// flight alone and takes only the sheet pull, which is the half he is asking for.
+    var tracksFlight = true
+
     /// The pull is over well before the sheet is: the card is a third of the way into the slot by
     /// then, and text that keeps drawing while it shrinks is what read as "still there".
     private static let goneAt: CGFloat = 0.32
@@ -116,6 +125,12 @@ private struct SheetCaptionFade: ViewModifier {
     /// mid-flight and has seen no frame of it yet. The next frame replaces it with a real number.
     private var opacity: Double {
         let flight = max(StoryCardMorph.shared.flightFraction, flightProgress)
+        guard tracksFlight else {
+            // Sheet pull only. The caller draws its own flight fade and this must not multiply a
+            // second curve into it.
+            let t = min(1, max(0, max(progress, StoryCardMorph.shared.sheetFraction) / Self.goneAt))
+            return Double(1 - t)
+        }
         if flightActive, flight == 0 { return 0 }
         let shrink = max(progress, StoryCardMorph.shared.sheetFraction, flight)
         let t = min(1, max(0, shrink / Self.goneAt))
@@ -594,7 +609,7 @@ struct StoryDetailView: View {
                             )
                             // Overlay caption: overlaid on the media (never baked into the photo).
                             // It fades with the viewers-sheet pull rather than flipping with the rest
-                            // of the chrome — see SheetCaptionFade.
+                            // of the chrome — see SheetPullFade.
                             // ⚠️ BOTH SCRIMS TAKE THE CARD'S OWN CLIP. They are overlaid AFTER the
                             // card's `.clipShape`, so their square corners OVERHUNG the rounded card
                             // — at rest, no flight involved: his 2026-08-09 screenshot, all four
@@ -609,7 +624,7 @@ struct StoryDetailView: View {
                             // sticker it belongs to is already drawn. See `tapAreas`.
                             .overlay(tapAreas(story))
                             .overlay(captionView(story.caption, plain: story.config.storyType == .plain())
-                                        .modifier(SheetCaptionFade())
+                                        .modifier(SheetPullFade())
                                         .clipShape(RoundedRectangle(cornerRadius: flightMaskOn ? 0 : cardRadius,
                                                                     style: .continuous)),
                                      alignment: .bottom)
@@ -692,6 +707,17 @@ struct StoryDetailView: View {
                                 // it was not wrong, it was unwanted.
                                 .opacity(flightActive ? 0 : 1)
                                 .animation(.easeOut(duration: 0.15), value: flightActive)
+                                // ⛔ AND IT GOES GRADUALLY ON A PULL-UP (owner 2026-08-22: "when I
+                                // start to scroll up, View and delete button is hidden one time…
+                                // make it hide step by step"). It was leaving on a boolean, and a
+                                // boolean cannot be half-told — so the bar was gone on the frame the
+                                // swipe engaged, before his finger had moved a point.
+                                //
+                                // The same modifier the caption uses, which was written for this
+                                // exact report about that exact behaviour. `tracksFlight: false`
+                                // because the line above already owns the flight and is deliberately
+                                // the reply bar's own line; this takes only the pull.
+                                .modifier(SheetPullFade(tracksFlight: false))
                         }
                     }
                     .padding(.top, winInsets.top)
