@@ -31,6 +31,24 @@ enum StoryVideoBrightness {
 
     static func isNeutral(_ value: Double) -> Bool { abs(value) < 0.001 }
 
+    /// ⛔ ONE CONTEXT FOR EVERY FRAME OF AN EXPORT. `request.finish(with:context:)` takes a
+    /// `CIContext` because it is meant to be GIVEN one: handing it nil makes AVFoundation fall back
+    /// to its own, which cannot keep this filter's compiled kernel or its working buffers between
+    /// frames, so every frame pays a setup cost that belongs to the whole run.
+    ///
+    /// Metal-backed, and intermediates deliberately NOT cached: every frame is a new image, so a
+    /// cache of intermediates is memory that can never be hit again.
+    ///
+    /// ⚠️ THE PREVIEW HAS ITS OWN, in `StoryVideoPreviewView`. They are not shared on purpose — the
+    /// preview's is bound to the Metal device its view draws on, and this one has no view at all.
+    private static let ciContext: CIContext = {
+        let options: [CIContextOption: Any] = [.cacheIntermediates: false]
+        if let device = MTLCreateSystemDefaultDevice() {
+            return CIContext(mtlDevice: device, options: options)
+        }
+        return CIContext(options: options)
+    }()
+
     // `LiveExposure` and `liveComposition` lived here: a composition built once per editing session
     // whose handler read a lock-guarded float. Both are gone with the preview's composition itself —
     // the trim page renders its own frames now and the exposure is a plain property on that view.
@@ -51,9 +69,9 @@ enum StoryVideoBrightness {
             // different or infinite extent, and a composition given one of those renders a frame
             // that does not line up with the one before it.
             let out = (f.outputImage ?? request.sourceImage).cropped(to: request.sourceImage.extent)
-            // The same shared context the preview uses, and for the same reason — an export is
-            // thousands of frames through one filter, which is exactly the case a reused context is
-            // for. No size cap here: what is posted keeps the clip's own resolution.
+            // The shared context above, and for the reason written there — an export is thousands
+            // of frames through one filter, which is exactly the case a reused context is for. No
+            // size cap here: what is posted keeps the clip's own resolution.
             request.finish(with: out, context: ciContext)
         }
     }
