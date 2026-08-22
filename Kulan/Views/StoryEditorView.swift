@@ -1647,18 +1647,21 @@ struct StoryEditorView: View {
                               showsToolPicker: false,
                               inkType: isHighlighter ? .marker : .pen,
                               penWidth: penWidth,
+                              onStroke: { drawing in
+                                  // A stroke is the last thing touched, so the ink comes forward.
+                                  drawingOnTop = true
+                                  withAnimation(.easeInOut(duration: 0.15)) { strokeInFlight = drawing }
+                              },
                               // ⛔ ZOOM WHILE THE PEN IS OPEN. The canvas covers the photo, so it
                               // carries the two-finger gestures and hands them to the photo's own
                               // coordinator — see `PhotoTransformRelay.drivePinch`. Nothing about
                               // where the ink LANDS changes: the strokes already wear this same
                               // transform (the long note above), and PencilKit goes on recording in
                               // its own untransformed space, which is the picture's space.
-                              photoRelay: photoTransform,
-                              onStroke: { drawing in
-                                  // A stroke is the last thing touched, so the ink comes forward.
-                                  drawingOnTop = true
-                                  withAnimation(.easeInOut(duration: 0.15)) { strokeInFlight = drawing }
-                              })
+                              //
+                              // ⚠️ AFTER `onStroke`, because a memberwise initialiser takes its
+                              // arguments in declaration order and this property is declared below it.
+                              photoRelay: photoTransform)
                     // Big enough to STILL cover the card once the zoom has shrunk it — see
                     // `penCanvasSize`. At a zoom of 1 or more this is exactly the card.
                     .frame(width: penCanvas.width, height: penCanvas.height)
