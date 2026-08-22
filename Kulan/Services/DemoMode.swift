@@ -242,7 +242,9 @@ enum DemoMode {
                   createdAt: now.addingTimeInterval(-ago),
                   expiresAt: now.addingTimeInterval(24 * 3600 - ago),
                   mediaUrl: story(asset, .systemBlue, .systemTeal, caption ?? ""),
-                  allowsReplies: true, caption: caption)
+                  // `Story.caption` is a plain String, not an optional. The nil here means "no
+                  // caption on this one", which on the model is the empty string.
+                  allowsReplies: true, caption: caption ?? "")
         }
         return [
             StoryGroup(authorUid: "demo-cabdi", name: "Cabdi", photoUrl: cabdiPhoto, stories: [
