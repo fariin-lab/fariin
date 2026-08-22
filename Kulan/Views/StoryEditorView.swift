@@ -210,6 +210,12 @@ struct StoryEditorView: View {
     @State private var brightnessLive: StoryVideoBrightness.LiveExposure?
     /// Which way the next still-frame nudge steps — see `nudgePreviewFrame`.
     @State private var nudgeForward = false
+    /// True while a still-frame redraw is being seeked. The dial keeps writing the exposure through
+    /// it; only the redraw is dropped. See `nudgePreviewFrame`.
+    @State private var nudgeInFlight = false
+    /// A redraw asked for while one was already running. Redeemed by the in-flight seek's completion
+    /// so the last position of a drag always gets a frame.
+    @State private var nudgePending = false
     /// Builds that one composition — see `applyPreviewBrightness`.
     @State private var brightnessTask: Task<Void, Never>?
     @State private var trimStart: Double = 0
@@ -1863,6 +1869,15 @@ struct StoryEditorView: View {
     /// diagnosis; this is the one door it has to be applied at.
     private func playPreview(_ p: AVPlayer) {
         StoryPreviewAudio.prepare()
+        // ⛔ CLEAR THE STILL-FRAME WORK BEFORE ASKING FOR MOTION. Whatever exact seeks the brightness
+        // dial left behind are for a frame nobody is going to look at any more — the next thing on
+        // screen is the clip running — but the video pipeline would finish them first while the
+        // audio, which carries no filter, started at once. That gap is the owner's "I can hear sound
+        // but video is not running". Cancelling is safe: `play()` resumes from wherever the item
+        // actually is, and a nudge is under two milliseconds from there. See `nudgePreviewFrame`.
+        p.currentItem?.cancelPendingSeeks()
+        nudgeInFlight = false
+        nudgePending = false
         p.play()
         // THE NET, because CallKit cannot be the whole answer: an app that does not report its calls
         // — or anything else sitting on a session it will not release — would leave the clip exactly
@@ -2495,13 +2510,42 @@ struct StoryEditorView: View {
     /// decodes and runs the handler, which reads the exposure as it now stands. It alternates either
     /// side of where the playhead is rather than always stepping one way, so a long drag cannot walk
     /// the clip forward: the most it is ever off is that one step, and the next move puts it back.
+    /// ⛔ ONE NUDGE AT A TIME, AND THE REASON IS THE OWNER'S 2026-08-22 REPORT: brightness dragged
+    /// fast to full, then play, and the sound started while the picture stayed on one frame for
+    /// several seconds. Only ever after using the dial, and never once the page had been left.
+    ///
+    /// A zero-tolerance seek is expensive here in a way it is not anywhere else in the app, because
+    /// this item is carrying a Core Image `videoComposition`: every one of them decodes to an exact
+    /// frame and runs the filter over it. They were issued one per touch delivery with no completion
+    /// handler and no coalescing, so a full-range drag left a deep queue of exact seeks behind it.
+    /// `play()` then started the audio immediately — audio has no composition on it — while the
+    /// video pipeline was still working through that queue. The clip was never stuck; it was busy.
+    ///
+    /// The flag is what the screen's own `seekPreview`/`drainSeeks` coalescer does, applied to the
+    /// path that was bypassing it: while a nudge is in flight the dial keeps writing `live.ev`, so
+    /// the exposure stays live and only the redraw is dropped, which is invisible on a still frame.
     private func nudgePreviewFrame(_ item: AVPlayerItem) {
         guard previewPlayer?.rate == 0 else { return }   // playing already draws every frame
+        // ⚠️ THE DROPPED ONE IS REMEMBERED, NOT LOST. Coalescing without this would swallow the LAST
+        // move of a drag — the finger stops, the final exposure never gets a frame, and the picture
+        // sits one dial-step behind where the dial is. The trailing redraw is the whole difference
+        // between coalescing and skipping.
+        guard !nudgeInFlight else { nudgePending = true; return }
         let epsilon = CMTime(value: 1, timescale: 600)   // ~1.7ms, under half a frame at 240fps
         let now = item.currentTime()
         let target = nudgeForward ? CMTimeAdd(now, epsilon) : CMTimeSubtract(now, epsilon)
         nudgeForward.toggle()
-        item.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero, completionHandler: nil)
+        nudgeInFlight = true
+        item.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+            // Back on the main actor: these are read and written only from there, and a completion
+            // handler is not promised any particular queue.
+            Task { @MainActor in
+                nudgeInFlight = false
+                guard nudgePending else { return }
+                nudgePending = false
+                nudgePreviewFrame(item)
+            }
+        }
     }
 
     private func openTrim() {
@@ -4033,6 +4077,20 @@ enum StoryChipStyle: Int, Equatable {
     }
 }
 
+/// How much bigger than itself a placed sticker or caption is to the finger.
+///
+/// One number for both, because to the hand they are the same object — the same rule the two
+/// gesture blocks already follow. 22 is a little over half Apple's 44pt minimum, applied on every
+/// side, so the smallest chip on the canvas still clears 44 across while a sticker dropped beside
+/// another does not swallow its neighbour's edge.
+///
+/// ⚠️ IT IS INSIDE THE TRANSFORMS, so it shrinks with a sticker the finger has pinched small. That is
+/// deliberate: the alternative is a fixed halo that a sticker at 0.3 would be swimming in, and that
+/// halo would cover whatever is next to it.
+enum StoryOverlayTouch {
+    static let pad: CGFloat = 22
+}
+
 /// Shared sticker drawing — used BOTH on-screen and in `flatten()`, so what is exported is what was
 /// seen. Same contract as `storyStyledText` above it, for the same reason.
 @ViewBuilder
@@ -4073,6 +4131,19 @@ struct StickerOverlayView: View {
 
     var body: some View {
         storyStickerImage(sticker)
+            // ⛔ THIS IS ALSO WHY PINCHING A STICKER USED TO ZOOM THE PHOTOGRAPH (owner 2026-08-22).
+            // Without a content shape a SwiftUI view is touchable only where it is actually PAINTED
+            // — the sticker's opaque pixels, or for a caption the glyph run itself. A pinch puts two
+            // fingers on opposite sides of the thing being pinched, which is exactly where there are
+            // no pixels, so both touches fell past this view to the UIKit photo underneath and its
+            // own `UIPinchGestureRecognizer` took them. One rectangle fixes the grabbing and the
+            // zooming together, because they were never two problems.
+            //
+            // The pad rides inside the transforms on purpose: it is part of the sticker, so it turns
+            // and scales with it and the grabbable area never sits crooked to the thing it belongs
+            // to. See `StoryOverlayTouch.pad`.
+            .padding(StoryOverlayTouch.pad)
+            .contentShape(Rectangle())
             .scaleEffect(max(0.3, sticker.scale * gScale))
             .rotationEffect(sticker.rotation + gRot)
             .position(liveCenter)
@@ -4147,6 +4218,11 @@ struct TextOverlayView: View {
 
     var body: some View {
         storyStyledText(overlay, maxWidth: canvasSize.width * 0.9)
+            // The caption's version of the same rectangle — see the long note in `StickerOverlayView`.
+            // Text is the worse of the two cases: a glyph run is mostly holes, so even a one-finger
+            // drag missed between the letters.
+            .padding(StoryOverlayTouch.pad)
+            .contentShape(Rectangle())
             .scaleEffect(liveScale)
             .rotationEffect(liveRot)
             // (No dashed selection border — removed per request; the text just shows plainly while editing.)
