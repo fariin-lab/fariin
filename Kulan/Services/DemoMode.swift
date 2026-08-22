@@ -32,7 +32,7 @@ import FirebaseFirestore
 //
 // WHAT THE WEBSITE NEEDS PHOTOGRAPHED, and where it comes from:
 //   1. the chat list                     -> the Chats tab, straight after login
-//   2. the Hooyo conversation            -> open Hooyo. Voice note is in there.
+//   2. the Sagal conversation            -> open Sagal. Voice note is in there.
 //   3. the Ayaan conversation            -> open Ayaan Warsame. Photo is in there.
 //   4. a call running                    -> NOT here. Calls are live, shoot a real one.
 //   5. a story open                      -> tap Cabdi's ring.
@@ -256,7 +256,34 @@ enum DemoMode {
                   // caption on this one", which on the model is the empty string.
                   allowsReplies: true, caption: caption ?? "")
         }
+        // SIX PEOPLE, NOT TWO. Two rings and then empty space reads as an app nobody uses. A story
+        // row is the one place in a messenger that is supposed to look busy, and it is the first
+        // thing in frame on the chat-list screenshot.
+        let sagalPhoto  = profilePhoto("demo-face-hooyo",  "hooyo",  .systemOrange, .systemYellow, "S")
+        let ayaanPhoto  = profilePhoto("demo-face-ayaan",  "ayaan",  .systemBlue,   .systemCyan,   "A")
+        let linneaPhoto = profilePhoto("demo-face-linnea", "linnea", .systemGreen,  .systemMint,   "L")
+        let ilhanPhoto  = profilePhoto("demo-face-ilhan",  "ilhan",  .systemPurple, .systemPink,   "I")
         return [
+            StoryGroup(authorUid: "demo-sagal", name: "Sagal", photoUrl: sagalPhoto, stories: [
+                s(1, "demo-sagal", "demo-story-sagal",   23400, "Subax"),
+                s(2, "demo-sagal", "demo-story-sagal-2", 16200, nil),
+                s(3, "demo-sagal", "demo-story-sagal-3",  7200, "Guriga"),
+            ], lastViewedAt: nil, isMine: false),
+            StoryGroup(authorUid: "demo-ayaan", name: "Ayaan", photoUrl: ayaanPhoto, stories: [
+                s(1, "demo-ayaan", "demo-story-ayaan",   26100, "Suuqa"),
+                s(2, "demo-ayaan", "demo-story-ayaan-2", 12600, "Shaah"),
+                s(3, "demo-ayaan", "demo-story-ayaan-3",  4500, nil),
+            ], lastViewedAt: nil, isMine: false),
+            StoryGroup(authorUid: "demo-linnea", name: "Linnea", photoUrl: linneaPhoto, stories: [
+                s(1, "demo-linnea", "demo-story-linnea",   20700, "Library"),
+                s(2, "demo-linnea", "demo-story-linnea-2", 13500, nil),
+                s(3, "demo-linnea", "demo-story-linnea-3",  6300, "Autumn"),
+            ], lastViewedAt: nil, isMine: false),
+            StoryGroup(authorUid: "demo-ilhan", name: "Ilhan", photoUrl: ilhanPhoto, stories: [
+                s(1, "demo-ilhan", "demo-story-ilhan",   30600, nil),
+                s(2, "demo-ilhan", "demo-story-ilhan-2", 17100, "Xeebta"),
+                s(3, "demo-ilhan", "demo-story-ilhan-3",  8100, "Baraf"),
+            ], lastViewedAt: nil, isMine: false),
             StoryGroup(authorUid: "demo-cabdi", name: "Cabdi", photoUrl: cabdiPhoto, stories: [
                 s(1, "demo-cabdi", "demo-story-cabdi",   25200, "Habeenkii Muqdisho"),
                 s(2, "demo-cabdi", "demo-story-cabdi-2", 18000, "Duurka"),
@@ -276,7 +303,7 @@ enum DemoMode {
     /// The chat list, top to bottom. The preview strings are written the way ChatService itself
     /// writes them, markers and all, so each row renders exactly as a real one does.
     ///
-    /// Hooyo carries 2 unread. That is deliberate: the badge is half of what makes a chat list look
+    /// Sagal carries 2 unread. That is deliberate: the badge is half of what makes a chat list look
     /// like somebody's phone rather than a screenshot of an empty app.
     ///
     /// Built fresh on every call because the times are relative to now — a list built at launch and
@@ -301,7 +328,7 @@ enum DemoMode {
         let linneaPhoto = profilePhoto("demo-face-linnea", "linnea", .systemGreen,  .systemMint,   "L")
         let ilhanPhoto  = profilePhoto("demo-face-ilhan",  "ilhan",  .systemPurple, .systemPink,   "I")
         return [
-            chat("demo-hooyo",  me, "demo-hooyo",  "Hooyo",         now.addingTimeInterval(-260),
+            chat("demo-hooyo",  me, "demo-hooyo",  "Sagal",         now.addingTimeInterval(-260),
                  "Ma soo gaadhay guriga?", hooyoPhoto, unread: 2),
             chat("demo-ayaan",  me, "demo-ayaan",  "Ayaan Warsame", now.addingTimeInterval(-2100),
                  "I will call you after Maghrib", ayaanPhoto),
@@ -357,7 +384,7 @@ enum DemoMode {
         case "demo-hooyo":
             return history(cid, me: me, other: "demo-hooyo", endingAt: t(-9000)) + [
                 Message(demoId: "\(cid)-0", from: "demo-hooyo", "Salaam walaal, sidee tahay?", t(-600)),
-                Message(demoId: "\(cid)-1", from: me, "Waan fiicanahay hooyo, adiga?", t(-540)),
+                Message(demoId: "\(cid)-1", from: me, "Waan fiicanahay walaal, adiga?", t(-540)),
                 Message(demoAudio: "\(cid)-2", from: me, data: silence(seconds: 14),
                         duration: 14, waveform: voicePattern, t(-500)),
                 Message(demoId: "\(cid)-3", from: "demo-hooyo", "Waan ku xiisay", t(-320)),
@@ -508,8 +535,18 @@ enum DemoMode {
             .jpegData(compressionQuality: 0.85) ?? Data()
     }
 
-    /// A story image, cached under a local URL. The story viewer reads URLCache first, so this
-    /// renders with no network and no Firebase. Real image wins if one is present.
+    /// A story image, cached under a local URL so it renders with no network and no Firebase.
+    /// Real image wins if one is present.
+    ///
+    /// ⛔ IT GOES IN BOTH CACHES, AND THE COMMENT THAT SAID OTHERWISE COST A BUILD. This used to
+    /// store into URLCache only, on the reasoning that "the story viewer reads URLCache first" —
+    /// true, and beside the point. The story ROW, the cards above the chat list, reads
+    /// `DiskImageCache`. So the avatar inside each card appeared (profilePhoto plants in both) while
+    /// the card behind it stayed grey forever, looking like a picture stuck loading. The viewer
+    /// worked, which is exactly why the wrong half was tested.
+    ///
+    /// `profilePhoto` below already had this right, and has a note saying it found it the hard way.
+    /// Two functions ten lines apart, one of them repeating a bug the other had already fixed.
     private static func story(_ assetName: String, _ c1: UIColor, _ c2: UIColor, _ label: String) -> String {
         let urlStr = "https://fariin.local/\(assetName).jpg"
         guard !cached.contains(assetName), let url = URL(string: urlStr) else { return urlStr }
@@ -517,10 +554,11 @@ enum DemoMode {
         let size = CGSize(width: 1080, height: 1920)
         let img = UIImage(named: assetName) ?? drawn(c1, c2, label, size: size, fontSize: 120)
         if let data = img.jpegData(compressionQuality: 0.85) {
+            DiskImageCache.shared.store(img, data: data, for: urlStr)   // the story ROW reads this
             let resp = URLResponse(url: url, mimeType: "image/jpeg",
                                    expectedContentLength: data.count, textEncodingName: nil)
             URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: data),
-                                                for: URLRequest(url: url))
+                                                for: URLRequest(url: url))   // the VIEWER reads this
         }
         return urlStr
     }
