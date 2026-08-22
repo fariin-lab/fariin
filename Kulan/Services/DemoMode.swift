@@ -285,11 +285,11 @@ enum DemoMode {
                 s(3, "demo-ilhan", "demo-story-ilhan-3",  8100, "Baraf"),
             ], lastViewedAt: nil, isMine: false),
             StoryGroup(authorUid: "demo-cabdi", name: "Cabdi", photoUrl: cabdiPhoto, stories: [
-                s(1, "demo-cabdi", "demo-story-cabdi",   25200, "Habeenkii Muqdisho"),
-                s(2, "demo-cabdi", "demo-story-cabdi-2", 18000, "Duurka"),
-                s(3, "demo-cabdi", "demo-story-cabdi-3", 10800, "Geeljire"),
+                s(1, "demo-cabdi", "demo-story-cabdi",   25200, "Night vibes"),
+                s(2, "demo-cabdi", "demo-story-cabdi-2", 18000, "Golden hour"),
+                s(3, "demo-cabdi", "demo-story-cabdi-3", 10800, "Home"),
                 s(4, "demo-cabdi", "demo-story-cabdi-4",  5400, nil),
-                s(5, "demo-cabdi", "demo-story-cabdi-5",  3600, "Waddada"),
+                s(5, "demo-cabdi", "demo-story-cabdi-5",  3600, "Long way back"),
             ], lastViewedAt: nil, isMine: false),
             StoryGroup(authorUid: "demo-khadra", name: "Khadra", photoUrl: khadraPhoto, stories: [
                 s(1, "demo-khadra", "demo-story-khadra",   28800, "Casarkii"),
