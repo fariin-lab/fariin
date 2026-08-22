@@ -494,6 +494,31 @@ struct ContactInfoView: View {
     }
     private var barTint: Color? { useAdaptive ? .white : nil }
 
+    /// ⛔ THE TWO BAR BUTTONS RESOLVE THEIR GLASS IN THE PAGE'S SCHEME, NOT THE BAR'S.
+    ///
+    /// This is the last difference between them and the round row, and it is why he photographed a
+    /// flat grey chevron and a flat grey "Edit" sitting above five circles that look right.
+    ///
+    /// They already take the identical tint from the identical place (`barGlassTint`, the extracted
+    /// `palette.card`), so the colour was never the problem. But a tint is not a colour on its own —
+    /// the material resolves it against `\.colorScheme`, and these two are the only glass on the page
+    /// that resolves it against a DIFFERENT one. The page pins itself to `.dark` (line ~589); the
+    /// navigation bar is pinned to `.light` on iOS 26 (`barScheme`, applied at ~825). Light-scheme
+    /// glass over a tint comes out opaque — the cream capsule — where dark-scheme glass over the same
+    /// tint stays translucent, which is the row he approved.
+    ///
+    /// ⚠️ ONLY THE TWO BUTTONS, on his instruction ("dont tuch other buttins only that buttons").
+    /// `.toolbarColorScheme` is left exactly as it is, so anything else the bar draws is untouched;
+    /// this rides on the button itself and reaches no further.
+    ///
+    /// ⚠️ The glyph does not follow it. `.tint(barGlyph)` is already an explicit `.white` on the
+    /// adaptive page, so flipping the scheme underneath it cannot darken the chevron or the word —
+    /// which was the failure mode of the two scheme attempts this file's notes record.
+    ///
+    /// iOS 27 never reaches here: `barGlassTint` is nil there, so both buttons take their plain
+    /// branch and the system's own glass is left to read the backdrop the way it already does right.
+    private var barGlassScheme: ColorScheme { .dark }
+
     private var barColorScheme: ColorScheme? { useAdaptive ? Self.barScheme : nil }
 
     private static var barScheme: ColorScheme {
@@ -523,6 +548,8 @@ struct ContactInfoView: View {
             .padding(.horizontal, Self.barItemTextInset)
             .frame(height: Self.barItemSide)
             .liquidGlass(Capsule(), interactive: true, tint: barGlassTint)
+            // Outside the glass so the glass is what reads it. See `barGlassScheme`.
+            .environment(\.colorScheme, barGlassScheme)
     }
 
     /// `.white` rather than `.primary` on the adaptive page: the bar's scheme is flipped to light on
@@ -675,6 +702,8 @@ struct ContactInfoView: View {
                 .liquidGlass(Circle(), interactive: true, tint: barGlassTint)
         }
         .tint(barGlyph)
+        // Outside the glass so the glass is what reads it. See `barGlassScheme`.
+        .environment(\.colorScheme, barGlassScheme)
     }
 
     /// The X, in the two states that have one — and nothing at all in the state that does not, which
