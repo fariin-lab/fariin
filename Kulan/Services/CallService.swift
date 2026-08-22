@@ -2266,6 +2266,17 @@ final class CallService: NSObject {
                     sdpMLineIndex: Int32((c["sdpMLineIndex"] as? NSNumber)?.intValue ?? 0),
                     sdpMid: c["sdpMid"] as? String
                 )
+                // ⭐ THE MEASUREMENT THAT SETTLES WHERE THE SECONDS GO. Two phones cannot begin
+                // testing a route until each has been TOLD about the other's, and every one of
+                // those travels as its own record to Firestore in Doha and back out. On a USA to
+                // Uganda call that is a detour through Qatar, six or ten times, in each direction.
+                //
+                // So the long gap between "our routes are ready" and "media is up" is either the
+                // ocean or it is our own signalling, and those need completely different fixes: the
+                // first is physics, the second is the Cloudflare worker already written and not yet
+                // deployed. `firstRemoteCandidate` against `firstCandidate` tells them apart —
+                // ours ready at 512ms and theirs arriving at 9s would name the culprit outright.
+                self.mark("firstRemoteCandidate")
                 self.addOrBuffer(candidate)   // buffer until remote SDP is set, then flush
             }
         }
