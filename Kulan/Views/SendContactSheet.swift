@@ -33,6 +33,15 @@ struct SendContactSheet: View {
     /// rather than with the page margin. See `sideInset`.
     @State private var gridWidth: CGFloat = 0
     @FocusState private var searchFocused: Bool
+    /// ⛔ LIGHT MODE NEEDS DIFFERENT PAINT ON THE QUIET BUTTON, and this is the risk I flagged when
+    /// the fill went from a blue wash to a neutral one (owner 2026-08-22: "in dark mode it is good,
+    /// in light mode the grey I cannot see very well… also make the text black").
+    ///
+    /// White on a translucent wash works over a dark sheet and disappears over a light one — the
+    /// wash has no colour of its own to push against. So light mode gets a fill with real presence
+    /// and ink to match it, and dark mode keeps exactly what he already approved.
+    @Environment(\.colorScheme) private var scheme
+    private var dark: Bool { scheme == .dark }
     private var me: String { AuthService.shared.uid ?? "" }
 
     private var people: [Conversation] {
@@ -276,7 +285,9 @@ struct SendContactSheet: View {
                 // every other label is white — it read as a link inside a button rather than as the
                 // button's own title. The tinted fill behind it already says the button is the
                 // quieter of the two states; the text does not have to say it twice.
-                .foregroundStyle(.white)
+                // Black on the light-mode Copy Link, white everywhere else — on the blue Send in
+                // both themes, and on the dark-mode wash his 2026-08-21 white-text rule was about.
+                .foregroundStyle(selected.isEmpty && !dark ? Color.black : Color.white)
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
                 // ⛔ GREY WHILE IT COPIES, BLUE ONCE IT SENDS (owner 2026-08-22: "make it grey
@@ -288,7 +299,12 @@ struct SendContactSheet: View {
                 // `tertiarySystemFill` rather than a grey of ours: it is the system's own wash for
                 // exactly this, it follows the theme, and it carries the same visual weight as the
                 // 0.14 it replaces, so nothing but the hue changes.
-                .background(selected.isEmpty ? Color(.tertiarySystemFill) : Color.accentColor,
+                // `systemGray5` in light: a real grey rather than a wash, so the pill has an edge
+                // to be seen by on a bright sheet. Dark keeps the system's own wash, which reads
+                // perfectly well there and is what he signed off.
+                .background(selected.isEmpty
+                            ? (dark ? Color(.tertiarySystemFill) : Color(.systemGray5))
+                            : Color.accentColor,
                             in: Capsule())
                 .contentShape(Capsule())
         }
