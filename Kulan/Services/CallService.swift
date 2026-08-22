@@ -87,6 +87,11 @@ final class CallService: NSObject {
                 // call of a session from the first call's origin, which is worse than no measurement
                 // at all: the numbers still look like numbers.
                 timeline = [:]; timelineOrigin = nil; timelineWritten = false
+                // ⛔ THESE TWO MUST RESET OR THE NEXT CALL IS BROKEN IN BOTH DIRECTIONS: a stale
+                // `preNegotiated` sends `answer()` down the fast path with no peer connection built,
+                // and a stale `mediaReady` would start a call the instant it is accepted, before any
+                // media exists. Both silent, both only visible on the SECOND call of a session.
+                preNegotiated = false; mediaReady = false
                 pendingOffer = nil
                 pendingRemoteCandidates = []; localCandidateBuffer = []; callDocCreated = false
                 stopRingback(); stopTone(); cancelTimers()
@@ -145,6 +150,47 @@ final class CallService: NSObject {
         if timelineOrigin == nil { timelineOrigin = now }
         guard let origin = timelineOrigin, timeline[label] == nil else { return }
         timeline[label] = Int(now.timeIntervalSince(origin) * 1000)
+    }
+
+    // MARK: - Pre-negotiation: the connection is built while the phone rings
+    //
+    // ⭐ WHAT SIGNAL DOES, IN THEIR OWN WORDS: rather than waiting for the recipient to answer, the
+    // ICE negotiation happens BEFORE the call is accepted, so that when somebody picks up, the
+    // encrypted connection is already prepared. Measured here on 2026-08-22, the wait between
+    // tapping answer and hearing sound was 3.4 to 6.7 seconds, and almost all of it was work that
+    // could have been done during the twenty seconds the phone spent ringing.
+    //
+    // ⛔ THE ONE RULE THAT MAKES THIS SAFE: the microphone stays off until the person accepts. The
+    // path exists and carries silence. Two independent locks, either of which is sufficient:
+    //   1. the local audio track is created DISABLED and only enabled in `accept()`
+    //   2. CallKit owns the audio session (`useManualAudio`), and WebRTC's audio unit stays off
+    //      until `didActivate` fires, which only happens on a real answer
+    // If either is ever removed, this feature becomes a bug that records people before they answer.
+
+    /// The media path is up. Says nothing about whether a human has accepted.
+    private var mediaReady = false
+    /// This side built its peer connection during the ring rather than at the tap.
+    private var preNegotiated = false
+
+    /// Has this call actually been accepted by a person? The callee's own tap, or — on the caller —
+    /// the callee's `acceptedAt` landing. Media being ready is not acceptance.
+    private var callAccepted: Bool { isCaller ? calleeAccepted : wasAccepted }
+
+    /// Promote a warm media path into a running call. Called from both directions: the path may come
+    /// up before the accept (the normal case now) or after it (a slow network), and whichever
+    /// arrives second is the one that starts the call.
+    private func beginConnectedCallIfAccepted() {
+        guard mediaReady, callAccepted, connectedDate == nil else { return }
+        connectedDate = Date()
+        mark("mediaUp")          // still the moment the user stops waiting, which is what we measure
+        writeTimeline()
+        CallKitManager.shared.reportConnected()
+        // The live row goes "Ringing" → "Ongoing". Caller only — one writer, and it is the device
+        // that created the row.
+        if isCaller, let id = callId, !otherUid.isEmpty {
+            let cid = [me, otherUid].sorted().joined(separator: "_")
+            Task { await ChatService.markCallOngoing(cid: cid, callId: id) }
+        }
     }
 
     /// Flushed when the media path comes up, and again — for the first time — when a call ENDS
@@ -400,6 +446,15 @@ final class CallService: NSObject {
         // Local mic track.
         let audioSource = Self.factory.audioSource(with: nil)
         let audioTrack = Self.factory.audioTrack(with: audioSource, trackId: "audio0")
+        // ⛔ DISABLED WHEN THIS CONNECTION IS BUILT BEFORE THE PERSON ANSWERED. The pre-negotiated
+        // path builds everything during the ring so the accept is instant, and the price of that is
+        // that a live connection exists to somebody who has not said yes yet. It carries silence
+        // until `answer()` enables this track. Do not "tidy" this to always-true: it is the lock.
+        //
+        // Belt as well as braces — CallKit owns the audio session and WebRTC's audio unit stays off
+        // until didActivate, which only fires on a real answer. Either one alone would be enough;
+        // both together mean a refactor has to break two things to start recording somebody early.
+        audioTrack.isEnabled = !(preNegotiated && !wasAccepted)
         connection?.add(audioTrack, streamIds: ["stream0"])
         localAudioTrack = audioTrack
         // Always negotiate a video m-line up front — the track is DISABLED for a voice call (no
@@ -1812,6 +1867,9 @@ final class CallService: NSObject {
                 if let cams = d["cams"] as? [String: Bool], let on = cams[self.otherUid] {
                     self.remoteCameraOn = on
                 }
+                // ⭐ AND NOW BUILD THE WHOLE CONNECTION, WHILE IT IS STILL RINGING. See the
+                // pre-negotiation note above `mediaReady`. The microphone stays off until accept.
+                self.preNegotiate(callId: callId, offerSdp: offer["sdp"] ?? "")
                 return
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
@@ -1883,9 +1941,49 @@ final class CallService: NSObject {
         return !blocked && (audience == .everyone || (audience == .contacts && isContact))
     }
 
+    /// Build the answering connection DURING THE RING, so the accept has nothing left to do.
+    ///
+    /// Everything `buildAnswer` does, minus the one thing that must wait for a person: the
+    /// microphone. `callDocCreated` is set here because our candidates can and should go out now —
+    /// the whole point is that both sides finish their checks before the tap.
+    private func preNegotiate(callId: String, offerSdp: String) {
+        guard !preNegotiated, !offerSdp.isEmpty, state == .incoming, self.callId == callId else { return }
+        preNegotiated = true
+        mark("preNegotiateStart")
+        Task { @MainActor in
+            await self.awaitIceServers()
+            // Still the same call, still nobody has answered or hung up.
+            guard self.state == .incoming, self.callId == callId, self.pc == nil else { return }
+            self.mark("preRelayCredsReady")
+            self.callDocCreated = true      // the doc exists — the caller made it — so candidates may fly
+            self.buildAnswer(ref: self.db.collection("calls").document(callId), offerSdp: offerSdp)
+        }
+    }
+
     func answer() {
         guard let id = callId else { return }
         mark("answerTapped")   // everything after this is time the user spends watching "Connecting…"
+
+        // ⭐ THE FAST PATH: the connection was built while it rang, so accepting is now three things
+        // — say yes, open the microphone, and start the call if the path is already up. No SDP, no
+        // relay fetch, no waiting for candidates to cross an ocean.
+        if preNegotiated, pc != nil {
+            state = .active
+            wasAccepted = true
+            db.collection("calls").document(id).updateData(["acceptedAt": FieldValue.serverTimestamp()])
+            ringingWatcher?.remove(); ringingWatcher = nil
+            if cameraOn { prepareLocalVideo() }
+            ensureMicPermission { [weak self] granted in
+                guard let self else { return }
+                guard granted else { self.hangUp(); return }
+                // ⛔ THE MICROPHONE OPENS HERE AND NOWHERE EARLIER. Until this line the track has
+                // been disabled since it was created, so the connection that has been up for the
+                // last ten seconds has been carrying silence.
+                self.localAudioTrack?.isEnabled = !self.isMuted
+                self.beginConnectedCallIfAccepted()
+            }
+            return
+        }
         ringingWatcher?.remove(); ringingWatcher = nil   // observeCallDoc (attached below) takes over
         callDocCreated = true   // callee: the caller already created the doc, so candidates can write now
         state = .active   // present the call screen immediately; SDP fills in below
@@ -2076,6 +2174,11 @@ final class CallService: NSObject {
                 self.stopRingback()
                 self.noAnswerWork?.cancel()
                 self.startAcceptedConnectTimeout()
+                // The path is very often ALREADY UP by now: the callee pre-negotiated during the
+                // ring, so ICE connected while the phone was still ringing and this accept is the
+                // second of the two events, not the first. Start the call here rather than waiting
+                // for a media event that has already been and gone.
+                self.beginConnectedCallIfAccepted()
             }
             // Caller applies the answer once it arrives → connected.
             if self.isCaller, let answer = d["answer"] as? [String: String], let sdp = answer["sdp"],
@@ -2340,21 +2443,17 @@ extension CallService: RTCPeerConnectionDelegate {
         DispatchQueue.main.async {
             switch newState {
             case .connected, .completed:
-                // First real media connect → NOW the call is truly connected: start the timer + tell CallKit.
-                if self.connectedDate == nil {
-                    self.connectedDate = Date()
-                    // The moment the waiting stops. Everything above is now measurable against it.
-                    self.mark("mediaUp")
-                    self.writeTimeline()
-                    CallKitManager.shared.reportConnected()
-                    // The live row goes "Ringing" → "Ongoing". Caller only — one writer, and it is
-                    // the device that created the row.
-                    if self.isCaller, let id = self.callId, !self.otherUid.isEmpty {
-                        let cid = [self.me, self.otherUid].sorted().joined(separator: "_")
-                        Task { await ChatService.markCallOngoing(cid: cid, callId: id) }
-                    }
-                }
+                // ⭐ THE MEDIA PATH BEING UP IS NO LONGER THE SAME EVENT AS THE CALL STARTING, and
+                // splitting those two is the whole of the pre-negotiation change.
+                //
+                // The connection is now built while the phone is still RINGING, so this fires before
+                // anybody has accepted. Treating it as "connected" there would start the duration
+                // timer on an unanswered call, tell CallKit the call is up, and flip the chat row to
+                // Ongoing — all for a call the person has not yet touched.
+                self.mediaReady = true
+                self.mark("mediaReady")
                 self.recovered()                          // back to a healthy media path
+                self.beginConnectedCallIfAccepted()
             case .disconnected:
                 self.enterReconnecting(restartAfter: 3)   // may self-heal; force a restart in 3s
             case .failed:
