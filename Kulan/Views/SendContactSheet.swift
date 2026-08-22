@@ -185,7 +185,7 @@ struct SendContactSheet: View {
     ///
     /// The name is 11pt regular and the gap is 4pt, which ARE their numbers exactly, and `sideInset`
     /// re-derives itself from this constant so the first face still lines up with the header button.
-    private static let face: CGFloat = 60
+    private static let face: CGFloat = 64   // owner 2026-08-22, up from 60
 
     private var peopleGrid: some View {
         // THE ORDER IS THE CHAT LIST'S: `people` sorts on `displayUpdatedAt`, the same key MainShell
@@ -226,7 +226,9 @@ struct SendContactSheet: View {
             .frame(width: Self.face, height: Self.face)
             HStack(spacing: 2) {
                 Text(c.displayName(me))
-                    .font(.system(size: 11))
+                    // Smaller as the face got bigger (owner 2026-08-22): the name is the caption of
+                    // the picture, and at the old size beside a 64pt circle the two were competing.
+                    .font(.system(size: 10))
                     .foregroundStyle(.primary)
                     .lineLimit(2).multilineTextAlignment(.center)
                 if !c.isGroup { VerifiedMark(uid: c.otherUid(me), size: 9) }
@@ -277,7 +279,16 @@ struct SendContactSheet: View {
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .frame(height: 50)
-                .background(selected.isEmpty ? Color.accentColor.opacity(0.14) : Color.accentColor,
+                // ⛔ GREY WHILE IT COPIES, BLUE ONCE IT SENDS (owner 2026-08-22: "make it grey
+                // after select, send button blue, don't touch that"). The quiet state was a wash of
+                // the accent colour, which made the resting button a paler version of the acting one
+                // — two blues saying different things. A neutral wash says "this is the other thing
+                // you could do" without borrowing the send button's meaning.
+                //
+                // `tertiarySystemFill` rather than a grey of ours: it is the system's own wash for
+                // exactly this, it follows the theme, and it carries the same visual weight as the
+                // 0.14 it replaces, so nothing but the hue changes.
+                .background(selected.isEmpty ? Color(.tertiarySystemFill) : Color.accentColor,
                             in: Capsule())
                 .contentShape(Capsule())
         }
