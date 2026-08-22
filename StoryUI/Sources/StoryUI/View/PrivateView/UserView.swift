@@ -104,11 +104,11 @@ struct UserView: View {
     }
 
     var body: some View {
-        // ⚠️ 12 SPELLED OUT HERE RATHER THAN TAKEN FROM `hStackSpace` (owner 2026-08-22: the gap
-        // between the two buttons goes 13 → 12). That constant is shared with the avatar-to-name gap
-        // on the very next line, and he asked for this one gap only — moving the constant would have
-        // pulled the name in against the picture as a side effect.
-        HStack(spacing: 12) {
+        // ⚠️ SPELLED OUT HERE RATHER THAN TAKEN FROM `hStackSpace` (owner 2026-08-22: the gap
+        // between the two buttons went 13 → 12, then 12 → 10). That constant is shared with the
+        // avatar-to-name gap on the very next line, and he asked for this one gap only — moving the
+        // constant would have pulled the name in against the picture as a side effect.
+        HStack(spacing: 10) {
             // Tappable header block (avatar 38pt + name 14pt + timestamp 12pt) → profile.
             HStack(spacing: Constant.UserView.hStackSpace) {
                 CacheAsyncImage(urlString: image, name: name)   // 38×38 circle
