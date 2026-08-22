@@ -2148,6 +2148,7 @@ struct ArchivedChatsView: View {
         //
         // ⚠️ THE CARDS BELOW ARE UNTOUCHED. Only the scroller changed hands.
         ArchiveStripScroller(target: archivedMenuTarget,
+                             onTap: openArchivedStory,
                              // The card, its label, and the strip's own vertical padding — the same
                              // numbers the card's frame two dozen lines down is built from.
                              height: storyCardW * 1.46 + 6 + 16 + 20) {
@@ -2160,12 +2161,21 @@ struct ArchivedChatsView: View {
                 // rebuilt the row it could hand a card's context menu to the neighbour it thought was
                 // the same view. One key, declared once, and there is nothing left to disagree.
                 ForEach(archivedStories, id: \.authorUid) { g in
-                    Button {
-                        // Archived stories are a drawer of ONE person each — no paging out of the
-                        // card you tapped into somebody else's, which the row does and this must not.
-                        StoryDoor.open(g, from: "arch-\(g.id)", deliveredToMe: true,
-                                       onClosed: { prefsTick += 1 })
-                    } label: {
+                    // ⛔ NO BUTTON. THE TAP IS A RECOGNISER ON THE STRIP NOW (owner 2026-08-22, third
+                    // time asking: "use the real one, the one the main chat list uses").
+                    //
+                    // A SwiftUI Button is backed by a gesture recogniser that BEGINS ON TOUCH-DOWN to
+                    // drive its pressed state, and a recogniser that begins cancels the exclusive ones
+                    // analysing the same touches — so the strip's long press was killed at touch-down
+                    // and never reached its threshold. Four fixes shipped against that and every one
+                    // left the Button in place.
+                    //
+                    // The chat list's cards are UIKit controls, which take input by touch DELIVERY
+                    // rather than through a recogniser, so nothing competes with its press and it has
+                    // never failed. Removing the Button is that same property. The tap now lives
+                    // beside the press on the scroll view and is resolved by the same point lookup,
+                    // so the two cannot disagree about which card was meant.
+                    Group {
                         VStack(spacing: 6) {
                             ZStack(alignment: .bottomLeading) {
                                 StoryImage(url: g.stories.last?.previewUrl ?? "")
@@ -2181,14 +2191,13 @@ struct ArchivedChatsView: View {
                                 .font(.system(size: 12)).lineLimit(1).frame(width: storyCardW)
                         }
                     }
-                    .buttonStyle(.plain)
                     // ⛔ THE LONG-PRESS RAMP. WITHOUT THESE TWO LINES THE PRESS HAS NO ANIMATION AT ALL.
                     //
                     // His report the moment the press itself started working: "now long press is
                     // working but there's no animation". There never was one here. The chat list's
                     // cards are UIKit `UIControl`s, so they get `isHighlighted` on touch-down for
-                    // free and the row springs them to 0.92 from it; these are a SwiftUI `Button`
-                    // with `.plain`, which has no visible pressed state whatsoever.
+                    // free and the row springs them to 0.92 from it; these are plain SwiftUI views,
+                    // which have no pressed state of their own at all — the press drives this one.
                     //
                     // 0.92 on a 0.28/0.7 spring, which is the CHAT ROW'S dip and not the reference
                     // app's ramp — his order after seeing the two side by side. The same row on two
@@ -2228,6 +2237,25 @@ struct ArchivedChatsView: View {
     /// cutting the pair under one 24pt radius would round the label's bottom. The card's height is
     /// known exactly (`storyCardW * 1.46`, the frame two lines up from the reporter), so the strip
     /// that is lifted is the top of that rect and nothing else.
+    /// Opening one by tap, resolved from the SAME rectangles the long press asks about.
+    ///
+    /// ⚠️ ONE LOOKUP FOR BOTH GESTURES, which is the point of doing it here rather than leaving a
+    /// Button on the card. The press already answers "which card is under this finger" through
+    /// `MediaOpenRects`; asking the same registry for the tap means a press and a tap can never
+    /// disagree about which story was meant — the mismatch that produced "long press the first story
+    /// and it opens the second" when two different things each had their own opinion.
+    private func openArchivedStory(at p: CGPoint) {
+        for g in archivedStories {
+            let key = MediaOpenRects.key(.storyRow, "arch-\(g.id)")
+            guard let r = MediaOpenRects.liveRect(key), r.contains(p) else { continue }
+            // Archived stories are a drawer of ONE person each — no paging out of the card you
+            // tapped into somebody else's, which the row does and this must not.
+            StoryDoor.open(g, from: "arch-\(g.id)", deliveredToMe: true,
+                           onClosed: { prefsTick += 1 })
+            return
+        }
+    }
+
     private func archivedMenuTarget(at p: CGPoint) -> StoryMenuTarget? {
         for g in archivedStories {
             let key = MediaOpenRects.key(.storyRow, "arch-\(g.id)")

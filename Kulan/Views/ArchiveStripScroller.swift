@@ -25,6 +25,22 @@ import SwiftUI
 struct ArchiveStripScroller<Content: View>: UIViewRepresentable {
     /// Which card is under this window point, and what its menu says. Asked at press time.
     let target: (CGPoint) -> StoryMenuTarget?
+    /// ⛔ THE TAP LIVES HERE NOW TOO, AND THAT IS THE PORT HE ASKED FOR THREE TIMES.
+    ///
+    /// The cards were SwiftUI `Button`s, and a SwiftUI Button is backed by a real
+    /// `UIGestureRecognizer` that BEGINS ON TOUCH-DOWN to drive its pressed state. A recogniser that
+    /// begins cancels every exclusive recogniser analysing the same touches, so the strip's long
+    /// press was being killed at touch-down and never reached its 0.32s. Four shipped fixes patched
+    /// around that — a retry, a second retry, a liveness check, a window fallback, a failure
+    /// requirement — and every one of them left the Button in place.
+    ///
+    /// The chat list's row has never failed, and its own note says why in one line: its cards are
+    /// UIKit `UIControl`s, which take their input through touch DELIVERY rather than through a
+    /// recogniser, so there is nothing for the press to compete with. This is that property, reached
+    /// without re-drawing seven working things in UIKit: the Button is gone, the card is a plain
+    /// view, and the tap is a recogniser on this scroll view beside the press — resolved through the
+    /// SAME point lookup, so the tap and the press can no longer disagree about which card was meant.
+    let onTap: (CGPoint) -> Void
     /// ⚠️ GIVEN, NOT MEASURED. A `UIScrollView` reports no intrinsic size, so a representable
     /// wrapping one has nothing to tell SwiftUI and the strip would lay out at zero. The archive
     /// already computes its card height exactly — it is the same expression the card's own frame
@@ -33,9 +49,11 @@ struct ArchiveStripScroller<Content: View>: UIViewRepresentable {
     let content: Content
 
     init(target: @escaping (CGPoint) -> StoryMenuTarget?,
+         onTap: @escaping (CGPoint) -> Void,
          height: CGFloat,
          @ViewBuilder content: () -> Content) {
         self.target = target
+        self.onTap = onTap
         self.height = height
         self.content = content()
     }
@@ -75,11 +93,20 @@ struct ArchiveStripScroller<Content: View>: UIViewRepresentable {
         sv.addSubview(anchor)
         context.coordinator.press.install(from: anchor)
         context.coordinator.anchor = anchor
+
+        // ⚠️ ON THE SCROLL VIEW, NOT ON A CARD. A recogniser that lives on a card has to be
+        // hit-testable, and a hit-testable card is a card that competes with the press again — the
+        // exact mistake this whole file exists to undo. One recogniser for the strip, the same shape
+        // as the press beside it, and the point decides which card was meant.
+        let tap = UITapGestureRecognizer(target: context.coordinator,
+                                         action: #selector(Coordinator.handleTap(_:)))
+        sv.addGestureRecognizer(tap)
         return sv
     }
 
     func updateUIView(_ sv: UIScrollView, context: Context) {
         context.coordinator.press.target = target
+        context.coordinator.onTap = onTap
         context.coordinator.host.rootView = content
         // The strip's contents change when a story is unhidden or a new one arrives, and SwiftUI is
         // free to rebuild the hosting view under us. Re-asking is a no-op while the press is alive.
@@ -95,19 +122,32 @@ struct ArchiveStripScroller<Content: View>: UIViewRepresentable {
         coordinator.press.uninstall()
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator(target: target, content: content) }
+    func makeCoordinator() -> Coordinator { Coordinator(target: target, onTap: onTap, content: content) }
 
-    @MainActor final class Coordinator {
+    @MainActor final class Coordinator: NSObject {
         let press: StoryRowLongPress.Coordinator
         let host: UIHostingController<Content>
         weak var anchor: UIView?
+        var onTap: (CGPoint) -> Void
 
-        init(target: @escaping (CGPoint) -> StoryMenuTarget?, content: Content) {
+        /// ⛔ A PRESS THAT HAS ALREADY WON SWALLOWS THE TAP, and this is the chat list's own line
+        /// (`StoriesRowUIKit`, `guard !StoryRowPress.swallowsTap`). Lifting a finger off a menu that
+        /// the press just raised must not also open the story behind it — the same report the row
+        /// had, answered the same way, rather than a second rule invented here.
+        @objc func handleTap(_ g: UITapGestureRecognizer) {
+            guard g.state == .ended, !StoryRowPress.swallowsTap else { return }
+            onTap(g.location(in: nil))
+        }
+
+        init(target: @escaping (CGPoint) -> StoryMenuTarget?,
+             onTap: @escaping (CGPoint) -> Void, content: Content) {
+            self.onTap = onTap
             press = StoryRowLongPress.Coordinator(target: target)
             host = UIHostingController(rootView: content)
             // No safe-area inset from a hosting controller that is not in a view controller
             // hierarchy — the strip sets its own padding and a second one would push the cards down.
             host.safeAreaRegions = []
+            super.init()
         }
     }
 }
