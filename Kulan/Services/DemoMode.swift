@@ -242,6 +242,11 @@ enum DemoMode {
         let ayaanPhoto  = profilePhoto("demo-face-ayaan",  "ayaan",  .systemBlue,   .systemCyan,   "A")
         let cabdiPhoto  = profilePhoto("demo-face-cabdi",  "cabdi",  .systemGreen,  .systemTeal,   "C")
         let khadraPhoto = profilePhoto("demo-face-khadra", "khadra", .systemPink,   .systemRed,    "K")
+        // THE ONE NAME IN THIS LIST THAT IS NOT SOMALI, and it is there on purpose. Every other row
+        // is family or a friend back home; this app is for people living far from the people they
+        // love, which means their list also has the colleague, the classmate, the neighbour where
+        // they actually live. A demo of six Somali names would show only half of that life.
+        let linneaPhoto = profilePhoto("demo-face-linnea", "linnea", .systemGreen,  .systemMint,   "L")
         return [
             chat("demo-hooyo",  me, "demo-hooyo",  "Hooyo",         now.addingTimeInterval(-260),
                  "Ma soo gaadhay guriga?", hooyoPhoto, unread: 2),
@@ -251,6 +256,8 @@ enum DemoMode {
                  "🎤 Voice message · 0:14", cabdiPhoto),
             chat("demo-khadra", me, "demo-khadra", "Khadra",        now.addingTimeInterval(-12000),
                  "📷 Photo", khadraPhoto),
+            chat("demo-linnea", me, "demo-linnea", "Linnea",        now.addingTimeInterval(-26000),
+                 "See you at the library at 4?", linneaPhoto),
             chat("demo-ilhan",  me, "demo-ilhan",  "Ilhan",         now.addingTimeInterval(-93000),
                  "Mahadsanid walaal", ""),
             // Deliberately LEFT WITHOUT A PHOTO, so the list also shows the other half of the rule:
@@ -329,6 +336,19 @@ enum DemoMode {
                 Message(demoImage: "\(cid)-1", from: "demo-khadra",
                         data: photoData("demo-photo-dinner", .systemOrange, .systemRed, "Casho"),
                         w: 1200, h: 900, t(-12000)),
+            ]
+
+        // IN ENGLISH, AND THAT IS THE POINT OF HER. The rest of this list is Somali because it is
+        // family and friends back home. This is the classmate where he actually lives, and the
+        // language switches with the person — which is exactly how the app gets used and something
+        // a screenshot of six Somali names could never show.
+        case "demo-linnea":
+            return [
+                Message(demoId: "\(cid)-0", from: "demo-linnea", "Did you finish the reading?", t(-28000)),
+                Message(demoId: "\(cid)-1", from: me, "Almost. Two chapters left", t(-27600)),
+                Message(demoId: "\(cid)-2", from: "demo-linnea", "Same. Coffee first though", t(-27200)),
+                Message(demoId: "\(cid)-3", from: me, "Always", t(-26800)),
+                Message(demoId: "\(cid)-4", from: "demo-linnea", "See you at the library at 4?", t(-26000)),
             ]
 
         case "demo-ilhan":
