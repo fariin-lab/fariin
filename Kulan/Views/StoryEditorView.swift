@@ -1729,9 +1729,18 @@ struct StoryEditorView: View {
             // cannot swallow anything the rest of the time because it does not exist the rest of the
             // time, so dragging, pinching and tapping a sticker are untouched.
             //
-            // ⚠️ zIndex 6, WHICH MUST STAY ABOVE THE HIGHEST NUMBER IN THIS STACK. The others run
-            // 0–5 and swap around `drawingOnTop`; if a layer is ever added above 5, this has to move
-            // with it or the bug comes straight back in whatever that new layer is.
+            // ⚠️ zIndex 6, WHICH MUST STAY ABOVE EVERY LAYER IT CAN BE ON SCREEN WITH. The content
+            // layers run 0–5 and swap around `drawingOnTop`; if one is ever added above 5, this has
+            // to move with it or the bug comes straight back in whatever that new layer is.
+            //
+            // The drag chrome at 7 and 8 is higher and that is fine: it is up only while something is
+            // being dragged, and nothing can be dragged while a caption has the keyboard.
+            //
+            // THE LEDGER, so the next person adding a layer does not have to read the whole stack:
+            //   0–5  photo, stickers, captions, pen — the pair that swap are `drawingOnTop`
+            //   6    this caption tap-catcher, only while the caption is focused
+            //   7    centre guides, only while dragging
+            //   8    the bin, only while dragging
             //
             // The photo's own `onTap` keeps its `captionFocused = false` — it is still correct, it
             // is just no longer the only way out.
@@ -1743,9 +1752,19 @@ struct StoryEditorView: View {
             }
 
             // Center alignment guides + trash zone (only while dragging an overlay).
+            //
+            // ⛔ THIS WHOLE BLOCK CARRIED NO `zIndex` AT ALL, WHICH MEANS ZERO (owner 2026-08-22: a
+            // sticker dragged down covers the delete button). Zero is the BOTTOM of this stack: the
+            // stickers sit at 1 or 3 and the captions at 2 or 4, so the very thing being dragged
+            // toward the bin was guaranteed to paint over it, and over the guides meant to line it
+            // up. It was never a layering choice, it was a layer nobody gave a number to.
+            //
+            // Drag chrome is the top of the stack by definition — it exists only while something is
+            // moving and its whole job is to be seen while that happens. The bin outranks the guides
+            // because a guide crossing the bin should pass behind it, not through the glyph.
             if draggingID != nil {
-                if guideV { Rectangle().fill(.yellow.opacity(0.9)).frame(width: 1).frame(maxHeight: .infinity).position(x: card.width / 2, y: card.height / 2) }
-                if guideH { Rectangle().fill(.yellow.opacity(0.9)).frame(height: 1).frame(maxWidth: .infinity).position(x: card.width / 2, y: card.height / 2) }
+                if guideV { Rectangle().fill(.yellow.opacity(0.9)).frame(width: 1).frame(maxHeight: .infinity).position(x: card.width / 2, y: card.height / 2).zIndex(7) }
+                if guideH { Rectangle().fill(.yellow.opacity(0.9)).frame(height: 1).frame(maxWidth: .infinity).position(x: card.width / 2, y: card.height / 2).zIndex(7) }
                 Image(systemName: "trash.fill")
                     .font(.system(size: 20, weight: .semibold)).foregroundStyle(.white)
                     .frame(width: trashDiameter, height: trashDiameter)
@@ -1753,6 +1772,7 @@ struct StoryEditorView: View {
                     .scaleEffect(trashHot ? 1.25 : 1)
                     .animation(.spring(response: 0.25, dampingFraction: 0.6), value: trashHot)
                     .position(trashCenter)
+                    .zIndex(8)
             }
         }
         .coordinateSpace(name: "canvas")
