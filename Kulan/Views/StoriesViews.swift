@@ -5173,8 +5173,28 @@ struct MyStoriesCarousel: View {
                      onActiveTap: { onActiveTap() })
                 .frame(maxWidth: .infinity)
                 .frame(height: slotH)
-            // The centred card's count, big + centred under the row (mockup).
+            // ⛔ THE ONLY COUNT ON THIS SCREEN, AND IT BELONGS TO WHICHEVER CARD IS CENTRED (owner
+            // 2026-08-22, written as a spec: "at any moment there should be only one View/Like stats
+            // section, and it must belong to the currently focused centre card").
+            //
+            // The per-card badges are gone from the row entirely — see `addSubview` in the card
+            // item's init — so there is nothing left that could show a second answer, a stale one, or
+            // the wrong card's. One view, one story, by construction rather than by keeping several
+            // in step.
+            //
+            // ⚠️ KEYED ON THE STORY, NOT ON THE NUMBERS. `.id` makes this a NEW view when the centred
+            // story changes, so the transition below runs on the hand-over rather than on a digit —
+            // two stories with the same counts still cross-fade, and a count that ticks up on the
+            // story you are looking at does not.
+            //
+            // The swap point itself is unchanged: the row reports a new centre as it crosses the half
+            // card, which is what "immediately switch when another card reaches the centre" asks for.
+            // What is new is that it fades across instead of snapping, so nothing flickers at the
+            // moment the number changes hands.
             countRow(views: focused.views, likes: focused.likes, big: true)
+                .id(focusedID)
+                .transition(.opacity)
+                .animation(.easeInOut(duration: 0.18), value: focusedID)
         }
         // ⚠️ THE ONE VALUE SWIFTUI STILL INTERPOLATES BEHIND THE ROW'S BACK.
         //
@@ -5222,9 +5242,11 @@ struct MyStoriesCarousel: View {
     // count as it reached the centre — is two lines inside the layout pass, where it costs an alpha
     // write instead of a SwiftUI geometry read per card per frame.
 
-    // Eye + views + heart + likes, white over a soft shadow — the row's BIG count, under the cards.
-    // The small one inside each card is `StoryRowCountView`, in UIKit, because its alpha is written
-    // on every frame of a scroll. This one changes when the centred card changes and no faster.
+    // Eye + views + heart + likes, white over a soft shadow — the row's ONE count, under the cards.
+    //
+    // The per-card badge that used to sit inside every card is gone (owner 2026-08-22). `big: false`
+    // survives because this is still the shared drawing and a caller may yet want the small size;
+    // nothing passes it today.
     private func countRow(views: Int, likes: Int, big: Bool) -> some View {
         HStack(spacing: big ? 7 : 5) {
             Image(systemName: "eye.fill")
