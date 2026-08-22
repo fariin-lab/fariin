@@ -1448,8 +1448,29 @@ struct EditProfileView: View {
     @State private var confirmDiscard = false
     @FocusState private var bioFocused: Bool
     private static let bioAnchor = "bio.field"   // the row the scroller pulls above the keyboard
+    /// The gap the bio card keeps above the keys (owner 2026-08-22: "there's no space between card
+    /// and keyboard"). `scrollTo(anchor: .bottom)` lands the card's bottom edge on the bottom of the
+    /// visible area, so the only way to buy a gap is to make the visible area end higher — which is
+    /// what the matching `safeAreaInset` on the Form does, and only while the bio is being edited.
+    private static let bioKeyboardGap: CGFloat = 14
+    /// Same rule as the username counter: show it only once this many characters remain.
+    private static let bioCounterAppearsAt = 20
+    private var bioRemaining: Int { max(0, Limits.bioChars - about.count) }
     private var hasUnsavedText: Bool {
         firstName != origFirst || lastName != origLast || handle != origHandle || about != origAbout
+    }
+
+    /// A BIO IS ONE PARAGRAPH. Every line break becomes a space and every run of blanks becomes one
+    /// blank, so "unlimited space" stops being expressible, then the character ceiling is applied to
+    /// what is left. Done in this order on purpose: measuring first would let a hundred blank lines
+    /// spend the budget and truncate the words the person actually typed.
+    ///
+    /// ⚠️ ONE TRAILING BLANK SURVIVES, and it has to — collapsing it would make it impossible to type
+    /// a space between two words, because the space is its own keystroke and arrives alone.
+    static func tidyBio(_ raw: String) -> String {
+        var s = String(raw.map { $0.isWhitespace ? " " : $0 })   // isWhitespace covers newlines too
+        while s.contains("  ") { s = s.replacingOccurrences(of: "  ", with: " ") }
+        return s.count > Limits.bioChars ? String(s.prefix(Limits.bioChars)) : s
     }
 
     /// ⚠️ THE WHOLE NAME, BECAUSE THE LETTER AVATAR'S COLOUR IS HASHED FROM IT. The two pictures of
@@ -1671,7 +1692,14 @@ struct EditProfileView: View {
                         .focused($bioFocused)
                         .id(Self.bioAnchor)
                         .onChange(of: about) { _, v in
-                            if v.count > 140 { about = String(v.prefix(140)) }
+                            // ⚠️ THE LIMIT IS A CHARACTER COUNT, AND BLANKS ARE CHARACTERS — WHICH IS
+                            // WHY IT NEVER HELD (owner 2026-08-22: "User bio can make unlimited
+                            // space"). `.lineLimit(1...5)` caps the box at five lines but not the
+                            // string, so Return could push a bio to any length inside the budget and
+                            // the profile page, which clamps nothing, drew the whole empty column.
+                            // Tidied first, then measured: see `tidyBio`.
+                            let tidied = Self.tidyBio(v)
+                            if tidied != v { about = tidied; return }   // the rewrite re-enters here
                             // Follow the cursor DOWN: anchor .bottom keeps the newest line just
                             // above the keyboard rather than centring the whole field.
                             if bioFocused { withAnimation(.easeOut(duration: 0.2)) { scroller.scrollTo(Self.bioAnchor, anchor: .bottom) } }
@@ -1686,11 +1714,33 @@ struct EditProfileView: View {
                         }
                 } header: {
                     Text("Bio")
+                } footer: {
+                    // The same counter rule the username field already uses: nothing at all until
+                    // you are near the ceiling, then a number counting DOWN. A counter that is
+                    // always on screen is a number that means nothing for the hundred characters
+                    // nobody is near the limit. Trailing, because that is the corner the eye checks.
+                    if bioRemaining <= Self.bioCounterAppearsAt {
+                        Text("\(bioRemaining)")
+                            .font(.subheadline)
+                            .monospacedDigit()          // so the row does not jog as 10 becomes 9
+                            .foregroundStyle(bioRemaining == 0 ? .red : .secondary)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                            .transition(.opacity)
+                            .accessibilityLabel("\(bioRemaining) characters left")
+                    }
                 }
+                .animation(.smooth(duration: 0.22), value: bioRemaining <= Self.bioCounterAppearsAt)
 
                 if let error {
                     Section { Text(error).foregroundStyle(.red).font(.footnote) }
                 }
+            }
+            // THE GAP ABOVE THE KEYS. Raising the bottom of the scrollable area is the only lever
+            // that works here: the scroller lands the bio card's bottom edge on that boundary, so
+            // with no inset the card sits flush against the keyboard. Zero when the bio is not being
+            // edited, so nothing else on the form gains a mystery margin.
+            .safeAreaInset(edge: .bottom) {
+                Color.clear.frame(height: bioFocused ? Self.bioKeyboardGap : 0)
             }
             }
             // X and Save moved OUT to the screen (see `body`). They belong to the whole screen, not
@@ -1807,7 +1857,9 @@ struct EditProfileView: View {
             // first and its failure keeps the sheet open with the reason. The photo cannot fail here
             // at all any more: it is applied locally and uploaded behind, so it is started last and
             // the sheet closes on top of it.
-            if hasUnsavedText { try await profile.updateProfile(name: n, handle: h, about: about) }
+            // Tidied again on the way out, not only as you type: a bio saved before this rule
+            // existed still holds its blank lines, and this is the pass that cleans it.
+            if hasUnsavedText { try await profile.updateProfile(name: n, handle: h, about: Self.tidyBio(about)) }
             applyPendingPhoto()
             dismiss()
         } catch {
@@ -1944,10 +1996,15 @@ struct UsernameEditView: View {
     ///
     /// They used to be one of the STATES, so the first reply from the server took them off the
     /// screen — exactly while you are typing a name and most likely to need them. They are not a
-    /// state, they are the caption for the field; the checker's answer goes underneath.
+    /// state, they are the caption for the field.
+    ///
+    /// ⚠️ THE VERDICT GOES ON TOP, THE RULES UNDER IT (owner 2026-08-22: "plz check available
+    /// usernam always make first"). The rules are the same sentence on every screen and every
+    /// visit, so once the checker has an answer the answer is the only new thing here — burying it
+    /// on the second line makes you read a line you already know before the one you are waiting
+    /// for. The rules keep their place as the field's caption; they just stop going first.
     @ViewBuilder private var statusLine: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Letters, numbers and _ only. \(Limits.usernameMinChars)–\(Limits.usernameMaxChars) characters.")
             switch status {
             case .quiet:
                 EmptyView()
@@ -1967,6 +2024,7 @@ struct UsernameEditView: View {
                 Text(why).foregroundStyle(.red)
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
             }
+            Text("Letters, numbers and _ only. \(Limits.usernameMinChars)–\(Limits.usernameMaxChars) characters.")
 
             // THE LINK, BUILT AS YOU TYPE. The reference app shows a similar line — "This link opens
             // a chat with you:" followed by its own address — which is the thing that makes a username feel like it is worth
@@ -1974,8 +2032,8 @@ struct UsernameEditView: View {
             //
             // Shown at EVERY state, including while the name is invalid or taken — the reference app does the
             // same, because the line's job is to show what the link WOULD be, not to be a second
-            // verdict. The status line directly above is the verdict, and two of them disagreeing on
-            // one screen is worse than none.
+            // verdict. The status line at the top of this block is the verdict, and two of them
+            // disagreeing on one screen is worse than none.
             //
             // The format is the one the app actually opens: KulanApp routes both
             // https://fariin.com/u/<handle> and kulan://u/<handle>, and fariin.com is in the
