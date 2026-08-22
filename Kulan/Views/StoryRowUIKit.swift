@@ -1175,7 +1175,19 @@ final class StoryRowController: UIViewController, UIScrollViewDelegate, UIGestur
             // is, at every frame of the gesture, which is the whole of what he asked for.
             let step = max(1, geometry.fullDist)
             let fromCentre = abs(p.center.x - screenW / 2) / step
-            let countAlpha = max(0, min(1, 1 - fromCentre))
+            // ⛔ OVER THREE STEPS, NOT ONE (owner 2026-08-22: "top preview left and right show View
+            // and love, now I am not seeing").
+            //
+            // Falling to zero across a single step meant a resting neighbour — which sits exactly one
+            // step out — was fully invisible. That matched the letter of his written spec (side cards
+            // clean) but not what he wanted once he saw it: the counts are meant to be THERE on the
+            // cards either side, quieter, so the eye can see them arriving.
+            //
+            // The divisor is the reference's own, read from its source earlier: its footer alpha
+            // collapses to `1 - min(1, distanceToCentre / 3)`, which puts the neighbour at about two
+            // thirds and the next at a third. The centred card is still the only one at full
+            // strength, so there is still exactly one prominent set of numbers.
+            let countAlpha = max(0, min(1, 1 - fromCentre / 3))
             // The card's own size. Set OUTSIDE the animation and only when it differs: a bounds
             // change re-lays-out the hosted content, and it changes for one reason (the sheet's slot
             // was re-measured) which is not something a scroll ever does.
