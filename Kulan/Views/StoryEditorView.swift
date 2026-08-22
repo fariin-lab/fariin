@@ -3225,9 +3225,13 @@ struct StoryEditorView: View {
                                           style: StoryChipStyle = .white) -> some View {
         HStack(spacing: 6) {
             Image(systemName: symbol).font(.system(size: 15, weight: .bold))
+                // Only the chain takes a colour of its own, and only on a chip that IS a link —
+                // `symbol` is the whole test, because it is the one thing that differs between a
+                // link, a pin and a clock. See `StoryChipStyle.linkGlyph`.
+                .foregroundStyle(symbol == "link" ? style.linkGlyph : style.ink)
             Text(text).font(.system(size: 15, weight: .bold)).lineLimit(1)
+                .foregroundStyle(style.ink)
         }
-        .foregroundStyle(style.ink)
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         .background(style.background, in: Capsule())
@@ -3712,10 +3716,28 @@ struct StoryEditorView: View {
             // the text. Same builder (`storyStickerImage`) and same three transforms as on screen →
             // WYSIWYG, which is the whole contract of this function.
             ForEach(stickers) { s in
-                storyStickerImage(s)
-                    .scaleEffect(s.scale)
-                    .rotationEffect(s.rotation)
-                    .position(s.center)
+                // ⚠️ A CHIP GOES BACK TO BEING TYPE HERE, AND THAT IS THE WHOLE FIX FOR ITS BLUR
+                // (owner 2026-08-22: "when i upload link link text quality is losing"). Everywhere
+                // else a chip is a bitmap on purpose, but on this one pass it is being drawn into a
+                // 1080-wide canvas, and a bitmap can only be stretched into that: it was baked at 3×
+                // its own small size, then resampled to `drawnSize`, then resampled AGAIN by this
+                // renderer — twice off its grid, and a fourth time over if the finger had pinched it
+                // bigger, which is the case that actually looks broken.
+                //
+                // The recipe is what makes this possible and it is already kept for the colour
+                // cycler, so nothing new is stored. Re-drawn from it, the words are glyphs again and
+                // land at whatever resolution the canvas asks for. Geometry is unchanged: the live
+                // chip's natural size is the size `baseWidth` was measured from in the first place.
+                Group {
+                    if let recipe = s.chip {
+                        stickerChip(symbol: recipe.symbol, text: recipe.text, style: s.chipStyle)
+                    } else {
+                        storyStickerImage(s)
+                    }
+                }
+                .scaleEffect(s.scale)
+                .rotationEffect(s.rotation)
+                .position(s.center)
             }
             .zIndex(drawingOnTop ? 1 : 3)
             // ⚠️ A `Group`, because a modifier cannot be attached to an `if` in a ViewBuilder —
@@ -3992,6 +4014,21 @@ enum StoryChipStyle: Int, Equatable {
         switch self {
         case .white: return .black
         case .black, .blue: return .white
+        }
+    }
+
+    /// THE CHAIN IS BLUE, THE WORDS ARE NOT (owner 2026-08-22: "link icon make it blue"). Only the
+    /// link chip asks for this; a clock or a pin keeps one colour throughout, which is why this is a
+    /// separate answer from `ink` rather than a change to it.
+    ///
+    /// Two blues, not one, because one of them would be unreadable on half the badges: the reference
+    /// app's own link badge uses `#0a84ff` on its white card and the lighter `#64d2ff` on its black
+    /// one. On our blue card there is no blue left to use, so the glyph keeps the ink.
+    var linkGlyph: Color {
+        switch self {
+        case .white: return Color(red: 0x0a / 255, green: 0x84 / 255, blue: 0xff / 255)
+        case .black: return Color(red: 0x64 / 255, green: 0xd2 / 255, blue: 0xff / 255)
+        case .blue:  return ink
         }
     }
 }
