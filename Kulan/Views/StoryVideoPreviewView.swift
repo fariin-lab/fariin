@@ -115,6 +115,18 @@ final class StoryVideoPreviewView: MTKView {
         if !playing { requestRedraw() }   // land on the frame it stopped at
     }
 
+    /// One frame, now, for a change the view cannot see coming.
+    ///
+    /// ⚠️ A SEEK THAT LANDS WHILE PAUSED IS THE CASE THIS EXISTS FOR. The player moves to a new time
+    /// and the output has a new frame ready, but nothing is running to come and take it — the link
+    /// only exists while there is motion. The editor calls this on every pass where the clip is not
+    /// playing, which costs one render of a still frame and catches a landed seek, a new item, and a
+    /// resized card alike.
+    func redrawIfIdle() {
+        guard !isPlaying else { return }   // the link is already producing frames
+        requestRedraw()
+    }
+
     private func attachOutput() {
         if let output, let item = observedItem { item.remove(output) }
         output = nil

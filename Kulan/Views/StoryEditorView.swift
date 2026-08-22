@@ -1487,7 +1487,17 @@ struct StoryEditorView: View {
                               videoExposureEV: currentIsVideo
                                   ? StoryVideoBrightness.exposureEV(for: items.indices.contains(index) ? items[index].brightness : 0)
                                   : 0,
-                              videoPlaying: previewPlaying,
+                              // ⛔ A SCRUB COUNTS AS MOTION (owner 2026-08-22: dragging the white line
+                              // must move the picture with it, continuously, not on release).
+                              //
+                              // The seeking was always right — tolerant while the finger owns it,
+                              // exact the moment it lets go. What changed is who DRAWS: the renderer
+                              // only pulls frames while its display link is running, and the link
+                              // ran only for playback. So a paused scrub seeked correctly and nobody
+                              // asked for the new frame. Treating a drag as motion runs the link for
+                              // its duration, so every screen refresh takes whatever the player has
+                              // arrived at — which is the finger's own rate.
+                              videoPlaying: previewPlaying || trimDragging,
                               onTap: {
                                   captionFocused = false; selectedID = nil
                                   // ⚠️ PLAY AND PAUSE ARE BOTH THE WHOLE FRAME, AND BOTH BELONG TO
@@ -4789,6 +4799,8 @@ struct ZoomableImageView: UIViewRepresentable {
         // install, nothing to re-prime, and nothing that can stall because the number moved.
         c.clipView?.exposureEV = videoExposureEV
         c.clipView?.setPlaying(videoPlaying)
+        // A seek that landed while paused has a frame waiting and nothing running to collect it.
+        c.clipView?.redrawIfIdle()
         // Hidden rather than removed: a photo item has no clip and must not have an empty player
         // layer sitting over its picture, but the view stays so the constraints never rebuild.
         c.clipView?.isHidden = player == nil
