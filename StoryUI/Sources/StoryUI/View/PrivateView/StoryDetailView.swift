@@ -1385,19 +1385,31 @@ private extension StoryDetailView {
     /// a tail direction is a variable here rather than a constant.
     @ViewBuilder
     private func visitLinkBubble(for t: StoryTapArea, in canvas: CGSize) -> some View {
-        let badgeTop = canvas.height * t.y - max(24, canvas.height * t.h) / 2
-        let below = badgeTop < Self.visitBubbleHeight + Self.visitBubbleMargin
-        VisitLinkBubble(tailDown: !below) { open(t.url) }
+        let half = max(24, canvas.height * t.h) / 2
+        let badgeTop = canvas.height * t.y - half
+        let badgeBottom = canvas.height * t.y + half
+        // ⛔ UNDER THE BADGE IS THE RESTING PLACE NOW (owner 2026-08-22: "just is coming under the
+        // text not bottom"). It sat above before, which is where the reference app puts it — but the
+        // reference's badge is drawn by the same code that draws the bubble, so it knows exactly
+        // where the badge's top edge is. Ours does not: the tap rectangle travelled with the story
+        // and is measured against a file whose shape is not the shape of the screen it is drawn on,
+        // so the edge it names is close but not exact. Above, that error showed as the bubble
+        // climbing over the badge, which is what he photographed.
+        //
+        // Only flips up when there is genuinely no room underneath.
+        let above = badgeBottom + Self.visitBubbleHeight + Self.visitBubbleGap + Self.visitBubbleMargin > canvas.height
+        VisitLinkBubble(tailDown: above) { open(t.url) }
             .position(x: min(max(canvas.width * t.x, Self.visitBubbleMargin),
                              canvas.width - Self.visitBubbleMargin),
-                      y: below
-                         ? canvas.height * t.y + max(24, canvas.height * t.h) / 2 + Self.visitBubbleHeight / 2
-                         : badgeTop - Self.visitBubbleHeight / 2)
-            // Spring in, plain fade out — theirs is 0.4s springing up from half its own height, and
-            // 0.2s of nothing but alpha on the way out.
-            .transition(.asymmetric(
-                insertion: .scale(scale: 0.2, anchor: below ? .top : .bottom).combined(with: .opacity),
-                removal: .opacity))
+                      y: above
+                         ? badgeTop - Self.visitBubbleGap - Self.visitBubbleHeight / 2
+                         : badgeBottom + Self.visitBubbleGap + Self.visitBubbleHeight / 2)
+            // ⚠️ SMALL, AND IT DOES NOT TRAVEL (his word: "just small animation"). It grew from a
+            // fifth of its size before, which over that distance reads as the bubble flying in from
+            // somewhere else rather than as an answer appearing where it was asked for. From 0.94 it
+            // is a settle, not a journey, and the anchor keeps whatever movement is left at the tail
+            // so the bubble never appears to leave the badge it belongs to.
+            .transition(.scale(scale: 0.94, anchor: above ? .bottom : .top).combined(with: .opacity))
     }
 
     /// FIRST TAP ARMS, SECOND TAP OPENS (owner 2026-08-22). A link on somebody else's story used to
@@ -1410,7 +1422,9 @@ private extension StoryDetailView {
     private func armTapArea(_ t: StoryTapArea) {
         guard armedTapID != t.id else { return }
         NotificationCenter.default.post(name: .pauseStory, object: nil)
-        withAnimation(.spring(response: 0.4, dampingFraction: 0.72)) { armedTapID = t.id }
+        // Short and barely springy. The old 0.4s spring at 0.72 damping overshot and settled back,
+        // which is a lot of motion for a control that is only saying "did you mean this one".
+        withAnimation(.spring(response: 0.24, dampingFraction: 0.92)) { armedTapID = t.id }
     }
 
     private func disarmTapArea() {
@@ -1436,6 +1450,14 @@ private extension StoryDetailView {
     static let visitBubbleHeight: CGFloat = 59
     /// The closest it is allowed to come to any edge of the picture.
     static let visitBubbleMargin: CGFloat = 60
+    /// Clear air between the badge's edge and the tail's tip.
+    ///
+    /// ⚠️ NOT ZERO, WHICH IS WHAT THE REFERENCE USES. Theirs can sit flush because the same code
+    /// draws the badge and the bubble and knows the edge to the point. Ours is working from a
+    /// rectangle that travelled with the story, measured against a file with a different shape from
+    /// the screen, so the edge is approximate — and an approximate edge with no gap is an overlap
+    /// half the time.
+    static let visitBubbleGap: CGFloat = 8
 
     // The caption component: 16pt regular white text with a soft shadow, left-aligned,
     // 16pt side padding, sitting over a 128pt black gradient (0 → 80%). Collapsed to 3 lines; tap to expand.
