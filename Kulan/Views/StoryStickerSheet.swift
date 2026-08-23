@@ -783,6 +783,21 @@ private struct PlaceStickerScreen: View {
                                 Text(sub).font(.system(size: 13)).foregroundStyle(.secondary)
                             }
                         }
+                        // ⛔ THE WHOLE ROW IS THE BUTTON — owner, 2026-08-23: "when i click empty area
+                        // nothing happen … it should work all card not only [the name]".
+                        //
+                        // ⚠️ A LABEL IS ONLY AS BIG AS WHAT IT DRAWS. This one was two pieces of text
+                        // in a `VStack`, so it measured the WORDS: "Cyclemat Hostel" is about half the
+                        // width of the row and the rest of the line was empty space belonging to the
+                        // list, not to the button. Everything he circled in his screenshot is to the
+                        // right of the longest word in each row.
+                        //
+                        // Both lines are needed and neither is enough alone: the frame makes the label
+                        // span the row, and `contentShape` is what makes that span answer a touch —
+                        // filling a frame with nothing drawn in it leaves it transparent to the
+                        // finger. Same trap as the caption pill's dead gutters, 2026-08-17.
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .listRowBackground(Color.clear)
