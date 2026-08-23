@@ -26,8 +26,24 @@ struct VerifyEncryptionView: View {
     private var myPhoto: String? { ProfileStore.shared.me?.photoUrl }
 
     var body: some View {
+        // ⛔ REDESIGNED 2026-08-23 ON HIS ORDER: "make it clear and minimalist … dont rmeove any
+        // feature just redesign smooth and clean".
+        //
+        // Nothing was taken out. Every element on this page is still here — the two faces, the lock
+        // that becomes a seal, the key-changed record, the code, the twelve groups, Scan, both
+        // paragraphs, the unavailable state. What changed is how much FURNITURE they sit in.
+        //
+        // The page had three filled grey cards stacked down it, one of which was a card wrapped
+        // around another card (a white QR panel inside a grey one), and a block of monospaced digits
+        // in a third. On a screen whose whole job is to let two people read twelve numbers to each
+        // other, the boxes were the loudest thing on it. They are gone; the code keeps one white
+        // panel because a QR has to be read off white, and the digits sit on the page.
+        //
+        // ⚠️ THE SPACING IS THE STRUCTURE NOW. With the cards gone, the only thing separating one
+        // section from the next is air, so these numbers are doing work the fills used to do — 32
+        // between sections, 16 inside one. Tightening them is what would make this read as a list.
         ScrollView {
-            VStack(spacing: 20) {
+            VStack(spacing: 32) {
                 header
                 if loadError {
                     unavailable
@@ -36,12 +52,15 @@ struct VerifyEncryptionView: View {
                 } else {
                     qrCard
                     numberCard
-                    scanButton
-                    note
+                    VStack(spacing: 14) {
+                        scanButton
+                        note
+                    }
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 28)
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+            .padding(.bottom, 36)
         }
         .navigationTitle("Encryption")
         .navigationBarTitleDisplayMode(.inline)
@@ -73,24 +92,36 @@ struct VerifyEncryptionView: View {
     // MARK: - Sections
 
     private var header: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 18) {
+        VStack(spacing: 16) {
+            // ⚠️ THE FACES ARE SMALLER AND CLOSER, and the lock between them is a mark rather than a
+            // third circle. It used to be a 22pt glyph on a 44pt filled disc, which made a row of
+            // three round objects out of two people and a status — the eye counted three faces. At
+            // 26pt with no disc it reads as what it is: the state of the line BETWEEN them.
+            HStack(spacing: 16) {
                 avatarLabel(myName, myPhoto, "You")
                 Image(systemName: verified ? "checkmark.seal.fill" : "lock.fill")
-                    .font(.system(size: 22, weight: .semibold))
+                    .font(.system(size: 26, weight: .medium))
                     .foregroundStyle(verified ? Color.accentColor : .secondary)
-                    .frame(width: 44, height: 44)
-                    .background(cardColor, in: Circle())
                     .contentTransition(.symbolEffect(.replace))
+                    // Lifted onto the avatars' own centre line rather than the column's: the labels
+                    // under the faces are part of those columns and would otherwise drag the lock
+                    // down below the pictures it sits between.
+                    .offset(y: -11)
                 avatarLabel(peerName, peerPhotoUrl, peerName)
             }
-            .padding(.top, 8)
-            Text(verified ? "This chat is verified" : "This chat is end-to-end encrypted")
-                .font(.headline)
-            Text("Messages and calls with \(peerName) are secured with end-to-end encryption. No one outside this chat, not even Fariin, can read them.")
-                .font(.footnote).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(spacing: 8) {
+                Text(verified ? "This chat is verified" : "This chat is end-to-end encrypted")
+                    .font(.system(size: 20, weight: .semibold))
+                    .multilineTextAlignment(.center)
+                Text("Messages and calls with \(peerName) are secured with end-to-end encryption. No one outside this chat, not even Fariin, can read them.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    // Narrower than the page. A centred paragraph running the full width reads as a
+                    // block of text; broken nearer its natural measure it reads as a caption, which
+                    // is what it is.
+                    .frame(maxWidth: 320)
+            }
             // THE RECORD, and it does not go away. The chat's bar can be tapped once and is then
             // gone for good, so before this there was no answer anywhere to "has this person's
             // number ever changed?" — the only trace was the Verified badge quietly not being
@@ -113,49 +144,62 @@ struct VerifyEncryptionView: View {
     }
 
     private func avatarLabel(_ name: String, _ photo: String?, _ caption: String) -> some View {
-        VStack(spacing: 6) {
-            AvatarView(name: name, photoUrl: photo, size: 60)
+        VStack(spacing: 8) {
+            AvatarView(name: name, photoUrl: photo, size: 56)
             Text(caption).font(.caption).foregroundStyle(.secondary).lineLimit(1)
         }
-        .frame(maxWidth: 120)
+        .frame(maxWidth: 110)
     }
 
+    /// ⛔ ONE PANEL, NOT TWO. The QR was a white card inside a grey card — a frame around a frame,
+    /// and the outer one carried no information at all. The white stays because a QR has to be read
+    /// off white in both appearances; what holds it to the page in light mode is a hairline of the
+    /// same grey the outer card used to be filled with, which separates it without boxing it.
     private var qrCard: some View {
-        VStack(spacing: 0) {
+        Group {
             if let img = qrImage(SafetyNumber.qrPayload(number)) {
                 Image(uiImage: img)
                     .interpolation(.none).resizable().scaledToFit()
-                    .frame(width: 220, height: 220)
-                    .padding(18)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .frame(width: 208, height: 208)
+                    .padding(20)
+                    .background(.white, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .strokeBorder(cardColor, lineWidth: dark ? 0 : 1)
+                    }
             }
         }
-        .padding(6)
-        .background(cardColor, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
     }
 
+    /// ⛔ THE DIGITS SIT ON THE PAGE. They were in a filled card, and this is the one thing on the
+    /// screen somebody actually reads out loud to another person — a grey block around it is a
+    /// second thing for the eye to resolve before it can start reading.
+    ///
+    /// ⚠️ THE LABEL IS CENTRED NOW, over centred numbers. Left-aligned above a centred grid it was
+    /// the only thing on the page hanging off the left margin.
     private var numberCard: some View {
-        VStack(spacing: 10) {
-            Text("Safety number")
-                .font(.footnote).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 10) {
+        VStack(spacing: 16) {
+            Text("SAFETY NUMBER")
+                .font(.system(size: 11, weight: .semibold)).kerning(0.8)
+                .foregroundStyle(.secondary)
+            // 14 rather than 10 between rows: three rows of monospaced figures at the old spacing
+            // read as one field of digits, and the whole point is that they are twelve separate
+            // groups you check one at a time.
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 14) {
                 ForEach(Array(SafetyNumber.grouped(number).enumerated()), id: \.offset) { _, group in
                     Text(group)
-                        .font(.system(.body, design: .monospaced).weight(.medium))
+                        .font(.system(size: 17, design: .monospaced))
                         .frame(maxWidth: .infinity)
                 }
             }
         }
-        .padding(16)
-        .background(cardColor, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
     private var scanButton: some View {
         Button { showScanner = true } label: {
             Label(verified ? "Scan again" : "Scan their code", systemImage: "qrcode.viewfinder")
                 .font(.body.weight(.semibold))
-                .frame(maxWidth: .infinity).frame(height: 50)
+                .frame(maxWidth: .infinity).frame(height: 52)
                 .background(Color.accentColor, in: Capsule())
                 // Accent IS `.primary` app-wide, so this capsule is white at night and a hardcoded
                 // white label vanished into it. `onAccent` is that colour's declared inverse.
@@ -168,19 +212,22 @@ struct VerifyEncryptionView: View {
             .font(.caption).foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
             .fixedSize(horizontal: false, vertical: true)
-            .padding(.top, 2)
+            .frame(maxWidth: 320)
     }
 
     private var unavailable: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             Image(systemName: "lock.slash").font(.system(size: 34)).foregroundStyle(.secondary)
             Text("Can't show the safety number yet")
-                .font(.headline)
+                .font(.system(size: 17, weight: .semibold))
+                .multilineTextAlignment(.center)
             Text("\(peerName) hasn't finished setting up encryption on their device. Try again once they've opened the chat.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: 320)
         }
-        .padding(.top, 50).padding(.horizontal, 20)
+        .padding(.top, 40)
     }
 
     // MARK: - Logic

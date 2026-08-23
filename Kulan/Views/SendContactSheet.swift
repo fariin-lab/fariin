@@ -33,6 +33,9 @@ struct SendContactSheet: View {
     /// rather than with the page margin. See `sideInset`.
     @State private var gridWidth: CGFloat = 0
     @FocusState private var searchFocused: Bool
+    /// Which height the sheet is at. Half by default; the search takes it to full and the X puts it
+    /// back. See the note on `presentationDetents`.
+    @State private var detent: PresentationDetent = .medium
     /// Told what was sent and to whom, so the page underneath can say so. The sheet does not show it
     /// itself — it is closing, and a message that leaves with the thing it is about is not a message.
     var onSent: (String) -> Void = { _ in }
@@ -57,8 +60,13 @@ struct SendContactSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            if searching { searchRow.transition(.move(edge: .top).combined(with: .opacity)) }
+            // ⛔ SEARCHING REPLACES THE HEADER, IT NO LONGER SITS UNDER IT — owner, 2026-08-23: "top
+            // header only show seatch bae and X button".
+            //
+            // The title and the share circle are not useful while somebody is typing a name, and on
+            // a half sheet they were costing a whole row of faces to say "Share with / Select
+            // chats" over a keyboard. One row in, one row out.
+            if searching { searchHeader.transition(.opacity) } else { header.transition(.opacity) }
             peopleGrid
             // ⚠️ GONE WHILE THE KEYBOARD IS UP (owner 2026-08-22). The sheet is lifted above the
             // keys as one piece, so this button was not hidden BY the keyboard — it was parked on
@@ -90,7 +98,15 @@ struct SendContactSheet: View {
         // ⚠️ DO NOT PUT A MATERIAL BACK TO "FIX" CONTRAST. If the names are ever hard to read over a
         // busy photograph, the fix is on the labels (a shadow), not on the surface — covering the
         // glass is what he has rejected twice.
-        .presentationDetents([.medium, .large])
+        // ⛔ THE SEARCH OWNS THE HEIGHT — owner, 2026-08-23: "when i click search button open full
+        // sheet … when i click x sheet make how its begire like 50%".
+        //
+        // ⚠️ THE DETENT HAS TO BE BOUND, not just listed. Both sizes were already offered and the
+        // sheet simply stayed wherever the finger had left it, so tapping search on a half sheet
+        // put a keyboard over two thirds of what was left. `selection:` is the only way to say
+        // WHICH of them is in force. It stays two-way, so dragging the grabber still works and the
+        // value follows it.
+        .presentationDetents([.medium, .large], selection: $detent)
         .presentationDragIndicator(.visible)
         .interactiveDismissDisabled(sending)
         // ⛔ NO SPINNER (owner 2026-08-22: "when I send, it is loading — no need loading"). A wheel
@@ -114,10 +130,7 @@ struct SendContactSheet: View {
                 Text("Select chats").font(.system(size: 13)).foregroundStyle(.secondary)
             }
             HStack {
-                circleButton(searching ? "xmark" : "magnifyingglass") {
-                    searching.toggle()
-                    if searching { searchFocused = true } else { query = ""; searchFocused = false }
-                }
+                circleButton("magnifyingglass") { openSearch() }
                 Spacer()
                 circleButton("square.and.arrow.up") { showSystemShare = true }
             }
@@ -125,6 +138,22 @@ struct SendContactSheet: View {
         .padding(.horizontal, 16)
         .padding(.top, 14)
         .padding(.bottom, 12)
+    }
+
+    private func openSearch() {
+        searching = true
+        detent = .large
+        searchFocused = true
+    }
+
+    /// ⚠️ THE KEYBOARD GOES DOWN BEFORE THE SHEET COMES DOWN, and the order is his report: "when i
+    /// click x … clos ekeybaod". A sheet shrinking to half with the keys still up would leave the
+    /// grid squeezed into whatever is left of it for the length of the animation.
+    private func closeSearch() {
+        searchFocused = false
+        query = ""
+        searching = false
+        detent = .medium
     }
 
     private func circleButton(_ icon: String, _ tap: @escaping () -> Void) -> some View {
@@ -139,28 +168,38 @@ struct SendContactSheet: View {
         .buttonStyle(.plain)
     }
 
-    /// Only on screen once the search circle is tapped — see the note at the top.
-    private var searchRow: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Search", text: $query)
-                .focused($searchFocused)
-                .submitLabel(.search)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            if !query.isEmpty {
-                Button { query = "" } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+    /// The whole header while searching: the field and the way out, nothing else.
+    ///
+    /// ⚠️ 48 TALL, WHICH IS THE X BESIDE IT (his numbers, and they are one number). The field was 40
+    /// against a 48pt circle, so the row had two different heights in it and the pill sat visibly
+    /// short of the button it shares a line with. Matching them is also what makes this a control
+    /// row rather than a field with a button parked next to it.
+    private var searchHeader: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search", text: $query)
+                    .focused($searchFocused)
+                    .submitLabel(.search)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                if !query.isEmpty {
+                    Button { query = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
+            .font(.system(size: 16))
+            .padding(.horizontal, 16)
+            .frame(height: 48)
+            .liquidGlass(Capsule())
+
+            circleButton("xmark") { closeSearch() }
         }
-        .font(.system(size: 16))
-        .padding(.horizontal, 14)
-        .frame(height: 40)
-        .liquidGlass(Capsule())
         .padding(.horizontal, 16)
-        .padding(.bottom, 10)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
     }
 
     // MARK: - The people
