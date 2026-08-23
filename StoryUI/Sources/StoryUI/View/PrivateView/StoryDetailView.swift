@@ -320,6 +320,11 @@ struct StoryDetailView: View {
     /// stranding the hold for the rest of the bucket. A value that is read every tick cannot strand.)
     @State private var isBuffering: Bool = false
     @State private var captionExpanded: Bool = false   // tap the caption to expand past 3 lines
+    /// The caption link under the finger, washed until the browser takes over. See `flashCaptionLink`.
+    @State private var pressedCaptionLink: URL?
+    /// Whatever `openURL` meant above this view. The caption overrides it for its own subtree, so
+    /// this is still the inherited one and is what actually opens the link once the wash has shown.
+    @Environment(\.openURL) private var inheritedOpenURL
     /// WHERE THE FINGER IS, and the only answer in this file that cannot be missed. See `holdGesture`.
     ///
     /// `.idle` while nothing is touching the story, `.down` from the instant a finger lands, and
@@ -1549,7 +1554,15 @@ private extension StoryDetailView {
                 // a link run to the link and everything else to the gesture. @mentions are
                 // deliberately NOT styled yet: a highlighted mention that goes nowhere is a fake
                 // feature, and the mention system (friends-only notify) is its own build.
-                Text(Self.captionWithLinks(text))
+                Text(Self.captionWithLinks(text, pressed: pressedCaptionLink))
+                    // The wash goes on, then the browser. `.handled` is only claimed for http(s):
+                    // a mention carries our own scheme and is resolved by the host above this view,
+                    // so it has to go on being resolved there, untouched.
+                    .environment(\.openURL, OpenURLAction { url in
+                        guard url.scheme == "http" || url.scheme == "https" else { return .systemAction }
+                        flashCaptionLink(url)
+                        return .handled
+                    })
                     .font(.system(size: 16))
                     .foregroundColor(.white)
                     .shadow(color: .black.opacity(0.25), radius: 4)
@@ -1581,11 +1594,31 @@ private extension StoryDetailView {
         }
     }
 
+    /// Wash the tapped link, then hand it on.
+    ///
+    /// ⚠️ THE DELAY IS THE POINT AND IT IS SHORT. `UIApplication.open` tears the app off the screen
+    /// on the next frame, so opening and highlighting in the same breath shows nothing at all — the
+    /// wash has to get one paint of its own before the hand-off. 0.16s is about two frames of visible
+    /// state, which is enough to feel and too little to read as a delay.
+    ///
+    /// The story is deliberately NOT paused here. A sticker link pauses because its Visit bubble
+    /// stands on screen waiting for a second tap; a caption link opens on the first one, and the
+    /// pause/resume pair would be straddling a trip out of the app.
+    private func flashCaptionLink(_ url: URL) {
+        withAnimation(.easeOut(duration: 0.08)) { pressedCaptionLink = url }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+            withAnimation(.easeOut(duration: 0.18)) { pressedCaptionLink = nil }
+            inheritedOpenURL(url)
+        }
+    }
+
     /// The caption with every URL made tappable. White and underlined rather than blue: the caption
     /// sits on a photograph behind a dark fade, and blue-on-anything is the one colour combination
     /// that can vanish there; the underline is what says "link" on every backdrop. Bare domains
     /// count (NSDataDetector supplies the scheme), which is how people actually type them.
-    static func captionWithLinks(_ text: String) -> AttributedString {
+    ///
+    /// `pressed` is the one link the finger is on right now, if any — see `flashCaptionLink`.
+    static func captionWithLinks(_ text: String, pressed: URL? = nil) -> AttributedString {
         var a = AttributedString(text)
         let full = NSRange(text.startIndex..., in: text)
         if let det = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
@@ -1620,6 +1653,19 @@ private extension StoryDetailView {
                 a[ar].link = url
                 a[ar].foregroundColor = .white
                 a[ar].font = .system(size: 16, weight: .semibold)
+            }
+        }
+        // ⛔ THE PRESSED RUN CARRIES A WASH — owner, 2026-08-23: "user not feeling to touch link,
+        // please add highlight when user click caption link". A caption link had no pressed state at
+        // all: the finger went down on white underlined text, nothing happened, and the browser
+        // opened a beat later with nothing in between to say the tap had landed.
+        //
+        // Only the RUN that was hit lights up, not the whole caption, which is what makes it read as
+        // "that one" rather than as the caption flashing. Ranges are collected before the write
+        // because `a.runs` is a view onto the string being mutated.
+        if let pressed {
+            for r in a.runs.filter({ $0.link == pressed }).map(\.range) {
+                a[r].backgroundColor = Color.white.opacity(0.28)
             }
         }
         return a
