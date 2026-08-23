@@ -147,7 +147,14 @@ struct SetNicknameView: View {
             } message: {
                 Text("This will permanently delete this nickname and note.")
             }
-            .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { focus = .first } }
+            // ⛔ NO KEYBOARD ON ARRIVAL — owner, 2026-08-23: "when i inter profile user then i click
+            // edit button to chnage nickname user plz don't open keyboard otomatic".
+            //
+            // The 0.35s delay this replaces was itself a repair: `.onAppear` fires as a push BEGINS,
+            // so focusing there handed the keyboard to the transition. Waiting it out fixed the
+            // stutter and left the behaviour, and the behaviour is the part he does not want — the
+            // page has a photo, three fields and a Delete on it, and it was arriving with half of
+            // itself under a keyboard he had not asked for. Any of the fields is one tap away.
         }
     }
 
