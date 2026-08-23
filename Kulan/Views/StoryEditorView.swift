@@ -3339,11 +3339,17 @@ struct StoryEditorView: View {
         }
     }
 
+    /// ⚠️ THE STRING IS KEPT EVEN THOUGH THE GLYPH CHANGED. It is not a picture any more, it is the
+    /// NAME of one: every place chip already posted carries `mappin.and.ellipse` in its recipe, and
+    /// renaming it here would leave those chips drawing an SF Symbol while new ones draw his pin.
+    /// `chipGlyph` is the one place that turns this name into a drawing.
+    static let placeSymbol = "mappin.and.ellipse"
+
     @MainActor private func addPlaceSticker(_ name: String, _ coord: CLLocationCoordinate2D) {
         let text = name.uppercased()
         chipSticker(action: .place(name: name, lat: coord.latitude, lon: coord.longitude),
-                    recipe: .init(symbol: "mappin.and.ellipse", text: text)) {
-            stickerChip(symbol: "mappin.and.ellipse", text: text)
+                    recipe: .init(symbol: Self.placeSymbol, text: text)) {
+            stickerChip(symbol: Self.placeSymbol, text: text)
         }
         showChipHint()
     }
@@ -3386,17 +3392,37 @@ struct StoryEditorView: View {
     @ViewBuilder private func stickerChip(symbol: String, text: String,
                                           style: StoryChipStyle = .white) -> some View {
         HStack(spacing: 7) {
-            Image(systemName: symbol).font(.system(size: 18, weight: .bold))
-                // Only the chain takes a colour of its own, and only on a chip that IS a link —
-                // `symbol` is the whole test, because it is the one thing that differs between a
-                // link, a pin and a clock. See `StoryChipStyle.linkGlyph`.
-                .foregroundStyle(symbol == "link" ? style.linkGlyph : style.ink)
+            chipGlyph(symbol, style: style)
             Text(text).font(.system(size: 18, weight: .bold)).lineLimit(1)
                 .foregroundStyle(style.ink)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 11)
         .background(style.background, in: Capsule())
+    }
+
+    /// The mark at the head of a chip. `symbol` is the whole test, because it is the one thing that
+    /// differs between a link, a place and a clock — the recipe carries it and `flatten` re-draws
+    /// from the same call, so what is exported is what was on screen.
+    ///
+    /// ⚠️ THE PIN IS NOT AN SF SYMBOL ANY MORE — owner, 2026-08-23, with his own vector attached.
+    /// `mappin.and.ellipse` was a solid glyph; his is an outline, so it is a `Shape` and it is
+    /// filled even-odd. See `StoryPlacePin` for why that fill rule is load-bearing.
+    ///
+    /// 20pt against the words' 18: the drawing sits inside a 24-wide box that its own artwork does
+    /// not fill, so matching the numbers would leave the pin visibly smaller than the chain and the
+    /// clock beside it. Measured against the badge's 44pt height, not chosen.
+    @ViewBuilder private func chipGlyph(_ symbol: String, style: StoryChipStyle) -> some View {
+        if symbol == Self.placeSymbol {
+            StoryPlacePin()
+                .fill(style.accentGlyph, style: FillStyle(eoFill: true))
+                .frame(width: 20, height: 20)
+        } else {
+            Image(systemName: symbol).font(.system(size: 18, weight: .bold))
+                // A link and a place both take the accent; a clock keeps the ink. See
+                // `StoryChipStyle.accentGlyph`.
+                .foregroundStyle(symbol == "link" ? style.accentGlyph : style.ink)
+        }
     }
 
     /// Re-bake a chip in the next colour. ⚠️ THE PICTURE IS THE STICKER — a chip has been a flat
@@ -4179,14 +4205,14 @@ enum StoryChipStyle: Int, Equatable {
         }
     }
 
-    /// THE CHAIN IS BLUE, THE WORDS ARE NOT (owner 2026-08-22: "link icon make it blue"). Only the
-    /// link chip asks for this; a clock or a pin keeps one colour throughout, which is why this is a
-    /// separate answer from `ink` rather than a change to it.
+    /// THE MARK IS BLUE, THE WORDS ARE NOT (owner 2026-08-22: "link icon make it blue", and
+    /// 2026-08-23 for the pin: "also make Blue"). The clock is the one that still keeps the ink
+    /// throughout, which is why this is a separate answer from `ink` rather than a change to it.
     ///
     /// Two blues, not one, because one of them would be unreadable on half the badges: the reference
     /// app's own link badge uses `#0a84ff` on its white card and the lighter `#64d2ff` on its black
     /// one. On our blue card there is no blue left to use, so the glyph keeps the ink.
-    var linkGlyph: Color {
+    var accentGlyph: Color {
         switch self {
         case .white: return Color(red: 0x0a / 255, green: 0x84 / 255, blue: 0xff / 255)
         case .black: return Color(red: 0x64 / 255, green: 0xd2 / 255, blue: 0xff / 255)
