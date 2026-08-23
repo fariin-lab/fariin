@@ -60,9 +60,16 @@ import UIKit
     /// after any of those changes pays for one render and one blur, on the main thread, exactly as
     /// theirs does. A 390×844 image at radius 20 is a few tens of milliseconds once per chat open.
     static func state(for cid: String, dark: Bool, frame: CGRect) -> WallpaperBlurState? {
-        guard !UIAccessibility.isReduceTransparencyEnabled else { return nil }
         let store = WallpaperStore.shared
-        guard store.hasWallpaper(for: cid), frame.width > 1, frame.height > 1 else { return nil }
+        // The wallpaper going AWAY is the same staleness the other way round: an off-screen bubble
+        // would go on showing a slice of a picture the chat no longer has. Same broadcast, emptied.
+        guard !UIAccessibility.isReduceTransparencyEnabled,
+              store.hasWallpaper(for: cid),
+              frame.width > 1, frame.height > 1
+        else {
+            WallpaperBlurSliceView.clear(cid)
+            return nil
+        }
         let key = "\(cid)|\(dark)|\(Int(frame.width))x\(Int(frame.height))|\(store.version)"
         if let hit = cache[key] { return hit }
         guard let source = renderWallpaper(cid: cid, dark: dark, size: frame.size),
@@ -72,6 +79,21 @@ import UIKit
         // handful is a theme flip or a rotation that will not come back soon.
         if cache.count >= 4 { cache.removeAll() }
         cache[key] = state
+        // ⛔ EVERY LIVE SLICE OF THIS CHAT TAKES THE NEW PICTURE AT ONCE — his 2026-08-23 "I change
+        // the wallpaper and some bubbles still have the old one", with two teal bubbles left over
+        // from the previous wallpaper among a screenful of correct ones.
+        //
+        // ⚠️ A ROW IS NOT REBUILT JUST BECAUSE ITS SIGNATURE CHANGED. `NativeMessageList` diffs the
+        // signatures against `indexPathsForVisibleItems` and refreshes only those — then writes
+        // `lastRowSigs = rowSignatures` for ALL of them, so a row that was off screen at that instant
+        // is recorded as up to date without ever having been rebuilt, and nothing asks again. Its
+        // bubble goes on holding the state it was born with, which is the old picture.
+        //
+        // Broadcasting is the right shape here rather than a fix to that diff: the picture is a
+        // SINGLETON per chat, so "every slice of this cid shows this image" is simply true, and it
+        // holds however a given slice got on screen. A slice whose cell IS rebuilt gets the same
+        // object through `updateUIView` anyway, so the two paths cannot disagree.
+        WallpaperBlurSliceView.adopt(state)
         return state
     }
 
@@ -204,6 +226,20 @@ import UIKit
         for v in live.allObjects { v.reposition() }
     }
 
+    /// The picture for a chat changed: every live slice of THAT chat takes it, on screen or not.
+    /// See the note at the call site in `WallpaperBlur.state(for:dark:frame:)` for why this is a
+    /// broadcast and not something each row is trusted to pick up.
+    static func adopt(_ new: WallpaperBlurState) {
+        for v in live.allObjects where v.state?.cid == new.cid && v.state !== new {
+            v.state = new
+        }
+    }
+
+    /// This chat has no picture any more — wallpaper removed, or Reduce Transparency switched on.
+    static func clear(_ cid: String) {
+        for v in live.allObjects where v.state?.cid == cid { v.state = nil }
+    }
+
     private let imageView = UIImageView()
     private let maskShape = CAShapeLayer()
     /// Their `strokeLayer`, construction and all: the bubble path stroked at 2 hairlines, sitting
@@ -216,6 +252,9 @@ import UIKit
         didSet {
             guard state !== oldValue else { return }
             imageView.image = state?.image
+            // With no picture there is nothing to rim either: the bubble is a flat colour now and
+            // the surface underneath it will say so on the next rebuild.
+            strokeShape.isHidden = state == nil || maskPath == nil
             reposition()
         }
     }
