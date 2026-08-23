@@ -2733,6 +2733,23 @@ struct ChatRow: View, Equatable {
         if s.hasPrefix("🎤 Voice message") {
             return ("mic.fill", "Voice message" + String(s.dropFirst("🎤 Voice message".count)))
         }
+        // ⛔ THE TWO ONE-TIME MARKERS, AND BOTH WERE FALLING THROUGH THIS WHOLE FUNCTION.
+        //
+        // "🎤 One-time voice message" does NOT start with "🎤 Voice message", and unlike 🎥/📷/🎬
+        // there was no generic 🎤 catch below it. "View-once photo" carries no emoji at all, so
+        // nothing here could recognise it either. Both then reached the plain-text branch — and
+        // decryption returns a non-cipher string UNCHANGED — so the row printed the marker verbatim:
+        // the voice one with its raw 🎤 showing, which is the exact thing every other case in here
+        // exists to prevent, and the photo one as bare grey words with no icon while every other
+        // photo preview had one.
+        //
+        // `1.circle` is the app's own one-time mark, the same glyph the composer and the story tray
+        // wear, so the list agrees with the place the thing was sent from.
+        if s == "🎤 One-time voice message" { return ("1.circle.fill", "One-time voice message") }
+        if s == "View-once photo"          { return ("1.circle.fill", "View-once photo") }
+        // A deleted newest message writes plain words too, for the same reason and with the same
+        // result: no icon, while everything around it had one.
+        if s == "This message was deleted" { return ("slash.circle", "This message was deleted") }
         if s.hasPrefix("🎥 Video") {   // video MESSAGE (🎥) — distinct from 📹 call markers
             return ("video.fill", "Video" + String(s.dropFirst("🎥 Video".count)))
         }
@@ -2742,6 +2759,10 @@ struct ChatRow: View, Equatable {
         if s.hasPrefix("📷 ") { return ("photo.fill", String(s.dropFirst("📷 ".count))) }
         // Mixed photo+video albums ("🎬 3 Media") — same icon+label treatment, never raw emoji.
         if s.hasPrefix("🎬 ") { return ("photo.on.rectangle.angled", String(s.dropFirst("🎬 ".count))) }
+        // The 🎤 catch that was never here. Every other media emoji has one, and its absence is what
+        // let the one-time voice marker reach the screen with its emoji intact. Anything new starting
+        // 🎤 now lands as icon + words rather than leaking.
+        if s.hasPrefix("🎤 ") { return ("mic.fill", String(s.dropFirst("🎤 ".count))) }
         switch s {
         case "📄 File":              return ("doc.fill", "File")
         // Our own GIF mark, the one the composer button wears. `sparkles` was standing in for a
@@ -2833,7 +2854,19 @@ struct ChatRow: View, Equatable {
     private var lastSenderPrefix: String {
         guard conv.isGroup, !conv.lastSender.isEmpty, conv.lastSender != me else { return "" }
         let c = conv.lastMessageCipher
-        guard c.hasPrefix("enc") || c.hasPrefix("📷") || c.hasPrefix("🎤 Voice message") || c.hasPrefix("🎥") || c.hasPrefix("🎬") else { return "" }
+        // ⚠️ THE TEST IS "DOES THE ROW RECOGNISE THIS", not a second hand-kept list of prefixes.
+        //
+        // It used to be its own literal list — enc / 📷 / 🎤 Voice message / 🎥 / 🎬 — which meant a
+        // group whose newest message was a FILE, a GIF, a one-time note or a deleted message showed
+        // the preview with nobody's name on it, while a photo one line above said "Ayaan: Photo".
+        // Every marker the badge knows is a real message from a real person, so asking the badge is
+        // both shorter and impossible to fall behind: add a marker there and the name follows.
+        //
+        // System events ("X added Y") stay bare, which is the whole point of the guard: they are
+        // plain words nobody "sent", the badge does not recognise them, and a name in front of one
+        // would read as somebody saying it. Call rows are already out — they write an empty
+        // lastSender on purpose.
+        guard c.hasPrefix("enc") || previewBadge(c) != nil else { return "" }
         let n = conv.names[conv.lastSender] ?? "Someone"
         return "\(n.split(separator: " ").first.map(String.init) ?? n): "
     }
