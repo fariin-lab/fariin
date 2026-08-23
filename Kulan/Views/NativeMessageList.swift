@@ -2358,6 +2358,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        // THE WALLPAPER SLICES FOLLOW THE SCROLL, BEFORE ANY OF THE GUARDS BELOW. An incoming bubble
+        // on a wallpaper shows the piece of blurred wallpaper that sits under it (see
+        // `WallpaperBlur`), and a cell that scrolls is moved by this view's offset, not laid out — so
+        // nothing else would ever tell the slice it has moved. This is the reference app's
+        // `updateScrollingContent`, called on every tick including the ones the pill and the
+        // read-tracking below deliberately ignore: a programmatic scroll and a capture freeze both
+        // still move the bubbles across the picture.
+        WallpaperBlurSliceView.repositionAll()
         guard !ignoringScrollEvents else { return }   // ditto: a stop is not a scroll
         // During the screenshot-capture freeze the SYSTEM owns the offset: write no SwiftUI state and fire
         // nothing.

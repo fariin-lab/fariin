@@ -98,7 +98,11 @@ struct OfficialChatView: View {
                     dark: dark,
                     onImageTap: { zoomedImage = $0 },
                     onButtonTap: { tap($0) },
-                    countsAsRead: true
+                    countsAsRead: true,
+                    // This channel is a full-screen chat on the same list as any other, so its
+                    // bubbles take the real slice. See `wallpaperBlur` on the row.
+                    wallpaperBlur: WallpaperBlur.state(for: OfficialChannel.cid, dark: dark,
+                                                       frame: WallpaperBlur.windowFrame)
                 ).padding(.horizontal, 12))
             },
             // Nothing to page: the channel holds the most recent hundred announcements and that is the
@@ -368,6 +372,11 @@ struct AnnouncementRow: View {
     /// anybody read anything — an admin checking their own draft would otherwise be counted as a
     /// reader of it.
     var countsAsRead: Bool = false
+    /// The blurred wallpaper this bubble shows a slice of — see `WallpaperBlur`. Passed ONLY by the
+    /// real chat, whose wallpaper fills the window; the previews draw the same wallpaper at a size
+    /// and place that is not the window's, and a slice there would show the wrong piece of it, so
+    /// they leave this nil and take the material approximation instead.
+    var wallpaperBlur: WallpaperBlurState? = nil
 
     /// Received-side cluster geometry, matching a normal chat bubble: 18pt outer corners, and the
     /// small 6pt corner is the one that fuses a run together. Every announcement stands alone, so
@@ -414,7 +423,11 @@ struct AnnouncementRow: View {
             // An announcement is an incoming bubble and this channel takes a wallpaper like any
             // other chat, so it resolves its surface the same way. Read at draw time rather than
             // passed in: these rows are built in two places and neither threads chat state through.
-            .background(Theme.receivedStyle(dark, onWallpaper: WallpaperStore.shared.hasWallpaper(for: OfficialChannel.cid)))
+            .background {
+                ReceivedBubbleSurface(dark: dark,
+                                      onWallpaper: WallpaperStore.shared.hasWallpaper(for: OfficialChannel.cid),
+                                      blur: wallpaperBlur)
+            }
             .clipShape(UnevenRoundedRectangle(cornerRadii: corners, style: .continuous))
             Spacer(minLength: 0)
         }

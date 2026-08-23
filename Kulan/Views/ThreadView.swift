@@ -450,6 +450,18 @@ struct ThreadView: View {
         return store.hasWallpaper(for: cid)
     }
 
+    /// The blurred picture of this chat's wallpaper that incoming bubbles show slices of — see
+    /// `WallpaperBlur`. Nil with no wallpaper or under Reduce Transparency. Cached inside; the first
+    /// read after a chat open, a theme flip or a wallpaper change is the one that renders.
+    ///
+    /// The window is the reference frame because the wallpaper is drawn `.ignoresSafeArea()` behind
+    /// this whole screen. For the 0.35s of a push transition the screen is not yet at the window's
+    /// origin and every slice is offset by the slide; at radius 20 under an 80% wash that is not a
+    /// thing anyone can see, and theirs has the same moment.
+    private var wallpaperBlur: WallpaperBlurState? {
+        WallpaperBlur.state(for: cid, dark: dark, frame: WallpaperBlur.windowFrame)
+    }
+
     // Type-erase the heavy messages chain at the scrollStack boundary: the chain's opaque type grew past
     // the type-checker's budget ("unable to type-check this expression in reasonable time") when another
     // onChange was added. AnyView resets the complexity scrollStack sees; one wrapper, no behavior change.
@@ -1748,7 +1760,7 @@ struct ThreadView: View {
         } else {
             MessageBubble(
                 message: msg, isMe: msg.authorId == me, dark: dark, cid: cid,
-                onWallpaper: chatHasWallpaper,
+                onWallpaper: chatHasWallpaper, wallpaperBlur: wallpaperBlur,
                 nameFor: { personName($0) },
                 avatarFor: { conversation?.photos[$0] },
                 onReply: { m in beginReply(to: m) },
@@ -2045,7 +2057,7 @@ struct ThreadView: View {
         // picture would land under bubbles still painting themselves flat, and they would only
         // correct themselves as scrolling recycled them — the "it fixes itself if I leave and come
         // back" report. One bool for the whole chat, not per row.
-        let wallTok = chatHasWallpaper
+        let wallTok = "\(chatHasWallpaper):\(wallpaperBlur?.id ?? 0)"
         // EVERY value rowView reads eagerly must be in this key, or hosted cells keep stale content
         // (the class of bug that produced the frozen bubble corners). Added:
         //   dark          - SwiftUI bubbles baked the palette in, so flipping Dark Mode left received
@@ -2176,7 +2188,10 @@ struct ThreadView: View {
         guard Self.useUIKitBubbles, !isGroup, !selecting, chatColorSpec == nil, !searchActive else { return [:] }
         // Audit M5: iBlocked and the read-receipts pref feed the tick, so they must key the cache —
         // toggling the pref (or a block-state change) left uikit rows showing stale ticks.
-        let key = "\(repo.itemsVersion)|\(repo.otherLastReadMillis)|\(highlightId ?? "-")|\(repo.iBlocked)|\(readReceiptsOn)"
+        // The wallpaper and its blurred picture are INSIDE the model (`onWallpaper`, `wallpaperBlur`),
+        // so they must key this cache or a wallpaper applied while the chat is open hands every
+        // UIKit text row a model that still says "no wallpaper" until the chat is reopened.
+        let key = "\(repo.itemsVersion)|\(repo.otherLastReadMillis)|\(highlightId ?? "-")|\(repo.iBlocked)|\(readReceiptsOn)|\(chatHasWallpaper):\(wallpaperBlur?.id ?? 0)"
         if uikitModelCache.key == key { return uikitModelCache.models }
         var out: [String: UIKitBubbleModel] = [:]
         for m in repo.items {
@@ -2460,7 +2475,7 @@ struct ThreadView: View {
             isMe: isMe, text: text, edited: m.edited,
             timeText: m.createdAt.formatted(date: .omitted, time: .shortened),
             tick: tick, radii: radii, topSpacing: first ? 14 : 2,
-            onWallpaper: chatHasWallpaper)
+            onWallpaper: chatHasWallpaper, wallpaperBlur: wallpaperBlur)
     }
 
     // UIKit message list. Reuses the SAME rowView, so every bubble feature is identical.
@@ -3836,7 +3851,10 @@ struct ThreadView: View {
             .padding(.horizontal, 14)
             .frame(height: 60)
             .fixedSize(horizontal: true, vertical: false)
-            .background(mine ? myBubbleFill : Theme.receivedStyle(dark, onWallpaper: chatHasWallpaper))
+            .background {
+                if mine { Rectangle().fill(myBubbleFill) }
+                else { ReceivedBubbleSurface(dark: dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur) }
+            }
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             // Tap target is ONLY the bubble — NOT the full-width row. The old .contentShape/
             // .onTapGesture sat on the outer HStack (which includes the empty-side Spacer), so
@@ -5770,17 +5788,20 @@ struct MessageBubble: View, Equatable {
             && l.isFirstInCluster == r.isFirstInCluster && l.isLastInCluster == r.isLastInCluster
             && l.otherLastRead == r.otherLastRead && l.chatColor == r.chatColor
             && l.isViewedOnce == r.isViewedOnce && l.restricted == r.restricted
-            && l.onWallpaper == r.onWallpaper
+            && l.onWallpaper == r.onWallpaper && l.wallpaperBlur == r.wallpaperBlur
     }
 
     let message: Message
     let isMe: Bool
     let dark: Bool
     let cid: String
-    /// Is this bubble sitting on a wallpaper? Decides whether an incoming bubble is a flat colour
-    /// or a blur material. Defaults to false so a bubble drawn somewhere with no wallpaper behind it
-    /// (the pinned-messages sheet) keeps the flat surface, which is the correct answer there.
+    /// Is this bubble sitting on a wallpaper, and if so the blurred picture of it that an incoming
+    /// bubble shows a slice of (see `WallpaperBlur`). Both default off so a bubble drawn somewhere
+    /// with no wallpaper behind it (the pinned-messages sheet) keeps the flat surface, which is the
+    /// correct answer there. A wallpaper with no picture — the chat peek platter, which is not the
+    /// size of the window — falls to the material approximation in `Theme.receivedSurface`.
     var onWallpaper: Bool = false
+    var wallpaperBlur: WallpaperBlurState? = nil
     var nameFor: (String) -> String = { _ in "" }
     var avatarFor: (String) -> String? = { _ in nil }
     var onReply: (Message) -> Void = { _ in }
@@ -5858,17 +5879,27 @@ struct MessageBubble: View, Equatable {
     // light/dark — see Theme.defaultBubble).
     private var myFill: AnyShapeStyle { chatColor?.fill ?? AnyShapeStyle(Theme.defaultBubble(dark)) }
 
-    // Surface behind THEIR bubbles. Flat grey on the plain background, a blur material on a
-    // wallpaper — see Theme.receivedStyle for why it stops being a colour at all. Every incoming
-    // bubble kind in this file goes through this one property so a chat can never draw a text
-    // bubble and a voice bubble on two different surfaces.
+    // Surface behind a bubble. MINE is the fill above, untouched. THEIRS is flat grey on the plain
+    // background and a slice of the blurred wallpaper on a wallpaper — see `Theme.receivedSurface`
+    // and `WallpaperBlur` for why it stops being a colour at all. Every bubble kind in this file
+    // goes through this one property so a chat can never draw a text bubble and a voice bubble on
+    // two different surfaces. A `.background { }` rather than a `.background(style)` because a slice
+    // is a view, not a style; for MY bubbles a rectangle filled with the same style, under the same
+    // clip, is the same pixels.
     //
-    // ⚠️ PASSED IN AND COMPARED IN `==`, NOT READ FROM THE ENVIRONMENT, and that is deliberate.
-    // This view is wrapped in `.equatable()`, so a bubble that compares equal never re-evaluates its
-    // body; an environment read is the kind of dependency that could be skipped there and leave the
-    // new wallpaper drawn under bubbles still painting themselves flat until something else
-    // invalidated them. `dark` is passed for the same reason and this rides beside it.
-    private var theirFill: AnyShapeStyle { Theme.receivedStyle(dark, onWallpaper: onWallpaper) }
+    // ⚠️ `onWallpaper` AND `wallpaperBlur` ARE PASSED IN AND COMPARED IN `==`, NOT READ FROM THE
+    // ENVIRONMENT, and that is deliberate. This view is wrapped in `.equatable()`, so a bubble that
+    // compares equal never re-evaluates its body; an environment read is the kind of dependency that
+    // could be skipped there and leave the new wallpaper drawn under bubbles still painting
+    // themselves flat until something else invalidated them. `dark` is passed for the same reason
+    // and these ride beside it.
+    @ViewBuilder private var bubbleSurface: some View {
+        if isMe {
+            Rectangle().fill(myFill)
+        } else {
+            ReceivedBubbleSurface(dark: dark, onWallpaper: onWallpaper, blur: wallpaperBlur)
+        }
+    }
 
     // Text/meta on MY bubbles: both the custom colours AND the default systemBlue are vivid in BOTH
     // modes, so the text/glyphs are always WHITE.
@@ -6630,7 +6661,7 @@ struct MessageBubble: View, Equatable {
             // placeholder in a vivid bubble is louder than the message it replaced. Two things keep
             // it quieter than the original version he rejected — it is still a CAPSULE rather than a
             // bubble, and it still carries no time and no tick.
-            .background(isMe ? myFill : theirFill, in: Capsule())
+            .background { bubbleSurface.clipShape(Capsule()) }
         } else if message.isAudio, message.viewOnce {
             // ONE-TIME VOICE: a pill, exactly the view-once photo's idiom further down this chain —
             // never the waveform player. The pill itself is live (it watches the engine for its one
@@ -6644,7 +6675,7 @@ struct MessageBubble: View, Equatable {
                              // is the consumption mark.
                              onOpen: { onTapImage(message) })
                 .padding(.horizontal, 15).padding(.vertical, 11)
-                .background(isMe ? myFill : theirFill)
+                .background { bubbleSurface }
                 .clipShape(Capsule())
         } else if message.isAudio {
             // WIDTH-ON-PLAY ROOT CAUSE (deep dive): VoiceMessageView is a DETERMINISTIC 212pt wide (play
@@ -6681,7 +6712,7 @@ struct MessageBubble: View, Equatable {
             // living with it, "people are adopted to the reference app's size" (the fixed-wide, slightly
             // taller shape in VoiceMessageView).
             .padding(.vertical, 8)
-            .background(isMe ? myFill : theirFill)
+            .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if message.isFile {
             VStack(alignment: .leading, spacing: 4) {
@@ -6742,7 +6773,7 @@ struct MessageBubble: View, Equatable {
                 HStack(spacing: 0) { Spacer(minLength: 0); metaRow }   // time+tick on files (was missing)
             }
             .padding(.horizontal, 13).padding(.vertical, 10)
-            .background(isMe ? myFill : theirFill)
+            .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if let pendingKind = message.pendingMediaKind, pendingKind != "image" {
             // THE MESSAGE IS HERE, THE BYTES ARE STILL COMING. Only the recipient reaches this; the
@@ -6791,7 +6822,7 @@ struct MessageBubble: View, Equatable {
                                    height: VoiceMessageView.waveHeight)
                     }
                     .padding(.horizontal, 13).padding(.vertical, 10)
-                    .background(isMe ? myFill : theirFill)
+                    .background { bubbleSurface }
                     .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
                 case "album":
                     // The SAME solver, the SAME aspects, the SAME width as the finished grid — see
@@ -6827,7 +6858,7 @@ struct MessageBubble: View, Equatable {
                     }
                     .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
                     .padding(.horizontal, 13).padding(.vertical, 10)
-                    .background(isMe ? myFill : theirFill)
+                    .background { bubbleSurface }
                     .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
                 }
             }
@@ -6956,7 +6987,7 @@ struct MessageBubble: View, Equatable {
                     if hasCaption { captionBody(width: videoBox.width) }
                 }
                 .frame(width: videoBox.width)
-                .background(isMe ? myFill : theirFill)
+                .background { bubbleSurface }
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             }
         } else if message.isAlbum {
@@ -6983,7 +7014,7 @@ struct MessageBubble: View, Equatable {
                 // definite size, and never narrower, so the timestamp stays on the trailing edge.
                 if !message.text.isEmpty { captionBody(width: albumWidth) }
             }
-            .background(isMe ? myFill : theirFill)
+            .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             // THE WHOLE-BUBBLE UPLOAD RING IS GONE (the agreed per-item spec): every sending tile
             // now carries its own ring, its own bytes and its own X — see `albumTile`. One ring
@@ -7010,7 +7041,7 @@ struct MessageBubble: View, Equatable {
             }
             .foregroundStyle((isMe ? onMyBubble : (dark ? Color.white : .black)).opacity(viewed ? 0.6 : 1))
             .padding(.horizontal, 15).padding(.vertical, 11)
-            .background(isMe ? myFill : theirFill)
+            .background { bubbleSurface }
             .clipShape(Capsule())
             .contentShape(Capsule())
             .onTapGesture {
@@ -7155,7 +7186,7 @@ struct MessageBubble: View, Equatable {
                     if hasCaption { captionBody(width: box.width) }
                 }
                 .frame(width: box.width)
-                .background(isMe ? myFill : theirFill)
+                .background { bubbleSurface }
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             }
         } else if let poll = message.poll {
@@ -7168,7 +7199,7 @@ struct MessageBubble: View, Equatable {
             .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
             .padding(12)
             .frame(width: maxBubbleWidth * 0.9)
-            .background(isMe ? myFill : theirFill)
+            .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if let loc = message.locationCard {
             // SHARED LOCATION card: pin + label + coordinates; tap opens Apple Maps at the spot.
@@ -7190,7 +7221,7 @@ struct MessageBubble: View, Equatable {
             .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
             .padding(12)
             .frame(width: maxBubbleWidth * 0.85)
-            .background(isMe ? myFill : theirFill)
+            .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             .contentShape(Rectangle())
             .onTapGesture {
@@ -7228,7 +7259,7 @@ struct MessageBubble: View, Equatable {
             .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
             .padding(12)
             .frame(width: maxBubbleWidth)
-            .background(isMe ? myFill : theirFill)
+            .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if jumbomojiCount > 0, message.replyTo == nil || message.replyTo?.isStatus == true,
                   firstLinkURL == nil {
@@ -7321,7 +7352,7 @@ struct MessageBubble: View, Equatable {
             }
             .padding(.horizontal, 15)
             .padding(.vertical, 10)
-            .background(isMe ? myFill : theirFill)
+            .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         }
     }

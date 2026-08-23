@@ -1,3 +1,4 @@
+import SwiftUI   // Theme.receivedSurface hands back a SwiftUI Color for the flat case
 import UIKit
 
 // ===== UIKit bubble migration (reference-style unified scrolling surface) =====
@@ -23,11 +24,14 @@ struct UIKitBubbleModel: Equatable {
     var tick: Tick
     var radii: Radii
     var topSpacing: CGFloat   // cluster spacing above this bubble (14 first-in-cluster, else 2)
-    /// Is this bubble sitting on a wallpaper? An incoming bubble is a flat fill without one and a
-    /// blur material with one — see `Theme.receivedStyle`, which this path has to agree with or a
-    /// chat draws two different incoming surfaces depending on which route a message took.
-    /// Equatable, so applying a wallpaper reconfigures every visible bubble by itself.
+    /// Is this bubble sitting on a wallpaper, and if so, the blurred picture of it. An incoming
+    /// bubble is a flat fill without one and a SLICE of that picture with one — see
+    /// `Theme.receivedSurface`, which this path has to agree with or a chat draws two different
+    /// incoming surfaces depending on which route a message took. Both are in the Equatable, so a
+    /// wallpaper applied live, or a theme flip that makes a new picture, reconfigures every visible
+    /// bubble by itself.
     var onWallpaper: Bool = false
+    var wallpaperBlur: WallpaperBlurState? = nil
 }
 
 // ===== Shared palette (dynamic — adapts to light/dark like the SwiftUI Theme) =====
@@ -38,8 +42,6 @@ private enum BubblePalette {
     }
     static let myFill = UIColor { $0.userInterfaceStyle == .dark ? hex(0x0A84FF) : hex(0x007AFF) }   // Theme.defaultBubble
     static let receivedFill = UIColor { $0.userInterfaceStyle == .dark ? hex(0x26262B) : hex(0xF2F2F2) } // Theme.received (owner's F2F2F2)
-    // Theme.bg — the Reduce Transparency substitute for the material, not the received grey. See applySurface.
-    static let plainBackground = UIColor { $0.userInterfaceStyle == .dark ? hex(0x121214) : hex(0xFFFFFF) }
     static let myText = UIColor.white
     static let receivedText = UIColor { $0.userInterfaceStyle == .dark ? .white : .black }
     static let myMeta = UIColor.white.withAlphaComponent(0.7)
@@ -64,12 +66,10 @@ final class UIKitBubbleView: UIView {
     private var model: UIKitBubbleModel?
     private(set) var lastCornerPath: UIBezierPath?   // exact bubble outline → context-menu lift preview
 
-    // The blur behind an INCOMING bubble on a wallpaper. Built on first use and kept after that: a
-    // recycled cell swings between the two surfaces as it is reused for a sent and a received
-    // message, and building a visual-effect view mid-scroll is the expensive half.
-    private var blurView: UIVisualEffectView?
-    private let blurMask = CAShapeLayer()
-    private var blurStyle: UIBlurEffect.Style?   // what the live blur was built for → rebuild only on a change
+    // The slice of blurred wallpaper behind an INCOMING bubble on a wallpaper — see `WallpaperBlur`.
+    // Built on first use and kept after that: a recycled cell swings between the two surfaces as it
+    // is reused for a sent and a received message.
+    private var sliceView: WallpaperBlurSliceView?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -94,45 +94,42 @@ final class UIKitBubbleView: UIView {
         setNeedsLayout()
     }
 
-    /// Paint the bubble, or stop painting it and let the wallpaper through instead.
+    /// Paint the bubble, or stop painting it and show the wallpaper's blurred picture through it.
     ///
     /// MY bubbles are always a fill — a chat colour is a colour and a wallpaper does not change that.
-    /// THEIRS is a fill only while the chat has no wallpaper; with one, the shape layer goes fully
-    /// transparent and a masked blur takes the same outline. Both surfaces exist in one view because
-    /// cells are recycled: the very next message this view draws may be the other kind.
+    /// THEIRS is whatever `Theme.receivedSurface` decides, the same call the SwiftUI bubbles make:
+    /// a flat colour with no wallpaper (or under Reduce Transparency), else a slice of the blurred
+    /// wallpaper masked to this bubble's own outline. Both surfaces live in one view because cells
+    /// are recycled: the very next message this view draws may be the other kind.
     private func applySurface(_ m: UIKitBubbleModel) {
-        // Reduce Transparency drops the material here too, and falls back to the plain background
-        // rather than the received grey — the same substitute Theme.receivedStyle makes, checked in
-        // the same order, so the two render paths cannot disagree for a user who has it on.
-        let reduced = UIAccessibility.isReduceTransparencyEnabled
-        guard !m.isMe, m.onWallpaper, !reduced else {
-            let fill: UIColor = m.isMe ? BubblePalette.myFill
-                : (m.onWallpaper && reduced ? BubblePalette.plainBackground : BubblePalette.receivedFill)
-            bubbleLayer.fillColor = fill.cgColor
-            blurView?.isHidden = true
+        guard !m.isMe else {
+            bubbleLayer.fillColor = BubblePalette.myFill.cgColor
+            sliceView?.isHidden = true
             return
         }
-        // Ultra-thin in dark, thin in light — the same split as Theme.receivedStyle, for the same
-        // reason: dark mode is protecting the picture, light mode is protecting black text on it.
-        let style: UIBlurEffect.Style = traitCollection.userInterfaceStyle == .dark
-            ? .systemUltraThinMaterial : .systemThinMaterial
-        // The fill has to go to CLEAR, not stay underneath. A blur over an opaque grey samples the
-        // grey and nothing else, which is the flat bubble again with the cost of a blur on top.
-        bubbleLayer.fillColor = UIColor.clear.cgColor
-        if blurView == nil {
-            let v = UIVisualEffectView(effect: UIBlurEffect(style: style))
-            v.isUserInteractionEnabled = false
-            v.layer.mask = blurMask
-            // Below both labels. The shape layer is not view-backed and is transparent whenever this
-            // blur is showing, so their relative order costs nothing.
-            insertSubview(v, at: 0)
-            blurView = v
-            blurStyle = style
-        } else if blurStyle != style {
-            blurView?.effect = UIBlurEffect(style: style)   // light↔dark switch on a live bubble
-            blurStyle = style
+        let dark = traitCollection.userInterfaceStyle == .dark
+        switch Theme.receivedSurface(dark, onWallpaper: m.onWallpaper, blur: m.wallpaperBlur) {
+        case .flat(let c):
+            bubbleLayer.fillColor = UIColor(c).cgColor
+            sliceView?.isHidden = true
+        case .slice(let state):
+            // The fill has to go to CLEAR, not stay underneath: the slice is opaque and would cover
+            // it, but a fill that is still there is a fill somebody will one day see at an edge.
+            bubbleLayer.fillColor = UIColor.clear.cgColor
+            if sliceView == nil {
+                let v = WallpaperBlurSliceView()
+                insertSubview(v, at: 0)   // under both labels
+                sliceView = v
+            }
+            sliceView?.state = state
+            sliceView?.isHidden = false
+        case .material:
+            // No picture could be made for this wallpaper. The flat grey is the honest fallback on
+            // this path — a live material here would be a second mechanism for a case that should
+            // not happen, and the SwiftUI bubbles only keep it for the preview platters.
+            bubbleLayer.fillColor = BubblePalette.receivedFill.cgColor
+            sliceView?.isHidden = true
         }
-        blurView?.isHidden = false
     }
 
     // ── Attributed strings ──
@@ -232,18 +229,13 @@ final class UIKitBubbleView: UIView {
         let path = Self.cornerPath(bubble, m.radii)
         bubbleLayer.path = path.cgPath
         lastCornerPath = path
-        // The blur wears the bubble's own outline, not a corner radius. These bubbles have four
+        // The slice wears the bubble's own outline, not a corner radius. These bubbles have four
         // different radii (the cluster shape squares off the side that continues), so a rounded-rect
         // mask would round the two corners the shape deliberately keeps sharp.
-        if let blur = blurView, !blur.isHidden {
-            // No implicit animation: the mask is re-pathed on every layout pass, and a cell being
-            // reused mid-scroll would otherwise animate its old outline into its new one.
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            blur.frame = self.bounds
-            blurMask.frame = self.bounds
-            blurMask.path = path.cgPath
-            CATransaction.commit()
+        if let slice = sliceView, !slice.isHidden {
+            slice.frame = self.bounds
+            slice.maskPath = path
+            slice.reposition()
         }
         textLabel.frame = CGRect(x: BubblePalette.hPad, y: BubblePalette.vPad,
                                  width: bubble.width - BubblePalette.hPad * 2,
