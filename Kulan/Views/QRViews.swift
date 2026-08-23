@@ -67,6 +67,9 @@ struct MyQRView: View {
     private var me: UserProfile? { ProfileStore.shared.me }
     private var handle: String { me?.handle ?? "" }
     private var name: String { me?.name ?? "" }
+    /// The words that ride with the link, in the owner's own wording (2026-08-23). Falls back to the
+    /// handle when the display name is empty — a name is optional in this app, a handle is not.
+    private var shareLine: String { "Chat with \(name.isEmpty ? handle : name) on Fariin" }
 
     var body: some View {
         NavigationStack {
@@ -114,10 +117,24 @@ struct MyQRView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    ShareLink(item: fariinLink(handle)) {
-                        Image(systemName: "square.and.arrow.up")
+                    // A SENTENCE, AND A REAL URL. It shared a bare string before: whoever got it saw
+                    // a naked address with nothing saying what it was or whose it was, and because
+                    // the item was a String rather than a URL, Messages and the rest had no link to
+                    // build a preview card from.
+                    //
+                    // GATED ON THE HANDLE. It is empty until the profile loads, and the old version
+                    // would happily share "https://fariin.com/u/" — a dead link, sent in good faith,
+                    // with no way for either person to tell why it does nothing.
+                    if !handle.isEmpty, let url = URL(string: fariinLink(handle)) {
+                        ShareLink(item: url,
+                                  subject: Text(shareLine),
+                                  message: Text(shareLine)) {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                        .accessibilityLabel("Share my link")
+                    } else {
+                        Image(systemName: "square.and.arrow.up").foregroundStyle(.tertiary)
                     }
-                    .accessibilityLabel("Share my link")
                 }
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
