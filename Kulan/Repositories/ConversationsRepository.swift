@@ -172,6 +172,14 @@ final class ConversationsRepository {
         let convs = DemoMode.withDemoChats(raw)
         if !convs.isEmpty { rememberHadChats() }
         prefetchArrivedVoice(convs)
+        // Warm the chats that just changed, so opening one lands on a full screen instead of drawing
+        // a beat after the push settles. Cheap when nothing went stale — see ChatHistoryPreloader.
+        // Hopped rather than called straight: this snapshot handler is not statically main-isolated,
+        // and the preloader builds ThreadRepository objects, which belong to the main actor. Same
+        // shape as the voice prefetch a few lines up.
+        let warmList = convs
+        let warmMe = Auth.auth().currentUser?.uid ?? ""
+        Task { @MainActor in ChatHistoryPreloader.shared.refresh(warmList, me: warmMe) }
         guard convs != conversations else { hasLoaded = true; return }   // no-op snapshot → no re-render
         if Date().timeIntervalSince(lastPublish) >= minPublishInterval {
             lastPublish = Date()
@@ -224,6 +232,8 @@ final class ConversationsRepository {
         pendingConvs = nil
         conversations = []
         hasLoaded = false
+        // The warm-up listeners belong to an account that just went away.
+        Task { @MainActor in ChatHistoryPreloader.shared.stopAll() }
 
     }
 }
