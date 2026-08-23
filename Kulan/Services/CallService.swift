@@ -1061,8 +1061,26 @@ final class CallService: NSObject {
     private var voiceMonitor: Timer?
     private var remoteQuietSince: Date?
     private var localQuietSince: Date?
-    /// audioLevel is 0…1. Breathing and room noise sit far below this; speech clears it easily.
-    private static let speakingLevel = 0.02
+    /// ⛔ A FIXED THRESHOLD CALLED A FRIDGE A VOICE. It was a flat 0.02, and `audioLevel` is raw
+    /// LOUDNESS — it cannot tell a person from a fan, a television or wind on a microphone. In an
+    /// ordinary room the background clears 0.02 on its own, so the mark lit up with nobody speaking
+    /// (owner, 2026-08-23: "some times flag sound with out sound, what sound we trach?").
+    ///
+    /// Two numbers replace it. Nothing under `hardFloor` is ever speech, whatever the room is doing;
+    /// above that, a sound has to rise `voiceGap` clear of THAT ROOM'S OWN background, which each
+    /// side learns for itself while nobody is talking. A noisy kitchen then needs a louder voice and
+    /// a silent bedroom stays sensitive, without either being tuned by hand.
+    ///
+    /// It cannot fix a television playing speech. That genuinely is a voice, and no level-based test
+    /// will ever say otherwise — iOS gives us no voice detection to read, so this is the honest
+    /// ceiling rather than a shortcut.
+    private static let hardFloor = 0.015
+    private static let voiceGap = 0.04
+
+    /// Each side's learned background. Not shared: the two people are in different rooms, which is
+    /// the entire reason a single fixed number could never fit both of them.
+    private var remoteFloor = 0.0
+    private var localFloor = 0.0
     /// Falling silent only counts after this long. Without it the badge strobes in the gaps between
     /// two words, which reads as broken rather than as live.
     private static let speakingHold: TimeInterval = 0.6
@@ -1077,6 +1095,8 @@ final class CallService: NSObject {
     func stopVoiceMonitor() {
         voiceMonitor?.invalidate(); voiceMonitor = nil
         remoteQuietSince = nil; localQuietSince = nil
+        // The next call is in a different room; a floor learned in this one would be a lie there.
+        remoteFloor = 0; localFloor = 0
         remoteSpeaking = false; localSpeaking = false
     }
 
@@ -1106,19 +1126,35 @@ final class CallService: NSObject {
 
     private func applyVoiceLevels(remote: Double, local: Double) {
         guard state == .active else { return }
-        remoteSpeaking = speakingNow(level: remote, micLive: !remoteMuted,
+        remoteSpeaking = speakingNow(level: remote, micLive: !remoteMuted, floor: &remoteFloor,
                                      quietSince: &remoteQuietSince, was: remoteSpeaking)
-        localSpeaking = speakingNow(level: local, micLive: !isMuted,
+        localSpeaking = speakingNow(level: local, micLive: !isMuted, floor: &localFloor,
                                     quietSince: &localQuietSince, was: localSpeaking)
     }
 
     /// Above the threshold turns it on immediately; below it turns off only once the hold has run out.
     /// A muted mic is never talking whatever the numbers say — that is the one case where the level
     /// and the truth can disagree.
-    private func speakingNow(level: Double, micLive: Bool,
+    private func speakingNow(level: Double, micLive: Bool, floor: inout Double,
                              quietSince: inout Date?, was: Bool) -> Bool {
+        // A muted mic is never talking, and its silence must NOT teach the floor — otherwise the
+        // background it learned while muted is zero, and the first noisy second after unmuting reads
+        // as a voice.
         guard micLive else { quietSince = nil; return false }
-        if level >= Self.speakingLevel { quietSince = nil; return true }
+
+        let threshold = max(Self.hardFloor, floor + Self.voiceGap)
+        let loud = level >= threshold
+
+        // ⚠️ THE FLOOR TRACKS THE BACKGROUND, NOT THE SOUND. It learns quickly from the moments
+        // nobody is talking and barely moves while somebody is, because a floor that chased speech
+        // would climb into the voice and then need a shout to clear itself. The slow rate is not
+        // zero on purpose: a room that gets permanently louder mid-call still gets followed, it just
+        // takes a few seconds rather than a few frames.
+        floor += (level - floor) * (loud ? 0.01 : 0.25)
+        // A ceiling, so one blast of feedback cannot deafen the detector for the rest of the call.
+        floor = max(0, min(floor, 0.35))
+
+        if loud { quietSince = nil; return true }
         guard was else { return false }
         let start = quietSince ?? Date()
         quietSince = start
