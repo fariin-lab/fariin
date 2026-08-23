@@ -882,12 +882,11 @@ struct FloatingCallWindow: View {
         GeometryReader { geo in
             if call.cardStashed {
                 stashTab
-                    .offset(y: min(offset.height, max(0, limits(geo.size).1)))
-                    .offset(x: tabPull)
                     // ONE OBJECT IN TWO SHAPES. The card does not vanish and a tab appear in its
                     // place: they share an identity, so the card's frame travels to the wedge's frame
-                    // and back. Applied OUTSIDE the offsets on purpose — the geometry that matters is
-                    // where the tab actually ended up after being dragged along the edge.
+                    // and back. Like the card, the tab's position is PADDING rather than `.offset` —
+                    // a morph reads layout geometry, and an offset tab would have flown to the corner
+                    // instead of to where it is sitting.
                     .matchedGeometryEffect(id: Self.morphID, in: morph)
                     // THE TAB DRAGS TOO (owner, 2026-08-23). Up and down it slides along the edge and
                     // stays where it is put. Pulled INWARD it comes back as the card — the same
@@ -916,13 +915,14 @@ struct FloatingCallWindow: View {
                             }
                     )
                     // FLUSH WITH THE EDGE, not tucked under it. See `stashTab` for why.
-                    .padding(.top, insets.top + 8)
+                    // `tabPull` is the live inward drag; its sign already says which way inward is,
+                    // so the magnitude is all this side needs.
+                    .padding(.top, insets.top + 8 + min(offset.height, max(0, limits(geo.size).1)))
+                    .padding(stashedLeft ? .leading : .trailing, abs(tabPull))
                     .frame(maxWidth: .infinity, maxHeight: .infinity,
                            alignment: stashedLeft ? .topLeading : .topTrailing)
             } else {
-                // The anchor goes OUTSIDE the offset: `offset` is a render-time shift, and the zoom has
-                // to land on where the card actually is after being dragged, not on its untouched home.
-                zoomAnchored(window.offset(offset))
+                zoomAnchored(window)
                     // The other half of the morph — see the tab's copy of this.
                     .matchedGeometryEffect(id: Self.morphID, in: morph)
                     // Plain gesture, not high-priority: the end button inside the window must still get
@@ -962,13 +962,28 @@ struct FloatingCallWindow: View {
                     .onTapGesture {
                         withAnimation(.easeInOut(duration: 0.25)) { call.minimized = false }
                     }
-                    // TOP-RIGHT HOME (owner, 2026-08-23: "most land top right that's standard"). It used
-                    // to rest bottom-right under his 2026-08-12 rule; that rule still governs the
-                    // self-tile INSIDE the call screen, which has not moved. This card is a different
-                    // thing — it is what you see after leaving the call, and every app that has one puts
-                    // it up top, out of the way of the list you went back to reading.
-                    .padding(.top, insets.top + 8)
-                    .padding(.trailing, 12)
+                    // ⛔ PADDING, NOT `.offset`, AND THAT IS THE WHOLE POINT (owner, 2026-08-23: he
+                    // dragged the card to the bottom-left, reopened the call, and the zoom still flew
+                    // to the top-right corner — "we hard code on top only").
+                    //
+                    // It was not hardcoded, and the card did land back where he left it. `.offset` is
+                    // a DRAW-TIME transform: it moves pixels and leaves the view's LAYOUT frame where
+                    // it always was, up in the corner. Both transitions read that layout frame —
+                    // matchedTransitionSource for the call screen's zoom, matchedGeometryEffect for
+                    // the morph into the tab — so both of them animated to a corner the card had not
+                    // occupied since the first drag. The card was right and the flight was wrong.
+                    //
+                    // Expressed as padding the position is real geometry, so the zoom lands on the
+                    // card wherever it actually sits. `offset.width` is zero at the right edge and
+                    // negative to the left of it, hence the subtraction; it can also go briefly
+                    // POSITIVE while a drag pushes the card past the edge, and negative padding is
+                    // exactly the right answer there.
+                    //
+                    // TOP-RIGHT is only the resting HOME (his 2026-08-23 rule: "most land top right,
+                    // that's standard"), which is what zero offset means. The self-tile inside the
+                    // call screen still lives bottom-right under his 2026-08-12 rule and has not moved.
+                    .padding(.top, insets.top + 8 + offset.height)
+                    .padding(.trailing, 12 - offset.width)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
         }
