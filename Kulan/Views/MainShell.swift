@@ -2893,9 +2893,20 @@ struct ChatRow: View, Equatable {
                 Text(lastSenderPrefix + photoPreviewLabel).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
             }
         } else if let badge = previewBadge(conv.lastMessageCipher) {
+            // A MISSED CALL IS THE ONE PREVIEW THAT IS BAD NEWS, and it was the same grey as
+            // "Photo" (owner, 2026-08-23). Red now, icon and words together — the Calls tab has
+            // always drawn its missed rows red and the list disagreed with it.
+            //
+            // ⚠️ RED FOR MISSED IN EITHER DIRECTION, unlike the Calls tab, which reddens only calls
+            // that came IN. Not an oversight: a call row deliberately writes an EMPTY `lastSender`
+            // (see ChatService — a call record is nobody's message and must not wear my delivery
+            // ticks), so the list has no direction to read. Both directions are worth chasing
+            // anyway: one is somebody who wanted you, the other is somebody you did not reach.
+            let missed = badge.1.hasPrefix("Missed")
             // Unheard voice note = accent mic (like an unread badge, but for your ears).
             previewRow(badge.0, lastSenderPrefix + badge.1,
-                       iconTint: voiceUnplayed ? Theme.accent(dark) : nil)
+                       iconTint: missed ? .red : (voiceUnplayed ? Theme.accent(dark) : nil),
+                       textTint: missed ? .red : nil)
         } else if decodedLast.isEmpty {
             previewRow("hand.wave.fill", "Say hello")
         } else if decodedLast.hasPrefix(Message.contactMarker) {
