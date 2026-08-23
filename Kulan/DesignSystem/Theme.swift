@@ -41,6 +41,28 @@ enum Theme {
     // Light received-bubble = F2F2F2, the owner's exact pick (2026-07-31 screenshot). Must stay in
     // lock-step with UIKitBubbleCell.receivedFill or text rows and media rows show two grays.
     static func received(_ dark: Bool) -> Color { dark ? Color(hex: 0x26262B) : Color(hex: 0xF2F2F2) }
+
+    /// THE SURFACE BEHIND A BUBBLE THAT IS NOT MINE — and on a wallpaper it is not a colour at all.
+    ///
+    /// Without a wallpaper this is `received` and nothing has changed. With one, the bubble stops
+    /// being painted and becomes a blur material: it samples the wallpaper directly behind itself,
+    /// blurs it, lifts the saturation, and lays the system's own grain over the top. Two things
+    /// follow from that, and both are the point rather than side effects — every bubble ends up a
+    /// slightly different shade depending on what it is sitting on, and a picture with light in it
+    /// puts that light INSIDE the bubble instead of only around it.
+    ///
+    /// This is what the reference app does, read from its source: incoming bubbles have exactly two
+    /// flat values (a light grey and a dark grey) and both are used ONLY when no wallpaper is set.
+    /// The moment one is, they hand the whole job to a material.
+    ///
+    /// ⚠️ THE THIN/ULTRA-THIN SPLIT IS NOT DECORATION. Ultra-thin lets more of the picture through,
+    /// which is right over a dark wallpaper in dark mode where a thicker material would grey the
+    /// picture out and hand back the flat bubble we were trying to leave. In light mode the wallpaper
+    /// is competing with black text, so the thicker one is what keeps the text legible.
+    static func receivedStyle(_ dark: Bool, onWallpaper: Bool) -> AnyShapeStyle {
+        guard onWallpaper else { return AnyShapeStyle(received(dark)) }
+        return AnyShapeStyle(dark ? Material.ultraThin : Material.thin)
+    }
     static func accent(_ dark: Bool) -> Color { dark ? .white : .black }
     static func onAccent(_ dark: Bool) -> Color { dark ? .black : .white }
     // Default outgoing-bubble colour when no custom Chat Color is picked. Apple systemBlue, which is a
