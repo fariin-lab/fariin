@@ -604,6 +604,27 @@ final class StorySmallPlusBadge: UIControl {
         clipsToBounds = false
         sendSubviewToBack(rim)
     }
+
+    /// ⛔ THE TOUCH AREA IS 44pt, THE BADGE IS STILL 16 — owner, 2026-08-23, with the miss circled
+    /// well below the plus. Nothing drawn changes: `size` still measures the disc, the frame the
+    /// card lays out is untouched, and this only widens the answer to "was that touch mine".
+    ///
+    /// 16pt is a quarter of the area Apple asks for and about a third of a fingertip, so the miss
+    /// was not a stray tap — most of the finger was always landing outside it. The circle beside it
+    /// already adds a story (see `tapped()`, his 2026-08-08 rule), which is what has been absorbing
+    /// these misses and hiding how small the badge itself is.
+    ///
+    /// ⚠️ Growing the FRAME instead would have moved the plus: the card positions it by its corner,
+    /// so a bigger box lands the disc somewhere else. Overriding the hit test is the version that
+    /// cannot move anything.
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        let side = max(Self.minimumTouchSide, bounds.width)
+        return bounds.insetBy(dx: (bounds.width - side) / 2,
+                              dy: (bounds.height - side) / 2).contains(point)
+    }
+
+    /// Apple's minimum, and the badge is nowhere near it on its own.
+    static let minimumTouchSide: CGFloat = 44
 }
 
 /// The big badge on my card when it has NO picture: the reference add-status look — `plus.circle.fill`
