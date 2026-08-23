@@ -132,6 +132,25 @@ final class StoryVideoPreviewView: MTKView {
         output = nil
         observedItem = nil
         lastBuffer = nil
+        // ⛔ THE CLIP YOU JUST LEFT IS WIPED OFF THIS LAYER HERE, SYNCHRONOUSLY — owner, 2026-08-23:
+        // "when I press Play on Video B, the cover of Video A briefly flashes before Video B starts",
+        // and the same flash when Trim is opened on a clip he has not played.
+        //
+        // ⚠️ A METAL LAYER GOES ON SHOWING THE LAST DRAWABLE THAT WAS PRESENTED TO IT. Swapping the
+        // player does not touch that, and neither does hiding the view: clip A's final frame stayed
+        // in this layer for as long as the editor was on a photo or on a clip with no player, and the
+        // moment a player existed again — Play, or Trim asking for one — the view came back wearing
+        // that frame until clip B's first buffer had been decoded. One mechanism, both reports: each
+        // is just "a player exists now", and neither had anything to do with posters, caches or
+        // thumbnails.
+        //
+        // `draw()` is MTKView's own immediate draw, and with no buffer to hand it `draw(in:)` now
+        // presents a TRANSPARENT drawable rather than leaving what was there. It runs on the pass
+        // where the player goes away, which is the tap that changed clip — so the wipe is a whole
+        // gesture ahead of the next Play, and it happens while the view is still on screen. What
+        // shows through is the item's own poster, sitting under this view in the same container,
+        // which is the picture that should be there.
+        draw()
         guard let item = player?.currentItem else { return }
         // Their settings, and the pixel format matters: a Metal-compatible buffer is what lets the
         // frame reach the GPU without a copy through the CPU.
@@ -187,8 +206,18 @@ extension StoryVideoPreviewView: MTKViewDelegate {
     func draw(in view: MTKView) {
         guard let drawable = currentDrawable,
               let queue = commandQueue,
-              let buffer = queue.makeCommandBuffer(),
-              let pixels = currentBuffer() else { return }
+              let buffer = queue.makeCommandBuffer() else { return }
+
+        // ⛔ NO FRAME MEANS AN EMPTY VIEW, NEVER THE LAST FRAME. Returning here left the previously
+        // presented drawable on the layer, and after a clip change that drawable belongs to the clip
+        // you just left — this is the other half of the flash `attachOutput` describes, and the one
+        // that catches the case where the wipe there could not get a drawable.
+        guard let pixels = currentBuffer() else {
+            clear(drawable, with: buffer)
+            buffer.present(drawable)
+            buffer.commit()
+            return
+        }
 
         var image = CIImage(cvPixelBuffer: pixels)
 
@@ -219,12 +248,19 @@ extension StoryVideoPreviewView: MTKViewDelegate {
 
         let bounds = CGRect(origin: .zero, size: target)
         // Cleared first, or the letterbox bands keep whatever the last frame left in them.
-        ciContext.render(CIImage(color: .clear).cropped(to: bounds),
-                         to: drawable.texture, commandBuffer: buffer,
-                         bounds: bounds, colorSpace: CGColorSpaceCreateDeviceRGB())
+        clear(drawable, with: buffer)
         ciContext.render(image, to: drawable.texture, commandBuffer: buffer,
                          bounds: bounds, colorSpace: CGColorSpaceCreateDeviceRGB())
         buffer.present(drawable)
         buffer.commit()
+    }
+
+    /// Transparent, edge to edge. Used for the letterbox bands under a frame, and on its own when
+    /// there is no frame to show — see the two notes above.
+    private func clear(_ drawable: CAMetalDrawable, with buffer: MTLCommandBuffer) {
+        let bounds = CGRect(x: 0, y: 0, width: drawable.texture.width, height: drawable.texture.height)
+        ciContext.render(CIImage(color: .clear).cropped(to: bounds),
+                         to: drawable.texture, commandBuffer: buffer,
+                         bounds: bounds, colorSpace: CGColorSpaceCreateDeviceRGB())
     }
 }
