@@ -415,10 +415,15 @@ struct ContactInfoView: View {
                     Task { await ChatService.setBlocked(cid, false); blocked = false }
                 }
             } else {
-                infoRow("Block \(shownName)", "nosign", tint: .red, chevron: false) { showBlock = true }
+                // ⛔ HIS OWN GLYPHS — owner, 2026-08-23, who sent both vectors. `nosign` and
+                // `exclamationmark.triangle` were Apple's, and they are the two most conspicuous
+                // symbols left on a page that is otherwise drawn in the app's own set. Both are
+                // template SVGs in the catalogue, so `infoRow` picks them up by the "ic_" prefix
+                // and the red tint still reaches them.
+                infoRow("Block \(shownName)", "ic_block", tint: .red, chevron: false) { showBlock = true }
             }
             rowDivider
-            infoRow("Report \(shownName)", "exclamationmark.triangle", tint: .red, chevron: false) { showReport = true }
+            infoRow("Report \(shownName)", "ic_report", tint: .red, chevron: false) { showReport = true }
         }
         .profileSurface(plain: cardColor)
     }
@@ -982,10 +987,18 @@ struct ContactInfoView: View {
             // LEADS WITH WHAT IT DOES TO THEM, because that is the question being asked. It used to
             // open on what you lose ("You won't be able to send messages…"), which answers a
             // question nobody is standing here asking: somebody about to block a stranger wants to
-            // know whether that stranger can still reach them, and whether they will find out.
-            // What you give up is real and stays, third, where it belongs.
+            // know whether that stranger can still reach them.
+            //
+            // ⛔ ONE SENTENCE — owner, 2026-08-23, who wrote the wording out. It ran to four clauses
+            // and he had to read them all standing over a button he had already decided to press.
+            // The two facts that were cut (they are not told; you cannot message them either) are
+            // still true and still written down — on the Blocked list in Settings, which is where
+            // somebody goes to ask about blocking rather than to do it.
+            //
+            // ⚠️ "Blocked users", not their name. His sentence, and it reads as the app stating a
+            // rule rather than as a page narrating one person, which is the tone this dialog wants.
             .darkAlert("Block \(shownName)?",
-                       message: "\(shownName) cannot call you, and nothing they send will reach you. They are not told. You cannot message them until you unblock.",
+                       message: "Blocked users will not be able to call you or send you messages.",
                        isPresented: $showBlock,
                        actions: [
                         .cancel(),
@@ -1004,8 +1017,11 @@ struct ContactInfoView: View {
                             }
                         },
                        ])
+            // Cut to one sentence alongside the Block dialog above, and for the same reason. The 24
+            // hours went with it: it was a promise about how fast a human answers, made by a screen
+            // that has no way to keep it.
             .darkAlert("Report \(shownName)?",
-                       message: "Our team will review this account within 24 hours. \(shownName) won't be told.",
+                       message: "Reported accounts are reviewed by our team. They are not told.",
                        isPresented: $showReport,
                        actions: [
                         .cancel(),
