@@ -434,8 +434,13 @@ struct ThreadView: View {
                 guard mine else { return }
                 withAnimation(.easeInOut(duration: 0.2)) { keyChanged = true }
             }
-            // Per-chat wallpaper behind the messages (extends under the bars).
-            .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
+            // Per-chat wallpaper behind the messages (extends under the bars). The anchor riding on
+            // it is what the bubble slices measure themselves against — see WallpaperBlur.
+            .background {
+                ChatWallpaperBackground(cid: cid)
+                    .overlay { WallpaperAnchor(cid: cid) }
+                    .ignoresSafeArea()
+            }
     }
 
     /// Does this chat have a wallpaper? Handed to every bubble, which decides its own surface from it.

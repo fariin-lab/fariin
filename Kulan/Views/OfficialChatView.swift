@@ -28,7 +28,11 @@ struct OfficialChatView: View {
 
     var body: some View {
         list
-            .background { ChatWallpaperBackground(cid: OfficialChannel.cid).ignoresSafeArea() }
+            .background {
+                ChatWallpaperBackground(cid: OfficialChannel.cid)
+                    .overlay { WallpaperAnchor(cid: OfficialChannel.cid) }   // the slices' reference — see WallpaperBlur
+                    .ignoresSafeArea()
+            }
             .safeAreaInset(edge: .bottom, spacing: 0) { cannotReplyBar }
             // Tapping the header opens the info screen, the same as every other chat. It used to do
             // nothing at all — I left the closure empty when this screen was built, so the one chat
