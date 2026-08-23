@@ -13,6 +13,18 @@ import FirebaseFunctions
 // + caller/callee ICE candidate subcollections) — the same design the RN web client
 // used. Media is peer-to-peer (STUN/TURN); the server only relays signalling.
 //
+/// The running call clock. It exists because the old `%02d:%02d` never carried into hours, so an
+/// hour-and-a-bit call read "100:45" — a number that looks like a mistake and cannot be read as a
+/// time at all (owner's screenshot, 2026-08-23). Under an hour it stays MM:SS, the way every call
+/// screen shows it; past that it becomes H:MM:SS.
+enum CallDuration {
+    static func clock(_ seconds: Int) -> String {
+        let s = max(0, seconds)
+        if s < 3600 { return String(format: "%02d:%02d", s / 60, s % 60) }
+        return String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60)
+    }
+}
+
 // NOTE: untested from CI — WebRTC needs two real devices. Compile-checked only.
 @Observable
 final class CallService: NSObject {
@@ -74,6 +86,9 @@ final class CallService: NSObject {
                 observeLifecycleIfNeeded()   // capture-session interruption -> camera pause/resume
                 startHeartbeat()             // prove we're alive; detect a force-quit on the other side
                 startLinkMonitor()           // weak link -> drop to audio rather than starve it
+                // Answered while you were already out of the call screen: the card is up, so the
+                // talking monitor has to start HERE too, not only when you minimize.
+                startVoiceMonitor()
                 updateInCallScreenBehavior() // proximity (voice) / keep-awake (video)
             }
             if state == .idle {
@@ -81,7 +96,9 @@ final class CallService: NSObject {
                 wantsSpeaker = false        // stale intent made the NEXT voice call blast on loudspeaker
                 cameraPausedByBackground = false; stopPausedCameraRetry()
                 stopLinkMonitor()
+                stopVoiceMonitor()
                 calleeRinging = false; calleeAccepted = false; wasAccepted = false; recordWritten = false; minimized = false; liveRingRowId = nil
+                everMinimized = false   // the NEXT call grows out of its own button again
                 endReason = .none; negotiationVersion = 0; appliedRemoteRestart = 0
                 // ⚠️ RESET WITH EVERYTHING ELSE. A timeline left standing would measure the second
                 // call of a session from the first call's origin, which is worse than no measurement
@@ -103,6 +120,7 @@ final class CallService: NSObject {
                 cameraOn = false; remoteCameraOn = false; remoteMuted = false; isHeld = false
                 usingFrontCamera = true; startedAsVideo = false; everVideo = false; pendingSwitchTarget = nil
                 isLocalExpanded = false; pipOffset = .zero; pipBase = .zero
+                cardOffset = .zero; cardBase = .zero; cardStashed = false
                 videoCapturer?.stopCapture(); videoCapturer = nil
                 localVideoTrack = nil; remoteVideoTrack = nil
                 updateInCallScreenBehavior() // proximity off + allow sleep again
@@ -119,7 +137,21 @@ final class CallService: NSObject {
     var otherPhotoUrl: String?
     var isMuted = false
     var isSpeaker = false
-    var minimized = false            // call screen minimized -> show the floating pill instead
+    /// Call screen minimized → the floating card instead. The talking monitor rides on this: the card
+    /// is the only thing that reads who is speaking, so it runs exactly while the card is on screen.
+    var minimized = false {
+        didSet {
+            guard minimized != oldValue else { return }
+            if minimized { everMinimized = true }
+            minimized ? startVoiceMonitor() : stopVoiceMonitor()
+        }
+    }
+    /// Has this call been shrunk into the card at least once? It decides WHICH THING the call screen
+    /// zooms out of and back into. Before the first minimize the answer is the button that placed the
+    /// call; after it, the card — and the card is the honest answer, because by then the button is
+    /// usually on a screen you navigated away from. Sticky for the whole call, so restoring and
+    /// minimizing again keeps flying between the same two shapes.
+    private(set) var everMinimized = false
     var calleeRinging = false        // caller: the other phone is actually ringing now
     /// Caller: the other person TAPPED ACCEPT (the instant `acceptedAt` signal — his two-phone
     /// report: the caller sat on "Ringing…" for the whole answer setup, and on the 12:27 call the
@@ -281,6 +313,19 @@ final class CallService: NSObject {
     var remoteCameraOn = false      // is THEIR camera sending (from the `cams` signal)
     var remoteMuted = false         // is THEIR mic muted (from the `muted` signal)
     var isVideo: Bool { cameraOn || remoteCameraOn }   // show the video layout
+
+    /// The chat this call belongs to while it is RUNNING — nil the rest of the time. The chat list
+    /// reads it to float that one row to the top and label it "Active call", the way the reference
+    /// app keeps a call you are on visible in the list instead of only in a bar over it.
+    /// Ringing (.outgoing/.incoming) is deliberately NOT included: the call screen is already up in
+    /// front of you then, and a row that appeared for two seconds and vanished on a missed call
+    /// would just make the list jump.
+    var liveConversationId: String? {
+        guard state == .active || state == .reconnecting, !otherUid.isEmpty else { return nil }
+        let mine = me
+        guard !mine.isEmpty else { return nil }
+        return ChatService.convId(mine, otherUid)
+    }
     /// STICKY: true from the first moment a camera came on, and it stays true for the rest of the call
     /// even if both cameras go off again. It drives the auto-hiding controls: a call that has been a
     /// video call keeps behaving like one, so the controls do not start reappearing permanently just
@@ -349,6 +394,21 @@ final class CallService: NSObject {
     var isLocalExpanded = false
     var pipOffset = CGSize.zero
     var pipBase = CGSize.zero
+    /// WHERE THE MINIMIZED CARD WAS LEFT. Owned here for the same reason as the tile above: the card
+    /// is destroyed and rebuilt every time you go back into the call and minimize again, so view
+    /// @State sent it home to the bottom-right corner every single time (owner, 2026-08-23 — it
+    /// should land where you left it). Cleared with everything else when the call ends, so the next
+    /// call starts in the corner rather than wherever the last one happened to finish.
+    var cardOffset = CGSize.zero
+    var cardBase = CGSize.zero
+    /// The card has been shoved off the side and is sitting there as a tab (owner, 2026-08-23 —
+    /// the reference app does this, and he asked whether we could without Apple's help; we can,
+    /// because this only ever happens INSIDE our own window. Hiding a floating window past the edge
+    /// of the SCREEN, over other apps, is the part only the system can do).
+    ///
+    /// Which side it went is not stored: `cardBase.width` is negative only when it was parked on the
+    /// left, so the side is already written down and cannot disagree with itself.
+    var cardStashed = false
     var localVideoTrack: RTCVideoTrack?
     var remoteVideoTrack: RTCVideoTrack?
     private var videoCapturer: RTCCameraVideoCapturer?
@@ -980,6 +1040,90 @@ final class CallService: NSObject {
     private var linkMonitor: Timer?
     /// The thresholds and both windows live in WeakLinkPolicy, which is pure and unit-tested.
     private var linkPolicy = WeakLinkPolicy()
+
+    // MARK: - Who is actually talking
+    //
+    // OWNER, 2026-08-23: the wave on the card must appear only while that person is TALKING. It was a
+    // permanent mute light before ("green mic on / grey mic off"), which is a different thing and it
+    // sat there for the whole call saying nothing.
+    //
+    // Group calls get speaking flags for free from their engine (`p.isSpeaking`). A 1:1 call is raw
+    // WebRTC and hands us nothing, so it is read out of the connection's own statistics: `audioLevel`
+    // on the incoming audio stream is them, `audioLevel` on the local media source is me.
+    //
+    // ⚠️ IT ONLY RUNS WHILE THE MINIMIZED CARD IS UP, because the card is the only thing that reads
+    // these two flags. A stats sweep three times a second for the length of a whole call is heat, and
+    // heat on this call path has already been tuned carefully (the thermal caps). Starting with
+    // `minimized` and stopping with it keeps the cost where the value is — put a talking indicator on
+    // the full call screen one day and this gate is the line to change, deliberately.
+    var remoteSpeaking = false
+    var localSpeaking = false
+    private var voiceMonitor: Timer?
+    private var remoteQuietSince: Date?
+    private var localQuietSince: Date?
+    /// audioLevel is 0…1. Breathing and room noise sit far below this; speech clears it easily.
+    private static let speakingLevel = 0.02
+    /// Falling silent only counts after this long. Without it the badge strobes in the gaps between
+    /// two words, which reads as broken rather than as live.
+    private static let speakingHold: TimeInterval = 0.6
+
+    func startVoiceMonitor() {
+        guard voiceMonitor == nil, state == .active, minimized else { return }
+        voiceMonitor = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
+            self?.sampleVoiceLevels()
+        }
+    }
+
+    func stopVoiceMonitor() {
+        voiceMonitor?.invalidate(); voiceMonitor = nil
+        remoteQuietSince = nil; localQuietSince = nil
+        remoteSpeaking = false; localSpeaking = false
+    }
+
+    private func sampleVoiceLevels() {
+        guard state == .active, minimized, let pc else { stopVoiceMonitor(); return }
+        pc.statistics { [weak self] report in
+            var remote = 0.0
+            var local = 0.0
+            for s in report.statistics.values {
+                guard (s.values["kind"] as? String) == "audio",
+                      let level = (s.values["audioLevel"] as? NSNumber)?.doubleValue else { continue }
+                switch s.type {
+                case "inbound-rtp":  remote = max(remote, level)
+                case "media-source": local = max(local, level)
+                // Older report shape, kept as a fallback: some builds carry the levels on `track`
+                // entries instead, and without this branch the badge would simply never appear —
+                // a silent nothing-happens that is very hard to tell from "nobody is talking".
+                case "track":
+                    if (s.values["remoteSource"] as? NSNumber)?.boolValue == true { remote = max(remote, level) }
+                    else { local = max(local, level) }
+                default: break
+                }
+            }
+            DispatchQueue.main.async { self?.applyVoiceLevels(remote: remote, local: local) }
+        }
+    }
+
+    private func applyVoiceLevels(remote: Double, local: Double) {
+        guard state == .active else { return }
+        remoteSpeaking = speakingNow(level: remote, micLive: !remoteMuted,
+                                     quietSince: &remoteQuietSince, was: remoteSpeaking)
+        localSpeaking = speakingNow(level: local, micLive: !isMuted,
+                                    quietSince: &localQuietSince, was: localSpeaking)
+    }
+
+    /// Above the threshold turns it on immediately; below it turns off only once the hold has run out.
+    /// A muted mic is never talking whatever the numbers say — that is the one case where the level
+    /// and the truth can disagree.
+    private func speakingNow(level: Double, micLive: Bool,
+                             quietSince: inout Date?, was: Bool) -> Bool {
+        guard micLive else { quietSince = nil; return false }
+        if level >= Self.speakingLevel { quietSince = nil; return true }
+        guard was else { return false }
+        let start = quietSince ?? Date()
+        quietSince = start
+        return Date().timeIntervalSince(start) < Self.speakingHold
+    }
 
     private func startLinkMonitor() {
         guard linkMonitor == nil else { return }

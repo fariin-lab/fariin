@@ -743,6 +743,8 @@ struct ChatsView: View {
     private var router = AppRouter.shared
     private var storiesRepo = StoriesRepository.shared   // @Observable: drives the chat-list story rings
     private var officialChannel = OfficialChannelStore.shared   // @Observable: the one synthetic row in the list
+    private var call = CallService.shared                // @Observable: the live 1:1 call, for the row below
+    @ObservedObject private var groupCall = GroupCallService.shared   // ObservableObject, so it needs the wrapper
     @Environment(\.colorScheme) private var scheme
     @State private var showNew = false
     /// FALSE UNTIL THE LIST HAS FINISHED ARRIVING, and it gates the reorder animation.
@@ -1085,6 +1087,7 @@ struct ChatsView: View {
     // List swallows the long-press) + the conversation peek as the menu preview.
     private func chatListRowLabel(_ conv: Conversation) -> some View {
         ChatRow(conv: conv, me: me, dark: dark,
+                onCall: conv.id == liveCallCid,
                 storySeen: storySeen(conv),
                 onStoryTap: {   // open this person's story in the same viewer the stories row uses
                     // The ring has its own tap gesture, which would beat the row's selection toggle.
@@ -1217,7 +1220,8 @@ struct ChatsView: View {
         // what an announcement is. It is nil until it has something to say — another mainstream messenger
         // keeps its release channel hidden the same way (an internal visibility flag) so a brand-new account never
         // opens onto an empty official chat.
-        (repo.conversations + [officialChannel.listEntry].compactMap { $0 })
+        let live = liveCallCid   // read ONCE — the comparator below runs n·log n times
+        return (repo.conversations + [officialChannel.listEntry].compactMap { $0 })
             .filter { !$0.isCleared(me) && !$0.isArchived(me) }
             .filter { Flags.groupsEnabled || !$0.isGroup }
             // A 1:1 chat you merely OPENED (from search / a profile) but never exchanged a message
@@ -1228,7 +1232,8 @@ struct ChatsView: View {
                 c.isGroup || !c.lastMessageCipher.isEmpty || c.hasUnreadMark(me) || c.isPinned(me)
                     || !Drafts.shared.text(c.id).isEmpty
                     || AudioRecorder.draftIndex[c.id] != nil   // a parked voice draft keeps its chat listed
-            }
+                    || c.id == live   // ...and so does a call: ringing someone you have never texted
+            }                         //   otherwise the "Active call" row has no chat to sit on
             .filter { c in   // Filter: 0 = All, 1 = Unread, 2 = Groups
                 switch chatFilter {
                 // Blocked-aware, like the row badge and the tab badge (audit: a silently blocked
@@ -1239,6 +1244,10 @@ struct ChatsView: View {
                 }
             }
             .sorted { a, b in
+                // A call you are ON outranks a pin. It is the one thing in the list that is
+                // happening RIGHT NOW, and it goes back to where it was the moment it ends —
+                // nothing is written to the conversation, so this costs the order nothing.
+                if (a.id == live) != (b.id == live) { return a.id == live }
                 if a.isPinned(me) != b.isPinned(me) { return a.isPinned(me) }
                 // Both pinned: manual order (higher rank = higher in list).
                 if a.isPinned(me) && b.isPinned(me) {
@@ -1248,6 +1257,10 @@ struct ChatsView: View {
                 return a.displayUpdatedAt(me) > b.displayUpdatedAt(me)   // recency (frozen if blocked)
             }
     }
+
+    /// The one chat that is on a call right now — 1:1 or group — or nil. Read by the sort above and
+    /// by the row, so both agree without either of them knowing how a call is put together.
+    private var liveCallCid: String? { call.liveConversationId ?? groupCall.activeCid }
 
 
     // Native nav bar with a crisp circle avatar — glass stripped via the iOS 26
@@ -2660,6 +2673,7 @@ struct ChatRow: View, Equatable {
     let conv: Conversation
     let me: String
     let dark: Bool
+    var onCall: Bool = false        // a call with this chat is running right now → green "Active call" line
     var storySeen: [Bool] = []      // per-segment seen flags for this person's stories ([] = no active story)
     var onStoryTap: (() -> Void)? = nil   // tap the ringed avatar → open their story (not the chat)
     var draft: String = ""          // unsent composer text (local-only) → "Draft:" preview
@@ -2684,6 +2698,7 @@ struct ChatRow: View, Equatable {
     // lastMessage/unread/updatedAt/pinned/muted/etc.; decryption/avatars/time only recompute on change.
     static func == (l: ChatRow, r: ChatRow) -> Bool {
         l.conv == r.conv && l.me == r.me && l.dark == r.dark
+            && l.onCall == r.onCall   // ⚠️ without this the row keeps its old preview for the whole call
             && l.storySeen == r.storySeen
             && l.draft == r.draft && l.voiceDraftSecs == r.voiceDraftSecs
             && l.voiceUnplayed == r.voiceUnplayed
@@ -2746,7 +2761,8 @@ struct ChatRow: View, Equatable {
     /// "ic_" names one of OUR drawings; anything else is an SF Symbol — the same convention the
     /// composer's attachment tiles use. It exists here because of the GIF row: SF Symbols has no GIF
     /// glyph at all, which is why that preview wore `sparkles` and read as anything but a GIF.
-    private func previewRow(_ icon: String, _ text: String, iconTint: Color? = nil) -> some View {
+    private func previewRow(_ icon: String, _ text: String, iconTint: Color? = nil,
+                            textTint: Color? = nil) -> some View {
         HStack(spacing: 5) {
             Group {
                 if icon.hasPrefix("ic_") {
@@ -2757,7 +2773,7 @@ struct ChatRow: View, Equatable {
                 }
             }
             .foregroundStyle(iconTint ?? Color.secondary)
-            Text(text).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
+            Text(text).font(.system(size: 14)).foregroundStyle(textTint ?? .secondary).lineLimit(1)
         }
     }
     /// The emoji shown as the row's trailing badge — the same fresh-reaction test the preview text
@@ -2839,10 +2855,15 @@ struct ChatRow: View, Equatable {
         if c.hasPrefix("🎬 ") { return String(c.dropFirst("🎬 ".count)) }   // mixed album → "3 Media"
         return "Photo"
     }
-    // Preview area, in priority order: blocked freeze → live typing → unsent draft →
+    // Preview area, in priority order: live call → blocked freeze → live typing → unsent draft →
     // photo thumbnail → media/call badge → say-hello → decrypted text.
     @ViewBuilder private var previewContent: some View {
-        if conv.leaksBlocked(me) {
+        if onCall {
+            // FIRST, above everything — a call in progress outranks typing, a draft, the last
+            // message, all of it. Green because that is what "live" reads as everywhere else in
+            // the app (the minimized call bar, the answer button), not a colour picked here.
+            previewRow("phone.fill", "Active call", iconTint: .green, textTint: .green)
+        } else if conv.leaksBlocked(me) {
             previewRow("hand.raised.fill", "Blocked")
         } else if let r = recordingLabel, !activityExpired {
             (Text(Image(systemName: "mic.fill")).font(.system(size: 12)) + Text(" \(r)"))
@@ -3156,7 +3177,11 @@ private struct ChatPeekPreview: View {
                 ScrollView {
                     VStack(spacing: 3) {
                         ForEach(msgs) { m in
-                            MessageBubble(message: m, isMe: m.authorId == me, dark: scheme == .dark, cid: cid)
+                            // The platter draws the real wallpaper above, so its bubbles have to
+                            // resolve their surface against it exactly as the chat does — otherwise
+                            // the peek shows flat grey bubbles on a picture the chat itself blurs.
+                            MessageBubble(message: m, isMe: m.authorId == me, dark: scheme == .dark, cid: cid,
+                                          onWallpaper: WallpaperStore.shared.hasWallpaper(for: cid))
                                 .allowsHitTesting(false)   // the platter is not interactive
                         }
                     }

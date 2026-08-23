@@ -154,8 +154,7 @@ struct CallView: View {
     }
     private var durationText: String {
         guard let start = call.connectedDate else { return "Connecting…" }   // not truly connected until ICE is up (H1)
-        let s = max(0, Int(now.timeIntervalSince(start)))
-        return String(format: "%02d:%02d", s / 60, s % 60)
+        return CallDuration.clock(max(0, Int(now.timeIntervalSince(start))))
     }
     private var bgImage: UIImage? {
         guard let url = call.otherPhotoUrl, !url.isEmpty else { return nil }
@@ -670,7 +669,7 @@ struct AudioRoutePicker: UIViewRepresentable {
 // MARK: - CallContainer
 
 // Root-level wrapper: lives above every screen so an active call survives all navigation.
-// Minimized → shows MiniCallBar at top; otherwise presents the full call screen.
+// Minimized → the floating card in the bottom corner; otherwise presents the full call screen.
 struct CallContainer<Content: View>: View {
     @ViewBuilder var content: Content
     private var call: CallService { CallService.shared }
@@ -684,24 +683,18 @@ struct CallContainer<Content: View>: View {
         }
     }
 
-    // A minimized VIDEO call gets the floating video window; only a voice call gets the green bar.
-    // Minimizing used to drop every call into that same bar, so a video call looked like it had
-    // turned into a voice one — the video was still running, nothing on screen was showing it.
-    private var showsFloatingVideo: Bool { isActive && call.minimized && call.isVideo }
+    // EVERY minimized call gets the floating card — voice ones too. The green bar that used to sit
+    // across the top for voice calls is gone (owner, 2026-08-23, reference in hand): a bar eats the
+    // top of whatever screen you moved on to, and it duplicated what the chat list now says by
+    // itself. The list carries the words ("Active call", green, top row) and the card carries the
+    // faces and the controls, which is the split the reference app uses.
+    private var showsFloatingCall: Bool { isActive && call.minimized }
     /// Held at the root because the cover is declared here; handed to the buttons through the
     /// environment. See `CallZoomNamespaceKey`.
     @Namespace private var callZoom
 
     var body: some View {
         VStack(spacing: 0) {
-            if isActive && call.minimized && !call.isVideo {
-                MiniCallBar()
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        withAnimation(.easeInOut(duration: 0.25)) { call.minimized = false }
-                    }
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
             // ONGOING GROUP CALL, swiped down: a live call (mic possibly hot) must NEVER be invisible.
             // Green return bar at root level — tap re-presents the group call screen from HERE, so it
             // works from any screen, not just the chat that started it.
@@ -728,12 +721,15 @@ struct CallContainer<Content: View>: View {
             content
         }
         .overlay {
-            if showsFloatingVideo {
+            if showsFloatingCall {
+                // A PLAIN OPACITY FADE, not the scale-from-0.7 pop it used to have. The card is the
+                // zoom's landing shape now, so the cover is already flying into this exact frame —
+                // a second scale of our own on top of that reads as a bounce and fights it.
                 FloatingCallWindow()
-                    .transition(.scale(scale: 0.7).combined(with: .opacity))
+                    .transition(.opacity)
             }
         }
-        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: showsFloatingVideo)
+        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: showsFloatingCall)
         .environment(\.callZoomNamespace, callZoom)
         // ⛔ THE SETTER SWALLOWED THE DISMISS, AND THAT LOST THE CALL.
         //
@@ -767,8 +763,17 @@ struct CallContainer<Content: View>: View {
             // It does NOT follow that this screen is only ever left by a button — that is what the
             // note used to claim and it is why the dismiss was thrown away above. The zoom's pan is
             // a second way out, and it has to mean the same thing the button means.
+            // ⚠️ THE SOURCE SWITCHES ONCE THE CARD HAS EXISTED (owner, 2026-08-23 — he asked whether
+            // closing the big screen into the small card was a matched transition; it was not, the
+            // cover just faded while the card popped in separately). Before the first minimize the
+            // source is the button that placed the call, which is what he asked for on 2026-08-20.
+            // After it, the source is the card: the screen shrinks into the card and grows back out
+            // of the same card on the way in. A zoom whose source is not on screen falls back to the
+            // ordinary presentation on its own, so ending a call is no worse than it was.
             CallView()
-                .navigationTransition(.zoom(sourceID: CallZoomSource.id(video: call.isVideo),
+                .navigationTransition(.zoom(sourceID: call.everMinimized
+                                                ? CallZoomSource.card
+                                                : CallZoomSource.id(video: call.isVideo),
                                             in: callZoom))
         }
         // THE SAME HOLE ON THE GROUP SIDE. Tapping the bar clears `minimized` and presents this;
@@ -808,6 +813,10 @@ extension EnvironmentValues {
 /// the one that was pressed — not out of whichever was registered last.
 enum CallZoomSource {
     static func id(video: Bool) -> String { video ? "call.video" : "call.voice" }
+    /// The floating card. Once a call has been minimized ONCE, the card is the thing the screen
+    /// belongs to and the button that started it is usually not even on screen any more — so from
+    /// then on the screen shrinks into the card and grows back out of it. See `everMinimized`.
+    static let card = "call.card"
 }
 
 // MARK: - FloatingCallWindow
@@ -816,11 +825,50 @@ enum CallZoomSource {
 // plus the corner tile, following the same big/small choice as the call screen. Tap it to go back.
 struct FloatingCallWindow: View {
     private var call: CallService { CallService.shared }
-    @State private var offset: CGSize = .zero
-    @State private var base: CGSize = .zero
+    /// The card is the call screen's zoom partner: the screen shrinks into it and grows back out of
+    /// it. Nil namespace is a working configuration — the zoom just falls back to a plain
+    /// presentation — so this never has to be guaranteed, only offered.
+    @Environment(\.callZoomNamespace) private var zoomNamespace
+    // NOT @State. See CallService.cardOffset: this view dies on every restore, and @State handed the
+    // card back to the bottom-right corner each time instead of leaving it where it was dropped.
+    private var offset: CGSize {
+        get { call.cardOffset } nonmutating set { call.cardOffset = newValue }
+    }
+    private var base: CGSize {
+        get { call.cardBase } nonmutating set { call.cardBase = newValue }
+    }
 
     private let w: CGFloat = 112
     private let h: CGFloat = 199   // 9:16
+
+    // Hiding it to the side.
+    private let overshoot: CGFloat = 70   // how far past the edge a drag is allowed to pull it
+    private let stashAt: CGFloat = 42     // let go beyond this and it parks as a tab
+    private let tabW: CGFloat = 68        // no part of it is buried, so it needs no extra width
+    private let tabH: CGFloat = 46        // the wedge loses height at its point, so it starts taller
+    private let pullMax: CGFloat = 34     // how far the tab rubber-bands inward before letting go
+    private let pullBack: CGFloat = 22    // pulled at least this far → the card comes back
+
+    /// Live inward drag on the tab. Transient by design: it is either mid-gesture or zero, and it
+    /// must not survive the tab turning back into a card.
+    @State private var tabPull: CGFloat = 0
+
+    /// Ties the card and the tab together as one shape for the morph.
+    @Namespace private var morph
+    private static let morphID = "call.card.morph"
+
+    /// ⚠️ `base` IS THE ANCHOR AND MUST NOT MOVE MID-DRAG. Every gesture update reports the
+    /// translation from where the finger went DOWN, so a version of this that wrote `base` on each
+    /// change re-added the whole translation to an already-moved anchor and the tab shot off the
+    /// screen. `offset` is the live position; `base` is only committed when the finger lifts. The
+    /// card's own drag has always worked this way — this is the same contract.
+    private func setLiveY(_ y: CGFloat) {
+        offset = CGSize(width: offset.width, height: y)
+    }
+
+    private func commitY() {
+        base = CGSize(width: base.width, height: offset.height)
+    }
 
     private var insets: UIEdgeInsets {
         UIApplication.shared.connectedScenes
@@ -830,49 +878,284 @@ struct FloatingCallWindow: View {
 
     var body: some View {
         GeometryReader { geo in
-            window
-                .offset(offset)
-                // Plain gesture, not high-priority: the end button inside the window must still get
-                // its own taps.
-                .gesture(
-                    DragGesture(minimumDistance: 8)
-                        .onChanged { v in
-                            let (maxLeft, maxUp) = limits(geo.size)
-                            offset = CGSize(
-                                width: min(0, max(maxLeft, base.width + v.translation.width)),
-                                height: max(maxUp, min(0, base.height + v.translation.height))
-                            )
-                        }
-                        .onEnded { _ in
-                            let (maxLeft, maxUp) = limits(geo.size)
-                            let x: CGFloat = offset.width < maxLeft / 2 ? maxLeft : 0
-                            let y: CGFloat = offset.height < maxUp / 2 ? maxUp : 0
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
-                                offset = CGSize(width: x, height: y)
+            if call.cardStashed {
+                stashTab
+                    .offset(y: min(offset.height, max(0, limits(geo.size).1)))
+                    .offset(x: tabPull)
+                    // ONE OBJECT IN TWO SHAPES. The card does not vanish and a tab appear in its
+                    // place: they share an identity, so the card's frame travels to the wedge's frame
+                    // and back. Applied OUTSIDE the offsets on purpose — the geometry that matters is
+                    // where the tab actually ended up after being dragged along the edge.
+                    .matchedGeometryEffect(id: Self.morphID, in: morph)
+                    // THE TAB DRAGS TOO (owner, 2026-08-23). Up and down it slides along the edge and
+                    // stays where it is put. Pulled INWARD it comes back as the card — the same
+                    // gesture that hid it, run backwards. A tap does nothing but bring the card back,
+                    // so the two never have to be told apart.
+                    .gesture(
+                        DragGesture(minimumDistance: 8)
+                            .onChanged { v in
+                                let (_, maxDown) = limits(geo.size)
+                                setLiveY(min(maxDown, max(0, base.height + v.translation.height)))
+                                // Only the inward direction is live. Pushing further out has nowhere
+                                // to go, and letting it move would look like it could leave twice.
+                                let inward = stashedLeft ? v.translation.width : -v.translation.width
+                                let pull = max(0, min(pullMax, inward))
+                                tabPull = stashedLeft ? pull : -pull
                             }
-                            base = CGSize(width: x, height: y)
-                        }
-                )
-                .onTapGesture {
-                    withAnimation(.easeInOut(duration: 0.25)) { call.minimized = false }
-                }
-                // BOTTOM corner home (owner's 2026-08-12 rule, same as the call-screen tile and the
-                // system PiP): the floating card rests bottom-trailing, above the tab pill.
-                .padding(.bottom, insets.bottom + 76)
-                .padding(.trailing, 12)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                            .onEnded { _ in
+                                commitY()
+                                let pulled = abs(tabPull)
+                                tabPull = 0
+                                if pulled >= pullBack {
+                                    withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                                        call.cardStashed = false
+                                    }
+                                }
+                            }
+                    )
+                    // FLUSH WITH THE EDGE, not tucked under it. See `stashTab` for why.
+                    .padding(.top, insets.top + 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity,
+                           alignment: stashedLeft ? .topLeading : .topTrailing)
+            } else {
+                // The anchor goes OUTSIDE the offset: `offset` is a render-time shift, and the zoom has
+                // to land on where the card actually is after being dragged, not on its untouched home.
+                zoomAnchored(window.offset(offset))
+                    // The other half of the morph — see the tab's copy of this.
+                    .matchedGeometryEffect(id: Self.morphID, in: morph)
+                    // Plain gesture, not high-priority: the end button inside the window must still get
+                    // its own taps.
+                    .gesture(
+                        DragGesture(minimumDistance: 8)
+                            .onChanged { v in
+                                let (maxLeft, maxDown) = limits(geo.size)
+                                // Deliberately allowed PAST the edge by `overshoot`. The card sliding
+                                // partly off is the only warning that letting go will hide it — clamped
+                                // dead at the edge, hiding would happen out of nowhere.
+                                offset = CGSize(
+                                    width: min(overshoot, max(maxLeft - overshoot, base.width + v.translation.width)),
+                                    height: min(maxDown, max(0, base.height + v.translation.height))
+                                )
+                            }
+                            .onEnded { _ in
+                                let (maxLeft, maxDown) = limits(geo.size)
+                                let y: CGFloat = offset.height > maxDown / 2 ? maxDown : 0
+                                // Shoved far enough past a side → park it there as a tab.
+                                if offset.width > stashAt || offset.width < maxLeft - stashAt {
+                                    let x: CGFloat = offset.width > stashAt ? 0 : maxLeft
+                                    base = CGSize(width: x, height: y)
+                                    withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                                        offset = CGSize(width: x, height: y)
+                                        call.cardStashed = true
+                                    }
+                                    return
+                                }
+                                let x: CGFloat = offset.width < maxLeft / 2 ? maxLeft : 0
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+                                    offset = CGSize(width: x, height: y)
+                                }
+                                base = CGSize(width: x, height: y)
+                            }
+                    )
+                    .onTapGesture {
+                        withAnimation(.easeInOut(duration: 0.25)) { call.minimized = false }
+                    }
+                    // TOP-RIGHT HOME (owner, 2026-08-23: "most land top right that's standard"). It used
+                    // to rest bottom-right under his 2026-08-12 rule; that rule still governs the
+                    // self-tile INSIDE the call screen, which has not moved. This card is a different
+                    // thing — it is what you see after leaving the call, and every app that has one puts
+                    // it up top, out of the way of the list you went back to reading.
+                    .padding(.top, insets.top + 8)
+                    .padding(.trailing, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            }
         }
         .ignoresSafeArea()
+        .animation(.spring(response: 0.34, dampingFraction: 0.82), value: call.cardStashed)
     }
 
-    // How far the window may travel from its bottom-right resting place (left, and UP as negative).
+    /// Which side it was parked on. `cardBase.width` is 0 at the right edge and negative anywhere
+    /// left of it, so the drag has already recorded this and there is no second flag to keep in step.
+    private var stashedLeft: Bool { base.width < 0 }
+
+    /// THE TAB. Everything the card was saying is gone except the one thing worth a glance from the
+    /// corner of your eye: how long you have been on. Green because that is what a live call is
+    /// everywhere else in here — the row in the chat list, the talking bubble.
+    ///
+    /// ⛔ NOT A ROUNDED RECTANGLE WITH A CORNER POKING OUT. That is the reference app's drawing, and
+    /// the first build of this was a straight copy of it — the owner asked, fairly, whether it just
+    /// looked like theirs (2026-08-23). It is a WEDGE now, his own pick: see `WedgeTab`.
+    ///
+    /// Tap brings the card back and does nothing else — never the full call screen, which is one more
+    /// tap on the card itself. Dragging it is handled where the geometry is, at the call site.
+    private var stashTab: some View {
+        TimelineView(.periodic(from: Date(), by: 1)) { context in
+            ZStack {
+                tabShape.fill(Color.green)
+                tabLabel(context.date)
+                    // The clock lives in the ROUND end, the half still facing the screen. Centred in
+                    // the frame it would sit halfway down the taper and lose a digit off the point.
+                    .padding(stashedLeft ? .leading : .trailing, tabW * 0.26)
+            }
+        }
+        .frame(width: tabW, height: tabH)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { call.cardStashed = false }
+        }
+        .shadow(color: .black.opacity(0.3), radius: 10, y: 4)
+        .accessibilityLabel("Back to the call")
+    }
+
+    /// Parked on the right → the point aims right, out through that edge. Mirrored on the left.
+    private var tabShape: WedgeTab { WedgeTab(pointsRight: !stashedLeft) }
+
+    @ViewBuilder private func tabLabel(_ now: Date) -> some View {
+        if let start = call.connectedDate {
+            Text(CallDuration.clock(max(0, Int(now.timeIntervalSince(start)))))
+                .font(.system(size: 14, weight: .bold))
+                .monospacedDigit()
+                .foregroundStyle(.white)
+                .lineLimit(1).minimumScaleFactor(0.7)
+        } else {
+            // Not connected yet, so there is no duration to report and a zeroed clock would be a
+            // lie. The glyph says "a call is going on here" and nothing more.
+            Image(systemName: "phone.fill")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white)
+        }
+    }
+
+    /// Marks the card as the shape the call screen flies into and out of. Same shape as the call
+    /// buttons' own modifier, and for the same reason: `matchedTransitionSource` needs a real
+    /// namespace, and on a screen that does not host the cover's environment there is not one.
+    @ViewBuilder private func zoomAnchored(_ content: some View) -> some View {
+        if let zoomNamespace {
+            content.matchedTransitionSource(id: CallZoomSource.card, in: zoomNamespace)
+        } else {
+            content
+        }
+    }
+
+    // How far the card may travel from its top-right home: LEFT as negative x, DOWN as positive y.
+    // The bottom stop still allows for the tab pill, so dragging it down parks it above the tabs
+    // rather than behind them.
     private func limits(_ size: CGSize) -> (CGFloat, CGFloat) {
         let maxLeft = -(size.width - w - 24)
-        let maxUp = -max(0, size.height - h - (insets.top + 8) - (insets.bottom + 76))
-        return (maxLeft, maxUp)
+        let maxDown = max(0, size.height - h - (insets.top + 8) - (insets.bottom + 76))
+        return (maxLeft, maxDown)
     }
 
     private var window: some View {
+        Group {
+            if call.isVideo { videoWindow } else { voiceWindow }
+        }
+        .frame(width: w, height: h)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(.white.opacity(0.22), lineWidth: 1)
+        )
+        // ⛔ NO BUTTONS ON THIS CARD (owner, 2026-08-23: "red end call and mute dont make that").
+        // A first pass put mute and End here when the green bar was removed, and the video card had
+        // carried a red End since before that. Both are gone: the card is a way BACK to the call, not
+        // a second set of controls, and the reference's floating window has nothing on it either.
+        // Tapping the card opens the call screen, where every control already lives.
+        //
+        // The stage sits UNDER the picture on a video card, because the picture is already filling
+        // it; the voice card puts the same words under the face instead. Either way a minimized call
+        // that has not been answered yet says so.
+        .overlay(alignment: .bottom) {
+            if call.isVideo, let stage = stageLabel {
+                Text(stage)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(.black.opacity(0.55), in: Capsule())
+                    .padding(.bottom, 8)
+            }
+        }
+        .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
+    }
+
+    /// WHAT THE CALL IS DOING, for the card — nil once it is connected, because two faces sitting
+    /// there already say "you are on a call" and a label would only repeat it. Owner, 2026-08-23:
+    /// minimizing a call that is still ringing used to leave a card that looked identical to a
+    /// connected one, so you could not tell whether they had picked up.
+    ///
+    /// The words are the ones the call screen uses, deliberately: minimizing must not rename the
+    /// stage halfway through it.
+    private var stageLabel: String? {
+        switch call.state {
+        case .outgoing:     return call.calleeAccepted ? "Connecting…" : (call.calleeRinging ? "Ringing…" : "Calling…")
+        case .incoming:     return "Incoming…"
+        case .reconnecting: return "Reconnecting…"
+        case .ended:        return "Call ended"
+        default:            return nil   // .active — the two faces carry it
+        }
+    }
+
+    // The minimized VOICE call. Connected: the two people stacked, them on top, you underneath —
+    // the shape the reference uses. Still ringing: ONE face, theirs, with the stage under it, which
+    // is also what the reference does before somebody answers.
+    // A voice call has no picture of its own, so the card says WHO you are on with instead of a
+    // phone glyph. Black panels, not coloured ones: this app's palette is black/white (Theme.accent
+    // is literally white-or-black) and a blue/peach card would belong to another app.
+    @ViewBuilder private var voiceWindow: some View {
+        if let stage = stageLabel {
+            VStack(spacing: 10) {
+                voiceFace(name: call.otherName, photoUrl: call.otherPhotoUrl, size: 54, speaking: false)
+                Text(stage)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)   // "Reconnecting…" must not clip on a 112pt card
+                    .padding(.horizontal, 8)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.white.opacity(0.06))
+            .background(Color.black)
+        } else {
+            VStack(spacing: 0) {
+                voicePanel(name: call.otherName, photoUrl: call.otherPhotoUrl,
+                           avatar: 46, speaking: call.remoteSpeaking)
+                Rectangle().fill(.white.opacity(0.14)).frame(height: 0.5)
+                voicePanel(name: call.myName, photoUrl: call.myPhotoUrl,
+                           avatar: 38, speaking: call.localSpeaking)
+            }
+            .background(Color.black)
+        }
+    }
+
+    /// One person's half of the connected voice card.
+    private func voicePanel(name: String, photoUrl: String?, avatar: CGFloat,
+                            speaking: Bool) -> some View {
+        ZStack {
+            Color.white.opacity(0.06)
+            voiceFace(name: name, photoUrl: photoUrl, size: avatar, speaking: speaking)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// A face on the card. The wave is there ONLY while that person is talking (owner, 2026-08-23) —
+    /// it is not a mute light and it does not sit there for the whole call. Nothing shows before the
+    /// call connects either: a live badge on a phone nobody has picked up would be saying something
+    /// untrue. See CallService's talking monitor for where `speaking` comes from.
+    private func voiceFace(name: String, photoUrl: String?, size: CGFloat, speaking: Bool) -> some View {
+        AvatarView(name: name, photoUrl: photoUrl, size: size)
+            .overlay(alignment: .topTrailing) {
+                if speaking {
+                    TalkingBubble(width: size * 0.56)
+                        .offset(x: size * 0.30, y: -size * 0.22)
+                        .transition(.scale(scale: 0.6, anchor: .bottomLeading).combined(with: .opacity))
+                }
+            }
+            .animation(.easeOut(duration: 0.18), value: speaking)
+    }
+
+    private var videoWindow: some View {
         let feeds = call.pipFeeds
         // bottomTrailing: the self-tile inside this card sits in the BOTTOM corner, matching the
         // call screen and the system PiP (owner's 2026-08-12 rule — the tile's home is the bottom).
@@ -916,30 +1199,112 @@ struct FloatingCallWindow: View {
             CallView.CallPiPHost(feeds: feeds)
                 .allowsHitTesting(false)
         }
-        .frame(width: w, height: h)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(.white.opacity(0.22), lineWidth: 1)
-        )
-        // End stays reachable without reopening the call — a live mic and camera must always have
-        // a one-tap kill.
-        .overlay(alignment: .bottom) {
-            Button {
-                CallKitManager.shared.end()
-            } label: {
-                Image(systemName: "phone.down.fill")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
-                    .background(.red, in: Circle())
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .padding(.bottom, 8)
-            .accessibilityLabel("End call")
+        // The card's frame, corner, border, controls and shadow are applied ONCE in `window`, so the
+        // voice half and the video half cannot drift apart into two different-looking cards.
+    }
+}
+
+// MARK: - WedgeTab
+
+/// The shape of the hidden call tab, drawn from the owner's own screenshot (2026-08-23): a round
+/// bulge facing INTO the screen, tapering to a point that goes OUT through the edge.
+///
+/// ⚠️ THIS IS THE OPPOSITE OF THE FIRST BUILD, and the difference is the whole idea. That one was
+/// flat on the edge with the point aimed inward, which reads as an arrow telling you to swipe
+/// somewhere. This one reads as the card itself being squeezed out through the side of the screen:
+/// the fat end is the part still in the room, the point is the part already gone. It also puts the
+/// wide half where the clock has to live, so the digits sit in the shape instead of fighting a taper.
+///
+/// The tip is rounded, never a true apex: a sharp point on a 46pt shape aliases into a whisker at
+/// some scale factors and looks like a rendering fault rather than a design.
+struct WedgeTab: Shape {
+    /// True when the point aims at the RIGHT edge — the tab is parked on the right.
+    var pointsRight: Bool
+
+    func path(in r: CGRect) -> Path {
+        let bulge = r.height / 2          // the round end is a half-circle's worth of belly
+        let tip = r.height * 0.30         // how far back from the point the rounding starts
+        var p = Path()
+        if pointsRight {
+            p.move(to: CGPoint(x: r.minX + bulge, y: r.minY))
+            p.addLine(to: CGPoint(x: r.maxX - tip, y: r.midY - tip * 0.55))
+            p.addQuadCurve(to: CGPoint(x: r.maxX - tip, y: r.midY + tip * 0.55),
+                           control: CGPoint(x: r.maxX, y: r.midY))
+            p.addLine(to: CGPoint(x: r.minX + bulge, y: r.maxY))
+            // Control sits a full bulge OUTSIDE the box on purpose — that is what puts the curve's
+            // widest point exactly on the box edge instead of somewhere inside it.
+            p.addQuadCurve(to: CGPoint(x: r.minX + bulge, y: r.minY),
+                           control: CGPoint(x: r.minX - bulge, y: r.midY))
+        } else {
+            p.move(to: CGPoint(x: r.maxX - bulge, y: r.minY))
+            p.addLine(to: CGPoint(x: r.minX + tip, y: r.midY - tip * 0.55))
+            p.addQuadCurve(to: CGPoint(x: r.minX + tip, y: r.midY + tip * 0.55),
+                           control: CGPoint(x: r.minX, y: r.midY))
+            p.addLine(to: CGPoint(x: r.maxX - bulge, y: r.maxY))
+            p.addQuadCurve(to: CGPoint(x: r.maxX - bulge, y: r.minY),
+                           control: CGPoint(x: r.maxX + bulge, y: r.midY))
         }
-        .shadow(color: .black.opacity(0.4), radius: 16, y: 6)
+        p.closeSubpath()
+        return p
+    }
+}
+
+// MARK: - TalkingBubble
+
+/// The "this person is talking" mark on the floating card, built from the owner's close-ups of the
+/// reference (2026-08-23): a small WHITE SPEECH BUBBLE hanging off the top-right of the face, with
+/// green level bars inside it. Not a coloured dot and not a mic glyph — a bubble reads as somebody
+/// saying something, which is exactly the thing being reported.
+///
+/// It is only ever on screen while that person is actually talking (see CallService's talking
+/// monitor), so the bars may animate freely: nothing is paying for them during the silences. The
+/// reference also draws a GREY three-dot version while a person is connected but quiet; that state
+/// is deliberately not built, because the owner asked for a card that is clear when nobody is
+/// talking.
+struct TalkingBubble: View {
+    /// Bubble width. Everything else is derived so one number scales the whole mark.
+    var width: CGFloat = 26
+
+    private var height: CGFloat { width * 0.72 }
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 12.0)) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            HStack(spacing: width * 0.07) {
+                ForEach(0..<3, id: \.self) { i in
+                    Capsule()
+                        .fill(Color.green)
+                        .frame(width: width * 0.085, height: barHeight(i, t))
+                }
+            }
+            .frame(width: width, height: height, alignment: .center)
+            .background(BubbleShape().fill(.white))
+            .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+        }
+        .frame(width: width, height: height)
+    }
+
+    /// Three bars out of step with each other. Even heights would read as a progress meter; the
+    /// offset phases are what make it read as a voice.
+    private func barHeight(_ i: Int, _ t: Double) -> CGFloat {
+        let phase = t * 7.5 + Double(i) * 1.15
+        return height * (0.24 + 0.34 * CGFloat(abs(sin(phase))))
+    }
+}
+
+/// Rounded bubble with a small tail on the bottom-left, pointing back down at the face it belongs to.
+private struct BubbleShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let bodyH = rect.height * 0.82
+        let body = CGRect(x: 0, y: 0, width: rect.width, height: bodyH)
+        p.addRoundedRect(in: body, cornerSize: CGSize(width: bodyH / 2, height: bodyH / 2))
+        let tailX = rect.width * 0.24
+        p.move(to: CGPoint(x: tailX, y: bodyH - 1))
+        p.addLine(to: CGPoint(x: rect.width * 0.10, y: rect.height))
+        p.addLine(to: CGPoint(x: tailX + rect.width * 0.20, y: bodyH - 1))
+        p.closeSubpath()
+        return p
     }
 }
 
@@ -995,77 +1360,6 @@ struct LiveCallBarBackground: View {
             Gradient(colors: [.white.opacity(0), .white.opacity(opacity)]),
             startPoint: CGPoint(x: 0, y: top),
             endPoint: CGPoint(x: 0, y: size.height)))
-    }
-}
-
-// MARK: - MiniCallBar
-
-// A 40pt green bar at the top when the call is minimized.
-struct MiniCallBar: View {
-    private var call: CallService { CallService.shared }
-    @State private var now = Date()
-    @State private var ticker = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-
-    private var statusText: String {
-        switch call.state {
-        case .active:
-            if call.videoPausedForNetwork { return "Video paused" }   // no room for the full sentence here
-            if let start = call.connectedDate {
-                let s = max(0, Int(now.timeIntervalSince(start)))
-                return String(format: "%d:%02d", s / 60, s % 60)
-            }
-            return "Connected"
-        case .outgoing:     return call.calleeAccepted ? "Connecting…" : (call.calleeRinging ? "Ringing…" : "Calling…")
-        case .reconnecting: return "Reconnecting…"
-        case .ended:        return "Call ended"
-        default:            return ""
-        }
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: call.isVideo ? "video.fill" : "phone.fill")
-                .font(.system(size: 13, weight: .bold))
-            Text(call.otherName)
-                .font(.system(size: 14, weight: .semibold))
-                .lineLimit(1)
-            VerifiedMark(uid: call.otherUid, size: 12)
-            Text(statusText)
-                .font(.system(size: 13))
-                .monospacedDigit()
-                .opacity(0.9)
-            Spacer(minLength: 6)
-            // Mute + End live HERE, not only behind a tap-to-return. The bar used to be a label with no
-            // controls at all, which meant a live mic (and a live camera) with no way to kill either
-            // without first reopening the call screen.
-            Button {
-                call.toggleMute()
-            } label: {
-                Image(systemName: call.isMuted ? "mic.slash.fill" : "mic.fill")
-                    .font(.system(size: 13, weight: .bold))
-                    .frame(width: 30, height: 30)
-                    .background(.white.opacity(call.isMuted ? 0.28 : 0.14), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(call.isMuted ? "Unmute" : "Mute")
-
-            Button {
-                CallKitManager.shared.end()
-            } label: {
-                Image(systemName: "phone.down.fill")
-                    .font(.system(size: 13, weight: .bold))
-                    .frame(width: 30, height: 30)
-                    .background(.red, in: Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("End call")
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 14)
-        .frame(height: 40)
-        .frame(maxWidth: .infinity)
-        .background(LiveCallBarBackground())   // reference-style living sweep, not a static green
-        .onReceive(ticker) { now = $0 }
     }
 }
 
