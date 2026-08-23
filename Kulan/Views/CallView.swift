@@ -340,7 +340,7 @@ struct CallView: View {
     private func topBar(safeTop: CGFloat) -> some View {
         HStack {
             // The ONLY way to minimize the call (swipe-to-minimize removed — screen is locked).
-            Button { withAnimation(.easeInOut(duration: 0.25)) { call.minimized = true } } label: {
+            Button { call.minimized = true } label: {   // no withAnimation: the zoom owns this motion
                 // The minimise glyph rather than a bare chevron: this button shrinks the call
                             // into the pill, it does not dismiss or scroll anything.
                             topCircle("arrow.down.right.and.arrow.up.left")
@@ -724,14 +724,22 @@ struct CallContainer<Content: View>: View {
         }
         .overlay {
             if showsFloatingCall {
-                // A PLAIN OPACITY FADE, not the scale-from-0.7 pop it used to have. The card is the
-                // zoom's landing shape now, so the cover is already flying into this exact frame —
-                // a second scale of our own on top of that reads as a bounce and fights it.
+                // ⛔ NO TRANSITION AND NO ANIMATION ON THIS. The card must simply BE THERE the instant
+                // `minimized` flips, because it is the shape the zoom is flying into.
+                //
+                // It used to fade in over a spring of its own while the cover was shrinking into it.
+                // Two animations describing the same moment, on two different curves, neither knowing
+                // about the other: the zoom landed on a card that was still half transparent and
+                // still settling, which is the "not smooth" the owner is pointing at (2026-08-23,
+                // beside a messenger whose version of this is clean). Apple's zoom is a real frame
+                // interpolation and it is good; it just cannot land on a target that is busy
+                // animating itself.
+                //
+                // The matched-geometry morph between card and tab stays — that is a DIFFERENT moment,
+                // with no cover involved and nothing else animating.
                 FloatingCallWindow()
-                    .transition(.opacity)
             }
         }
-        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: showsFloatingCall)
         .environment(\.callZoomNamespace, callZoom)
         // ⛔ THE SETTER SWALLOWED THE DISMISS, AND THAT LOST THE CALL.
         //
@@ -750,7 +758,7 @@ struct CallContainer<Content: View>: View {
             get: { isActive && !call.minimized },
             set: { presented in
                 guard !presented, isActive else { return }
-                withAnimation(.easeInOut(duration: 0.25)) { call.minimized = true }
+                call.minimized = true   // no withAnimation: the zoom owns this motion
             }
         )) {
             // GROWS OUT OF THE BUTTON THAT WAS PRESSED (owner, 2026-08-20), rather than sliding up
@@ -969,7 +977,7 @@ struct FloatingCallWindow: View {
                             }
                     )
                     .onTapGesture {
-                        withAnimation(.easeInOut(duration: 0.25)) { call.minimized = false }
+                        call.minimized = false   // no withAnimation: the zoom owns this motion
                     }
                     // ⛔ PADDING, NOT `.offset`, AND THAT IS THE WHOLE POINT (owner, 2026-08-23: he
                     // dragged the card to the bottom-left, reopened the call, and the zoom still flew
