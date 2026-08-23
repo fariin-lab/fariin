@@ -30,14 +30,39 @@ enum StoryText {
     /// It is also what the tap area is built from, so a viewer's finger and the drawing agree by
     /// construction rather than by two sets of arithmetic being kept in step by hand.
     static let linkCardWidthFraction: CGFloat = 0.72
-    static let linkCardCentreY: CGFloat = 0.62
 
-    /// The clear air the words must leave above the card, as a fraction of the height they are laid
-    /// out in. A fraction for the same reason the two above are: 40pt on the 2700pt render is a
-    /// different amount of room than 40pt on a 600pt composer card, and the two have to describe the
-    /// same picture. 40/2700 is the number the bake has always used, restated so the composer can
-    /// read it too.
-    static let linkCardGapFraction: CGFloat = 40.0 / 2700.0
+    /// ⛔ THE AIR BETWEEN THE WORDS AND THE CARD — owner, 2026-08-23: "there is an unwanted empty
+    /// space between the story text and the link preview … position them naturally and closely
+    /// together."
+    ///
+    /// ⚠️ `linkCardCentreY` IS GONE AND THAT IS THE FIX. The card used to be pinned at 62% of the
+    /// height whatever the status said, and the words centred themselves in whatever was left above
+    /// it — so a short status sat around a third of the way down with the card still at 62%, and the
+    /// hole between them was the difference. Nothing was inserting that space; two independently
+    /// centred things were.
+    ///
+    /// They are one stack now, centred as a group, so the only distance between them is this. As a
+    /// fraction of the WIDTH, like every other number on this screen, so the composer and the render
+    /// describe the same picture — see `fittedSize` for why ratios rather than points.
+    static let linkGapRatio: CGFloat = 0.04
+}
+
+/// Which of the two cards a story's link is wearing.
+///
+/// ⛔ TWO STYLES, AND A TAP ON THE CARD SWAPS THEM — owner, 2026-08-23: "I want 2 different preview
+/// styles … when I tap the preview, it should switch to the other preview type. Both preview types
+/// must work correctly with the same link."
+///
+/// ⚠️ `compact` IS THE DEFAULT, on his word: "always the new one, that one is better, use always
+/// default". It is also the one that fits: `large` stands more than twice as tall, which is most of
+/// what he means by the preview being too big.
+enum StoryTextLinkStyle: Equatable {
+    /// A row: a square of the page's picture on the left, its words to the right. His image 2.
+    case compact
+    /// The picture across the top with the words beneath it. The original card, smaller than it was.
+    case large
+
+    var other: StoryTextLinkStyle { self == .compact ? .large : .compact }
 }
 
 /// ⛔ THE LINK IS FOUND IN THE WORDS. THERE IS NO LINK BUTTON ANY MORE — owner, 2026-08-23: "Remove
@@ -189,6 +214,57 @@ enum TextStoryStyles {
         }
         return minSize
     }
+
+    /// How tall this status actually stands at that size — the same measurement `fittedSize` makes
+    /// on its way to an answer, exposed because the LAYOUT needs it too.
+    ///
+    /// ⛔ THIS IS WHAT LETS THE WORDS AND A LINK CARD BE ONE STACK. A `UITextView` fills whatever box
+    /// it is given, so in a stack it would take everything and leave the card nothing; told its own
+    /// height it takes exactly its own room and the two sit together. See `linkLayout`.
+    ///
+    /// ⚠️ MEASURED IN UIKIT AND DRAWN IN SWIFTUI, which differ by a hair — the same hair `fittedSize`
+    /// keeps on the safe side with its 0.98. The callers add a little slack for the same reason, and
+    /// it must be slack rather than a tighter number: too much room is invisible, too little clips
+    /// the last line.
+    static func measuredHeight(for text: String, boxWidth w: CGFloat,
+                               fontIndex: Int, size: CGFloat) -> CGFloat {
+        guard w > 1, !text.isEmpty else { return 0 }
+        let para = NSMutableParagraphStyle()
+        para.alignment = .center
+        para.lineBreakMode = .byWordWrapping
+        return (text as NSString).boundingRect(
+            with: CGSize(width: w, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: uiFont(fontIndex, size: size), .paragraphStyle: para],
+            context: nil).height
+    }
+}
+
+/// Where the words and the link card sit inside a box of a given size — asked by the composer and by
+/// the render with their own numbers, so the two describe one picture.
+///
+/// ⛔ A STACK, CENTRED AS A GROUP. The card used to be pinned at a fixed fraction of the height and
+/// the words centred themselves in whatever was above it, which is exactly the gap he asked to have
+/// removed: two things each centred in a different box, with the leftover between them.
+///
+/// ⚠️ NOTHING HERE IS MEASURED AFTER THE FACT. The card states its own height and the words are
+/// measured before layout, so every number below is known on the first pass — which is what stops
+/// the card appearing over the words and the words then moving. See `StoryTextLinkPreview.height`.
+enum StoryTextLinkLayout {
+    /// - Returns: the height to give the words, and where the card's centre lands as a FRACTION of
+    ///   the box — the fraction being what the posted tap target is built from.
+    static func place(textHeight: CGFloat, cardHeight: CGFloat,
+                      boxWidth: CGFloat, boxHeight: CGFloat) -> (text: CGFloat, cardCentreY: CGFloat) {
+        let gap = boxWidth * StoryText.linkGapRatio
+        // The words never take so much that the card is pushed off the bottom. A very long status in
+        // a keyboard-shortened box hits this and scrolls inside what is left, which is the same
+        // thing it has always done — the card keeping its room is the part that matters.
+        let text = max(0, min(textHeight, boxHeight - cardHeight - gap))
+        let group = text + gap + cardHeight
+        let top = max(0, (boxHeight - group) / 2)
+        let centre = top + text + gap + cardHeight / 2
+        return (text, boxHeight > 1 ? centre / boxHeight : 0.5)
+    }
 }
 
 struct StoryTextCard: View {
@@ -202,13 +278,21 @@ struct StoryTextCard: View {
     @Binding var link: StoryTextLink?
     var onClose: () -> Void
 
-    /// The measured height of the link card on screen. The words' bottom inset is built from it, so
-    /// it has to be the real one — a card with a picture, one with two lines of description and one
-    /// with nothing but a host are three different heights.
-    @State private var linkCardHeight: CGFloat = 0
     /// The debounce-and-fetch for whatever URL the words currently hold. Cancelled by the next
     /// keystroke, which is what keeps a typed-out address from firing a request per character.
     @State private var linkTask: Task<Void, Never>?
+
+    /// ⛔ THE SMALL CARD WHILE THE KEYBOARD IS UP, WHATEVER HE PICKED — owner, 2026-08-23: "the big
+    /// one make small; when I open the keyboard use the small one."
+    ///
+    /// His choice is not lost, only overruled while there is nowhere to put it: the keyboard takes
+    /// most of the card, and the tall style plus a status of any length in what is left means the
+    /// words scrolling in a sliver. It comes straight back when the keyboard goes down, which is the
+    /// state the story is composed and posted in — the BAKE always draws `link.style`, never this.
+    private var shownLinkStyle: StoryTextLinkStyle {
+        guard let link else { return .compact }
+        return focused ? .compact : link.style
+    }
 
     /// ⚠️ PLAIN `@State`, NOT `@FocusState`. The words are a `UITextView` now (`StoryTextEditor`), and
     /// focus there is `becomeFirstResponder` rather than SwiftUI's focus system — one of the two has
@@ -296,25 +380,38 @@ struct StoryTextCard: View {
                 .onTapGesture { focused.toggle() }
                 .animation(.easeInOut(duration: 0.3), value: styleIndex)
 
-            // ⛔ THE WORDS AND THE CARD SHARE ONE BOX, AND THAT IS WHAT STOPS THEM LANDING ON EACH
-            // OTHER — owner, 2026-08-23: "the text and link preview must never overlap, cover each
-            // other, or become hidden".
+            // ⛔ THE WORDS AND THE CARD ARE ONE STACK, CENTRED AS A GROUP — owner, 2026-08-23, twice
+            // over: "remove that extra spacing so the text and link preview are positioned naturally
+            // and closely together", and "the preview temporarily overlaps the text, after a few
+            // seconds the text suddenly moves upward".
             //
-            // ⚠️ THEY USED TO BE SIBLINGS IN THE CARD'S OWN `ZStack` WITH NOTHING BETWEEN THEM. The
-            // words were centred in the whole card and the link card was positioned at 62% of it,
-            // so a short status cleared it by luck and a long one was drawn straight through it. The
-            // bake has always given the words a bottom inset that clears the card (see
-            // `renderTextStory`); the composer never did, which is why what he was looking at and
-            // what he posted were two different pictures.
+            // ⚠️ BOTH OF THOSE CAME FROM THE SAME ARRANGEMENT AND NEITHER WAS A SPACING VALUE. The
+            // card was pinned at a fixed fraction of the height and the words centred themselves in
+            // whatever was above it — two things centred in two different boxes, with the leftover
+            // showing as a hole between them. And the room the words had to leave was worked out
+            // from the card's height, which was MEASURED after drawing it and read back a pass
+            // later: until that arrived the words were laid out against a height of zero, which is
+            // the overlap, and when it arrived they moved, which is the jump.
             //
-            // The box is what is LEFT after the keyboard, so both of them are inside what is
-            // visible: the card rides up with the words instead of staying at 62% of a card whose
-            // bottom half is under the keys. At rest the box IS the card and the arrangement is the
-            // posted one, exactly.
+            // A stack answers both. The card states its own height before anything is drawn
+            // (`StoryTextLinkPreview.height`) and the words are measured before layout, so the whole
+            // arrangement is known on the first pass and there is nothing left to arrive late.
+            //
+            // The box is what is LEFT after the keyboard, so both are inside what is visible.
             GeometryReader { g in
                 let boxH = g.size.height
-                let centreY = boxH * StoryText.linkCardCentreY
-                ZStack {
+                let cardW = g.size.width * StoryText.linkCardWidthFraction
+                let cardH = link.map {
+                    StoryTextLinkPreview.height(width: cardW, style: shownLinkStyle, draft: $0.draft)
+                } ?? 0
+                // 1.06 of the measured height, and the slack is deliberate: the fit is measured in
+                // UIKit's metrics and drawn in SwiftUI's. Too much room is invisible; too little
+                // clips the last line.
+                let textH = TextStoryStyles.measuredHeight(for: text, boxWidth: g.size.width - 56,
+                                                           fontIndex: fontIndex, size: fontSize) * 1.06
+                let place = StoryTextLinkLayout.place(textHeight: textH, cardHeight: cardH,
+                                                      boxWidth: g.size.width, boxHeight: boxH)
+                VStack(spacing: link == nil ? 0 : g.size.width * StoryText.linkGapRatio) {
                     ZStack {
                         if text.isEmpty {
                             Text("Type something…")
@@ -331,38 +428,32 @@ struct StoryTextCard: View {
                                         limit: charLimit)
                             .padding(.horizontal, 28)
                     }
-                    // The bake's own rule, asked at this size: give up everything from the card's
-                    // top edge downwards, plus the gap. `linkCardHeight` is measured rather than
-                    // assumed because a card with a picture, a card with two lines and a card with
-                    // only a host are three different heights.
-                    .padding(.bottom, link == nil ? 0
-                             : max(0, boxH - (centreY - linkCardHeight / 2)
-                                   + boxH * StoryText.linkCardGapFraction))
+                    // ⚠️ TOLD ITS HEIGHT ONLY WHEN THERE IS A CARD BELOW IT. A `UITextView` fills
+                    // whatever it is offered, so in a stack it would take everything and leave the
+                    // card nothing. With no link it keeps the whole box and centres in it, which is
+                    // exactly what a text-only status has always done — that case is untouched.
+                    .frame(height: link == nil ? nil : place.text)
 
-                    // ⛔ NO LONGER HIDDEN WHILE TYPING. It was `if let link, !focused`, on the
-                    // reasoning that the keyboard had taken the bottom half of the card — which was
-                    // true while the card sat at 62% of the WHOLE card. It sits at 62% of what the
-                    // keyboard leaves now, so there is nothing to hide it from, and his rule is that
-                    // a detected link's preview is always on screen.
+                    // ⛔ NO LONGER HIDDEN WHILE TYPING (2026-08-23, his rule that a detected link's
+                    // preview is always on screen), and now TAPPABLE: a tap swaps the two card
+                    // styles. It is the only control the card has, which is why the tap is the whole
+                    // card rather than a button in a corner — and why it must take the touch before
+                    // the background behind it, whose own tap raises and drops the keyboard.
                     if let link {
-                        StoryTextLinkPreview(draft: link.draft,
-                                             width: g.size.width * StoryText.linkCardWidthFraction)
-                            .background(
-                                GeometryReader { c in
-                                    Color.clear
-                                        .onAppear { linkCardHeight = c.size.height }
-                                        .onChange(of: c.size.height) { _, v in linkCardHeight = v }
+                        StoryTextLinkPreview(draft: link.draft, width: cardW, style: shownLinkStyle)
+                            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .onTapGesture {
+                                withAnimation(.smooth(duration: 0.25)) {
+                                    self.link?.style = link.style.other
                                 }
-                            )
-                            .position(x: g.size.width / 2, y: centreY)
+                            }
                             .transition(.opacity)
                     }
                 }
                 // ⚠️ STATED, BECAUSE A `GeometryReader` ALIGNS ITS CONTENT TOP-LEADING. Without this
                 // the words would stop being centred in the card the moment they were wrapped in one
-                // — they were a plain child of the card's `ZStack` before — and `.position` on the
-                // link card would be measuring against a container sized to its own content rather
-                // than to the box.
+                // — they were a plain child of the card's `ZStack` before — and the stack would sit
+                // against the top instead of in the middle.
                 .frame(width: g.size.width, height: g.size.height)
             }
             // ⚠️ THE KEYBOARD IS TAKEN OUT OF THE WORDS' BOX, NOT SUBTRACTED FROM THEIR POSITION —
@@ -750,42 +841,46 @@ struct RenderedTextStory {
     let size = TextStoryStyles.fittedSize(for: trimmed, boxWidth: renderW - pad * 2, fontIndex: fontIndex)
     let renderH = renderW * 2.5
 
-    // ⚠️ THE LINK CARD IS DRAWN TO ITS OWN PICTURE FIRST, AND ONLY THEN INTO THE STORY. Not for
-    // speed — because its HEIGHT is not known until something has laid it out, and the height is
-    // what the tap rectangle is made of. Rendering it once answers both questions at the same moment
-    // and with the same numbers, where measuring separately would be a second answer to drift from.
+    // ⛔ THE SAME STACK THE COMPOSER DRAWS, WITH THIS PICTURE'S OWN NUMBERS. The card no longer sits
+    // at a fixed fraction with the words pushed above it; the two are one group, centred, with the
+    // gap between them and nothing else. `StoryTextLinkLayout` is the one place that arrangement is
+    // worked out, so the composer and this cannot describe different pictures.
+    //
+    // ⚠️ THE CARD IS NO LONGER PRE-RENDERED TO LEARN ITS HEIGHT. It states it
+    // (`StoryTextLinkPreview.height`), which is what the tap rectangle is built from — so the extra
+    // `ImageRenderer` pass that existed only to measure is gone, and with it the chance of the
+    // measured height and the drawn one being two different answers.
     let cardW = renderW * StoryText.linkCardWidthFraction
-    var linkArt: UIImage?
-    if let draft = link?.draft {
-        let r = ImageRenderer(content: StoryTextLinkPreview(draft: draft, width: cardW))
-        r.scale = 1
-        r.isOpaque = false
-        linkArt = r.uiImage
-    }
-    let cardH = linkArt?.size.height ?? 0
-    let cardCentreY = renderH * StoryText.linkCardCentreY
+    let cardH = link.map {
+        StoryTextLinkPreview.height(width: cardW, style: $0.style, draft: $0.draft)
+    } ?? 0
+    // The words' own height at this size, with the same 1.06 of slack the composer allows for the
+    // difference between UIKit's metrics and SwiftUI's.
+    let textH = TextStoryStyles.measuredHeight(for: trimmed, boxWidth: renderW - pad * 2,
+                                               fontIndex: fontIndex, size: size) * 1.06
+    let place = StoryTextLinkLayout.place(textHeight: textH, cardHeight: cardH,
+                                          boxWidth: renderW, boxHeight: renderH)
+
+    let words = Text(trimmed)
+        .font(TextStoryStyles.font(fontIndex, size: size))
+        .foregroundStyle(style.ink)
+        .multilineTextAlignment(.center)
+        // A belt, not the mechanism: the fit above is measured in UIKit's metrics and drawn in
+        // SwiftUI's, and the last line must never be the one that gets clipped.
+        .minimumScaleFactor(0.85)
+        .padding(.horizontal, pad)
 
     let card = ZStack {
         style.bg
-        Text(trimmed)
-            .font(TextStoryStyles.font(fontIndex, size: size))
-            .foregroundStyle(style.ink)
-            .multilineTextAlignment(.center)
-            // A belt, not the mechanism: the fit above is measured in UIKit's metrics and drawn in
-            // SwiftUI's, and the last line must never be the one that gets clipped.
-            .minimumScaleFactor(0.85)
-            .padding(pad)
-            // The words give up the bottom of the picture when a card is standing there, so the two
-            // cannot land on each other. Nothing changes at all when there is no link.
-            // ⚠️ THE GAP IS THE SHARED FRACTION NOW, not a bare 40. It is the same 40 at this size —
-            // `linkCardGapFraction` is 40/2700 and `renderH` is 2700 — but the composer applies the
-            // identical rule to its own height, and two spellings of one number is how the composed
-            // card and the posted picture drift apart. See `StoryText.linkCardGapFraction`.
-            .padding(.bottom, linkArt == nil ? 0
-                     : renderH - (cardCentreY - cardH / 2) + renderH * StoryText.linkCardGapFraction)
-        if let linkArt {
-            Image(uiImage: linkArt)
-                .position(x: renderW / 2, y: cardCentreY)
+        if let link {
+            VStack(spacing: renderW * StoryText.linkGapRatio) {
+                words.frame(height: place.text)
+                StoryTextLinkPreview(draft: link.draft, width: cardW, style: link.style)
+            }
+        } else {
+            // Untouched: with no card there is nothing to make room for, and a text-only status is
+            // the same picture it has always been.
+            words.padding(.vertical, pad)
         }
     }
     .frame(width: renderW, height: renderH)
@@ -795,7 +890,7 @@ struct RenderedTextStory {
     guard let data = renderer.uiImage?.jpegData(compressionQuality: 0.9) else { return nil }
     let tap = link.map { l in
         StoryTapTarget(x: 0.5,
-                       y: StoryText.linkCardCentreY,
+                       y: place.cardCentreY,
                        w: StoryText.linkCardWidthFraction,
                        h: cardH / renderH,
                        rotation: 0,
@@ -820,6 +915,9 @@ struct RenderedTextStory {
 /// already asked, and the page could have changed in between.
 struct StoryTextLink: Equatable {
     var draft: LinkPreviewService.LinkDraft
+    /// Which card it wears. Travels with the link because the POSTED picture has to be the one he
+    /// chose — the composer is where it is picked and the bake is where it matters.
+    var style: StoryTextLinkStyle = .compact
     var url: URL { draft.url }
 }
 
@@ -836,44 +934,111 @@ struct StoryTextLinkPreview: View {
     let draft: LinkPreviewService.LinkDraft
     /// The width the card is being drawn at. 1 unit of scale = the composer's own size.
     var width: CGFloat
+    var style: StoryTextLinkStyle = .compact
 
     /// Nothing came back but a host — their `.domainOnly` card, and it is deliberately still a card.
     /// A link that silently vanishes because a site would not answer is worse than a plain one.
     private var domainOnly: Bool { draft.title.isEmpty && draft.desc.isEmpty }
 
     private var k: CGFloat { width / 300 }      // everything below is quoted at a 300pt reference
+    private var hasPicture: Bool { draft.image != nil && !domainOnly }
+
+    /// ⛔ THE CARD SAYS HOW TALL IT IS, RATHER THAN BEING MEASURED AFTER THE FACT, and that is the
+    /// whole of his "the preview overlaps the text, then a few seconds later the text jumps up".
+    ///
+    /// ⚠️ THE HEIGHT USED TO BE AN ANSWER THAT ARRIVED LATE. The layout above it needed to know how
+    /// much room to leave, so the card was drawn, measured through a `GeometryReader`, written into
+    /// `@State`, and read back on the NEXT pass — a full round trip through SwiftUI's update cycle
+    /// for a number that is a pure function of the width and the draft. Until that trip finished the
+    /// words were laid out against a height of zero, which is the overlap; when it finished they
+    /// moved, which is the jump. Nothing was delayed on purpose and no animation was too slow: the
+    /// layout genuinely did not know the answer yet.
+    ///
+    /// Every ingredient is fixed — two lines of title, two of description, one host, a square or a
+    /// banner of picture — so the answer can simply be stated, and both the composer and the render
+    /// get it before they lay anything out. The text block is pinned to it below, so a one-line
+    /// title cannot make the card shorter than this says it is.
+    static func height(width: CGFloat, style: StoryTextLinkStyle,
+                       draft: LinkPreviewService.LinkDraft) -> CGFloat {
+        let k = width / 300
+        let bare = draft.title.isEmpty && draft.desc.isEmpty
+        let hasPicture = draft.image != nil && !bare
+        switch style {
+        case .compact: return textBlockHeight * k
+        case .large:   return (hasPicture ? bannerHeight : 0) * k + textBlockHeight * k
+        }
+    }
+
+    /// The words' side of the card, at the 300pt reference. Title 2 × 18, description 2 × 15, host
+    /// 15, two 2pt gaps, 7pt of air top and bottom.
+    private static let textBlockHeight: CGFloat = 100
+    /// The picture across the top of the `large` card. 120, down from 150 — his "make it smaller and
+    /// properly sized", and the compact card's own square is this block's height instead.
+    private static let bannerHeight: CGFloat = 120
+
+    private var cardHeight: CGFloat { Self.height(width: width, style: style, draft: draft) }
+
+    @ViewBuilder private var words: some View {
+        VStack(alignment: .leading, spacing: 2 * k) {
+            if !draft.title.isEmpty {
+                Text(draft.title)
+                    .font(.system(size: 15 * k, weight: .semibold))
+                    .lineLimit(2)
+            }
+            if !draft.desc.isEmpty {
+                Text(draft.desc)
+                    .font(.system(size: 12.5 * k))
+                    .lineLimit(2)
+            }
+            Text(draft.host)
+                .font(.system(size: 12.5 * k))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .multilineTextAlignment(.leading)
+        // Pinned to the declared height and top-aligned, so a one-line title leaves its space empty
+        // rather than making the card a different size from the one `height(width:style:draft:)`
+        // promised. That promise is what the layout above is built on.
+        .frame(maxWidth: .infinity, minHeight: Self.textBlockHeight * k,
+               maxHeight: Self.textBlockHeight * k, alignment: .topLeading)
+        .padding(.horizontal, 12 * k)
+        .padding(.vertical, 7 * k)
+        .clipped()
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if let img = draft.image, !domainOnly {
-                Image(uiImage: img)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: width, height: 150 * k)
-                    .clipped()
-            }
-            VStack(alignment: .leading, spacing: 2 * k) {
-                if !draft.title.isEmpty {
-                    Text(draft.title)
-                        .font(.system(size: 15 * k, weight: .semibold))
-                        .lineLimit(2)
+        Group {
+            switch style {
+            // ⛔ HIS IMAGE 2, AND THE DEFAULT. A square of the page's own picture on the left with
+            // the words beside it, so the card is one text block tall instead of a banner plus a
+            // text block. A page that answered with no picture is simply the words, full width,
+            // which is the same card the `large` style falls back to — one link, two heights,
+            // never two different amounts of information.
+            case .compact:
+                HStack(spacing: 0) {
+                    if hasPicture, let img = draft.image {
+                        Image(uiImage: img)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: cardHeight, height: cardHeight)
+                            .clipped()
+                    }
+                    words
                 }
-                if !draft.desc.isEmpty {
-                    Text(draft.desc)
-                        .font(.system(size: 13 * k))
-                        .lineLimit(2)
+            case .large:
+                VStack(alignment: .leading, spacing: 0) {
+                    if hasPicture, let img = draft.image {
+                        Image(uiImage: img)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: width, height: Self.bannerHeight * k)
+                            .clipped()
+                    }
+                    words
                 }
-                Text(draft.host)
-                    .font(.system(size: 13 * k))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
             }
-            .multilineTextAlignment(.leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12 * k)
-            .padding(.vertical, 8 * k)
         }
-        .frame(width: width)
+        .frame(width: width, height: cardHeight)
         .background(Color(white: 0.97))
         .foregroundStyle(.black)
         .clipShape(RoundedRectangle(cornerRadius: (domainOnly ? 12 : 18) * k, style: .continuous))
