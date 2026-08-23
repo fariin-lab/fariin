@@ -1715,6 +1715,16 @@ struct StoryViewer: View {
             // sat open on a story that no longer exists. The bucket in hand already knows, and the
             // count cannot change under a modal viewer.
             let wasLast = (StoriesRepository.shared.mine?.stories.count ?? 0) <= 1
+            // ⛔ THE CLOSE'S PICTURE IS NOW A PICTURE OF SOMETHING DELETED — owner, 2026-08-23: after
+            // deleting the story he was on, dragging down to close flashed the DELETED one on the
+            // card before the row caught up.
+            //
+            // Dropped HERE, on the viewer's own event, rather than after the server answers: he can
+            // start the drag in the same second, and a cover that is wrong is wrong from the moment
+            // the item leaves the bucket. If the delete then fails, the reload below puts the story
+            // back and the close simply lands without a cover — which is a fallback the flight
+            // already has, and the mechanism is written up on `invalidateCover`.
+            StoryZoomPresenter.invalidateCover()
             Task {
                 let gone = await StoriesService.shared.deleteStory(id)
                 guard gone else {

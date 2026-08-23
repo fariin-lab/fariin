@@ -60,6 +60,31 @@ enum StoryZoomPresenter {
         coverKey = sourceKey
     }
 
+    /// ⛔ THE COVER IS A PHOTOGRAPH, AND A PHOTOGRAPH GOES STALE — owner, 2026-08-23: delete the
+    /// story you are on, land on the one before it, drag down to close, and the DELETED one flashes
+    /// on the card as it settles.
+    ///
+    /// ⚠️ NOTHING ABOUT THE VIEWER IS WRONG IN THAT REPORT, WHICH IS WHY IT LOOKED LIKE A REFRESH
+    /// PROBLEM. The story on screen is already the right one; the state is already right. What is
+    /// wrong is the picture the CLOSE wears. `present` photographs the row card at tap time, and at
+    /// tap time that card was showing the story he has since deleted — the card is a picture of a
+    /// bucket's newest item, so deleting that item changes it. The close then does exactly what it
+    /// is built to do: it fades the cover in at the row end so the landing is seamless, and the
+    /// cover is seamless with a card that no longer exists.
+    ///
+    /// Forgetting it is the honest repair, and it lands somewhere the code already supports: with no
+    /// cover, the flight carries the LIVE viewer all the way home, which is the story he is actually
+    /// on. `coverKey` goes too, or the close would still believe it is wearing this person's card.
+    ///
+    /// ⚠️ NOT A RE-PHOTOGRAPH. The row card is alpha 0 for the whole visit (`MediaSourceVisibility`)
+    /// and renders blank from its own layer tree, so a shot taken now would be an empty rectangle —
+    /// a worse landing than none, and the exact failure `retarget` refuses to risk.
+    static func invalidateCover() {
+        guard let vc = container else { return }
+        vc.dropCover()
+        coverKey = nil
+    }
+
     /// `coverFrom`: the tapped row card's live view. It is photographed HERE, at tap time while it
     /// is definitely on screen, and the snapshot rides the flight as the cover the open wears —
     /// the shared-element look he named from the reference app: the thumbnail itself expands, opaque from
@@ -286,6 +311,16 @@ final class StoryZoomContainerVC: UIViewController {
     /// (its alpha is 0 at rest — flights alone drive it), and if the OPEN had no cover to
     /// photograph, one is created and mounted here: that open flew bare, but this close does not
     /// have to.
+    /// Take the cover off the flight and forget it. See `StoryZoomPresenter.invalidateCover`.
+    /// `StoryCardMorph.flightCover` is cleared too — it is the handle the close drives the alpha
+    /// through, and a view removed from the tree but still pointed at is the shape of bug the
+    /// retarget note above already had to be written about once.
+    func dropCover() {
+        coverView?.removeFromSuperview()
+        coverView = nil
+        StoryCardMorph.shared.flightCover = nil
+    }
+
     func retargetCover(_ image: UIImage) {
         if let coverView { coverView.image = image; return }
         setCoverImage(image)
