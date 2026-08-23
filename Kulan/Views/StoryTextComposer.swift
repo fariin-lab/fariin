@@ -31,6 +31,51 @@ enum StoryText {
     /// construction rather than by two sets of arithmetic being kept in step by hand.
     static let linkCardWidthFraction: CGFloat = 0.72
     static let linkCardCentreY: CGFloat = 0.62
+
+    /// The clear air the words must leave above the card, as a fraction of the height they are laid
+    /// out in. A fraction for the same reason the two above are: 40pt on the 2700pt render is a
+    /// different amount of room than 40pt on a 600pt composer card, and the two have to describe the
+    /// same picture. 40/2700 is the number the bake has always used, restated so the composer can
+    /// read it too.
+    static let linkCardGapFraction: CGFloat = 40.0 / 2700.0
+}
+
+/// ⛔ THE LINK IS FOUND IN THE WORDS. THERE IS NO LINK BUTTON ANY MORE — owner, 2026-08-23: "Remove
+/// this button completely … the user should be able to simply paste or type a URL directly into the
+/// text … there should be no need for a separate Link button."
+///
+/// ⚠️ `NSDataDetector`, NOT A REGEX OF OURS. It is the same detector the system uses to underline
+/// addresses in Notes and Messages, so what it finds is what an iPhone user already expects a URL to
+/// be — including a bare `example.com` with no scheme, which is how people type. A pattern written
+/// here would be a second, worse opinion about the same question, and it would be the one that has
+/// to be maintained.
+///
+/// Two filters on top of it, and both are narrowing rather than second-guessing:
+///
+///   • HTTP AND HTTPS ONLY. The detector also matches `mailto:` for an email address and `tel:` for
+///     a phone number, and a story that quietly grew a link card because somebody wrote their email
+///     in it would be the app doing something nobody asked for.
+///   • A HOST WITH A DOT IN IT, which is the same test the link sheet used before this and keeps a
+///     stray word from being read as a hostname.
+///
+/// The FIRST one wins. A story carries one link (the reference app's shape, and what the posted
+/// picture and its tap rectangle are built for), so "first" is the rule rather than a limitation —
+/// it is the one the reading eye picks too.
+enum StoryTextLinkDetector {
+    private static let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
+    static func firstURL(in text: String) -> URL? {
+        guard let detector, !text.isEmpty else { return nil }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        for match in detector.matches(in: text, options: [], range: range) {
+            guard let url = match.url,
+                  let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+                  let host = url.host, host.contains(".")
+            else { continue }
+            return url
+        }
+        return nil
+    }
 }
 
 /// One background and the ink that stays legible on it. Paired deliberately: a palette that only
@@ -157,7 +202,13 @@ struct StoryTextCard: View {
     @Binding var link: StoryTextLink?
     var onClose: () -> Void
 
-    @State private var showLinkSheet = false
+    /// The measured height of the link card on screen. The words' bottom inset is built from it, so
+    /// it has to be the real one — a card with a picture, one with two lines of description and one
+    /// with nothing but a host are three different heights.
+    @State private var linkCardHeight: CGFloat = 0
+    /// The debounce-and-fetch for whatever URL the words currently hold. Cancelled by the next
+    /// keystroke, which is what keeps a typed-out address from firing a request per character.
+    @State private var linkTask: Task<Void, Never>?
 
     /// ⚠️ PLAIN `@State`, NOT `@FocusState`. The words are a `UITextView` now (`StoryTextEditor`), and
     /// focus there is `becomeFirstResponder` rather than SwiftUI's focus system — one of the two has
@@ -245,21 +296,74 @@ struct StoryTextCard: View {
                 .onTapGesture { focused.toggle() }
                 .animation(.easeInOut(duration: 0.3), value: styleIndex)
 
-            ZStack {
-                if text.isEmpty {
-                    Text("Type something…")
-                        .font(TextStoryStyles.font(fontIndex, size: fontSize))
-                        .foregroundStyle(style.ink.opacity(0.45))
-                        .multilineTextAlignment(.center)
-                        .allowsHitTesting(false)
+            // ⛔ THE WORDS AND THE CARD SHARE ONE BOX, AND THAT IS WHAT STOPS THEM LANDING ON EACH
+            // OTHER — owner, 2026-08-23: "the text and link preview must never overlap, cover each
+            // other, or become hidden".
+            //
+            // ⚠️ THEY USED TO BE SIBLINGS IN THE CARD'S OWN `ZStack` WITH NOTHING BETWEEN THEM. The
+            // words were centred in the whole card and the link card was positioned at 62% of it,
+            // so a short status cleared it by luck and a long one was drawn straight through it. The
+            // bake has always given the words a bottom inset that clears the card (see
+            // `renderTextStory`); the composer never did, which is why what he was looking at and
+            // what he posted were two different pictures.
+            //
+            // The box is what is LEFT after the keyboard, so both of them are inside what is
+            // visible: the card rides up with the words instead of staying at 62% of a card whose
+            // bottom half is under the keys. At rest the box IS the card and the arrangement is the
+            // posted one, exactly.
+            GeometryReader { g in
+                let boxH = g.size.height
+                let centreY = boxH * StoryText.linkCardCentreY
+                ZStack {
+                    ZStack {
+                        if text.isEmpty {
+                            Text("Type something…")
+                                .font(TextStoryStyles.font(fontIndex, size: fontSize))
+                                .foregroundStyle(style.ink.opacity(0.45))
+                                .multilineTextAlignment(.center)
+                                .allowsHitTesting(false)
+                        }
+                        // SIZED TO FIT — see `TextStoryStyles.fittedSize` — and SCROLLING, which is
+                        // the other half. See `StoryTextEditor`.
+                        StoryTextEditor(text: $text, focused: $focused,
+                                        font: TextStoryStyles.uiFont(fontIndex, size: fontSize),
+                                        color: UIColor(style.ink),
+                                        limit: charLimit)
+                            .padding(.horizontal, 28)
+                    }
+                    // The bake's own rule, asked at this size: give up everything from the card's
+                    // top edge downwards, plus the gap. `linkCardHeight` is measured rather than
+                    // assumed because a card with a picture, a card with two lines and a card with
+                    // only a host are three different heights.
+                    .padding(.bottom, link == nil ? 0
+                             : max(0, boxH - (centreY - linkCardHeight / 2)
+                                   + boxH * StoryText.linkCardGapFraction))
+
+                    // ⛔ NO LONGER HIDDEN WHILE TYPING. It was `if let link, !focused`, on the
+                    // reasoning that the keyboard had taken the bottom half of the card — which was
+                    // true while the card sat at 62% of the WHOLE card. It sits at 62% of what the
+                    // keyboard leaves now, so there is nothing to hide it from, and his rule is that
+                    // a detected link's preview is always on screen.
+                    if let link {
+                        StoryTextLinkPreview(draft: link.draft,
+                                             width: g.size.width * StoryText.linkCardWidthFraction)
+                            .background(
+                                GeometryReader { c in
+                                    Color.clear
+                                        .onAppear { linkCardHeight = c.size.height }
+                                        .onChange(of: c.size.height) { _, v in linkCardHeight = v }
+                                }
+                            )
+                            .position(x: g.size.width / 2, y: centreY)
+                            .transition(.opacity)
+                    }
                 }
-                // SIZED TO FIT — see `TextStoryStyles.fittedSize` — and SCROLLING, which is the
-                // other half. See `StoryTextEditor`.
-                StoryTextEditor(text: $text, focused: $focused,
-                                font: TextStoryStyles.uiFont(fontIndex, size: fontSize),
-                                color: UIColor(style.ink),
-                                limit: charLimit)
-                    .padding(.horizontal, 28)
+                // ⚠️ STATED, BECAUSE A `GeometryReader` ALIGNS ITS CONTENT TOP-LEADING. Without this
+                // the words would stop being centred in the card the moment they were wrapped in one
+                // — they were a plain child of the card's `ZStack` before — and `.position` on the
+                // link card would be measuring against a container sized to its own content rather
+                // than to the box.
+                .frame(width: g.size.width, height: g.size.height)
             }
             // ⚠️ THE KEYBOARD IS TAKEN OUT OF THE WORDS' BOX, NOT SUBTRACTED FROM THEIR POSITION —
             // his 2026-08-16 report: "text typing is entering under keyboard, i can't see what i am
@@ -279,26 +383,6 @@ struct StoryTextCard: View {
             //
             // The extra 68 clears the Aa / colour / ✓ row, which rides just above the keys.
             .padding(.bottom, keyboardOverlap > 0 ? keyboardOverlap + 68 : 0)
-
-            // THE LINK CARD, AT THE SAME FRACTION OF THE CARD THAT THE BAKE PUTS IT AT.
-            //
-            // ⚠️ POSITIONED BY FRACTION RATHER THAN STACKED UNDER THE WORDS, and that is what keeps
-            // the composed card and the posted picture the same picture. They are not the same
-            // SHAPE — this card is roughly the phone's aspect and the export is a fixed 1:2.5 (see
-            // `renderTextStory`) — so anything laid out by flow lands somewhere else in the file
-            // than it does here. A fraction of the height means the same thing in both.
-            //
-            // Hidden while typing: the keyboard has taken the bottom half of the card and the words
-            // are what is being worked on.
-            if let link, !focused {
-                GeometryReader { g in
-                    StoryTextLinkPreview(draft: link.draft,
-                                         width: g.size.width * StoryText.linkCardWidthFraction,
-                                         onRemove: { withAnimation(.smooth(duration: 0.2)) { self.link = nil } })
-                        .position(x: g.size.width / 2, y: g.size.height * StoryText.linkCardCentreY)
-                }
-                .transition(.opacity)
-            }
 
             VStack(spacing: 0) {
                 HStack {
@@ -333,20 +417,10 @@ struct StoryTextCard: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        // THE LINK, third in the same reach. It belongs with these two rather than
-                        // in a corner: all three change what the finished status is made of, and the
-                        // corners are kept for the two controls that LEAVE.
-                        //
-                        // It re-opens with the current address when there is one, which is how a
-                        // link gets EDITED — there is no second control for that, and the card's own
-                        // ✕ is how it is removed.
-                        Button { showLinkSheet = true } label: {
-                            glassCircle {
-                                Image(systemName: "link")
-                                    .foregroundStyle(link == nil ? style.ink : Color.accentColor)
-                            }
-                        }
-                        .buttonStyle(.plain)
+                        // ⛔ THE LINK BUTTON WAS HERE AND IS GONE — owner, 2026-08-23, in those
+                        // words. Nothing replaces it: a link is now something the words CONTAIN, so
+                        // a control for it would be a second way to say what typing already says,
+                        // and the two could disagree. See `StoryTextLinkDetector`.
                     }
                     Spacer()
                     // Only while the keyboard is up, exactly as he drew it: it is the way OUT of
@@ -418,12 +492,59 @@ struct StoryTextCard: View {
                      destructive: "Discard",
                      onDestructive: { onClose() },
                      onCancel: { focused = true })
-        // A sheet rather than a page pushed inside the card: this card is the picture being
-        // composed, and a form drawn on top of it would be part of what he is looking at.
-        .sheet(isPresented: $showLinkSheet) {
-            StoryTextLinkSheet { l in withAnimation(.smooth(duration: 0.25)) { link = l } }
-                .presentationDetents([.medium])
-                .presentationBackground(.black)
+        // THE WORDS ARE THE ONLY INPUT. Every edit re-asks what URL they hold; `syncDetectedLink`
+        // decides whether that is a change worth a fetch.
+        .onChange(of: text) { _, _ in syncDetectedLink() }
+        // ...and on arrival, because the card can be re-entered with a status already written — a
+        // draft carried back from the CAMERA page, or a discard that was cancelled.
+        .onAppear { syncDetectedLink() }
+        .onDisappear { linkTask?.cancel(); linkTask = nil }
+    }
+
+    /// ⛔ THE PREVIEW IS A FUNCTION OF THE WORDS, and this is the only thing that writes `link`.
+    ///
+    /// Four cases, in the order they are asked:
+    ///
+    ///   • NO URL IN THE TEXT — the card goes. Deleting the address is how a link is removed now,
+    ///     and it is the only way, which is deliberate: with a ✕ as well there would be a state
+    ///     where the words name a link and the picture does not show one, and nothing on screen
+    ///     would explain why.
+    ///   • THE URL WE ALREADY HAVE — nothing at all. Typing on either side of a link must not make
+    ///     its card blink, and this is what stops it.
+    ///   • A NEW URL — fetched after a beat, and only installed if the words still name it. A reply
+    ///     for an address the field has moved on from is thrown away rather than shown, which is the
+    ///     same rule the link sheet carried before it.
+    ///   • A URL NOTHING ANSWERED FOR — the card goes ONLY if the host changed too. Half of
+    ///     `https://example.com/artic` is a URL that no page will answer for, and clearing on every
+    ///     one of those would flash the card off and on all the way through typing a long address.
+    ///
+    /// ⚠️ 400ms, AND THE DEBOUNCE IS NOT AN OPTIMISATION HERE. The link sheet fetched on every
+    /// keystroke because the whole field was the address; here the address is inside a sentence he
+    /// is still writing, so every character after it would re-ask a question already answered.
+    private func syncDetectedLink() {
+        let found = StoryTextLinkDetector.firstURL(in: text)
+        guard let found else {
+            linkTask?.cancel(); linkTask = nil
+            if link != nil { withAnimation(.smooth(duration: 0.2)) { link = nil } }
+            return
+        }
+        guard link?.url != found else { return }
+        linkTask?.cancel()
+        linkTask = Task {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            if Task.isCancelled { return }
+            let d = await LinkPreviewService.shared.draft(for: found)
+            if Task.isCancelled { return }
+            await MainActor.run {
+                guard StoryTextLinkDetector.firstURL(in: text) == found else { return }
+                guard let d else {
+                    if link?.url.host != found.host {
+                        withAnimation(.smooth(duration: 0.2)) { link = nil }
+                    }
+                    return
+                }
+                withAnimation(.smooth(duration: 0.2)) { link = StoryTextLink(draft: d) }
+            }
         }
     }
 
@@ -656,7 +777,12 @@ struct RenderedTextStory {
             .padding(pad)
             // The words give up the bottom of the picture when a card is standing there, so the two
             // cannot land on each other. Nothing changes at all when there is no link.
-            .padding(.bottom, linkArt == nil ? 0 : renderH - (cardCentreY - cardH / 2) + 40)
+            // ⚠️ THE GAP IS THE SHARED FRACTION NOW, not a bare 40. It is the same 40 at this size —
+            // `linkCardGapFraction` is 40/2700 and `renderH` is 2700 — but the composer applies the
+            // identical rule to its own height, and two spellings of one number is how the composed
+            // card and the posted picture drift apart. See `StoryText.linkCardGapFraction`.
+            .padding(.bottom, linkArt == nil ? 0
+                     : renderH - (cardCentreY - cardH / 2) + renderH * StoryText.linkCardGapFraction)
         if let linkArt {
             Image(uiImage: linkArt)
                 .position(x: renderW / 2, y: cardCentreY)
@@ -710,8 +836,6 @@ struct StoryTextLinkPreview: View {
     let draft: LinkPreviewService.LinkDraft
     /// The width the card is being drawn at. 1 unit of scale = the composer's own size.
     var width: CGFloat
-    /// The composer shows a remove button; the bake never does.
-    var onRemove: (() -> Void)?
 
     /// Nothing came back but a host — their `.domainOnly` card, and it is deliberately still a card.
     /// A link that silently vanishes because a site would not answer is worse than a plain one.
@@ -753,136 +877,29 @@ struct StoryTextLinkPreview: View {
         .background(Color(white: 0.97))
         .foregroundStyle(.black)
         .clipShape(RoundedRectangle(cornerRadius: (domainOnly ? 12 : 18) * k, style: .continuous))
-        // ⚠️ THE REMOVE BUTTON IS AN OVERLAY, so it takes no part in the layout and the card measures
-        // the same with and without it. That matters: the composer and the bake have to agree on the
-        // card's height or the tap area lands somewhere the picture does not.
-        .overlay(alignment: .topTrailing) {
-            if let onRemove {
-                Button(action: onRemove) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 26, height: 26)
-                        .background(Color.black.opacity(0.55), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .padding(8)
-            }
-        }
+        // ⛔ THE ✕ IS GONE, AND ITS ABSENCE IS THE FEATURE — owner, 2026-08-23: "when a valid link
+        // is detected, its link preview must always remain visible … must never become hidden".
+        //
+        // ⚠️ IT COULD ONLY EVER CREATE A STATE NOTHING ON SCREEN EXPLAINS. The card is drawn from
+        // whatever URL the words hold, so dismissing it would leave the address sitting in the
+        // status with no preview under it and no way to tell why — and the next keystroke would
+        // either bring it back or not, depending on how the dismissal was remembered. Deleting the
+        // address is the removal now, it is the only one, and it is the one the words already
+        // describe.
+        //
+        // The composer and the bake therefore draw exactly the same view with the same numbers,
+        // which is what the old note here was protecting by making the button an overlay: the two
+        // have to agree on the card's height or the posted tap area lands somewhere the picture does
+        // not. There is nothing left to disagree about.
     }
 }
 
-/// Typing or pasting the URL.
-///
-/// ⛔ THE CONFIRM BUTTON IS GATED ON THE FETCH, NOT ON THE TEXT, and that is their rule verbatim:
-/// "if case .draft = newState { isDoneEnabled = true }". There is no regex and no scheme check in
-/// their view controller at all — the typed string is handed to the fetcher on every keystroke and
-/// the only test that counts is whether a page answered. It is a better test than a pattern: a
-/// well-formed address for a site that does not exist passes every regex ever written.
-///
-/// `https://` is prepended when no scheme was typed, which is their Android client's rule
-/// (`TextStoryPostLinkEntryFragment`) and the way people actually type an address.
-struct StoryTextLinkSheet: View {
-    var onDone: (StoryTextLink) -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var text = ""
-    @State private var draft: LinkPreviewService.LinkDraft?
-    @State private var fetching = false
-    /// The URL the visible draft belongs to. Compared before anything is shown, so a reply that
-    /// arrives after the field has moved on cannot put a stale card under a different address.
-    @State private var draftURL: URL?
-    @FocusState private var focused: Bool
-
-    private var typedURL: URL? {
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard t.count >= 4 else { return nil }
-        let withScheme = t.contains("://") ? t : "https://\(t)"
-        guard let u = URL(string: withScheme), let host = u.host, host.contains(".") else { return nil }
-        return u
-    }
-    private var ready: LinkPreviewService.LinkDraft? {
-        guard let d = draft, d.url == draftURL, draftURL == typedURL else { return nil }
-        return d
-    }
-
-    var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "link")
-                .font(.system(size: 22))
-                .foregroundStyle(.white.opacity(0.75))
-                .padding(.top, 26)
-            Text("Share a link with viewers of your story")
-                .font(.system(size: 15))
-                .foregroundStyle(.white.opacity(0.6))
-
-            HStack(spacing: 12) {
-                TextField("", text: $text,
-                          prompt: Text("Type or paste a URL").foregroundStyle(.white.opacity(0.4)))
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                    .submitLabel(.done)
-                    .onSubmit { commit() }
-                    .focused($focused)
-                    .font(.system(size: 16))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 16)
-                    .frame(height: 46)
-                    .background(Color.white.opacity(0.12), in: Capsule())
-
-                Button(action: commit) {
-                    Group {
-                        if fetching {
-                            ProgressView().tint(.white)
-                        } else {
-                            Image(systemName: "checkmark").font(.system(size: 16, weight: .bold))
-                        }
-                    }
-                    .foregroundStyle(.white)
-                    .frame(width: 44, height: 44)
-                    .background(ready == nil ? Color.white.opacity(0.14) : Color.accentColor, in: Circle())
-                }
-                .buttonStyle(.plain)
-                .disabled(ready == nil)
-            }
-            .padding(.horizontal, 16)
-
-            if let d = ready {
-                StoryTextLinkPreview(draft: d, width: 260)
-                    .padding(.horizontal, 16)
-                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
-            }
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity)
-        .background(Color.black.opacity(0.92).ignoresSafeArea())
-        .animation(.smooth(duration: 0.22), value: ready)
-        .onAppear { focused = true }
-        // THE FETCH FOLLOWS THE TYPING, one behind. Their composer asks on every `.editingChanged`
-        // and lets the service dedupe; ours does the same and `LinkPreviewService` already holds an
-        // in-flight table keyed by URL, so a fast typist makes one request per address rather than
-        // one per keystroke.
-        .onChange(of: text) { _, _ in
-            guard let u = typedURL else { draft = nil; draftURL = nil; return }
-            fetching = true
-            Task {
-                let d = await LinkPreviewService.shared.draft(for: u)
-                await MainActor.run {
-                    // Still the address being asked about? A slower answer for a URL the field has
-                    // already left is thrown away rather than shown.
-                    guard typedURL == u else { return }
-                    fetching = false
-                    draft = d
-                    draftURL = d == nil ? nil : u
-                }
-            }
-        }
-    }
-
-    private func commit() {
-        guard let d = ready else { return }
-        onDone(StoryTextLink(draft: d))
-        dismiss()
-    }
-}
+// ⛔ `StoryTextLinkSheet` LIVED HERE AND IS DELETED — owner, 2026-08-23, with the button that
+// opened it. It was a whole screen whose only job was to collect an address, and the address is
+// now in the words. Nothing else ever presented it (checked: the composer's `.sheet` was its one
+// call site), so it went with its button rather than being left behind unreachable.
+//
+// The one thing worth keeping out of it is written down where it is still true: the test for a
+// good link is whether a page ANSWERS, not whether the string matches a pattern — see
+// `syncDetectedLink`, which installs a card only on a real draft. Their own rule, and it is why a
+// well-formed address for a site that does not exist gets no card here either.
