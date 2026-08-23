@@ -84,7 +84,12 @@ struct CustomColorView: View {
             .padding(.horizontal, 14).padding(.vertical, 9)
             .background {
                 RoundedRectangle(cornerRadius: 17, style: .continuous)
-                    .fill(mine ? spec.fill : AnyShapeStyle(Theme.received(dark)))
+                    // The preview stands on the chat's real wallpaper, so the incoming bubble has to
+                    // resolve against it the way the chat does. Showing a flat grey here while the
+                    // chat behind the sheet blurs would make the preview lie about the one thing it
+                    // exists to show.
+                    .fill(mine ? spec.fill
+                               : Theme.receivedStyle(dark, onWallpaper: WallpaperStore.shared.hasWallpaper(for: cid)))
             }
     }
 
