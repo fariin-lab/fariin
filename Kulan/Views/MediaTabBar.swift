@@ -29,6 +29,14 @@ import UIKit
 struct MediaTabBar: View {
     let titles: [String]
     @Binding var selection: Int
+    /// ⛔ WHERE THE PAGER ACTUALLY IS, IN PAGE UNITS — owner, 2026-08-23: "0% swipe → indicator is
+    /// 100% on Media, 10% swipe → indicator should already move approximately 10% toward Files …
+    /// if I move my finger slowly, the indicator must move slowly".
+    ///
+    /// 1.5 means halfway between the second and third segments, and the pill is drawn there. This is
+    /// the only thing the pill's position depends on; `selection` decides which label is bold and
+    /// which segment the bar scrolls to, and nothing else.
+    var progress: CGFloat = 0
 
     /// The bar's own height. Stated so the scroll views can reserve a matching top margin — a
     /// floating bar and the content that must clear it cannot each guess.
@@ -44,10 +52,32 @@ struct MediaTabBar: View {
     /// The page margin the track itself keeps.
     private static let pageInset: CGFloat = 16
 
-    @Namespace private var pill
+    /// Each segment's frame inside the row, measured once the row has laid out. The pill reads two
+    /// of these and interpolates between them.
+    ///
+    /// ⚠️ A PREFERENCE IS ONE LAYOUT PASS LATE, and that is harmless HERE and only here: these frames
+    /// depend on the titles and the font, both of which are fixed for the life of the screen. The
+    /// same mechanism is fatal for anything measured per-keystroke — the story text badge carries
+    /// that warning for the case where it bit.
+    @State private var frames: [Int: CGRect] = [:]
     /// True only between a segment tap and the auto-scroll that answers it — see the note on
     /// `onChange(of: selection)`. A swipe never sets it, which is what keeps the commit frame cheap.
     @State private var tapDriven = false
+
+    /// The pill's rect for a given travel. Between two segments it is a straight blend of both their
+    /// positions AND both their widths, which is what makes a short label growing into a long one
+    /// read as one shape moving rather than a box that jumps size on arrival.
+    private func pillRect(_ p: CGFloat) -> CGRect? {
+        guard !titles.isEmpty else { return nil }
+        let clamped = min(max(p, 0), CGFloat(titles.count - 1))
+        let lo = Int(clamped.rounded(.down)), hi = min(lo + 1, titles.count - 1)
+        guard let a = frames[lo], let b = frames[hi] else { return nil }
+        let t = clamped - CGFloat(lo)
+        return CGRect(x: a.minX + (b.minX - a.minX) * t,
+                      y: a.minY,
+                      width: a.width + (b.width - a.width) * t,
+                      height: a.height)
+    }
 
     var body: some View {
         // ⚠️ A ScrollView, AND IT IS THE POINT RATHER THAN A PRECAUTION. Content-sized segments only
@@ -62,21 +92,32 @@ struct MediaTabBar: View {
                     }
                 }
                 .padding(Self.pillInset)
-                // ⛔ THE PILL'S OWN ANIMATION, SO IT NO LONGER DEPENDS ON HOW `selection` WAS WRITTEN
-                // (owner 2026-08-22: "when I swipe the page the active tab is jumping to the next tab,
-                // make it smooth").
+                // ⛔ ONE PILL, BEHIND EVERY SEGMENT, PLACED BY `progress` — NOT A PILL PER SEGMENT AND
+                // NOT `matchedGeometryEffect` ANY MORE.
                 //
-                // The note below says a swipe needs no animation because "the pill has
-                // matchedGeometryEffect, so the bar tracks it either way". That is the mistake.
-                // `matchedGeometryEffect` does not follow a drag — it interpolates between two
-                // layouts only when the change that caused them is inside an animation. A tap wrapped
-                // its write in one, so the pill sprang; a paged TabView writes the selection raw, so
-                // the pill teleported. One path was animated and the other never was.
+                // The effect it replaces could only interpolate between two finished layouts, and
+                // only when the change that produced them sat inside an animation. That is a
+                // handsome jump; it is not a follow. His report is precisely about the difference:
+                // at 10% of a swipe the pill had not moved at all, because nothing had changed yet
+                // for it to interpolate FROM. Now the position IS the drag.
                 //
-                // Attached to the ROW rather than to the write, so both paths get it from one place
-                // and neither call site can forget. The tap's own `withAnimation` is gone with it —
-                // two sources for one movement is how they drift.
-                .animation(.spring(response: 0.34, dampingFraction: 0.86), value: selection)
+                // The spring that used to live here is gone with it. A spring on a value that
+                // already arrives once per frame is a second clock running beside the finger, which
+                // is the lag it was added to cure. A TAP still needs one, and gets it below, where
+                // there is no drag to fight.
+                .background(alignment: .topLeading) {
+                    if let r = pillRect(progress) {
+                        Capsule()
+                            // The system's own selected-segment fill rather than a hand-mixed
+                            // opacity: it is already defined against both appearances and against
+                            // glass, which a `primary.opacity` is not.
+                            .fill(Color(uiColor: .tertiarySystemFill))
+                            .frame(width: r.width, height: r.height)
+                            .offset(x: r.minX, y: r.minY)
+                    }
+                }
+                .coordinateSpace(.named("mediaTabRow"))
+                .onPreferenceChange(MediaTabSegmentFrames.self) { frames = $0 }
             }
             .frame(height: Self.barHeight)
             // ⛔ GLASS, AND THE OLD "DO NOT PUT GLASS ON THIS" WARNING NO LONGER APPLIES.
@@ -103,9 +144,11 @@ struct MediaTabBar: View {
             // That is his "swiping pages lags".
             //
             // A swipe needs no animation anyway: the page is already moving under the finger and the
-            // pill has `matchedGeometryEffect`, so the bar tracks it either way. The animation only
-            // ever existed for the other case — tapping a segment that is half off the right edge,
-            // where the scroll is the whole feedback and a jump would read as a glitch.
+            // pill is drawn at the offset that drag reports, so the bar tracks it either way. The
+            // animation only ever existed for the other case — tapping a segment that is half off
+            // the right edge, where the scroll is the whole feedback and a jump would read as a
+            // glitch. (This is the BAR scrolling sideways, which is a separate motion from the pill
+            // sliding along it; only the pill follows `progress`.)
             //
             // `tapDriven` is set by the segment button one line before it writes the selection, so it
             // is true only on that path and is cleared the moment it is spent.
@@ -120,14 +163,20 @@ struct MediaTabBar: View {
         }
     }
 
+    /// ⚠️ THE BOLD FOLLOWS `progress`, NOT `selection`. They agree at rest and disagree for the whole
+    /// length of a drag: `selection` flips at the midpoint, so the words used to change weight a beat
+    /// after the pill had already arrived under them. Rounding the travel puts both on one clock.
     private func segment(_ title: String, index: Int) -> some View {
-        let on = selection == index
+        let on = Int(progress.rounded()) == index
         return Button {
             // Set BEFORE the write, because the write is what fires the `onChange` that reads it.
             tapDriven = true
-            // ⚠️ A PLAIN WRITE. The spring lives on the row now (see the note beside it), so a tap
-            // and a swipe move the pill by the same rule and there is nothing here to keep in step.
-            selection = index
+            // ⛔ ANIMATED, AND THIS IS NOW THE PAGER'S ANIMATION RATHER THAN THE PILL'S. The gallery
+            // scrolls to the tapped page off this value, and a scroll made inside an animation
+            // travels instead of jumping — so it reports itself frame by frame on the way, and the
+            // pill follows the same number it follows under a finger. One rule for both paths, which
+            // is what every previous round here was trying to buy with a second animation.
+            withAnimation(.snappy(duration: 0.3)) { selection = index }
         } label: {
             Text(title)
                 .font(.system(size: 16, weight: on ? .semibold : .regular))
@@ -150,21 +199,25 @@ struct MediaTabBar: View {
                 .fixedSize()                       // each segment is as wide as its own words
                 .padding(.horizontal, Self.segmentHPad)
                 .frame(height: Self.barHeight - Self.pillInset * 2)
+                // The pill is drawn once, behind the whole row (see `body`). All a segment does now
+                // is say where it is.
                 .background {
-                    // ⛔ ONE PILL THAT MOVES, not one per segment fading in and out.
-                    // `matchedGeometryEffect` is what makes it slide from the old segment to the new
-                    // one; two pills cross-fading is the cheap version and reads as a blink.
-                    if on {
-                        Capsule()
-                            // The system's own selected-segment fill rather than a hand-mixed
-                            // opacity: it is already defined against both appearances and against
-                            // glass, which a `primary.opacity` is not.
-                            .fill(Color(uiColor: .tertiarySystemFill))
-                            .matchedGeometryEffect(id: "mediaTabPill", in: pill)
+                    GeometryReader { g in
+                        Color.clear.preference(key: MediaTabSegmentFrames.self,
+                                               value: [index: g.frame(in: .named("mediaTabRow"))])
                     }
                 }
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// Every segment's frame in the row's own space, keyed by index. Merged rather than replaced, since
+/// each segment contributes exactly one entry and they arrive separately.
+private struct MediaTabSegmentFrames: PreferenceKey {
+    static let defaultValue: [Int: CGRect] = [:]
+    static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) {
+        value.merge(nextValue()) { _, new in new }
     }
 }

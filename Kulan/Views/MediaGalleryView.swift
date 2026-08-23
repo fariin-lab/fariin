@@ -39,6 +39,10 @@ struct MediaGalleryView: View {
     @State private var all: [Message] = []
     @State private var loaded = false
     @State private var tab: Tab = .media
+    /// How far the pager has travelled, in PAGE UNITS — 0 is Media at rest, 1.5 is halfway between
+    /// Files and Voice. Written every frame of a drag and read by the tab bar, which is the whole of
+    /// "the page and the indicator are one gesture". See `content`.
+    @State private var tabProgress: CGFloat = 0
     @State private var mediaFilter: MediaFilter = .all
     @State private var selecting = false
     @State private var preparingShare = false   // Share tapped, items not ready yet (see shareSelected)
@@ -236,7 +240,10 @@ struct MediaGalleryView: View {
     private var tabBar: some View {
         MediaTabBar(titles: Tab.allCases.map(\.label),
                     selection: Binding(get: { Tab.allCases.firstIndex(of: tab) ?? 0 },
-                                       set: { tab = Tab.allCases[$0] }))
+                                       set: { tab = Tab.allCases[$0] }),
+                    // The pager's own live offset. See `content` for why the bar cannot get this
+                    // from `selection`.
+                    progress: tabProgress)
         // ⛔ NO HORIZONTAL PADDING HERE — IT WAS BEING APPLIED TWICE AND THAT IS THE WHOLE BUG.
         //
         // `MediaTabBar` already keeps its own 16pt page margin (`pageInset`, on the track itself).
@@ -272,20 +279,58 @@ struct MediaGalleryView: View {
     // drag gesture: it carries the interactive rubber-banding, the velocity handling and the correct
     // relationship with the screen-edge back gesture for free (an edge pan still pops the screen, because
     // the system edge recogniser outranks a scroll view's pan).
+    /// ⛔ A PAGING `ScrollView`, NOT A PAGED `TabView`, AND THE REASON IS THE TAB BAR — owner,
+    /// 2026-08-23: "when the Files page is about 10% visible, the active tab indicator is still
+    /// completely on Media … the indicator must be driven by the same real-time horizontal scroll
+    /// value as the page".
+    ///
+    /// ⚠️ A PAGED `TabView` HAS NO SUCH VALUE TO GIVE. Its selection is a discrete tag that flips as
+    /// the finger crosses the midpoint, and there is no public way to ask it how far the drag has
+    /// travelled — so anything hung off it can only ever jump, and jump halfway through. Every
+    /// smoothing attempt on the bar itself (a spring on the row, `matchedGeometryEffect`) was
+    /// interpolating between two positions AFTER the fact, which is a nicer jump, not a follow.
+    ///
+    /// `onScrollGeometryChange` reports the offset every frame of the drag, in page units, so the
+    /// pill and the page move on one number. Cancelling a swipe carries the pill back with it for
+    /// free — it is the same number going the other way.
+    ///
+    /// ⚠️ THE OLD WARNING ABOUT THE COMMIT FRAME STILL STANDS AND IS STILL OBEYED. Nothing animated
+    /// hangs off `tab` here: the bar reads `tabProgress` and draws a pill at a position, which is a
+    /// frame's worth of arithmetic and no animation at all. `.scrollPosition` is what a TAP writes,
+    /// and that one is allowed to animate because there is no drag under it.
     @ViewBuilder private var content: some View {
-        TabView(selection: $tab) {
-            grid(mediaItems, emptyIcon: "photo.on.rectangle", emptyText: "No media").tag(Tab.media)
-            filesList.tag(Tab.files)
-            voiceList.tag(Tab.voice)
-            linksList.tag(Tab.links)
-            grid(gifItems, emptyIcon: "square.stack.3d.up", emptyText: "No GIFs").tag(Tab.gifs)
+        ScrollView(.horizontal) {
+            LazyHStack(spacing: 0) {
+                ForEach(Tab.allCases, id: \.self) { t in
+                    page(t)
+                        .containerRelativeFrame(.horizontal)
+                        .id(t)
+                }
+            }
+            .scrollTargetLayout()
         }
-        .tabViewStyle(.page(indexDisplayMode: .never))
-        // NO `.animation(value: tab)` HERE, AND THIS IS THE SWIPE LAG HE REPORTED. A paged TabView
-        // flips `tab` as your finger crosses the midpoint, WHILE YOU ARE STILL DRAGGING, and an
-        // animation attached to the TabView animates the whole five-tab subtree on that same frame.
-        // The drag is already the animation; a second one over all of it is what dropped frames
-        // under his finger. Same lesson as the photo pager: nothing heavy on the commit frame.
+        .scrollTargetBehavior(.paging)
+        .scrollIndicators(.hidden)
+        .scrollPosition(id: Binding(get: { Optional(tab) },
+                                    set: { if let t = $0 { tab = t } }))
+        // Page units: 0 is Media sitting still, 1.5 is halfway between Files and Voice. Divided by
+        // the CONTAINER's width rather than by a constant, so a rotation or a split view cannot put
+        // the pill somewhere the page is not.
+        .onScrollGeometryChange(for: CGFloat.self) { g in
+            g.containerSize.width > 1 ? g.contentOffset.x / g.containerSize.width : 0
+        } action: { _, p in
+            tabProgress = p
+        }
+    }
+
+    @ViewBuilder private func page(_ t: Tab) -> some View {
+        switch t {
+        case .media: grid(mediaItems, emptyIcon: "photo.on.rectangle", emptyText: "No media")
+        case .files: filesList
+        case .voice: voiceList
+        case .links: linksList
+        case .gifs:  grid(gifItems, emptyIcon: "square.stack.3d.up", emptyText: "No GIFs")
+        }
     }
 
     // Shown until the first load finishes, so the empty state never flashes while loading.
