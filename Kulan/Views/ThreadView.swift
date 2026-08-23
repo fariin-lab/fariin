@@ -2102,7 +2102,23 @@ struct ThreadView: View {
                 // Live call rows mutate in place (ringing → ongoing → final, duration, voice→video
                 // upgrade) and change no other field this string reads — same rule as `deleted`.
                 let call = m.isCall ? "\(m.callOutcome ?? "-"):\(m.callDuration ?? -1):\(m.callVideo)" : "-"
-                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(cluster)|\(story)|\(unread)|\(call)"
+                // DARK, and this is the FOURTH instance of the key-vs-value mistake named above.
+                // `dark` has been in the KEY since the mixed-palette fix, which recomputes this whole
+                // dictionary on a theme flip — but every row then produced the SAME string as before,
+                // so nothing reconfigured and hosted cells kept the `dark` they were BUILT with.
+                //
+                // A SwiftUI bubble bakes it: `dark ? .white : .black` is resolved when the view value
+                // is made, unlike `.primary`, which re-resolves against the environment on its own.
+                // That is exactly the split the owner photographed — the call bubble's `.primary`
+                // title went white in dark mode while the message text beside it stayed BLACK, in the
+                // same screenshot. It also left incoming bubbles on `Material.thin` where dark mode
+                // asks for `.ultraThin`, so the surface was too heavy as well as the text unreadable.
+                //
+                // The UIKit text cells never showed it: they carry dynamic UIColors and re-resolve on
+                // `registerForTraitChanges`. So the bug only appears in a chat with a custom chat
+                // colour, because `chatColorSpec == nil` in the UIKit route guard sends EVERY row to
+                // SwiftUI there. That is why it hid for months.
+                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)"
             }
             sigCache.key = key
             sigCache.base = out

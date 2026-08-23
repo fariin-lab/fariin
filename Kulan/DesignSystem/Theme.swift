@@ -61,6 +61,12 @@ enum Theme {
     /// is competing with black text, so the thicker one is what keeps the text legible.
     static func receivedStyle(_ dark: Bool, onWallpaper: Bool) -> AnyShapeStyle {
         guard onWallpaper else { return AnyShapeStyle(received(dark)) }
+        // REDUCE TRANSPARENCY WINS, and the reference app checks it first for a reason: someone who
+        // has asked the system to stop seeing through things gets a bubble they cannot read if we
+        // hand them a material anyway. They fall back to the plain theme background, not to the
+        // received grey, because the grey is a bubble-on-background colour and there is a picture
+        // here instead. Same choice, same order.
+        if UIAccessibility.isReduceTransparencyEnabled { return AnyShapeStyle(bg(dark)) }
         return AnyShapeStyle(dark ? Material.ultraThin : Material.thin)
     }
     static func accent(_ dark: Bool) -> Color { dark ? .white : .black }

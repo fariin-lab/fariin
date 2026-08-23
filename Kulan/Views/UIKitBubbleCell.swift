@@ -38,6 +38,8 @@ private enum BubblePalette {
     }
     static let myFill = UIColor { $0.userInterfaceStyle == .dark ? hex(0x0A84FF) : hex(0x007AFF) }   // Theme.defaultBubble
     static let receivedFill = UIColor { $0.userInterfaceStyle == .dark ? hex(0x26262B) : hex(0xF2F2F2) } // Theme.received (owner's F2F2F2)
+    // Theme.bg — the Reduce Transparency substitute for the material, not the received grey. See applySurface.
+    static let plainBackground = UIColor { $0.userInterfaceStyle == .dark ? hex(0x121214) : hex(0xFFFFFF) }
     static let myText = UIColor.white
     static let receivedText = UIColor { $0.userInterfaceStyle == .dark ? .white : .black }
     static let myMeta = UIColor.white.withAlphaComponent(0.7)
@@ -99,9 +101,14 @@ final class UIKitBubbleView: UIView {
     /// transparent and a masked blur takes the same outline. Both surfaces exist in one view because
     /// cells are recycled: the very next message this view draws may be the other kind.
     private func applySurface(_ m: UIKitBubbleModel) {
-        let wantsBlur = !m.isMe && m.onWallpaper
-        guard wantsBlur else {
-            bubbleLayer.fillColor = (m.isMe ? BubblePalette.myFill : BubblePalette.receivedFill).cgColor
+        // Reduce Transparency drops the material here too, and falls back to the plain background
+        // rather than the received grey — the same substitute Theme.receivedStyle makes, checked in
+        // the same order, so the two render paths cannot disagree for a user who has it on.
+        let reduced = UIAccessibility.isReduceTransparencyEnabled
+        guard !m.isMe, m.onWallpaper, !reduced else {
+            let fill: UIColor = m.isMe ? BubblePalette.myFill
+                : (m.onWallpaper && reduced ? BubblePalette.plainBackground : BubblePalette.receivedFill)
+            bubbleLayer.fillColor = fill.cgColor
             blurView?.isHidden = true
             return
         }
