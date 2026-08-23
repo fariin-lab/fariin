@@ -70,35 +70,57 @@ struct MyQRView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
-                Spacer()
-                card
-                Text("Scan this code in Fariin to start a chat.")
-                    .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Spacer()
-                ShareLink(item: fariinLink(handle)) {
-                    // The app tints itself `.primary` (KulanApp), so `Color.accentColor` here is
-                    // WHITE in dark mode and black in light. A hardcoded white label was therefore
-                    // invisible on its own capsule every night, and correct every day, which is why
-                    // it survived so long. `Theme.onAccent` is the inverse of that same colour.
-                    Label("Share my link", systemImage: "square.and.arrow.up")
-                        .frame(maxWidth: .infinity).frame(height: 50)
-                        .background(Color.accentColor, in: Capsule())
-                        .foregroundStyle(Theme.onAccent(dark))
+            ZStack {
+                // ⛔ THE GROUND, AND IT IS THE WHOLE REASON THIS SCREEN LOOKED SCATTERED.
+                //
+                // The card has always been painted `secondarySystemGroupedBackground` — which is pure
+                // WHITE in light mode. Behind it was the default `systemBackground`, also pure white.
+                // A white card on a white page has no edge, so the photo, the name and the code read
+                // as three loose things floating on a blank page rather than as one card. It only
+                // showed up in daylight: at night the two colours differ, so the card was visible and
+                // the bug looked like it did not exist. (Owner, 2026-08-23: "now looks unorganized".)
+                Color(.systemGroupedBackground).ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    Spacer(minLength: 8)
+                    card
+                    Text("Scan this code in Fariin to start a chat.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 18)
+                    Spacer(minLength: 8)
+                    // ONE ACTION, AND IT IS SCAN (owner, 2026-08-23). Sharing moved to an icon in the
+                    // toolbar: you share your own code now and then, but the reason you open this
+                    // screen with somebody in front of you is to point a camera at theirs.
+                    Button {
+                        if let onScan { onScan() } else { showScanner = true }
+                    } label: {
+                        // The app tints itself `.primary` (KulanApp), so `Color.accentColor` here is
+                        // WHITE in dark mode and black in light. A hardcoded white label was therefore
+                        // invisible on its own capsule every night, and correct every day, which is why
+                        // it survived so long. `Theme.onAccent` is the inverse of that same colour.
+                        Text("Scan a code")
+                            .font(.system(size: 17, weight: .semibold))
+                            .frame(maxWidth: .infinity).frame(height: 54)
+                            .background(Color.accentColor, in: Capsule())
+                            .foregroundStyle(Theme.onAccent(dark))
+                    }
                 }
                 .padding(.horizontal, 24)
-                Button {
-                    if let onScan { onScan() } else { showScanner = true }
-                } label: {
-                    Label("Scan a code", systemImage: "qrcode.viewfinder")
-                        .frame(maxWidth: .infinity).frame(height: 50)
-                }
-                .padding(.horizontal, 24)
+                .padding(.bottom, 10)
             }
-            .padding()
             .navigationTitle("My QR Code")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    ShareLink(item: fariinLink(handle)) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .accessibilityLabel("Share my link")
+                }
+                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+            }
             .fullScreenCover(isPresented: $showScanner) {
                 // `onMyCode: dismiss` on the scanner we open ourselves: its "My code" button comes
                 // back HERE instead of presenting a second copy of this screen on top of this one.
@@ -130,10 +152,18 @@ struct MyQRView: View {
 
     /// The photo sits ON the card's edge rather than inside it, which is what stops the card reading
     /// as a plain white box with a face pasted in the corner.
+    ///
+    /// THIS LAYOUT IS THE ONE HE KEPT (owner, 2026-08-23: "just current one we have"). A two-half
+    /// version — dark identity block over a white code panel — was built and thrown away in the same
+    /// session. Do not bring it back on a hunch; the card was never the problem, the ground behind it
+    /// was, and that is fixed in `body`.
     private var card: some View {
         VStack(spacing: 0) {
             AvatarView(name: name, photoUrl: me?.photoUrl, size: 76)
-                .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 5))
+                // The ring is the CARD's colour, not the page's. They used to be the same white and
+                // it did not matter; now that the page is grey, a page-coloured ring would draw a
+                // grey band across the half of the photo that overlaps the card.
+                .overlay(Circle().stroke(Color(.secondarySystemGroupedBackground), lineWidth: 5))
                 .zIndex(1)
                 .offset(y: 38)
             VStack(spacing: 14) {
@@ -206,10 +236,17 @@ struct ScanQRView: View {
     /// nobody behind it" — telling somebody there is no Fariin user in a picture of their lunch
     /// answers a question they did not ask.
     @State private var noCodeInPhoto = false
+    @State private var torchOn = false
 
     var body: some View {
         ZStack {
             QRScanner(onCode: { code in resolve(code) }, resetToken: scanReset).ignoresSafeArea()
+
+            // WHERE TO PUT THE CODE. The camera used to fill the screen with nothing on it, which
+            // leaves you guessing how close to hold the phone and how much of the frame the code is
+            // supposed to fill. The dimmed surround and the four corners answer both without a word.
+            ScanTarget(locked: handling).ignoresSafeArea()
+
             VStack {
                 HStack {
                     Button { dismiss() } label: {
@@ -217,10 +254,15 @@ struct ScanQRView: View {
                             .padding(12).liquidGlass(Circle(), interactive: true)
                     }
                     Spacer()
-                    PhotosPicker(selection: $photoItem, matching: .images) {
-                        Image(systemName: "photo.on.rectangle").font(.title3.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .padding(12).liquidGlass(Circle(), interactive: true)
+                    // Only where there IS one. The front camera and the simulator have no torch, and
+                    // a button that cannot do anything is worse than no button.
+                    if hasTorch {
+                        Button { toggleTorch() } label: {
+                            Image(systemName: torchOn ? "bolt.fill" : "bolt.slash")
+                                .font(.title3.weight(.semibold)).foregroundStyle(.primary)
+                                .padding(12).liquidGlass(Circle(), interactive: true)
+                        }
+                        .accessibilityLabel(torchOn ? "Turn off flash" : "Turn on flash")
                     }
                 }
                 Spacer()
@@ -228,20 +270,43 @@ struct ScanQRView: View {
                     .font(.subheadline.weight(.medium)).foregroundStyle(.primary)
                     .padding(.horizontal, 16).padding(.vertical, 10)
                     .liquidGlass(Capsule())
-                Button {
-                    if let onMyCode { onMyCode() } else { showMyCode = true }
-                } label: {
-                    Label("My code", systemImage: "qrcode")
-                        .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                        .padding(.horizontal, 20).padding(.vertical, 14)
-                        .liquidGlass(Capsule(), interactive: true)
-                }
-                .padding(.top, 14)
-                .padding(.bottom, 40)
+                    // Clears the bottom row below. The hint used to be part of that stack; now that
+                    // the row is its own layer, nothing else is holding this up off the pill.
+                    .padding(.bottom, 80)
             }
             .padding()
+
+            // The bottom row: pick a picture on the left, your own code in the middle. The empty
+            // square on the right is not padding — it is what keeps "My code" centred on the screen
+            // rather than centred in the space left over beside the picture button.
+            VStack {
+                Spacer()
+                HStack(spacing: 12) {
+                    PhotosPicker(selection: $photoItem, matching: .images) {
+                        Image(systemName: "photo.on.rectangle").font(.title3.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .padding(12).liquidGlass(Circle(), interactive: true)
+                    }
+                    Spacer(minLength: 0)
+                    Button {
+                        if let onMyCode { onMyCode() } else { showMyCode = true }
+                    } label: {
+                        Label("My code", systemImage: "qrcode")
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                            .padding(.horizontal, 20).padding(.vertical, 14)
+                            .liquidGlass(Capsule(), interactive: true)
+                    }
+                    Spacer(minLength: 0)
+                    Color.clear.frame(width: 46, height: 46)
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 40)
+            }
         }
         .onChange(of: photoItem) { _, item in readPickedPhoto(item) }
+        // A torch left burning after the screen closes is a flashlight nobody asked for, and on some
+        // phones it stays on until the camera is opened again.
+        .onDisappear { setTorch(false) }
         .sheet(isPresented: $showMyCode) {
             // `onScan: dismiss` for the same reason the code screen passes one to us: its "Scan a
             // code" button comes back to this camera rather than opening another one.
@@ -253,6 +318,23 @@ struct ScanQRView: View {
         if noCodeInPhoto { return "No QR code in that picture" }
         if notFound { return "No Fariin user found" }
         return "Point at a Fariin QR code"
+    }
+
+    // MARK: - Flash
+
+    private var hasTorch: Bool { AVCaptureDevice.default(for: .video)?.hasTorch ?? false }
+
+    private func toggleTorch() { setTorch(!torchOn) }
+
+    /// Driven straight on the capture device the scanner is already running on. Locking is required
+    /// by AVFoundation and must be released whatever happens — an unbalanced lock leaves the camera
+    /// unconfigurable for everything else in the app, calls included.
+    private func setTorch(_ on: Bool) {
+        guard let device = AVCaptureDevice.default(for: .video), device.hasTorch else { return }
+        guard (try? device.lockForConfiguration()) != nil else { return }
+        device.torchMode = on ? .on : .off
+        device.unlockForConfiguration()
+        torchOn = on
     }
 
     /// The picked image goes through `resolve` — the same path a camera frame takes — so a photo and
@@ -308,6 +390,81 @@ struct ScanQRView: View {
     // Re-arm after a beat, so a bad code still in frame retries ~1/s instead of every camera frame.
     private func rearmScanner() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { scanReset += 1 }
+    }
+}
+
+// MARK: - ScanTarget
+
+/// The aiming square: everything outside it dims, and four corners mark where the code goes.
+///
+/// THE CORNERS ARE WHITE UNTIL A CODE IS ACTUALLY IN HAND, then green. This app's palette is
+/// black and white, so a permanently green frame would be a colour borrowed from somebody else's
+/// brand for no reason. Held back until `handling` — the moment a code has been read and is being
+/// looked up — it earns its place: green is what "got it" looks like everywhere else in here, and
+/// the flash of it is the only feedback between pointing the camera and the chat opening.
+///
+/// ⚠️ THE SQUARE IS A GUIDE, NOT A GATE. The camera still scans the whole frame, so a code slightly
+/// outside the corners is read anyway. Narrowing the capture to this rectangle would make the
+/// picture honest and the scanner worse — people hold phones at angles, and a code that is visibly
+/// on screen but refuses to scan reads as a broken camera.
+private struct ScanTarget: View {
+    var locked: Bool
+
+    var body: some View {
+        GeometryReader { geo in
+            let side = min(geo.size.width * 0.72, geo.size.height * 0.42)
+            ZStack {
+                Color.black.opacity(0.38)
+                    .mask {
+                        Rectangle()
+                            .overlay(alignment: .center) {
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .frame(width: side, height: side)
+                                    .blendMode(.destinationOut)   // punches the window out of the dim
+                            }
+                            .compositingGroup()
+                    }
+                ScanCorners()
+                    .stroke(locked ? Color.green : .white,
+                            style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                    .frame(width: side, height: side)
+                    .animation(.easeOut(duration: 0.2), value: locked)
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+        .allowsHitTesting(false)   // the buttons underneath must still take taps
+    }
+}
+
+/// Four L-shaped corners with rounded elbows. One Shape rather than four rotated copies, so the
+/// stroke joins the same way at every corner.
+private struct ScanCorners: Shape {
+    var arm: CGFloat = 34
+    var radius: CGFloat = 14
+
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        // top-left
+        p.move(to: CGPoint(x: r.minX, y: r.minY + arm))
+        p.addLine(to: CGPoint(x: r.minX, y: r.minY + radius))
+        p.addQuadCurve(to: CGPoint(x: r.minX + radius, y: r.minY), control: CGPoint(x: r.minX, y: r.minY))
+        p.addLine(to: CGPoint(x: r.minX + arm, y: r.minY))
+        // top-right
+        p.move(to: CGPoint(x: r.maxX - arm, y: r.minY))
+        p.addLine(to: CGPoint(x: r.maxX - radius, y: r.minY))
+        p.addQuadCurve(to: CGPoint(x: r.maxX, y: r.minY + radius), control: CGPoint(x: r.maxX, y: r.minY))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.minY + arm))
+        // bottom-right
+        p.move(to: CGPoint(x: r.maxX, y: r.maxY - arm))
+        p.addLine(to: CGPoint(x: r.maxX, y: r.maxY - radius))
+        p.addQuadCurve(to: CGPoint(x: r.maxX - radius, y: r.maxY), control: CGPoint(x: r.maxX, y: r.maxY))
+        p.addLine(to: CGPoint(x: r.maxX - arm, y: r.maxY))
+        // bottom-left
+        p.move(to: CGPoint(x: r.minX + arm, y: r.maxY))
+        p.addLine(to: CGPoint(x: r.minX + radius, y: r.maxY))
+        p.addQuadCurve(to: CGPoint(x: r.minX, y: r.maxY - radius), control: CGPoint(x: r.minX, y: r.maxY))
+        p.addLine(to: CGPoint(x: r.minX, y: r.maxY - arm))
+        return p
     }
 }
 
