@@ -941,7 +941,16 @@ struct FloatingCallWindow: View {
                             }
                             .onEnded { _ in
                                 let (maxLeft, maxDown) = limits(geo.size)
-                                let y: CGFloat = offset.height > maxDown / 2 ? maxDown : 0
+                                // ⛔ ONLY THE SIDE SNAPS. Height stays exactly where the finger left
+                                // it (owner, 2026-08-23: "only i can drag top left or top right,
+                                // bottom left, no middle right or left"). Snapping y as well pinned
+                                // the card to four corners, so it could never sit beside the row you
+                                // were actually reading — you had to choose between covering the top
+                                // of the list or the bottom of it. Apple's own picture-in-picture and
+                                // the reference app both do it this way: the edge is decided for you
+                                // because a card floating in open space is just in the way; the
+                                // height is yours because only you know what is underneath it.
+                                let y = min(maxDown, max(0, offset.height))
                                 // Shoved far enough past a side → park it there as a tab.
                                 if offset.width > stashAt || offset.width < maxLeft - stashAt {
                                     let x: CGFloat = offset.width > stashAt ? 0 : maxLeft
