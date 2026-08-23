@@ -42,32 +42,42 @@ enum Theme {
     // lock-step with UIKitBubbleCell.receivedFill or text rows and media rows show two grays.
     static func received(_ dark: Bool) -> Color { dark ? Color(hex: 0x26262B) : Color(hex: 0xF2F2F2) }
 
-    /// THE SURFACE BEHIND A BUBBLE THAT IS NOT MINE — and on a wallpaper it is not a colour at all.
+    /// THE SURFACE BEHIND A BUBBLE THAT IS NOT MINE, decided once and read by both render paths.
     ///
-    /// Without a wallpaper this is `received` and nothing has changed. With one, the bubble stops
-    /// being painted and becomes a blur material: it samples the wallpaper directly behind itself,
-    /// blurs it, lifts the saturation, and lays the system's own grain over the top. Two things
-    /// follow from that, and both are the point rather than side effects — every bubble ends up a
-    /// slightly different shade depending on what it is sitting on, and a picture with light in it
-    /// puts that light INSIDE the bubble instead of only around it.
+    /// Without a wallpaper it is `received` and nothing has changed. With one it is a SLICE of the
+    /// blurred, washed wallpaper — the reference app's `CVWallpaperBlurView`, ported in
+    /// `WallpaperBlur` with its numbers — so every bubble shows the part of the picture that sits
+    /// under it, and a picture with light in it puts that light INSIDE the bubble. Reduce
+    /// Transparency wins over all of it, exactly as theirs checks it first: the plain theme
+    /// background, not the received grey, because the grey is a bubble-on-background colour and
+    /// there is a picture here instead.
     ///
-    /// This is what the reference app does, read from its source: incoming bubbles have exactly two
-    /// flat values (a light grey and a dark grey) and both are used ONLY when no wallpaper is set.
-    /// The moment one is, they hand the whole job to a material.
-    ///
-    /// ⚠️ THE THIN/ULTRA-THIN SPLIT IS NOT DECORATION. Ultra-thin lets more of the picture through,
-    /// which is right over a dark wallpaper in dark mode where a thicker material would grey the
-    /// picture out and hand back the flat bubble we were trying to leave. In light mode the wallpaper
-    /// is competing with black text, so the thicker one is what keeps the text legible.
+    /// `.material` is the one branch theirs does not have. It is what a surface falls back to when a
+    /// wallpaper is present but no slice could be made for it — a preview platter that is not the
+    /// size of the window, or a render that failed — and it is an approximation, kept only so those
+    /// places still read as "on a wallpaper" rather than going flat.
+    enum ReceivedSurface: Equatable {
+        case flat(Color)
+        case slice(WallpaperBlurState)
+        case material
+    }
+
+    static func receivedSurface(_ dark: Bool, onWallpaper: Bool,
+                                blur: WallpaperBlurState?) -> ReceivedSurface {
+        guard onWallpaper else { return .flat(received(dark)) }
+        if UIAccessibility.isReduceTransparencyEnabled { return .flat(bg(dark)) }
+        if let blur { return .slice(blur) }
+        return .material
+    }
+
+    /// The previews' version of the above — the colour-picker platter and the chat peek, which
+    /// draw the wallpaper at a size that is not the window's and so cannot take a slice. Same
+    /// decision, with `.material` drawn as the system material it approximates.
     static func receivedStyle(_ dark: Bool, onWallpaper: Bool) -> AnyShapeStyle {
-        guard onWallpaper else { return AnyShapeStyle(received(dark)) }
-        // REDUCE TRANSPARENCY WINS, and the reference app checks it first for a reason: someone who
-        // has asked the system to stop seeing through things gets a bubble they cannot read if we
-        // hand them a material anyway. They fall back to the plain theme background, not to the
-        // received grey, because the grey is a bubble-on-background colour and there is a picture
-        // here instead. Same choice, same order.
-        if UIAccessibility.isReduceTransparencyEnabled { return AnyShapeStyle(bg(dark)) }
-        return AnyShapeStyle(dark ? Material.ultraThin : Material.thin)
+        switch receivedSurface(dark, onWallpaper: onWallpaper, blur: nil) {
+        case .flat(let c): return AnyShapeStyle(c)
+        case .slice, .material: return AnyShapeStyle(dark ? Material.ultraThin : Material.thin)
+        }
     }
     static func accent(_ dark: Bool) -> Color { dark ? .white : .black }
     static func onAccent(_ dark: Bool) -> Color { dark ? .black : .white }
@@ -444,5 +454,21 @@ struct GoogleGIcon: View {
             .resizable()
             .scaledToFit()
             .frame(width: size, height: size)
+    }
+}
+
+/// The SwiftUI surface behind an incoming bubble. Draws whatever `Theme.receivedSurface` decided;
+/// the bubble's own `clipShape` after it is what gives it the bubble's shape.
+struct ReceivedBubbleSurface: View {
+    let dark: Bool
+    let onWallpaper: Bool
+    let blur: WallpaperBlurState?
+
+    var body: some View {
+        switch Theme.receivedSurface(dark, onWallpaper: onWallpaper, blur: blur) {
+        case .flat(let c): c
+        case .slice(let s): WallpaperBlurSlice(state: s)
+        case .material: Rectangle().fill(dark ? Material.ultraThin : Material.thin)
+        }
     }
 }

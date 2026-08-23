@@ -438,6 +438,11 @@ enum ChatWallpapers {
 // bubbles and the floating header/composer stay readable on busy images.
 struct ChatWallpaperBackground: View {
     let cid: String
+    /// False only when this is being RENDERED TO AN IMAGE as the source for the incoming-bubble
+    /// blur (see `WallpaperBlur`): the reference app blurs the undimmed wallpaper and does all its
+    /// darkening in the wash, so blurring our photo scrim in first would darken a bubble twice.
+    /// On screen this is always true and nothing about the picture changes.
+    var includesScrim: Bool = true
     @Environment(\.colorScheme) private var scheme
     private var store: WallpaperStore { .shared }
 
@@ -462,7 +467,9 @@ struct ChatWallpaperBackground: View {
                 Color.clear
                     .overlay { Image(uiImage: img).resizable().scaledToFill() }
                     .clipped()
-                    .overlay(dark ? Color.black.opacity(0.28) : Color.white.opacity(0.14))
+                    .overlay(includesScrim
+                             ? (dark ? Color.black.opacity(0.28) : Color.white.opacity(0.14))
+                             : Color.clear)
             } else {
                 Theme.bg(dark)   // photo deleted from the library → fall back gracefully
             }
