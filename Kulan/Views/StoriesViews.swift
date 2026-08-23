@@ -2944,7 +2944,16 @@ struct StoryViewer: View {
     /// numbers, so the cover and the mask cannot disagree about which journey is running.
     private var heroLandingIsCircle: Bool {
         let key = MediaOpenRects.key(.storyRow, heroKeyNow())
-        guard let r = MediaOpenRects.liveRect(key), r.width > 1 else { return false }
+        // ⚠️ `liveViewRect`, THE SAME QUESTION `onScreenRect` ASKS, AND IT WAS THE ONLY PLACE ON
+        // THIS FLIGHT STILL ASKING THE OTHER ONE. `liveRect` falls back to a rectangle written down
+        // at some earlier layout pass, which for a door living in the recycling chat list can be
+        // where a different bubble used to be — the trap `liveViewRect` exists to close.
+        //
+        // It costs nothing here: the geometry has already refused to fly when there is no live view,
+        // so by the time anything asks about the SHAPE there is one. What it buys is that the shape
+        // and the geometry can never be answered from two different sources — one saying circle off
+        // a stale rect while the other flies to a card.
+        guard let r = MediaOpenRects.liveViewRect(key), r.width > 1 else { return false }
         return MediaOpenRects.cornerRadius(key) >= min(r.width, r.height) / 2 - 0.5
     }
 

@@ -60,6 +60,35 @@ import UIKit
         views[key] = WeakView(view)
     }
 
+    /// ⛔ AN ANCHOR THAT HAS BEEN GIVEN A NEW JOB LETS GO OF ITS OLD ONE — owner, 2026-08-23: the
+    /// story opened from a reply preview sometimes flies out of the chat's top header instead of out
+    /// of the thumbnail, "only sometimes".
+    ///
+    /// ⚠️ THE VIEW REGISTRY WAS APPEND-ONLY, AND A REUSING LIST IS WHAT MAKES THAT A BUG. The chat is
+    /// a `UICollectionView`; its cells are recycled. When a cell that was drawing message A is handed
+    /// message B, the anchor inside it keeps the same UIView and is simply told a new key — so it
+    /// registered under B and NOTHING released A. `views["reply-A"]` went on pointing at a real,
+    /// on-screen, laid-out view that now belongs to a completely different message, which is
+    /// somewhere else entirely on the screen. A flight that resolved A got an honest-looking
+    /// rectangle for the wrong bubble, and near the top of the list that is the header.
+    ///
+    /// This is the same class of mistake `liveViewRect` was written for and the opposite direction:
+    /// that one is a stale RECTANGLE with no view, this is a live view under a stale KEY. The
+    /// written-down rect was made honest; the view was not.
+    ///
+    /// Intermittent for the reason reuse is intermittent — it depends on whether that particular
+    /// cell had been recycled yet, which is why it survived the earlier fix and why it never showed
+    /// on a short conversation.
+    ///
+    /// ⚠️ ONLY IF IT IS STILL US. A newer anchor may already have claimed the key legitimately (two
+    /// views can carry one id for a frame while SwiftUI swaps them), and evicting that one would
+    /// trade an intermittent wrong answer for an intermittent missing one.
+    static func releaseView(_ key: String, ifItIs view: UIView) {
+        guard !key.isEmpty else { return }
+        guard let held = views[key]?.value, held === view else { return }
+        views.removeValue(forKey: key)
+    }
+
     /// The registered view itself, while it is on screen. The story hero snapshots it at tap time:
     /// the flying card lifts off WEARING the tapped card's own pixels (another mainstream app's shared-element
     /// look — the thumbnail expands, not a screen materialising over it), and the snapshot is what
@@ -203,10 +232,23 @@ private struct MediaViewAnchor: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) { (uiView as? Anchor)?.key = key }
 
     final class Anchor: UIView {
-        var key: String = "" { didSet { register() } }
+        var key: String = "" {
+            didSet {
+                guard key != oldValue else { return }
+                // The old key must stop pointing at this view BEFORE the new one starts, or a
+                // recycled cell leaves the message it used to draw resolving to the bubble that
+                // replaced it. See `MediaOpenRects.releaseView`.
+                MediaOpenRects.releaseView(oldValue, ifItIs: self)
+                register()
+            }
+        }
         // Registered on every window change too: SwiftUI reuses these views as the row re-orders, so
         // "it was registered once at birth" is not good enough.
         override func didMoveToWindow() { super.didMoveToWindow(); register() }
+        // ⚠️ NOTHING IS NEEDED ON DEALLOC. The registry holds these weakly and every reader tests
+        // `window != nil` first, so a view that has gone away already answers honestly. The case
+        // that needed fixing is the one where the view is very much alive and simply not what the
+        // key says any more — the key change above.
         private func register() {
             guard !key.isEmpty, window != nil else { return }
             MediaOpenRects.captureView(key, self)
