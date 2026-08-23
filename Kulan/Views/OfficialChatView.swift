@@ -429,6 +429,14 @@ struct AnnouncementRow: View {
                                       blur: wallpaperBlur)
             }
             .clipShape(UnevenRoundedRectangle(cornerRadii: corners, style: .continuous))
+            // The rim every incoming bubble wears on a wallpaper — see Theme.bubbleRim.
+            .overlay {
+                if WallpaperStore.shared.hasWallpaper(for: OfficialChannel.cid) {
+                    UnevenRoundedRectangle(cornerRadii: corners, style: .continuous)
+                        .strokeBorder(Theme.bubbleRim(dark), lineWidth: Theme.hairline)
+                        .allowsHitTesting(false)
+                }
+            }
             Spacer(minLength: 0)
         }
         .padding(.vertical, 2)
