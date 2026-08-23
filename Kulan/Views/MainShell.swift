@@ -2783,18 +2783,19 @@ struct ChatRow: View, Equatable {
     /// composer's attachment tiles use. It exists here because of the GIF row: SF Symbols has no GIF
     /// glyph at all, which is why that preview wore `sparkles` and read as anything but a GIF.
     private func previewRow(_ icon: String, _ text: String, iconTint: Color? = nil,
-                            textTint: Color? = nil) -> some View {
+                            textTint: Color? = nil, weight: Font.Weight = .regular) -> some View {
         HStack(spacing: 5) {
             Group {
                 if icon.hasPrefix("ic_") {
                     Image(icon).renderingMode(.template).resizable().scaledToFit()
                         .frame(width: 14, height: 14)
                 } else {
-                    Image(systemName: icon).font(.system(size: 12))
+                    Image(systemName: icon).font(.system(size: 13, weight: weight))
                 }
             }
             .foregroundStyle(iconTint ?? Color.secondary)
-            Text(text).font(.system(size: 14)).foregroundStyle(textTint ?? .secondary).lineLimit(1)
+            Text(text).font(.system(size: 15, weight: weight))
+                .foregroundStyle(textTint ?? .secondary).lineLimit(1)
         }
     }
     /// The emoji shown as the row's trailing badge — the same fresh-reaction test the preview text
@@ -2900,9 +2901,9 @@ struct ChatRow: View, Equatable {
             previewRow("hand.raised.fill", "Blocked")
         } else if let r = recordingLabel, !activityExpired {
             (Text(Image(systemName: "mic.fill")).font(.system(size: 12)) + Text(" \(r)"))
-                .font(.system(size: 14)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
+                .font(.system(size: 15)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
         } else if let t = typingLabel, !activityExpired {
-            Text(t).font(.system(size: 14)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
+            Text(t).font(.system(size: 15)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
         } else if unread > 1 {
             // MORE THAN ONE WAITING → COUNT THEM, don't quote the newest (owner, 2026-08-23, with
             // the reference row: "when user send one message its shows what is saying, but when its
@@ -2920,7 +2921,7 @@ struct ChatRow: View, Equatable {
             // that is right — a badge is a number, this is a sentence, and "23 new messages" reads
             // like an inbox report rather than a chat.
             Text(unread > 9 ? "9+ new messages" : "\(unread) new messages")
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Color.primary)
                 .lineLimit(1)
         } else if voiceDraftSecs > 0 {
@@ -2930,20 +2931,20 @@ struct ChatRow: View, Equatable {
             (Text("Draft: ").foregroundStyle(.red)
              + Text(Image(systemName: "mic.fill")).font(.system(size: 12))
              + Text(" " + voiceDraftLabel).foregroundStyle(.secondary))
-                .font(.system(size: 14)).lineLimit(1)
+                .font(.system(size: 15)).lineLimit(1)
         } else if !draft.isEmpty {
             (Text("Draft: ").foregroundStyle(.red) + Text(draft).foregroundStyle(.secondary))
                 // 2 lines is the design, but the first layout pass can offer almost no width, and
                 // without a cap the text stacks one letter per line. See the note on timeStr.
-                .font(.system(size: 14)).lineLimit(2).truncationMode(.tail)
+                .font(.system(size: 15)).lineLimit(2).truncationMode(.tail)
         } else if let r = reactionPreview {
-            Text(r).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
+            Text(r).font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(1)
         } else if isPhotoPreview {
             HStack(spacing: 5) {
                 SecureImageView(imageUrl: conv.lastImageUrl ?? "", enc: conv.lastImageEnc, cid: conv.id)
                     .frame(width: 20, height: 20)
                     .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                Text(lastSenderPrefix + photoPreviewLabel).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
+                Text(lastSenderPrefix + photoPreviewLabel).font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(1)
             }
         } else if let badge = previewBadge(conv.lastMessageCipher) {
             // A MISSED CALL IS THE ONE PREVIEW THAT IS BAD NEWS, and it was the same grey as
@@ -2959,7 +2960,12 @@ struct ChatRow: View, Equatable {
             // Unheard voice note = accent mic (like an unread badge, but for your ears).
             previewRow(badge.0, lastSenderPrefix + badge.1,
                        iconTint: missed ? .red : (voiceUnplayed ? Theme.accent(dark) : nil),
-                       textTint: missed ? .red : nil)
+                       textTint: missed ? .red : nil,
+                       // Semibold on a missed call, regular on everything else. Two weights in the
+                       // preview line is the convention every big messenger follows: the states you
+                       // have to act on carry weight, the rest stay quiet. One weight for all of them
+                       // is what made this line read thin under a 16pt bold name.
+                       weight: missed ? .semibold : .regular)
         } else if decodedLast.isEmpty {
             previewRow("hand.wave.fill", "Say hello")
         } else if decodedLast.hasPrefix(Message.contactMarker) {
@@ -2981,7 +2987,7 @@ struct ChatRow: View, Equatable {
             previewRow("arrow.up.circle.fill", "Message from a newer version")
         } else {
             Text(lastSenderPrefix + decodedLast)
-                .font(.system(size: 14, weight: unread > 0 ? .medium : .regular))
+                .font(.system(size: 15, weight: unread > 0 ? .semibold : .regular))
                 .foregroundStyle(unread > 0 ? Color.primary : .secondary).lineLimit(2)   // darker when unread
         }
     }
