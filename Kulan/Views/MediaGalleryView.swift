@@ -93,7 +93,14 @@ struct MediaGalleryView: View {
     // Media, a multi-photo album never did â€” `isAlbum` messages fell through the image/video filter).
     // The synthetic "<messageId>-<index>" ids match the chat's album tile registry, so the fly-open and
     // the drag-close landing resolve real geometry.
-    private var expandedAll: [Message] { all.flatMap { $0.expandedGalleryItems(cid: cid) } }
+    /// ⚠️ A MESSAGE DELETED FOR ME IS GONE FROM HERE TOO, and it never used to be. `HiddenMessages`
+    /// is the chat's local hide list, and this screen had never consulted it — so "Delete for me" in
+    /// the conversation removed the bubble and left the photograph sitting in All Media, which is
+    /// the same hole view-once had before 2026-08-11. It is also what makes the split delete below
+    /// possible at all.
+    private var expandedAll: [Message] {
+        all.flatMap { $0.expandedGalleryItems(cid: cid) }.filter { !HiddenMessages.isHidden($0.id) }
+    }
 
     /// Everything the Media tab holds, BEFORE the Show filter narrows it. Split out because the
     /// "..." menu has to know the difference: a tab with photos in it but the Videos filter on is
@@ -186,13 +193,29 @@ struct MediaGalleryView: View {
         .tint(Color.accentColor)
         .toolbar { toolbar }
         .background { NavBarNoHairline() }   // no hairline under the header (see below)
-        .safeAreaInset(edge: .bottom) { if selecting { selectionToolbar } }
+        // ⛔ AN OVERLAY, NOT A RESERVED STRIP — owner, 2026-08-23: "All media Page buttom plz remove
+        // the border".
+        //
+        // ⚠️ THERE IS NO BORDER IN THIS FILE, AND THAT IS THE POINT. `safeAreaInset` RESERVES a band
+        // at the bottom: the grid is not allowed into it, so the photos stop dead on a straight line
+        // across the screen and the page's own colour fills what is left. That edge is the border he
+        // is pointing at — nothing draws it, the layout produces it, and no amount of looking for a
+        // `Divider` or a stroke would have found it.
+        //
+        // The tab bar at the top of this same screen was moved off an inset for exactly this reason
+        // and its note is above. Same answer here: the toolbar floats, the content passes under it,
+        // and each scroll view carries a matching bottom content margin so the last row can still be
+        // reached. Three glass controls over the photographs, and no line anywhere.
+        .overlay(alignment: .bottom) { if selecting { selectionToolbar } }
         .task {
             // STABLE via a persistent-backed store, so reopen is instant: render the cached list
             // synchronously first â€” no full-screen spinner on reopen â€” then refresh in the background
             // and update the cache. The spinner shows only on the very first load.
-            if let cached = GalleryCache.store[cid] { all = cached; loaded = true }
-            let fresh = await ChatService.galleryContent(cid)
+            // Hidden ones are dropped on the way IN, so the four lists that read `all` directly
+            // (files, voice, links, GIFs) get the same treatment `expandedAll` gives the grid.
+            func visible(_ m: [Message]) -> [Message] { m.filter { !HiddenMessages.isHidden($0.id) } }
+            if let cached = GalleryCache.store[cid] { all = visible(cached); loaded = true }
+            let fresh = visible(await ChatService.galleryContent(cid))
             all = fresh
             GalleryCache.store[cid] = fresh
             loaded = true
@@ -348,6 +371,14 @@ struct MediaGalleryView: View {
             ToolbarItem(placement: .topBarLeading) {
                 Button { exitSelection() } label: { Image(systemName: "xmark") }.tint(.primary)
             }
+            // Select All lives on the bar rather than in the "…" menu, because the "…" is not shown
+            // in selection mode at all — the X takes its place. See `selectAll` for the ceiling.
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Select All") { selectAll() }
+                    .tint(.primary)
+                    .disabled(currentItems.isEmpty
+                              || selection.count >= min(Self.selectionCap, currentItems.count))
+            }
         } else if showsMoreMenu {
             ToolbarItem(placement: .topBarTrailing) { moreMenu }
         }
@@ -409,6 +440,11 @@ struct MediaGalleryView: View {
         Button(action: action) { if on { Label(title, systemImage: "checkmark") } else { Text(title) } }
     }
 
+    /// The vertical room the floating toolbar needs: a 48pt control plus its own 8pt of air top and
+    /// bottom. Stated so the scroll views can reserve a matching bottom margin — a floating bar and
+    /// the content that must clear it cannot each guess. Same contract as `MediaTabBar.slotHeight`.
+    static let selectionBarSlot: CGFloat = 48 + 16
+
     private var selectionToolbar: some View {
         HStack {
             // Share â€” 48px real Liquid Glass circle.
@@ -468,6 +504,8 @@ struct MediaGalleryView: View {
         // bar being an overlay. A content margin does what padding cannot: it moves where the content
         // STARTS without moving where it is allowed to go.
         .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
+        // ...and the same trick at the bottom for the selection toolbar. See `selectionToolbar`.
+        .contentMargins(.bottom, selecting ? Self.selectionBarSlot : 0, for: .scrollContent)
     }
 
     // Group items into date sections ("Today", "Yesterday", "This Month", "June", "June 2024"),
@@ -609,6 +647,8 @@ struct MediaGalleryView: View {
             }
         }
         .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
+        // ...and the same trick at the bottom for the selection toolbar. See `selectionToolbar`.
+        .contentMargins(.bottom, selecting ? Self.selectionBarSlot : 0, for: .scrollContent)
     }
 
     private func voiceRow(_ m: Message) -> some View {
@@ -646,6 +686,8 @@ struct MediaGalleryView: View {
             }
         }
         .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
+        // ...and the same trick at the bottom for the selection toolbar. See `selectionToolbar`.
+        .contentMargins(.bottom, selecting ? Self.selectionBarSlot : 0, for: .scrollContent)
     }
 
     private func linkRow(_ m: Message) -> some View {
@@ -668,7 +710,7 @@ struct MediaGalleryView: View {
         .onTapGesture { if selecting { toggle(m) } else { goToChat(m) } }
         .contextMenu {
             if !selecting {
-                Button { goToChat(m) } label: { Label("Go to Chat", systemImage: "bubble.left") }
+                Button { goToChat(m) } label: { goToChatLabel }
                 if let url { Button { UIApplication.shared.open(url) } label: { Label("Open Link", systemImage: "safari") } }
             }
         }
@@ -694,6 +736,8 @@ struct MediaGalleryView: View {
             }
         }
         .contentMargins(.top, MediaTabBar.slotHeight, for: .scrollContent)
+        // ...and the same trick at the bottom for the selection toolbar. See `selectionToolbar`.
+        .contentMargins(.bottom, selecting ? Self.selectionBarSlot : 0, for: .scrollContent)
     }
 
     private func fileRow(_ m: Message) -> some View {
@@ -717,7 +761,7 @@ struct MediaGalleryView: View {
         .onTapGesture { if selecting { toggle(m) } else { goToChat(m) } }
         .contextMenu {
             if !selecting {
-                Button { goToChat(m) } label: { Label("Go to Chat", systemImage: "bubble.left") }
+                Button { goToChat(m) } label: { goToChatLabel }
             }
         }
     }
@@ -733,8 +777,21 @@ struct MediaGalleryView: View {
     // ids never contain "-", so the first segment is always the parent.
     private func parentMessageId(_ id: String) -> String { id.split(separator: "-").first.map(String.init) ?? id }
 
+    /// ⛔ HIS OWN OUTLINE BUBBLE, NOT `bubble.left` — owner, 2026-08-23: "go to chat icon update use
+    /// my custom chat icon the Outline". `ic_chat_outline` is already in the bundle; the Settings
+    /// page has drawn it for weeks and the long-press menus were the last place still on Apple's.
+    ///
+    /// ⚠️ `MenuIcon` RATHER THAN A PLAIN `Image`, and that is the whole reason this is a property.
+    /// SwiftUI hands a `.contextMenu` to UIKit, which builds a real `UIMenu` and tints its images
+    /// with the PRESENTING view's `tintColor` — somewhere no SwiftUI `.tint` reaches. A template
+    /// image put here would come out system blue, which is his 2026-08-16 report about these exact
+    /// three menus. `MenuIcon(ink:)` bakes the colour into the bitmap so there is no tint to take.
+    @ViewBuilder private var goToChatLabel: some View {
+        Label { Text("Go to Chat") } icon: { MenuIcon("ic_chat_outline", ink: .label) }
+    }
+
     @ViewBuilder private func itemMenu(_ m: Message) -> some View {
-        Button { goToChat(m) } label: { Label("Go to Chat", systemImage: "bubble.left") }
+        Button { goToChat(m) } label: { goToChatLabel }
         Button { share(m) } label: { Label("Share", systemImage: "square.and.arrow.up") }
         Button { selecting = true; selection = [m.id] } label: { Label("Select", systemImage: "checkmark.circle") }
         // Delete-for-everyone is only for MY OWN media â€” received media can't be deleted from the server.
@@ -769,9 +826,39 @@ struct MediaGalleryView: View {
         // the background slid up from the bottom instead of flying. See MediaOpen.flyOrPresent.
         MediaOpen.flyOrPresent(imageUrl: poster, rectKey: key, present: present)
     }
+    /// ⛔ A HUNDRED AT A TIME, AND THE HUNDRED-AND-FIRST TAP SIMPLY DOES NOT TAKE — owner,
+    /// 2026-08-23: "user can selete only 100 images one time".
+    ///
+    /// The ceiling is real work, not a policy: Delete walks the selection one message at a time,
+    /// each a document read, a write and a Storage sweep, and Share resolves every item's bytes
+    /// before the sheet can open. Four hundred of either is a screen that looks frozen.
+    ///
+    /// ⚠️ IT REFUSES QUIETLY, AND DELIBERATELY. A tap that is already at the ceiling gives the
+    /// rejection haptic and nothing else — no alert, because an alert on the 101st of 400 taps is a
+    /// dialog he has to dismiss to carry on doing the thing it is telling him he cannot do. The
+    /// count in the toolbar is what says where he is.
+    static let selectionCap = 100
+
     private func toggle(_ m: Message) {
-        if selection.contains(m.id) { selection.remove(m.id) } else { selection.insert(m.id) }
+        if selection.contains(m.id) { selection.remove(m.id); return }
+        guard selection.count < Self.selectionCap else {
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            return
+        }
+        selection.insert(m.id)
     }
+
+    /// Everything on this tab, up to the ceiling — his "if user click selete all otomatic selete
+    /// only 100".
+    ///
+    /// ⚠️ THIS CONTROL DID NOT EXIST BEFORE TODAY. He described what Select All should do, and the
+    /// gallery's "…" menu only ever offered Select. It is added here rather than invented elsewhere
+    /// because that menu is already where selection is turned on, and it takes the FIRST hundred in
+    /// the order the grid shows them, which is newest first — the same order his finger would go in.
+    private func selectAll() {
+        selection = Set(currentItems.prefix(Self.selectionCap).map(\.id))
+    }
+
     private func exitSelection() { selecting = false; selection = [] }
 
     // Go to Chat (popToViewController: land directly on the conversation, no profile shown).
@@ -785,12 +872,37 @@ struct MediaGalleryView: View {
         NotificationCenter.default.post(name: .goToMessage, object: GoToMessage(cid: cid, messageId: parentMessageId(m.id)))
     }
 
+    /// ⛔ ONE DELETE, TWO MECHANISMS, AND HE IS NEVER ASKED WHICH — owner, 2026-08-23: "do not show
+    /// different delete options … the app should silently split the selected items internally and
+    /// apply the correct logic to each item".
+    ///
+    /// Mine go for everyone, theirs go for me. That is not a policy we chose: it is the only pair
+    /// that CAN happen. The server refuses a delete of somebody else's message, so the old version —
+    /// which filtered the selection down to my own and deleted those — did exactly half the job
+    /// silently. Select four things, two of them theirs, tap Delete, and two of them stayed on
+    /// screen with no error anywhere. That is the bug underneath his request.
+    ///
+    /// "For me" is the same local hide the chat's own Delete for Me uses, so a photo removed here is
+    /// removed in the conversation too, and one removed there no longer comes back in this grid —
+    /// see `expandedAll`, which had never consulted that list.
+    ///
+    /// ⚠️ AN ALBUM CHILD HIDES BY ITS SYNTHETIC ID (`<parent>-<index>`), which is the id this grid
+    /// shows it under. The chat has one row for the whole album and will still draw it. Hiding
+    /// somebody else's single photo out of their album of four is not a thing the chat can express,
+    /// and pretending otherwise would mean hiding all four.
     private func deleteSelected() {
-        // Only MY OWN messages â€” the server rejects deleting others', which made them reappear.
         let me = AuthService.shared.uid
-        let ids = Set(all.filter { selection.contains($0.id) && $0.authorId == me }.map(\.id))
+        // Resolved against the EXPANDED list, because that is what the grid selects from — an album
+        // child is not in `all` under the id the tile carries.
+        let picked = expandedAll.filter { selection.contains($0.id) }
+        let mine = Set(picked.filter { $0.authorId == me }.map(\.id))
+        let theirs = Set(picked.filter { $0.authorId != me }.map(\.id))
+        // Hidden BEFORE the awaits, so the grid can drop everything in one pass below rather than
+        // theirs vanishing a beat ahead of mine.
+        for id in theirs { HiddenMessages.hide(id) }
+        let ids = mine.union(theirs)
         Task {
-            for id in ids { await ChatService.deleteMessage(cid: cid, messageId: id) }
+            for id in mine { await ChatService.deleteMessage(cid: cid, messageId: id) }
             await MainActor.run {
                 all.removeAll { ids.contains($0.id) }
                 GalleryCache.store[cid] = all   // keep the reopen cache in sync (no deleted-media flash)
