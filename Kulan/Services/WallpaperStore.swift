@@ -292,6 +292,17 @@ enum ChatWallpapers {
 
     // MARK: - Active wallpaper (per chat)
 
+    /// Is there anything behind this chat's messages other than the plain app background?
+    ///
+    /// Read by the bubbles, not by the background: an incoming bubble is a flat colour on the plain
+    /// background and a blur material on anything else (see `Theme.receivedStyle`). A solid `.color`
+    /// wallpaper counts — it is still a surface the bubble can pick light off, and treating it as
+    /// "no wallpaper" would give a chat two different bubble treatments for two things the user
+    /// picked from the same screen.
+    func hasWallpaper(for cid: String) -> Bool {
+        wallpaper(for: cid) != .none
+    }
+
     func wallpaper(for cid: String) -> ChatWallpaper {
         if let c = cache[cid] { return c }
         // No per-chat pick → fall back to the all-chats default ("Apply For All Chats").

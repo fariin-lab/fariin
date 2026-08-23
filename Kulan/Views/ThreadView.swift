@@ -438,6 +438,18 @@ struct ThreadView: View {
             .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
     }
 
+    /// Does this chat have a wallpaper? Handed to every bubble, which decides its own surface from it.
+    ///
+    /// The `version` touch is the same one `ChatWallpaperBackground` makes and it is load-bearing
+    /// for the same reason: the store bumps it when the picker applies, so the bubbles and the
+    /// picture they sit on re-render together. Without it the wallpaper could appear under bubbles
+    /// still drawing themselves flat, until something else happened to invalidate them.
+    private var chatHasWallpaper: Bool {
+        let store = WallpaperStore.shared
+        _ = store.version
+        return store.hasWallpaper(for: cid)
+    }
+
     // Type-erase the heavy messages chain at the scrollStack boundary: the chain's opaque type grew past
     // the type-checker's budget ("unable to type-check this expression in reasonable time") when another
     // onChange was added. AnyView resets the complexity scrollStack sees; one wrapper, no behavior change.
@@ -1758,6 +1770,7 @@ struct ThreadView: View {
         } else {
             MessageBubble(
                 message: msg, isMe: msg.authorId == me, dark: dark, cid: cid,
+                onWallpaper: chatHasWallpaper,
                 nameFor: { personName($0) },
                 avatarFor: { conversation?.photos[$0] },
                 onReply: { m in beginReply(to: m) },
@@ -2048,6 +2061,13 @@ struct ThreadView: View {
         // left and re-opened the chat (user report). Putting it in every row's signature makes
         // the existing contentChanged→splitByRouteFlip→reloadItems path swap the cells live.
         let colorTok = chatColorSpec?.stored ?? "-"
+        // Wallpaper: the SAME shape of bug as the chat colour above, and it has to be caught the same
+        // way. Applying or removing a wallpaper changes what surface an INCOMING bubble draws (flat
+        // colour ⇄ blur material) while changing no message content at all, so without it here the
+        // picture would land under bubbles still painting themselves flat, and they would only
+        // correct themselves as scrolling recycled them — the "it fixes itself if I leave and come
+        // back" report. One bool for the whole chat, not per row.
+        let wallTok = chatHasWallpaper
         // EVERY value rowView reads eagerly must be in this key, or hosted cells keep stale content
         // (the class of bug that produced the frozen bubble corners). Added:
         //   dark          - SwiftUI bubbles baked the palette in, so flipping Dark Mode left received
@@ -2059,7 +2079,7 @@ struct ThreadView: View {
         // CONTENT AND HEIGHT (140pt card → one line of text), and height only updates through the
         // signature path. Reading it here also makes the body observe story changes at all.
         let storiesRepo = StoriesRepository.shared
-        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(term)|\(colorTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)"
+        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)"
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
@@ -2106,7 +2126,23 @@ struct ThreadView: View {
                 // Live call rows mutate in place (ringing → ongoing → final, duration, voice→video
                 // upgrade) and change no other field this string reads — same rule as `deleted`.
                 let call = m.isCall ? "\(m.callOutcome ?? "-"):\(m.callDuration ?? -1):\(m.callVideo)" : "-"
-                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)|\(cluster)|\(story)|\(unread)|\(call)"
+                // DARK, and this is the FOURTH instance of the key-vs-value mistake named above.
+                // `dark` has been in the KEY since the mixed-palette fix, which recomputes this whole
+                // dictionary on a theme flip — but every row then produced the SAME string as before,
+                // so nothing reconfigured and hosted cells kept the `dark` they were BUILT with.
+                //
+                // A SwiftUI bubble bakes it: `dark ? .white : .black` is resolved when the view value
+                // is made, unlike `.primary`, which re-resolves against the environment on its own.
+                // That is exactly the split the owner photographed — the call bubble's `.primary`
+                // title went white in dark mode while the message text beside it stayed BLACK, in the
+                // same screenshot. It also left incoming bubbles on `Material.thin` where dark mode
+                // asks for `.ultraThin`, so the surface was too heavy as well as the text unreadable.
+                //
+                // The UIKit text cells never showed it: they carry dynamic UIColors and re-resolve on
+                // `registerForTraitChanges`. So the bug only appears in a chat with a custom chat
+                // colour, because `chatColorSpec == nil` in the UIKit route guard sends EVERY row to
+                // SwiftUI there. That is why it hid for months.
+                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)"
             }
             sigCache.key = key
             sigCache.base = out
@@ -2445,7 +2481,8 @@ struct ThreadView: View {
         return UIKitBubbleModel(
             isMe: isMe, text: text, edited: m.edited,
             timeText: m.createdAt.formatted(date: .omitted, time: .shortened),
-            tick: tick, radii: radii, topSpacing: first ? 14 : 2)
+            tick: tick, radii: radii, topSpacing: first ? 14 : 2,
+            onWallpaper: chatHasWallpaper)
     }
 
     // UIKit message list. Reuses the SAME rowView, so every bubble feature is identical.
@@ -3821,7 +3858,7 @@ struct ThreadView: View {
             .padding(.horizontal, 14)
             .frame(height: 60)
             .fixedSize(horizontal: true, vertical: false)
-            .background(mine ? myBubbleFill : AnyShapeStyle(Theme.received(dark)))
+            .background(mine ? myBubbleFill : Theme.receivedStyle(dark, onWallpaper: chatHasWallpaper))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             // Tap target is ONLY the bubble — NOT the full-width row. The old .contentShape/
             // .onTapGesture sat on the outer HStack (which includes the empty-side Spacer), so
@@ -5766,12 +5803,17 @@ struct MessageBubble: View, Equatable {
             && l.isFirstInCluster == r.isFirstInCluster && l.isLastInCluster == r.isLastInCluster
             && l.otherLastRead == r.otherLastRead && l.chatColor == r.chatColor
             && l.isViewedOnce == r.isViewedOnce && l.restricted == r.restricted
+            && l.onWallpaper == r.onWallpaper
     }
 
     let message: Message
     let isMe: Bool
     let dark: Bool
     let cid: String
+    /// Is this bubble sitting on a wallpaper? Decides whether an incoming bubble is a flat colour
+    /// or a blur material. Defaults to false so a bubble drawn somewhere with no wallpaper behind it
+    /// (the pinned-messages sheet) keeps the flat surface, which is the correct answer there.
+    var onWallpaper: Bool = false
     var nameFor: (String) -> String = { _ in "" }
     var avatarFor: (String) -> String? = { _ in nil }
     var onReply: (Message) -> Void = { _ in }
@@ -5848,6 +5890,18 @@ struct MessageBubble: View, Equatable {
     // Fill behind MY bubbles: the custom chat colour if set, else the default systemBlue (adaptive
     // light/dark — see Theme.defaultBubble).
     private var myFill: AnyShapeStyle { chatColor?.fill ?? AnyShapeStyle(Theme.defaultBubble(dark)) }
+
+    // Surface behind THEIR bubbles. Flat grey on the plain background, a blur material on a
+    // wallpaper — see Theme.receivedStyle for why it stops being a colour at all. Every incoming
+    // bubble kind in this file goes through this one property so a chat can never draw a text
+    // bubble and a voice bubble on two different surfaces.
+    //
+    // ⚠️ PASSED IN AND COMPARED IN `==`, NOT READ FROM THE ENVIRONMENT, and that is deliberate.
+    // This view is wrapped in `.equatable()`, so a bubble that compares equal never re-evaluates its
+    // body; an environment read is the kind of dependency that could be skipped there and leave the
+    // new wallpaper drawn under bubbles still painting themselves flat until something else
+    // invalidated them. `dark` is passed for the same reason and this rides beside it.
+    private var theirFill: AnyShapeStyle { Theme.receivedStyle(dark, onWallpaper: onWallpaper) }
 
     // Text/meta on MY bubbles: both the custom colours AND the default systemBlue are vivid in BOTH
     // modes, so the text/glyphs are always WHITE.
@@ -6609,7 +6663,7 @@ struct MessageBubble: View, Equatable {
             // placeholder in a vivid bubble is louder than the message it replaced. Two things keep
             // it quieter than the original version he rejected — it is still a CAPSULE rather than a
             // bubble, and it still carries no time and no tick.
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)), in: Capsule())
+            .background(isMe ? myFill : theirFill, in: Capsule())
         } else if message.isAudio, message.viewOnce {
             // ONE-TIME VOICE: a pill, exactly the view-once photo's idiom further down this chain —
             // never the waveform player. The pill itself is live (it watches the engine for its one
@@ -6623,7 +6677,7 @@ struct MessageBubble: View, Equatable {
                              // is the consumption mark.
                              onOpen: { onTapImage(message) })
                 .padding(.horizontal, 15).padding(.vertical, 11)
-                .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                .background(isMe ? myFill : theirFill)
                 .clipShape(Capsule())
         } else if message.isAudio {
             // WIDTH-ON-PLAY ROOT CAUSE (deep dive): VoiceMessageView is a DETERMINISTIC 212pt wide (play
@@ -6660,7 +6714,7 @@ struct MessageBubble: View, Equatable {
             // living with it, "people are adopted to the reference app's size" (the fixed-wide, slightly
             // taller shape in VoiceMessageView).
             .padding(.vertical, 8)
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .background(isMe ? myFill : theirFill)
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if message.isFile {
             VStack(alignment: .leading, spacing: 4) {
@@ -6721,7 +6775,7 @@ struct MessageBubble: View, Equatable {
                 HStack(spacing: 0) { Spacer(minLength: 0); metaRow }   // time+tick on files (was missing)
             }
             .padding(.horizontal, 13).padding(.vertical, 10)
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .background(isMe ? myFill : theirFill)
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if let pendingKind = message.pendingMediaKind, pendingKind != "image" {
             // THE MESSAGE IS HERE, THE BYTES ARE STILL COMING. Only the recipient reaches this; the
@@ -6770,7 +6824,7 @@ struct MessageBubble: View, Equatable {
                                    height: VoiceMessageView.waveHeight)
                     }
                     .padding(.horizontal, 13).padding(.vertical, 10)
-                    .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                    .background(isMe ? myFill : theirFill)
                     .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
                 case "album":
                     // The SAME solver, the SAME aspects, the SAME width as the finished grid — see
@@ -6806,7 +6860,7 @@ struct MessageBubble: View, Equatable {
                     }
                     .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
                     .padding(.horizontal, 13).padding(.vertical, 10)
-                    .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                    .background(isMe ? myFill : theirFill)
                     .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
                 }
             }
@@ -6935,7 +6989,7 @@ struct MessageBubble: View, Equatable {
                     if hasCaption { captionBody(width: videoBox.width) }
                 }
                 .frame(width: videoBox.width)
-                .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                .background(isMe ? myFill : theirFill)
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             }
         } else if message.isAlbum {
@@ -6962,7 +7016,7 @@ struct MessageBubble: View, Equatable {
                 // definite size, and never narrower, so the timestamp stays on the trailing edge.
                 if !message.text.isEmpty { captionBody(width: albumWidth) }
             }
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .background(isMe ? myFill : theirFill)
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             // THE WHOLE-BUBBLE UPLOAD RING IS GONE (the agreed per-item spec): every sending tile
             // now carries its own ring, its own bytes and its own X — see `albumTile`. One ring
@@ -6989,7 +7043,7 @@ struct MessageBubble: View, Equatable {
             }
             .foregroundStyle((isMe ? onMyBubble : (dark ? Color.white : .black)).opacity(viewed ? 0.6 : 1))
             .padding(.horizontal, 15).padding(.vertical, 11)
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .background(isMe ? myFill : theirFill)
             .clipShape(Capsule())
             .contentShape(Capsule())
             .onTapGesture {
@@ -7134,7 +7188,7 @@ struct MessageBubble: View, Equatable {
                     if hasCaption { captionBody(width: box.width) }
                 }
                 .frame(width: box.width)
-                .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                .background(isMe ? myFill : theirFill)
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             }
         } else if let poll = message.poll {
@@ -7147,7 +7201,7 @@ struct MessageBubble: View, Equatable {
             .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
             .padding(12)
             .frame(width: maxBubbleWidth * 0.9)
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .background(isMe ? myFill : theirFill)
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if let loc = message.locationCard {
             // SHARED LOCATION card: pin + label + coordinates; tap opens Apple Maps at the spot.
@@ -7169,7 +7223,7 @@ struct MessageBubble: View, Equatable {
             .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
             .padding(12)
             .frame(width: maxBubbleWidth * 0.85)
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .background(isMe ? myFill : theirFill)
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             .contentShape(Rectangle())
             .onTapGesture {
@@ -7207,7 +7261,7 @@ struct MessageBubble: View, Equatable {
             .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
             .padding(12)
             .frame(width: maxBubbleWidth)
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .background(isMe ? myFill : theirFill)
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         } else if jumbomojiCount > 0, message.replyTo == nil || message.replyTo?.isStatus == true,
                   firstLinkURL == nil {
@@ -7300,7 +7354,7 @@ struct MessageBubble: View, Equatable {
             }
             .padding(.horizontal, 15)
             .padding(.vertical, 10)
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .background(isMe ? myFill : theirFill)
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
         }
     }

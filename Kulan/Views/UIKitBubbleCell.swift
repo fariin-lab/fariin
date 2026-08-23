@@ -23,6 +23,11 @@ struct UIKitBubbleModel: Equatable {
     var tick: Tick
     var radii: Radii
     var topSpacing: CGFloat   // cluster spacing above this bubble (14 first-in-cluster, else 2)
+    /// Is this bubble sitting on a wallpaper? An incoming bubble is a flat fill without one and a
+    /// blur material with one — see `Theme.receivedStyle`, which this path has to agree with or a
+    /// chat draws two different incoming surfaces depending on which route a message took.
+    /// Equatable, so applying a wallpaper reconfigures every visible bubble by itself.
+    var onWallpaper: Bool = false
 }
 
 // ===== Shared palette (dynamic — adapts to light/dark like the SwiftUI Theme) =====
@@ -33,6 +38,8 @@ private enum BubblePalette {
     }
     static let myFill = UIColor { $0.userInterfaceStyle == .dark ? hex(0x0A84FF) : hex(0x007AFF) }   // Theme.defaultBubble
     static let receivedFill = UIColor { $0.userInterfaceStyle == .dark ? hex(0x26262B) : hex(0xF2F2F2) } // Theme.received (owner's F2F2F2)
+    // Theme.bg — the Reduce Transparency substitute for the material, not the received grey. See applySurface.
+    static let plainBackground = UIColor { $0.userInterfaceStyle == .dark ? hex(0x121214) : hex(0xFFFFFF) }
     static let myText = UIColor.white
     static let receivedText = UIColor { $0.userInterfaceStyle == .dark ? .white : .black }
     static let myMeta = UIColor.white.withAlphaComponent(0.7)
@@ -57,6 +64,13 @@ final class UIKitBubbleView: UIView {
     private var model: UIKitBubbleModel?
     private(set) var lastCornerPath: UIBezierPath?   // exact bubble outline → context-menu lift preview
 
+    // The blur behind an INCOMING bubble on a wallpaper. Built on first use and kept after that: a
+    // recycled cell swings between the two surfaces as it is reused for a sent and a received
+    // message, and building a visual-effect view mid-scroll is the expensive half.
+    private var blurView: UIVisualEffectView?
+    private let blurMask = CAShapeLayer()
+    private var blurStyle: UIBlurEffect.Style?   // what the live blur was built for → rebuild only on a change
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         layer.addSublayer(bubbleLayer)
@@ -76,8 +90,49 @@ final class UIKitBubbleView: UIView {
         model = m
         textLabel.attributedText = Self.textAttr(m)   // body + invisible trailing meta spacer
         metaLabel.attributedText = Self.metaAttr(m)
-        bubbleLayer.fillColor = (m.isMe ? BubblePalette.myFill : BubblePalette.receivedFill).cgColor
+        applySurface(m)
         setNeedsLayout()
+    }
+
+    /// Paint the bubble, or stop painting it and let the wallpaper through instead.
+    ///
+    /// MY bubbles are always a fill — a chat colour is a colour and a wallpaper does not change that.
+    /// THEIRS is a fill only while the chat has no wallpaper; with one, the shape layer goes fully
+    /// transparent and a masked blur takes the same outline. Both surfaces exist in one view because
+    /// cells are recycled: the very next message this view draws may be the other kind.
+    private func applySurface(_ m: UIKitBubbleModel) {
+        // Reduce Transparency drops the material here too, and falls back to the plain background
+        // rather than the received grey — the same substitute Theme.receivedStyle makes, checked in
+        // the same order, so the two render paths cannot disagree for a user who has it on.
+        let reduced = UIAccessibility.isReduceTransparencyEnabled
+        guard !m.isMe, m.onWallpaper, !reduced else {
+            let fill: UIColor = m.isMe ? BubblePalette.myFill
+                : (m.onWallpaper && reduced ? BubblePalette.plainBackground : BubblePalette.receivedFill)
+            bubbleLayer.fillColor = fill.cgColor
+            blurView?.isHidden = true
+            return
+        }
+        // Ultra-thin in dark, thin in light — the same split as Theme.receivedStyle, for the same
+        // reason: dark mode is protecting the picture, light mode is protecting black text on it.
+        let style: UIBlurEffect.Style = traitCollection.userInterfaceStyle == .dark
+            ? .systemUltraThinMaterial : .systemThinMaterial
+        // The fill has to go to CLEAR, not stay underneath. A blur over an opaque grey samples the
+        // grey and nothing else, which is the flat bubble again with the cost of a blur on top.
+        bubbleLayer.fillColor = UIColor.clear.cgColor
+        if blurView == nil {
+            let v = UIVisualEffectView(effect: UIBlurEffect(style: style))
+            v.isUserInteractionEnabled = false
+            v.layer.mask = blurMask
+            // Below both labels. The shape layer is not view-backed and is transparent whenever this
+            // blur is showing, so their relative order costs nothing.
+            insertSubview(v, at: 0)
+            blurView = v
+            blurStyle = style
+        } else if blurStyle != style {
+            blurView?.effect = UIBlurEffect(style: style)   // light↔dark switch on a live bubble
+            blurStyle = style
+        }
+        blurView?.isHidden = false
     }
 
     // ── Attributed strings ──
@@ -177,6 +232,19 @@ final class UIKitBubbleView: UIView {
         let path = Self.cornerPath(bubble, m.radii)
         bubbleLayer.path = path.cgPath
         lastCornerPath = path
+        // The blur wears the bubble's own outline, not a corner radius. These bubbles have four
+        // different radii (the cluster shape squares off the side that continues), so a rounded-rect
+        // mask would round the two corners the shape deliberately keeps sharp.
+        if let blur = blurView, !blur.isHidden {
+            // No implicit animation: the mask is re-pathed on every layout pass, and a cell being
+            // reused mid-scroll would otherwise animate its old outline into its new one.
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            blur.frame = self.bounds
+            blurMask.frame = self.bounds
+            blurMask.path = path.cgPath
+            CATransaction.commit()
+        }
         textLabel.frame = CGRect(x: BubblePalette.hPad, y: BubblePalette.vPad,
                                  width: bubble.width - BubblePalette.hPad * 2,
                                  height: bubble.height - BubblePalette.vPad * 2)

@@ -411,7 +411,10 @@ struct AnnouncementRow: View {
                 if !usableButtons.isEmpty { buttonStack }
             }
             .frame(maxWidth: 320, alignment: .leading)
-            .background(Theme.received(dark))
+            // An announcement is an incoming bubble and this channel takes a wallpaper like any
+            // other chat, so it resolves its surface the same way. Read at draw time rather than
+            // passed in: these rows are built in two places and neither threads chat state through.
+            .background(Theme.receivedStyle(dark, onWallpaper: WallpaperStore.shared.hasWallpaper(for: OfficialChannel.cid)))
             .clipShape(UnevenRoundedRectangle(cornerRadii: corners, style: .continuous))
             Spacer(minLength: 0)
         }
