@@ -3177,11 +3177,7 @@ private struct ChatPeekPreview: View {
                 ScrollView {
                     VStack(spacing: 3) {
                         ForEach(msgs) { m in
-                            // The platter draws the real wallpaper above, so its bubbles have to
-                            // resolve their surface against it exactly as the chat does — otherwise
-                            // the peek shows flat grey bubbles on a picture the chat itself blurs.
-                            MessageBubble(message: m, isMe: m.authorId == me, dark: scheme == .dark, cid: cid,
-                                          onWallpaper: WallpaperStore.shared.hasWallpaper(for: cid))
+                            MessageBubble(message: m, isMe: m.authorId == me, dark: scheme == .dark, cid: cid)
                                 .allowsHitTesting(false)   // the platter is not interactive
                         }
                     }

@@ -1442,6 +1442,45 @@ final class CallService: NSObject {
         externalAudioAvailable = hasExternalInput || audioRoute == .external
     }
 
+    // MARK: - What the audio is coming out of
+
+    /// The glyph for the CURRENT external route. It used to be one hardcoded `headphones` for
+    /// everything, which drew a pair of over-ear cans while the sound was going to AirPods (owner,
+    /// 2026-08-23, with the picture: "it has this old earbuds instead modern bluetooth").
+    ///
+    /// Apple ships no Bluetooth glyph — the mark is trademarked and it is not in SF Symbols — so the
+    /// modern way to say "this is going somewhere wireless" is to draw THE DEVICE, which is exactly
+    /// what iOS itself does. AirPods get AirPods, a car gets a car, a cable still gets the cans,
+    /// because for a wired headset the cans are the true picture rather than an old one.
+    ///
+    /// Read live from the session on every call: a route can change under us at any moment and the
+    /// view re-reads this whenever `audioRoute` moves.
+    var externalRouteIcon: String {
+        guard let out = AVAudioSession.sharedInstance().currentRoute.outputs.first else { return "headphones" }
+        let name = out.portName.lowercased()
+        switch out.portType {
+        case .carAudio:
+            return "car.fill"
+        case .bluetoothA2DP, .bluetoothHFP, .bluetoothLE:
+            if name.contains("airpods max") { return Self.symbol("airpodsmax", or: "headphones") }
+            if name.contains("airpods pro") { return Self.symbol("airpodspro", or: "headphones") }
+            if name.contains("airpod")      { return Self.symbol("airpods.gen3", or: "airpods") }
+            if name.contains("beats")       { return Self.symbol("beats.headphones", or: "headphones") }
+            // Some other wireless headset. Cans are honest here — it could be anything, and guessing
+            // earbuds would draw a picture of a device the person is not wearing.
+            return "headphones"
+        default:
+            return "headphones"   // wired, or an oddity: the cable really is a pair of headphones
+        }
+    }
+
+    /// ⚠️ A MISSING SF SYMBOL RENDERS AS NOTHING AT ALL — no crash, no warning, just a blank circle
+    /// where the button was. These names are device-specific and come and go between SF Symbols
+    /// releases, so every one of them is checked before it is handed to the view.
+    private static func symbol(_ name: String, or fallback: String) -> String {
+        UIImage(systemName: name) != nil ? name : fallback
+    }
+
     // Ringback the CALLER hears while waiting (generated tone, looped). Ensure the
     // audio unit is on + allow mixing so the player outputs while CallKit owns the session.
     private func startRingback() {

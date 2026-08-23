@@ -602,7 +602,9 @@ struct CallView: View {
     @ViewBuilder private var speakerCircle: some View {
         if call.externalAudioAvailable {
             ZStack {
-                Image(systemName: call.audioRoute == .external ? "headphones" : "speaker.wave.2.fill")
+                // The external glyph is the DEVICE, not one generic pair of cans — see
+                // CallService.externalRouteIcon.
+                Image(systemName: call.audioRoute == .external ? call.externalRouteIcon : "speaker.wave.2.fill")
                     .font(.system(size: 20, weight: .semibold))
                     .contentTransition(.symbolEffect(.replace))
                     .foregroundStyle(call.audioRoute == .earpiece ? .white : .black)
