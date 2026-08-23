@@ -2165,15 +2165,66 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // MARK: - Custom long-press menu (experiment)
 
+    /// ⛔ A LIFTED BUBBLE THAT IS A MATERIAL NEEDS A SURFACE OF ITS OWN — owner, 2026-08-23, two
+    /// photographs of the same bug wearing two faces: on the UIKit path the lifted bubble came up a
+    /// flat near-black block, on the SwiftUI path it came up with no background at all, just text
+    /// floating on the menu's backdrop.
+    ///
+    /// ⚠️ BOTH ARE `snapshotView`, WHICH DOES NOT RENDER VISUAL EFFECTS. UIKit's snapshot is a cheap
+    /// replica, not a rasterisation, and a blur is not something it can copy — so whatever the
+    /// replica does with the empty space is undefined and differs between a `UIVisualEffectView` and
+    /// a SwiftUI `Material`. Neither is a colour that was chosen wrongly; there is no colour at all.
+    ///
+    /// And it could not simply be re-blurred at its new home: a material samples what is BEHIND it,
+    /// and behind the lift is the menu's own blurred, dimmed backdrop. A bubble sampling that is a
+    /// blur of a blur, which is the grey smear rather than the bubble.
+    ///
+    /// So the lifted copy wears the flat received colour — the exact one this chat would use if it
+    /// had no wallpaper. It is the same substitution the app already makes for Reduce Transparency,
+    /// and it is only ever the LIFT: the bubble on the list behind is untouched and still a material.
+    ///
+    /// ⚠️ ONLY FOR BUBBLES THAT ARE ACTUALLY TRANSLUCENT, which is incoming-on-a-wallpaper and
+    /// nothing else. Mine is a chat colour, snapshots the way it always has, and must not be given a
+    /// second surface underneath it.
+    private func backed(_ snap: UIView, size: CGSize, path: UIBezierPath?,
+                        radius: CGFloat, bottomInset: CGFloat = 0) -> UIView {
+        let container = UIView(frame: CGRect(origin: .zero, size: size))
+        container.backgroundColor = .clear
+        let back = UIView(frame: CGRect(x: 0, y: 0,
+                                        width: size.width,
+                                        height: max(0, size.height - bottomInset)))
+        back.backgroundColor = BubblePalette.receivedFill
+        if let path {
+            // The bubble's own outline, so a cluster's squared-off corner stays squared off.
+            let mask = CAShapeLayer()
+            mask.path = path.cgPath
+            back.layer.mask = mask
+        } else {
+            back.layer.cornerRadius = radius
+            back.layer.cornerCurve = .continuous
+        }
+        container.addSubview(back)
+        snap.frame = container.bounds
+        container.addSubview(snap)
+        return container
+    }
+
     /// The real bubble to hide/squeeze, an already-taken snapshot of it, and its window frame.
     /// Snapshot BEFORE the squeeze runs, so the preview is the unsqueezed truth.
     private func bubbleSource(at indexPath: IndexPath, id: String)
         -> (source: UIView, snapshot: UIView, frame: CGRect)? {
         guard let cell = collectionView.cellForItem(at: indexPath) else { return nil }
         if let native = cell as? UIKitBubbleCell {
-            guard let snap = native.previewBubble.snapshotView(afterScreenUpdates: false) else { return nil }
-            let frame = native.previewBubble.convert(native.previewBubble.bounds, to: nil)
-            return (native.previewBubble, snap, frame)
+            let bubble = native.previewBubble
+            guard let snap = bubble.snapshotView(afterScreenUpdates: false) else { return nil }
+            let frame = bubble.convert(bubble.bounds, to: nil)
+            // A material has no pixels of its own to copy — see `backed`. The bubble's OWN outline is
+            // available on this path, so the backing wears the real cluster corners rather than a
+            // guessed radius.
+            let out = bubble.isTranslucent
+                ? backed(snap, size: frame.size, path: bubble.lastCornerPath, radius: 18)
+                : snap
+            return (bubble, out, frame)
         }
         // Hosted (SwiftUI) row: crop the row snapshot to the published bubble rect. The bubble draws
         // its own rounded corners over a clear row background, so the crop needs no masking. When no
@@ -2183,7 +2234,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             guard let snap = cell.contentView.resizableSnapshotView(from: inContent,
                                                                     afterScreenUpdates: false,
                                                                     withCapInsets: .zero) else { return nil }
-            return (cell.contentView, snap, rect)
+            // ⚠️ THE BACKING STOPS AT THE BUBBLE'S REAL BOTTOM EDGE. `rect` was published with the
+            // reaction badge's 13pt overhang added so the lift would not slice the badge, and that
+            // extension is transparent row space — painting a surface over it would draw a bubble
+            // taller than the one on screen, with a heart floating inside it.
+            let out = CMBubbleRects.isTranslucent(id)
+                ? backed(snap, size: rect.size, path: nil, radius: CMBubbleRects.radius(id),
+                         bottomInset: CMBubbleRects.overhang(id))
+                : snap
+            return (cell.contentView, out, rect)
         }
         guard let snap = cell.contentView.snapshotView(afterScreenUpdates: false) else { return nil }
         return (cell.contentView, snap, cell.contentView.convert(cell.contentView.bounds, to: nil))
@@ -2395,14 +2454,23 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     // Page history in when the reader gets within three screens of the OLDEST loaded row â€” which under the
-    // flip is the far end of the content, not the near end. Throttled to one load per 2s. There is no
-    // zone-entry debounce: a short page leaves the reader still inside the zone, and the time throttle
-    // alone lets the chain continue until content outruns the threshold.
+    // flip is the far end of the content, not the near end. There is no zone-entry debounce: a short page
+    // leaves the reader still inside the zone, and the throttle alone lets the chain continue until
+    // content outruns the threshold.
+    //
+    // âš ï¸ THE THROTTLE WAS 2 SECONDS AND IT WAS THE WALL. Three screens of lead is generous, but a hard
+    // flick clears three screens in well under two seconds â€” so the reader arrived at the oldest row
+    // with the next page still forbidden, and the scroll stopped dead. That is the "their scroll never
+    // stops until you reach the beginning" the owner is describing, and it was our own limit doing it,
+    // not the network.
+    //
+    // It only needs to stop a burst of duplicate asks in the same instant; the repository already
+    // refuses a second `loadOlder` while one is in flight, so serialising is not this timer's job.
     private func autoLoadMoreIfNeeded() {
         guard didReveal, Date() >= captureFreezeUntil else { return }
         let threshold = max(72, collectionView.bounds.height * 3)
         guard maxContentOffsetY - collectionView.contentOffset.y <= threshold,
-              Date().timeIntervalSince(lastLoadOlderAt) > 2 else { return }
+              Date().timeIntervalSince(lastLoadOlderAt) > 0.3 else { return }
         lastLoadOlderAt = Date()
         coordinator.parent.onReachedTop()
     }

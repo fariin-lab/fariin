@@ -105,7 +105,11 @@ final class ThreadRepository {
     private var presenceListener: ListenerRegistration?
     let cid: String
 
-    private let pageSize = 40
+    /// 60, which is the reference messenger's own page size for exactly this job. 40 was a smaller
+    /// bite than anybody else takes: on a fast flick the reader clears a page before the next one
+    /// lands, and the wall you hit is the gap between pages rather than the network being slow.
+    /// Bigger bites, fewer gaps, and the round trips per screen actually go DOWN.
+    private let pageSize = 60
     // The standard approach caps the in-memory window (~500) and LRU-drops the oldest — an unbounded
     // window is a memory + main-thread cost that feeds watchdog kills on huge chats. We trim on live
     // commits above a high-water mark (paging older may exceed the cap briefly; the next live commit
