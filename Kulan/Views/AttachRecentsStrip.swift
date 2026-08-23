@@ -105,6 +105,10 @@ struct AttachRecentsStrip: View {
     /// album list start this far down (see `grid`), so nothing sits UNDER an opaque bar at rest.
     private let headerHeight: CGFloat = 56
 
+    /// True once the list has moved off its top, which is the only moment there are photographs
+    /// behind the header. Drives the bar's material — see `header`.
+    @State private var scrolled = false
+
     var body: some View {
         // THE PHOTOS RUN UNDER THE HEADER (his reference, 2026-08-14: "make the white follow the
         // photo… swipe down and it comes back"). It used to be the first row of a VStack, which is a
@@ -208,11 +212,29 @@ struct AttachRecentsStrip: View {
         // pictures happened to be behind them — and the way into Albums is that chevron, so a
         // control nobody can see is a door nobody can find.
         //
-        // The page's own background, not white: this sheet follows the colour scheme, and a
-        // hardcoded white bar would be a bright slab across a dark picker. Same reasoning as the
-        // rest of the app — see the accent-is-white-at-night note. Extended under the top safe area
-        // so it reads as the sheet's own header rather than a stripe floating in it.
-        .background(Color(.systemBackground).ignoresSafeArea(edges: .top))
+        // ⛔ ONLY ONCE PHOTOGRAPHS ARE ACTUALLY BEHIND IT (owner, 2026-08-23, holding this sheet next
+        // to the Add-to-Story one: "when u story the photos, when swipe up that top bar follow and
+        // cool i like; when u in chat its status wont follow").
+        //
+        // The story sheet gets that for nothing because it uses a REAL navigation bar, and iOS gives
+        // those the scroll edge effect: clear while the scroll rests at the top, material once
+        // content passes underneath. This header is hand-built, so it had a permanent
+        // `Color(.systemBackground)` slab and could never react to anything.
+        //
+        // The 2026-08-17 reason for that slab still holds and is NOT being undone: "Recents ▾" sat
+        // directly on the grid and dissolved into whatever pictures were behind it, and that chevron
+        // is the only door into Albums. It stays legible here for a different reason — the scroll
+        // content already reserves `headerHeight` at the top (see `.contentMargins` on both lists),
+        // so AT REST there is nothing behind this bar but the sheet's own background. Only scrolling
+        // brings photographs under it, and that is exactly when the material arrives.
+        //
+        // A material rather than the flat page colour, because at that point it has a picture to
+        // blur, which is the whole look he is pointing at.
+        .background {
+            if scrolled {
+                Rectangle().fill(.bar).ignoresSafeArea(edges: .top)
+            }
+        }
     }
 
     // Caption + Send bar shown while items are selected (replaces the source row). The selected COUNT is
@@ -308,6 +330,12 @@ struct AttachRecentsStrip: View {
         }
         // Starts the Camera tile and the first row of photos clear of the header bar. See `body`.
         .contentMargins(.top, headerHeight, for: .scrollContent)
+        .onScrollGeometryChange(for: Bool.self) { g in
+            g.contentOffset.y + g.contentInsets.top > 1
+        } action: { _, now in
+            guard scrolled != now else { return }
+            withAnimation(.easeOut(duration: 0.18)) { scrolled = now }
+        }
     }
 
     // Native-style album list (Recents, Favorites, Videos, Selfies, Live Photos, Panoramas, user albums).
@@ -333,6 +361,12 @@ struct AttachRecentsStrip: View {
         }
         // Same as the grid: the first album row is not born under the bar.
         .contentMargins(.top, headerHeight, for: .scrollContent)
+        .onScrollGeometryChange(for: Bool.self) { g in
+            g.contentOffset.y + g.contentInsets.top > 1
+        } action: { _, now in
+            guard scrolled != now else { return }
+            withAnimation(.easeOut(duration: 0.18)) { scrolled = now }
+        }
     }
 
     private func selectAlbum(_ album: AttachAlbum) {
