@@ -29,13 +29,17 @@ import UIKit
 @MainActor final class WallpaperBlurState: Equatable {
     let image: UIImage
     let frame: CGRect
+    /// Whose wallpaper this is — the slice uses it to find the chat's live anchor view, because the
+    /// state outlives any one visit to the chat (it is cached) and a view reference must not.
+    let cid: String
     let id: UInt
 
     private static var counter: UInt = 0
 
-    fileprivate init(image: UIImage, frame: CGRect) {
+    fileprivate init(image: UIImage, frame: CGRect, cid: String) {
         self.image = image
         self.frame = frame
+        self.cid = cid
         Self.counter &+= 1
         self.id = Self.counter
     }
@@ -63,7 +67,7 @@ import UIKit
         if let hit = cache[key] { return hit }
         guard let source = renderWallpaper(cid: cid, dark: dark, size: frame.size),
               let blurred = blurred(source, dark: dark) else { return nil }
-        let state = WallpaperBlurState(image: blurred, frame: frame)
+        let state = WallpaperBlurState(image: blurred, frame: frame, cid: cid)
         // One chat is open at a time and the official channel is the other; anything past a
         // handful is a theme flip or a rotation that will not come back soon.
         if cache.count >= 4 { cache.removeAll() }
@@ -71,8 +75,38 @@ import UIKit
         return state
     }
 
-    /// Where a full-screen chat's wallpaper sits: the window. `ChatWallpaperBackground` is drawn with
-    /// `.ignoresSafeArea()` behind the whole screen, so its origin is the window's origin.
+    // MARK: - The anchor
+
+    /// ⛔ THE SLICES ARE POSITIONED AGAINST THIS VIEW, NOT AGAINST THE WINDOW — his 2026-08-23
+    /// "profile → All Media → back and the bubbles lose their colour" screenshot, and a shortcut of
+    /// mine the reference app deliberately does not take.
+    ///
+    /// Converting from the window is only right while the chat is sitting still AT the window's
+    /// origin. Coming back from a pushed screen, the chat re-enters the hierarchy mid-slide; every
+    /// slice repositions at that moment (`didMoveToWindow`), bakes the transition's offset into its
+    /// frame, and nothing runs afterwards to correct it because nothing scrolled. The image ends up
+    /// shifted sideways: short bubbles fall entirely outside it and go CLEAR — his "using background
+    /// color" — and wide ones show a displaced dark patch beside themselves.
+    ///
+    /// The reference converts from a reference view INSIDE the conversation screen
+    /// (`convert(referenceView.bounds, from: referenceView)`), so the bubble and the wallpaper slide
+    /// together and the conversion cancels the slide at every instant. `WallpaperAnchor` is ours: an
+    /// inert view laid exactly over the chat's wallpaper, registered per chat. Weak values, so a
+    /// closed chat cleans up after itself.
+    private static let anchors = NSMapTable<NSString, UIView>(keyOptions: .copyIn,
+                                                              valueOptions: .weakMemory)
+
+    static func registerAnchor(_ view: UIView, for cid: String) {
+        anchors.setObject(view, forKey: cid as NSString)
+    }
+
+    static func anchor(for cid: String) -> UIView? {
+        anchors.object(forKey: cid as NSString)
+    }
+
+    /// Where a full-screen chat's wallpaper sits once settled: the window. `ChatWallpaperBackground`
+    /// is drawn `.ignoresSafeArea()` behind the whole screen. This is the SIZE the picture is made
+    /// at, and the positioning fallback for a slice whose chat has no live anchor.
     static var windowFrame: CGRect {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         let window = scenes.flatMap(\.windows).first(where: \.isKeyWindow) ?? scenes.first?.windows.first
@@ -234,7 +268,14 @@ import UIKit
         // the wallpaper lagging behind the bubble it is supposed to be under.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        imageView.frame = convert(state.frame, from: nil)
+        // Against the chat's own anchor when it is live and on this window — transition-proof, see
+        // `WallpaperBlur.registerAnchor`. The window fallback only serves a slice drawn somewhere
+        // its chat's wallpaper is not (which today is nowhere: the previews take the material).
+        if let ref = WallpaperBlur.anchor(for: state.cid), ref.window === window {
+            imageView.frame = convert(ref.bounds, from: ref)
+        } else {
+            imageView.frame = convert(state.frame, from: nil)
+        }
         CATransaction.commit()
     }
 
@@ -271,5 +312,44 @@ struct WallpaperBlurSlice: UIViewRepresentable {
     func updateUIView(_ v: WallpaperBlurSliceView, context: Context) {
         v.state = state
         v.reposition()
+    }
+}
+
+// MARK: - The anchor view
+
+/// Inert and invisible; its only job is to BE somewhere — laid exactly over a chat's wallpaper so
+/// the slices have a coordinate space that travels with the screen. Registered on every window
+/// attach (a nav pop re-adds the chat's view), and each attach repositions every live slice, so the
+/// first frame after a return is already right.
+private final class WallpaperAnchorView: UIView {
+    var cid: String = "" {
+        didSet { if window != nil { WallpaperBlur.registerAnchor(self, for: cid) } }
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil, !cid.isEmpty else { return }
+        WallpaperBlur.registerAnchor(self, for: cid)
+        WallpaperBlurSliceView.repositionAll()
+    }
+}
+
+/// Rides as an overlay on the chat's `ChatWallpaperBackground` — and ONLY the chat's. The previews
+/// draw the same wallpaper view elsewhere at other sizes; anchoring one of those would point every
+/// slice in the real chat at it.
+struct WallpaperAnchor: UIViewRepresentable {
+    let cid: String
+
+    func makeUIView(context: Context) -> UIView {
+        let v = WallpaperAnchorView()
+        v.isUserInteractionEnabled = false
+        v.backgroundColor = .clear
+        v.isAccessibilityElement = false
+        v.cid = cid
+        return v
+    }
+
+    func updateUIView(_ v: UIView, context: Context) {
+        (v as? WallpaperAnchorView)?.cid = cid
     }
 }
