@@ -894,7 +894,11 @@ struct RenderedTextStory {
                        w: StoryText.linkCardWidthFraction,
                        h: cardH / renderH,
                        rotation: 0,
-                       url: l.url.absoluteString)
+                       url: l.url.absoluteString,
+                       // ⛔ WITHOUT THIS THE FRACTIONS ABOVE ARE MEANINGLESS TO THE VIEWER. They are
+                       // measured against a 1:2.5 file and the viewer shows the middle of it, so it
+                       // has to know the shape to undo the crop. See `StoryTapTarget.aspect`.
+                       aspect: Double(renderW / renderH))
     }
     return RenderedTextStory(data: data, linkTap: tap)
 }

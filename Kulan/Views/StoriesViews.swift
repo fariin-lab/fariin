@@ -1572,7 +1572,12 @@ struct StoryViewer: View {
                         taps: s.stickers.compactMap { t in
                             guard let u = URL(string: t.url) else { return nil }
                             return StoryUI.StoryTapArea(x: t.x, y: t.y, w: t.w, h: t.h,
-                                                        rotation: t.rotation, url: u)
+                                                        rotation: t.rotation, url: u,
+                                                        // The shape the fractions were measured
+                                                        // against, so the viewer can undo the crop
+                                                        // it shows the picture with. See
+                                                        // `StoryTapTarget.aspect`.
+                                                        aspect: t.aspect)
                         },
                         date: timeAgo(s.createdAt),
                         isLiked: StoryPrefs.isStoryLiked(s.id),   // heart stays red on reopen

@@ -171,11 +171,29 @@ public struct StoryTapArea: Identifiable, Hashable {
     public var rotation: Double   // radians
     public var url: URL
 
+    /// ⛔ WIDTH OVER HEIGHT OF THE FILE THESE FRACTIONS WERE MEASURED AGAINST, when the host knows it.
+    ///
+    /// ⚠️ THE NOTE ABOVE IS RIGHT THAT A FRACTION TRAVELS AND A POINT DOES NOT, AND INCOMPLETE. A
+    /// fraction of WHAT is the missing half: these are fractions of the FILE, and this view lays
+    /// them over the CARD, which is a different shape. The picture is drawn to fill, so a file taller
+    /// than the card has its top and bottom cropped away — and every fraction inside it then means
+    /// something else on screen.
+    ///
+    /// It went unnoticed because a photo story's file is very nearly the card's own shape, so the
+    /// error was a point or two. A text story renders at 1:2.5 to fill full-bleed on any phone, which
+    /// crops about 14% off each end: the owner's 2026-08-23 report that a link card answers a tap on
+    /// its picture and not on its words is that error, and nothing more.
+    ///
+    /// nil for every story posted before the host started sending it, and nil is honoured rather than
+    /// guessed — those keep the flat mapping they were placed with.
+    public var aspect: Double?
+
     public init(id: String = UUID().uuidString, x: Double, y: Double, w: Double, h: Double,
-                rotation: Double, url: URL) {
+                rotation: Double, url: URL, aspect: Double? = nil) {
         self.id = id
         self.x = x; self.y = y; self.w = w; self.h = h
         self.rotation = rotation
         self.url = url
+        self.aspect = aspect
     }
 }

@@ -44,8 +44,27 @@ struct StoryTapTarget: Equatable, Codable, Hashable {
     /// a second thing for the viewer to branch on.
     var url: String
 
+    /// ⛔ THE SHAPE OF THE PICTURE THESE FRACTIONS WERE MEASURED AGAINST — owner, 2026-08-23: a text
+    /// story's link card only answers a tap on its upper part, "it only works when I tap the preview
+    /// image".
+    ///
+    /// ⚠️ A FRACTION IS ONLY A PLACE IF YOU KNOW THE SHAPE IT IS A FRACTION OF, and the viewer did
+    /// not. The four numbers above are measured against the FILE; the viewer laid them over the CARD
+    /// on screen. For a photo story those are the same shape and nobody noticed for months. A text
+    /// story renders at 1:2.5 so that it fills full-bleed on every phone — which means the viewer
+    /// shows the middle of it and CROPS about 14% off the top and the bottom. Every fraction is
+    /// therefore in the wrong place and about 1.4× too small, which puts the rectangle up over the
+    /// card's picture and short of the words underneath it. Exactly what he can and cannot press.
+    ///
+    /// Width over height of the rendered file. Optional because every story posted before today has
+    /// none, and for those the viewer keeps doing what it does now — right for the photo stories that
+    /// are the vast majority of them, and no worse than today for the rest.
+    var aspect: Double? = nil
+
     var asDictionary: [String: Any] {
-        ["x": x, "y": y, "w": w, "h": h, "rotation": rotation, "url": url]
+        var d: [String: Any] = ["x": x, "y": y, "w": w, "h": h, "rotation": rotation, "url": url]
+        if let aspect, aspect > 0 { d["aspect"] = aspect }
+        return d
     }
 
     /// ⚠️ ANYTHING THAT IS NOT A WEB OR MAPS URL IS DROPPED ON THE WAY IN, not on the way out. This
@@ -61,7 +80,11 @@ struct StoryTapTarget: Equatable, Codable, Hashable {
               let w = d["w"] as? Double, let h = d["h"] as? Double,
               w > 0, h > 0 else { return nil }
         return StoryTapTarget(x: x, y: y, w: w, h: h,
-                              rotation: d["rotation"] as? Double ?? 0, url: url)
+                              rotation: d["rotation"] as? Double ?? 0, url: url,
+                              // Absent on every story posted before 2026-08-23, and absent is a real
+                              // answer: the viewer then lays the fractions over the card as it
+                              // always has. See the note on `aspect`.
+                              aspect: (d["aspect"] as? Double).flatMap { $0 > 0 ? $0 : nil })
     }
 }
 

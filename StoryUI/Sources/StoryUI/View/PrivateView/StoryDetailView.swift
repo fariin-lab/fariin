@@ -1379,12 +1379,12 @@ private extension StoryDetailView {
             GeometryReader { geo in
                 ZStack {
                     ForEach(story.taps) { t in
+                        let r = tapRect(t, in: geo.size)
                         Color.clear
-                            .frame(width: max(24, geo.size.width * t.w),
-                                   height: max(24, geo.size.height * t.h))
+                            .frame(width: r.width, height: r.height)
                             .contentShape(Rectangle())
                             .rotationEffect(.radians(t.rotation))
-                            .position(x: geo.size.width * t.x, y: geo.size.height * t.y)
+                            .position(x: r.midX, y: r.midY)
                             .allowsHitTesting(true)
                             .onTapGesture { armTapArea(t) }
                     }
@@ -1403,6 +1403,45 @@ private extension StoryDetailView {
         }
     }
 
+    /// ⛔ THE AREA, PUT WHERE THE PICTURE ACTUALLY PUT IT — owner, 2026-08-23: a text story's link
+    /// card answers a tap on its picture and not on the words underneath it.
+    ///
+    /// ⚠️ THE FRACTIONS ARE OF THE FILE; THIS VIEW IS THE CARD. The media is drawn to FILL, so a file
+    /// taller than the card has its top and bottom cropped away and everything inside it is both
+    /// shifted and magnified relative to the card. The old version multiplied the fractions straight
+    /// by the card's own size, which is the identity mapping — right only when the file and the card
+    /// are the same shape.
+    ///
+    /// A photo story is very nearly that shape, which is why this was invisible for months. A text
+    /// story is 1:2.5 so it fills full-bleed on any phone: about 14% goes off each end, so a
+    /// rectangle at 0.62 down the FILE belongs at 0.67 down the CARD and stands 1.4× taller than the
+    /// old arithmetic drew it. Shifted up and shrunk is precisely a rectangle sitting over the card's
+    /// picture and stopping short of its words.
+    ///
+    /// No aspect (every story posted before the host started sending one) keeps the identity mapping
+    /// it was placed with — changing those retroactively would move rectangles that currently work.
+    private func tapRect(_ t: StoryTapArea, in canvas: CGSize) -> CGRect {
+        var origin = CGPoint.zero
+        var media = canvas
+        // `.scaledToFill`: whichever axis needs the bigger scale wins, and the overflow hangs off
+        // both ends of the other one.
+        if let a = t.aspect, a > 0, canvas.width > 1, canvas.height > 1 {
+            let byWidth = CGSize(width: canvas.width, height: canvas.width / a)
+            media = byWidth.height >= canvas.height
+                ? byWidth
+                : CGSize(width: canvas.height * a, height: canvas.height)
+            origin = CGPoint(x: (canvas.width - media.width) / 2,
+                             y: (canvas.height - media.height) / 2)
+        }
+        // The 24pt floor is unchanged and is a REACHABILITY floor, not a geometry one: a sticker
+        // small enough to be hard to hit still has to be hittable.
+        let w = max(24, media.width * t.w)
+        let h = max(24, media.height * t.h)
+        return CGRect(x: origin.x + media.width * t.x - w / 2,
+                      y: origin.y + media.height * t.y - h / 2,
+                      width: w, height: h)
+    }
+
     /// "Visit link ›" over the badge that was tapped.
     ///
     /// ⚠️ IT FLIPS NEAR THE TOP. Sitting on the badge's top edge is the resting arrangement, but a
@@ -1411,21 +1450,24 @@ private extension StoryDetailView {
     /// a tail direction is a variable here rather than a constant.
     @ViewBuilder
     private func visitLinkBubble(for t: StoryTapArea, in canvas: CGSize) -> some View {
-        let half = max(24, canvas.height * t.h) / 2
-        let badgeTop = canvas.height * t.y - half
-        let badgeBottom = canvas.height * t.y + half
+        // ⚠️ THE SAME RECTANGLE THE TOUCH USES, not a second reckoning of where the badge is. These
+        // two were worked out separately from the same fractions, so the bubble could be sitting
+        // exactly where the tap area was NOT — see `tapRect` for why that arithmetic was wrong.
+        let badge = tapRect(t, in: canvas)
+        let badgeTop = badge.minY
+        let badgeBottom = badge.maxY
         // ⛔ UNDER THE BADGE IS THE RESTING PLACE NOW (owner 2026-08-22: "just is coming under the
         // text not bottom"). It sat above before, which is where the reference app puts it — but the
         // reference's badge is drawn by the same code that draws the bubble, so it knows exactly
-        // where the badge's top edge is. Ours does not: the tap rectangle travelled with the story
-        // and is measured against a file whose shape is not the shape of the screen it is drawn on,
-        // so the edge it names is close but not exact. Above, that error showed as the bubble
-        // climbing over the badge, which is what he photographed.
+        // where the badge's top edge is. Ours knows it through `tapRect`, which now undoes the
+        // picture's crop rather than assuming the file and the card are the same shape — the edge it
+        // names is the drawn one. The bubble climbing over the badge in his 2026-08-22 photograph was
+        // that same error, one screen further on.
         //
         // Only flips up when there is genuinely no room underneath.
         let above = badgeBottom + Self.visitBubbleHeight + Self.visitBubbleGap + Self.visitBubbleMargin > canvas.height
         VisitLinkBubble(tailDown: above) { open(t.url) }
-            .position(x: min(max(canvas.width * t.x, Self.visitBubbleMargin),
+            .position(x: min(max(badge.midX, Self.visitBubbleMargin),
                              canvas.width - Self.visitBubbleMargin),
                       y: above
                          ? badgeTop - Self.visitBubbleGap - Self.visitBubbleHeight / 2
