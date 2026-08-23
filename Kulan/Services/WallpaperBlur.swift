@@ -172,6 +172,11 @@ import UIKit
 
     private let imageView = UIImageView()
     private let maskShape = CAShapeLayer()
+    /// Their `strokeLayer`, construction and all: the bubble path stroked at 2 hairlines, sitting
+    /// inside the masked view so the outer half is clipped and ONE physical pixel of rim survives
+    /// on the inside of the edge. Drawn only on the UIKit path (`maskPath != nil`) — the SwiftUI
+    /// bubbles draw their rim as a `strokeBorder` overlay because only the site knows the shape.
+    private let strokeShape = CAShapeLayer()
 
     var state: WallpaperBlurState? {
         didSet {
@@ -196,9 +201,21 @@ import UIKit
         // identity draw; it is only named so a rounding error cannot ask for aspect fitting.
         imageView.contentMode = .scaleToFill
         addSubview(imageView)
+        strokeShape.fillColor = nil
+        strokeShape.lineWidth = 2 * Theme.hairline
+        layer.addSublayer(strokeShape)   // added after the image view → above it; the mask clips both
+        // The rim colour is baked to a CGColor, so a light↔dark switch has to re-resolve it by hand.
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: WallpaperBlurSliceView, _) in
+            self.applyStrokeColor()
+        }
         Self.live.add(self)
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    private func applyStrokeColor() {
+        let dark = traitCollection.userInterfaceStyle == .dark
+        strokeShape.strokeColor = UIColor(Theme.bubbleRim(dark)).cgColor
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()
@@ -222,16 +239,21 @@ import UIKit
     }
 
     private func applyMask() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         if let maskPath {
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
             maskShape.frame = bounds
             maskShape.path = maskPath.cgPath
             layer.mask = maskShape
-            CATransaction.commit()
+            strokeShape.frame = bounds
+            strokeShape.path = maskPath.cgPath
+            applyStrokeColor()
+            strokeShape.isHidden = false
         } else {
             layer.mask = nil
+            strokeShape.isHidden = true
         }
+        CATransaction.commit()
     }
 }
 

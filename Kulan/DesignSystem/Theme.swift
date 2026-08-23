@@ -70,6 +70,20 @@ enum Theme {
         return .material
     }
 
+    /// THE RIM ON AN INCOMING BUBBLE OVER A WALLPAPER — his close-up crops, 2026-08-23, and the last
+    /// visible difference from the reference. Theirs is not glass and not a reflection: a
+    /// `CAShapeLayer` stroking the bubble's own path at 2 hairlines, clipped by the bubble mask so
+    /// only the INNER hairline survives — one physical pixel of light just inside the edge. White at
+    /// 25% in dark mode, BLACK at 35% in light (the "white rim" is a dark-mode fact). Incoming only,
+    /// wallpaper only; outgoing never gets one.
+    static func bubbleRim(_ dark: Bool) -> Color {
+        dark ? Color.white.opacity(0.25) : Color.black.opacity(0.35)
+    }
+
+    /// One physical pixel, in points. What survives of their 2-hairline centred stroke after the
+    /// mask eats the outer half — so this is the width to draw INSIDE the edge (`strokeBorder`).
+    static var hairline: CGFloat { 1 / UIScreen.main.scale }
+
     /// The previews' version of the above — the colour-picker platter and the chat peek, which
     /// draw the wallpaper at a size that is not the window's and so cannot take a slice. Same
     /// decision, with `.material` drawn as the system material it approximates.

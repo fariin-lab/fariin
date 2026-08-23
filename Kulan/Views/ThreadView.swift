@@ -3878,6 +3878,14 @@ struct ThreadView: View {
                 else { ReceivedBubbleSurface(dark: dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur) }
             }
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            // The rim, exactly as on every other incoming bubble — see Theme.bubbleRim.
+            .overlay {
+                if !mine, chatHasWallpaper {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Theme.bubbleRim(dark), lineWidth: Theme.hairline)
+                        .allowsHitTesting(false)
+                }
+            }
             // Tap target is ONLY the bubble — NOT the full-width row. The old .contentShape/
             // .onTapGesture sat on the outer HStack (which includes the empty-side Spacer), so
             // tapping the blank space anywhere on the row placed a call (accidental-call bug).
@@ -5934,6 +5942,18 @@ struct MessageBubble: View, Equatable {
         }
     }
 
+    /// The reference's hairline rim, drawn just inside whatever shape clipped this bubble — see
+    /// `Theme.bubbleRim` for the numbers and their construction. Incoming on a wallpaper only:
+    /// theirs guards it `hasWallpaper, isIncoming`, and an outgoing bubble never wears one.
+    /// An overlay per site rather than part of `bubbleSurface`, because only the site knows the
+    /// shape the bubble was clipped with, and a rim on the wrong shape is worse than none.
+    @ViewBuilder private func bubbleRim<S: InsettableShape>(_ shape: S) -> some View {
+        if !isMe, onWallpaper {
+            shape.strokeBorder(Theme.bubbleRim(dark), lineWidth: Theme.hairline)
+                .allowsHitTesting(false)
+        }
+    }
+
     // Text/meta on MY bubbles: both the custom colours AND the default systemBlue are vivid in BOTH
     // modes, so the text/glyphs are always WHITE.
     private var onMyBubble: Color { .white }
@@ -6695,6 +6715,7 @@ struct MessageBubble: View, Equatable {
             // it quieter than the original version he rejected — it is still a CAPSULE rather than a
             // bubble, and it still carries no time and no tick.
             .background { bubbleSurface.clipShape(Capsule()) }
+            .overlay { bubbleRim(Capsule()) }
         } else if message.isAudio, message.viewOnce {
             // ONE-TIME VOICE: a pill, exactly the view-once photo's idiom further down this chain —
             // never the waveform player. The pill itself is live (it watches the engine for its one
@@ -6710,6 +6731,7 @@ struct MessageBubble: View, Equatable {
                 .padding(.horizontal, 15).padding(.vertical, 11)
                 .background { bubbleSurface }
                 .clipShape(Capsule())
+                .overlay { bubbleRim(Capsule()) }
         } else if message.isAudio {
             // WIDTH-ON-PLAY ROOT CAUSE (deep dive): VoiceMessageView is a DETERMINISTIC 212pt wide (play
             // button 42 + HStack spacing 12 + waveform 158) in every playback state — the speed toggle sits
@@ -6747,6 +6769,7 @@ struct MessageBubble: View, Equatable {
             .padding(.vertical, 8)
             .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
         } else if message.isFile {
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
@@ -6808,6 +6831,7 @@ struct MessageBubble: View, Equatable {
             .padding(.horizontal, 13).padding(.vertical, 10)
             .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
         } else if let pendingKind = message.pendingMediaKind, pendingKind != "image" {
             // THE MESSAGE IS HERE, THE BYTES ARE STILL COMING. Only the recipient reaches this; the
             // sender keeps their own local copy (ThreadRepository.refreshItems).
@@ -6857,6 +6881,7 @@ struct MessageBubble: View, Equatable {
                     .padding(.horizontal, 13).padding(.vertical, 10)
                     .background { bubbleSurface }
                     .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                    .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
                 case "album":
                     // The SAME solver, the SAME aspects, the SAME width as the finished grid — see
                     // `albumAspect`, which now reads `albumSizes` for exactly this. So the mosaic is
@@ -6893,6 +6918,7 @@ struct MessageBubble: View, Equatable {
                     .padding(.horizontal, 13).padding(.vertical, 10)
                     .background { bubbleSurface }
                     .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                    .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
                 }
             }
         } else if message.isPendingImage {
@@ -7022,6 +7048,7 @@ struct MessageBubble: View, Equatable {
                 .frame(width: videoBox.width)
                 .background { bubbleSurface }
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
             }
         } else if message.isAlbum {
             // Album (2+ photos as ONE message): a MOSAIC GRID inside the bubble + one caption.
@@ -7049,6 +7076,7 @@ struct MessageBubble: View, Equatable {
             }
             .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
             // THE WHOLE-BUBBLE UPLOAD RING IS GONE (the agreed per-item spec): every sending tile
             // now carries its own ring, its own bytes and its own X — see `albumTile`. One ring
             // centred on the bubble could not say which image was slow, could not cancel one of
@@ -7076,6 +7104,7 @@ struct MessageBubble: View, Equatable {
             .padding(.horizontal, 15).padding(.vertical, 11)
             .background { bubbleSurface }
             .clipShape(Capsule())
+            .overlay { bubbleRim(Capsule()) }
             .contentShape(Capsule())
             .onTapGesture {
                 guard !isMe, !viewed, message.sendState == nil else { return }
@@ -7221,6 +7250,7 @@ struct MessageBubble: View, Equatable {
                 .frame(width: box.width)
                 .background { bubbleSurface }
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
             }
         } else if let poll = message.poll {
             // POLL: question + options with live vote bars. Content is E2EE (rides the encrypted text
@@ -7234,6 +7264,7 @@ struct MessageBubble: View, Equatable {
             .frame(width: maxBubbleWidth * 0.9)
             .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
         } else if let loc = message.locationCard {
             // SHARED LOCATION card: pin + label + coordinates; tap opens Apple Maps at the spot.
             VStack(alignment: .leading, spacing: 8) {
@@ -7256,6 +7287,7 @@ struct MessageBubble: View, Equatable {
             .frame(width: maxBubbleWidth * 0.85)
             .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
             .contentShape(Rectangle())
             .onTapGesture {
                 let q = (loc.label ?? "Shared Location").addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "Location"
@@ -7294,6 +7326,7 @@ struct MessageBubble: View, Equatable {
             .frame(width: maxBubbleWidth)
             .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
         } else if jumbomojiCount > 0, message.replyTo == nil || message.replyTo?.isStatus == true,
                   firstLinkURL == nil {
             // JUMBOMOJI — the reference app's behaviour, read from their source (2026-07-28) rather than eyeballed.
@@ -7387,6 +7420,7 @@ struct MessageBubble: View, Equatable {
             .padding(.vertical, 10)
             .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
         }
     }
 
