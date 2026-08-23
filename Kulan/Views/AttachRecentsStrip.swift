@@ -105,6 +105,21 @@ struct AttachRecentsStrip: View {
     /// album list start this far down (see `grid`), so nothing sits UNDER an opaque bar at rest.
     private let headerHeight: CGFloat = 56
 
+    /// THE BAR RIDES WITH THE PHOTOS (owner, 2026-08-23, and this is the REASON he pointed at the
+    /// story picker in the first place — not its colour: "when i swipe down photo it follows photo
+    /// that top thing and come back when goo up, but photos on in chat it's stay same, that top
+    /// never hides"). Scroll into the grid and the bar leaves with it; scroll back and it returns.
+    @State private var headerHidden = false
+
+    /// How far up the bar has to travel to clear the screen: its own height plus whatever the notch
+    /// is taking, since its background is extended under the top safe area.
+    private var headerTravel: CGFloat {
+        let top = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.top }
+            .max() ?? 0
+        return headerHeight + top
+    }
+
     var body: some View {
         // THE PHOTOS RUN UNDER THE HEADER (his reference, 2026-08-14: "make the white follow the
         // photo… swipe down and it comes back"). It used to be the first row of a VStack, which is a
@@ -133,7 +148,10 @@ struct AttachRecentsStrip: View {
         // runs to the very top edge and the header floats on it from the first frame, which is what
         // theirs does. Nothing is unreachable: the first row sits under a close button with its own
         // glass circle and a floating title, and one scroll moves it clear.
-        .overlay(alignment: .top) { header }
+        .overlay(alignment: .top) {
+            header
+                .offset(y: headerHidden ? -headerTravel : 0)
+        }
         // ≥1 selected → a caption + Send bar as a native bottom inset bar, so iOS pins it directly above
         // the keyboard (no home-indicator gap between the bar and the keyboard) and above the home
         // indicator when the keyboard is down — exactly like a composer.
@@ -314,6 +332,19 @@ struct AttachRecentsStrip: View {
         }
         // Starts the Camera tile and the first row of photos clear of the header bar. See `body`.
         .contentMargins(.top, headerHeight, for: .scrollContent)
+        // Direction, not position: the bar leaves when the photos move up and returns the moment
+        // they move back down, which is what "follows the photo" means. The 4pt gate ignores the
+        // jitter a finger makes while holding still; the `> headerHeight` floor keeps it on screen
+        // near the top, so it can never hide the very first row you are looking at.
+        .onScrollGeometryChange(for: CGFloat.self) { g in
+            g.contentOffset.y + g.contentInsets.top
+        } action: { old, new in
+            let dy = new - old
+            guard abs(dy) > 4 else { return }
+            let hide = dy > 0 && new > headerHeight
+            guard headerHidden != hide else { return }
+            withAnimation(.easeOut(duration: 0.22)) { headerHidden = hide }
+        }
     }
 
     // Native-style album list (Recents, Favorites, Videos, Selfies, Live Photos, Panoramas, user albums).
@@ -339,6 +370,19 @@ struct AttachRecentsStrip: View {
         }
         // Same as the grid: the first album row is not born under the bar.
         .contentMargins(.top, headerHeight, for: .scrollContent)
+        // Direction, not position: the bar leaves when the photos move up and returns the moment
+        // they move back down, which is what "follows the photo" means. The 4pt gate ignores the
+        // jitter a finger makes while holding still; the `> headerHeight` floor keeps it on screen
+        // near the top, so it can never hide the very first row you are looking at.
+        .onScrollGeometryChange(for: CGFloat.self) { g in
+            g.contentOffset.y + g.contentInsets.top
+        } action: { old, new in
+            let dy = new - old
+            guard abs(dy) > 4 else { return }
+            let hide = dy > 0 && new > headerHeight
+            guard headerHidden != hide else { return }
+            withAnimation(.easeOut(duration: 0.22)) { headerHidden = hide }
+        }
     }
 
     private func selectAlbum(_ album: AttachAlbum) {
