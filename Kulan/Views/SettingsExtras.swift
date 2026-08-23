@@ -20,7 +20,7 @@ private var appVersion: String {
 struct NotificationsSettingsView: View {
     @AppStorage("notif.push") private var pushOn = true
     @AppStorage("notif.preview") private var messagePreview = true
-    @AppStorage("notif.sound") private var soundName = "rebound"
+    @AppStorage("notif.sound") private var soundName = NotificationSound.defaultMessageTone.id
     @AppStorage("notif.inAppSound") private var inAppSound = true
     @AppStorage("notif.inAppVibrate") private var inAppVibrate = true
     @AppStorage("notif.inAppPreview") private var inAppPreview = true
@@ -31,7 +31,10 @@ struct NotificationsSettingsView: View {
 
     /// Anything on this page off its default, or any per-chat customisation anywhere.
     private var hasAnythingToReset: Bool {
-        if !pushOn || !messagePreview || soundName != "rebound"
+        // The DEFAULT, resolved, rather than a tone named here — this page had "rebound" written
+        // into it in four places and the default moved to Note on 2026-08-23.
+        if !pushOn || !messagePreview
+            || NotificationSound.resolveMessageTone(soundName).id != NotificationSound.defaultMessageTone.id
             || !inAppSound || !inAppVibrate || !inAppPreview { return true }
         if SoundStore.hasAnyCustom { return true }
         let now = Date().timeIntervalSince1970 * 1000
@@ -75,7 +78,11 @@ struct NotificationsSettingsView: View {
                     HStack {
                         Text("Sound")
                         Spacer()
-                        Text(soundName == "default" ? "Default" : soundName.capitalized)
+                        // ⚠️ THE TONE'S NAME, NOT ITS STORED ID CAPITALISED. The two happened to match
+                        // while every tone was one of ours; Apple's Note is stored as "tritone" (its
+                        // system file's name), and this row would have read "Tritone" under a picker
+                        // that says Note.
+                        Text(NotificationSound.resolveMessageTone(soundName).name)
                             .foregroundStyle(.secondary)
                     }
                 }
@@ -146,11 +153,11 @@ struct NotificationsSettingsView: View {
         // push, so flipping the value here is the whole job.
         pushOn = true
         messagePreview = true
-        soundName = "rebound"
+        soundName = NotificationSound.defaultMessageTone.id
         inAppSound = true
         inAppVibrate = true
         inAppPreview = true
-        try? await ProfileStore.shared.setNotifPrefs(preview: true, sound: "rebound")
+        try? await ProfileStore.shared.setNotifPrefs(preview: true, sound: NotificationSound.defaultMessageTone.id)
         resetting = false
     }
 }
@@ -158,25 +165,28 @@ struct NotificationsSettingsView: View {
 // Sound picker: bundled tones, tap = hear it + choose it. The choice drives BOTH the
 // lock-screen push (server reads users.notifSound) and the in-app banner tone.
 struct NotificationSoundView: View {
-    @AppStorage("notif.sound") private var soundName = "rebound"
-    // Our own tones only. "default" was Apple's Note (the reference app's sound) and is gone; a stored
-    // "default" from before now resolves to Rebound wherever it is read.
-    private let sounds = ["rebound", "chime", "pop", "pulse", "marimba"]
+    @AppStorage("notif.sound") private var soundName = NotificationSound.defaultMessageTone.id
+    /// ⛔ THE LIST AND THE NAMES COME FROM `NotificationSound`, NOT FROM HERE. This page used to hold
+    /// its own array of five strings and its own "(default)" label, and the per-chat Message Sound
+    /// sheet read the real list — so the same setting had two catalogues that had to be edited
+    /// together, and the day one moved (Note becoming the default, 2026-08-23) they disagreed.
+    private var sounds: [NotificationSound] { NotificationSound.messageTones }
 
     var body: some View {
         List {
             Section {
-                ForEach(sounds, id: \.self) { s in
+                ForEach(sounds) { s in
                     Button {
-                        soundName = s
-                        InAppNotify.shared.playTone(s)   // instant preview
-                        Task { try? await ProfileStore.shared.setNotifPrefs(sound: s) }
+                        soundName = s.id
+                        InAppNotify.shared.playTone(s.id)   // instant preview
+                        Task { try? await ProfileStore.shared.setNotifPrefs(sound: s.id) }
                     } label: {
                         HStack {
-                            Text(s == "rebound" ? "Rebound (default)" : s.capitalized)
-                                .foregroundStyle(.primary)
+                            Text(s.name).foregroundStyle(.primary)
                             Spacer()
-                            if soundName == s || (soundName == "default" && s == "rebound") {
+                            // One question, asked in one place: what does the stored id resolve to.
+                            // The old version spelled the legacy-"default" case out by hand here.
+                            if NotificationSound.resolveMessageTone(soundName).id == s.id {
                                 Image(systemName: "checkmark").fontWeight(.semibold)
                                     .foregroundStyle(Color.accentColor)
                             }

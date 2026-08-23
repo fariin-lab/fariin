@@ -84,10 +84,21 @@ import FirebaseAuth
     /// Play the user's chosen notification tone (Settings > Notifications > Sound).
     /// Also used by the sound picker to preview a tone before choosing it.
     func playTone(_ override: String? = nil) {
-        var name = override ?? (UserDefaults.standard.string(forKey: "notif.sound") ?? "rebound")
-        // A "default" stored before the Apple-tone option was removed. It used to fall through to
-        // system sound 1007, which is Note — the reference app's tone coming out of Fariin.
-        if name == "default" { name = "rebound" }
+        let stored = override ?? UserDefaults.standard.string(forKey: "notif.sound")
+        // ⛔ THE TONE IS RESOLVED, NOT GUESSED FROM THE STRING — owner, 2026-08-23, who put Apple's
+        // Note back as the default. `NotificationSound` is the one list that knows what an id means,
+        // and it is what the per-chat picker already reads; this used to keep its own idea of the
+        // default and its own handling of a legacy "default", so the two could drift apart on a
+        // change like this one.
+        let tone = NotificationSound.resolveMessageTone(stored)
+        if tone.id == NotificationSound.none.id { return }
+        // A tone with no file of ours is one of Apple's, and those are played by id — there is
+        // nothing in the bundle to look up.
+        guard let file = tone.bundleFile else {
+            AudioServicesPlaySystemSound(tone.systemID ?? 1007)
+            return
+        }
+        let name = (file as NSString).deletingPathExtension
         guard let url = Bundle.main.url(forResource: name, withExtension: "wav") else {
             AudioServicesPlaySystemSound(1007)   // last resort: a missing file must still make a noise
             return

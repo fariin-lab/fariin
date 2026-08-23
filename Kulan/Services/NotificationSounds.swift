@@ -104,13 +104,24 @@ struct NotificationSound: Identifiable, Equatable {
     // choice could never match what a notification actually played, and the two lists shared no names.
     // The user asked for the Settings list everywhere, which is also the correct one: it is what pushes use.
     ///
-    /// EVERY ENTRY IS OURS. The list used to open with a "Default" that was Apple's Note
-    /// (systemID 1007) — the reference app's tone. Fariin then sounded like the reference app in the foreground
-    /// while the server's push played our Rebound, so one message made two different noises
-    /// depending on whether the app happened to be open. A messenger's alert is how people
-    /// know which app buzzed without looking, so it has to be ours and it has to be one sound.
+    /// ⛔ APPLE'S NOTE IS THE DEFAULT AGAIN — owner, 2026-08-23: "plz chnage defulit message sounde
+    /// use apple message a sound by default … Note (Default)".
+    ///
+    /// ⚠️ THIS REVERSES A DELIBERATE REMOVAL AND HE SHOULD KNOW WHAT IT COSTS. The list used to open
+    /// with a "Default" that was this exact tone, and it was taken out because the FOREGROUND alert
+    /// and the LOCK-SCREEN push are played by two different things: the app plays the chosen tone
+    /// itself, and the server names a sound in the APNs payload. Note is not a file we can ship — it
+    /// lives in `/System/Library/Audio/UISounds` and belongs to Apple — so the push cannot name it,
+    /// and the two ends can only agree if APNs' own `"sound": "default"` happens to be the same
+    /// noise. That is not documented and cannot be checked from here.
+    ///
+    /// ⚠️ SO THIS IS THE CLIENT HALF ONLY, AND IT NEEDS A DEVICE AND A SERVER CHANGE TO FINISH. Send
+    /// yourself a message with the app OPEN, then with it LOCKED, and say whether the two sound the
+    /// same. If they do not, either the server sends `"default"` for this tone or the default goes
+    /// back to Rebound — that is his call, not one to make in code.
     static let messageTones: [NotificationSound] = [
-        NotificationSound(id: "rebound", name: "Rebound (default)", bundleFile: "rebound.wav"),
+        NotificationSound(id: "tritone", name: "Note (Default)", systemID: 1007),
+        NotificationSound(id: "rebound", name: "Rebound", bundleFile: "rebound.wav"),
         NotificationSound(id: "chime",   name: "Chime",   bundleFile: "chime.wav"),
         NotificationSound(id: "pop",     name: "Pop",     bundleFile: "pop.wav"),
         NotificationSound(id: "pulse",   name: "Pulse",   bundleFile: "pulse.wav"),
@@ -121,7 +132,8 @@ struct NotificationSound: Identifiable, Equatable {
 
     /// Resolve a stored id against the MESSAGE tone list — ours FIRST, which matters because
     /// "pulse" exists in both lists and the Apple one used to win. `builtIn` stays as a fallback
-    /// for a choice made before this list existed. A legacy "default" lands on Rebound.
+    /// for a choice made before this list existed. A legacy "default" lands on Note, which is the
+    /// tone it originally named — see the note on `messageTones`.
     static func resolveMessageTone(_ id: String?) -> NotificationSound {
         guard let id, id != "default" else { return .defaultMessageTone }
         if id == "none" { return .none }
