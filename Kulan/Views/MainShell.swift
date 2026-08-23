@@ -2888,8 +2888,8 @@ struct ChatRow: View, Equatable {
         if c.hasPrefix("🎬 ") { return String(c.dropFirst("🎬 ".count)) }   // mixed album → "3 Media"
         return "Photo"
     }
-    // Preview area, in priority order: live call → blocked freeze → live typing → unsent draft →
-    // photo thumbnail → media/call badge → say-hello → decrypted text.
+    // Preview area, in priority order: live call → blocked freeze → live typing → 2+ unread count →
+    // unsent draft → photo thumbnail → media/call badge → say-hello → decrypted text.
     @ViewBuilder private var previewContent: some View {
         if onCall {
             // FIRST, above everything — a call in progress outranks typing, a draft, the last
@@ -2903,6 +2903,26 @@ struct ChatRow: View, Equatable {
                 .font(.system(size: 14)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
         } else if let t = typingLabel, !activityExpired {
             Text(t).font(.system(size: 14)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
+        } else if unread > 1 {
+            // MORE THAN ONE WAITING → COUNT THEM, don't quote the newest (owner, 2026-08-23, with
+            // the reference row: "when user send one message its shows what is saying, but when its
+            // one and more must count"). Two unread messages shown as the last line of the pair says
+            // nothing about the first one, and the row looks the same whether you missed two or
+            // twenty.
+            //
+            // ONE unread still shows the message itself, deliberately: with a single message there
+            // is nothing to summarise, and "1 new message" would be strictly less than the words.
+            //
+            // Below typing and recording on purpose: those are happening RIGHT NOW, and a count of
+            // what already arrived should not cover somebody mid-sentence.
+            //
+            // "9+" past nine, matching the reference. The badge beside it caps at 99 instead, and
+            // that is right — a badge is a number, this is a sentence, and "23 new messages" reads
+            // like an inbox report rather than a chat.
+            Text(unread > 9 ? "9+ new messages" : "\(unread) new messages")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(Color.primary)
+                .lineLimit(1)
         } else if voiceDraftSecs > 0 {
             // A parked voice recording (his reference screenshots): the same red "Draft:" the text
             // draft below wears, then the mic and the note's length. Wins over a text draft — the
