@@ -213,7 +213,16 @@ struct VoiceMessageView: View {
         // the second half of what he drew.
         HStack(spacing: Self.discGap) {
             playButton
-            VStack(alignment: .leading, spacing: 2) {
+            // ⛔ 6, UP FROM 2 — owner, 2026-08-24, with his image 1 (now) beside image 2 (wanted):
+            // "give space between the waveform and the minutes, and between the 1.5× button and the
+            // time".
+            //
+            // ⚠️ BOTH GAPS HE CIRCLED ARE THIS ONE NUMBER. The wave sits over the duration and the
+            // speed pill sits over the clock, but they are not two stacks — they are one row above
+            // another row, so the space under the wave and the space under the pill are the same
+            // spacing and cannot drift apart. Nothing else moves: the bubble takes the extra height
+            // through `contentHeight`'s minHeight, which is a floor rather than a fixed size.
+            VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: Self.discGap) {
                     WaveformBars(bars: displayBars, progress: progress, played: tint,
                              // 0.45, not 0.3. The unplayed half is most of the bar for most of a
