@@ -17,6 +17,10 @@ struct KulanApp: App {
                 // Someone still on one of the removed tri-arrow icons has a name iOS can no longer
                 // resolve — put them back on the default rather than leave them with a broken icon.
                 .task { RetiredAppIcons.resetIfInUse() }
+                // Voice notes whose send never finished keep a copy of their own bytes so a retry
+                // survives a restart. Anything still there after a week belongs to a send nobody is
+                // coming back for, so it goes — see AudioRecorder.sweepInFlight.
+                .task { AudioRecorder.sweepInFlight() }
                 // STORYUI CAN SEE THE APP'S DECODED-IMAGE CACHE, through one closure.
                 //
                 // A story video is hidden until its first frame is ready for display, the way

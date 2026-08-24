@@ -395,6 +395,59 @@ final class AudioRecorder {
     // and the chat lands on the review bar: listen, keep recording, send or bin — nothing is gone
     // until the person says so.
 
+    // MARK: - Bytes of a note that is still being sent
+
+    /// ⛔ A FAILED VOICE NOTE USED TO LOSE ITS AUDIO WHEN THE APP RESTARTED, and the button to fix it
+    /// stayed on screen looking like it would work.
+    ///
+    /// The optimistic bubble carries the recording in `Message.localAudioData`, in memory. That field
+    /// is NOT in `Message.CodingKeys`, so when a pending message is written to disk the audio is
+    /// dropped on the floor. Kill the app with a red voice bubble sitting there and it comes back
+    /// with nothing inside: `resend` looks for `localAudioData`, finds nil, matches no branch, and
+    /// does nothing at all. A dead button on top of a lost recording.
+    ///
+    /// The bytes go to a real file now, beside the parked drafts and for the same reason —
+    /// Application Support survives relaunch where `temporaryDirectory` is purged by the OS whenever
+    /// it feels like it. The path rides on `localMediaURL`, which IS persisted, so the retry has
+    /// something to read whatever happened in between.
+    private static func inFlightDir() -> URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("VoiceInFlight", isDirectory: true)
+    }
+
+    /// Parks the bytes of a note that is being sent. Returns the path for `Message.localMediaURL`,
+    /// or nil if the write failed — in which case the send still goes ahead, it just cannot be
+    /// retried after a restart, which is exactly where we were before.
+    static func parkInFlight(_ data: Data, clientId: String) -> String? {
+        let dir = inFlightDir()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("\(clientId).m4a")
+        do { try data.write(to: url, options: .atomic); return url.path } catch { return nil }
+    }
+
+    static func inFlightData(clientId: String) -> Data? {
+        try? Data(contentsOf: inFlightDir().appendingPathComponent("\(clientId).m4a"))
+    }
+
+    /// The note landed, or the person binned it. Either way the copy has no more work to do.
+    static func dropInFlight(clientId: String) {
+        try? FileManager.default.removeItem(at: inFlightDir().appendingPathComponent("\(clientId).m4a"))
+    }
+
+    /// Anything still here after a week belongs to a send nobody is coming back for — a bubble
+    /// dismissed, a chat cleared, an account signed out. Swept at launch so this folder cannot grow
+    /// forever on a phone that has a bad month of signal.
+    static func sweepInFlight() {
+        let dir = inFlightDir()
+        guard let items = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        let cutoff = Date().addingTimeInterval(-7 * 24 * 3600)
+        for url in items {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let modified, modified < cutoff { try? FileManager.default.removeItem(at: url) }
+        }
+    }
+
     private static func draftDir(_ cid: String) -> URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("VoiceDrafts", isDirectory: true)

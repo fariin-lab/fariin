@@ -173,7 +173,16 @@ struct Message: Identifiable, Equatable, Codable {
     var expiresAt: Date? = nil
 
     var isImage: Bool { (type == "image" && (imageUrl?.isEmpty == false)) || (localImageData != nil && type != "video") }
-    var isAudio: Bool { (type == "audio" && (audioUrl?.isEmpty == false)) || localAudioData != nil }
+    /// ⚠️ THE THIRD CLAUSE IS FOR A FAILED NOTE THAT OUTLIVED THE APP. A pending voice message keeps
+    /// `type == "audio"` across a restart but has no `audioUrl` (it never uploaded) and no
+    /// `localAudioData` (bytes are not written to the cache) — so both of the first two clauses were
+    /// false and the bubble stopped identifying as audio at all. Its retry branch never matched and
+    /// the button did nothing. The parked file is the surviving proof that this is a voice note.
+    var isAudio: Bool {
+        (type == "audio" && (audioUrl?.isEmpty == false))
+            || localAudioData != nil
+            || (type == "audio" && localMediaURL != nil)
+    }
     // Optimistic videos carry their thumbnail in localImageData (hence the isImage carve-out).
     var isVideo: Bool { type == "video" && (videoUrl?.isEmpty == false || localImageData != nil) }
     var isFile: Bool { type == "file" && (fileUrl?.isEmpty == false || localFile) }
@@ -433,6 +442,12 @@ struct Message: Identifiable, Equatable, Codable {
         case createdAt, width, blurhash, height
         case callerUid, callOutcome, callVideo, callDuration
         case edited, deleted, forwarded, clientTs, linkPreview, hasServerTime, uploading, albumSizes
+        // ⚠️ THE PATH TO A PENDING SEND'S OWN BYTES, and it has to persist or a failed voice note
+        // comes back after a restart as a bubble with nothing in it and a retry button that quietly
+        // does nothing. The BYTES are not encoded (localAudioData/localImageData stay out on
+        // purpose — a cache file is no place for megabytes); the path is, and the file it points at
+        // lives in Application Support. See AudioRecorder.parkInFlight.
+        case localMediaURL
     }
 
     init(id: String, data: [String: Any], cid: String, crypto: Crypto) {
