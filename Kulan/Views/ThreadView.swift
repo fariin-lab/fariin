@@ -5169,7 +5169,19 @@ struct ThreadView: View {
         guard holdStarted, !recordLocked else { return }   // locked = keep going, the bar owns it
         if cancelled || recordCancelArmed {
             cancelRecording()
-        } else if Date().timeIntervalSince(holdBeganAt) < 0.30, abs(t.width) < 10, abs(t.height) < 10,
+        // ⚠️ 0.5s, NOT 0.30 (owner, 2026-08-23: "make the holder bit late so when i tap hands-free the
+        // recorder will not think it's hold to record"). His taps were landing a hair over 0.30s, so
+        // the gesture read as a short hold, and a short hold SENDS — the opposite of what he meant.
+        //
+        // Nothing is lost by being generous here: a hold under 1.0s cannot produce a note at all
+        // (AudioRecorder.finish's floor), so every gesture in the window this widens was going to be
+        // discarded as too short anyway. The only change is that it now lands hands-free instead of
+        // in the bin. 0.5 is also Apple's own long-press threshold, so it matches what a finger
+        // already expects a "press" to mean.
+        //
+        // The 10pt movement guard stays: a tap that travels is a drag toward lock or cancel, and
+        // those two gestures have to keep their meaning.
+        } else if Date().timeIntervalSince(holdBeganAt) < 0.5, abs(t.width) < 10, abs(t.height) < 10,
                   AVAudioApplication.shared.recordPermission == .granted {
             // ^ Permission GRANTED, deliberately NOT `recorder.isRecording`: a cold-started
             // recorder assembles itself asynchronously, so `isRecording` can still be false the
