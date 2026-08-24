@@ -1061,11 +1061,28 @@ struct ThreadView: View {
         // coordinates, delivered as an encrypted location-card message.
         .sheet(isPresented: $showLocationShare) {
             LocationPickerSheet { lat, lon, label in
+                // ⛔ AND THE CHAT GOES TO IT — owner, 2026-08-24: "when I send a message the chat
+                // scrolls up, but when I send a location it does nothing".
+                //
+                // ⚠️ THE GLIDE IS TRIGGERED BY THE OPTIMISTIC ROW, NOT BY THE SEND. `refreshItems`
+                // watches for a fresh item of mine with `sendState != nil` — that is the local
+                // insert a normal send makes before the server hears anything, and it is what tells
+                // the list to travel. This path called `sendText` straight through, so nothing
+                // appeared until the server echo came back, by which time the batch held only rows
+                // with `sendState == nil` and the test could never pass.
+                //
+                // Asking for the bottom directly is the smaller fix than inventing an optimistic
+                // location row: the marker is one short string, so the echo lands almost at once,
+                // and this is the same wire the down-arrow uses.
+                nativeScrollTarget = "BOTTOM"
                 Task {
                     try? await ChatService.sendText(
                         cid: cid,
                         text: Message.locationMarkerText(lat: lat, lon: lon, label: label),
                         group: isGroup ? groupMembers : nil)
+                    // Again once it has actually landed: the first ask moves to today's bottom, and
+                    // the new row is below that.
+                    await MainActor.run { nativeScrollTarget = "BOTTOM" }
                 }
             }
         }
@@ -4778,11 +4795,6 @@ struct ThreadView: View {
     // gap was never the mechanism. If that recurs it is the safeAreaBar keyboard edge itself
     // under-reporting on that OS, and no padding value fixes it; measure the bar's frame against
     // `KeyboardWatcher.topOnScreen` on the device before touching these constants.
-    /// The map on a shared-location bubble. Stated rather than measured, like every other size in a
-    /// bubble here: the row is pre-measured before the snapshot exists, and a height that arrives
-    /// with the picture is the bloom this file's notes keep warning about.
-    private static let locationMapHeight: CGFloat = 140
-
     private static let composerKeyboardGap: CGFloat = 8
     private static let composerRestDip: CGFloat = 5
 
@@ -6069,6 +6081,15 @@ struct MessageBubble: View, Equatable {
     // could be skipped there and leave the new wallpaper drawn under bubbles still painting
     // themselves flat until something else invalidated them. `dark` is passed for the same reason
     // and these ride beside it.
+    /// The map on a shared-location bubble. Stated rather than measured, like every other size in a
+    /// bubble here: the row is pre-measured before the snapshot exists, and a height that arrives
+    /// with the picture is the bloom this file's notes keep warning about.
+    ///
+    /// ⚠️ ON `MessageBubble`, NOT ON `ThreadView`. It is read from inside this view, where `Self` is
+    /// this struct — declaring it next door compiled as a member of the wrong type and did not
+    /// resolve. Sizes a bubble uses live with the bubble.
+    private static let locationMapHeight: CGFloat = 140
+
     @ViewBuilder private var bubbleSurface: some View {
         if isMe {
             Rectangle().fill(myFill)

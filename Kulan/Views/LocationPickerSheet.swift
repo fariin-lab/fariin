@@ -77,6 +77,52 @@ struct LocationPickerSheet: View {
     @State private var results: [MKMapItem] = []
     @State private var selectedName: String?
     @State private var userMovedMap = false   // the user actually panned the map to a spot
+    /// ⛔ MAP · SATELLITE · HYBRID — owner, 2026-08-24, as a thing he expected and did not find.
+    /// Three cases rather than a free-form style so the control and the map cannot disagree.
+    @State private var styleKind: MapStyleKind = .standard
+    /// What the pin is standing on, resolved from the coordinate — see `resolveName`. This is what
+    /// makes the sent bubble say a PLACE instead of "Location": without it the label was nil for
+    /// every share except one picked out of search, which is his "the name is not appearing".
+    @State private var resolvedName: String?
+    @State private var resolvedAddress: String?
+    @State private var geocodeTask: Task<Void, Never>?
+
+    enum MapStyleKind: String, CaseIterable, Identifiable {
+        case standard = "Map", satellite = "Satellite", hybrid = "Hybrid"
+        var id: String { rawValue }
+        var style: MapStyle {
+            switch self {
+            case .standard:  return .standard(elevation: .realistic)
+            case .satellite: return .imagery(elevation: .realistic)
+            case .hybrid:    return .hybrid(elevation: .realistic)
+            }
+        }
+    }
+
+    /// The name that travels with the share: what he picked out of search if he did, otherwise
+    /// whatever the pin resolved to. Nil only while a fresh spot is still being looked up.
+    private var sendName: String? { selectedName ?? resolvedName }
+
+    /// One reverse-geocode for wherever the pin is now, debounced, because the camera reports
+    /// continuously while a finger is moving and CLGeocoder rate-limits hard — a request per frame
+    /// gets the whole app throttled, and the only answer that matters is the one after it settles.
+    private func resolveName(for c: CLLocationCoordinate2D) {
+        geocodeTask?.cancel()
+        geocodeTask = Task {
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled else { return }
+            let placemarks = try? await CLGeocoder()
+                .reverseGeocodeLocation(CLLocation(latitude: c.latitude, longitude: c.longitude))
+            guard !Task.isCancelled, let p = placemarks?.first else { return }
+            await MainActor.run {
+                // `name` is the building or landmark; the thoroughfare is the fallback so a spot in
+                // the middle of a street still says the street rather than a plus-code.
+                resolvedName = p.name ?? p.thoroughfare ?? p.locality ?? p.country
+                resolvedAddress = [p.thoroughfare, p.locality, p.country]
+                    .compactMap { $0 }.joined(separator: ", ")
+            }
+        }
+    }
     @FocusState private var searchFocused: Bool
 
     // Only a location the user actually CHOSE counts: a spot they panned to, a search result they
@@ -92,10 +138,20 @@ struct LocationPickerSheet: View {
             Map(position: $camera) {
                 UserAnnotation()
             }
+            .mapStyle(styleKind.style)
             .ignoresSafeArea()
             .onMapCameraChange(frequency: .continuous) { ctx in
                 center = ctx.camera.centerCoordinate
                 if searchFocused == false && !results.isEmpty { results = [] }
+            }
+            // The name is looked up when the map STOPS, not while it moves. `onEnded` is the settle,
+            // which is the only camera value worth spending a geocode on.
+            .onMapCameraChange(frequency: .onEnd) { ctx in
+                let c = ctx.camera.centerCoordinate
+                center = c
+                // A spot chosen by hand is no longer the search result that was picked before it.
+                if userMovedMap { selectedName = nil }
+                resolveName(for: c)
             }
             // A finger drag on the map = the user deliberately choosing a spot (enables Send even with
             // no GPS / permission denied — they're pointing at a real place).
@@ -132,6 +188,34 @@ struct LocationPickerSheet: View {
             // instead of the screen's usable one. Pushing the header down by the top inset leaves
             // the map full-bleed and puts only the controls where they can be reached.
             .padding(.top, _locationTopInset())
+
+            // Map · Satellite · Hybrid, under the header and over the map. A plain segmented picker
+            // rather than a custom control: it is the shape iOS uses for exactly this choice, and it
+            // stays legible over both a street map and satellite imagery because the system draws it
+            // on its own background.
+            VStack(spacing: 8) {
+                Picker("", selection: $styleKind) {
+                    ForEach(MapStyleKind.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 280)
+
+                // What the pin is standing on. It appears as soon as the lookup answers, so the spot
+                // is named BEFORE it is sent rather than only afterwards in the bubble.
+                if let name = sendName, !name.isEmpty {
+                    VStack(spacing: 1) {
+                        Text(name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                        if let addr = resolvedAddress, !addr.isEmpty, addr != name {
+                            Text(addr).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 7)
+                    .background(.regularMaterial, in: Capsule())
+                    .transition(.opacity)
+                }
+            }
+            .padding(.top, _locationTopInset() + 56)
+            .animation(.easeOut(duration: 0.2), value: sendName)
         }
         // Locate-me + send + search pinned at the bottom.
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -177,7 +261,9 @@ struct LocationPickerSheet: View {
                 // Send Location — outputs the chosen (or current GPS) coordinates.
                 Button {
                     guard let c = sendCoordinate else { fetcher.request(); return }
-                    onSend(c.latitude, c.longitude, selectedName)
+                    // The resolved name travels with it, so the bubble can say the place rather
+                    // than "Location" — see `sendName`.
+                    onSend(c.latitude, c.longitude, sendName)
                     dismiss()
                 } label: {
                     Label("Send Location", systemImage: "location.fill")
