@@ -60,6 +60,23 @@ import UIKit
 // access it simply shows whatever the user granted. Photos open the chat editor
 // (crop/caption); videos go straight into the send pipeline.
 struct AttachRecentsStrip: View {
+    /// ⛔ 44, THEIR NUMBER, READ FROM THEIR SOURCE — owner, 2026-08-24: "make it like tg".
+    ///
+    /// The reference app lays its picker's header controls out inside a 44pt-high container
+    /// (`MediaPickerScreen`, `containerSize: CGSize(width: …, height: 44.0)`), inset 16 from the
+    /// screen edges (`barButtonSideInset`). Ours were 48 with the same 16 inset, so the inset already
+    /// matched and only the button was four points over.
+    ///
+    /// ⚠️ BOTH BUTTONS, NOT JUST THE ✕. The close and the selected-count sit either side of the
+    /// title and read as a pair; changing one would leave the header lopsided. Their glyphs are
+    /// unchanged — 44 is the size the reference states for the control, and the marks inside ours
+    /// were never what he was comparing.
+    ///
+    /// ⚠️ ONLY THIS SHEET. `CloseXButton` in the design system is still 48 and is used by the GIF
+    /// picker, Edit Profile and the wallpaper sheet; this is the photo sheet's header, which is the
+    /// one he measured against theirs.
+    private static let headerButtonSize: CGFloat = 44
+
     var onCamera: () -> Void = {}
     var onClose: () -> Void = {}
     var onPickPhoto: (UIImage) -> Void
@@ -186,8 +203,10 @@ struct AttachRecentsStrip: View {
                 } label: {
                     Image(systemName: (selectedAlbum != nil || showAlbums) ? "chevron.left" : "xmark")
                         .font(.system(size: 18, weight: .semibold))
+                        // Their colour change, kept: the glyph follows the scheme rather than being
+                        // pinned white. Only the SIZE is mine — see `headerButtonSize`.
                         .foregroundStyle(.primary)
-                        .frame(width: 48, height: 48)
+                        .frame(width: Self.headerButtonSize, height: Self.headerButtonSize)
                         .liquidGlass(Circle(), interactive: true)
                 }
                 Spacer()
@@ -196,7 +215,7 @@ struct AttachRecentsStrip: View {
                 if !selectedIds.isEmpty {
                     Text("\(selectedIds.count)")
                         .font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
-                        .frame(width: 48, height: 48)
+                        .frame(width: Self.headerButtonSize, height: Self.headerButtonSize)
                         .liquidGlass(Circle(), interactive: true, tint: Theme.defaultBubble(false))
                 }
             }

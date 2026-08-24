@@ -3109,6 +3109,23 @@ struct ThreadView: View {
     /// two spacers centre it. Four tiles (GIF · Files · Location · Poll in a group) come to about
     /// 300pt, which still fits the narrowest phone we build for; the day a fifth arrives, the scroll
     /// view comes back.
+    /// ⛔ THE REFERENCE APP'S OWN NUMBERS, READ FROM ITS SOURCE — owner, 2026-08-24, after asking
+    /// for them rather than for an eyeball match. Their attachment panel states all of these:
+    ///
+    ///   icon        30 × 30      (`iconSize`)
+    ///   label       10pt medium  (`titleFont = Font.medium(10.0)`)
+    ///   bar height  62           (`glassPanelHeight`)
+    ///   bar bottom  the layout's own `insets.bottom` and nothing added
+    ///
+    /// ⚠️ THE BOTTOM IS A RULE, NOT A NUMBER, and it is the one that was actually different. Ours
+    /// added a flat 10 ON TOP of the inset the sheet already carries, so the bar floated ten points
+    /// higher than theirs on a phone with a home indicator and sat level with it on one without.
+    /// Theirs composes the bar's height from the inset itself. Dropping our 10 is what makes the two
+    /// agree on every device instead of on one.
+    private static let attachBarHeight: CGFloat = 62
+    /// Their icon, stated once so the tile and anything else that draws one cannot drift apart.
+    private static let attachIconSize: CGFloat = 30
+
     @ViewBuilder private var sourceBar: some View {
         if !recentsHasSelection {
             HStack(spacing: 0) {
@@ -3124,12 +3141,11 @@ struct ThreadView: View {
                     if isGroup { attachTile("chart.bar", "Poll") { showPollComposer = true } }
                 }
                 .padding(.horizontal, 6)
-                .padding(.vertical, 4)
+                .frame(height: Self.attachBarHeight)
                 .liquidGlass(Capsule())   // the ONE piece of glass here, and the only background
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
-            .padding(.bottom, 10)
         }
     }
 
@@ -3162,15 +3178,25 @@ struct ThreadView: View {
                 Group {
                     if icon.hasPrefix("ic_") {
                         Image(icon).renderingMode(.template).resizable().scaledToFit()
-                            .frame(width: 21, height: 21)
+                            .frame(width: Self.attachIconSize, height: Self.attachIconSize)
                     } else {
-                        Image(systemName: icon).font(.system(size: 18, weight: .medium))
+                        // An SF Symbol draws smaller than the point size it is asked for, so the
+                        // symbol case is sized by its frame like the drawings are — otherwise Poll
+                        // would sit visibly smaller than the three beside it, which is what the old
+                        // 18-against-21 pair did.
+                        Image(systemName: icon)
+                            .font(.system(size: Self.attachIconSize * 0.78, weight: .medium))
+                            .frame(width: Self.attachIconSize, height: Self.attachIconSize)
                     }
                 }
                 .foregroundStyle(.primary)
-                Text(label).font(.caption2.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
+                // 10pt medium, their `titleFont`. A stated size rather than `.caption2`, which is
+                // about 11 and moves with Dynamic Type — this row is a fixed-height bar and a label
+                // that grows would be clipped by it.
+                Text(label).font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.primary).lineLimit(1)
             }
-            .frame(width: 72, height: 48)
+            .frame(width: 72, height: Self.attachBarHeight - 8)
             .contentShape(Capsule())
         }
         // The app's own press feel, rather than nothing at all — same style the story editor's
