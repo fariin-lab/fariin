@@ -236,8 +236,11 @@ struct VoiceMessageView: View {
                 bottomLine
             }
         }
-        .frame(width: Self.contentWidth(for: message),
-               minHeight: Self.contentHeight, alignment: .leading)
+        .frame(width: Self.contentWidth(for: message), alignment: .leading)
+        // A SECOND frame, because there is no `frame(width:minHeight:)` — the fixed-size signature
+        // takes width and height, and mixing a fixed width with a minimum height needs the two
+        // stated separately.
+        .frame(minHeight: Self.contentHeight, alignment: .leading)
         .animation(.easeOut(duration: 0.2), value: unheard)
         // ⚠️ The RAW objectWillChange, with the main-queue hop INSIDE the closure — not
         // `.receive(on:)`. Wrapping the publisher rebuilt it on every body evaluation, and each
