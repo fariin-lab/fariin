@@ -660,7 +660,7 @@ struct ThreadView: View {
                     .liquidGlass(Circle(), interactive: true)
             }
             .buttonStyle(.plain)
-            .padding(.trailing, 16)
+            .padding(.trailing, floatingButtonInset)   // the composer's edge — see `floatingButtonInset`
             .transition(.scale.combined(with: .opacity))
         }
     }
@@ -763,7 +763,7 @@ struct ThreadView: View {
                         }
                     }
             }
-            .padding(.trailing, 16)
+            .padding(.trailing, floatingButtonInset)   // the composer's edge — see `floatingButtonInset`
             .transition(.scale.combined(with: .opacity))
             .animation(.spring(response: 0.32, dampingFraction: 0.72), value: isAtBottom)
         }
@@ -4734,6 +4734,22 @@ struct ThreadView: View {
     // `KeyboardWatcher.topOnScreen` on the device before touching these constants.
     private static let composerKeyboardGap: CGFloat = 8
     private static let composerRestDip: CGFloat = 5
+
+    /// ⛔ THE FLOATING BUTTONS SIT ON THE COMPOSER'S OWN EDGE — owner, 2026-08-24: the down-arrow
+    /// "is using old padding on the right side, use the padding the composer is using… both when
+    /// the keyboard is open and when it is closed".
+    ///
+    /// They were a hardcoded 16 while the composer had moved to deriving its inset from iOS, so the
+    /// arrow hung past the composer's right edge — his screenshot has it half off the screen. This
+    /// is the same expression the composer's `.padding(.horizontal)` uses, so the two edges are one
+    /// number by construction rather than by being kept in step: the system margin with the
+    /// keyboard up, and the margin-or-band expression at rest.
+    ///
+    /// ⚠️ IT MOVES WITH THE KEYBOARD FOR FREE. `composerKeyboardUp` is read off the composer's own
+    /// geometry, so these buttons change inset on exactly the frame the composer does.
+    private var floatingButtonInset: CGFloat {
+        composerKeyboardUp ? chromeMargin : max(chromeMargin, chromeBottomInset - Self.composerRestDip)
+    }
 
     /// iOS's numbers, reported by `SystemChromeReader`; the defaults only cover the first frame.
     @State private var chromeMargin: CGFloat = 20
