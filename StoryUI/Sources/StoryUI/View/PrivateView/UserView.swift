@@ -336,7 +336,7 @@ struct StoryMoreMenu: UIViewRepresentable {
             .joined(separator: "\u{1F}")
     }
 
-    final class Coordinator {
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var signature: String?
         /// The pause this menu owns, so it is released exactly once and only by the menu that took it.
         var pausedForMenu = false
@@ -385,6 +385,19 @@ struct StoryMoreMenu: UIViewRepresentable {
                 forName: UIWindow.didBecomeHiddenNotification, object: nil, queue: .main, using: onHidden))
         }
 
+        /// The finger has landed on the "…" — see the recognizer in `makeUIView`. Only `.began` is
+        /// acted on: the story must stop as the menu comes up, and every way it goes away again is
+        /// already covered.
+        @objc func pressBegan(_ g: UILongPressGestureRecognizer) {
+            guard g.state == .began, let host = g.view else { return }
+            pause(host: host)
+        }
+
+        /// Never exclusive: the button's own interaction has to keep working, so this recognizer
+        /// runs beside whatever else claims the touch rather than instead of it.
+        func gestureRecognizer(_ g: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+
         func resume() {
             guard pausedForMenu else { return }
             pausedForMenu = false
@@ -414,6 +427,29 @@ struct StoryMoreMenu: UIViewRepresentable {
                     for: .touchDown)
         b.addAction(UIAction { _ in coordinator.resume() }, for: .touchUpOutside)
         b.addAction(UIAction { _ in coordinator.resume() }, for: .touchCancel)
+        // ⛔ A THIRD DOOR, AND IT IS THE ONE THAT CANNOT BE SWALLOWED — owner, 2026-08-24, third
+        // report on this menu: "when I click the 3 dot menu the story is still running".
+        //
+        // ⚠️ BOTH DOORS ABOVE ARE CONTROL EVENTS, AND A MENU BUTTON NEED NOT SEND EITHER. With
+        // `showsMenuAsPrimaryAction`, the touch is claimed by the button's own context-menu
+        // interaction, which presents the menu without necessarily running the control-event path —
+        // so on a system where that is what happens, neither `.menuActionTriggered` nor `.touchDown`
+        // arrives and the pause is simply never taken. That is consistent with the report: not a
+        // pause released too early (the last fix), a pause never started.
+        //
+        // A recognizer sees the touch before any of that is decided. `minimumPressDuration = 0` makes
+        // it fire on contact, `cancelsTouchesInView = false` means the button still gets the touch
+        // exactly as before, and recognising alongside everything else means it cannot block the
+        // menu from opening. It only ever calls `pause`, which is idempotent — releasing stays with
+        // the window notifications and the item actions, which were never the failing half.
+        let press = UILongPressGestureRecognizer(target: context.coordinator,
+                                                 action: #selector(Coordinator.pressBegan(_:)))
+        press.minimumPressDuration = 0
+        press.cancelsTouchesInView = false
+        press.delaysTouchesBegan = false
+        press.delaysTouchesEnded = false
+        press.delegate = context.coordinator
+        b.addGestureRecognizer(press)
         // ⚠️ ALL FOUR PRIORITIES DROPPED, AND IT IS THE TAP TARGET THAT DEPENDS ON IT. A
         // `UIButton` with no title and no image has a tiny intrinsic size, and SwiftUI sizes a
         // representable from that unless the view says it will take whatever it is given — so the
