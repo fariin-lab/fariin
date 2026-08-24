@@ -5301,12 +5301,18 @@ struct ThreadView: View {
                         // REVIEWING: play it back. The waveform is the finished one, not the live meter —
                         // same component the sent bubble uses, so what you check is what they will see.
                         Button { togglePreview() } label: {
-                            // Smaller than it was (owner 2026-08-24, image 2: "play icon add small
-                            // size"). A bare glyph, no disc — the sent bubble's disc is a different
-                            // thing and this one lives inside the pill.
+                            // ⛔ 22, AND IT GOES UP FROM THE ORIGINAL 15 — owner, 2026-08-24. I read his
+                            // "play icon add small size" as "make it a small size" and shrank it to
+                            // 13; he meant ADD size, by a small amount. Measured off the image he
+                            // sent to settle it, the triangle stands about 60% of the pill's height,
+                            // which on a 40pt pill is 22-24pt of glyph.
+                            //
+                            // A bare glyph with no disc, which is what his picture shows — the sent
+                            // bubble's filled disc is a different control and this one lives inside
+                            // the pill.
                             Image(systemName: previewPlaying ? "pause.fill" : "play.fill")
-                                .font(.system(size: 13)).foregroundStyle(Theme.accent(dark))
-                                .frame(width: 18, height: 18)
+                                .font(.system(size: 22)).foregroundStyle(Theme.accent(dark))
+                                .frame(width: 26, height: 26)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
