@@ -82,9 +82,9 @@ struct VoiceMessageView: View {
     /// per-note again the signature will not have to change back.
     /// ⛔ 112, DOWN FROM 170 — owner, 2026-08-24, image 2. The speed pill moved onto this line, and
     /// in his reference the bubble does not get wider to make room for it: the wave gives up the
-    /// space instead. 32 + 8 + 112 + 8 + 42 = 202, against the 210 the old disc-plus-wave came to,
+    /// space instead. 40 + 8 + 104 + 8 + 42 = 202, against the 210 the old disc-plus-wave came to,
     /// so the bubble keeps the width he already signed off.
-    static func waveWidth(for message: Message) -> CGFloat { 112 }
+    static func waveWidth(for message: Message) -> CGFloat { 104 }
     /// COMPACT, 2026-08-13, on his side-by-side ("make it like the second one… ours is bigger and
     /// wider"). Three things were making it bigger and all three come down here:
     ///
@@ -100,7 +100,17 @@ struct VoiceMessageView: View {
     ///
     /// ⚠️ EVERY NUMBER LIVES HERE AND NOWHERE ELSE, so the pre-measure (which calls this) and the
     /// render can never disagree — that equality is what stops the bloom described above.
-    static let discSize: CGFloat = 32
+    /// ⛔ 40, UP FROM 32 — owner, 2026-08-24, image 2, after he asked me to check the disc before
+    /// and after the redesign. The honest answer was that the redesign never touched it: it moved
+    /// the playhead and the speed pill and left this at 32. Measured off both crops at the same
+    /// scale, his reference draws the disc about a third of the bubble's height where ours is a
+    /// quarter — roughly 40pt against 32.
+    ///
+    /// ⚠️ IT IS NOW TALLER THAN THE WAVE (40 against 22), which is the arrangement in his picture:
+    /// the disc anchors the row and the wave is the quieter thing beside it. The row centres on the
+    /// disc, so nothing else moves, and `contentWidth` picks the change up on its own because it is
+    /// stated in terms of this constant.
+    static let discSize: CGFloat = 40
     static let waveHeight: CGFloat = 22
     static let discGap: CGFloat = 8
     /// The speed pill's slot on the waveform's line, gap included — see `speedPill`. A STATED width
@@ -279,7 +289,9 @@ struct VoiceMessageView: View {
                     .frame(width: Self.discSize, height: Self.discSize)
                     .overlay {
                         Image(systemName: playing ? "pause.fill" : "play.fill")
-                            .font(.system(size: 14))
+                            // Scaled with the disc: 14 was sized for a 32 circle and read as a
+                            // triangle lost inside the larger one. Same ratio as his image 2.
+                            .font(.system(size: 17))
                             // Colour is irrelevant under destinationOut — only the alpha is read, and
                             // this has to be fully opaque to cut a clean hole.
                             .foregroundStyle(.black)
@@ -532,7 +544,11 @@ struct WaveformBars: View {
                 // why the gesture must not come back here.
                 Capsule()
                     .fill(played)
-                    .frame(width: 2.5, height: Self.waveHeight)
+                    // The wave's own height, read from the geometry this view was given rather than
+                    // from VoiceMessageView's constant: this bars view is also drawn by the recorder
+                    // strip and the gallery at other heights, and a playhead taller than its wave
+                    // would poke out of both.
+                    .frame(width: 2.5, height: geo.size.height)
                     .frame(width: 40, height: 40)
                     .offset(x: sx - 20)
                     // VISUAL ONLY. This used to carry its own DragGesture(minimumDistance: 0) behind a
