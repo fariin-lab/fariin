@@ -758,7 +758,18 @@ struct ThreadView: View {
                     .foregroundStyle(dark ? .white : .black)
                     .shadow(color: (dark ? Color.black : Color.white).opacity(0.35), radius: 2)
                     .frame(width: 40, height: 40)
-                    .liquidGlass(Circle(), interactive: true)
+                    // ⛔ NOT INTERACTIVE — owner, 2026-08-24: "when I click or hold the button it
+                    // looks like a translucent background".
+                    //
+                    // ⚠️ `interactive()` IS THE PRESSED LOOK, NOT THE RESTING ONE. iOS 26's touch
+                    // reactive glass brightens and swells while a finger is on it, which reads as
+                    // depth over a plain background and as the disc DISSOLVING over a busy wallpaper
+                    // — his shot is a blue nebula, and the pressed circle all but vanished into it.
+                    // The resting glass is unchanged, so nothing about how it normally looks moves.
+                    //
+                    // ⚠️ It stays interactive nowhere else by accident: the composer's + and mic sit
+                    // on the composer's own glass and are read against that, not against a picture.
+                    .liquidGlass(Circle())
                     .overlay(alignment: .top) {
                         if newWhileAway > 0 {
                             Text("\(newWhileAway)").font(.system(size: 11, weight: .bold))
