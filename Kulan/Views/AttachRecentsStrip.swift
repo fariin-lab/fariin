@@ -118,9 +118,14 @@ struct AttachRecentsStrip: View {
 
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 3)   // 3 per row (user request)
 
-    /// The header's own height: the 48pt close button plus its 8pt bottom padding. The grid and the
+    /// The header's own height: the 44pt close button plus 8 above it and 8 below. The grid and the
     /// album list start this far down (see `grid`), so nothing sits UNDER an opaque bar at rest.
-    private let headerHeight: CGFloat = 56
+    ///
+    /// ⚠️ KEEP THIS EQUAL TO WHAT `header` ACTUALLY PADS TO. It is not decoration — `contentMargins`
+    /// feeds it to both scroll views as their top margin, so a number smaller than the bar hides the
+    /// first row of photos under it and a larger one leaves a strip of empty sheet he has rejected
+    /// twice. It was still 56 for a 48pt button after the button became 44 and gained 8 on top.
+    private let headerHeight: CGFloat = 60
 
     var body: some View {
         // THE PHOTOS RUN UNDER THE HEADER (his reference, 2026-08-14: "make the white follow the
@@ -226,6 +231,16 @@ struct AttachRecentsStrip: View {
             }
         }
         .padding(.horizontal, 16)
+        // ⛔ THE ✕ WAS RIDING THE SHEET'S ROUNDED CORNER — owner, 2026-08-24, magnified: his shot shows
+        // the glass circle crossing the corner curve and poking outside it. There was no top padding at
+        // all, so a 44pt circle began at the sheet's very first pixel, where the corner radius is still
+        // cutting the surface away.
+        //
+        // ⚠️ THIS IS A BAR, SO IT IS SPACED LIKE ONE. His words for what he wants: system chrome
+        // attached to the edge, not app content floating in the safe area. A bar item is CENTRED in its
+        // bar, and the bar starts below the grabber — it does not start at the sheet's own edge. 8 above
+        // and 8 below puts the circle clear of both the grabber and the corner, and centres it.
+        .padding(.top, 8)
         .padding(.bottom, 8)
         // ⚠️ A SURFACE UNDER THE HEADER. Owner 2026-08-17, with the sheet open: "Recents ▾" and the
         // X sat directly on the photo grid, so the title and its chevron dissolved into whatever

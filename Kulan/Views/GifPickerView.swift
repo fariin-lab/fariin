@@ -160,6 +160,13 @@ struct GifPickerView: View {
             // The mood row pins under the title; the grid scrolls beneath it. Search stays at the
             // bottom (native iOS 26 placement — the owner's pick over the reference's top bar).
             .safeAreaInset(edge: .top, spacing: 0) { categoryRow }
+            // ⛔ INLINE, AND WITHOUT THIS LINE THERE IS AN EMPTY WHITE BAND UNDER THE HEADER — owner,
+            // 2026-08-24, circled. Nothing draws that band: with no display mode stated, iOS uses the
+            // LARGE title layout and reserves the large-title strip beneath the bar. The title here is
+            // a `.principal` toolbar item, so that reserved strip has nothing in it and renders as a
+            // gap between "Choose GIF" and the mood pills. Inline is the layout this header was drawn
+            // for anyway — one bar, title centred in it.
+            .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, prompt: "Search GIFs")
             .onChange(of: query) { _, _ in
                 searchTask?.cancel()

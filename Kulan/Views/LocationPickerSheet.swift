@@ -166,20 +166,33 @@ struct LocationPickerSheet: View {
                     .allowsHitTesting(false)
             }
 
-            // Header: title + X (matches the design).
+            // Header: X on the LEADING edge, title centred.
+            //
+            // ⛔ THE ✕ MOVED OFF THE RIGHT BECAUSE MAPKIT OWNS THAT CORNER — owner, 2026-08-24, with
+            // the ✕ and the compass circled together. `Map` draws its compass at the top-TRAILING
+            // corner, and our close button was put in the same place, so the two sat on top of each
+            // other. Nothing was going to separate them there: the compass appears and disappears on
+            // its own as the map rotates, so on a north-up map the collision is invisible and the
+            // moment the map turns it is not.
+            //
+            // Leading is also where this app already puts a sheet's close: the GIF picker and the
+            // photo sheet both do, and both get it from a real toolbar's `.topBarLeading`. Same
+            // position, reached the same way a bar item would be.
             HStack {
-                Spacer().frame(width: 48)
-                Spacer()
-                Text("Select Location").font(.headline)
-                Spacer()
                 Button { dismiss() } label: {
                     Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
                         .foregroundStyle(.primary)
-                        .frame(width: 48, height: 48)
+                        .frame(width: 44, height: 44)
                         .liquidGlass(Circle(), interactive: true)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                Spacer()
+                Text("Select Location").font(.headline)
+                Spacer()
+                // Balances the title against the button so it is centred on the SCREEN, not on the
+                // space left over beside the ✕.
+                Spacer().frame(width: 44)
             }
             .padding(.horizontal, 12)
             // ⛔ INSIDE THE SAFE AREA — owner, 2026-08-24: the ✕ sat under the status bar and the
@@ -194,11 +207,19 @@ struct LocationPickerSheet: View {
             // stays legible over both a street map and satellite imagery because the system draws it
             // on its own background.
             VStack(spacing: 8) {
+                // ⛔ IT NEEDS A SURFACE OF ITS OWN — owner, 2026-08-24: "to bar aits hard to see".
+                // A segmented picker draws its own background, but that background is translucent and
+                // it was sitting straight on a street map, so the roads and labels read through both
+                // the track and the selected segment. Backing it with an opaque material and lifting
+                // it off the map with a shadow is what separates a control from the picture under it.
                 Picker("", selection: $styleKind) {
                     ForEach(MapStyleKind.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .frame(maxWidth: 280)
+                .padding(3)
+                .background(.thickMaterial, in: Capsule())
+                .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
 
                 // What the pin is standing on. It appears as soon as the lookup answers, so the spot
                 // is named BEFORE it is sent rather than only afterwards in the bubble.
@@ -210,11 +231,18 @@ struct LocationPickerSheet: View {
                         }
                     }
                     .padding(.horizontal, 14).padding(.vertical, 7)
-                    .background(.regularMaterial, in: Capsule())
+                    // Thick, not regular, and for the same reason as the picker above it: a regular
+                    // material over pale map tiles let the street names underneath compete with the
+                    // place name, which is the one piece of text on this screen that has to be read
+                    // before Send is pressed.
+                    .background(.thickMaterial, in: Capsule())
+                    .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
                     .transition(.opacity)
                 }
             }
-            .padding(.top, _locationTopInset() + 56)
+            // Header height + the gap under it. 44 is the close button, which came down from 48 with
+            // the bar-item sizing above, so this follows it rather than leaving 4pt of drift.
+            .padding(.top, _locationTopInset() + 52)
             .animation(.easeOut(duration: 0.2), value: sendName)
         }
         // Locate-me + send + search pinned at the bottom.

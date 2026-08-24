@@ -424,6 +424,27 @@ struct ThreadView: View {
                         }
                     }
             }
+            // ⛔ THE RECORDING PAUSE / CONTINUE BUTTON LIVES HERE, ON THE CHAT, NOT ON THE BAR — owner,
+            // 2026-08-24: it did nothing when tapped. See `lockedRecordingBar` for the mechanism; in
+            // one line, an overlay offset above its parent's frame draws but is never hit-tested, and
+            // the bar cannot be grown to contain it because its height is the list's bottom inset.
+            //
+            // This container is the whole chat, so a point above the bar is inside it and the touch
+            // lands. It is positioned from the same two numbers the old offset used — the measured bar
+            // height and `lockedBarRowGap` — so it sits where it has been sitting, and the trailing
+            // inset repeats the composer's own resting expression so it stays in the send button's
+            // column on every device instead of on the one it was eyeballed against.
+            .overlay(alignment: .bottomTrailing) {
+                if recordLocked {
+                    recordStateButton
+                        .frame(width: 40, height: 40)
+                        .padding(.trailing, composerKeyboardUp
+                                 ? chromeMargin
+                                 : max(chromeMargin, chromeBottomInset - Self.composerRestDip))
+                        .padding(.bottom, composerBarHeight + Self.lockedBarRowGap)
+                        .transition(.opacity)
+                }
+            }
             // A key that changes WHILE the chat is open (their reinstall lands mid-conversation) has
             // to say so there and then, not on the next open.
             .onReceive(NotificationCenter.default.publisher(for: .peerKeyChanged)) { note in
@@ -3163,6 +3184,12 @@ struct ThreadView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
+            // ⛔ 29, HIS NUMBER, GIVEN 2026-08-24 WITH THE BAR AND THE GAP CIRCLED. This reverses the
+            // rule stated directly above, which dropped our flat 10 so the bar composed its bottom
+            // from the sheet's own inset the way the reference app does. He has now measured the
+            // result on his phone and asked for a stated 29 instead. His number stands; the reasoning
+            // above is left in place so the reversal reads as a decision rather than a mistake.
+            .padding(.bottom, 29)
         }
     }
 
@@ -5496,28 +5523,41 @@ struct ThreadView: View {
                 .liquidGlass(Capsule(), interactive: true)
                 .clipShape(Capsule())   // keep the dotted waveform fully inside the pill's rounded edges
                 Button { sendRecording() } label: {
-                    // BLUE send button (white arrow on blue Liquid Glass), matching the composer send.
+                    // ⛔ THE CHAT'S OWN COLOUR, NOT A FIXED BLUE — owner, 2026-08-24, with a red chat
+                    // open and a blue arrow in it: "it should work like the Send Message button, with
+                    // a colour that matches the bubble colour I'm using".
+                    //
+                    // The comment that stood here said this matched the composer send, and it had
+                    // stopped being true: that one resolves `chatColorSpec?.swatch` and falls back to
+                    // the default only when the chat has no custom colour, while this one named the
+                    // default outright. Same expression on both now, so a chat colour cannot reach one
+                    // send button and miss the other.
                     Image(systemName: "arrow.up").font(.system(size: 18, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 40, height: 40)
-                        .liquidGlass(Circle(), interactive: true, tint: Theme.defaultBubble(dark))
+                        .liquidGlass(Circle(), interactive: true,
+                                     tint: chatColorSpec?.swatch ?? Theme.defaultBubble(dark))
                         .contentShape(Circle())
                 }
             }
             .frame(height: 40)
         }
-        // Pause (or continue) rides ABOVE the bar, on the send's side, floating over the messages.
-        // Not part of the row below it: it neither disposes of the note nor commits it, and lining
-        // it up with the two that do made three equal circles out of two decisions and a toggle.
+        // ⛔ THE PAUSE BUTTON IS NOT ATTACHED HERE ANY MORE, AND THAT IS THE FIX — owner, 2026-08-24,
+        // circled: tapping it did nothing. It was an overlay on this bar, offset up by its own height
+        // plus the gap, and it DREW in exactly the right place the whole time, which is why it read
+        // as a dead button rather than a missing one.
         //
-        // The offset is its own height plus the gap, so the spacing to the send button is exactly
-        // `lockedBarRowGap` — the same 10 + 6 the down-arrow keeps from the composer — with no row
-        // slack able to creep in, because there is no second row any more.
-        .overlay(alignment: .topTrailing) {
-            recordStateButton
-                .frame(height: 40)
-                .offset(y: -(40 + Self.lockedBarRowGap))
-        }
+        // ⚠️ AN OVERLAY OFFSET OUTSIDE ITS PARENT'S FRAME IS DRAWN BUT NEVER HIT-TESTED. A touch is
+        // resolved by walking down the hierarchy, and this bar's frame rejects every point above its
+        // own top edge before the overlay is reached — so the taps went to the message list behind
+        // it. The note that stood here claimed the opposite, citing the hold hint and the record mic
+        // as riding outside the same way; both are things nobody taps, so neither could have shown
+        // this up.
+        //
+        // Growing this bar to contain the button is not available: its height is spent twice, as the
+        // safeAreaBar inset AND as `composerBarHeight`, so containing it here is precisely the
+        // chat-scrolls-up behaviour he rejected. It hangs off the chat container instead, which has
+        // full-screen bounds, so the touch lands and not one point of height is added here.
         .animation(.spring(response: 0.28, dampingFraction: 0.85), value: reviewingNote)
     }
 
@@ -5562,6 +5602,17 @@ struct ThreadView: View {
             previewWaveform = wf
             previewProgress = 0
             impact(.light)
+            // ⛔ WARM IT NOW, NOT ON THE TAP — owner, 2026-08-24: "when i click play is not realtime,
+            // is playing late". Nothing was slow about playback itself; the FIRST tap was paying for
+            // three things before a sample could leave. Building an AVAudioPlayer opens and parses the
+            // file, `prepareToPlay` allocates its buffers, and `setCategory` + `setActive` reconfigure
+            // the audio route — and that last pair is the expensive one, blocking the main thread for
+            // as long as the route takes to change.
+            //
+            // All of it is known the moment the review appears, so it happens here and the tap is left
+            // with `play()`, which starts immediately. `startPreviewPlayback` still does the same work
+            // behind a nil check, so a tap that somehow arrives first is correct, only slower.
+            warmPreviewPlayback(url)
             // ⚠️ NO autoplay. The reference parks the pill with a play triangle waiting; hearing it
             // is a choice, and with Resume on the bar an unasked-for playback would talk over the
             // person deciding whether to keep going.
@@ -5622,8 +5673,15 @@ struct ThreadView: View {
         previewTimer?.invalidate(); previewTimer = nil
     }
 
-    private func startPreviewPlayback() {
-        guard let url = previewURL else { return }
+    /// Everything the first tap on play used to pay for, done while the review is appearing instead.
+    ///
+    /// Called from `beginPreview`. Safe to call more than once: the player is built only when there
+    /// isn't one, and setting the session to what it already is costs nothing.
+    ///
+    /// ⚠️ THE SESSION IS THE SLOW HALF, not the file. Changing the category and activating the session
+    /// blocks the caller while the route actually changes, which is why the delay was audible on the
+    /// first tap and gone on the second.
+    private func warmPreviewPlayback(_ url: URL) {
         if previewPlayer == nil {
             previewPlayer = try? AVAudioPlayer(contentsOf: url)
             previewPlayer?.prepareToPlay()
@@ -5634,6 +5692,13 @@ struct ThreadView: View {
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .duckOthers])
         try? session.setActive(true)
+    }
+
+    private func startPreviewPlayback() {
+        guard let url = previewURL else { return }
+        // Normally a no-op by now — `beginPreview` warmed both the player and the session as the
+        // review appeared. It stays here so a play that somehow lands first still works.
+        warmPreviewPlayback(url)
         previewPlaying = previewPlayer?.play() ?? false
         if previewPlaying { startPreviewTicker() }
     }
