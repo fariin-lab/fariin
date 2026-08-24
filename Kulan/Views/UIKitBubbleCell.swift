@@ -1,3 +1,4 @@
+import SwiftUI   // Theme.receivedSurface hands back a SwiftUI Color for the flat case
 import UIKit
 
 // ===== UIKit bubble migration (reference-style unified scrolling surface) =====
@@ -23,6 +24,14 @@ struct UIKitBubbleModel: Equatable {
     var tick: Tick
     var radii: Radii
     var topSpacing: CGFloat   // cluster spacing above this bubble (14 first-in-cluster, else 2)
+    /// Is this bubble sitting on a wallpaper, and if so, the blurred picture of it. An incoming
+    /// bubble is a flat fill without one and a SLICE of that picture with one — see
+    /// `Theme.receivedSurface`, which this path has to agree with or a chat draws two different
+    /// incoming surfaces depending on which route a message took. Both are in the Equatable, so a
+    /// wallpaper applied live, or a theme flip that makes a new picture, reconfigures every visible
+    /// bubble by itself.
+    var onWallpaper: Bool = false
+    var wallpaperBlur: WallpaperBlurState? = nil
 }
 
 // ===== Shared palette (dynamic — adapts to light/dark like the SwiftUI Theme) =====
@@ -57,6 +66,11 @@ final class UIKitBubbleView: UIView {
     private var model: UIKitBubbleModel?
     private(set) var lastCornerPath: UIBezierPath?   // exact bubble outline → context-menu lift preview
 
+    // The slice of blurred wallpaper behind an INCOMING bubble on a wallpaper — see `WallpaperBlur`.
+    // Built on first use and kept after that: a recycled cell swings between the two surfaces as it
+    // is reused for a sent and a received message.
+    private var sliceView: WallpaperBlurSliceView?
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         layer.addSublayer(bubbleLayer)
@@ -76,8 +90,46 @@ final class UIKitBubbleView: UIView {
         model = m
         textLabel.attributedText = Self.textAttr(m)   // body + invisible trailing meta spacer
         metaLabel.attributedText = Self.metaAttr(m)
-        bubbleLayer.fillColor = (m.isMe ? BubblePalette.myFill : BubblePalette.receivedFill).cgColor
+        applySurface(m)
         setNeedsLayout()
+    }
+
+    /// Paint the bubble, or stop painting it and show the wallpaper's blurred picture through it.
+    ///
+    /// MY bubbles are always a fill — a chat colour is a colour and a wallpaper does not change that.
+    /// THEIRS is whatever `Theme.receivedSurface` decides, the same call the SwiftUI bubbles make:
+    /// a flat colour with no wallpaper (or under Reduce Transparency), else a slice of the blurred
+    /// wallpaper masked to this bubble's own outline. Both surfaces live in one view because cells
+    /// are recycled: the very next message this view draws may be the other kind.
+    private func applySurface(_ m: UIKitBubbleModel) {
+        guard !m.isMe else {
+            bubbleLayer.fillColor = BubblePalette.myFill.cgColor
+            sliceView?.isHidden = true
+            return
+        }
+        let dark = traitCollection.userInterfaceStyle == .dark
+        switch Theme.receivedSurface(dark, onWallpaper: m.onWallpaper, blur: m.wallpaperBlur) {
+        case .flat(let c):
+            bubbleLayer.fillColor = UIColor(c).cgColor
+            sliceView?.isHidden = true
+        case .slice(let state):
+            // The fill has to go to CLEAR, not stay underneath: the slice is opaque and would cover
+            // it, but a fill that is still there is a fill somebody will one day see at an edge.
+            bubbleLayer.fillColor = UIColor.clear.cgColor
+            if sliceView == nil {
+                let v = WallpaperBlurSliceView()
+                insertSubview(v, at: 0)   // under both labels
+                sliceView = v
+            }
+            sliceView?.state = state
+            sliceView?.isHidden = false
+        case .material:
+            // No picture could be made for this wallpaper. The flat grey is the honest fallback on
+            // this path — a live material here would be a second mechanism for a case that should
+            // not happen, and the SwiftUI bubbles only keep it for the preview platters.
+            bubbleLayer.fillColor = BubblePalette.receivedFill.cgColor
+            sliceView?.isHidden = true
+        }
     }
 
     // ── Attributed strings ──
@@ -177,6 +229,14 @@ final class UIKitBubbleView: UIView {
         let path = Self.cornerPath(bubble, m.radii)
         bubbleLayer.path = path.cgPath
         lastCornerPath = path
+        // The slice wears the bubble's own outline, not a corner radius. These bubbles have four
+        // different radii (the cluster shape squares off the side that continues), so a rounded-rect
+        // mask would round the two corners the shape deliberately keeps sharp.
+        if let slice = sliceView, !slice.isHidden {
+            slice.frame = self.bounds
+            slice.maskPath = path
+            slice.reposition()
+        }
         textLabel.frame = CGRect(x: BubblePalette.hPad, y: BubblePalette.vPad,
                                  width: bubble.width - BubblePalette.hPad * 2,
                                  height: bubble.height - BubblePalette.vPad * 2)

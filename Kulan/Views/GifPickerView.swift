@@ -180,6 +180,18 @@ struct GifPickerView: View {
             // about.
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbar {
+                // ⛔ THE TITLE IS BACK, ON HIS WORD — owner, 2026-08-24: "in the GIF page header add
+                // the text Choose GIF". That reverses the note directly above, which took it out
+                // because neither reference names its picker and a word over moving GIFs was close
+                // to the complaint that removed the opaque bar. His newer word stands; the reasoning
+                // is left there so the reversal is visible rather than looking like a mistake.
+                //
+                // The band stays hidden either way — this is a title on the glass, not a bar.
+                ToolbarItem(placement: .principal) {
+                    Text("Choose GIF")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                }
                 // Hide the toolbar's own glass so CloseXButton's circle isn't double-wrapped (iOS 26).
                 if #available(iOS 26.0, *) {
                     ToolbarItem(placement: .topBarLeading) { CloseXButton { dismiss() } }

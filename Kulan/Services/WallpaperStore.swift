@@ -292,6 +292,17 @@ enum ChatWallpapers {
 
     // MARK: - Active wallpaper (per chat)
 
+    /// Is there anything behind this chat's messages other than the plain app background?
+    ///
+    /// Read by the bubbles, not by the background: an incoming bubble is a flat colour on the plain
+    /// background and a blur material on anything else (see `Theme.receivedStyle`). A solid `.color`
+    /// wallpaper counts — it is still a surface the bubble can pick light off, and treating it as
+    /// "no wallpaper" would give a chat two different bubble treatments for two things the user
+    /// picked from the same screen.
+    func hasWallpaper(for cid: String) -> Bool {
+        wallpaper(for: cid) != .none
+    }
+
     func wallpaper(for cid: String) -> ChatWallpaper {
         if let c = cache[cid] { return c }
         // No per-chat pick → fall back to the all-chats default ("Apply For All Chats").
@@ -427,6 +438,11 @@ enum ChatWallpapers {
 // bubbles and the floating header/composer stay readable on busy images.
 struct ChatWallpaperBackground: View {
     let cid: String
+    /// False only when this is being RENDERED TO AN IMAGE as the source for the incoming-bubble
+    /// blur (see `WallpaperBlur`): the reference app blurs the undimmed wallpaper and does all its
+    /// darkening in the wash, so blurring our photo scrim in first would darken a bubble twice.
+    /// On screen this is always true and nothing about the picture changes.
+    var includesScrim: Bool = true
     @Environment(\.colorScheme) private var scheme
     private var store: WallpaperStore { .shared }
 
@@ -451,7 +467,9 @@ struct ChatWallpaperBackground: View {
                 Color.clear
                     .overlay { Image(uiImage: img).resizable().scaledToFill() }
                     .clipped()
-                    .overlay(dark ? Color.black.opacity(0.28) : Color.white.opacity(0.14))
+                    .overlay(includesScrim
+                             ? (dark ? Color.black.opacity(0.28) : Color.white.opacity(0.14))
+                             : Color.clear)
             } else {
                 Theme.bg(dark)   // photo deleted from the library → fall back gracefully
             }

@@ -336,8 +336,11 @@ struct StoryMoreMenu: UIViewRepresentable {
             .joined(separator: "\u{1F}")
     }
 
-    final class Coordinator {
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var signature: String?
+        /// The button this menu belongs to, so the deferred element can pause without a view passed
+        /// in — it is asked by UIKit at presentation time, not by anything holding the button.
+        weak var hostButton: UIButton?
         /// The pause this menu owns, so it is released exactly once and only by the menu that took it.
         var pausedForMenu = false
         var closeObservers: [NSObjectProtocol] = []
@@ -385,6 +388,19 @@ struct StoryMoreMenu: UIViewRepresentable {
                 forName: UIWindow.didBecomeHiddenNotification, object: nil, queue: .main, using: onHidden))
         }
 
+        /// The finger has landed on the "…" — see the recognizer in `makeUIView`. Only `.began` is
+        /// acted on: the story must stop as the menu comes up, and every way it goes away again is
+        /// already covered.
+        @objc func pressBegan(_ g: UILongPressGestureRecognizer) {
+            guard g.state == .began, let host = g.view else { return }
+            pause(host: host)
+        }
+
+        /// Never exclusive: the button's own interaction has to keep working, so this recognizer
+        /// runs beside whatever else claims the touch rather than instead of it.
+        func gestureRecognizer(_ g: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+
         func resume() {
             guard pausedForMenu else { return }
             pausedForMenu = false
@@ -414,6 +430,29 @@ struct StoryMoreMenu: UIViewRepresentable {
                     for: .touchDown)
         b.addAction(UIAction { _ in coordinator.resume() }, for: .touchUpOutside)
         b.addAction(UIAction { _ in coordinator.resume() }, for: .touchCancel)
+        // ⛔ A THIRD DOOR, AND IT IS THE ONE THAT CANNOT BE SWALLOWED — owner, 2026-08-24, third
+        // report on this menu: "when I click the 3 dot menu the story is still running".
+        //
+        // ⚠️ BOTH DOORS ABOVE ARE CONTROL EVENTS, AND A MENU BUTTON NEED NOT SEND EITHER. With
+        // `showsMenuAsPrimaryAction`, the touch is claimed by the button's own context-menu
+        // interaction, which presents the menu without necessarily running the control-event path —
+        // so on a system where that is what happens, neither `.menuActionTriggered` nor `.touchDown`
+        // arrives and the pause is simply never taken. That is consistent with the report: not a
+        // pause released too early (the last fix), a pause never started.
+        //
+        // A recognizer sees the touch before any of that is decided. `minimumPressDuration = 0` makes
+        // it fire on contact, `cancelsTouchesInView = false` means the button still gets the touch
+        // exactly as before, and recognising alongside everything else means it cannot block the
+        // menu from opening. It only ever calls `pause`, which is idempotent — releasing stays with
+        // the window notifications and the item actions, which were never the failing half.
+        let press = UILongPressGestureRecognizer(target: context.coordinator,
+                                                 action: #selector(Coordinator.pressBegan(_:)))
+        press.minimumPressDuration = 0
+        press.cancelsTouchesInView = false
+        press.delaysTouchesBegan = false
+        press.delaysTouchesEnded = false
+        press.delegate = context.coordinator
+        b.addGestureRecognizer(press)
         // ⚠️ ALL FOUR PRIORITIES DROPPED, AND IT IS THE TAP TARGET THAT DEPENDS ON IT. A
         // `UIButton` with no title and no image has a tiny intrinsic size, and SwiftUI sizes a
         // representable from that unless the view says it will take whatever it is given — so the
@@ -423,6 +462,7 @@ struct StoryMoreMenu: UIViewRepresentable {
             b.setContentHuggingPriority(.defaultLow, for: axis)
             b.setContentCompressionResistancePriority(.defaultLow, for: axis)
         }
+        context.coordinator.hostButton = b
         b.menu = menu(context.coordinator)
         context.coordinator.signature = signature
         return b
@@ -443,7 +483,28 @@ struct StoryMoreMenu: UIViewRepresentable {
     }
 
     private func menu(_ coordinator: Coordinator) -> UIMenu {
-        UIMenu(title: "", children: items.map { item in
+        // ⛔ THE MENU ITSELF SAYS WHEN IT IS OPENING — owner, 2026-08-24: pause the instant the menu
+        // appears, resume only once it is dismissed, for text, photo and video alike.
+        //
+        // A deferred element's provider runs when UIKit is BUILDING the menu for presentation, which
+        // is the one moment that is guaranteed by the API rather than inferred from a touch. It
+        // returns no elements, so it draws nothing; it exists only to be asked. `.uncached` is what
+        // makes it run on EVERY presentation instead of once.
+        //
+        // This is the reliable half of the open signal and the recognizer in `makeUIView` is the
+        // early half — that one fires on contact, a frame or two sooner, and covers a press that
+        // never becomes a menu (released by `.touchUpOutside`/`.touchCancel`). `pause` is idempotent,
+        // so having both costs nothing and neither can be the single point of failure.
+        //
+        // ⚠️ NO NEW PAUSE SYSTEM, which was his condition. This posts the same `.pauseStory` the
+        // viewers sheet, the share sheet and the dismiss drag all post, and the host's `hostPause`
+        // gates the progress timer and the video mode together — so a text story's bar freezes and a
+        // video's playback stops on the one flag, and both come back on `.resumeStory`.
+        let opening = UIDeferredMenuElement.uncached { [weak coordinator] completion in
+            if let host = coordinator?.hostButton { coordinator?.pause(host: host) }
+            completion([])
+        }
+        return UIMenu(title: "", children: [opening] + items.map { item in
             // The app's own artwork when the entry names one, the SF Symbol otherwise. Template
             // rendering so a `UIMenu` tints it exactly like the symbols around it; without it the
             // file's own colour is drawn and the row looks like a different app's.

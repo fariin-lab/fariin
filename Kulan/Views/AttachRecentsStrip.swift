@@ -60,6 +60,23 @@ import UIKit
 // access it simply shows whatever the user granted. Photos open the chat editor
 // (crop/caption); videos go straight into the send pipeline.
 struct AttachRecentsStrip: View {
+    /// ⛔ 44, THEIR NUMBER, READ FROM THEIR SOURCE — owner, 2026-08-24: "make it like tg".
+    ///
+    /// The reference app lays its picker's header controls out inside a 44pt-high container
+    /// (`MediaPickerScreen`, `containerSize: CGSize(width: …, height: 44.0)`), inset 16 from the
+    /// screen edges (`barButtonSideInset`). Ours were 48 with the same 16 inset, so the inset already
+    /// matched and only the button was four points over.
+    ///
+    /// ⚠️ BOTH BUTTONS, NOT JUST THE ✕. The close and the selected-count sit either side of the
+    /// title and read as a pair; changing one would leave the header lopsided. Their glyphs are
+    /// unchanged — 44 is the size the reference states for the control, and the marks inside ours
+    /// were never what he was comparing.
+    ///
+    /// ⚠️ ONLY THIS SHEET. `CloseXButton` in the design system is still 48 and is used by the GIF
+    /// picker, Edit Profile and the wallpaper sheet; this is the photo sheet's header, which is the
+    /// one he measured against theirs.
+    private static let headerButtonSize: CGFloat = 44
+
     var onCamera: () -> Void = {}
     var onClose: () -> Void = {}
     var onPickPhoto: (UIImage) -> Void
@@ -186,8 +203,15 @@ struct AttachRecentsStrip: View {
                 } label: {
                     Image(systemName: (selectedAlbum != nil || showAlbums) ? "chevron.left" : "xmark")
                         .font(.system(size: 18, weight: .semibold))
+                        // ⚠️ MERGE 2026-08-24, TWO BRANCHES DISAGREED HERE AND BOTH WERE RIGHT ON
+                        // THEIR OWN SIDE. The other branch had this white, correctly, because it
+                        // still carries the black header bar. This branch REMOVED that bar on the
+                        // owner's word ("back the way it before"), so the header follows the phone's
+                        // scheme again and white would be an invisible X in daylight. Colour comes
+                        // from the revert, size comes from the other branch's measurement — the two
+                        // decisions are independent and neither one cancels the other.
                         .foregroundStyle(.primary)
-                        .frame(width: 48, height: 48)
+                        .frame(width: Self.headerButtonSize, height: Self.headerButtonSize)
                         .liquidGlass(Circle(), interactive: true)
                 }
                 Spacer()
@@ -196,7 +220,7 @@ struct AttachRecentsStrip: View {
                 if !selectedIds.isEmpty {
                     Text("\(selectedIds.count)")
                         .font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
-                        .frame(width: 48, height: 48)
+                        .frame(width: Self.headerButtonSize, height: Self.headerButtonSize)
                         .liquidGlass(Circle(), interactive: true, tint: Theme.defaultBubble(false))
                 }
             }
@@ -323,11 +347,20 @@ struct AttachRecentsStrip: View {
                             Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
                                 .foregroundStyle(.tertiary)
                         }
-                        .padding(.horizontal, 16).padding(.vertical, 7)
+                        // ⛔ ROOMIER, AND INSET FURTHER FROM THE LEFT — owner, 2026-08-24: the album
+                        // list "looks zoomed out" beside his reference, and the rows "tuck" too
+                        // close to the edge. The thumbnail carries the row's height, so 52 with 7
+                        // above and below is a 66pt row against the reference's ~76; the leading
+                        // inset is the other half of it, at 16 against their 20-plus.
+                        .padding(.leading, 20).padding(.trailing, 16)
+                        .padding(.vertical, 11)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    Divider().padding(.leading, 78)
+                    // Starts where the TITLE starts, not where the thumbnail does — 20 leading + 60
+                    // thumb + 14 gap. Moved with the inset above so the rule still lines up with the
+                    // first letter rather than floating in the gap beside it.
+                    Divider().padding(.leading, 94)
                 }
             }
         }
@@ -711,8 +744,10 @@ private struct AlbumThumb: View {
             if let image { Image(uiImage: image).resizable().scaledToFill() }
             else { Rectangle().fill(Color.secondary.opacity(0.12)) }
         }
-        .frame(width: 52, height: 52)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        // 60, up from 52 — see the row's own note. The cover is what sets the row's height, so this
+        // is the number that makes the list read at the reference's scale rather than zoomed out.
+        .frame(width: 60, height: 60)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .task {
             let f = PHFetchOptions()
             f.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]

@@ -41,6 +41,58 @@ enum Theme {
     // Light received-bubble = F2F2F2, the owner's exact pick (2026-07-31 screenshot). Must stay in
     // lock-step with UIKitBubbleCell.receivedFill or text rows and media rows show two grays.
     static func received(_ dark: Bool) -> Color { dark ? Color(hex: 0x26262B) : Color(hex: 0xF2F2F2) }
+
+    /// THE SURFACE BEHIND A BUBBLE THAT IS NOT MINE, decided once and read by both render paths.
+    ///
+    /// Without a wallpaper it is `received` and nothing has changed. With one it is a SLICE of the
+    /// blurred, washed wallpaper — the reference app's `CVWallpaperBlurView`, ported in
+    /// `WallpaperBlur` with its numbers — so every bubble shows the part of the picture that sits
+    /// under it, and a picture with light in it puts that light INSIDE the bubble. Reduce
+    /// Transparency wins over all of it, exactly as theirs checks it first: the plain theme
+    /// background, not the received grey, because the grey is a bubble-on-background colour and
+    /// there is a picture here instead.
+    ///
+    /// `.material` is the one branch theirs does not have. It is what a surface falls back to when a
+    /// wallpaper is present but no slice could be made for it — a preview platter that is not the
+    /// size of the window, or a render that failed — and it is an approximation, kept only so those
+    /// places still read as "on a wallpaper" rather than going flat.
+    enum ReceivedSurface: Equatable {
+        case flat(Color)
+        case slice(WallpaperBlurState)
+        case material
+    }
+
+    static func receivedSurface(_ dark: Bool, onWallpaper: Bool,
+                                blur: WallpaperBlurState?) -> ReceivedSurface {
+        guard onWallpaper else { return .flat(received(dark)) }
+        if UIAccessibility.isReduceTransparencyEnabled { return .flat(bg(dark)) }
+        if let blur { return .slice(blur) }
+        return .material
+    }
+
+    /// THE RIM ON AN INCOMING BUBBLE OVER A WALLPAPER — his close-up crops, 2026-08-23, and the last
+    /// visible difference from the reference. Theirs is not glass and not a reflection: a
+    /// `CAShapeLayer` stroking the bubble's own path at 2 hairlines, clipped by the bubble mask so
+    /// only the INNER hairline survives — one physical pixel of light just inside the edge. White at
+    /// 25% in dark mode, BLACK at 35% in light (the "white rim" is a dark-mode fact). Incoming only,
+    /// wallpaper only; outgoing never gets one.
+    static func bubbleRim(_ dark: Bool) -> Color {
+        dark ? Color.white.opacity(0.25) : Color.black.opacity(0.35)
+    }
+
+    /// One physical pixel, in points. What survives of their 2-hairline centred stroke after the
+    /// mask eats the outer half — so this is the width to draw INSIDE the edge (`strokeBorder`).
+    static var hairline: CGFloat { 1 / UIScreen.main.scale }
+
+    /// The previews' version of the above — the colour-picker platter and the chat peek, which
+    /// draw the wallpaper at a size that is not the window's and so cannot take a slice. Same
+    /// decision, with `.material` drawn as the system material it approximates.
+    static func receivedStyle(_ dark: Bool, onWallpaper: Bool) -> AnyShapeStyle {
+        switch receivedSurface(dark, onWallpaper: onWallpaper, blur: nil) {
+        case .flat(let c): return AnyShapeStyle(c)
+        case .slice, .material: return AnyShapeStyle(dark ? Material.ultraThin : Material.thin)
+        }
+    }
     static func accent(_ dark: Bool) -> Color { dark ? .white : .black }
     static func onAccent(_ dark: Bool) -> Color { dark ? .black : .white }
     // Default outgoing-bubble colour when no custom Chat Color is picked. Apple systemBlue, which is a
@@ -416,5 +468,21 @@ struct GoogleGIcon: View {
             .resizable()
             .scaledToFit()
             .frame(width: size, height: size)
+    }
+}
+
+/// The SwiftUI surface behind an incoming bubble. Draws whatever `Theme.receivedSurface` decided;
+/// the bubble's own `clipShape` after it is what gives it the bubble's shape.
+struct ReceivedBubbleSurface: View {
+    let dark: Bool
+    let onWallpaper: Bool
+    let blur: WallpaperBlurState?
+
+    var body: some View {
+        switch Theme.receivedSurface(dark, onWallpaper: onWallpaper, blur: blur) {
+        case .flat(let c): c
+        case .slice(let s): WallpaperBlurSlice(state: s)
+        case .material: Rectangle().fill(dark ? Material.ultraThin : Material.thin)
+        }
     }
 }

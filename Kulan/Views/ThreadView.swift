@@ -434,8 +434,37 @@ struct ThreadView: View {
                 guard mine else { return }
                 withAnimation(.easeInOut(duration: 0.2)) { keyChanged = true }
             }
-            // Per-chat wallpaper behind the messages (extends under the bars).
-            .background { ChatWallpaperBackground(cid: cid).ignoresSafeArea() }
+            // Per-chat wallpaper behind the messages (extends under the bars). The anchor riding on
+            // it is what the bubble slices measure themselves against — see WallpaperBlur.
+            .background {
+                ChatWallpaperBackground(cid: cid)
+                    .overlay { WallpaperAnchor(cid: cid) }
+                    .ignoresSafeArea()
+            }
+    }
+
+    /// Does this chat have a wallpaper? Handed to every bubble, which decides its own surface from it.
+    ///
+    /// The `version` touch is the same one `ChatWallpaperBackground` makes and it is load-bearing
+    /// for the same reason: the store bumps it when the picker applies, so the bubbles and the
+    /// picture they sit on re-render together. Without it the wallpaper could appear under bubbles
+    /// still drawing themselves flat, until something else happened to invalidate them.
+    private var chatHasWallpaper: Bool {
+        let store = WallpaperStore.shared
+        _ = store.version
+        return store.hasWallpaper(for: cid)
+    }
+
+    /// The blurred picture of this chat's wallpaper that incoming bubbles show slices of — see
+    /// `WallpaperBlur`. Nil with no wallpaper or under Reduce Transparency. Cached inside; the first
+    /// read after a chat open, a theme flip or a wallpaper change is the one that renders.
+    ///
+    /// The window is the reference frame because the wallpaper is drawn `.ignoresSafeArea()` behind
+    /// this whole screen. For the 0.35s of a push transition the screen is not yet at the window's
+    /// origin and every slice is offset by the slide; at radius 20 under an 80% wash that is not a
+    /// thing anyone can see, and theirs has the same moment.
+    private var wallpaperBlur: WallpaperBlurState? {
+        WallpaperBlur.state(for: cid, dark: dark, frame: WallpaperBlur.windowFrame)
     }
 
     // Type-erase the heavy messages chain at the scrollStack boundary: the chain's opaque type grew past
@@ -618,7 +647,7 @@ struct ThreadView: View {
                     .liquidGlass(Circle(), interactive: true)
             }
             .buttonStyle(.plain)
-            .padding(.trailing, 16)
+            .padding(.trailing, floatingButtonInset)   // the composer's edge — see `floatingButtonInset`
             .transition(.scale.combined(with: .opacity))
         }
     }
@@ -721,7 +750,7 @@ struct ThreadView: View {
                         }
                     }
             }
-            .padding(.trailing, 16)
+            .padding(.trailing, floatingButtonInset)   // the composer's edge — see `floatingButtonInset`
             .transition(.scale.combined(with: .opacity))
             .animation(.spring(response: 0.32, dampingFraction: 0.72), value: isAtBottom)
         }
@@ -980,6 +1009,13 @@ struct ThreadView: View {
                 // SOLID system background (white in light / dark in dark mode) — the default iOS 26 glass
                 // sheet showed the chat blurring through, which read as a broken half-empty panel.
                 .presentationBackground(Color(.systemBackground))
+                // ⛔ NO ZOOM TRANSITION, AND THAT IS NOW TWICE. Built again on his word 2026-08-24
+                // and pulled the same day on his verdict: it "caused the bugs" in that build. The
+                // note below is from the FIRST removal, July, and it named the reason both times —
+                // the morph fights the detent snap, and the detents are the part he will not give
+                // up. A third attempt needs a different shape entirely (a custom container that owns
+                // its own drag, which is what the reference app actually does), not this two-line one.
+                //
                 // THE REFERENCE APP MODEL (user request 2026-07-14, replacing the brief zoom-from-+ experiment):
                 // the reference app's attachment menu is a spring bottom sheet — it slides up from the bottom
                 // edge with a quick spring, drags between part/full height, and a downward drag or flick
@@ -1025,11 +1061,28 @@ struct ThreadView: View {
         // coordinates, delivered as an encrypted location-card message.
         .sheet(isPresented: $showLocationShare) {
             LocationPickerSheet { lat, lon, label in
+                // ⛔ AND THE CHAT GOES TO IT — owner, 2026-08-24: "when I send a message the chat
+                // scrolls up, but when I send a location it does nothing".
+                //
+                // ⚠️ THE GLIDE IS TRIGGERED BY THE OPTIMISTIC ROW, NOT BY THE SEND. `refreshItems`
+                // watches for a fresh item of mine with `sendState != nil` — that is the local
+                // insert a normal send makes before the server hears anything, and it is what tells
+                // the list to travel. This path called `sendText` straight through, so nothing
+                // appeared until the server echo came back, by which time the batch held only rows
+                // with `sendState == nil` and the test could never pass.
+                //
+                // Asking for the bottom directly is the smaller fix than inventing an optimistic
+                // location row: the marker is one short string, so the echo lands almost at once,
+                // and this is the same wire the down-arrow uses.
+                nativeScrollTarget = "BOTTOM"
                 Task {
                     try? await ChatService.sendText(
                         cid: cid,
                         text: Message.locationMarkerText(lat: lat, lon: lon, label: label),
                         group: isGroup ? groupMembers : nil)
+                    // Again once it has actually landed: the first ask moves to today's bottom, and
+                    // the new row is below that.
+                    await MainActor.run { nativeScrollTarget = "BOTTOM" }
                 }
             }
         }
@@ -1738,7 +1791,7 @@ struct ThreadView: View {
             // Inline day separator: translucent pill. NOT Liquid Glass (user clarified 2026-07-14:
             // only the TOP floating "Today" pill is glass — the in-chat separators keep this look).
             Text(dayLabel(msg.createdAt))
-                .modifier(ChatNoticePill())
+                .modifier(ChatNoticePill(dark: dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
         }
@@ -1758,6 +1811,7 @@ struct ThreadView: View {
         } else {
             MessageBubble(
                 message: msg, isMe: msg.authorId == me, dark: dark, cid: cid,
+                onWallpaper: chatHasWallpaper, wallpaperBlur: wallpaperBlur,
                 nameFor: { personName($0) },
                 avatarFor: { conversation?.photos[$0] },
                 onReply: { m in beginReply(to: m) },
@@ -2048,6 +2102,13 @@ struct ThreadView: View {
         // left and re-opened the chat (user report). Putting it in every row's signature makes
         // the existing contentChanged→splitByRouteFlip→reloadItems path swap the cells live.
         let colorTok = chatColorSpec?.stored ?? "-"
+        // Wallpaper: the SAME shape of bug as the chat colour above, and it has to be caught the same
+        // way. Applying or removing a wallpaper changes what surface an INCOMING bubble draws (flat
+        // colour ⇄ blur material) while changing no message content at all, so without it here the
+        // picture would land under bubbles still painting themselves flat, and they would only
+        // correct themselves as scrolling recycled them — the "it fixes itself if I leave and come
+        // back" report. One bool for the whole chat, not per row.
+        let wallTok = "\(chatHasWallpaper):\(wallpaperBlur?.id ?? 0)"
         // EVERY value rowView reads eagerly must be in this key, or hosted cells keep stale content
         // (the class of bug that produced the frozen bubble corners). Added:
         //   dark          - SwiftUI bubbles baked the palette in, so flipping Dark Mode left received
@@ -2059,7 +2120,7 @@ struct ThreadView: View {
         // CONTENT AND HEIGHT (140pt card → one line of text), and height only updates through the
         // signature path. Reading it here also makes the body observe story changes at all.
         let storiesRepo = StoriesRepository.shared
-        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(term)|\(colorTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)"
+        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)"
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
@@ -2106,7 +2167,23 @@ struct ThreadView: View {
                 // Live call rows mutate in place (ringing → ongoing → final, duration, voice→video
                 // upgrade) and change no other field this string reads — same rule as `deleted`.
                 let call = m.isCall ? "\(m.callOutcome ?? "-"):\(m.callDuration ?? -1):\(m.callVideo)" : "-"
-                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)|\(cluster)|\(story)|\(unread)|\(call)"
+                // DARK, and this is the FOURTH instance of the key-vs-value mistake named above.
+                // `dark` has been in the KEY since the mixed-palette fix, which recomputes this whole
+                // dictionary on a theme flip — but every row then produced the SAME string as before,
+                // so nothing reconfigured and hosted cells kept the `dark` they were BUILT with.
+                //
+                // A SwiftUI bubble bakes it: `dark ? .white : .black` is resolved when the view value
+                // is made, unlike `.primary`, which re-resolves against the environment on its own.
+                // That is exactly the split the owner photographed — the call bubble's `.primary`
+                // title went white in dark mode while the message text beside it stayed BLACK, in the
+                // same screenshot. It also left incoming bubbles on `Material.thin` where dark mode
+                // asks for `.ultraThin`, so the surface was too heavy as well as the text unreadable.
+                //
+                // The UIKit text cells never showed it: they carry dynamic UIColors and re-resolve on
+                // `registerForTraitChanges`. So the bug only appears in a chat with a custom chat
+                // colour, because `chatColorSpec == nil` in the UIKit route guard sends EVERY row to
+                // SwiftUI there. That is why it hid for months.
+                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)"
             }
             sigCache.key = key
             sigCache.base = out
@@ -2162,7 +2239,10 @@ struct ThreadView: View {
         guard Self.useUIKitBubbles, !isGroup, !selecting, chatColorSpec == nil, !searchActive else { return [:] }
         // Audit M5: iBlocked and the read-receipts pref feed the tick, so they must key the cache —
         // toggling the pref (or a block-state change) left uikit rows showing stale ticks.
-        let key = "\(repo.itemsVersion)|\(repo.otherLastReadMillis)|\(highlightId ?? "-")|\(repo.iBlocked)|\(readReceiptsOn)"
+        // The wallpaper and its blurred picture are INSIDE the model (`onWallpaper`, `wallpaperBlur`),
+        // so they must key this cache or a wallpaper applied while the chat is open hands every
+        // UIKit text row a model that still says "no wallpaper" until the chat is reopened.
+        let key = "\(repo.itemsVersion)|\(repo.otherLastReadMillis)|\(highlightId ?? "-")|\(repo.iBlocked)|\(readReceiptsOn)|\(chatHasWallpaper):\(wallpaperBlur?.id ?? 0)"
         if uikitModelCache.key == key { return uikitModelCache.models }
         var out: [String: UIKitBubbleModel] = [:]
         for m in repo.items {
@@ -2416,6 +2496,21 @@ struct ThreadView: View {
               m.replyTo == nil, m.reactions.isEmpty,
               !m.isFeatureMarker, !m.viewOnce, !m.forwarded,           // Forwarded tag is SwiftUI-only
               !m.isImage, !m.isVideo, !m.isGif, !m.isFile, !m.isAudio, !m.isAlbum, !m.isCall,
+              // ⛔ A SYSTEM NOTICE IS NOT A MESSAGE — owner, 2026-08-24: turning on disappearing
+              // messages posted "adnan abdi turned on disappearing messages (5 minutes)" as a real
+              // blue bubble with delivery ticks, where it should read like the pin notice.
+              //
+              // ⚠️ NOTHING WAS WRONG WITH THE WRITE OR THE RENDERER. `setDisappear` writes
+              // `type: "system"`, and `rowView` routes `isSystem` to `systemRow`, which is the same
+              // centred pill the pin notice uses. This guard was the whole bug: it lists every kind
+              // that must stay in SwiftUI and never learned about system rows, so a plain-text
+              // system notice matched "delivered 1:1 text" and took the UIKit bubble path — which
+              // draws a bubble and a tick and knows nothing about pills.
+              //
+              // ⚠️ IT ONLY SHOWS IN A CHAT WITH NO CUSTOM CHAT COLOUR, because `chatColorSpec == nil`
+              // in this function's own guard sends every row to SwiftUI when one is set. That is why
+              // it appeared now and not while his test chat was red.
+              !m.isSystem, m.pinNotice == nil,
               m.mentions.isEmpty else { return nil }
         let text = m.safeText
         guard !text.isEmpty else { return nil }
@@ -2445,7 +2540,8 @@ struct ThreadView: View {
         return UIKitBubbleModel(
             isMe: isMe, text: text, edited: m.edited,
             timeText: m.createdAt.formatted(date: .omitted, time: .shortened),
-            tick: tick, radii: radii, topSpacing: first ? 14 : 2)
+            tick: tick, radii: radii, topSpacing: first ? 14 : 2,
+            onWallpaper: chatHasWallpaper, wallpaperBlur: wallpaperBlur)
     }
 
     // UIKit message list. Reuses the SAME rowView, so every bubble feature is identical.
@@ -3030,6 +3126,23 @@ struct ThreadView: View {
     /// two spacers centre it. Four tiles (GIF · Files · Location · Poll in a group) come to about
     /// 300pt, which still fits the narrowest phone we build for; the day a fifth arrives, the scroll
     /// view comes back.
+    /// ⛔ THE REFERENCE APP'S OWN NUMBERS, READ FROM ITS SOURCE — owner, 2026-08-24, after asking
+    /// for them rather than for an eyeball match. Their attachment panel states all of these:
+    ///
+    ///   icon        30 × 30      (`iconSize`)
+    ///   label       10pt medium  (`titleFont = Font.medium(10.0)`)
+    ///   bar height  62           (`glassPanelHeight`)
+    ///   bar bottom  the layout's own `insets.bottom` and nothing added
+    ///
+    /// ⚠️ THE BOTTOM IS A RULE, NOT A NUMBER, and it is the one that was actually different. Ours
+    /// added a flat 10 ON TOP of the inset the sheet already carries, so the bar floated ten points
+    /// higher than theirs on a phone with a home indicator and sat level with it on one without.
+    /// Theirs composes the bar's height from the inset itself. Dropping our 10 is what makes the two
+    /// agree on every device instead of on one.
+    private static let attachBarHeight: CGFloat = 62
+    /// Their icon, stated once so the tile and anything else that draws one cannot drift apart.
+    private static let attachIconSize: CGFloat = 30
+
     @ViewBuilder private var sourceBar: some View {
         if !recentsHasSelection {
             HStack(spacing: 0) {
@@ -3045,12 +3158,11 @@ struct ThreadView: View {
                     if isGroup { attachTile("chart.bar", "Poll") { showPollComposer = true } }
                 }
                 .padding(.horizontal, 6)
-                .padding(.vertical, 4)
+                .frame(height: Self.attachBarHeight)
                 .liquidGlass(Capsule())   // the ONE piece of glass here, and the only background
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
-            .padding(.bottom, 10)
         }
     }
 
@@ -3083,15 +3195,25 @@ struct ThreadView: View {
                 Group {
                     if icon.hasPrefix("ic_") {
                         Image(icon).renderingMode(.template).resizable().scaledToFit()
-                            .frame(width: 21, height: 21)
+                            .frame(width: Self.attachIconSize, height: Self.attachIconSize)
                     } else {
-                        Image(systemName: icon).font(.system(size: 18, weight: .medium))
+                        // An SF Symbol draws smaller than the point size it is asked for, so the
+                        // symbol case is sized by its frame like the drawings are — otherwise Poll
+                        // would sit visibly smaller than the three beside it, which is what the old
+                        // 18-against-21 pair did.
+                        Image(systemName: icon)
+                            .font(.system(size: Self.attachIconSize * 0.78, weight: .medium))
+                            .frame(width: Self.attachIconSize, height: Self.attachIconSize)
                     }
                 }
                 .foregroundStyle(.primary)
-                Text(label).font(.caption2.weight(.medium)).foregroundStyle(.primary).lineLimit(1)
+                // 10pt medium, their `titleFont`. A stated size rather than `.caption2`, which is
+                // about 11 and moves with Dynamic Type — this row is a fixed-height bar and a label
+                // that grows would be clipped by it.
+                Text(label).font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.primary).lineLimit(1)
             }
-            .frame(width: 72, height: 48)
+            .frame(width: 72, height: Self.attachBarHeight - 8)
             .contentShape(Capsule())
         }
         // The app's own press feel, rather than nothing at all — same style the story editor's
@@ -3694,7 +3816,7 @@ struct ThreadView: View {
             // so this is too.
             Text("\(m.authorId == me ? "You" : personName(m.authorId)) pinned \(pin.label)")
                 .lineLimit(1)
-                .modifier(ChatNoticePill())
+                .modifier(ChatNoticePill(dark: dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur))
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -3705,7 +3827,7 @@ struct ThreadView: View {
     private func systemRow(_ m: Message) -> some View {
         Text(m.text)
             .multilineTextAlignment(.center)
-            .modifier(ChatNoticePill())
+            .modifier(ChatNoticePill(dark: dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
     }
@@ -3821,8 +3943,19 @@ struct ThreadView: View {
             .padding(.horizontal, 14)
             .frame(height: 60)
             .fixedSize(horizontal: true, vertical: false)
-            .background(mine ? myBubbleFill : AnyShapeStyle(Theme.received(dark)))
+            .background {
+                if mine { Rectangle().fill(myBubbleFill) }
+                else { ReceivedBubbleSurface(dark: dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur) }
+            }
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            // The rim, exactly as on every other incoming bubble — see Theme.bubbleRim.
+            .overlay {
+                if !mine, chatHasWallpaper {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Theme.bubbleRim(dark), lineWidth: Theme.hairline)
+                        .allowsHitTesting(false)
+                }
+            }
             // Tap target is ONLY the bubble — NOT the full-width row. The old .contentShape/
             // .onTapGesture sat on the outer HStack (which includes the empty-side Spacer), so
             // tapping the blank space anywhere on the row placed a call (accidental-call bug).
@@ -4626,147 +4759,126 @@ struct ThreadView: View {
         return -(limit + (1 - 1 / (over * c / dim + 1)) * dim)
     }
 
-    /// THE PLATFORM'S OWN MODEL, not a number measured to the glass (owner, build 443: "sit
-    /// naturally on the safe area, just like the reference app, rather than floating above it").
+    // ⛔ THE COMPOSER'S POSITION IS APPLE'S NOW, NOT OURS — owner, 2026-08-24: "go make it like
+    // iMessage, native Apple", closing four rounds of fixed insets (30/16 sides, safe-area + 8
+    // bottom) that behaved differently across his two phones and sat visibly higher than the
+    // system's own bars.
+    //
+    // What the native bottom search bar does, which is the model he pointed at:
+    //   sides  → the LAYOUT-MARGIN system: 16pt on narrow phones, 20pt on wider ones, chosen by
+    //            iOS per device. Constant whether the keyboard is up or down — measured off his
+    //            own iMessage screenshots, which show the same inset in both states.
+    //   bottom → the bar is EDGE-ATTACHED CHROME: its pill dips INTO the home-indicator band
+    //            (search bar ≈ 23-26pt above the physical edge, iMessage ≈ 29, both inside the
+    //            34pt band) instead of stacking on top of the safe area the way content does.
+    //            With the keyboard up, the same bar sits a small design gap above the keys.
+    //
+    // So the only numbers still ours are DESIGN GAPS, the same kind Apple holds:
+    //   `composerKeyboardGap`  8 — under the pill when the bar rides the keyboard. The reference
+    //                              app's own vMargin, 0.5 * (56 - 40); unchanged from before.
+    //   `composerRestDip`      5 — how far the pill sinks below the safe-area line at rest, which
+    //                              lands its bottom at inset − 5 (≈29pt on his phones), iMessage's
+    //                              own resting height. Home-button phones have no band to sink
+    //                              into, so they keep the 8 instead.
+    // Everything device-shaped comes from iOS at runtime through `SystemChromeReader`:
+    //   `chromeMargin`      the root controller's systemMinimumLayoutMargins (16/20 per device)
+    //   `chromeBottomInset` the window's bottom safe-area inset (34/0; never includes the keyboard)
+    //
+    // ⚠️ THE KEYBOARD STATE IS GEOMETRY, NOT FOCUS. The old side switch hung off `inputFocused`
+    // re-laying-out the bar, which worked on his iOS 27 phone and silently did not on the iOS 26
+    // one. `composerKeyboardUp` comes from the keyboard's OWN notification instead, which is the
+    // OS reporting its state rather than us inferring it from a layout — see that property for why
+    // reading the bar's position replaced this once and then had to be replaced in turn.
+    //
+    // ⚠️ CARRIED FORWARD, still open: on his 13 Pro (iOS 26) the bar was once seen sitting INSIDE
+    // the keyboard at rest gaps of both 8 and 16 — a shortfall bigger than either number, so the
+    // gap was never the mechanism. If that recurs it is the safeAreaBar keyboard edge itself
+    // under-reporting on that OS, and no padding value fixes it; measure the bar's frame against
+    // `KeyboardWatcher.topOnScreen` on the device before touching these constants.
+    private static let composerKeyboardGap: CGFloat = 8
+    private static let composerRestDip: CGFloat = 5
+
+    /// ⛔ THE FLOATING BUTTONS SIT ON THE COMPOSER'S OWN EDGE — owner, 2026-08-24: the down-arrow
+    /// "is using old padding on the right side, use the padding the composer is using… both when
+    /// the keyboard is open and when it is closed".
     ///
-    /// Read out of the reference app's ConversationInputToolbar, which is the closest open implementation of the
-    /// convention the reference app follows. Two things define it:
+    /// They were a hardcoded 16 while the composer had moved to deriving its inset from iOS, so the
+    /// arrow hung past the composer's right edge — his screenshot has it half off the screen. This
+    /// is the same expression the composer's `.padding(.horizontal)` uses, so the two edges are one
+    /// number by construction rather than by being kept in step: the system margin with the
+    /// keyboard up, and the margin-or-band expression at rest.
     ///
-    ///   contentView.bottomAnchor.constraint(equalTo: bottomAnchor)   // the BAR's bottom, not the
-    ///                                                                // safe area's
-    ///   vMargin: 0.5 * (initialToolbarHeight - initialTextBoxHeight) // 0.5 * (56 - 40) = 8
+    /// ⚠️ IT MOVES WITH THE KEYBOARD FOR FREE. `composerKeyboardUp` is one value read by both, so
+    /// these buttons change inset on exactly the frame the composer does.
+    private var floatingButtonInset: CGFloat {
+        composerKeyboardUp ? chromeMargin : max(chromeMargin, chromeBottomInset - Self.composerRestDip)
+    }
+
+    /// iOS's numbers, reported by `SystemChromeReader`; the defaults only cover the first frame.
+    @State private var chromeMargin: CGFloat = 20
+    @State private var chromeBottomInset: CGFloat = 34
+    /// ⛔ THE KEYBOARD'S OWN NOTIFICATION, NOT THE BAR'S POSITION — owner, 2026-08-24: opening a chat
+    /// showed the composer "too early in the wrong position", correcting itself about a fifth of the
+    /// way through the push.
     ///
-    /// So the BAR's bottom edge rests on the safe area line and the system's inset is what lifts it
-    /// clear of the home indicator; inside the bar the pill is centred, which leaves 8pt under it.
-    /// `safeAreaBar` already does the first half for us, so the whole of our side is that 8.
+    /// ⚠️ READING THE BAR'S OWN FRAME IS WHAT CAUSED THAT, and it was my own doing. The state was
+    /// `screenHeight - bar.maxY > 120`, which is only meaningful once the bar is laid out where it
+    /// will finally sit. During a push the incoming view is measured before it is placed, so the bar
+    /// reports a maxY far up the screen, the test says "the keyboard must be up", and the composer
+    /// draws its keyboard-up padding until the layout settles and it snaps. The threshold was never
+    /// the problem — no threshold can tell a keyboard apart from a view that is not in place yet.
     ///
-    /// THE DEVICE-SPECIFIC PART IS THAT THERE ISN'T ONE, and that is the point of doing it this way.
-    /// The previous version subtracted the device's inset to hit a fixed distance from the glass,
-    /// which meant carrying our own idea of what every iPhone needs. Here iOS supplies it: 34pt of
-    /// lift on an indicator phone, none on a Home-button one, and the 8 sits on top of whatever that
-    /// is. Nothing to keep in step with new hardware.
-    ///
-    /// The keyboard case is the same 8, and now for a reason rather than by exception: up there the
-    /// bar rides the keyboard, which is simply a different edge to rest on.
-    /// ⛔ 30pt FROM THE SCREEN'S BOTTOM ON EVERY PHONE, NOT 30pt ON TOP OF WHATEVER THE PHONE HAS
-    /// (owner 2026-08-22: "bottom make also 30pt like iMessage… I want every phone it's most same").
-    ///
-    /// ⚠️ THE HOME INDICATOR IS THE WHOLE PROBLEM. It is 34pt on a phone that has one and 0 on a
-    /// phone that does not, and this padding sits ON TOP of it — so the flat 8 that used to be here
-    /// put the bar 42pt up on his phone and 8pt up on a home-button phone. Same number, two very
-    /// different bars, which is exactly what he is asking to stop.
-    ///
-    /// Subtracting the inset makes the TOTAL the constant instead. A phone with an indicator taller
-    /// than the target clamps at zero and keeps its 34, because there is nothing below the indicator
-    /// to give back — 34 against 30 is as close as the two can be made, and it is close.
-    /// Left and right. One number, both sides, every state — see the note where it is applied.
-    ///
-    /// ⚠️ APPLE'S OWN IS NARROWER. Measured off his iMessage screenshot, which is an exact 3× shot of
-    /// a 428pt phone: their pill's right edge sits 76px from the screen, which is 25.3pt. 30 is his
-    /// number and is what this is set to; the measurement is written down so the difference is a
-    /// decision rather than a drift.
-    private static let composerSideInset: CGFloat = 30
-    /// ⛔ AND IT NARROWS AGAIN WHILE TYPING, WHICH I HAD REMOVED AND SHOULD NOT HAVE (owner
-    /// 2026-08-22: "before opening the keyboard the composer is correct, after opening it must use
-    /// the left and right space it used before, I think 16pt").
-    ///
-    /// I read his "make it 30 left and right, the same on every phone" as also meaning the same in
-    /// every STATE, and dropped the focused case with the number. It was his own 2026-08-02 rule and
-    /// he still wants it: the bar gets wider exactly when you are typing into it, which is the moment
-    /// the field needs the room. "The same on every phone" was about phones, not about states.
-    private static let composerSideInsetTyping: CGFloat = 16
-    /// Above whatever edge iOS hands the bar, which is a different question from above the screen —
-    /// and asking the second question is what the removed `composerBottomTarget` did.
-    ///
-    /// ⛔ 8, AND PUTTING IT BACK IS THE FIX — owner 2026-08-22, after the 16 below shipped.
-    ///
-    /// I raised it to 16 believing the bar was landing a few points into the keyboard's rounded top
-    /// corners on iOS 26, and that one number big enough for both versions would cover it. That was
-    /// wrong twice over, and his two phones say so between them:
-    ///
-    ///   iPhone 13 Pro Max, iOS 27 — 8 looked right, 16 is visibly too much room. His words: go back.
-    ///   iPhone 13 Pro,     iOS 26 — the bar sits inside the keyboard at 8 AND STILL AT 16.
-    ///
-    /// ⚠️ THE SECOND LINE IS THE DIAGNOSIS. A bar a few points short is cleared by doubling the gap.
-    /// This one was not moved by doubling it, so whatever is wrong on that phone is larger than 16
-    /// and is not the size of this number — the number was never the mechanism. Raising it further
-    /// would only spend the Max's spacing to chase something that is not there, which is exactly the
-    /// trade he just rejected.
-    ///
-    /// So this goes back to the value the whole design is written around, and the 13 Pro is a
-    /// separate question with a separate answer. See the note above: 8 is the reference app's own
-    /// `vMargin`, 0.5 * (56 - 40), the pill centred inside a bar whose bottom rests on the edge it is
-    /// given. `safeAreaBar` supplies that edge — the safe area at rest, the keyboard while typing —
-    /// so the same 8 is correct in both states by construction rather than by exception.
-    ///
-    /// ⛔ WHY THIS IS A CONSTANT AND NOT A MEASUREMENT, WHICH IS THE HONEST ANSWER AND NOT THE
-    /// TIDY ONE. `KeyboardWatcher.topOnScreen` exists precisely for this and the story text card uses
-    /// it, but that card's own frame never moves — the note on `keyboardOverlap` says so in as many
-    /// words, and that is the property that makes measuring safe there. This bar IS moved, by
-    /// SwiftUI's avoidance, so a padding derived from its measured overlap would change the overlap
-    /// it was derived from: add padding, the bar rises, the shortfall reads zero, the padding goes,
-    /// the bar drops. An oscillation is a worse bug than a gap that is wrong by a fixed amount.
-    /// ⛔ ONE NUMBER, IN EVERY STATE, ON EVERY PHONE, AND IT NEVER ASKS THE DEVICE ANYTHING —
-    /// owner 2026-08-22, and it is his own question: why can this not just use Apple's safe-area and
-    /// keyboard system instead of hardcoded values and per-device guesses. It can, and this is that.
-    ///
-    /// ⚠️ WHAT WAS HERE READ THE HARDWARE AND IS THE WHOLE BUG. `max(0, 30 - safeAreaInsets.bottom)`,
-    /// to put the bar 30pt from the GLASS on every phone. That number is ours, not the platform's,
-    /// and holding it means carrying our own idea of what each iPhone needs:
-    ///
-    ///     home-indicator phone   34 inset  →  30 - 34  →  clamps to 0
-    ///     home-button phone       0 inset  →  30 -  0  →  30
-    ///
-    /// The clamp is the failure. On his 13 Pro it resolves to zero padding, so the bar rests flush
-    /// against whatever is under it, which is his screenshot: the pill touching the keys with no gap
-    /// at all. Measured off it — the composer's left edge sits at 29.7pt and the space under the pill
-    /// at 1.6pt, which are the at-rest 30 and the clamped 0, with the keyboard open.
-    ///
-    /// ⚠️ IT ALSO BRANCHED ON `inputFocused`, AND THAT IS WHY RAISING THE NUMBER DID NOTHING. Both
-    /// measurements above are the UNFOCUSED values taken with the keyboard up, so on that phone the
-    /// focused branch is not the one running and the number in it was never read. A gap that depends
-    /// on a flag can be wrong whenever the flag is; a constant cannot. Now there is no branch.
-    ///
-    /// ⛔ HOW THE POSITION IS DECIDED NOW, which is the part that is Apple's rather than ours:
-    ///
-    ///     safeAreaBar (iOS 26+) / safeAreaInset  →  puts the bar's bottom ON the current edge
-    ///     that edge is the safe area at rest     →  iOS supplies 34, or 0, or whatever is next
-    ///     that edge is the KEYBOARD while typing →  iOS supplies its real height, per version
-    ///     this constant                          →  the design's own margin, and only that
-    ///
-    /// So a new iPhone with a different inset, or an iOS with a different keyboard height, is already
-    /// handled: the thing that changes is the thing iOS measures, and the thing we hold is the only
-    /// part that is a design decision. Nothing here to keep in step with new hardware.
-    ///
-    /// ⚠️ 8 IS THE DESIGN'S NUMBER, NOT A FUDGE, and it is unchanged from what the composer already
-    /// uses — see the note above: the reference app's `vMargin`, 0.5 * (56 - 40), the pill centred in
-    /// its bar. He asked for the composer's size, height, padding and design to be left exactly as
-    /// they are, and they are. Only where the bar is put changed.
-    ///
-    /// ⚠️ THE ONE VISIBLE CONSEQUENCE, said plainly: at rest on a home-indicator phone the bar now
-    /// sits 8 above the indicator instead of on it, so it rises by 8pt. That is the cost of dropping
-    /// the subtraction, and it cannot be avoided while iOS owns the inset — "30pt from the glass on
-    /// every phone" is only reachable by overriding the safe area, which is the guessing he asked to
-    /// stop.
-    private static let composerBottomGap: CGFloat = 8
+    /// The keyboard's own frame cannot be confused by any of that: `KeyboardWatcher` reads
+    /// `keyboardWillChangeFrame` / `willHide`, so this is the OS reporting its own state rather than
+    /// us inferring it from a layout. It also keeps the property that made me leave `inputFocused`
+    /// behind in the first place — notifications fire identically on iOS 26 and 27, where SwiftUI's
+    /// focus flag did not — and it lands at the START of the keyboard's animation, so the padding
+    /// moves with the keys instead of a frame behind them.
+    @StateObject private var keyboard = KeyboardWatcher()
+    private var composerKeyboardUp: Bool { keyboard.height > 0 }
 
     private var composer: some View {
         VStack(spacing: 6) {
             if !mentionCandidates.isEmpty { mentionPicker }
+            // ⛔ AN if/else, AND IT MUST STAY ONE — owner, 2026-08-24, after build 662: "remove the
+            // entire cross-fade transition, that is what introduced the bug".
+            //
+            // ⚠️ WHY A ZStack OF BOTH STATES CANNOT LIVE HERE. It was tried to make the swipe-up lock
+            // cross-fade instead of pop, and it did — but a ZStack sizes to its LARGEST child, and the
+            // locked bar is two rows (~96pt) against this row's ~40. So the composer became ~96pt
+            // tall permanently, with the input row floating in the middle of it, and that height IS
+            // the safe-area inset this bar hands to the list: everything above it shifted and every
+            // gap around it read wrong. The system-positioned behaviour was correct in 660 and broke
+            // in 662 for exactly this reason.
+            //
+            // The pop is the price of the height being right. If the transition is ever wanted again
+            // it has to keep the if/else — only the showing state may size this bar — and cross-fade
+            // through `.transition` on each branch, never by holding both.
             Group {
                 if recordLocked { lockedRecordingBar } else { inputRow }
             }
         }
-        // ⛔ 30 AT REST, 16 WHILE TYPING. The 30 is his 2026-08-22 number and the 16 is his own
-        // 2026-08-02 rule, which I removed with the old 24 and should not have — see
-        // `composerSideInsetTyping`. The bar gets wider exactly when you are typing into it, which is
-        // the moment the field needs the room.
-        .padding(.horizontal, inputFocused ? Self.composerSideInsetTyping : Self.composerSideInset)
+        // ⛔ AT REST THE SIDES MATCH THE BOTTOM — owner, 2026-08-24, from the preview of the pure
+        // system-margin version: "when keyboard off, left and right padding is small, use same size
+        // as bottom". The rest inset is therefore the SAME expression as the pill's resting height
+        // above the physical edge (inset − dip, ≈29 on his phones), which is exactly what makes the
+        // three gaps read as one; it stays device-derived because the inset is. The margin is the
+        // floor so a home-button phone (inset 0) keeps the system number instead of collapsing.
+        // With the keyboard up the flat edge takes over and the sides drop to the system margin,
+        // which is iMessage's own open-state number.
+        .padding(.horizontal, composerKeyboardUp
+                 ? chromeMargin
+                 : max(chromeMargin, chromeBottomInset - Self.composerRestDip))
         .padding(.top, 6)
-        .padding(.bottom, Self.composerBottomGap)
-        // Both margins move with the focus again, so they ride the keyboard's own curve instead of
-        // snapping a frame before or after it. The bar's CONTENT changes on the same value — the send
-        // button appears, the mic leaves — so one animation covers the lot.
+        // At rest the pill sinks `composerRestDip` below the safe-area line, into the indicator
+        // band, exactly as the system bars sit. Riding the keyboard it keeps the 8 above the keys.
+        // Home-button phones (inset 0) have no band, so rest matches the keyboard gap.
+        .padding(.bottom, composerKeyboardUp || chromeBottomInset <= 0
+                 ? Self.composerKeyboardGap : -Self.composerRestDip)
+        .background { SystemChromeReader(margin: $chromeMargin, bottomInset: $chromeBottomInset) }
+        .animation(.easeOut(duration: 0.25), value: composerKeyboardUp)
+        // The bar's CONTENT still changes on focus — the send button appears, the mic leaves —
+        // so that animation stays keyed to it even though the geometry no longer is.
         .animation(.easeOut(duration: 0.25), value: inputFocused)
         .overlay(alignment: .top) {
             if holdHint {
@@ -4784,7 +4896,7 @@ struct ThreadView: View {
                     Image(systemName: "checkmark.circle.fill").font(.system(size: 14))
                     Text("Set to one-time listen").font(.system(size: 13, weight: .medium))
                 }
-                .modifier(ChatNoticePill())
+                .modifier(ChatNoticePill(dark: dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur))
                 .offset(y: -8)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
@@ -4793,7 +4905,10 @@ struct ThreadView: View {
         .overlay(alignment: .bottomTrailing) {
             if recordingHeld { recordingMicOverlay }
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: recordLocked)
+        // One spring covers the whole lock: the cross-fade, the scale, and the height the row
+        // changes by as the locked bar's second line arrives. Slightly softer than the old 0.8 so
+        // the taller layout settles instead of snapping into place.
+        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: recordLocked)
     }
 
     // @-mention autocomplete shown above the input while typing "@" in a group.
@@ -5263,19 +5378,46 @@ struct ThreadView: View {
     /// the wave BETWEEN the two decisions — throw it away on the left, send it on the right — so the
     /// two things you might do with the recording sit either side of the recording itself, and the
     /// one control that only changes the recording's state stands out of that line entirely.
+    /// ⛔ THE PAUSE-TO-SEND GAP, AND IT IS THE ARROW'S GAP — owner, 2026-08-24: "increase the space
+    /// between the Pause and Send buttons so it matches the spacing between the arrow button and the
+    /// composer". I had read his earlier "make it 10pt" as the number he wanted and pinned the rows
+    /// to make 10 exact; he meant the gap should be BIGGER, and named the arrow as the thing to
+    /// match.
+    ///
+    /// The arrow floats `10` above the composer bar and the bar carries `6` of top padding before
+    /// its pill, so the gap a reader actually sees between the arrow and the composer's pill is the
+    /// two added together. That sum is this number, which is why it is written as the sum rather
+    /// than as 16 — if either of those two moves, this follows instead of drifting.
+    ///
+    /// ⚠️ THE ROW PINS BELOW ARE WHAT MAKE IT EXACT and they stay. Both rows are free-height
+    /// otherwise, so each takes the tallest thing in it and centres the rest, and the slack lands on
+    /// top of this spacing — which is how the old stated 10 rendered as about 14.
+    private static let lockedBarRowGap: CGFloat = 10 + 6
+
     private var lockedRecordingBar: some View {
-        VStack(spacing: 10) {
-            // Pause (or continue) rides above, on the send's side. Not part of the row below: it
-            // does not dispose of the note or commit it, and lining it up with the two that do is
-            // what made three equal circles out of two decisions and a toggle.
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
-                recordStateButton
-            }
+        // ⛔ ONE ROW TALL, WITH THE PAUSE FLOATING OVER THE CHAT — owner, 2026-08-24: locking a
+        // recording "scrolls the chat up to give space for the pause button… it can overlap the
+        // chat, it's a button, everyone can see it, no need for the chat to scroll".
+        //
+        // ⚠️ THIS BAR'S HEIGHT IS SPENT TWICE, which is why the pause cost so much room. It is the
+        // safeAreaBar's inset AND it is measured into `composerBarHeight`, which the list takes as
+        // extra bottom clearance — so a second 40pt row pushed the conversation up by its own height
+        // plus the gap, every time you locked. Only the strip row is the bar now; the pause is an
+        // overlay, which draws and takes touches outside the bar's bounds without being part of its
+        // height. The hold hint and the big record mic in `composer` already ride outside it the
+        // same way, so this is the shape this bar already uses rather than a new trick.
+        VStack(spacing: 0) {
             HStack(spacing: 10) {
-                Button { cancelRecording() } label: {
-                    Image(systemName: "trash.fill").font(.system(size: 18)).foregroundStyle(.red)
-                        .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true)
+                // ⛔ THE BIN BELONGS TO THE REVIEW, NOT TO THE RECORDING — owner, 2026-08-24, image 1:
+                // while it is still recording there is no trash button and the pill runs the full
+                // width, with a red Cancel in the middle of it doing that job instead. The bin comes
+                // back the moment it pauses, which is his image 2.
+                if reviewingNote {
+                    Button { cancelRecording() } label: {
+                        Image(systemName: "trash.fill").font(.system(size: 18)).foregroundStyle(.red)
+                            .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true)
+                    }
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
                 // THE STRIP: the wave owns whatever the two buttons leave.
                 HStack(spacing: 8) {
@@ -5283,9 +5425,18 @@ struct ThreadView: View {
                         // REVIEWING: play it back. The waveform is the finished one, not the live meter —
                         // same component the sent bubble uses, so what you check is what they will see.
                         Button { togglePreview() } label: {
+                            // ⛔ 22, AND IT GOES UP FROM THE ORIGINAL 15 — owner, 2026-08-24. I read his
+                            // "play icon add small size" as "make it a small size" and shrank it to
+                            // 13; he meant ADD size, by a small amount. Measured off the image he
+                            // sent to settle it, the triangle stands about 60% of the pill's height,
+                            // which on a 40pt pill is 22-24pt of glyph.
+                            //
+                            // A bare glyph with no disc, which is what his picture shows — the sent
+                            // bubble's filled disc is a different control and this one lives inside
+                            // the pill.
                             Image(systemName: previewPlaying ? "pause.fill" : "play.fill")
-                                .font(.system(size: 15)).foregroundStyle(Theme.accent(dark))
-                                .frame(width: 22, height: 22)
+                                .font(.system(size: 22)).foregroundStyle(Theme.accent(dark))
+                                .frame(width: 26, height: 26)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -5303,10 +5454,24 @@ struct ThreadView: View {
                         Text(timeString(recorder.elapsed)).font(.system(size: 15).monospacedDigit())
                             .foregroundStyle(.secondary)
                     } else {
-                        // RECORDING: timer · live wave, the reference's order.
+                        // ⛔ RECORDING: mic · timer · CANCEL · the "1" — owner's image 1, replacing the
+                        // live waveform that used to fill this space. The wave was showing the level
+                        // of something you cannot hear yet and cannot act on; Cancel is the one thing
+                        // you might actually want mid-recording, and putting it here is what lets the
+                        // bin leave the row entirely. The finished waveform still appears on pause,
+                        // where it is a thing you can scrub.
+                        Image(systemName: "mic.fill")
+                            .font(.system(size: 17)).foregroundStyle(.red)
+                            .symbolEffect(.pulse, options: .repeating)
                         RecordTimerText(recorder: recorder)
-                        RecordWaveform(recorder: recorder, color: Theme.accent(dark))
-                            .frame(maxWidth: .infinity)
+                        Button { cancelRecording() } label: {
+                            Text("Cancel")
+                                .font(.system(size: 17))
+                                .foregroundStyle(.red)
+                                .frame(maxWidth: .infinity)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                     }
                     // ONE-TIME LISTEN — the "1" at the strip's end, both states, fill-when-armed like
                     // the photo picker's badge. Arming it flashes the little confirmation over the bar.
@@ -5339,6 +5504,19 @@ struct ThreadView: View {
                         .contentShape(Circle())
                 }
             }
+            .frame(height: 40)
+        }
+        // Pause (or continue) rides ABOVE the bar, on the send's side, floating over the messages.
+        // Not part of the row below it: it neither disposes of the note nor commits it, and lining
+        // it up with the two that do made three equal circles out of two decisions and a toggle.
+        //
+        // The offset is its own height plus the gap, so the spacing to the send button is exactly
+        // `lockedBarRowGap` — the same 10 + 6 the down-arrow keeps from the composer — with no row
+        // slack able to creep in, because there is no second row any more.
+        .overlay(alignment: .topTrailing) {
+            recordStateButton
+                .frame(height: 40)
+                .offset(y: -(40 + Self.lockedBarRowGap))
         }
         .animation(.spring(response: 0.28, dampingFraction: 0.85), value: reviewingNote)
     }
@@ -5605,13 +5783,45 @@ enum ViewedOnce {
 /// apart read as two different things (user screenshot, "make it the same, no difference"). One
 /// modifier now owns the look, which is also what stops it drifting again.
 struct ChatNoticePill: ViewModifier {
+    /// ⛔ THE SAME SURFACE AN INCOMING BUBBLE WEARS — owner, 2026-08-24: the Today badge, the pin
+    /// notice and the disappearing-message badge "must be like bubble color… the bubble now adapts
+    /// to the background, make it like how bubble color is used".
+    ///
+    /// It is also what the reference app does, and by the same mechanism rather than by an eyeball
+    /// match: `CVComponentDateHeader` overrides `wallpaperBlurView(componentView:)` and returns a
+    /// `CVWallpaperBlurView`, the identical class their message bubbles use. Their date pill is not
+    /// styled to resemble a bubble; it IS one, minus the text colour.
+    ///
+    /// So this goes through `ReceivedBubbleSurface` and `Theme.bubbleRim` like every incoming
+    /// bubble: a slice of the blurred wallpaper with the hairline rim on a wallpaper, and the flat
+    /// received colour without one. Every badge in the chat routes through this one modifier — the
+    /// day separator, the pin notice, the system rows and the composer's toasts — so they cannot
+    /// drift apart from the bubbles or from each other.
+    ///
+    /// ⚠️ NOT `.ultraThinMaterial`, WHICH IS WHAT THIS WAS. A material samples live and comes out a
+    /// different colour from the bubble beside it, which is the mismatch in his screenshot: grey
+    /// pills on a blue-tinted wall of bubbles. The slice is the same picture the bubbles read from,
+    /// so a pill and the bubble above it are cut from one image.
+    let dark: Bool
+    let onWallpaper: Bool
+    let blur: WallpaperBlurState?
+
     func body(content: Content) -> some View {
         content
             .font(.caption.weight(.semibold))
             .foregroundStyle(.primary)
             .padding(.horizontal, 12).padding(.vertical, 5)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().stroke(.white.opacity(0.06), lineWidth: 0.5))
+            .background { ReceivedBubbleSurface(dark: dark, onWallpaper: onWallpaper, blur: blur) }
+            .clipShape(Capsule())
+            .overlay {
+                if onWallpaper {
+                    Capsule().strokeBorder(Theme.bubbleRim(dark), lineWidth: Theme.hairline)
+                        .allowsHitTesting(false)
+                } else {
+                    // The old hairline, kept for the no-wallpaper case it was designed against.
+                    Capsule().stroke(.white.opacity(0.06), lineWidth: 0.5)
+                }
+            }
     }
 }
 
@@ -5766,12 +5976,20 @@ struct MessageBubble: View, Equatable {
             && l.isFirstInCluster == r.isFirstInCluster && l.isLastInCluster == r.isLastInCluster
             && l.otherLastRead == r.otherLastRead && l.chatColor == r.chatColor
             && l.isViewedOnce == r.isViewedOnce && l.restricted == r.restricted
+            && l.onWallpaper == r.onWallpaper && l.wallpaperBlur == r.wallpaperBlur
     }
 
     let message: Message
     let isMe: Bool
     let dark: Bool
     let cid: String
+    /// Is this bubble sitting on a wallpaper, and if so the blurred picture of it that an incoming
+    /// bubble shows a slice of (see `WallpaperBlur`). Both default off so a bubble drawn somewhere
+    /// with no wallpaper behind it (the pinned-messages sheet) keeps the flat surface, which is the
+    /// correct answer there. A wallpaper with no picture — the chat peek platter, which is not the
+    /// size of the window — falls to the material approximation in `Theme.receivedSurface`.
+    var onWallpaper: Bool = false
+    var wallpaperBlur: WallpaperBlurState? = nil
     var nameFor: (String) -> String = { _ in "" }
     var avatarFor: (String) -> String? = { _ in nil }
     var onReply: (Message) -> Void = { _ in }
@@ -5848,6 +6066,49 @@ struct MessageBubble: View, Equatable {
     // Fill behind MY bubbles: the custom chat colour if set, else the default systemBlue (adaptive
     // light/dark — see Theme.defaultBubble).
     private var myFill: AnyShapeStyle { chatColor?.fill ?? AnyShapeStyle(Theme.defaultBubble(dark)) }
+
+    // Surface behind a bubble. MINE is the fill above, untouched. THEIRS is flat grey on the plain
+    // background and a slice of the blurred wallpaper on a wallpaper — see `Theme.receivedSurface`
+    // and `WallpaperBlur` for why it stops being a colour at all. Every bubble kind in this file
+    // goes through this one property so a chat can never draw a text bubble and a voice bubble on
+    // two different surfaces. A `.background { }` rather than a `.background(style)` because a slice
+    // is a view, not a style; for MY bubbles a rectangle filled with the same style, under the same
+    // clip, is the same pixels.
+    //
+    // ⚠️ `onWallpaper` AND `wallpaperBlur` ARE PASSED IN AND COMPARED IN `==`, NOT READ FROM THE
+    // ENVIRONMENT, and that is deliberate. This view is wrapped in `.equatable()`, so a bubble that
+    // compares equal never re-evaluates its body; an environment read is the kind of dependency that
+    // could be skipped there and leave the new wallpaper drawn under bubbles still painting
+    // themselves flat until something else invalidated them. `dark` is passed for the same reason
+    // and these ride beside it.
+    /// The map on a shared-location bubble. Stated rather than measured, like every other size in a
+    /// bubble here: the row is pre-measured before the snapshot exists, and a height that arrives
+    /// with the picture is the bloom this file's notes keep warning about.
+    ///
+    /// ⚠️ ON `MessageBubble`, NOT ON `ThreadView`. It is read from inside this view, where `Self` is
+    /// this struct — declaring it next door compiled as a member of the wrong type and did not
+    /// resolve. Sizes a bubble uses live with the bubble.
+    private static let locationMapHeight: CGFloat = 140
+
+    @ViewBuilder private var bubbleSurface: some View {
+        if isMe {
+            Rectangle().fill(myFill)
+        } else {
+            ReceivedBubbleSurface(dark: dark, onWallpaper: onWallpaper, blur: wallpaperBlur)
+        }
+    }
+
+    /// The reference's hairline rim, drawn just inside whatever shape clipped this bubble — see
+    /// `Theme.bubbleRim` for the numbers and their construction. Incoming on a wallpaper only:
+    /// theirs guards it `hasWallpaper, isIncoming`, and an outgoing bubble never wears one.
+    /// An overlay per site rather than part of `bubbleSurface`, because only the site knows the
+    /// shape the bubble was clipped with, and a rim on the wrong shape is worse than none.
+    @ViewBuilder private func bubbleRim<S: InsettableShape>(_ shape: S) -> some View {
+        if !isMe, onWallpaper {
+            shape.strokeBorder(Theme.bubbleRim(dark), lineWidth: Theme.hairline)
+                .allowsHitTesting(false)
+        }
+    }
 
     // Text/meta on MY bubbles: both the custom colours AND the default systemBlue are vivid in BOTH
     // modes, so the text/glyphs are always WHITE.
@@ -6609,7 +6870,8 @@ struct MessageBubble: View, Equatable {
             // placeholder in a vivid bubble is louder than the message it replaced. Two things keep
             // it quieter than the original version he rejected — it is still a CAPSULE rather than a
             // bubble, and it still carries no time and no tick.
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)), in: Capsule())
+            .background { bubbleSurface.clipShape(Capsule()) }
+            .overlay { bubbleRim(Capsule()) }
         } else if message.isAudio, message.viewOnce {
             // ONE-TIME VOICE: a pill, exactly the view-once photo's idiom further down this chain —
             // never the waveform player. The pill itself is live (it watches the engine for its one
@@ -6623,8 +6885,9 @@ struct MessageBubble: View, Equatable {
                              // is the consumption mark.
                              onOpen: { onTapImage(message) })
                 .padding(.horizontal, 15).padding(.vertical, 11)
-                .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                .background { bubbleSurface }
                 .clipShape(Capsule())
+                .overlay { bubbleRim(Capsule()) }
         } else if message.isAudio {
             // WIDTH-ON-PLAY ROOT CAUSE (deep dive): VoiceMessageView is a DETERMINISTIC 212pt wide (play
             // button 42 + HStack spacing 12 + waveform 158) in every playback state — the speed toggle sits
@@ -6660,8 +6923,9 @@ struct MessageBubble: View, Equatable {
             // living with it, "people are adopted to the reference app's size" (the fixed-wide, slightly
             // taller shape in VoiceMessageView).
             .padding(.vertical, 8)
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
         } else if message.isFile {
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
@@ -6721,8 +6985,9 @@ struct MessageBubble: View, Equatable {
                 HStack(spacing: 0) { Spacer(minLength: 0); metaRow }   // time+tick on files (was missing)
             }
             .padding(.horizontal, 13).padding(.vertical, 10)
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
         } else if let pendingKind = message.pendingMediaKind, pendingKind != "image" {
             // THE MESSAGE IS HERE, THE BYTES ARE STILL COMING. Only the recipient reaches this; the
             // sender keeps their own local copy (ThreadRepository.refreshItems).
@@ -6770,8 +7035,9 @@ struct MessageBubble: View, Equatable {
                                    height: VoiceMessageView.waveHeight)
                     }
                     .padding(.horizontal, 13).padding(.vertical, 10)
-                    .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                    .background { bubbleSurface }
                     .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                    .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
                 case "album":
                     // The SAME solver, the SAME aspects, the SAME width as the finished grid — see
                     // `albumAspect`, which now reads `albumSizes` for exactly this. So the mosaic is
@@ -6806,8 +7072,9 @@ struct MessageBubble: View, Equatable {
                     }
                     .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
                     .padding(.horizontal, 13).padding(.vertical, 10)
-                    .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                    .background { bubbleSurface }
                     .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                    .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
                 }
             }
         } else if message.isPendingImage {
@@ -6935,8 +7202,9 @@ struct MessageBubble: View, Equatable {
                     if hasCaption { captionBody(width: videoBox.width) }
                 }
                 .frame(width: videoBox.width)
-                .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                .background { bubbleSurface }
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
             }
         } else if message.isAlbum {
             // Album (2+ photos as ONE message): a MOSAIC GRID inside the bubble + one caption.
@@ -6962,8 +7230,9 @@ struct MessageBubble: View, Equatable {
                 // definite size, and never narrower, so the timestamp stays on the trailing edge.
                 if !message.text.isEmpty { captionBody(width: albumWidth) }
             }
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
             // THE WHOLE-BUBBLE UPLOAD RING IS GONE (the agreed per-item spec): every sending tile
             // now carries its own ring, its own bytes and its own X — see `albumTile`. One ring
             // centred on the bubble could not say which image was slow, could not cancel one of
@@ -6989,8 +7258,9 @@ struct MessageBubble: View, Equatable {
             }
             .foregroundStyle((isMe ? onMyBubble : (dark ? Color.white : .black)).opacity(viewed ? 0.6 : 1))
             .padding(.horizontal, 15).padding(.vertical, 11)
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .background { bubbleSurface }
             .clipShape(Capsule())
+            .overlay { bubbleRim(Capsule()) }
             .contentShape(Capsule())
             .onTapGesture {
                 guard !isMe, !viewed, message.sendState == nil else { return }
@@ -7134,8 +7404,9 @@ struct MessageBubble: View, Equatable {
                     if hasCaption { captionBody(width: box.width) }
                 }
                 .frame(width: box.width)
-                .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+                .background { bubbleSurface }
                 .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+                .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
             }
         } else if let poll = message.poll {
             // POLL: question + options with live vote bars. Content is E2EE (rides the encrypted text
@@ -7147,30 +7418,45 @@ struct MessageBubble: View, Equatable {
             .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
             .padding(12)
             .frame(width: maxBubbleWidth * 0.9)
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
         } else if let loc = message.locationCard {
-            // SHARED LOCATION card: pin + label + coordinates; tap opens Apple Maps at the spot.
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 10) {
-                    Image(systemName: "mappin.circle.fill")
-                        .font(.system(size: 34))
-                        .foregroundStyle(.red, isMe ? Color.white : Color.primary.opacity(0.9))
-                    VStack(alignment: .leading, spacing: 2) {
+            // ⛔ THE MAP IS THE CARD NOW — owner, 2026-08-24: "when I send a location, add a location
+            // preview". It used to be a pin glyph over the raw coordinates, and a coordinate is the
+            // one thing about a place that tells you nothing.
+            //
+            // The picture sits where a photo bubble's picture sits: flush to the top and the sides,
+            // with the words below it under the same background and the same clip — one bubble, not
+            // a card inside a card. See `LocationMapPreview` for why it is a rendered still rather
+            // than a live map, and why its height is stated.
+            //
+            // ⚠️ THE COORDINATES ARE GONE FROM THE FACE OF IT, DELIBERATELY. What replaces them is
+            // the map itself; the numbers were only ever standing in for it. The label keeps its
+            // line, and a share with no label says "Location" as before.
+            VStack(alignment: .leading, spacing: 0) {
+                LocationMapPreview(lat: loc.lat, lon: loc.lon,
+                                   width: maxBubbleWidth * 0.85,
+                                   height: Self.locationMapHeight,
+                                   dark: dark)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "mappin.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.red, isMe ? Color.white : Color.primary.opacity(0.9))
                         Text(loc.label ?? "Location").font(.system(size: 16, weight: .semibold)).lineLimit(1)
-                        Text(String(format: "%.5f, %.5f", loc.lat, loc.lon))
-                            .font(.caption).opacity(0.8)
+                        Spacer(minLength: 6)
+                        Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).opacity(0.7)
                     }
-                    Spacer(minLength: 6)
-                    Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).opacity(0.7)
+                    HStack { Spacer(); metaRow }
                 }
-                HStack { Spacer(); metaRow }
+                .padding(12)
             }
             .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
-            .padding(12)
             .frame(width: maxBubbleWidth * 0.85)
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
             .contentShape(Rectangle())
             .onTapGesture {
                 let q = (loc.label ?? "Shared Location").addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "Location"
@@ -7207,8 +7493,9 @@ struct MessageBubble: View, Equatable {
             .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
             .padding(12)
             .frame(width: maxBubbleWidth)
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
         } else if jumbomojiCount > 0, message.replyTo == nil || message.replyTo?.isStatus == true,
                   firstLinkURL == nil {
             // JUMBOMOJI — the reference app's behaviour, read from their source (2026-07-28) rather than eyeballed.
@@ -7300,8 +7587,9 @@ struct MessageBubble: View, Equatable {
             }
             .padding(.horizontal, 15)
             .padding(.vertical, 10)
-            .background(isMe ? myFill : AnyShapeStyle(Theme.received(dark)))
+            .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
+            .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
         }
     }
 

@@ -323,7 +323,20 @@ struct MediaGalleryView: View {
     /// and that one is allowed to animate because there is no drag under it.
     @ViewBuilder private var content: some View {
         ScrollView(.horizontal) {
-            LazyHStack(spacing: 0) {
+            // ⛔ `HStack`, NOT `LazyHStack`, AND THAT IS THE WHOLE SWIPE-LAG FIX (owner, 2026-08-23:
+            // "Media → File is already smooth, every other transition is laggy").
+            //
+            // Lazy is exactly wrong for a pager. It realises a page as that page scrolls into view,
+            // which is to say IN THE MIDDLE OF THE DRAG, so the first swipe onto each tab paid for
+            // building it while the finger was moving. Media → Files felt fine only because Files
+            // was the one page already realised as the neighbour of the one you opened on; every
+            // further tab was built under the finger, which is why the report names all of them
+            // except that one.
+            //
+            // Building all five up front is cheap and that is what makes this safe: each page is a
+            // ScrollView whose rows are a LazyVStack, so what gets built here is five empty shells,
+            // not five lists of content. The rows still arrive lazily, per page, as they always did.
+            HStack(spacing: 0) {
                 ForEach(Tab.allCases, id: \.self) { t in
                     page(t)
                         .containerRelativeFrame(.horizontal)
