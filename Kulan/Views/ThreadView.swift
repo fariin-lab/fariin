@@ -5348,6 +5348,16 @@ struct ThreadView: View {
                 Spacer(minLength: 0)
                 recordStateButton
             }
+            // ⛔ PINNED TO THE BUTTON'S OWN HEIGHT, AND THAT IS WHAT MAKES THE 10 BELOW EXACT —
+            // owner, 2026-08-24: "space between pause and send button, make it 10pt".
+            //
+            // ⚠️ THE VSTACK ALREADY SAID 10 AND IT DID NOT RENDER AS 10. Both rows are free-height,
+            // so each takes the tallest thing in it and centres the rest: any slack in the strip row
+            // is split above and below the send button and lands ON TOP of the stack's spacing. The
+            // gap was therefore 10 plus half of whatever the pill happened to measure that frame,
+            // which is why a stated number was not the number on screen. With both rows pinned to
+            // the 40pt the buttons already are, the only thing between them is the spacing.
+            .frame(height: 40)
             HStack(spacing: 10) {
                 // ⛔ THE BIN BELONGS TO THE REVIEW, NOT TO THE RECORDING — owner, 2026-08-24, image 1:
                 // while it is still recording there is no trash button and the pill runs the full
@@ -5445,6 +5455,7 @@ struct ThreadView: View {
                         .contentShape(Circle())
                 }
             }
+            .frame(height: 40)   // the other half of the exact 10 — see the note on the row above
         }
         .animation(.spring(response: 0.28, dampingFraction: 0.85), value: reviewingNote)
     }

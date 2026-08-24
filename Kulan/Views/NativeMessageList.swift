@@ -570,7 +570,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// until ARC catches up, and a controller with no window has no reader to move.
     @objc private func jumpToNewestRequested() {
         guard collectionView.window != nil else { return }
-        perform(.newest(animated: true))
+        // Only the down-arrow posts this (see the observer above), so it is user-initiated by
+        // definition and does not wait for a finger to lift.
+        perform(.newest(animated: true, userInitiated: true))
     }
 
     func setLoadingOlder(_ loading: Bool) {
@@ -799,7 +801,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // fifteen call sites each inventing their own guard, which is how four unrelated bugs produced one
     // symptom.
     private enum ScrollIntent {
-        case newest(animated: Bool)   // jump-to-latest button, own send, first open with nothing unread
+        /// `userInitiated` = the reader ASKED for this, by tapping the down-arrow. Automatic ones
+        /// (own send, a width-change re-anchor) leave it false and keep the finger rule.
+        case newest(animated: Bool, userInitiated: Bool = false)
         case message(String)          // reply / search jump to a specific row
         case initialPosition          // the very first landing, before the list is visible
     }
@@ -810,13 +814,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // visible, so it is never gated.
     private func perform(_ intent: ScrollIntent) {
         switch intent {
-        case .newest(let animated):
+        case .newest(let animated, let userInitiated):
             guard didFirstLand else { return }
-            // A TAP IS NOT A DROP. The finger rule stands — nothing moves the reader while they are
-            // touching the glass — but the request used to be thrown away here, and the binding that
-            // carried it is one-shot, so a jump asked for with a thumb still down was gone for good.
-            // It waits for the lift now (see scrollViewDidEndDragging).
-            guard !isUserScrolling else { pendingNewestJump = animated; return }
+            // A TAP IS NOT A DROP. The finger rule stands for AUTOMATIC jumps — nothing moves the
+            // reader while they are touching the glass — and they wait for the lift rather than
+            // being dropped (see scrollViewDidEndDragging), because the binding that carries them
+            // is one-shot.
+            //
+            // ⛔ BUT AN ASKED-FOR JUMP OUTRANKS THE FINGER — owner, 2026-08-24: "the arrow button
+            // works only when the swipe is finished". Parking his tap was the whole delay. The rule
+            // exists so an ARRIVING MESSAGE cannot yank the list out from under someone who is
+            // reading; a thumb on the arrow is the reader asking to be moved, which is the opposite
+            // situation, and deferring it makes the button feel broken rather than careful.
+            //
+            // Two fingers is all it takes to reach this: one still coasting the list, one on the
+            // arrow. `scrollToOffset` kills the coast on its way past, so landing mid-fling is
+            // already handled — this only stops us refusing the request in the first place.
+            if !userInitiated {
+                guard !isUserScrolling else { pendingNewestJump = animated; return }
+            }
             pendingNewestJump = nil
             scrollToOffset(minContentOffsetY, animated: animated)
         case .message(let id):
