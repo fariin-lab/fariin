@@ -4747,9 +4747,17 @@ struct ThreadView: View {
                 if recordLocked { lockedRecordingBar } else { inputRow }
             }
         }
-        // The system margin on both sides, in every state — iMessage's own behaviour, measured.
-        // See the block over `composerKeyboardGap` for the whole model and its provenance.
-        .padding(.horizontal, chromeMargin)
+        // ⛔ AT REST THE SIDES MATCH THE BOTTOM — owner, 2026-08-24, from the preview of the pure
+        // system-margin version: "when keyboard off, left and right padding is small, use same size
+        // as bottom". The rest inset is therefore the SAME expression as the pill's resting height
+        // above the physical edge (inset − dip, ≈29 on his phones), which is exactly what makes the
+        // three gaps read as one; it stays device-derived because the inset is. The margin is the
+        // floor so a home-button phone (inset 0) keeps the system number instead of collapsing.
+        // With the keyboard up the flat edge takes over and the sides drop to the system margin,
+        // which is iMessage's own open-state number.
+        .padding(.horizontal, composerKeyboardUp
+                 ? chromeMargin
+                 : max(chromeMargin, chromeBottomInset - Self.composerRestDip))
         .padding(.top, 6)
         // At rest the pill sinks `composerRestDip` below the safe-area line, into the indicator
         // band, exactly as the system bars sit. Riding the keyboard it keeps the 8 above the keys.
