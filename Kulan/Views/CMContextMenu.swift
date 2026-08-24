@@ -24,13 +24,21 @@ import UIKit
 /// list's invisible sizer copy, and letting that copy land would overwrite the real bubble's
 /// position with a rect nowhere near the finger (the KeyboardSafeRects lesson, kept).
 @MainActor enum CMBubbleRects {
-    private static var rects: [String: (rect: CGRect, radius: CGFloat)] = [:]
-    static func capture(_ id: String, _ rect: CGRect, radius: CGFloat) {
+    private static var rects: [String: (rect: CGRect, radius: CGFloat,
+                                        translucent: Bool, overhang: CGFloat)] = [:]
+    static func capture(_ id: String, _ rect: CGRect, radius: CGFloat,
+                        translucent: Bool = false, overhang: CGFloat = 0) {
         guard !rect.isEmpty, rect.intersects(UIScreen.main.bounds) else { return }
-        rects[id] = (rect, radius)
+        rects[id] = (rect, radius, translucent, overhang)
     }
     static func rect(_ id: String) -> CGRect? { rects[id]?.rect }
     static func radius(_ id: String) -> CGFloat { rects[id]?.radius ?? 18 }
+    /// Is this bubble drawn as a blur material rather than a colour? See `NativeMessageList`'s lift:
+    /// a material cannot be snapshotted and the lifted copy has to be given a surface of its own.
+    static func isTranslucent(_ id: String) -> Bool { rects[id]?.translucent ?? false }
+    /// How much of `rect` is reaction badge hanging BELOW the bubble rather than bubble. The lift's
+    /// backing must stop at the real bottom edge or it paints a bubble taller than the one on screen.
+    static func overhang(_ id: String) -> CGFloat { rects[id]?.overhang ?? 0 }
 }
 
 /// Publishes a bubble's window rect + corner radius for as long as it is on screen.
@@ -42,6 +50,10 @@ struct CMBubbleRectReporter: ViewModifier {
     let id: String
     let radius: CGFloat
     var bottomOverhang: CGFloat = 0
+    /// True when this bubble's surface is a blur material rather than a colour — an INCOMING bubble
+    /// in a chat that has a wallpaper. The lift needs to know, because a material cannot be
+    /// snapshotted. See `CMBubbleRects.isTranslucent`.
+    var translucent: Bool = false
     func body(content: Content) -> some View {
         content.background(
             GeometryReader { g in
@@ -51,6 +63,10 @@ struct CMBubbleRectReporter: ViewModifier {
                     // the frame observer above never fires and the rect stayed at the pre-reaction
                     // height, which is why the lift sliced a badge that had just appeared.
                     .onChange(of: bottomOverhang) { _, _ in publish(g.frame(in: .global)) }
+                    // Same reason, one property along: applying a wallpaper changes the SURFACE and
+                    // nothing about where the bubble is, so without this the registry would still be
+                    // saying "solid colour" about a bubble that had become a material.
+                    .onChange(of: translucent) { _, _ in publish(g.frame(in: .global)) }
             }
         )
     }
@@ -58,7 +74,8 @@ struct CMBubbleRectReporter: ViewModifier {
     private func publish(_ f: CGRect) {
         var r = f
         r.size.height += bottomOverhang
-        CMBubbleRects.capture(id, r, radius: radius)
+        CMBubbleRects.capture(id, r, radius: radius,
+                              translucent: translucent, overhang: bottomOverhang)
     }
 }
 

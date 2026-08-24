@@ -20,6 +20,50 @@ import UIKit
 enum StoryText {
     static let charLimit = 720
 
+    /// ⛔ THE POSTED PICTURE SHOWS A SHORT ADDRESS, NOT THE ONE THAT WAS TYPED — owner, 2026-08-23:
+    /// "don't show all the link, also don't show https://, just show like this
+    /// `reicon.dev/icon/alert?...`".
+    ///
+    /// His example is the whole specification and it cuts in two places, not one. The scheme goes
+    /// because it is the same seven characters on every link anybody posts. The QUERY goes because
+    /// it is the half that is machine-written — `?weight=outline` is longer than the page it points
+    /// at and says nothing to a reader — and the `?...` left behind is what stops the address
+    /// reading as if it ended at the path.
+    ///
+    /// The host and the path stay whole. That is the part a person recognises, and truncating a
+    /// domain to fit is how a link stops being checkable.
+    ///
+    /// ⚠️ DISPLAY ONLY, AND ONLY IN THE BAKE. The words the composer edits are still exactly what
+    /// was typed, because that text is what the link is detected and fetched from — shortening it
+    /// there would mean re-parsing an address we had already damaged. What is posted is a picture,
+    /// so this is the last moment the two can differ, which makes it the safe one.
+    static func shortenedURLs(in text: String) -> String {
+        guard let det = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        else { return text }
+        let full = NSRange(text.startIndex..., in: text)
+        var out = text
+        // Back to front: an earlier replacement would move every later range.
+        for m in det.matches(in: text, range: full).reversed() {
+            guard let r = Range(m.range, in: text), let url = m.url else { continue }
+            guard url.scheme == "http" || url.scheme == "https" else { continue }
+            out.replaceSubrange(r, with: shortened(url))
+        }
+        return out
+    }
+
+    /// One address, his shape.
+    static func shortened(_ url: URL) -> String {
+        guard let host = url.host else { return url.absoluteString }
+        var s = host
+        // `path` is "/" for a bare domain, which would leave a dangling slash.
+        let path = url.path
+        if path.count > 1 { s += path.hasSuffix("/") ? String(path.dropLast()) : path }
+        // A cap for the pathological case — a real path can still be longer than a story is wide.
+        if s.count > 42 { s = String(s.prefix(42)) + "…" }
+        if url.query != nil || url.fragment != nil { s += "?..." }
+        return s
+    }
+
     /// WHERE A LINK CARD SITS, AS FRACTIONS, AND THE TWO PLACES THAT DRAW IT BOTH READ THESE.
     ///
     /// The composer card is roughly the phone's shape and the posted file is a fixed 1:2.5 (see
@@ -260,9 +304,14 @@ enum StoryTextLinkLayout {
         // a keyboard-shortened box hits this and scrolls inside what is left, which is the same
         // thing it has always done — the card keeping its room is the part that matters.
         let text = max(0, min(textHeight, boxHeight - cardHeight - gap))
-        let group = text + gap + cardHeight
+        let group = cardHeight + gap + text
         let top = max(0, (boxHeight - group) / 2)
-        let centre = top + text + gap + cardHeight / 2
+        // ⛔ THE CARD IS THE TOP OF THE GROUP NOW — owner, 2026-08-23: "always preview up, text is
+        // bottom". It sat under the words before, which is where the reference app puts it; his word
+        // is newer and this is his screen. The centre moves with it, and it has to: the posted TAP
+        // RECTANGLE is built from this fraction, so a card drawn in one place and a centre reported
+        // from the other is a link you cannot press.
+        let centre = top + cardHeight / 2
         return (text, boxHeight > 1 ? centre / boxHeight : 0.5)
     }
 }
@@ -412,6 +461,26 @@ struct StoryTextCard: View {
                 let place = StoryTextLinkLayout.place(textHeight: textH, cardHeight: cardH,
                                                       boxWidth: g.size.width, boxHeight: boxH)
                 VStack(spacing: link == nil ? 0 : g.size.width * StoryText.linkGapRatio) {
+                    // ⛔ ABOVE THE WORDS, matching the posted picture — owner, 2026-08-23: "always
+                    // preview up, text is bottom". The bake draws the same order and
+                    // `StoryTextLinkLayout.place` reports the centre from the same arrangement, so
+                    // the composer, the picture and the tap rectangle all describe one layout.
+                    //
+                    // NO LONGER HIDDEN WHILE TYPING (2026-08-23, his rule that a detected link's
+                    // preview is always on screen), and TAPPABLE: a tap swaps the two card styles.
+                    // It is the only control the card has, which is why the tap is the whole card
+                    // rather than a button in a corner — and why it must take the touch before the
+                    // background behind it, whose own tap raises and drops the keyboard.
+                    if let link {
+                        StoryTextLinkPreview(draft: link.draft, width: cardW, style: shownLinkStyle)
+                            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .onTapGesture {
+                                withAnimation(.smooth(duration: 0.25)) {
+                                    self.link?.style = link.style.other
+                                }
+                            }
+                            .transition(.opacity)
+                    }
                     ZStack {
                         if text.isEmpty {
                             Text("Type something…")
@@ -428,27 +497,11 @@ struct StoryTextCard: View {
                                         limit: charLimit)
                             .padding(.horizontal, 28)
                     }
-                    // ⚠️ TOLD ITS HEIGHT ONLY WHEN THERE IS A CARD BELOW IT. A `UITextView` fills
+                    // ⚠️ TOLD ITS HEIGHT ONLY WHEN THERE IS A CARD ABOVE IT. A `UITextView` fills
                     // whatever it is offered, so in a stack it would take everything and leave the
                     // card nothing. With no link it keeps the whole box and centres in it, which is
                     // exactly what a text-only status has always done — that case is untouched.
                     .frame(height: link == nil ? nil : place.text)
-
-                    // ⛔ NO LONGER HIDDEN WHILE TYPING (2026-08-23, his rule that a detected link's
-                    // preview is always on screen), and now TAPPABLE: a tap swaps the two card
-                    // styles. It is the only control the card has, which is why the tap is the whole
-                    // card rather than a button in a corner — and why it must take the touch before
-                    // the background behind it, whose own tap raises and drops the keyboard.
-                    if let link {
-                        StoryTextLinkPreview(draft: link.draft, width: cardW, style: shownLinkStyle)
-                            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                            .onTapGesture {
-                                withAnimation(.smooth(duration: 0.25)) {
-                                    self.link?.style = link.style.other
-                                }
-                            }
-                            .transition(.opacity)
-                    }
                 }
                 // ⚠️ STATED, BECAUSE A `GeometryReader` ALIGNS ITS CONTENT TOP-LEADING. Without this
                 // the words would stop being centred in the card the moment they were wrapped in one
@@ -828,7 +881,10 @@ struct RenderedTextStory {
 
 @MainActor func renderTextStory(text: String, styleIndex: Int, fontIndex: Int,
                                 link: StoryTextLink? = nil) -> RenderedTextStory? {
-    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    // Shortened HERE, before anything measures it, so the size the words are fitted at and the
+    // height the layout reserves are both worked out from the string that actually gets drawn. See
+    // `StoryText.shortenedURLs`.
+    let trimmed = StoryText.shortenedURLs(in: text).trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return nil }
     let style = TextStoryStyles.style(styleIndex)
     let renderW: CGFloat = 1080
@@ -874,8 +930,8 @@ struct RenderedTextStory {
         style.bg
         if let link {
             VStack(spacing: renderW * StoryText.linkGapRatio) {
-                words.frame(height: place.text)
                 StoryTextLinkPreview(draft: link.draft, width: cardW, style: link.style)
+                words.frame(height: place.text)
             }
         } else {
             // Untouched: with no card there is nothing to make room for, and a text-only status is
