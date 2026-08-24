@@ -1172,7 +1172,9 @@ struct StoryCameraView: View {
                     onClose()
                     // After the camera has gone, or the route opens behind a full-screen cover.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        UIApplication.shared.open(code)
+                        // A scanned code can be anything; WebLink sends a web page to the sheet
+                        // and hands everything else (tel:, our own links) to the system.
+                        WebLink.open(code)
                     }
                 } label: {
                     HStack(spacing: 8) {

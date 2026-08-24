@@ -711,7 +711,7 @@ struct MediaGalleryView: View {
         .contextMenu {
             if !selecting {
                 Button { goToChat(m) } label: { goToChatLabel }
-                if let url { Button { UIApplication.shared.open(url) } label: { Label("Open Link", systemImage: "safari") } }
+                if let url { Button { WebLink.open(url) } label: { Label("Open Link", systemImage: "safari") } }
             }
         }
     }

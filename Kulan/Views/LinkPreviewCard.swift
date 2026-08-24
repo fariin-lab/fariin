@@ -151,7 +151,8 @@ struct LinkPreviewCard: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onTapGesture {
-            if let u = URL(string: preview.url) { UIApplication.shared.open(u) }
+            // In-app Safari sheet, not a trip out to Safari — see WebLink.
+            if let u = URL(string: preview.url) { WebLink.open(u) }
         }
     }
 }

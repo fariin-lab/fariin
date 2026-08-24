@@ -1055,7 +1055,9 @@ struct ThreadView: View {
                             isPresented: Binding(get: { tappedLink != nil },
                                                  set: { if !$0 { tappedLink = nil } }),
                             titleVisibility: .visible, presenting: tappedLink) { url in
-            Button("Open") { UIApplication.shared.open(url) }
+            // The confirm stays — a link somebody else typed still gets a second look before it
+            // opens. What changes is where it lands: a sheet over the chat, not Safari.
+            Button("Open") { WebLink.open(url) }
             Button("Cancel", role: .cancel) {}
         } message: { url in Text(url.absoluteString) }
         .alert("Sorry, this user doesn't seem to exist.", isPresented: $tappedUserNotFound) {
@@ -7140,7 +7142,9 @@ struct MessageBubble: View, Equatable {
             .onTapGesture {
                 let q = (loc.label ?? "Shared Location").addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "Location"
                 if let u = URL(string: "http://maps.apple.com/?ll=\(loc.lat),\(loc.lon)&q=\(q)") {
-                    UIApplication.shared.open(u)
+                    // WebLink deliberately does NOT sheet maps.apple.com: a shared location has to
+                    // land in the Maps app with the pin on it, not on a web page.
+                    WebLink.open(u)
                 }
             }
         } else if let card = message.contactCard {

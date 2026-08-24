@@ -61,7 +61,9 @@ struct OfficialChatView: View {
             .sheet(isPresented: $shareInvite) { InviteShareSheet() }
             .alert("Open this link?", isPresented: Binding(get: { pendingLink != nil },
                                                           set: { if !$0 { pendingLink = nil } })) {
-                Button("Open") { if let pendingLink { openURL(pendingLink) }; pendingLink = nil }
+                // WebLink, not openURL: a link in the official channel opens in a sheet over the
+                // app like any other, instead of handing the reader to Safari and losing the chat.
+                Button("Open") { if let pendingLink { WebLink.open(pendingLink) }; pendingLink = nil }
                 Button("Cancel", role: .cancel) { pendingLink = nil }
             } message: {
                 Text(pendingLink?.absoluteString ?? "")
