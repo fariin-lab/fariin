@@ -884,11 +884,23 @@ struct FloatingCallWindow: View {
         base = CGSize(width: base.width, height: offset.height)
     }
 
-    private var insets: UIEdgeInsets {
+    /// ⛔ CACHED, BECAUSE THIS IS READ FROM `body`. It walks every connected scene and every window
+    /// to find the notch, and `body` re-runs on every frame of a drag — sixty scene-graph walks a
+    /// second, for a number that cannot change while a call is on screen. Resolved once when the
+    /// card appears and read from memory after that.
+    @State private var insetsCache: UIEdgeInsets = .zero
+
+    private var insets: UIEdgeInsets { insetsCache }
+
+    private static func resolveInsets() -> UIEdgeInsets {
         UIApplication.shared.connectedScenes
             .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets }
             .max(by: { $0.top < $1.top }) ?? .zero
     }
+
+    /// True while a finger is on the card. Everything that measures geometry per frame is switched
+    /// OFF for the duration — see the drag's `onChanged` and `morphAnchored`.
+    @State private var dragging = false
 
     var body: some View {
         GeometryReader { geo in
@@ -934,14 +946,13 @@ struct FloatingCallWindow: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity,
                            alignment: stashedLeft ? .topLeading : .topTrailing)
             } else {
-                zoomAnchored(window)
-                    // The other half of the morph — see the tab's copy of this.
-                    .matchedGeometryEffect(id: Self.morphID, in: morph)
+                morphAnchored(zoomAnchored(window))
                     // Plain gesture, not high-priority: the end button inside the window must still get
                     // its own taps.
                     .gesture(
                         DragGesture(minimumDistance: 8)
                             .onChanged { v in
+                                if !dragging { dragging = true }
                                 let (maxLeft, maxDown) = limits(geo.size)
                                 // Deliberately allowed PAST the edge by `overshoot`. The card sliding
                                 // partly off is the only warning that letting go will hide it — clamped
@@ -969,6 +980,7 @@ struct FloatingCallWindow: View {
                                                   height: target.height - base.height)
                             }
                             .onEnded { v in
+                                dragging = false
                                 let (maxLeft, maxDown) = limits(geo.size)
                                 // ⛔ ONLY THE SIDE SNAPS. Height stays exactly where the finger left
                                 // it (owner, 2026-08-23: "only i can drag top left or top right,
@@ -1051,6 +1063,8 @@ struct FloatingCallWindow: View {
         }
         .ignoresSafeArea()
         .animation(.spring(response: 0.34, dampingFraction: 0.82), value: call.cardStashed)
+        // Resolved once. See `insetsCache` for why this is not read live from `body`.
+        .onAppear { insetsCache = Self.resolveInsets() }
     }
 
     /// Which side it was parked on. `cardBase.width` is 0 at the right edge and negative anywhere
@@ -1105,11 +1119,36 @@ struct FloatingCallWindow: View {
         }
     }
 
+    /// ⛔ THE MORPH ANCHOR, AND IT IS WHY THE CARD SHOOK UNDER A FINGER.
+    ///
+    /// `matchedGeometryEffect` exists to move a view between two STATES. It re-resolves the match on
+    /// every layout pass and applies its own correcting offset to line the frames up — which is
+    /// exactly the wrong thing to have attached to a view whose position is already changing sixty
+    /// times a second. Its correction and the drag argue over the same pixels, one frame apart, and
+    /// that argument is the shake (owner reported it twice; my first fix moved the drag to a
+    /// transform, which was necessary and not sufficient).
+    ///
+    /// So it is OFF while a finger is down. Nothing is lost: the only thing it does is carry the
+    /// card into the edge tab and back, and neither of those happens mid-drag — the stash is decided
+    /// on RELEASE, by which point this is attached again.
+    @ViewBuilder private func morphAnchored(_ content: some View) -> some View {
+        if dragging {
+            content
+        } else {
+            content.matchedGeometryEffect(id: Self.morphID, in: morph)
+        }
+    }
+
     /// Marks the card as the shape the call screen flies into and out of. Same shape as the call
     /// buttons' own modifier, and for the same reason: `matchedTransitionSource` needs a real
     /// namespace, and on a screen that does not host the cover's environment there is not one.
+    ///
+    /// Also skipped mid-drag, for the same reason as the morph above: it records this view's
+    /// geometry every pass, and there is no transition to prepare for while a finger is down.
     @ViewBuilder private func zoomAnchored(_ content: some View) -> some View {
-        if let zoomNamespace {
+        if dragging {
+            content
+        } else if let zoomNamespace {
             content.matchedTransitionSource(id: CallZoomSource.card, in: zoomNamespace)
         } else {
             content
