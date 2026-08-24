@@ -1745,7 +1745,7 @@ struct ThreadView: View {
             // Inline day separator: translucent pill. NOT Liquid Glass (user clarified 2026-07-14:
             // only the TOP floating "Today" pill is glass — the in-chat separators keep this look).
             Text(dayLabel(msg.createdAt))
-                .modifier(ChatNoticePill())
+                .modifier(ChatNoticePill(dark: dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
         }
@@ -3729,7 +3729,7 @@ struct ThreadView: View {
             // so this is too.
             Text("\(m.authorId == me ? "You" : personName(m.authorId)) pinned \(pin.label)")
                 .lineLimit(1)
-                .modifier(ChatNoticePill())
+                .modifier(ChatNoticePill(dark: dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur))
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -3740,7 +3740,7 @@ struct ThreadView: View {
     private func systemRow(_ m: Message) -> some View {
         Text(m.text)
             .multilineTextAlignment(.center)
-            .modifier(ChatNoticePill())
+            .modifier(ChatNoticePill(dark: dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
     }
@@ -4769,7 +4769,7 @@ struct ThreadView: View {
                     Image(systemName: "checkmark.circle.fill").font(.system(size: 14))
                     Text("Set to one-time listen").font(.system(size: 13, weight: .medium))
                 }
-                .modifier(ChatNoticePill())
+                .modifier(ChatNoticePill(dark: dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur))
                 .offset(y: -8)
                 .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
@@ -5579,13 +5579,45 @@ enum ViewedOnce {
 /// apart read as two different things (user screenshot, "make it the same, no difference"). One
 /// modifier now owns the look, which is also what stops it drifting again.
 struct ChatNoticePill: ViewModifier {
+    /// ⛔ THE SAME SURFACE AN INCOMING BUBBLE WEARS — owner, 2026-08-24: the Today badge, the pin
+    /// notice and the disappearing-message badge "must be like bubble color… the bubble now adapts
+    /// to the background, make it like how bubble color is used".
+    ///
+    /// It is also what the reference app does, and by the same mechanism rather than by an eyeball
+    /// match: `CVComponentDateHeader` overrides `wallpaperBlurView(componentView:)` and returns a
+    /// `CVWallpaperBlurView`, the identical class their message bubbles use. Their date pill is not
+    /// styled to resemble a bubble; it IS one, minus the text colour.
+    ///
+    /// So this goes through `ReceivedBubbleSurface` and `Theme.bubbleRim` like every incoming
+    /// bubble: a slice of the blurred wallpaper with the hairline rim on a wallpaper, and the flat
+    /// received colour without one. Every badge in the chat routes through this one modifier — the
+    /// day separator, the pin notice, the system rows and the composer's toasts — so they cannot
+    /// drift apart from the bubbles or from each other.
+    ///
+    /// ⚠️ NOT `.ultraThinMaterial`, WHICH IS WHAT THIS WAS. A material samples live and comes out a
+    /// different colour from the bubble beside it, which is the mismatch in his screenshot: grey
+    /// pills on a blue-tinted wall of bubbles. The slice is the same picture the bubbles read from,
+    /// so a pill and the bubble above it are cut from one image.
+    let dark: Bool
+    let onWallpaper: Bool
+    let blur: WallpaperBlurState?
+
     func body(content: Content) -> some View {
         content
             .font(.caption.weight(.semibold))
             .foregroundStyle(.primary)
             .padding(.horizontal, 12).padding(.vertical, 5)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().stroke(.white.opacity(0.06), lineWidth: 0.5))
+            .background { ReceivedBubbleSurface(dark: dark, onWallpaper: onWallpaper, blur: blur) }
+            .clipShape(Capsule())
+            .overlay {
+                if onWallpaper {
+                    Capsule().strokeBorder(Theme.bubbleRim(dark), lineWidth: Theme.hairline)
+                        .allowsHitTesting(false)
+                } else {
+                    // The old hairline, kept for the no-wallpaper case it was designed against.
+                    Capsule().stroke(.white.opacity(0.06), lineWidth: 0.5)
+                }
+            }
     }
 }
 
