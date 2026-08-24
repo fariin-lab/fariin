@@ -5317,8 +5317,24 @@ struct ThreadView: View {
     /// the wave BETWEEN the two decisions — throw it away on the left, send it on the right — so the
     /// two things you might do with the recording sit either side of the recording itself, and the
     /// one control that only changes the recording's state stands out of that line entirely.
+    /// ⛔ THE PAUSE-TO-SEND GAP, AND IT IS THE ARROW'S GAP — owner, 2026-08-24: "increase the space
+    /// between the Pause and Send buttons so it matches the spacing between the arrow button and the
+    /// composer". I had read his earlier "make it 10pt" as the number he wanted and pinned the rows
+    /// to make 10 exact; he meant the gap should be BIGGER, and named the arrow as the thing to
+    /// match.
+    ///
+    /// The arrow floats `10` above the composer bar and the bar carries `6` of top padding before
+    /// its pill, so the gap a reader actually sees between the arrow and the composer's pill is the
+    /// two added together. That sum is this number, which is why it is written as the sum rather
+    /// than as 16 — if either of those two moves, this follows instead of drifting.
+    ///
+    /// ⚠️ THE ROW PINS BELOW ARE WHAT MAKE IT EXACT and they stay. Both rows are free-height
+    /// otherwise, so each takes the tallest thing in it and centres the rest, and the slack lands on
+    /// top of this spacing — which is how the old stated 10 rendered as about 14.
+    private static let lockedBarRowGap: CGFloat = 10 + 6
+
     private var lockedRecordingBar: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: Self.lockedBarRowGap) {
             // Pause (or continue) rides above, on the send's side. Not part of the row below: it
             // does not dispose of the note or commit it, and lining it up with the two that do is
             // what made three equal circles out of two decisions and a toggle.
