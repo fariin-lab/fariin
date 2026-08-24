@@ -30,12 +30,24 @@ import UIKit
     // PRE-WARM the recents so the grid is ready BEFORE the sheet ever opens. Called when the chat opens;
     // the fetch runs off-main and the first page + its thumbnails land in the cache, so tapping + shows
     // photos instantly instead of an empty sheet that fills in a beat later.
+    /// The warm that is currently running, so the sheet can WAIT for it instead of racing it.
+    ///
+    /// ⛔ THE SHEET USED TO START A SECOND FETCH OF THE SAME PHOTOS — owner, 2026-08-24, "attach sheet
+    /// images coming late", with the grid empty but for the Camera tile. The prewarm below is kicked
+    /// off when the chat opens and takes a moment on a real library; tapping + before it lands found
+    /// `assets` still empty, skipped the instant path, and went off to fetch the identical first page
+    /// itself. Two fetches for one answer, and the sheet showed nothing until the slower one finished.
+    private static var warmTask: Task<Void, Never>?
+
+    /// Wait for an in-flight `prewarm`. Returns at once when there isn't one, or when it is done.
+    static func awaitWarm() async { await warmTask?.value }
+
     static func prewarm() {
         guard assets.isEmpty, !warming else { return }
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard status == .authorized || status == .limited else { return }
         warming = true
-        Task.detached(priority: .userInitiated) {
+        warmTask = Task.detached(priority: .userInitiated) {
             let f = PHFetchOptions()
             f.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
             f.predicate = NSPredicate(format: "mediaType == %d || mediaType == %d",
@@ -167,9 +179,15 @@ struct AttachRecentsStrip: View {
             guard status == .authorized || status == .limited else { return }
             // STABLE open: render the cached first page + albums instantly (no empty flash), then
             // refresh fresh underneath — the same pattern as the media gallery.
-            if assets.isEmpty, selectedAlbum == nil, !RecentsCache.assets.isEmpty {
-                assets = RecentsCache.assets
-                albums = RecentsCache.albums
+            if assets.isEmpty, selectedAlbum == nil {
+                // The chat kicked off a warm when it opened. If it has not landed yet, WAIT for it —
+                // it is already fetching exactly this page, and starting our own was what made the
+                // grid sit empty. `awaitWarm` returns immediately when nothing is in flight.
+                if RecentsCache.assets.isEmpty { await RecentsCache.awaitWarm() }
+                if !RecentsCache.assets.isEmpty {
+                    assets = RecentsCache.assets
+                    albums = RecentsCache.albums
+                }
             }
             load(); loadAlbums()
         }
@@ -442,22 +460,40 @@ struct AttachRecentsStrip: View {
         f.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         f.predicate = NSPredicate(format: "mediaType == %d || mediaType == %d",
                                   PHAssetMediaType.image.rawValue, PHAssetMediaType.video.rawValue)
+        // The fetch RESULT is lazy and cheap, so it stays here. Materialising it is not.
         let res = selectedAlbum.map { PHAsset.fetchAssets(in: $0, options: f) } ?? PHAsset.fetchAssets(with: f)
-        fetchResult = res
-        loadedCount = 0
-        // Build the first page and swap it in ONE assignment — never blank `assets` to [] first (that
-        // wiped the instantly-shown cache and flashed the grid empty on every open).
         let end = min(pageSize, res.count)
-        var out: [PHAsset] = []
-        out.reserveCapacity(end)
-        if end > 0 {
-            res.enumerateObjects(at: IndexSet(integersIn: 0..<end), options: []) { a, _, _ in out.append(a) }
+        let isRecents = selectedAlbum == nil
+        // ⛔ THE 200 ASSETS ARE BUILT OFF THE MAIN THREAD NOW — owner, 2026-08-24, "images coming late".
+        // `enumerateObjects` over a page is the expensive half and it ran right here, on main, inside
+        // `.task` — which SwiftUI runs AFTER the first frame. So the sheet drew its empty grid, then
+        // froze while the page was materialised, then the photos appeared. That sequence is exactly
+        // what "coming late" looks like from the outside.
+        //
+        // Same shape as `loadAlbums` directly below, deliberately: detached work, one hop back to the
+        // main actor, one assignment.
+        Task.detached(priority: .userInitiated) {
+            var out: [PHAsset] = []
+            if end > 0 {
+                out.reserveCapacity(end)
+                res.enumerateObjects(at: IndexSet(integersIn: 0..<end), options: []) { a, _, _ in out.append(a) }
+            }
+            let built = out
+            await MainActor.run {
+                // ⚠️ ALL FOUR LAND TOGETHER. `fetchResult` and `loadedCount` used to be set here while
+                // the page was still being built, which left a window where the paging state described
+                // a page that did not exist yet — `loadedCount` at 0 against a grid still showing the
+                // cached photos, so a scroll could have paged the first batch in a second time.
+                fetchResult = res
+                // Swapped in ONE assignment — never blank `assets` to [] first (that wiped the
+                // instantly-shown cache and flashed the grid empty on every open).
+                assets = built
+                loadedCount = end
+                if isRecents { RecentsCache.assets = built }
+                // Warm the new page's thumbnails (album switches included) so tiles never fill in late.
+                RecentsCache.precache(Array(built.prefix(60)))
+            }
         }
-        assets = out
-        loadedCount = end
-        if selectedAlbum == nil { RecentsCache.assets = out }
-        // Warm the new page's thumbnails (album switches included) so tiles never fill in late.
-        RecentsCache.precache(Array(out.prefix(60)))
     }
 
     // Materialize the next page of the fetch result into the grid's array.
