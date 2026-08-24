@@ -19,6 +19,16 @@ enum SendQueue {
         let replyAuthor: String?
         let replyText: String?
         let createdAt: Double
+        /// ⛔ VOICE NOTES RIDE THIS QUEUE TOO NOW. It was text only, on the reasoning that "media
+        /// payloads are large and already have retry affordances" — but the affordance was a red
+        /// bubble you had to notice and tap, while a text message that failed on the same weak
+        /// signal quietly resent itself. The one that took effort to record was the one that did not.
+        ///
+        /// The AUDIO ITSELF IS NOT STORED HERE. UserDefaults is no place for megabytes, and it
+        /// already lives in a file — `AudioRecorder.parkInFlight` writes it and keys it by clientId,
+        /// so this only has to remember that the file is waiting and what to send it as.
+        var audioDuration: Double? = nil
+        var audioWaveform: [Int]? = nil
     }
 
     private static let key = "sendQueue.v1"
@@ -39,6 +49,18 @@ enum SendQueue {
         map[clientId] = Entry(clientId: clientId, cid: cid, text: text, mentions: mentions,
                               replyId: reply?.id, replyAuthor: reply?.authorId, replyText: reply?.text,
                               createdAt: ts)
+        save(map)
+    }
+
+    /// Queues a voice note whose send failed. The bytes are already parked on disk by the recorder;
+    /// this is the note that they are owed a retry.
+    static func addAudio(clientId: String, cid: String, duration: Double, waveform: [Int],
+                         reply: ReplyRef?, ts: Double) {
+        lock.lock(); defer { lock.unlock() }
+        var map = load()
+        map[clientId] = Entry(clientId: clientId, cid: cid, text: "", mentions: [],
+                              replyId: reply?.id, replyAuthor: reply?.authorId, replyText: reply?.text,
+                              createdAt: ts, audioDuration: duration, audioWaveform: waveform)
         save(map)
     }
 
@@ -80,9 +102,22 @@ enum SendQueue {
                 ReplyRef(id: $0, authorId: e.replyAuthor ?? "", text: e.replyText ?? "")
             }
             do {
-                // group: nil → sendText resolves members from the conversation doc itself.
-                try await ChatService.sendText(cid: e.cid, text: e.text, replyTo: reply,
-                                               clientId: e.clientId, group: nil, mentions: e.mentions)
+                if let dur = e.audioDuration {
+                    // The bytes are in the file the recorder parked. If that file is gone there is
+                    // nothing left to send, so the entry is dropped rather than retried forever
+                    // against a payload that no longer exists.
+                    guard let data = AudioRecorder.inFlightData(clientId: e.clientId) else {
+                        remove(clientId: e.clientId); continue
+                    }
+                    try await ChatService.sendAudio(cid: e.cid, data: data, duration: dur,
+                                                    waveform: e.audioWaveform ?? [], replyTo: reply,
+                                                    clientId: e.clientId, group: nil)
+                    AudioRecorder.dropInFlight(clientId: e.clientId)
+                } else {
+                    // group: nil → sendText resolves members from the conversation doc itself.
+                    try await ChatService.sendText(cid: e.cid, text: e.text, replyTo: reply,
+                                                   clientId: e.clientId, group: nil, mentions: e.mentions)
+                }
                 remove(clientId: e.clientId)
             } catch {
                 // Still offline / still refused: leave it queued for the next launch.

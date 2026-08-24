@@ -786,6 +786,19 @@ struct ThreadView: View {
         .onDisappear {
             inputFocused = false
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            // ⛔ A LOCKED RECORDING USED TO KEEP RUNNING AFTER YOU WALKED AWAY — mic live, clock
+            // running, nothing anywhere on screen saying so. There is no recording twin of the
+            // floating playback bar, so leaving the chat left a take with no timer, no stop and no
+            // send, running until something else happened to end it.
+            //
+            // Parked, not cancelled, and that distinction is the whole fix: `parkDraft` writes the
+            // audio to Application Support, the chat list row says "Draft: 🎤 0:05", and coming back
+            // adopts it into the recorder and lands on the review bar. Nothing lost, nothing running
+            // unseen.
+            //
+            // ⚠️ Backgrounding already did exactly this (see the didEnterBackground handler). Leaving
+            // the chat is the same moment for the same reason, and it was simply never wired.
+            if recordLocked { parkRecordingDraft() }
         }
         .navigationDestination(isPresented: $showContactInfo) {
             if isGroup {
@@ -1303,6 +1316,15 @@ struct ThreadView: View {
                 recordDrag = .zero
                 holdStarted = false   // recordingHeld is computed (holdStarted && !recordLocked) → goes false
                 recordLocked = true
+            }
+            // TEN MINUTES AND IT STOPS ITSELF. Same landing as an interruption on purpose: the take
+            // is not thrown away, it goes to the review bar with everything said so far, so hitting
+            // the ceiling is a full stop rather than a loss. See AudioRecorder.maxDuration.
+            recorder.onReachedLimit = {
+                recordDrag = .zero
+                holdStarted = false
+                recordLocked = true
+                Task { _ = await recorder.pauseForReview() }
             }
             // A parked note from last time — leaving the chat, or the whole app, mid-recording —
             // is adopted back and the bar lands on the review: listen, continue with the red mic,
@@ -5539,7 +5561,18 @@ struct ThreadView: View {
             try await ChatService.sendAudio(cid: cid, data: data, duration: dur, waveform: wf, replyTo: reply, clientId: clientId, group: isGroup ? groupMembers : nil, viewOnce: viewOnce)
             AudioRecorder.dropInFlight(clientId: clientId)   // it landed; the spare copy has no job left
         }
-        catch { await MainActor.run { repo.markFailed(clientId: clientId) } }
+        catch {
+            // ⛔ QUEUED, NOT JUST MARKED RED. A text that fails on weak signal resends itself on the
+            // next launch; a voice note used to sit there waiting for somebody to notice a red mark
+            // and tap it. The one that took effort to record was the one that needed the tap.
+            //
+            // The bytes are already parked on disk under this clientId, so the queue only records
+            // that they are owed a send. The red bubble stays either way — retrying by hand still
+            // works, this just means nobody HAS to.
+            SendQueue.addAudio(clientId: clientId, cid: cid, duration: dur, waveform: wf,
+                               reply: reply, ts: Date().timeIntervalSince1970)
+            await MainActor.run { repo.markFailed(clientId: clientId) }
+        }
     }
 
     private func sendCaptured(_ data: Data) async {

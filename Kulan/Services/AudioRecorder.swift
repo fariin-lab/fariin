@@ -13,6 +13,18 @@ final class AudioRecorder {
     private var interruptionObserver: NSObjectProtocol?
     // Fired when a phone call / Siri / alarm interrupts recording — the view resets its hold UI.
     var onInterrupt: (() -> Void)?
+
+    /// ⛔ A RECORDING WITH NO END. There was no cap of any kind: a take could run until the battery
+    /// died, and paired with a locked recording that survives leaving the chat, a pocket could
+    /// produce a half-hour file nobody knew was being made.
+    ///
+    /// Ten minutes, and it does NOT throw the take away — `onReachedLimit` lands it on the review
+    /// bar with everything said so far, so the ceiling is a full stop rather than a loss. Longer than
+    /// any voice note anybody actually means to send, short enough that an accident stays small.
+    static let maxDuration: TimeInterval = 600
+    /// Fired once when the cap is hit. The view stops the take and shows the review bar.
+    var onReachedLimit: (() -> Void)?
+    private var limitFired = false
     var isRecording = false
     var elapsed: TimeInterval = 0
     var currentTime: TimeInterval { recorder?.currentTime ?? 0 }   // live (not the 0.05s-throttled `elapsed`)
@@ -168,6 +180,7 @@ final class AudioRecorder {
         // pre-interruption waveform/levels are kept (a full reset would wipe the captured envelope).
         if !resuming {
             isRecording = true; elapsed = 0; completedElapsed = 0; levels = []; liveWindow = []; allLevels = []; smoothed = 0
+            limitFired = false
             Task { @MainActor in SleepBlocker.shared.add("voice-record") }   // no auto-lock mid-recording (sleep block)
         }
         timer?.invalidate()
@@ -182,6 +195,11 @@ final class AudioRecorder {
             // Finished stretches + the live one: the clock a person watches never restarts at zero
             // just because they paused to listen and carried on.
             self.elapsed = self.completedElapsed + r.currentTime
+            // The ceiling. Fired once per take — `limitFired` resets with the recorder in start().
+            if !self.limitFired, self.elapsed >= Self.maxDuration {
+                self.limitFired = true
+                self.onReachedLimit?()
+            }
             r.updateMeters()
             let target = self.perceptualLevel(rmsDB: r.averagePower(forChannel: 0),
                                               peakDB: r.peakPower(forChannel: 0))
