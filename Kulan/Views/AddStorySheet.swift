@@ -153,7 +153,22 @@ private struct DarkConfirm: UIViewControllerRepresentable {
 //  • Library button → the Photos / Albums grid, which is the only path that also takes VIDEO.
 struct AddStorySheet: View {
     var onPosted: () -> Void = {}
+    /// HOW THIS SCREEN PUTS ITSELF AWAY WHEN NOTHING PRESENTED IT.
+    ///
+    /// ⚠️ `@Environment(\.dismiss)` IS A NO-OP UNLESS SOMETHING IS PRESENTING YOU, and since the
+    /// camera stopped being a `fullScreenCover` (see `StoryCameraDoor`, which slides it in from the
+    /// left instead of up from the bottom) there is no presentation to end. Left alone, every close
+    /// in here — the ✕, and every posted story — would have silently done nothing.
+    ///
+    /// The door passes a closer; when it is absent `dismiss()` still runs, so this type keeps
+    /// working anywhere it IS presented normally.
+    var onDismiss: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
+
+    /// The one way out, so a future close cannot pick the wrong one.
+    private func closeSelf() {
+        if let onDismiss { onDismiss() } else { dismiss() }
+    }
     @State private var editorImage: EditorImage?
     @State private var editorVideo: EditorVideo?
     /// THE EDITOR FOR SOMETHING PICKED IN THE LIBRARY, presented FROM the library sheet rather than
@@ -184,7 +199,7 @@ struct AddStorySheet: View {
                 var t = Transaction(); t.disablesAnimations = true
                 withTransaction(t) { editorImage = EditorImage(ui) }
             },
-            onClose: { dismiss() },
+            onClose: { closeSelf() },
             // A recorded clip goes to the SAME editor a library video opens in, so a story filmed
             // here and a story picked from Photos are trimmed and captioned the same way.
             // Same handover for a recording — his "dont forget is i reacord video use same
@@ -200,12 +215,12 @@ struct AddStorySheet: View {
         // These two are the CAMERA's editors. A photo taken here closes back to the camera, which is
         // where it was taken. The library has its own pair, presented from the library itself.
         .fullScreenCover(item: $editorImage) { item in
-            StoryEditorView(source: item.image, onPosted: { onPosted(); dismiss() })
+            StoryEditorView(source: item.image, onPosted: { onPosted(); closeSelf() })
         }
         // ⚠️ A RECORDED CLIP OPENS THE COMPOSER, NOT A SCREEN OF ITS OWN — his three reports of two
         // story editors on the video path end here. See `StoryEditorView.sourceVideo`.
         .fullScreenCover(item: $editorVideo) { item in
-            StoryEditorView.forVideo(url: item.url, onPosted: { onPosted(); dismiss() })
+            StoryEditorView.forVideo(url: item.url, onPosted: { onPosted(); closeSelf() })
         }
         // THE PICKER DOES NOT CLOSE WHEN YOU PICK (owner 2026-08-04: "the media picker should not
         // close automatically after I select a photo… only close it when I tap the close button").
@@ -224,12 +239,12 @@ struct AddStorySheet: View {
                 onImage: { ui, id in libraryEditorImage = EditorImage(ui, assetID: id) },
                 onVideo: { url, id in libraryEditorVideo = EditorVideo(url, assetID: id) })
             .fullScreenCover(item: $libraryEditorImage) { item in
-                StoryEditorView(source: item.image, onPosted: { onPosted(); dismiss() },
+                StoryEditorView(source: item.image, onPosted: { onPosted(); closeSelf() },
                                 sourceAssetID: item.assetID)
             }
             .fullScreenCover(item: $libraryEditorVideo) { item in
                 StoryEditorView.forVideo(url: item.url, assetID: item.assetID,
-                                         onPosted: { onPosted(); dismiss() })
+                                         onPosted: { onPosted(); closeSelf() })
             }
         }
         // Text story → audience sheet (was posting straight to "everyone", ignoring audience — M4).
@@ -238,7 +253,7 @@ struct AddStorySheet: View {
             // link: the photo editor reaches the same sheet by its own route (see `StoryEditorView`)
             // and passes them, so the field existed and this call simply never used it.
             ShareStorySheet(image: s.data, stickers: s.stickers,
-                            onPosted: { onPosted(); dismiss() })
+                            onPosted: { onPosted(); closeSelf() })
         }
     }
 
