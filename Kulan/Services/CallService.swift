@@ -1058,6 +1058,19 @@ final class CallService: NSObject {
     // the full call screen one day and this gate is the line to change, deliberately.
     var remoteSpeaking = false
     var localSpeaking = false
+
+    /// HOW LOUD, not just whether — 0…1, smoothed, and what the wave around each face is drawn from.
+    ///
+    /// Everyone else's talking indicator is a BOOLEAN: their ring switches on and sits there. We
+    /// already sample the real level to decide `speaking` at all, so throwing the number away and
+    /// keeping only the yes/no was wasting the one thing that makes our version impossible to copy
+    /// without doing the same work.
+    ///
+    /// Measured ABOVE THE ROOM'S OWN FLOOR, so it means the same thing in a quiet bedroom and a loud
+    /// kitchen: 0 is the background, 1 is a good clear voice over it. A raw level would just read
+    /// "this room is noisy" and the ring would sit half-open all call.
+    var remoteLevel: Double = 0
+    var localLevel: Double = 0
     private var voiceMonitor: Timer?
     private var remoteQuietSince: Date?
     private var localQuietSince: Date?
@@ -1098,6 +1111,7 @@ final class CallService: NSObject {
         // The next call is in a different room; a floor learned in this one would be a lie there.
         remoteFloor = 0; localFloor = 0
         remoteSpeaking = false; localSpeaking = false
+        remoteLevel = 0; localLevel = 0
     }
 
     private func sampleVoiceLevels() {
@@ -1130,11 +1144,29 @@ final class CallService: NSObject {
                                      quietSince: &remoteQuietSince, was: remoteSpeaking)
         localSpeaking = speakingNow(level: local, micLive: !isMuted, floor: &localFloor,
                                     quietSince: &localQuietSince, was: localSpeaking)
+        remoteLevel = loudness(remote, floor: remoteFloor, speaking: remoteSpeaking, was: remoteLevel)
+        localLevel = loudness(local, floor: localFloor, speaking: localSpeaking, was: localLevel)
     }
 
     /// Above the threshold turns it on immediately; below it turns off only once the hold has run out.
     /// A muted mic is never talking whatever the numbers say — that is the one case where the level
     /// and the truth can disagree.
+    /// The 0…1 the wave is drawn from. Zero whenever the person is not talking, so the ring closes
+    /// completely in the gaps rather than hovering at some resting size.
+    ///
+    /// ⚠️ ASYMMETRIC SMOOTHING, and it is the difference between a voice and a strobe. Samples land
+    /// every 0.3s, which is far slower than speech moves, so following them exactly would make the
+    /// ring jump in steps. Rising fast keeps the ring on the front of each word — a slow attack
+    /// reads as lag. Falling slow rides through the gaps between syllables, which are shorter than
+    /// one sample and would otherwise punch a hole in the middle of every word.
+    private func loudness(_ level: Double, floor: Double, speaking: Bool, was: Double) -> Double {
+        guard speaking else { return was * 0.45 }   // ease shut rather than snap to nothing
+        // Above the floor, scaled so an ordinary speaking voice reaches most of the way to 1.
+        let over = max(0, level - floor) / 0.16
+        let target = min(1, over)
+        return target > was ? was + (target - was) * 0.65 : was + (target - was) * 0.28
+    }
+
     private func speakingNow(level: Double, micLive: Bool, floor: inout Double,
                              quietSince: inout Date?, was: Bool) -> Bool {
         // A muted mic is never talking, and its silence must NOT teach the floor — otherwise the

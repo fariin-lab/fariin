@@ -1185,7 +1185,7 @@ struct FloatingCallWindow: View {
     @ViewBuilder private var voiceWindow: some View {
         if let stage = stageLabel {
             VStack(spacing: 10) {
-                voiceFace(name: call.otherName, photoUrl: call.otherPhotoUrl, size: 54, speaking: false)
+                voiceFace(name: call.otherName, photoUrl: call.otherPhotoUrl, size: 54, level: 0)
                 Text(stage)
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.92))
@@ -1199,10 +1199,10 @@ struct FloatingCallWindow: View {
         } else {
             VStack(spacing: 0) {
                 voicePanel(name: call.otherName, photoUrl: call.otherPhotoUrl,
-                           avatar: 46, speaking: call.remoteSpeaking)
+                           avatar: 46, level: call.remoteLevel)
                 Rectangle().fill(.white.opacity(0.14)).frame(height: 0.5)
                 voicePanel(name: call.myName, photoUrl: call.myPhotoUrl,
-                           avatar: 38, speaking: call.localSpeaking)
+                           avatar: 38, level: call.localLevel)
             }
             .background(Color.black)
         }
@@ -1210,28 +1210,31 @@ struct FloatingCallWindow: View {
 
     /// One person's half of the connected voice card.
     private func voicePanel(name: String, photoUrl: String?, avatar: CGFloat,
-                            speaking: Bool) -> some View {
+                            level: Double) -> some View {
         ZStack {
             Color.white.opacity(0.06)
-            voiceFace(name: name, photoUrl: photoUrl, size: avatar, speaking: speaking)
+            voiceFace(name: name, photoUrl: photoUrl, size: avatar, level: level)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// A face on the card. The wave is there ONLY while that person is talking (owner, 2026-08-23) —
-    /// it is not a mute light and it does not sit there for the whole call. Nothing shows before the
-    /// call connects either: a live badge on a phone nobody has picked up would be saying something
-    /// untrue. See CallService's talking monitor for where `speaking` comes from.
-    private func voiceFace(name: String, photoUrl: String?, size: CGFloat, speaking: Bool) -> some View {
+    /// A face on the card, wearing the wave.
+    ///
+    /// ⛔ THE WAVE IS ON THE FACE, NOT BESIDE IT, and it is driven by HOW LOUD rather than by
+    /// whether (owner, 2026-08-23: "what if we make around avatar wave that take talk", and then
+    /// "can that wave be free from a copied look?").
+    ///
+    /// It replaces a white speech bubble with green bars, which was a straight lift of the reference
+    /// app's mark and looked it. This one cannot be copied without first doing the work underneath:
+    /// everyone else's talking indicator is a BOOLEAN, so their ring switches on and sits there. We
+    /// already read the real audio level to decide whether somebody is speaking at all, so the ring
+    /// breathes with the voice instead of blinking with a flag.
+    ///
+    /// Nothing at all is drawn at level 0 — silence carries no mark, and a call that has not been
+    /// answered passes 0 explicitly, because a live ring on a phone nobody picked up would be a lie.
+    private func voiceFace(name: String, photoUrl: String?, size: CGFloat, level: Double) -> some View {
         AvatarView(name: name, photoUrl: photoUrl, size: size)
-            .overlay(alignment: .topTrailing) {
-                if speaking {
-                    TalkingBubble(width: size * 0.56)
-                        .offset(x: size * 0.30, y: -size * 0.22)
-                        .transition(.scale(scale: 0.6, anchor: .bottomLeading).combined(with: .opacity))
-                }
-            }
-            .animation(.easeOut(duration: 0.18), value: speaking)
+            .background { TalkingWave(level: level, avatar: size) }
     }
 
     private var videoWindow: some View {
@@ -1328,64 +1331,77 @@ struct WedgeTab: Shape {
     }
 }
 
-// MARK: - TalkingBubble
+// MARK: - TalkingWave
 
-/// The "this person is talking" mark on the floating card, built from the owner's close-ups of the
-/// reference (2026-08-23): a small WHITE SPEECH BUBBLE hanging off the top-right of the face, with
-/// green level bars inside it. Not a coloured dot and not a mic glyph — a bubble reads as somebody
-/// saying something, which is exactly the thing being reported.
+/// THE WAVE AROUND A FACE ON THE CALL CARD — his design, 2026-08-23 ("what if we make around avatar
+/// wave that take talk"), replacing a white speech bubble with green bars that was a straight lift
+/// of the reference app's mark and looked like one.
 ///
-/// It is only ever on screen while that person is actually talking (see CallService's talking
-/// monitor), so the bars may animate freely: nothing is paying for them during the silences. The
-/// reference also draws a GREY three-dot version while a person is connected but quiet; that state
-/// is deliberately not built, because the owner asked for a card that is clear when nobody is
-/// talking.
-struct TalkingBubble: View {
-    /// Bubble width. Everything else is derived so one number scales the whole mark.
-    var width: CGFloat = 26
+/// ⛔ IT IS DRIVEN BY HOW LOUD, NOT BY WHETHER, and that is the whole answer to his follow-up: "can
+/// that wave be free from a copied look?" Every other messenger's talking indicator is a BOOLEAN —
+/// their ring switches on and then just sits there, because a flag is all they read. We already
+/// sample the real audio level to decide whether somebody is speaking at all (see CallService), so
+/// ours breathes with the voice. Nobody can copy the look without first doing that work, and almost
+/// nobody bothers.
+///
+/// Two rings leave the rim and fade as they travel, further and brighter the louder the voice, over
+/// a collar that thickens on the rim itself. At level 0 NOTHING is drawn: a silent face carries no
+/// mark, which is what makes the card quiet in the gaps instead of decorated.
+struct TalkingWave: View {
+    /// 0…1 above the room's own noise floor. See CallService.remoteLevel.
+    var level: Double
+    /// The avatar's diameter — everything else is derived, so one number scales the whole mark.
+    var avatar: CGFloat
 
-    private var height: CGFloat { width * 0.72 }
+    /// How far the outermost ring can travel past the rim at full voice.
+    private var reach: CGFloat { avatar * 0.42 }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 12.0)) { context in
+        // ⚠️ TimelineView, NOT a repeating animation. The rings have to travel outward continuously
+        // AND their size has to track a number that changes several times a second; a
+        // `repeatForever` animation would fight every level change and restart mid-flight. A clock
+        // plus a pure function of (time, level) has no state to fight over.
+        //
+        // 20fps: the motion is a slow swell, not a spinner, and this can be on screen for the length
+        // of a call. Nothing here is worth 60.
+        TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
-            HStack(spacing: width * 0.07) {
-                ForEach(0..<3, id: \.self) { i in
-                    Capsule()
-                        .fill(Color.green)
-                        .frame(width: width * 0.085, height: barHeight(i, t))
+            Canvas { ctx, size in
+                guard level > 0.02 else { return }   // silence draws nothing at all
+                let c = CGPoint(x: size.width / 2, y: size.height / 2)
+                let rim = avatar / 2
+
+                for i in 0..<2 {
+                    // The two rings are half a cycle apart, so one is always leaving as the other
+                    // arrives — a single ring reads as a pulse, two read as a wave.
+                    let phase = ((t / 1.15) + Double(i) * 0.5).truncatingRemainder(dividingBy: 1)
+                    let radius = rim + CGFloat(phase) * reach * level
+                    // Fades to nothing by the end of its travel, so no ring ever pops out of
+                    // existence at the edge.
+                    let alpha = (1 - phase) * level * 0.5
+                    guard alpha > 0.01 else { continue }
+                    let rect = CGRect(x: c.x - radius, y: c.y - radius, width: radius * 2, height: radius * 2)
+                    ctx.stroke(Path(ellipseIn: rect),
+                               with: .color(.green.opacity(alpha)),
+                               lineWidth: 1.5 + 2.5 * level * (1 - phase))
                 }
+
+                // A collar on the rim itself, so the face is unmistakably the SOURCE of the rings
+                // rather than something that happens to be sitting inside them.
+                let collar = rim + 1
+                let rect = CGRect(x: c.x - collar, y: c.y - collar, width: collar * 2, height: collar * 2)
+                ctx.stroke(Path(ellipseIn: rect),
+                           with: .color(.green.opacity(0.3 + 0.55 * level)),
+                           lineWidth: 1.5 + 2 * level)
             }
-            .frame(width: width, height: height, alignment: .center)
-            .background(BubbleShape().fill(.white))
-            .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+            // The canvas has to be wider than the face or the rings would be clipped at the avatar's
+            // own bounds, which is exactly where they are supposed to be travelling past.
+            .frame(width: avatar + reach * 2 + 6, height: avatar + reach * 2 + 6)
         }
-        .frame(width: width, height: height)
-    }
-
-    /// Three bars out of step with each other. Even heights would read as a progress meter; the
-    /// offset phases are what make it read as a voice.
-    private func barHeight(_ i: Int, _ t: Double) -> CGFloat {
-        let phase = t * 7.5 + Double(i) * 1.15
-        return height * (0.24 + 0.34 * CGFloat(abs(sin(phase))))
+        .allowsHitTesting(false)
     }
 }
 
-/// Rounded bubble with a small tail on the bottom-left, pointing back down at the face it belongs to.
-private struct BubbleShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        var p = Path()
-        let bodyH = rect.height * 0.82
-        let body = CGRect(x: 0, y: 0, width: rect.width, height: bodyH)
-        p.addRoundedRect(in: body, cornerSize: CGSize(width: bodyH / 2, height: bodyH / 2))
-        let tailX = rect.width * 0.24
-        p.move(to: CGPoint(x: tailX, y: bodyH - 1))
-        p.addLine(to: CGPoint(x: rect.width * 0.10, y: rect.height))
-        p.addLine(to: CGPoint(x: tailX + rect.width * 0.20, y: bodyH - 1))
-        p.closeSubpath()
-        return p
-    }
-}
 
 // MARK: - LiveCallBarBackground
 
