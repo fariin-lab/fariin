@@ -1222,7 +1222,20 @@ struct StoryEditorView: View {
                             // 40pt, his call (2026-08-06), matching the video editor's. The glyph
                             // comes down with the circle so the proportion inside it is unchanged.
                             Image(systemName: "xmark").font(.system(size: 15, weight: .semibold))
-                                .foregroundStyle(.primary)   // always white; glass + shadow carry contrast
+                                // ⛔ WHITE, STATED — owner, 2026-08-24: the ✕ was drawing BLUE.
+                                //
+                                // ⚠️ `.primary` IS HIERARCHICAL, AND INSIDE A `Button` IT RESOLVES
+                                // AGAINST THE BUTTON'S TINT, not against the text colour. With no
+                                // `.buttonStyle(.plain)` on this one, that tint is the accent — so
+                                // the glyph came out blue. The comment that stood here claimed it was
+                                // "always white", which it never was: `.primary` is also black in
+                                // light mode, so this had two ways to be wrong and was showing one.
+                                //
+                                // The editor sits over a photo, so white is the right answer and the
+                                // shadow below is what carries it on a pale picture — his screenshot
+                                // caught it over a bright screenshot, which is the hardest case.
+                                // Same trap as the 2026-08-18 batch; stated colours cannot fall into it.
+                                .foregroundStyle(.white)
                                 .shadow(color: .black.opacity(0.35), radius: 2)
                                 .frame(width: 40, height: 40).contentShape(Circle()).liquidGlass(Circle())
                         }
