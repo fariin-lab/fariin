@@ -4743,8 +4743,31 @@ struct ThreadView: View {
     private var composer: some View {
         VStack(spacing: 6) {
             if !mentionCandidates.isEmpty { mentionPicker }
-            Group {
-                if recordLocked { lockedRecordingBar } else { inputRow }
+            // ⛔ A ZStack WITH BOTH STATES ALWAYS PRESENT, NOT AN if/else — owner, 2026-08-24: the
+            // swipe-up lock "feels like a pop… should be seamless rather than suddenly switching
+            // designs".
+            //
+            // ⚠️ THE SPRING WAS NEVER THE PROBLEM. `lockRecording()` already wraps the flip in one,
+            // and the modifier below has carried a spring on `recordLocked` all along. An `if/else`
+            // gives SwiftUI two DIFFERENT structural identities: the whole composer row is removed
+            // and a different one inserted, so there is nothing for a spring to interpolate — an
+            // insertion cannot animate from a state it was never in. That is the same lesson the
+            // selection tick in `SelectableRow` carries a warning about, one screen along.
+            //
+            // Both live in a ZStack now and cross-fade with the strip they share sliding into place:
+            // the pill is in the same spot in both states, so it reads as the row rearranging itself
+            // around the pill rather than as one design replacing another. The hidden side is fully
+            // transparent and takes no touches, and neither branch is ever torn down, which also
+            // means the recorder's live views keep their identity across the lock.
+            ZStack {
+                inputRow
+                    .opacity(recordLocked ? 0 : 1)
+                    .scaleEffect(recordLocked ? 0.94 : 1, anchor: .bottom)
+                    .allowsHitTesting(!recordLocked)
+                lockedRecordingBar
+                    .opacity(recordLocked ? 1 : 0)
+                    .scaleEffect(recordLocked ? 1 : 0.94, anchor: .bottom)
+                    .allowsHitTesting(recordLocked)
             }
         }
         // ⛔ AT REST THE SIDES MATCH THE BOTTOM — owner, 2026-08-24, from the preview of the pure
@@ -4800,7 +4823,10 @@ struct ThreadView: View {
         .overlay(alignment: .bottomTrailing) {
             if recordingHeld { recordingMicOverlay }
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: recordLocked)
+        // One spring covers the whole lock: the cross-fade, the scale, and the height the row
+        // changes by as the locked bar's second line arrives. Slightly softer than the old 0.8 so
+        // the taller layout settles instead of snapping into place.
+        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: recordLocked)
     }
 
     // @-mention autocomplete shown above the input while typing "@" in a group.
