@@ -71,10 +71,27 @@ final class StoryCameraSlideAnimator: NSObject, UIViewControllerAnimatedTransiti
     /// be given corners without mutating the live app's own layer. A snapshot can be put anywhere in
     /// the container, styled freely, and thrown away when the animation ends — the real view is never
     /// touched, which is also why nothing can be left behind if the transition is interrupted.
+    /// ⛔ THE CORNERS ROUNDED ONLY SOMETIMES — owner, 2026-08-24, with a square-cornered chat list
+    /// mid-slide. Two things made it a coin toss and both are gone:
+    ///
+    /// ⚠️ THE CORNER WAS BEING SET ON THE SNAPSHOT ITSELF. `snapshotView` does not return an ordinary
+    /// view — it is a special replicant of another view's rendered content, and it is not a surface
+    /// to hang a resolving corner configuration on. The snapshot is now CARGO: it rides inside a
+    /// plain `UIView` that owns the corner and does the clipping, and a plain view resolves the way
+    /// the API documents.
+    ///
+    /// ⚠️ AND THE CORNER WAS RESOLVED IN THE SAME BREATH AS THE FIRST ANIMATED FRAME. A concentric
+    /// corner is worked out during layout; the card was created, added and animated in one runloop
+    /// turn, so whether a layout pass happened first was down to timing — which is exactly what
+    /// "sometimes it works" looks like from the outside. The caller forces that pass now, before any
+    /// animation is set up.
     private static func makeCard(of view: UIView, bounds: CGRect) -> UIView? {
-        guard let card = view.snapshotView(afterScreenUpdates: false) else { return nil }
-        card.frame = bounds
+        guard let snapshot = view.snapshotView(afterScreenUpdates: false) else { return nil }
+        let card = UIView(frame: bounds)
         card.layer.masksToBounds = true
+        snapshot.frame = card.bounds
+        snapshot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        card.addSubview(snapshot)
         if #available(iOS 26.0, *) {
             // ⚠️ THE SHAPE OF THIS CALL IS EASY TO GET WRONG AND THE FIRST ATTEMPT DID. The radius
             // and the configuration are two different types: `containerConcentric` is a
@@ -115,7 +132,14 @@ final class StoryCameraSlideAnimator: NSObject, UIViewControllerAnimatedTransiti
 
             // Added AFTER the camera, so it sits above it.
             let card = Self.makeCard(of: fromVC.view, bounds: container.bounds)
-            if let card { container.addSubview(card) }
+            if let card {
+                container.addSubview(card)
+                // ⚠️ RESOLVE THE CORNER BEFORE THE FIRST ANIMATED FRAME, NOT DURING IT. See
+                // `makeCard`: a concentric corner is worked out in layout, and without this the
+                // card was created, added and animated inside one runloop turn — so it rounded or
+                // did not depending on whether a layout pass happened to land first.
+                container.layoutIfNeeded()
+            }
 
             UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseInOut]) {
                 camera.transform = .identity
@@ -130,6 +154,7 @@ final class StoryCameraSlideAnimator: NSObject, UIViewControllerAnimatedTransiti
             let card = Self.makeCard(of: toVC.view, bounds: container.bounds)
             if let card {
                 container.addSubview(card)
+                container.layoutIfNeeded()   // same reason as the opening half
                 card.transform = aboveOffscreen
             }
             UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseInOut]) {
