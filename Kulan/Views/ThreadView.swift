@@ -3205,9 +3205,20 @@ struct ThreadView: View {
             // both requests said what he actually wanted and I under-weighted them twice: system
             // chrome, attached to the edge. That is the inset alone, with nothing added.
             //
-            // So there is no `.padding(.bottom)` at all. `safeAreaInset` hands the bar the home
-            // indicator's band as its own bottom, which is device-derived and collapses correctly on
-            // a phone that has no band.
+            // ⛔ AND THEN A 5pt DIP INTO THE BAND, WHICH IS WHERE HIS 29 CAME FROM. He reported the
+            // gap as still too big with the inset alone, and sent the same words a third time on the
+            // wallpaper sheet: system chrome, edge-attached, system-positioned.
+            //
+            // ⚠️ 29 WAS NEVER AN ARBITRARY NUMBER AND I TREATED IT AS ONE TWICE. This app already
+            // states the rule, in `composer` above: a system-positioned control rests at the
+            // safe-area line LESS `composerRestDip`, sinking into the indicator band exactly as the
+            // system's own bars do. The band is 34 on his phone, so the resting gap is 29 — his
+            // number, derived. Adding 29 to the inset was the mistake; this IS the 29.
+            //
+            // `safeAreaInset` gives the bar the whole band; the negative padding takes the dip back,
+            // so the arithmetic stays device-derived and a phone with no band still collapses to the
+            // layout's own margin rather than being pulled off the edge.
+            .padding(.bottom, -Self.composerRestDip)
         }
     }
 

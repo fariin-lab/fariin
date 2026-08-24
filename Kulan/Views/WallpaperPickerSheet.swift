@@ -114,14 +114,27 @@ struct WallpaperPickerSheet: View {
             bottomBar
         }
         .padding(.top, 8)      // native gap under the system grabber (was a big dead band)
-        // ⛔ THE HOME INDICATOR IS NOT PART OF THE 12. A fixed detent measures the sheet from the
-        // bottom of the SCREEN, so on a phone with an indicator the last button sat in the strip the
-        // system draws over — 12pt of clearance where the indicator alone wants about 34. The inset
-        // is added to the padding AND to the detent: adding it to the padding alone would have kept
-        // the sheet the same height and squeezed the content instead of lifting the button.
-        .padding(.bottom, 12 + Self.bottomInset)
+        // ⛔ THE BUTTON IS SYSTEM CHROME, SO IT SITS WHERE SYSTEM CHROME SITS — owner,
+        // 2026-08-24, third time he has sent the same rule: "use system chrome / edge-attached UI,
+        // system-positioned", with the space under Apply Wallpaper circled.
+        //
+        // ⚠️ AND HIS "29" WAS NEVER AN ARBITRARY NUMBER — I read it as one and got it wrong twice on
+        // the attach bar. This app already states the rule, in the composer: a system-positioned
+        // control rests at the safe-area line LESS a small dip INTO the indicator band, which is how
+        // the system's own bars sit. That dip is `composerRestDip`, 5. On his phone the band is 34,
+        // so the resting gap is 29 — his number, derived rather than picked, and device-correct
+        // everywhere instead of on one handset.
+        //
+        // What was here was 12 ON TOP OF the full band, about 46, which is the "still too big" he
+        // reported. The old note was right that the indicator must be accounted for and wrong about
+        // clearing all of it and then some.
+        //
+        // ⚠️ THE DETENT MOVES WITH THE PADDING OR THE SHEET STOPS FITTING ITS CONTENT. A fixed detent
+        // measures from the bottom of the SCREEN, so the two are one arithmetic: the padding lost 17
+        // (12 + 5), so the two base heights lose the same 12 and the band term becomes the gap.
+        .padding(.bottom, Self.bottomChromeGap)
         // Taller only while the secondary "Apply For All Chats" button is present.
-        .presentationDetents([.height((hasPendingChange && !globalOnly ? 428 : 384) + Self.bottomInset)])
+        .presentationDetents([.height((hasPendingChange && !globalOnly ? 416 : 372) + Self.bottomChromeGap)])
         .presentationDragIndicator(.visible)
         .sheet(isPresented: $showCustomColor) {
             CustomColorView(cid: cid) { spec in
@@ -255,6 +268,15 @@ struct WallpaperPickerSheet: View {
     // otherwise → "Choose Wallpaper from Photos".
     /// The home indicator's strip, read from the window. A sheet's own safe area does not reach a
     /// fixed-height detent's arithmetic, which is what has to know about it here.
+    /// Where a SYSTEM-POSITIONED control rests above the physical edge: the indicator's band, less
+    /// the dip the system's own bars take into it. Stated once, and the same rule the composer uses —
+    /// see `composerRestDip` in ThreadView, which is where the 5 comes from.
+    ///
+    /// ⚠️ A phone with no indicator has no band, so this collapses to 0 and the control sits on the
+    /// margin the layout already gives it. That is the point of deriving it instead of stating a
+    /// number: one expression that is right on every device.
+    static var bottomChromeGap: CGFloat { max(0, bottomInset - 5) }
+
     static var bottomInset: CGFloat {
         UIApplication.shared.connectedScenes
             .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }
