@@ -71,7 +71,26 @@ import UIKit
             return nil
         }
         let key = "\(cid)|\(dark)|\(Int(frame.width))x\(Int(frame.height))|\(store.version)"
-        if let hit = cache[key] { return hit }
+        if let hit = cache[key] {
+            // ⛔ A CACHE HIT MUST BROADCAST TOO, AND NOT DOING SO IS THE LIGHT/DARK BUG — owner,
+            // 2026-08-24: "I change light mode to dark, the bubbles and the pin, time and
+            // disappearing badges don't understand which mode I picked until I leave the page and
+            // come back."
+            //
+            // ⚠️ IT ONLY BIT ON THE WAY BACK, WHICH IS WHY IT LOOKED RANDOM. Going light → dark is a
+            // MISS: a picture is rendered and `adopt` below hands it to every slice already on
+            // screen. Going dark → light again is a HIT, and this line used to return the old picture
+            // straight to the caller without telling a single live slice about it — so every badge
+            // and every incoming bubble went on wearing the wash of the mode he had just left.
+            // Leaving the chat and coming back rebuilt them all, which is exactly the workaround he
+            // described.
+            //
+            // The note under `adopt` already says a row is NOT rebuilt merely because its signature
+            // changed, and that broadcasting is what covers the rows nobody rebuilds. That reasoning
+            // applies whether the picture was made just now or half a minute ago.
+            WallpaperBlurSliceView.adopt(hit)
+            return hit
+        }
         guard let source = renderWallpaper(cid: cid, dark: dark, size: frame.size),
               let blurred = blurred(source, dark: dark) else { return nil }
         let state = WallpaperBlurState(image: blurred, frame: frame, cid: cid)

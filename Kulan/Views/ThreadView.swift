@@ -2263,7 +2263,17 @@ struct ThreadView: View {
         // The wallpaper and its blurred picture are INSIDE the model (`onWallpaper`, `wallpaperBlur`),
         // so they must key this cache or a wallpaper applied while the chat is open hands every
         // UIKit text row a model that still says "no wallpaper" until the chat is reopened.
-        let key = "\(repo.itemsVersion)|\(repo.otherLastReadMillis)|\(highlightId ?? "-")|\(repo.iBlocked)|\(readReceiptsOn)|\(chatHasWallpaper):\(wallpaperBlur?.id ?? 0)"
+        // ⛔ `dark` BELONGS HERE AND WAS MISSING — the other half of his 2026-08-24 light/dark report.
+        // With a wallpaper the blur id below happens to cover it, because a theme flip renders a new
+        // picture and the id moves. WITHOUT one there is no blur, the id is a constant 0, and not one
+        // other value in this key knows the theme changed — so every UIKit row kept the model it was
+        // built with, and `uikitModelsVersion` never moved either, which also skipped the belt-and-
+        // braces repaint at the call site. Two safety nets, both keyed on the same stale number.
+        //
+        // ⚠️ This is the fifth time this exact mistake has been found in this file's caches. The rule
+        // it keeps breaking: if a value is READ while building a row, it has to be in the key that
+        // decides whether that row is rebuilt — a picture cannot be the proxy for a theme.
+        let key = "\(repo.itemsVersion)|\(repo.otherLastReadMillis)|\(highlightId ?? "-")|\(repo.iBlocked)|\(readReceiptsOn)|\(dark)|\(chatHasWallpaper):\(wallpaperBlur?.id ?? 0)"
         if uikitModelCache.key == key { return uikitModelCache.models }
         var out: [String: UIKitBubbleModel] = [:]
         for m in repo.items {
@@ -3184,12 +3194,20 @@ struct ThreadView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
-            // ⛔ 29, HIS NUMBER, GIVEN 2026-08-24 WITH THE BAR AND THE GAP CIRCLED. This reverses the
-            // rule stated directly above, which dropped our flat 10 so the bar composed its bottom
-            // from the sheet's own inset the way the reference app does. He has now measured the
-            // result on his phone and asked for a stated 29 instead. His number stands; the reasoning
-            // above is left in place so the reversal reads as a decision rather than a mistake.
-            .padding(.bottom, 29)
+            // ⛔ NO NUMBER HERE AGAIN — owner, 2026-08-24, second look with the gap circled: "the
+            // space between the bar and the bottom of the screen is too much."
+            //
+            // ⚠️ THIS BAR HAS HELD THREE POSITIONS TODAY AND THE RULE STATED ABOVE WAS RIGHT BOTH
+            // TIMES. A flat 10 was dropped this morning so the bar could compose its bottom from the
+            // sheet's own inset, the way the reference app does. He then asked for a stated 29, which
+            // put a flat number straight back — and stacked it ON TOP of an inset already worth about
+            // 34 on his phone, so the bar ended up roughly 63 off the edge. The words he sent with
+            // both requests said what he actually wanted and I under-weighted them twice: system
+            // chrome, attached to the edge. That is the inset alone, with nothing added.
+            //
+            // So there is no `.padding(.bottom)` at all. `safeAreaInset` hands the bar the home
+            // indicator's band as its own bottom, which is device-derived and collapses correctly on
+            // a phone that has no band.
         }
     }
 
