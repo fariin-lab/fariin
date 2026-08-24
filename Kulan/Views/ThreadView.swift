@@ -4797,31 +4797,22 @@ struct ThreadView: View {
     private var composer: some View {
         VStack(spacing: 6) {
             if !mentionCandidates.isEmpty { mentionPicker }
-            // ⛔ A ZStack WITH BOTH STATES ALWAYS PRESENT, NOT AN if/else — owner, 2026-08-24: the
-            // swipe-up lock "feels like a pop… should be seamless rather than suddenly switching
-            // designs".
+            // ⛔ AN if/else, AND IT MUST STAY ONE — owner, 2026-08-24, after build 662: "remove the
+            // entire cross-fade transition, that is what introduced the bug".
             //
-            // ⚠️ THE SPRING WAS NEVER THE PROBLEM. `lockRecording()` already wraps the flip in one,
-            // and the modifier below has carried a spring on `recordLocked` all along. An `if/else`
-            // gives SwiftUI two DIFFERENT structural identities: the whole composer row is removed
-            // and a different one inserted, so there is nothing for a spring to interpolate — an
-            // insertion cannot animate from a state it was never in. That is the same lesson the
-            // selection tick in `SelectableRow` carries a warning about, one screen along.
+            // ⚠️ WHY A ZStack OF BOTH STATES CANNOT LIVE HERE. It was tried to make the swipe-up lock
+            // cross-fade instead of pop, and it did — but a ZStack sizes to its LARGEST child, and the
+            // locked bar is two rows (~96pt) against this row's ~40. So the composer became ~96pt
+            // tall permanently, with the input row floating in the middle of it, and that height IS
+            // the safe-area inset this bar hands to the list: everything above it shifted and every
+            // gap around it read wrong. The system-positioned behaviour was correct in 660 and broke
+            // in 662 for exactly this reason.
             //
-            // Both live in a ZStack now and cross-fade with the strip they share sliding into place:
-            // the pill is in the same spot in both states, so it reads as the row rearranging itself
-            // around the pill rather than as one design replacing another. The hidden side is fully
-            // transparent and takes no touches, and neither branch is ever torn down, which also
-            // means the recorder's live views keep their identity across the lock.
-            ZStack {
-                inputRow
-                    .opacity(recordLocked ? 0 : 1)
-                    .scaleEffect(recordLocked ? 0.94 : 1, anchor: .bottom)
-                    .allowsHitTesting(!recordLocked)
-                lockedRecordingBar
-                    .opacity(recordLocked ? 1 : 0)
-                    .scaleEffect(recordLocked ? 1 : 0.94, anchor: .bottom)
-                    .allowsHitTesting(recordLocked)
+            // The pop is the price of the height being right. If the transition is ever wanted again
+            // it has to keep the if/else — only the showing state may size this bar — and cross-fade
+            // through `.transition` on each branch, never by holding both.
+            Group {
+                if recordLocked { lockedRecordingBar } else { inputRow }
             }
         }
         // ⛔ AT REST THE SIDES MATCH THE BOTTOM — owner, 2026-08-24, from the preview of the pure
