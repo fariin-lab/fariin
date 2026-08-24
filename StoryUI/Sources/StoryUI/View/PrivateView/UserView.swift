@@ -338,6 +338,9 @@ struct StoryMoreMenu: UIViewRepresentable {
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var signature: String?
+        /// The button this menu belongs to, so the deferred element can pause without a view passed
+        /// in — it is asked by UIKit at presentation time, not by anything holding the button.
+        weak var hostButton: UIButton?
         /// The pause this menu owns, so it is released exactly once and only by the menu that took it.
         var pausedForMenu = false
         var closeObservers: [NSObjectProtocol] = []
@@ -459,6 +462,7 @@ struct StoryMoreMenu: UIViewRepresentable {
             b.setContentHuggingPriority(.defaultLow, for: axis)
             b.setContentCompressionResistancePriority(.defaultLow, for: axis)
         }
+        context.coordinator.hostButton = b
         b.menu = menu(context.coordinator)
         context.coordinator.signature = signature
         return b
@@ -479,7 +483,28 @@ struct StoryMoreMenu: UIViewRepresentable {
     }
 
     private func menu(_ coordinator: Coordinator) -> UIMenu {
-        UIMenu(title: "", children: items.map { item in
+        // ⛔ THE MENU ITSELF SAYS WHEN IT IS OPENING — owner, 2026-08-24: pause the instant the menu
+        // appears, resume only once it is dismissed, for text, photo and video alike.
+        //
+        // A deferred element's provider runs when UIKit is BUILDING the menu for presentation, which
+        // is the one moment that is guaranteed by the API rather than inferred from a touch. It
+        // returns no elements, so it draws nothing; it exists only to be asked. `.uncached` is what
+        // makes it run on EVERY presentation instead of once.
+        //
+        // This is the reliable half of the open signal and the recognizer in `makeUIView` is the
+        // early half — that one fires on contact, a frame or two sooner, and covers a press that
+        // never becomes a menu (released by `.touchUpOutside`/`.touchCancel`). `pause` is idempotent,
+        // so having both costs nothing and neither can be the single point of failure.
+        //
+        // ⚠️ NO NEW PAUSE SYSTEM, which was his condition. This posts the same `.pauseStory` the
+        // viewers sheet, the share sheet and the dismiss drag all post, and the host's `hostPause`
+        // gates the progress timer and the video mode together — so a text story's bar freezes and a
+        // video's playback stops on the one flag, and both come back on `.resumeStory`.
+        let opening = UIDeferredMenuElement.uncached { [weak coordinator] completion in
+            if let host = coordinator?.hostButton { coordinator?.pause(host: host) }
+            completion([])
+        }
+        return UIMenu(title: "", children: [opening] + items.map { item in
             // The app's own artwork when the entry names one, the SF Symbol otherwise. Template
             // rendering so a `UIMenu` tints it exactly like the symbols around it; without it the
             // file's own colour is drawn and the row looks like a different app's.
