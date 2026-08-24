@@ -110,13 +110,6 @@ struct MainShell: View {
         // chat. It draws nothing at all unless a note is playing outside the chat on screen — see
         // `VoiceNotePlayer.barVisible`.
         .safeAreaInset(edge: .top, spacing: 0) { VoiceNoteBar() }
-        // ⛔ THE STORY CAMERA COMES IN FROM THE LEFT AND PUSHES THIS WHOLE SHELL RIGHT — owner,
-        // 2026-08-24. It is mounted HERE, on the tab shell, and not on the chat list, because the
-        // thing that has to travel is the entire app: their transition slides the root container,
-        // tab bar and all, which is the rounded card leaving to the right in his screenshot. Hung on
-        // the chat list it would have slid the list out from under its own tab bar.
-        // Every number, and why four things move instead of one: `StoryCameraDoor`.
-        .storyCameraDoor { storyCameraScreen }
         // (The window dim that used to live here is gone — see the note above `MainShell`. The
         // presenter's own wall covers the tab bar and every tab's content, because it IS a screen
         // over them, and it is driven by the flight's fraction rather than by a bool.)
@@ -193,17 +186,6 @@ struct MainShell: View {
                     .contentTransition(.symbolEffect(.replace))   // smooth fill<->outline swap
             }
         }
-    }
-
-    /// The camera the door slides in. A property, not an inline closure on `body`: that body has hit
-    /// "unable to type-check this expression in reasonable time" before, and the thing that tipped it
-    /// was one closure written in place.
-    ///
-    /// ⚠️ NOT under the `@available(iOS 26.0, *)` below — that belongs to `modernTabView`, which uses
-    /// the new `Tab` API. This is mounted on `body`, which runs on every supported OS.
-    private var storyCameraScreen: some View {
-        AddStorySheet(onPosted: { Task { await StoriesRepository.shared.load(force: true) } },
-                      onDismiss: { StoryCameraDoorState.shared.close() })
     }
 
     @available(iOS 26.0, *)
@@ -1800,8 +1782,9 @@ struct ChatsView: View {
             //
             // ⛔ THE COVER IS GONE — owner, 2026-08-24: it came up from the bottom, and a
             // `fullScreenCover` has no other move. The camera is mounted on the tab shell now and
-            // arrives from the left; see `storyCameraDoor` up there and `StoryCameraDoor` for the
-            // transition itself. Opening is `StoryCameraDoorState.shared.open()`, from `composeStory`.
+            // arrives from the left on Apple's push metrics, mirrored — `StoryCameraDoor` presents
+            // it with a real `UIViewControllerAnimatedTransitioning`, so UIKit owns the animation.
+            // Opening is `StoryCameraDoor.open()`, from `composeStory`.
             // ⛔ THE ANSWER ARRIVES BEFORE THE CAMERA DOES (owner, 2026-08-20). Told at Upload
             // instead, a person has already opened the picker, chosen twenty photos, waited for
             // them to resolve and pressed the button — all of it spent on a post the database was
@@ -1928,8 +1911,9 @@ struct ChatsView: View {
             // while the app sat open opens the composer on the next tap instead of a day later.
             Task { await storyBudget.refreshDailyBudget() }
         } else {
-            // The door, not a cover binding — see `storyCameraDoor` on the tab shell.
-            StoryCameraDoorState.shared.open()
+            // The door, not a cover binding — it presents the camera itself, so nothing needs to be
+            // mounted on this screen or on the tab shell for it.
+            StoryCameraDoor.open()
         }
     }
 
@@ -1946,7 +1930,7 @@ struct ChatsView: View {
         // on top of it — see the ArchiveRoute destination.)
         showNew = false
         // The camera is not a cover any more, so a binding cannot take it away — the door does.
-        StoryCameraDoorState.shared.close()
+        StoryCameraDoor.close()
         // The story viewer is not a cover any more, so it cannot be dismissed by clearing a binding:
         // it is a presented screen and the door takes it away. Same job, one call.
         StoryDoor.dismiss()
