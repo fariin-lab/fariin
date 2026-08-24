@@ -4672,129 +4672,51 @@ struct ThreadView: View {
         return -(limit + (1 - 1 / (over * c / dim + 1)) * dim)
     }
 
-    /// THE PLATFORM'S OWN MODEL, not a number measured to the glass (owner, build 443: "sit
-    /// naturally on the safe area, just like the reference app, rather than floating above it").
-    ///
-    /// Read out of the reference app's ConversationInputToolbar, which is the closest open implementation of the
-    /// convention the reference app follows. Two things define it:
-    ///
-    ///   contentView.bottomAnchor.constraint(equalTo: bottomAnchor)   // the BAR's bottom, not the
-    ///                                                                // safe area's
-    ///   vMargin: 0.5 * (initialToolbarHeight - initialTextBoxHeight) // 0.5 * (56 - 40) = 8
-    ///
-    /// So the BAR's bottom edge rests on the safe area line and the system's inset is what lifts it
-    /// clear of the home indicator; inside the bar the pill is centred, which leaves 8pt under it.
-    /// `safeAreaBar` already does the first half for us, so the whole of our side is that 8.
-    ///
-    /// THE DEVICE-SPECIFIC PART IS THAT THERE ISN'T ONE, and that is the point of doing it this way.
-    /// The previous version subtracted the device's inset to hit a fixed distance from the glass,
-    /// which meant carrying our own idea of what every iPhone needs. Here iOS supplies it: 34pt of
-    /// lift on an indicator phone, none on a Home-button one, and the 8 sits on top of whatever that
-    /// is. Nothing to keep in step with new hardware.
-    ///
-    /// The keyboard case is the same 8, and now for a reason rather than by exception: up there the
-    /// bar rides the keyboard, which is simply a different edge to rest on.
-    /// ⛔ 30pt FROM THE SCREEN'S BOTTOM ON EVERY PHONE, NOT 30pt ON TOP OF WHATEVER THE PHONE HAS
-    /// (owner 2026-08-22: "bottom make also 30pt like iMessage… I want every phone it's most same").
-    ///
-    /// ⚠️ THE HOME INDICATOR IS THE WHOLE PROBLEM. It is 34pt on a phone that has one and 0 on a
-    /// phone that does not, and this padding sits ON TOP of it — so the flat 8 that used to be here
-    /// put the bar 42pt up on his phone and 8pt up on a home-button phone. Same number, two very
-    /// different bars, which is exactly what he is asking to stop.
-    ///
-    /// Subtracting the inset makes the TOTAL the constant instead. A phone with an indicator taller
-    /// than the target clamps at zero and keeps its 34, because there is nothing below the indicator
-    /// to give back — 34 against 30 is as close as the two can be made, and it is close.
-    /// Left and right. One number, both sides, every state — see the note where it is applied.
-    ///
-    /// ⚠️ APPLE'S OWN IS NARROWER. Measured off his iMessage screenshot, which is an exact 3× shot of
-    /// a 428pt phone: their pill's right edge sits 76px from the screen, which is 25.3pt. 30 is his
-    /// number and is what this is set to; the measurement is written down so the difference is a
-    /// decision rather than a drift.
-    private static let composerSideInset: CGFloat = 30
-    /// ⛔ AND IT NARROWS AGAIN WHILE TYPING, WHICH I HAD REMOVED AND SHOULD NOT HAVE (owner
-    /// 2026-08-22: "before opening the keyboard the composer is correct, after opening it must use
-    /// the left and right space it used before, I think 16pt").
-    ///
-    /// I read his "make it 30 left and right, the same on every phone" as also meaning the same in
-    /// every STATE, and dropped the focused case with the number. It was his own 2026-08-02 rule and
-    /// he still wants it: the bar gets wider exactly when you are typing into it, which is the moment
-    /// the field needs the room. "The same on every phone" was about phones, not about states.
-    private static let composerSideInsetTyping: CGFloat = 16
-    /// Above whatever edge iOS hands the bar, which is a different question from above the screen —
-    /// and asking the second question is what the removed `composerBottomTarget` did.
-    ///
-    /// ⛔ 8, AND PUTTING IT BACK IS THE FIX — owner 2026-08-22, after the 16 below shipped.
-    ///
-    /// I raised it to 16 believing the bar was landing a few points into the keyboard's rounded top
-    /// corners on iOS 26, and that one number big enough for both versions would cover it. That was
-    /// wrong twice over, and his two phones say so between them:
-    ///
-    ///   iPhone 13 Pro Max, iOS 27 — 8 looked right, 16 is visibly too much room. His words: go back.
-    ///   iPhone 13 Pro,     iOS 26 — the bar sits inside the keyboard at 8 AND STILL AT 16.
-    ///
-    /// ⚠️ THE SECOND LINE IS THE DIAGNOSIS. A bar a few points short is cleared by doubling the gap.
-    /// This one was not moved by doubling it, so whatever is wrong on that phone is larger than 16
-    /// and is not the size of this number — the number was never the mechanism. Raising it further
-    /// would only spend the Max's spacing to chase something that is not there, which is exactly the
-    /// trade he just rejected.
-    ///
-    /// So this goes back to the value the whole design is written around, and the 13 Pro is a
-    /// separate question with a separate answer. See the note above: 8 is the reference app's own
-    /// `vMargin`, 0.5 * (56 - 40), the pill centred inside a bar whose bottom rests on the edge it is
-    /// given. `safeAreaBar` supplies that edge — the safe area at rest, the keyboard while typing —
-    /// so the same 8 is correct in both states by construction rather than by exception.
-    ///
-    /// ⛔ WHY THIS IS A CONSTANT AND NOT A MEASUREMENT, WHICH IS THE HONEST ANSWER AND NOT THE
-    /// TIDY ONE. `KeyboardWatcher.topOnScreen` exists precisely for this and the story text card uses
-    /// it, but that card's own frame never moves — the note on `keyboardOverlap` says so in as many
-    /// words, and that is the property that makes measuring safe there. This bar IS moved, by
-    /// SwiftUI's avoidance, so a padding derived from its measured overlap would change the overlap
-    /// it was derived from: add padding, the bar rises, the shortfall reads zero, the padding goes,
-    /// the bar drops. An oscillation is a worse bug than a gap that is wrong by a fixed amount.
-    /// ⛔ ONE NUMBER, IN EVERY STATE, ON EVERY PHONE, AND IT NEVER ASKS THE DEVICE ANYTHING —
-    /// owner 2026-08-22, and it is his own question: why can this not just use Apple's safe-area and
-    /// keyboard system instead of hardcoded values and per-device guesses. It can, and this is that.
-    ///
-    /// ⚠️ WHAT WAS HERE READ THE HARDWARE AND IS THE WHOLE BUG. `max(0, 30 - safeAreaInsets.bottom)`,
-    /// to put the bar 30pt from the GLASS on every phone. That number is ours, not the platform's,
-    /// and holding it means carrying our own idea of what each iPhone needs:
-    ///
-    ///     home-indicator phone   34 inset  →  30 - 34  →  clamps to 0
-    ///     home-button phone       0 inset  →  30 -  0  →  30
-    ///
-    /// The clamp is the failure. On his 13 Pro it resolves to zero padding, so the bar rests flush
-    /// against whatever is under it, which is his screenshot: the pill touching the keys with no gap
-    /// at all. Measured off it — the composer's left edge sits at 29.7pt and the space under the pill
-    /// at 1.6pt, which are the at-rest 30 and the clamped 0, with the keyboard open.
-    ///
-    /// ⚠️ IT ALSO BRANCHED ON `inputFocused`, AND THAT IS WHY RAISING THE NUMBER DID NOTHING. Both
-    /// measurements above are the UNFOCUSED values taken with the keyboard up, so on that phone the
-    /// focused branch is not the one running and the number in it was never read. A gap that depends
-    /// on a flag can be wrong whenever the flag is; a constant cannot. Now there is no branch.
-    ///
-    /// ⛔ HOW THE POSITION IS DECIDED NOW, which is the part that is Apple's rather than ours:
-    ///
-    ///     safeAreaBar (iOS 26+) / safeAreaInset  →  puts the bar's bottom ON the current edge
-    ///     that edge is the safe area at rest     →  iOS supplies 34, or 0, or whatever is next
-    ///     that edge is the KEYBOARD while typing →  iOS supplies its real height, per version
-    ///     this constant                          →  the design's own margin, and only that
-    ///
-    /// So a new iPhone with a different inset, or an iOS with a different keyboard height, is already
-    /// handled: the thing that changes is the thing iOS measures, and the thing we hold is the only
-    /// part that is a design decision. Nothing here to keep in step with new hardware.
-    ///
-    /// ⚠️ 8 IS THE DESIGN'S NUMBER, NOT A FUDGE, and it is unchanged from what the composer already
-    /// uses — see the note above: the reference app's `vMargin`, 0.5 * (56 - 40), the pill centred in
-    /// its bar. He asked for the composer's size, height, padding and design to be left exactly as
-    /// they are, and they are. Only where the bar is put changed.
-    ///
-    /// ⚠️ THE ONE VISIBLE CONSEQUENCE, said plainly: at rest on a home-indicator phone the bar now
-    /// sits 8 above the indicator instead of on it, so it rises by 8pt. That is the cost of dropping
-    /// the subtraction, and it cannot be avoided while iOS owns the inset — "30pt from the glass on
-    /// every phone" is only reachable by overriding the safe area, which is the guessing he asked to
-    /// stop.
-    private static let composerBottomGap: CGFloat = 8
+    // ⛔ THE COMPOSER'S POSITION IS APPLE'S NOW, NOT OURS — owner, 2026-08-24: "go make it like
+    // iMessage, native Apple", closing four rounds of fixed insets (30/16 sides, safe-area + 8
+    // bottom) that behaved differently across his two phones and sat visibly higher than the
+    // system's own bars.
+    //
+    // What the native bottom search bar does, which is the model he pointed at:
+    //   sides  → the LAYOUT-MARGIN system: 16pt on narrow phones, 20pt on wider ones, chosen by
+    //            iOS per device. Constant whether the keyboard is up or down — measured off his
+    //            own iMessage screenshots, which show the same inset in both states.
+    //   bottom → the bar is EDGE-ATTACHED CHROME: its pill dips INTO the home-indicator band
+    //            (search bar ≈ 23-26pt above the physical edge, iMessage ≈ 29, both inside the
+    //            34pt band) instead of stacking on top of the safe area the way content does.
+    //            With the keyboard up, the same bar sits a small design gap above the keys.
+    //
+    // So the only numbers still ours are DESIGN GAPS, the same kind Apple holds:
+    //   `composerKeyboardGap`  8 — under the pill when the bar rides the keyboard. The reference
+    //                              app's own vMargin, 0.5 * (56 - 40); unchanged from before.
+    //   `composerRestDip`      5 — how far the pill sinks below the safe-area line at rest, which
+    //                              lands its bottom at inset − 5 (≈29pt on his phones), iMessage's
+    //                              own resting height. Home-button phones have no band to sink
+    //                              into, so they keep the 8 instead.
+    // Everything device-shaped comes from iOS at runtime through `SystemChromeReader`:
+    //   `chromeMargin`      the root controller's systemMinimumLayoutMargins (16/20 per device)
+    //   `chromeBottomInset` the window's bottom safe-area inset (34/0; never includes the keyboard)
+    //
+    // ⚠️ THE KEYBOARD STATE IS GEOMETRY, NOT FOCUS. The old side switch hung off `inputFocused`
+    // re-laying-out the bar, which worked on his iOS 27 phone and silently did not on the iOS 26
+    // one. `composerKeyboardUp` is read off the bar's own measured distance from the physical
+    // bottom instead — if the bar has risen, the keyboard is there, by definition — so the state
+    // and the movement cannot disagree, on any OS. The threshold only has to split 34 from a
+    // keyboard's 300-plus; 120 is nowhere near either.
+    //
+    // ⚠️ CARRIED FORWARD, still open: on his 13 Pro (iOS 26) the bar was once seen sitting INSIDE
+    // the keyboard at rest gaps of both 8 and 16 — a shortfall bigger than either number, so the
+    // gap was never the mechanism. If that recurs it is the safeAreaBar keyboard edge itself
+    // under-reporting on that OS, and no padding value fixes it; measure the bar's frame against
+    // `KeyboardWatcher.topOnScreen` on the device before touching these constants.
+    private static let composerKeyboardGap: CGFloat = 8
+    private static let composerRestDip: CGFloat = 5
+
+    /// iOS's numbers, reported by `SystemChromeReader`; the defaults only cover the first frame.
+    @State private var chromeMargin: CGFloat = 20
+    @State private var chromeBottomInset: CGFloat = 34
+    /// Whether the bar is riding the keyboard, derived from its own geometry — see the note above.
+    @State private var composerKeyboardUp = false
 
     private var composer: some View {
         VStack(spacing: 6) {
@@ -4803,16 +4725,25 @@ struct ThreadView: View {
                 if recordLocked { lockedRecordingBar } else { inputRow }
             }
         }
-        // ⛔ 30 AT REST, 16 WHILE TYPING. The 30 is his 2026-08-22 number and the 16 is his own
-        // 2026-08-02 rule, which I removed with the old 24 and should not have — see
-        // `composerSideInsetTyping`. The bar gets wider exactly when you are typing into it, which is
-        // the moment the field needs the room.
-        .padding(.horizontal, inputFocused ? Self.composerSideInsetTyping : Self.composerSideInset)
+        // The system margin on both sides, in every state — iMessage's own behaviour, measured.
+        // See the block over `composerKeyboardGap` for the whole model and its provenance.
+        .padding(.horizontal, chromeMargin)
         .padding(.top, 6)
-        .padding(.bottom, Self.composerBottomGap)
-        // Both margins move with the focus again, so they ride the keyboard's own curve instead of
-        // snapping a frame before or after it. The bar's CONTENT changes on the same value — the send
-        // button appears, the mic leaves — so one animation covers the lot.
+        // At rest the pill sinks `composerRestDip` below the safe-area line, into the indicator
+        // band, exactly as the system bars sit. Riding the keyboard it keeps the 8 above the keys.
+        // Home-button phones (inset 0) have no band, so rest matches the keyboard gap.
+        .padding(.bottom, composerKeyboardUp || chromeBottomInset <= 0
+                 ? Self.composerKeyboardGap : -Self.composerRestDip)
+        .background { SystemChromeReader(margin: $chromeMargin, bottomInset: $chromeBottomInset) }
+        // The keyboard state, read off the bar's own position — see the note over the constants.
+        .onGeometryChange(for: Bool.self) { proxy in
+            UIScreen.main.bounds.height - proxy.frame(in: .global).maxY > 120
+        } action: { _, up in
+            composerKeyboardUp = up
+        }
+        .animation(.easeOut(duration: 0.25), value: composerKeyboardUp)
+        // The bar's CONTENT still changes on focus — the send button appears, the mic leaves —
+        // so that animation stays keyed to it even though the geometry no longer is.
         .animation(.easeOut(duration: 0.25), value: inputFocused)
         .overlay(alignment: .top) {
             if holdHint {
