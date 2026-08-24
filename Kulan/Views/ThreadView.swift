@@ -4778,6 +4778,11 @@ struct ThreadView: View {
     // gap was never the mechanism. If that recurs it is the safeAreaBar keyboard edge itself
     // under-reporting on that OS, and no padding value fixes it; measure the bar's frame against
     // `KeyboardWatcher.topOnScreen` on the device before touching these constants.
+    /// The map on a shared-location bubble. Stated rather than measured, like every other size in a
+    /// bubble here: the row is pre-measured before the snapshot exists, and a height that arrives
+    /// with the picture is the bloom this file's notes keep warning about.
+    private static let locationMapHeight: CGFloat = 140
+
     private static let composerKeyboardGap: CGFloat = 8
     private static let composerRestDip: CGFloat = 5
 
@@ -7396,24 +7401,37 @@ struct MessageBubble: View, Equatable {
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
             .overlay { bubbleRim(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous)) }
         } else if let loc = message.locationCard {
-            // SHARED LOCATION card: pin + label + coordinates; tap opens Apple Maps at the spot.
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 10) {
-                    Image(systemName: "mappin.circle.fill")
-                        .font(.system(size: 34))
-                        .foregroundStyle(.red, isMe ? Color.white : Color.primary.opacity(0.9))
-                    VStack(alignment: .leading, spacing: 2) {
+            // ⛔ THE MAP IS THE CARD NOW — owner, 2026-08-24: "when I send a location, add a location
+            // preview". It used to be a pin glyph over the raw coordinates, and a coordinate is the
+            // one thing about a place that tells you nothing.
+            //
+            // The picture sits where a photo bubble's picture sits: flush to the top and the sides,
+            // with the words below it under the same background and the same clip — one bubble, not
+            // a card inside a card. See `LocationMapPreview` for why it is a rendered still rather
+            // than a live map, and why its height is stated.
+            //
+            // ⚠️ THE COORDINATES ARE GONE FROM THE FACE OF IT, DELIBERATELY. What replaces them is
+            // the map itself; the numbers were only ever standing in for it. The label keeps its
+            // line, and a share with no label says "Location" as before.
+            VStack(alignment: .leading, spacing: 0) {
+                LocationMapPreview(lat: loc.lat, lon: loc.lon,
+                                   width: maxBubbleWidth * 0.85,
+                                   height: Self.locationMapHeight,
+                                   dark: dark)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "mappin.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.red, isMe ? Color.white : Color.primary.opacity(0.9))
                         Text(loc.label ?? "Location").font(.system(size: 16, weight: .semibold)).lineLimit(1)
-                        Text(String(format: "%.5f, %.5f", loc.lat, loc.lon))
-                            .font(.caption).opacity(0.8)
+                        Spacer(minLength: 6)
+                        Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).opacity(0.7)
                     }
-                    Spacer(minLength: 6)
-                    Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).opacity(0.7)
+                    HStack { Spacer(); metaRow }
                 }
-                HStack { Spacer(); metaRow }
+                .padding(12)
             }
             .foregroundStyle(isMe ? onMyBubble : (dark ? .white : .black))
-            .padding(12)
             .frame(width: maxBubbleWidth * 0.85)
             .background { bubbleSurface }
             .clipShape(UnevenRoundedRectangle(cornerRadii: bubbleCorners, style: .continuous))
