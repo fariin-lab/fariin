@@ -4867,22 +4867,30 @@ struct ThreadView: View {
     private var composer: some View {
         VStack(spacing: 6) {
             if !mentionCandidates.isEmpty { mentionPicker }
-            // ⛔ AN if/else, AND IT MUST STAY ONE — owner, 2026-08-24, after build 662: "remove the
-            // entire cross-fade transition, that is what introduced the bug".
+            // ⛔ ONE SLOT, BOTH STATES RESIDENT, CROSS-FADED IN PLACE — the reference app's structure,
+            // read from its source and ported on his order 2026-08-24.
             //
-            // ⚠️ WHY A ZStack OF BOTH STATES CANNOT LIVE HERE. It was tried to make the swipe-up lock
-            // cross-fade instead of pop, and it did — but a ZStack sizes to its LARGEST child, and the
-            // locked bar is two rows (~96pt) against this row's ~40. So the composer became ~96pt
-            // tall permanently, with the input row floating in the middle of it, and that height IS
-            // the safe-area inset this bar hands to the list: everything above it shifted and every
-            // gap around it read wrong. The system-positioned behaviour was correct in 660 and broke
-            // in 662 for exactly this reason.
+            // ⚠️ THIS REVERSES THE if/else RULE THAT STOOD HERE THIS MORNING, AND ONLY BECAUSE THE
+            // THING THAT FORCED IT IS GONE. That rule was right when it was written: a ZStack sizes to
+            // its tallest child, the locked bar was TWO rows (~96pt) against this row's 40, so holding
+            // both made the composer permanently 96 — and this bar's height IS the list's bottom
+            // inset, so everything above it shifted. The locked bar became ONE row this afternoon when
+            // the pause button moved onto the chat container, and `inputRow` carries `minHeight: 40`,
+            // so the two states are now the same 40 and a shared slot cannot inflate anything.
+            // ⚠️ If either state ever grows a second row again, this has to go back to an if/else.
             //
-            // The pop is the price of the height being right. If the transition is ever wanted again
-            // it has to keep the if/else — only the showing state may size this bar — and cross-fade
-            // through `.transition` on each branch, never by holding both.
-            Group {
-                if recordLocked { lockedRecordingBar } else { inputRow }
+            // WHY THIS SHAPE AND NOT A NICER `.transition`: an if/else INSERTS one view tree and
+            // REMOVES another, and an insertion cannot cross-fade with a removal — they are two
+            // separate events that happen to overlap, which is what made every attempt read as a pop.
+            // Theirs never inserts or removes anything: the recording UI and the text field are pinned
+            // to the same four anchors and only their alpha changes. This is that, in SwiftUI.
+            ZStack {
+                inputRow
+                    .opacity(recordLocked ? 0 : 1)
+                    .allowsHitTesting(!recordLocked)
+                lockedRecordingBar
+                    .opacity(recordLocked ? 1 : 0)
+                    .allowsHitTesting(recordLocked)
             }
         }
         // ⛔ AT REST THE SIDES MATCH THE BOTTOM — owner, 2026-08-24, from the preview of the pure
@@ -4932,10 +4940,10 @@ struct ThreadView: View {
         .overlay(alignment: .bottomTrailing) {
             if recordingHeld { recordingMicOverlay }
         }
-        // One spring covers the whole lock: the cross-fade, the scale, and the height the row
-        // changes by as the locked bar's second line arrives. Slightly softer than the old 0.8 so
-        // the taller layout settles instead of snapping into place.
-        .animation(.spring(response: 0.34, dampingFraction: 0.86), value: recordLocked)
+        // ONE CURVE FOR THE WHOLE LOCK, and it is theirs. Everything keyed to `recordLocked` — the
+        // two states cross-fading, the send button growing in, the mic overlay leaving — rides this
+        // single spring, which is what their one-animator-per-moment rule buys. See `refControlSpring`.
+        .animation(Self.refControlSpring, value: recordLocked)
     }
 
     // @-mention autocomplete shown above the input while typing "@" in a group.
@@ -5421,6 +5429,28 @@ struct ThreadView: View {
     /// top of this spacing — which is how the old stated 10 rendered as about 14.
     private static let lockedBarRowGap: CGFloat = 10 + 6
 
+    /// ⛔ THE REFERENCE APP'S OWN TWO SPRINGS, READ FROM ITS SOURCE — ported on his order 2026-08-24
+    /// after asking for their numbers rather than for an eyeball match.
+    ///
+    /// Their input toolbar states exactly two, and which one is used says what is moving:
+    ///
+    ///   controls   duration 0.25, springDamping 0.645, springResponse 0.25
+    ///   height     duration 0.25, springDamping 0.9,   springResponse 0.3
+    ///
+    /// UIKit's `springDamping`/`springResponse` are SwiftUI's `dampingFraction`/`response`, so these
+    /// are the same curves rather than an approximation of them.
+    ///
+    /// ⚠️ THE POINT IS THAT THERE IS ONE OF EACH, NOT WHAT THE NUMBERS ARE. Every control they hide
+    /// or show in a single moment is added to ONE `UIViewPropertyAnimator` and started once, so the
+    /// send button, the mic and the text field cannot arrive at different times. The lock used to run
+    /// three curves at once here — a 0.3/0.7 spring at the call site, a 0.34/0.86 spring on the
+    /// composer, and two easeOut 0.25s for keyboard and focus on the same subtree. Copying their
+    /// damping into that would have changed nothing; having one curve is the fix.
+    private static let refControlSpring: Animation = .spring(response: 0.25, dampingFraction: 0.645)
+    /// Reserved for anything that changes this bar's HEIGHT. Nothing does today — both composer
+    /// states are 40 — but their split is kept so a future height change uses the stiffer one.
+    private static let refHeightSpring: Animation = .spring(response: 0.3, dampingFraction: 0.9)
+
     private var lockedRecordingBar: some View {
         // ⛔ ONE ROW TALL, WITH THE PAUSE FLOATING OVER THE CHAT — owner, 2026-08-24: locking a
         // recording "scrolls the chat up to give space for the pause button… it can overlap the
@@ -5538,6 +5568,12 @@ struct ThreadView: View {
                         .liquidGlass(Circle(), interactive: true,
                                      tint: chatColorSpec?.swatch ?? Theme.defaultBubble(dark))
                         .contentShape(Circle())
+                        // ⛔ IT GROWS FROM A DOT — their entrance, stated in their source as
+                        // `transform = isHidden ? .scale(0.1) : .identity` alongside the alpha, on the
+                        // control spring. Ours had no entrance of its own: it simply came with the bar
+                        // that appeared, which is the difference between a button arriving and a
+                        // button being revealed. 0.1 is their number, not a rounded-off tenth.
+                        .scaleEffect(recordLocked ? 1 : 0.1)
                 }
             }
             .frame(height: 40)
@@ -5718,7 +5754,11 @@ struct ThreadView: View {
         holdStarted = false
         recordCancelArmed = false
         impact(.medium)   // lock
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+        // The same spring the composer uses for `recordLocked`, not a second one. These were 0.3/0.7
+        // here and 0.34/0.86 there, so the drag settling and the bar changing over were two curves
+        // running on one gesture — close enough to look intentional and far enough apart to read as
+        // slack. `recordDrag` needs the call site because it is not keyed to a value modifier.
+        withAnimation(Self.refControlSpring) {
             recordLocked = true
             recordDrag = .zero
         }
