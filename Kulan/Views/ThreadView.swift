@@ -5330,24 +5330,18 @@ struct ThreadView: View {
     private static let lockedBarRowGap: CGFloat = 10 + 6
 
     private var lockedRecordingBar: some View {
-        VStack(spacing: Self.lockedBarRowGap) {
-            // Pause (or continue) rides above, on the send's side. Not part of the row below: it
-            // does not dispose of the note or commit it, and lining it up with the two that do is
-            // what made three equal circles out of two decisions and a toggle.
-            HStack(spacing: 0) {
-                Spacer(minLength: 0)
-                recordStateButton
-            }
-            // ⛔ PINNED TO THE BUTTON'S OWN HEIGHT, AND THAT IS WHAT MAKES THE 10 BELOW EXACT —
-            // owner, 2026-08-24: "space between pause and send button, make it 10pt".
-            //
-            // ⚠️ THE VSTACK ALREADY SAID 10 AND IT DID NOT RENDER AS 10. Both rows are free-height,
-            // so each takes the tallest thing in it and centres the rest: any slack in the strip row
-            // is split above and below the send button and lands ON TOP of the stack's spacing. The
-            // gap was therefore 10 plus half of whatever the pill happened to measure that frame,
-            // which is why a stated number was not the number on screen. With both rows pinned to
-            // the 40pt the buttons already are, the only thing between them is the spacing.
-            .frame(height: 40)
+        // ⛔ ONE ROW TALL, WITH THE PAUSE FLOATING OVER THE CHAT — owner, 2026-08-24: locking a
+        // recording "scrolls the chat up to give space for the pause button… it can overlap the
+        // chat, it's a button, everyone can see it, no need for the chat to scroll".
+        //
+        // ⚠️ THIS BAR'S HEIGHT IS SPENT TWICE, which is why the pause cost so much room. It is the
+        // safeAreaBar's inset AND it is measured into `composerBarHeight`, which the list takes as
+        // extra bottom clearance — so a second 40pt row pushed the conversation up by its own height
+        // plus the gap, every time you locked. Only the strip row is the bar now; the pause is an
+        // overlay, which draws and takes touches outside the bar's bounds without being part of its
+        // height. The hold hint and the big record mic in `composer` already ride outside it the
+        // same way, so this is the shape this bar already uses rather than a new trick.
+        VStack(spacing: 0) {
             HStack(spacing: 10) {
                 // ⛔ THE BIN BELONGS TO THE REVIEW, NOT TO THE RECORDING — owner, 2026-08-24, image 1:
                 // while it is still recording there is no trash button and the pill runs the full
@@ -5445,7 +5439,19 @@ struct ThreadView: View {
                         .contentShape(Circle())
                 }
             }
-            .frame(height: 40)   // the other half of the exact 10 — see the note on the row above
+            .frame(height: 40)
+        }
+        // Pause (or continue) rides ABOVE the bar, on the send's side, floating over the messages.
+        // Not part of the row below it: it neither disposes of the note nor commits it, and lining
+        // it up with the two that do made three equal circles out of two decisions and a toggle.
+        //
+        // The offset is its own height plus the gap, so the spacing to the send button is exactly
+        // `lockedBarRowGap` — the same 10 + 6 the down-arrow keeps from the composer — with no row
+        // slack able to creep in, because there is no second row any more.
+        .overlay(alignment: .topTrailing) {
+            recordStateButton
+                .frame(height: 40)
+                .offset(y: -(40 + Self.lockedBarRowGap))
         }
         .animation(.spring(response: 0.28, dampingFraction: 0.85), value: reviewingNote)
     }
