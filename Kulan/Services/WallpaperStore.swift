@@ -434,8 +434,9 @@ enum ChatWallpapers {
 }
 
 // The wallpaper layer that sits behind a chat's messages. `.none` renders the plain app
-// background (so nothing changes for chats without a wallpaper). Photos get a light scrim so
-// bubbles and the floating header/composer stay readable on busy images.
+// background (so nothing changes for chats without a wallpaper). A photo is dimmed in DARK MODE
+// ONLY, by the reference app's 0.20 — see the overlay below for both numbers and why light mode
+// now gets nothing.
 struct ChatWallpaperBackground: View {
     let cid: String
     /// False only when this is being RENDERED TO AN IMAGE as the source for the incoming-bubble
@@ -467,9 +468,25 @@ struct ChatWallpaperBackground: View {
                 Color.clear
                     .overlay { Image(uiImage: img).resizable().scaledToFill() }
                     .clipped()
-                    .overlay(includesScrim
-                             ? (dark ? Color.black.opacity(0.28) : Color.white.opacity(0.14))
-                             : Color.clear)
+                    // ⛔ THEIR NUMBERS, READ FROM THEIR SOURCE — his order 2026-08-24 after asking for
+                    // the exact amounts rather than for an eyeball match.
+                    //
+                    //   light   nothing at all
+                    //   dark    black at 0.20   (`dimmingView.backgroundColor = .ows_blackAlpha20`,
+                    //                            applied only when the dark theme is on)
+                    //
+                    // ⚠️ THE LIGHT-MODE CHANGE IS NOT A BRIGHTNESS CHANGE, IT IS A REMOVAL. Ours laid
+                    // white at 0.14 over a light-mode photo, which does not darken a picture, it fades
+                    // it — the washed-out look in daylight. They lay nothing over it, so the photo is
+                    // the photo. The old comment justified the scrim by bubble readability; theirs
+                    // solves that in the BUBBLE instead, which is the wallpaper-slice wash we already
+                    // ported, so the same job is not wanted twice.
+                    //
+                    // Dark goes 0.28 → 0.20, so the picture is 40% less dimmed than it was.
+                    //
+                    // ⚠️ Theirs is also a per-chat switch the user can turn off, defaulting on. Not
+                    // built here — he asked for the amount, not the setting.
+                    .overlay(includesScrim && dark ? Color.black.opacity(0.20) : Color.clear)
             } else {
                 Theme.bg(dark)   // photo deleted from the library → fall back gracefully
             }
