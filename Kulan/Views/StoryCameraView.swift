@@ -849,14 +849,16 @@ struct StoryCameraView: View {
     /// The zoom the shutter drag started from, so an upward drag ramps from where the picture WAS
     /// rather than from 1× every time.
     @State private var zoomAtRecordStart: CGFloat = 1
-    /// How far the camera has been pulled down, in points. The card FOLLOWS the finger — see the
-    /// vertical branch of the mode swipe.
-    @State private var dismissY: CGFloat = 0
-    // The drag has DECIDED it is a dismissal. The reference app decides the axis once, at the first movement
-    // (their own directional pan recognizer), and from then on the screen follows the finger BOTH
-    // ways — the old live axis test here re-judged every event, so a finger that came back up or
-    // drifted sideways stopped being written and the card froze mid-screen (his 535 report).
-    @State private var dismissActive = false
+    // ⛔ THE PULL-DOWN IS GONE — owner, 2026-08-24: "story camera scroll down, now I need
+    // remove please", with the preview dragged halfway down the screen and black above it.
+    //
+    // What lived here was `dismissY` / `dismissActive`: a downward drag that carried the whole camera
+    // with the finger and closed it past 200pt. The ✕ is the way out now, and the door's own
+    // transition owns the closing animation — a second way to leave, with its own geometry, is what
+    // put the preview in the middle of a black screen in his shot.
+    //
+    // ⚠️ THE GESTURE ITSELF STAYS, because it is not only a dismissal: the same recognizer carries
+    // swipe-UP-to-library and the sideways CAMERA/TEXT switch. Only the downward branch is cut.
     /// How close the finger is to locking the recording, 0 to 1. Drives the lock's own growth so the
     /// gesture can be FELT before it completes.
     @State private var lockProgress: CGFloat = 0
@@ -1012,75 +1014,20 @@ struct StoryCameraView: View {
                 // gesture that CLAIMS the touch eats both (kulan-scroll-gesture-rules; this exact
                 // mistake has cost us a build before).
                 .simultaneousGesture(
-                    // ⚠️ `.global`, AND THAT ONE ARGUMENT IS HIS SHAKE (2026-08-12: "the camera
-                    // shakes/jitters during the gesture").
-                    //
-                    // A `DragGesture` measures in its own view's LOCAL space by default — and this
-                    // gesture's view is inside the very `VStack` that `.offset(y: dismissY)` moves.
-                    // So the drag moved the ruler it was being measured with: finger goes down 100,
-                    // the card goes down 100, the local translation now reads less than 100, so
-                    // `dismissY` shrinks, so the card comes back up, so the translation grows again.
-                    // That is a feedback loop running at screen refresh rate, and what it looks like
-                    // is the camera vibrating under the finger.
-                    //
-                    // Window space cannot move, so the reported translation is the finger's real
-                    // travel and the card follows it exactly once. Same reason
-                    // `StoryPager.applyCube` reads `layer.position` instead of `frame` — a value you
-                    // are writing must never be read back through the thing you wrote it to.
+                    // `.global` is kept, though the bug it was added for is gone with the
+                    // pull-down. It was there because a `DragGesture` measures in its own view's
+                    // LOCAL space, and this gesture's view was inside the very stack the dismissal
+                    // offset moved — so the drag moved the ruler it was measured with and the camera
+                    // vibrated under the finger (his 2026-08-12 "shakes/jitters"). Nothing is offset
+                    // by this gesture now, so local space would behave; window space is simply the
+                    // honest one to measure a finger in, and changing it would be churn.
                     DragGesture(minimumDistance: 24, coordinateSpace: .global)
-                        // ⚠️ THE CARD FOLLOWS THE FINGER GOING DOWN (owner 2026-08-11: "is working
-                        // but is not following my finger"). It was judged only in `onEnded`, so a
-                        // downward swipe was a FLICK: nothing moved until it was already over, and
-                        // the camera simply vanished. The reference app's close is interactive — its
-                        // own interactive dismiss pan is a real vertical pan that carries the
-                        // screen — and this is that, in the gesture that already owns this axis.
-                        //
-                        // Only downward, only in camera mode, never mid-recording, and only once the
-                        // drag is clearly vertical: the same test `onEnded` uses, applied live so the
-                        // sideways CAMERA/TEXT swipe cannot start dragging the screen down with it.
-                        .onChanged { v in
-                            guard !typing, mode == .camera else { return }
-                            guard !cam.recording else {
-                                // Recording started under a live drag: put the card back and stand
-                                // down, or it stays stranded wherever the finger left it.
-                                if dismissActive { dismissActive = false; dismissY = 0 }
-                                return
-                            }
-                            let dy = v.translation.height
-                            if !dismissActive {
-                                // The axis is judged ONCE, at entry — the reference app's directional pan. A
-                                // sideways CAMERA/TEXT swipe never becomes a dismissal, and a
-                                // dismissal never freezes for turning diagonal later.
-                                guard dy > 0, dy > abs(v.translation.width) * 1.5 else { return }
-                                dismissActive = true
-                            }
-                            // 1:1 with the finger, clamped at the origin (the reference app: `max(0, offset.y)`
-                            // — the card never rides above its resting place). The 24pt the gesture
-                            // spent proving itself is subtracted so tracking starts from ZERO under
-                            // the finger instead of arriving with a jump.
-                            dismissY = max(0, dy - 24)
-                        }
+                        // Nothing to track while the finger is down any more — the dismissal
+                        // was the only part of this gesture that followed the finger live. The
+                        // library swipe and the mode switch are both judged at the release.
                         .onEnded { v in
-                            let wasDismissing = dismissActive
-                            dismissActive = false
-                            guard !typing, !cam.recording else { dismissY = 0; return }
+                            guard !typing, !cam.recording else { return }
                             let dx = v.translation.width, dy = v.translation.height
-                            if wasDismissing {
-                                // The reference app's commit rule is DISTANCE ONLY: 200pt of travel, judged
-                                // where the finger let go (their own dismiss-distance threshold), no
-                                // velocity clause — a short flick snaps back, and a drag brought
-                                // back under the line un-arms itself by simply being under it.
-                                if dismissY >= 200 {
-                                    // Left where the finger put it: the cover slides the rest of
-                                    // the way from here, and springing back under a dismissal is
-                                    // a flicker.
-                                    onClose()
-                                } else {
-                                    // Their cancel is a plain 0.1s animation, not a spring.
-                                    withAnimation(.easeInOut(duration: 0.1)) { dismissY = 0 }
-                                }
-                                return
-                            }
                             // VERTICAL FIRST, and only when it is clearly vertical. Both reference
                             // cameras put the gallery above and the exit below, and reading the axes
                             // in one place is what stops a lazy diagonal doing both.
@@ -1121,7 +1068,6 @@ struct StoryCameraView: View {
             // shrink this carried (3.8% at a real drag) read as nothing anyway. No animation
             // modifier here on purpose: while the finger is down the FINGER is the animation, and
             // the put-back is applied at the release instead.
-            .offset(y: dismissY)
         }
         // THE PAGE DOES NOT RESIZE FOR THE KEYBOARD (owner 2026-08-04: "the entire editor frame moves
         // upward and a black background appears behind the keyboard").
