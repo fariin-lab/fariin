@@ -119,6 +119,26 @@ final class StoryCameraSlideAnimator: NSObject, UIViewControllerAnimatedTransiti
         let width = container.bounds.width
         let duration = transitionDuration(using: ctx)
 
+        // ⛔ THE CONTAINER HAS TO CARRY A RADIUS TOO, OR OPENING IS SQUARE — owner, 2026-08-24, and
+        // this time it was not intermittent: closing rounded correctly, opening never did.
+        //
+        // ⚠️ A CONCENTRIC CORNER RESOLVES AGAINST ITS SUPERVIEW, and the card's superview is this
+        // transition container. We never gave the container a radius, so on the way IN there was
+        // nothing to be concentric with and it resolved to square. On the way OUT it happened to
+        // work, because UIKit's dismissal container already carries one — which is the worst kind of
+        // working: the same line of code producing two results because it was leaning on something
+        // nobody set.
+        //
+        // Asking the CONTAINER to be concentric too ends the chain at the window, which is the one
+        // container iOS resolves to the physical display corner. Both directions then read the same
+        // radius from the same place, and it is still the system's number rather than ours.
+        //
+        // ⚠️ Deliberately NOT clipping the container. A radius here is being set to be READ, not to
+        // cut anything: `masksToBounds` stays false so the camera underneath is never trimmed.
+        if #available(iOS 26.0, *) {
+            container.cornerConfiguration = .corners(radius: .containerConcentric())
+        }
+
         // Underneath, the camera only ever covers the last 30% of the distance. On top, the page
         // being left travels the whole width.
         let beneathStart = CGAffineTransform(translationX: -width * Self.parallax, y: 0)
