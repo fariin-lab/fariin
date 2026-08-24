@@ -4722,10 +4722,9 @@ struct ThreadView: View {
     //
     // ⚠️ THE KEYBOARD STATE IS GEOMETRY, NOT FOCUS. The old side switch hung off `inputFocused`
     // re-laying-out the bar, which worked on his iOS 27 phone and silently did not on the iOS 26
-    // one. `composerKeyboardUp` is read off the bar's own measured distance from the physical
-    // bottom instead — if the bar has risen, the keyboard is there, by definition — so the state
-    // and the movement cannot disagree, on any OS. The threshold only has to split 34 from a
-    // keyboard's 300-plus; 120 is nowhere near either.
+    // one. `composerKeyboardUp` comes from the keyboard's OWN notification instead, which is the
+    // OS reporting its state rather than us inferring it from a layout — see that property for why
+    // reading the bar's position replaced this once and then had to be replaced in turn.
     //
     // ⚠️ CARRIED FORWARD, still open: on his 13 Pro (iOS 26) the bar was once seen sitting INSIDE
     // the keyboard at rest gaps of both 8 and 16 — a shortfall bigger than either number, so the
@@ -4745,8 +4744,8 @@ struct ThreadView: View {
     /// number by construction rather than by being kept in step: the system margin with the
     /// keyboard up, and the margin-or-band expression at rest.
     ///
-    /// ⚠️ IT MOVES WITH THE KEYBOARD FOR FREE. `composerKeyboardUp` is read off the composer's own
-    /// geometry, so these buttons change inset on exactly the frame the composer does.
+    /// ⚠️ IT MOVES WITH THE KEYBOARD FOR FREE. `composerKeyboardUp` is one value read by both, so
+    /// these buttons change inset on exactly the frame the composer does.
     private var floatingButtonInset: CGFloat {
         composerKeyboardUp ? chromeMargin : max(chromeMargin, chromeBottomInset - Self.composerRestDip)
     }
@@ -4754,8 +4753,25 @@ struct ThreadView: View {
     /// iOS's numbers, reported by `SystemChromeReader`; the defaults only cover the first frame.
     @State private var chromeMargin: CGFloat = 20
     @State private var chromeBottomInset: CGFloat = 34
-    /// Whether the bar is riding the keyboard, derived from its own geometry — see the note above.
-    @State private var composerKeyboardUp = false
+    /// ⛔ THE KEYBOARD'S OWN NOTIFICATION, NOT THE BAR'S POSITION — owner, 2026-08-24: opening a chat
+    /// showed the composer "too early in the wrong position", correcting itself about a fifth of the
+    /// way through the push.
+    ///
+    /// ⚠️ READING THE BAR'S OWN FRAME IS WHAT CAUSED THAT, and it was my own doing. The state was
+    /// `screenHeight - bar.maxY > 120`, which is only meaningful once the bar is laid out where it
+    /// will finally sit. During a push the incoming view is measured before it is placed, so the bar
+    /// reports a maxY far up the screen, the test says "the keyboard must be up", and the composer
+    /// draws its keyboard-up padding until the layout settles and it snaps. The threshold was never
+    /// the problem — no threshold can tell a keyboard apart from a view that is not in place yet.
+    ///
+    /// The keyboard's own frame cannot be confused by any of that: `KeyboardWatcher` reads
+    /// `keyboardWillChangeFrame` / `willHide`, so this is the OS reporting its own state rather than
+    /// us inferring it from a layout. It also keeps the property that made me leave `inputFocused`
+    /// behind in the first place — notifications fire identically on iOS 26 and 27, where SwiftUI's
+    /// focus flag did not — and it lands at the START of the keyboard's animation, so the padding
+    /// moves with the keys instead of a frame behind them.
+    @StateObject private var keyboard = KeyboardWatcher()
+    private var composerKeyboardUp: Bool { keyboard.height > 0 }
 
     private var composer: some View {
         VStack(spacing: 6) {
@@ -4805,12 +4821,6 @@ struct ThreadView: View {
         .padding(.bottom, composerKeyboardUp || chromeBottomInset <= 0
                  ? Self.composerKeyboardGap : -Self.composerRestDip)
         .background { SystemChromeReader(margin: $chromeMargin, bottomInset: $chromeBottomInset) }
-        // The keyboard state, read off the bar's own position — see the note over the constants.
-        .onGeometryChange(for: Bool.self) { proxy in
-            UIScreen.main.bounds.height - proxy.frame(in: .global).maxY > 120
-        } action: { _, up in
-            composerKeyboardUp = up
-        }
         .animation(.easeOut(duration: 0.25), value: composerKeyboardUp)
         // The bar's CONTENT still changes on focus — the send button appears, the mic leaves —
         // so that animation stays keyed to it even though the geometry no longer is.
