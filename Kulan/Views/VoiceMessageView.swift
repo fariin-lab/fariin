@@ -80,11 +80,16 @@ struct VoiceMessageView: View {
     /// duration-deterministic, so the bloom rule (pre-measure == render, always) holds for free.
     /// The `message` parameter stays: every call site already passes it, and the day this becomes
     /// per-note again the signature will not have to change back.
-    /// ⛔ 112, DOWN FROM 170 — owner, 2026-08-24, image 2. The speed pill moved onto this line, and
-    /// in his reference the bubble does not get wider to make room for it: the wave gives up the
-    /// space instead. 40 + 8 + 104 + 8 + 42 = 202, against the 210 the old disc-plus-wave came to,
-    /// so the bubble keeps the width he already signed off.
-    static func waveWidth(for message: Message) -> CGFloat { 104 }
+    /// ⛔ 140 — owner, 2026-08-24: "make the size like image 2, don't change the design, just fix
+    /// the size". I had spent this twice to pay for things that arrived beside it: 170 to 112 when
+    /// the speed pill moved onto this line, then 112 to 104 when the disc grew to 40. Two trims that
+    /// each looked small left the wave a third shorter than he had signed off, which is the stubby
+    /// bubble in his image 1.
+    ///
+    /// Measured off his image 2 with the 40pt disc as the scale: the wave runs about 140 and the
+    /// whole bubble about 236. 40 + 8 + 140 + 8 + 42 = 238, so the bubble is his width again and the
+    /// wave is what got it back — the disc and the pill keep the sizes he asked for.
+    static func waveWidth(for message: Message) -> CGFloat { 140 }
     /// COMPACT, 2026-08-13, on his side-by-side ("make it like the second one… ours is bigger and
     /// wider"). Three things were making it bigger and all three come down here:
     ///
@@ -351,7 +356,11 @@ struct VoiceMessageView: View {
             // rate cycles (1× → 1.5× → 2×), and a capsule that grows would push the whole row past
             // the pre-measured `contentWidth` — the same bloom the notes in `bottomLine` describe,
             // reached by a different door. The slot is stated, the capsule stays snug.
-            .frame(width: Self.speedSlot, alignment: .trailing)
+            // ⛔ LEADING, NOT TRAILING. The slot has to be wide enough for "1.5×", so a capsule
+            // parked at its far end left a visible hole between the wave and the pill on the common
+            // "1×" — his image 1. Held at the near end it sits just after the wave, which is where
+            // his image 2 puts it, and the spare width falls off the right where the bubble ends.
+            .frame(width: Self.speedSlot, alignment: .leading)
     }
 
     private var bottomLine: some View {
