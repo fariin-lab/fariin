@@ -76,7 +76,15 @@ final class StoryCameraSlideAnimator: NSObject, UIViewControllerAnimatedTransiti
         card.frame = bounds
         card.layer.masksToBounds = true
         if #available(iOS 26.0, *) {
-            card.cornerConfiguration = .containerConcentric()
+            // ⚠️ THE SHAPE OF THIS CALL IS EASY TO GET WRONG AND THE FIRST ATTEMPT DID. The radius
+            // and the configuration are two different types: `containerConcentric` is a
+            // `UICornerRadius`, and it has to be wrapped by a `UICornerConfiguration` that says which
+            // corners it applies to. `.containerConcentric()` on its own does not compile.
+            //
+            // ⚠️ IT RESOLVES AGAINST THE SUPERVIEW, which here is the transition's own container. If
+            // that reads as square then this comes out square, and the fix is a `minimum:` floor
+            // rather than a stated radius — his rule was no hardcoded radius, and a floor is not one.
+            card.cornerConfiguration = .corners(radius: .containerConcentric())
         } else {
             card.layer.cornerRadius = legacyCardRadius
             card.layer.cornerCurve = .continuous
