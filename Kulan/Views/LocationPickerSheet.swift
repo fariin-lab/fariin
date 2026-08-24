@@ -55,6 +55,15 @@ final class LocationFetcher: NSObject, ObservableObject, CLLocationManagerDelega
     func locationManager(_ m: CLLocationManager, didFailWithError error: Error) { /* one-shot; ignore */ }
 }
 
+/// The window's top inset — the status bar and, on a phone that has one, the island. Read from the
+/// window rather than a `GeometryReader`, because this header sits over a view that deliberately
+/// ignores the safe area and would therefore be handed the full screen by any reader inside it.
+private func _locationTopInset() -> CGFloat {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    let w = scenes.flatMap(\.windows).first(where: \.isKeyWindow) ?? scenes.first?.windows.first
+    return w?.safeAreaInsets.top ?? 44
+}
+
 // "Select Location" (user design): full-screen map with a fixed CENTER PIN (pan the map to choose),
 // a locate-me button, a bottom search field (MKLocalSearch), and a Send Location button that outputs
 // the chosen coordinates (falls back to the live GPS fix when the map hasn't been moved).
@@ -117,6 +126,12 @@ struct LocationPickerSheet: View {
                 .buttonStyle(.plain)
             }
             .padding(.horizontal, 12)
+            // ⛔ INSIDE THE SAFE AREA — owner, 2026-08-24: the ✕ sat under the status bar and the
+            // island. The map below is deliberately full-bleed (`ignoresSafeArea`), and this header
+            // is layered over it in the same ZStack, so it inherited the map's edge-to-edge frame
+            // instead of the screen's usable one. Pushing the header down by the top inset leaves
+            // the map full-bleed and puts only the controls where they can be reached.
+            .padding(.top, _locationTopInset())
         }
         // Locate-me + send + search pinned at the bottom.
         .safeAreaInset(edge: .bottom, spacing: 0) {

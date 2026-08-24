@@ -342,11 +342,20 @@ struct AttachRecentsStrip: View {
                             Image(systemName: "chevron.right").font(.footnote.weight(.semibold))
                                 .foregroundStyle(.tertiary)
                         }
-                        .padding(.horizontal, 16).padding(.vertical, 7)
+                        // ⛔ ROOMIER, AND INSET FURTHER FROM THE LEFT — owner, 2026-08-24: the album
+                        // list "looks zoomed out" beside his reference, and the rows "tuck" too
+                        // close to the edge. The thumbnail carries the row's height, so 52 with 7
+                        // above and below is a 66pt row against the reference's ~76; the leading
+                        // inset is the other half of it, at 16 against their 20-plus.
+                        .padding(.leading, 20).padding(.trailing, 16)
+                        .padding(.vertical, 11)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    Divider().padding(.leading, 78)
+                    // Starts where the TITLE starts, not where the thumbnail does — 20 leading + 60
+                    // thumb + 14 gap. Moved with the inset above so the rule still lines up with the
+                    // first letter rather than floating in the gap beside it.
+                    Divider().padding(.leading, 94)
                 }
             }
         }
@@ -730,8 +739,10 @@ private struct AlbumThumb: View {
             if let image { Image(uiImage: image).resizable().scaledToFill() }
             else { Rectangle().fill(Color.secondary.opacity(0.12)) }
         }
-        .frame(width: 52, height: 52)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        // 60, up from 52 — see the row's own note. The cover is what sets the row's height, so this
+        // is the number that makes the list read at the reference's scale rather than zoomed out.
+        .frame(width: 60, height: 60)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .task {
             let f = PHFetchOptions()
             f.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
