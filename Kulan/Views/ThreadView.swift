@@ -86,6 +86,19 @@ struct ThreadView: View {
     @State private var sendError: String?
     @State private var showCamera = false
     @State private var showAttachPanel = false
+    /// ⛔ THE ATTACH SHEET GROWS OUT OF THE "+" — owner, 2026-08-24, choosing Apple's zoom over a
+    /// hand-built morph so the 62%-to-full drag stays exactly as it is.
+    ///
+    /// `matchedTransitionSource` marks the button, `navigationTransition(.zoom)` marks the sheet,
+    /// and this namespace is what ties the two together. Both have been public since iOS 18 and the
+    /// app is 26-only, so nothing here is gated.
+    ///
+    /// ⚠️ A ZOOM WAS TRIED AND REMOVED ONCE BEFORE — the note on the sheet itself records it:
+    /// "the zoom morph fought the detent snap" (2026-07-14). He has chosen to take that risk again
+    /// rather than give up the drag. If it misbehaves, the fight is between the zoom and
+    /// `presentationDetents`, not anything about this namespace, and the fallback is a single fixed
+    /// detent rather than a different animation.
+    @Namespace private var attachZoom
     // Opens at ~62% (shows the camera + ~3 photo rows, user spec); grows to .large on caption focus.
     static let attachOpenDetent: PresentationDetent = .fraction(0.62)
     @State private var attachDetent: PresentationDetent = ThreadView.attachOpenDetent
@@ -1009,6 +1022,16 @@ struct ThreadView: View {
                 // SOLID system background (white in light / dark in dark mode) — the default iOS 26 glass
                 // sheet showed the chat blurring through, which read as a broken half-empty panel.
                 .presentationBackground(Color(.systemBackground))
+                // ⛔ ZOOM FROM THE "+", DETENTS UNTOUCHED — owner, 2026-08-24. The detents above are
+                // exactly as they were: it opens at ~62% and still drags to full. The transition is
+                // the only thing added, and it is Apple's, so the system still owns the drag, the
+                // snap and the interactive dismissal.
+                //
+                // ⚠️ THE NOTE BELOW IS THE HISTORY AND IT STANDS. A zoom was tried here in July and
+                // removed because it fought the detent snap; he has chosen to take that risk again
+                // rather than give up the 62%-to-full drag. If it reappears, the fix is one fixed
+                // detent, not a different animation.
+                .navigationTransition(.zoom(sourceID: "attach", in: attachZoom))
                 // THE REFERENCE APP MODEL (user request 2026-07-14, replacing the brief zoom-from-+ experiment):
                 // the reference app's attachment menu is a spring bottom sheet — it slides up from the bottom
                 // edge with a quick spring, drags between part/full height, and a downward drag or flick
@@ -4889,6 +4912,10 @@ struct ThreadView: View {
                         .liquidGlass(Circle(), interactive: true)
                 }
                 .tint(.primary)
+                // The sheet grows out of THIS button — see `attachZoom`. On the Button rather than
+                // on its label so the source rect is the whole 40pt control, which is the shape the
+                // sheet appears to come from.
+                .matchedTransitionSource(id: "attach", in: attachZoom)
                 .transition(.scale.combined(with: .opacity))   // smooth fade/scale out when recording starts
             }
 
