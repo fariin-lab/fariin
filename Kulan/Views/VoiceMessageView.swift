@@ -119,6 +119,10 @@ struct VoiceMessageView: View {
     /// than the measurement is exactly the bloom the comments in `bottomLine` describe. "1.5×" is
     /// the widest label at 11pt bold and fits inside this with its capsule padding.
     static let speedSlot: CGFloat = 42
+    /// Everything to the right of the disc: the wave, the pill, and the caption line under them.
+    static func columnWidth(for message: Message) -> CGFloat {
+        waveWidth(for: message) + discGap + speedSlot
+    }
     static func contentWidth(for message: Message) -> CGFloat {
         discSize + discGap + waveWidth(for: message) + discGap + speedSlot
     }
@@ -180,15 +184,24 @@ struct VoiceMessageView: View {
     }
 
     var body: some View {
-        // TWO ROWS, NOT A COLUMN BESIDE THE BUTTON — and that is what fixes the alignment he asked
-        // about. The play button used to be boxed with the waveform AND the little text row together, so
-        // it centred on both and ended up sitting roughly 10pt BELOW the middle of the wave. Nothing in
-        // the bubble lined up with anything. Now the button is boxed with the wave alone, so the two are
-        // on one line, which is what both references do.
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: Self.discGap) {
-                playButton
-                WaveformBars(bars: displayBars, progress: progress, played: tint,
+        // ⛔ THE DISC IS CENTRED ON BOTH ROWS AND THE WORDS START AT THE WAVE — owner, 2026-08-24,
+        // his image 2, two position changes and nothing else.
+        //
+        // ⚠️ THIS REVERSES THE ARRANGEMENT THE NOTE BELOW DESCRIBES, DELIBERATELY AND ON HIS NEWER
+        // WORD. It used to be two full-width rows with the disc boxed against the WAVE alone,
+        // because when the disc had been centred on both it sat about 10pt below the middle of the
+        // wave and nothing lined up. What made that true was a 32pt disc against a 22pt wave plus a
+        // caption line; the disc is 40 now, tall enough to span both rows and read as the anchor of
+        // the bubble rather than as a control that missed its line.
+        //
+        // So: the disc sits beside a COLUMN of (wave + pill) over (duration + clock), centred on it.
+        // The duration therefore starts where the wave starts instead of under the disc, which is
+        // the second half of what he drew.
+        HStack(spacing: Self.discGap) {
+            playButton
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: Self.discGap) {
+                    WaveformBars(bars: displayBars, progress: progress, played: tint,
                              // 0.45, not 0.3. The unplayed half is most of the bar for most of a
                              // note's life, and at 30% of the tint on a saturated bubble it read as
                              // washed rather than as a waveform waiting to be played. Still clearly
@@ -200,13 +213,14 @@ struct VoiceMessageView: View {
                              onScrub: { s in
                                  engine.setScrubbing(s); VoiceScrubState.active = s; onScrub(s)
                              })
-                    .frame(width: Self.waveWidth(for: message), height: Self.waveHeight)
-                // ⛔ AT THE END OF THE WAVE, ON ITS OWN LINE — owner, 2026-08-24, image 2. It used to
+                        .frame(width: Self.waveWidth(for: message), height: Self.waveHeight)
+                    // ⛔ AT THE END OF THE WAVE, ON ITS OWN LINE — owner, 2026-08-24, image 2. It used to
                 // sit in the text row beside the duration; there it competed with the clock for the
                 // same line and left the wave stopping short of nothing in particular.
-                speedPill
+                    speedPill
+                }
+                bottomLine
             }
-            bottomLine
         }
         .frame(width: Self.contentWidth(for: message), alignment: .leading)
         .animation(.easeOut(duration: 0.2), value: unheard)
@@ -369,7 +383,10 @@ struct VoiceMessageView: View {
                     .foregroundStyle(tint.opacity(heardByOther ? 1 : 0.35))
             }
         }
-        .frame(width: Self.contentWidth(for: message), alignment: .leading)
+        // The COLUMN's width, not the bubble's: this row now lives beside the disc rather than
+        // under it, so the clock's trailing edge is the column's — which is still the bubble's right
+        // edge, because the column is everything the disc is not.
+        .frame(width: Self.columnWidth(for: message), alignment: .leading)
         .overlay(alignment: .trailing) { trailingMeta?() }
     }
 
