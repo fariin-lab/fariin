@@ -20,61 +20,97 @@ import UIKit
 /// completion, the interruption and the cleanup, and this file supplies two frames and a duration.
 /// There is no progress variable and no gesture left to get out of step.
 ///
-/// A note on why this is not literally a `UINavigationController` push, which is what he described:
-/// a push goes right-to-left and there is no public flag to reverse it. The numbers below ARE the
-/// push's — full travel for the arriving screen, ~30% for the one being left, one duration, one
-/// curve — with the sign flipped, so it reads as the same motion coming the other way.
-final class StoryCameraPushAnimator: NSObject, UIViewControllerAnimatedTransitioning {
+/// A note on why this is not literally a `UINavigationController` transition, which is what he
+/// described: a push and a pop run right-to-left and there is no public flag to reverse either. The
+/// numbers below ARE the system's — full travel for the screen on top, 30% for the one beneath, one
+/// duration, one curve — with the sign flipped, so it reads as the same motion coming the other way.
+final class StoryCameraSlideAnimator: NSObject, UIViewControllerAnimatedTransitioning {
     /// True for opening, false for closing. One class for both so the two directions cannot drift.
     private let presenting: Bool
     init(presenting: Bool) { self.presenting = presenting }
 
-    /// Apple's own push duration.
+    /// Apple's own push/pop duration.
     func transitionDuration(using _: UIViewControllerContextTransitioning?) -> TimeInterval { 0.35 }
 
-    /// ⚠️ THE SCREEN BEING LEFT MOVES A THIRD, NOT THE WHOLE WAY, and that single number is most of
-    /// what makes a push look like a push rather than like two sheets of paper swapping places.
+    /// ⛔ THIS IS A POP, NOT A PUSH — owner, 2026-08-24, with ours beside theirs: "the camera page
+    /// must be UNDER the page that is going up, and the page that is going must have rounded corners
+    /// like image 2."
+    ///
+    /// ⚠️ THE FIRST VERSION HAD THE Z-ORDER THE WRONG WAY ROUND, and that one fact is both of his
+    /// points. It was built as a push: the arriving camera on TOP, travelling the full width, with
+    /// the app moving 30% beneath it. So the camera's hard edge cut across the chat list, and a
+    /// screen that is underneath has no corners to round.
+    ///
+    /// A pop is the same animation with the roles swapped, and it is what he photographed: the
+    /// LEAVING screen rides on top and travels the whole way out, revealing the arriving one
+    /// underneath, which drifts in over the last 30% of the distance. Because the chat list is now
+    /// the thing on top, it is the thing that carries a corner radius, exactly as in their shot.
     private static let parallax: CGFloat = 0.30
+
+    /// The radius on the leaving page. One number, stated once, so it is a single edit if he wants it
+    /// tighter or rounder.
+    private static let cardRadius: CGFloat = 24
+
+    /// ⚠️ THE PAGE THAT LEAVES IS A SNAPSHOT, AND IT HAS TO BE. The app's real view lives in the
+    /// window, NOT in the transition's container, so it cannot be raised above the camera and cannot
+    /// be given corners without mutating the live app's own layer. A snapshot can be put anywhere in
+    /// the container, styled freely, and thrown away when the animation ends — the real view is never
+    /// touched, which is also why nothing can be left behind if the transition is interrupted.
+    private static func makeCard(of view: UIView, bounds: CGRect) -> UIView? {
+        guard let card = view.snapshotView(afterScreenUpdates: false) else { return nil }
+        card.frame = bounds
+        card.layer.cornerRadius = cardRadius
+        card.layer.cornerCurve = .continuous
+        card.layer.masksToBounds = true
+        return card
+    }
 
     func animateTransition(using ctx: UIViewControllerContextTransitioning) {
         let container = ctx.containerView
-        guard let from = ctx.viewController(forKey: .from)?.view,
-              let to = ctx.viewController(forKey: .to)?.view else {
+        guard let fromVC = ctx.viewController(forKey: .from),
+              let toVC = ctx.viewController(forKey: .to) else {
             ctx.completeTransition(false)
             return
         }
         let width = container.bounds.width
         let duration = transitionDuration(using: ctx)
 
-        // The camera arrives from the LEFT, so the app it covers leaves to the RIGHT.
-        let cameraOffscreen = CGAffineTransform(translationX: -width, y: 0)
-        let appPushedAside = CGAffineTransform(translationX: width * Self.parallax, y: 0)
+        // Underneath, the camera only ever covers the last 30% of the distance. On top, the page
+        // being left travels the whole width.
+        let beneathStart = CGAffineTransform(translationX: -width * Self.parallax, y: 0)
+        let aboveOffscreen = CGAffineTransform(translationX: width, y: 0)
 
         if presenting {
-            // `to` is the camera. It is the only view that has to be placed: the app is already in
-            // the window and stays there (`.overFullScreen`), which is what lets it be moved.
-            to.frame = container.bounds
-            container.addSubview(to)
-            to.transform = cameraOffscreen
+            let camera = toVC.view!
+            camera.frame = container.bounds
+            container.addSubview(camera)
+            camera.transform = beneathStart
+
+            // Added AFTER the camera, so it sits above it.
+            let card = Self.makeCard(of: fromVC.view, bounds: container.bounds)
+            if let card { container.addSubview(card) }
+
             UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseInOut]) {
-                to.transform = .identity
-                from.transform = appPushedAside
+                camera.transform = .identity
+                card?.transform = aboveOffscreen
             } completion: { _ in
-                // ⚠️ THE APP IS PUT BACK STRAIGHT AWAY, AND IT IS COVERED WHEN THAT HAPPENS, so
-                // nothing is visible. Leaving a transform standing on the app's own root for as long
-                // as the camera is up would mean every coordinate under it is a lie — and the close
-                // below re-applies it for exactly the length of its own animation anyway.
-                from.transform = .identity
+                card?.removeFromSuperview()
                 ctx.completeTransition(!ctx.transitionWasCancelled)
             }
         } else {
-            // `from` is the camera, `to` is the app — still in the window, never removed.
-            to.transform = appPushedAside
+            let camera = fromVC.view!
+            // Coming back, the app arrives on top from the right and the camera slips away under it.
+            let card = Self.makeCard(of: toVC.view, bounds: container.bounds)
+            if let card {
+                container.addSubview(card)
+                card.transform = aboveOffscreen
+            }
             UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseInOut]) {
-                from.transform = cameraOffscreen
-                to.transform = .identity
+                camera.transform = beneathStart
+                card?.transform = .identity
             } completion: { _ in
-                to.transform = .identity
+                card?.removeFromSuperview()
+                camera.transform = .identity
                 ctx.completeTransition(!ctx.transitionWasCancelled)
             }
         }
@@ -90,11 +126,11 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
 
     func animationController(forPresented _: UIViewController, presenting _: UIViewController,
                              source _: UIViewController) -> UIViewControllerAnimatedTransitioning? {
-        StoryCameraPushAnimator(presenting: true)
+        StoryCameraSlideAnimator(presenting: true)
     }
 
     func animationController(forDismissed _: UIViewController) -> UIViewControllerAnimatedTransitioning? {
-        StoryCameraPushAnimator(presenting: false)
+        StoryCameraSlideAnimator(presenting: false)
     }
 }
 
@@ -109,9 +145,10 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
         let sheet = AddStorySheet(onPosted: { Task { await StoriesRepository.shared.load(force: true) } },
                                   onDismiss: { StoryCameraDoor.close() })
         let host = UIHostingController(rootView: sheet)
-        // ⚠️ `.overFullScreen`, NOT `.fullScreen`, AND THE ANIMATION DEPENDS ON IT. A `.fullScreen`
-        // presentation takes the presenting view out of the hierarchy, so there would be nothing left
-        // to slide aside — the app would simply vanish and the camera would arrive over nothing.
+        // ⚠️ `.overFullScreen`, NOT `.fullScreen`, AND THE CLOSING ANIMATION DEPENDS ON IT. A
+        // `.fullScreen` presentation takes the presenting view out of the hierarchy. On the way out
+        // the camera slides 30% to the left, and what is revealed in that strip is the real app
+        // sitting in the window — remove it and that strip is a black band for the whole animation.
         host.modalPresentationStyle = .overFullScreen
         host.transitioningDelegate = StoryCameraTransitionDelegate.shared
         // The camera paints its own black; without this the app shows through wherever it does not.
