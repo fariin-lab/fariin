@@ -100,17 +100,18 @@ struct VoiceMessageView: View {
     ///
     /// ⚠️ EVERY NUMBER LIVES HERE AND NOWHERE ELSE, so the pre-measure (which calls this) and the
     /// render can never disagree — that equality is what stops the bloom described above.
-    /// ⛔ 40, UP FROM 32 — owner, 2026-08-24, image 2, after he asked me to check the disc before
-    /// and after the redesign. The honest answer was that the redesign never touched it: it moved
-    /// the playhead and the speed pill and left this at 32. Measured off both crops at the same
-    /// scale, his reference draws the disc about a third of the bubble's height where ours is a
-    /// quarter — roughly 40pt against 32.
+    /// ⛔ 44, HIS NUMBER, GIVEN 2026-08-24 WITH THE DISC CIRCLED. It went 32 → 40 earlier the same
+    /// day (measured off his reference, which draws the disc about a third of the bubble's height
+    /// where ours was a quarter); he has now looked at 40 on the phone and asked for 44. It is also
+    /// Apple's minimum touch size, so the disc is finally its own tap target rather than relying on
+    /// the row around it.
     ///
-    /// ⚠️ IT IS NOW TALLER THAN THE WAVE (40 against 22), which is the arrangement in his picture:
-    /// the disc anchors the row and the wave is the quieter thing beside it. The row centres on the
-    /// disc, so nothing else moves, and `contentWidth` picks the change up on its own because it is
-    /// stated in terms of this constant.
-    static let discSize: CGFloat = 40
+    /// ⚠️ IT IS TALLER THAN THE WAVE (44 against 22), which is the arrangement in his picture: the
+    /// disc anchors the row and the wave is the quieter thing beside it. The row centres on the
+    /// disc, so nothing else moves, and BOTH `contentWidth` AND `contentHeight` pick the change up on
+    /// their own because both are stated in terms of this constant — which is the whole reason this
+    /// is a one-line change and not a re-measure of the bubble.
+    static let discSize: CGFloat = 44
     static let waveHeight: CGFloat = 22
     static let discGap: CGFloat = 8
     /// The speed pill's slot on the waveform's line, gap included — see `speedPill`. A STATED width
