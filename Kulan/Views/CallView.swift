@@ -863,6 +863,10 @@ struct FloatingCallWindow: View {
     /// must not survive the tab turning back into a card.
     @State private var tabPull: CGFloat = 0
 
+    /// The card's live drag, as a TRANSFORM. Zero except while a finger is down — see the drag's
+    /// `onChanged` for why the settled position and the moving one are kept apart.
+    @State private var dragLive: CGSize = .zero
+
     /// Ties the card and the tab together as one shape for the morph.
     @Namespace private var morph
     private static let morphID = "call.card.morph"
@@ -942,12 +946,29 @@ struct FloatingCallWindow: View {
                                 // Deliberately allowed PAST the edge by `overshoot`. The card sliding
                                 // partly off is the only warning that letting go will hide it — clamped
                                 // dead at the edge, hiding would happen out of nowhere.
-                                offset = CGSize(
+                                let target = CGSize(
                                     width: min(overshoot, max(maxLeft - overshoot, base.width + v.translation.width)),
                                     height: min(maxDown, max(0, base.height + v.translation.height))
                                 )
+                                // ⛔ THE LIVE DRAG IS A TRANSFORM, NOT LAYOUT, and that is the whole
+                                // reason this variable exists (owner, 2026-08-23: "when i drag and
+                                // moving the small card it makes shaking, looks something blocks").
+                                //
+                                // My own regression. Moving the card with PADDING fixed the zoom —
+                                // padding is real geometry, so the transition finally knew where the
+                                // card was — but padding is also a full LAYOUT PASS, and I was
+                                // running one per touch event. Sixty relayouts a second of a view
+                                // sitting over the whole screen is the stutter he is feeling.
+                                //
+                                // Both, then, each where it belongs: the settled position stays
+                                // padding, so the frame is honest at rest, which is the ONLY moment a
+                                // zoom or a morph ever reads it. The finger moves a transform, which
+                                // costs nothing and cannot stutter. On release the transform folds
+                                // back into the padding and returns to zero.
+                                dragLive = CGSize(width: target.width - base.width,
+                                                  height: target.height - base.height)
                             }
-                            .onEnded { _ in
+                            .onEnded { v in
                                 let (maxLeft, maxDown) = limits(geo.size)
                                 // ⛔ ONLY THE SIDE SNAPS. Height stays exactly where the finger left
                                 // it (owner, 2026-08-23: "only i can drag top left or top right,
@@ -958,22 +979,45 @@ struct FloatingCallWindow: View {
                                 // the reference app both do it this way: the edge is decided for you
                                 // because a card floating in open space is just in the way; the
                                 // height is yours because only you know what is underneath it.
-                                let y = min(maxDown, max(0, offset.height))
+                                // ⛔ WHERE THE THROW WAS GOING, not where the finger stopped. Read
+                                // out of Signal's own `animateDecelerationToVerticalEdge`: they take
+                                // the pan velocity, ignore anything under a threshold so a slow
+                                // release is not a throw at all, project where that speed would
+                                // carry the view, and land it on the nearest side at whatever height
+                                // the projection reached.
+                                //
+                                // `predictedEndTranslation` is SwiftUI's version of that same
+                                // projection, so a flick up-and-left lands top-left and a careful
+                                // drop stays exactly where it was let go. Without it the card simply
+                                // stopped dead under the finger, which is what makes a floating
+                                // window feel stuck to the glass rather than thrown.
+                                let thrown = CGSize(
+                                    width: base.width + v.predictedEndTranslation.width,
+                                    height: base.height + v.predictedEndTranslation.height
+                                )
+                                // The finger's real last position still decides the STASH, so shoving
+                                // it off the side stays a deliberate push rather than something a
+                                // fast flick can trigger by accident.
+                                let ended = CGSize(width: base.width + dragLive.width,
+                                                   height: base.height + dragLive.height)
+                                let y = min(maxDown, max(0, thrown.height))
                                 // Shoved far enough past a side → park it there as a tab.
-                                if offset.width > stashAt || offset.width < maxLeft - stashAt {
-                                    let x: CGFloat = offset.width > stashAt ? 0 : maxLeft
-                                    base = CGSize(width: x, height: y)
+                                if ended.width > stashAt || ended.width < maxLeft - stashAt {
+                                    let x: CGFloat = ended.width > stashAt ? 0 : maxLeft
                                     withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                                        offset = CGSize(width: x, height: y)
+                                        base = CGSize(width: x, height: y)
+                                        offset = base
+                                        dragLive = .zero   // fold the transform back into the layout
                                         call.cardStashed = true
                                     }
                                     return
                                 }
-                                let x: CGFloat = offset.width < maxLeft / 2 ? maxLeft : 0
+                                let x: CGFloat = thrown.width < maxLeft / 2 ? maxLeft : 0
                                 withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
-                                    offset = CGSize(width: x, height: y)
+                                    base = CGSize(width: x, height: y)
+                                    offset = base
+                                    dragLive = .zero
                                 }
-                                base = CGSize(width: x, height: y)
                             }
                     )
                     .onTapGesture {
@@ -999,8 +1043,9 @@ struct FloatingCallWindow: View {
                     // TOP-RIGHT is only the resting HOME (his 2026-08-23 rule: "most land top right,
                     // that's standard"), which is what zero offset means. The self-tile inside the
                     // call screen still lives bottom-right under his 2026-08-12 rule and has not moved.
-                    .padding(.top, insets.top + 8 + offset.height)
-                    .padding(.trailing, 12 - offset.width)
+                    .offset(dragLive)                       // the finger: a transform, costs nothing
+                    .padding(.top, insets.top + 8 + base.height)     // the settled position: real layout
+                    .padding(.trailing, 12 - base.width)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
         }
