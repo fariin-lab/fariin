@@ -111,7 +111,7 @@ struct VoiceMessageView: View {
     /// disc, so nothing else moves, and BOTH `contentWidth` AND `contentHeight` pick the change up on
     /// their own because both are stated in terms of this constant — which is the whole reason this
     /// is a one-line change and not a re-measure of the bubble.
-    static let discSize: CGFloat = 44
+    static let discSize: CGFloat = 42
     static let waveHeight: CGFloat = 22
     static let discGap: CGFloat = 8
     /// The speed pill's slot on the waveform's line, gap included — see `speedPill`. A STATED width
@@ -130,9 +130,16 @@ struct VoiceMessageView: View {
     /// 40, so the disc became the tallest thing and the bubble lost about fifteen points.
     ///
     /// A `minHeight` rather than a fixed one: it restores the old number without capping anything,
-    /// so a larger Dynamic Type caption can still grow the bubble the way it always could. Stated as
-    /// the sum it came from, so it follows the disc if that ever moves again.
-    static let contentHeight: CGFloat = discSize + 2 + 13
+    /// so a larger Dynamic Type caption can still grow the bubble the way it always could.
+    ///
+    /// ⛔ 55, HIS NUMBER, GIVEN 2026-08-24 ALONGSIDE THE 42 DISC. It used to be written as the sum it
+    /// came from (`discSize + 2 + 13`) so that it tracked the disc; he has now asked for the height
+    /// and the disc as two separate figures, so this is stated outright and no longer follows.
+    ///
+    /// ⚠️ Decoupling is safe here ONLY because this is a FLOOR. If the disc is ever made taller than
+    /// 55 the bubble simply grows to the disc — nothing is clipped. It would not be safe if this were
+    /// a fixed height, and it must not be turned into one.
+    static let contentHeight: CGFloat = 55
 
     /// Everything to the right of the disc: the wave, the pill, and the caption line under them.
     static func columnWidth(for message: Message) -> CGFloat {
