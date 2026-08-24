@@ -47,9 +47,24 @@ final class StoryCameraSlideAnimator: NSObject, UIViewControllerAnimatedTransiti
     /// the thing on top, it is the thing that carries a corner radius, exactly as in their shot.
     private static let parallax: CGFloat = 0.30
 
-    /// The radius on the leaving page. One number, stated once, so it is a single edit if he wants it
-    /// tighter or rounder.
-    private static let cardRadius: CGFloat = 24
+    /// ⛔ THE SYSTEM PICKS THE RADIUS, NOT US — owner, 2026-08-24: "do not hardcode 24 or another
+    /// fixed radius; let iOS decide it per device so the transition matches the system on every
+    /// iPhone."
+    ///
+    /// ⚠️ THE DEVICE'S DISPLAY RADIUS IS NOT PUBLIC. UIKit rounds a pushed screen to the physical
+    /// corner of the display, but that number is reachable only through a private `UIScreen` key, and
+    /// this app goes to App Store review. So it is not read — it is DELEGATED.
+    ///
+    /// `containerConcentric` is iOS 26's answer to exactly this question: the corner resolves against
+    /// whatever container the view is in, which here is the screen, so iOS supplies the same radius it
+    /// uses for its own transitions and keeps supplying the right one on hardware that does not exist
+    /// yet. Nothing to maintain and no device table to go stale.
+    ///
+    /// ⚠️ The fallback is NOT a guess at the display radius, and deliberately so. On iOS 17–18 there
+    /// is no way to ask, and a stated number would be right on one phone and wrong on the rest — so
+    /// the older path takes a plain modest corner that reads as a card without pretending to match
+    /// the hardware.
+    private static let legacyCardRadius: CGFloat = 12
 
     /// ⚠️ THE PAGE THAT LEAVES IS A SNAPSHOT, AND IT HAS TO BE. The app's real view lives in the
     /// window, NOT in the transition's container, so it cannot be raised above the camera and cannot
@@ -59,9 +74,13 @@ final class StoryCameraSlideAnimator: NSObject, UIViewControllerAnimatedTransiti
     private static func makeCard(of view: UIView, bounds: CGRect) -> UIView? {
         guard let card = view.snapshotView(afterScreenUpdates: false) else { return nil }
         card.frame = bounds
-        card.layer.cornerRadius = cardRadius
-        card.layer.cornerCurve = .continuous
         card.layer.masksToBounds = true
+        if #available(iOS 26.0, *) {
+            card.cornerConfiguration = .containerConcentric()
+        } else {
+            card.layer.cornerRadius = legacyCardRadius
+            card.layer.cornerCurve = .continuous
+        }
         return card
     }
 
