@@ -336,123 +336,84 @@ struct StoryMoreMenu: UIViewRepresentable {
             .joined(separator: "\u{1F}")
     }
 
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+    /// THE BUTTON SAYS WHEN ITS OWN MENU OPENS AND CLOSES, BECAUSE UIKIT ALREADY TELLS IT.
+    ///
+    /// ⛔ HIS FOURTH REPORT ON THIS MENU, 2026-08-24: "when I open the menu the story is still
+    /// running." Three attempts before this one INFERRED the moment — from `.menuActionTriggered`,
+    /// from `.touchDown`, from a long-press recognizer, and released it by watching which UIWindow
+    /// became key. Every one of them was built on a sentence in this file that was simply false:
+    /// that a `UIButton` menu has no open/close callback.
+    ///
+    /// ⚠️ IT HAS TWO, THEY ARE PUBLIC, AND THEY ARE WHAT THE REFERENCE APP USES. `UIButton` conforms
+    /// to `UIContextMenuInteractionDelegate`, so a subclass can override the two moments outright
+    /// (their `ContextMenuButton` does exactly this and nothing else):
+    ///
+    ///   willDisplayMenuFor  → the menu is about to appear   → pause
+    ///   willEndFor          → the menu is about to go away   → resume
+    ///
+    /// No touches, no windows, no timing. The inference is all deleted with this: guessing at a
+    /// moment UIKit announces is what made this take four rounds.
+    final class StoryMenuButton: UIButton {
+        var onWillDisplayMenu: () -> Void = {}
+        var onDidDismissMenu: () -> Void = {}
+
+        override func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                             willDisplayMenuFor configuration: UIContextMenuConfiguration,
+                                             animator: UIContextMenuInteractionAnimating?) {
+            super.contextMenuInteraction(interaction, willDisplayMenuFor: configuration, animator: animator)
+            onWillDisplayMenu()
+        }
+
+        override func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                             willEndFor configuration: UIContextMenuConfiguration,
+                                             animator: UIContextMenuInteractionAnimating?) {
+            super.contextMenuInteraction(interaction, willEndFor: configuration, animator: animator)
+            onDidDismissMenu()
+        }
+    }
+
+    final class Coordinator: NSObject {
         var signature: String?
-        /// The button this menu belongs to, so the deferred element can pause without a view passed
-        /// in — it is asked by UIKit at presentation time, not by anything holding the button.
-        weak var hostButton: UIButton?
         /// The pause this menu owns, so it is released exactly once and only by the menu that took it.
         var pausedForMenu = false
-        var closeObservers: [NSObjectProtocol] = []
 
         /// ⚠️ THE STORY STOPS WHILE THE DROPDOWN IS UP — his ask, and the note on the host's own
         /// `pauseStory` handler already said this was meant to happen ("Host shows/hides a sheet over
         /// the viewer (viewers list, share, menu)"). The menu was the one of those three that never
         /// posted it, so the bar kept running and the story kept advancing behind an open menu.
-        func pause(host: UIView) {
+        ///
+        /// No new pause system, which was his condition: this posts the same `.pauseStory` the
+        /// viewers sheet, the share sheet and the dismiss drag post, and the host's `hostPause` gates
+        /// the progress timer and the video mode together.
+        func pause() {
             guard !pausedForMenu else { return }
             pausedForMenu = true
             NotificationCenter.default.post(name: .pauseStory, object: nil)
-            // ⚠️ FILTERED TO OUR OWN WINDOW, AND THE FIRST VERSION OF THIS RELEASED ITSELF INSTANTLY.
-            //
-            // His second report on the same menu: "Still Video is running is not pausing". The pause
-            // was taken and then given straight back, microseconds later, because this listened for
-            // ANY window becoming key — and the very next thing that happens after a menu is asked
-            // for is the MENU'S OWN window becoming key. It heard its own opening as a closing.
-            //
-            // There is still no "menu dismissed" callback on a `UIButton` menu, and overriding the
-            // private context-menu delegate is not worth a story that freezes when a future iOS stops
-            // calling it. But the window traffic does say it plainly once you read WHICH window:
-            //
-            //   · menu opens  → the MENU's window becomes key. Not ours, so it is ignored.
-            //   · menu closes → OURS becomes key again. That is the release.
-            //
-            // `didBecomeHidden` is kept for the same moment arriving the other way round, filtered
-            // the other way: the window being hidden at the end is the menu's, never ours.
-            //
-            // ⚠️ AND IF NEITHER EVER ARRIVES, NOTHING IS STRANDED. `tapNextStory` and
-            // `tapPreviousStory` clear the host pause themselves — a finger on the story is proof no
-            // menu is over it. That belt is what makes this safe to do at all.
-            let ours = host.window
-            let onKey: (Notification) -> Void = { [weak self] note in
-                guard (note.object as? UIWindow) === ours else { return }
-                self?.resume()
-            }
-            let onHidden: (Notification) -> Void = { [weak self] note in
-                guard let w = note.object as? UIWindow, w !== ours else { return }
-                self?.resume()
-            }
-            closeObservers.append(NotificationCenter.default.addObserver(
-                forName: UIWindow.didBecomeKeyNotification, object: nil, queue: .main, using: onKey))
-            closeObservers.append(NotificationCenter.default.addObserver(
-                forName: UIWindow.didBecomeHiddenNotification, object: nil, queue: .main, using: onHidden))
         }
-
-        /// The finger has landed on the "…" — see the recognizer in `makeUIView`. Only `.began` is
-        /// acted on: the story must stop as the menu comes up, and every way it goes away again is
-        /// already covered.
-        @objc func pressBegan(_ g: UILongPressGestureRecognizer) {
-            guard g.state == .began, let host = g.view else { return }
-            pause(host: host)
-        }
-
-        /// Never exclusive: the button's own interaction has to keep working, so this recognizer
-        /// runs beside whatever else claims the touch rather than instead of it.
-        func gestureRecognizer(_ g: UIGestureRecognizer,
-                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 
         func resume() {
             guard pausedForMenu else { return }
             pausedForMenu = false
-            closeObservers.forEach { NotificationCenter.default.removeObserver($0) }
-            closeObservers.removeAll()
             NotificationCenter.default.post(name: .resumeStory, object: nil)
         }
 
+        /// A menu still up when this view goes away must not strand the pause.
         deinit { resume() }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeUIView(context: Context) -> UIButton {
-        let b = UIButton(type: .custom)
+    func makeUIView(context: Context) -> StoryMenuButton {
+        let b = StoryMenuButton(type: .custom)
         b.showsMenuAsPrimaryAction = true
         b.backgroundColor = .clear
-        // ⚠️ TWO DOORS ONTO "THE MENU IS COMING UP", BECAUSE ONLY ONE OF THEM IS GUARANTEED.
-        // `.menuActionTriggered` is the documented event for a button whose primary action is its
-        // menu; `.touchDown` fires as the finger lands, which is a frame or two earlier and covers
-        // the case where the first event does not arrive. `pause()` is idempotent, so both firing
-        // costs nothing. The two outside-touch events undo a `.touchDown` that never became a menu.
+        // ⛔ THE MENU'S OWN TWO MOMENTS, AND NOTHING ELSE — see `StoryMenuButton`. Everything that
+        // used to be here was an attempt to guess these: control events that a menu button need not
+        // send, a zero-delay long-press recognizer, and window-key notifications to guess the close.
+        // All deleted. UIKit announces both moments to the button itself.
         let coordinator = context.coordinator
-        b.addAction(UIAction { [weak b] _ in if let b { coordinator.pause(host: b) } },
-                    for: .menuActionTriggered)
-        b.addAction(UIAction { [weak b] _ in if let b { coordinator.pause(host: b) } },
-                    for: .touchDown)
-        b.addAction(UIAction { _ in coordinator.resume() }, for: .touchUpOutside)
-        b.addAction(UIAction { _ in coordinator.resume() }, for: .touchCancel)
-        // ⛔ A THIRD DOOR, AND IT IS THE ONE THAT CANNOT BE SWALLOWED — owner, 2026-08-24, third
-        // report on this menu: "when I click the 3 dot menu the story is still running".
-        //
-        // ⚠️ BOTH DOORS ABOVE ARE CONTROL EVENTS, AND A MENU BUTTON NEED NOT SEND EITHER. With
-        // `showsMenuAsPrimaryAction`, the touch is claimed by the button's own context-menu
-        // interaction, which presents the menu without necessarily running the control-event path —
-        // so on a system where that is what happens, neither `.menuActionTriggered` nor `.touchDown`
-        // arrives and the pause is simply never taken. That is consistent with the report: not a
-        // pause released too early (the last fix), a pause never started.
-        //
-        // A recognizer sees the touch before any of that is decided. `minimumPressDuration = 0` makes
-        // it fire on contact, `cancelsTouchesInView = false` means the button still gets the touch
-        // exactly as before, and recognising alongside everything else means it cannot block the
-        // menu from opening. It only ever calls `pause`, which is idempotent — releasing stays with
-        // the window notifications and the item actions, which were never the failing half.
-        let press = UILongPressGestureRecognizer(target: context.coordinator,
-                                                 action: #selector(Coordinator.pressBegan(_:)))
-        press.minimumPressDuration = 0
-        press.cancelsTouchesInView = false
-        press.delaysTouchesBegan = false
-        press.delaysTouchesEnded = false
-        press.delegate = context.coordinator
-        b.addGestureRecognizer(press)
+        b.onWillDisplayMenu = { coordinator.pause() }
+        b.onDidDismissMenu = { coordinator.resume() }
         // ⚠️ ALL FOUR PRIORITIES DROPPED, AND IT IS THE TAP TARGET THAT DEPENDS ON IT. A
         // `UIButton` with no title and no image has a tiny intrinsic size, and SwiftUI sizes a
         // representable from that unless the view says it will take whatever it is given — so the
@@ -462,13 +423,12 @@ struct StoryMoreMenu: UIViewRepresentable {
             b.setContentHuggingPriority(.defaultLow, for: axis)
             b.setContentCompressionResistancePriority(.defaultLow, for: axis)
         }
-        context.coordinator.hostButton = b
         b.menu = menu(context.coordinator)
         context.coordinator.signature = signature
         return b
     }
 
-    func updateUIView(_ b: UIButton, context: Context) {
+    func updateUIView(_ b: StoryMenuButton, context: Context) {
         // ⚠️ ONLY WHEN THE MENU HAS ACTUALLY CHANGED, AND THE GUARD IS THE FIX. A `UIMenu` cannot
         // have its children edited in place, so a genuine change still means a fresh one — but this
         // ran on every re-render, and the story page re-renders twenty times a second while the
@@ -483,28 +443,11 @@ struct StoryMoreMenu: UIViewRepresentable {
     }
 
     private func menu(_ coordinator: Coordinator) -> UIMenu {
-        // ⛔ THE MENU ITSELF SAYS WHEN IT IS OPENING — owner, 2026-08-24: pause the instant the menu
-        // appears, resume only once it is dismissed, for text, photo and video alike.
-        //
-        // A deferred element's provider runs when UIKit is BUILDING the menu for presentation, which
-        // is the one moment that is guaranteed by the API rather than inferred from a touch. It
-        // returns no elements, so it draws nothing; it exists only to be asked. `.uncached` is what
-        // makes it run on EVERY presentation instead of once.
-        //
-        // This is the reliable half of the open signal and the recognizer in `makeUIView` is the
-        // early half — that one fires on contact, a frame or two sooner, and covers a press that
-        // never becomes a menu (released by `.touchUpOutside`/`.touchCancel`). `pause` is idempotent,
-        // so having both costs nothing and neither can be the single point of failure.
-        //
-        // ⚠️ NO NEW PAUSE SYSTEM, which was his condition. This posts the same `.pauseStory` the
-        // viewers sheet, the share sheet and the dismiss drag all post, and the host's `hostPause`
-        // gates the progress timer and the video mode together — so a text story's bar freezes and a
-        // video's playback stops on the one flag, and both come back on `.resumeStory`.
-        let opening = UIDeferredMenuElement.uncached { [weak coordinator] completion in
-            if let host = coordinator?.hostButton { coordinator?.pause(host: host) }
-            completion([])
-        }
-        return UIMenu(title: "", children: [opening] + items.map { item in
+        // ⛔ NO OPENING ELEMENT HERE ANY MORE. A `UIDeferredMenuElement.uncached` used to sit at the
+        // head of this menu purely to be ASKED, so that being asked could stand in for "the menu is
+        // opening". That was the third guess at a moment UIKit reports directly — see
+        // `StoryMenuButton`, which overrides the two callbacks the button already receives.
+        return UIMenu(title: "", children: items.map { item in
             // The app's own artwork when the entry names one, the SF Symbol otherwise. Template
             // rendering so a `UIMenu` tints it exactly like the symbols around it; without it the
             // file's own colour is drawn and the row looks like a different app's.
