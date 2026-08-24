@@ -2473,6 +2473,21 @@ struct ThreadView: View {
               m.replyTo == nil, m.reactions.isEmpty,
               !m.isFeatureMarker, !m.viewOnce, !m.forwarded,           // Forwarded tag is SwiftUI-only
               !m.isImage, !m.isVideo, !m.isGif, !m.isFile, !m.isAudio, !m.isAlbum, !m.isCall,
+              // ⛔ A SYSTEM NOTICE IS NOT A MESSAGE — owner, 2026-08-24: turning on disappearing
+              // messages posted "adnan abdi turned on disappearing messages (5 minutes)" as a real
+              // blue bubble with delivery ticks, where it should read like the pin notice.
+              //
+              // ⚠️ NOTHING WAS WRONG WITH THE WRITE OR THE RENDERER. `setDisappear` writes
+              // `type: "system"`, and `rowView` routes `isSystem` to `systemRow`, which is the same
+              // centred pill the pin notice uses. This guard was the whole bug: it lists every kind
+              // that must stay in SwiftUI and never learned about system rows, so a plain-text
+              // system notice matched "delivered 1:1 text" and took the UIKit bubble path — which
+              // draws a bubble and a tick and knows nothing about pills.
+              //
+              // ⚠️ IT ONLY SHOWS IN A CHAT WITH NO CUSTOM CHAT COLOUR, because `chatColorSpec == nil`
+              // in this function's own guard sends every row to SwiftUI when one is set. That is why
+              // it appeared now and not while his test chat was red.
+              !m.isSystem, m.pinNotice == nil,
               m.mentions.isEmpty else { return nil }
         let text = m.safeText
         guard !text.isEmpty else { return nil }
