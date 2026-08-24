@@ -5284,9 +5284,16 @@ struct ThreadView: View {
                 recordStateButton
             }
             HStack(spacing: 10) {
-                Button { cancelRecording() } label: {
-                    Image(systemName: "trash.fill").font(.system(size: 18)).foregroundStyle(.red)
-                        .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true)
+                // ⛔ THE BIN BELONGS TO THE REVIEW, NOT TO THE RECORDING — owner, 2026-08-24, image 1:
+                // while it is still recording there is no trash button and the pill runs the full
+                // width, with a red Cancel in the middle of it doing that job instead. The bin comes
+                // back the moment it pauses, which is his image 2.
+                if reviewingNote {
+                    Button { cancelRecording() } label: {
+                        Image(systemName: "trash.fill").font(.system(size: 18)).foregroundStyle(.red)
+                            .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true)
+                    }
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
                 // THE STRIP: the wave owns whatever the two buttons leave.
                 HStack(spacing: 8) {
@@ -5294,9 +5301,12 @@ struct ThreadView: View {
                         // REVIEWING: play it back. The waveform is the finished one, not the live meter —
                         // same component the sent bubble uses, so what you check is what they will see.
                         Button { togglePreview() } label: {
+                            // Smaller than it was (owner 2026-08-24, image 2: "play icon add small
+                            // size"). A bare glyph, no disc — the sent bubble's disc is a different
+                            // thing and this one lives inside the pill.
                             Image(systemName: previewPlaying ? "pause.fill" : "play.fill")
-                                .font(.system(size: 15)).foregroundStyle(Theme.accent(dark))
-                                .frame(width: 22, height: 22)
+                                .font(.system(size: 13)).foregroundStyle(Theme.accent(dark))
+                                .frame(width: 18, height: 18)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -5314,10 +5324,24 @@ struct ThreadView: View {
                         Text(timeString(recorder.elapsed)).font(.system(size: 15).monospacedDigit())
                             .foregroundStyle(.secondary)
                     } else {
-                        // RECORDING: timer · live wave, the reference's order.
+                        // ⛔ RECORDING: mic · timer · CANCEL · the "1" — owner's image 1, replacing the
+                        // live waveform that used to fill this space. The wave was showing the level
+                        // of something you cannot hear yet and cannot act on; Cancel is the one thing
+                        // you might actually want mid-recording, and putting it here is what lets the
+                        // bin leave the row entirely. The finished waveform still appears on pause,
+                        // where it is a thing you can scrub.
+                        Image(systemName: "mic.fill")
+                            .font(.system(size: 17)).foregroundStyle(.red)
+                            .symbolEffect(.pulse, options: .repeating)
                         RecordTimerText(recorder: recorder)
-                        RecordWaveform(recorder: recorder, color: Theme.accent(dark))
-                            .frame(maxWidth: .infinity)
+                        Button { cancelRecording() } label: {
+                            Text("Cancel")
+                                .font(.system(size: 17))
+                                .foregroundStyle(.red)
+                                .frame(maxWidth: .infinity)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                     }
                     // ONE-TIME LISTEN — the "1" at the strip's end, both states, fill-when-armed like
                     // the photo picker's badge. Arming it flashes the little confirmation over the bar.
