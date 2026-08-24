@@ -80,7 +80,11 @@ struct VoiceMessageView: View {
     /// duration-deterministic, so the bloom rule (pre-measure == render, always) holds for free.
     /// The `message` parameter stays: every call site already passes it, and the day this becomes
     /// per-note again the signature will not have to change back.
-    static func waveWidth(for message: Message) -> CGFloat { 170 }
+    /// ⛔ 112, DOWN FROM 170 — owner, 2026-08-24, image 2. The speed pill moved onto this line, and
+    /// in his reference the bubble does not get wider to make room for it: the wave gives up the
+    /// space instead. 32 + 8 + 112 + 8 + 42 = 202, against the 210 the old disc-plus-wave came to,
+    /// so the bubble keeps the width he already signed off.
+    static func waveWidth(for message: Message) -> CGFloat { 112 }
     /// COMPACT, 2026-08-13, on his side-by-side ("make it like the second one… ours is bigger and
     /// wider"). Three things were making it bigger and all three come down here:
     ///
@@ -99,8 +103,14 @@ struct VoiceMessageView: View {
     static let discSize: CGFloat = 32
     static let waveHeight: CGFloat = 22
     static let discGap: CGFloat = 8
+    /// The speed pill's slot on the waveform's line, gap included — see `speedPill`. A STATED width
+    /// rather than a measured one, for the reason every number in this block is stated: the
+    /// collection view pre-measures the cell through `contentWidth`, and a size that resolves later
+    /// than the measurement is exactly the bloom the comments in `bottomLine` describe. "1.5×" is
+    /// the widest label at 11pt bold and fits inside this with its capsule padding.
+    static let speedSlot: CGFloat = 42
     static func contentWidth(for message: Message) -> CGFloat {
-        discSize + discGap + waveWidth(for: message)
+        discSize + discGap + waveWidth(for: message) + discGap + speedSlot
     }
 
     /// ⚠️ THE PLAYER IS NOT IN HERE ANY MORE, AND THAT IS THE WHOLE POINT.
@@ -181,6 +191,10 @@ struct VoiceMessageView: View {
                                  engine.setScrubbing(s); VoiceScrubState.active = s; onScrub(s)
                              })
                     .frame(width: Self.waveWidth(for: message), height: Self.waveHeight)
+                // ⛔ AT THE END OF THE WAVE, ON ITS OWN LINE — owner, 2026-08-24, image 2. It used to
+                // sit in the text row beside the duration; there it competed with the clock for the
+                // same line and left the wave stopping short of nothing in particular.
+                speedPill
             }
             bottomLine
         }
@@ -296,28 +310,36 @@ struct VoiceMessageView: View {
     /// bloom because their metaRow is an .overlay, which doesn't affect size". So: no Spacer, no
     /// flexible child, the row is pinned to the known content width and the clock is laid over its
     /// trailing edge.
+    /// The speed toggle, on the WAVEFORM's line and hard against its trailing edge (owner
+    /// 2026-08-24, image 2). Shown ALWAYS, never gated on the player existing: the cell is
+    /// pre-measured before playback and anything that appears later grows the content past the
+    /// measured height and eats the gap to the next bubble — the bloom `bottomLine` documents.
+    /// Tap gesture, not a Button, same reason as the play disc.
+    private var speedPill: some View {
+        Text(rateLabel).font(.system(size: 11, weight: .bold)).foregroundStyle(tint)
+            .padding(.horizontal, 7).padding(.vertical, 2)
+            .background(tint.opacity(0.16), in: Capsule())
+            .contentShape(Capsule())
+            .onTapGesture { cycleRate() }
+            // ⚠️ A FIXED SLOT WITH THE CAPSULE HUGGING INSIDE IT. The label changes width as the
+            // rate cycles (1× → 1.5× → 2×), and a capsule that grows would push the whole row past
+            // the pre-measured `contentWidth` — the same bloom the notes in `bottomLine` describe,
+            // reached by a different door. The slot is stated, the capsule stays snug.
+            .frame(width: Self.speedSlot, alignment: .trailing)
+    }
+
     private var bottomLine: some View {
         HStack(spacing: 8) {
             Text(durationText).font(.caption2).foregroundStyle(tint.opacity(0.8))
+            // ⛔ THE SPEED PILL IS NOT IN THIS ROW ANY MORE — owner, 2026-08-24, image 2: it sits at
+            // the END OF THE WAVEFORM, on the wave's own line, not under the duration. See
+            // `waveRow`. It is still rendered unconditionally up there, so the pre-measure and the
+            // played render stay identical and the bloom this row's comments describe cannot return.
             // "Not heard yet" dot (a blue mic indicator, our way) — fades once played.
             if unheard {
                 Circle().fill(Theme.accent(dark)).frame(width: 7, height: 7)
                     .transition(.opacity)
             }
-            // Speed toggle (1× / 1.5× / 2×) shown ALWAYS — not gated on `player != nil`.
-            // ROOT CAUSE of "the bubble changes size once played / spacing between notes disappears"
-            // (user clue: "happens when the x1 tab appears"): the cell is PRE-MEASURED by the
-            // collection view while player == nil (no toggle), but the toggle capsule is TALLER than
-            // the plain duration text, so when it appeared on first play the content grew past the
-            // measured cell height and overflowed into the next bubble (the "spacing disappears").
-            // Rendering it unconditionally makes the pre-measure and the played render IDENTICAL, so
-            // nothing shifts. Before load it simply pre-selects the rate cycleRate() applies on play.
-            // Tap gesture, not a Button — same reason as the play disc above.
-            Text(rateLabel).font(.system(size: 10, weight: .bold)).foregroundStyle(tint)
-                .padding(.horizontal, 5).padding(.vertical, 1)
-                .background(tint.opacity(0.16), in: Capsule())
-                .contentShape(Capsule())
-                .onTapGesture { cycleRate() }
             // THEY HEARD IT. On my own notes only, and only in a chat — this is the thing the reference app says
             // with a blue microphone, and the one voice signal we sent nothing for at all.
             //
@@ -499,13 +521,19 @@ struct WaveformBars: View {
             .overlay(alignment: .leading) {
                 let w = max(1, geo.size.width)
                 let sx = w * CGFloat(max(0, min(1, progress)))
-                // Solid dot in the played colour, like the reference app's. A soft shadow keeps it visible
-                // whatever the bubble colour is (white dot on a light custom bubble, etc).
-                Circle()
+                // ⛔ A FLAT CAPPED LINE, NOT A ROUND KNOB — owner, 2026-08-24, image 2. The dot sat
+                // proud of the bar row and pulled the eye to itself; his reference marks the spot
+                // with a thin vertical rule the same height as the tallest bar, so the playhead
+                // reads as part of the waveform instead of as a control parked on top of it.
+                //
+                // ⚠️ The 40pt box stays. It was never the dot's touch area — the knob has had
+                // `allowsHitTesting(false)` since the scrubbing moved to the waveform gesture — it
+                // is what centres the mark on `sx` via the -20 offset, and the note below explains
+                // why the gesture must not come back here.
+                Capsule()
                     .fill(played)
-                    .shadow(color: .black.opacity(0.28), radius: 1.5, y: 0.5)
-                    .frame(width: 13, height: 13)
-                    .frame(width: 40, height: 40)      // generous touch area around a small dot
+                    .frame(width: 2.5, height: Self.waveHeight)
+                    .frame(width: 40, height: 40)
                     .offset(x: sx - 20)
                     // VISUAL ONLY. This used to carry its own DragGesture(minimumDistance: 0) behind a
                     // .highPriorityGesture — which pre-empts everything, so a 40x40 patch of every voice
