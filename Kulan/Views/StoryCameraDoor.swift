@@ -216,9 +216,23 @@ final class StoryCameraTransitionDelegate: NSObject, UIViewControllerTransitioni
         top.present(host, animated: true)
     }
 
+    /// ⛔ DISMISS THE HOST, NOT WHATEVER THE HOST IS PRESENTING — owner, 2026-08-25: "when I upload
+    /// story, [after] post story it's showing the camera page again".
+    ///
+    /// ⚠️ `dismiss(animated:)` TAKES DOWN THE RECEIVER'S CHILD, NOT THE RECEIVER. A controller with
+    /// something presented dismisses THAT; only a controller presenting nothing forwards the call to
+    /// its own presenter. The story editor is a `fullScreenCover` raised FROM this host (see
+    /// `AddStorySheet`), so at the moment a story is posted the host has a child — and this line
+    /// dismissed the EDITOR and left the camera standing. The camera he sees is not a new screen
+    /// being shown; it is the old one never being taken away.
+    ///
+    /// Asking the PRESENTER removes the ambiguity: dismissing the host takes everything the host
+    /// raised down with it, in one animation, whether or not an editor is open. The nil-coalesce
+    /// keeps the old behaviour for the case the door is ever used with nothing presenting it.
     static func close() {
-        presented?.dismiss(animated: true)
+        guard let host = presented else { return }
         presented = nil
+        (host.presentingViewController ?? host).dismiss(animated: true)
     }
 
     /// Present on whatever is actually on top — presenting on a controller that is itself covered
