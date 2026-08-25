@@ -3201,11 +3201,11 @@ struct ThreadView: View {
                 }
                 .padding(.horizontal, 6)
                 .frame(height: Self.attachBarHeight)
-                // ⛔ THEIR BLUR, NOT OUR GLASS — owner, 2026-08-25, after reading their attachment
-                // panel next to ours. Their panel is a stripped `UIBlurEffect` with a translucent
-                // wash, not a Liquid Glass lens; see `PanelBlur` for what "stripped" means and why
-                // the difference is visible rather than academic.
-                .panelBlur(Capsule(), dark: dark)
+                // ⛔ APPLE'S GLASS ON 26; THEIR BLUR ONLY ON 27 — owner, 2026-08-25. On 26 this is
+                // still `liquidGlass(Capsule())` and nothing about it has changed. See
+                // `attachPanelSurface` for why the split exists and `PanelBlur` for what the 27 side
+                // actually is.
+                .attachPanelSurface(Capsule(), dark: dark)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)

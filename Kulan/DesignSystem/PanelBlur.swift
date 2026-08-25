@@ -114,4 +114,30 @@ extension View {
     func panelBlur(_ shape: some Shape, dark: Bool) -> some View {
         background { PanelBlur(dark: dark).clipShape(shape) }
     }
+
+    /// ⛔ GLASS ON 26, THE PORTED BLUR ON 27 — owner, 2026-08-25: "do not remove Apple's native
+    /// Liquid Glass… it works well for users on iOS 26. Only use the custom blur for users on iOS 27,
+    /// since Apple has changed the blur behaviour in 27 for the bottom bar and those areas."
+    ///
+    /// So the blur is a REPAIR for a specific OS, not a replacement for the material. On 26 nothing
+    /// about these bars changes — same `glassEffect`, same `interactive` flag, same shape — and the
+    /// port only takes over where the system stopped doing the job.
+    ///
+    /// ⚠️ `#available(iOS 27, *)` COMPILES AGAINST THE 26 SDK. Availability versions are just
+    /// numbers to the compiler; it does not need an SDK that knows 27 to emit the runtime check. The
+    /// deployment target is 26.0, so this is a true two-way branch rather than a check that can only
+    /// ever be false.
+    ///
+    /// ⚠️ ONE PLACE, and it has to stay one place. The whole point of the split is that a future
+    /// session can find every bar affected by the 27 change by finding the callers of this — two
+    /// call sites each carrying their own `#available` is how one of them gets fixed and the other
+    /// does not.
+    @ViewBuilder
+    func attachPanelSurface(_ shape: some Shape, dark: Bool, interactive: Bool = false) -> some View {
+        if #available(iOS 27.0, *) {
+            panelBlur(shape, dark: dark)
+        } else {
+            liquidGlass(shape, interactive: interactive)
+        }
+    }
 }

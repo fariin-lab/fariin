@@ -312,10 +312,11 @@ struct AttachRecentsStrip: View {
                 }
             }
             .padding(.leading, 16).padding(.trailing, 4).frame(minHeight: 40)
-            // ⛔ THEIR BLUR, NOT OUR GLASS — owner, 2026-08-25, same call as the attach bar above it:
-            // the two bars share a sheet, so they have to share a material. Shape and 23pt radius are
-            // untouched; only what fills them changed. See `PanelBlur`.
-            .panelBlur(RoundedRectangle(cornerRadius: 23, style: .continuous), dark: colorScheme == .dark)
+            // ⛔ APPLE'S GLASS ON 26; THEIR BLUR ONLY ON 27 — owner, 2026-08-25, same split as the
+            // attach bar: the two bars share a sheet, so they have to share a material on both OSes.
+            // `interactive: true` is carried through, so the 26 path is byte-for-byte what it was.
+            .attachPanelSurface(RoundedRectangle(cornerRadius: 23, style: .continuous),
+                                dark: colorScheme == .dark, interactive: true)
             Button { sendSelected() } label: {
                 // Match the main composer send: WHITE arrow on a blue-tinted glass circle (was a blue
                 // arrow on clear glass, which read as a different, washed-out button).
