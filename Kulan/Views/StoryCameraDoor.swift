@@ -102,28 +102,76 @@ final class StoryCameraSlideAnimator: NSObject, UIViewControllerAnimatedTransiti
     /// turn, so whether a layout pass happened first was down to timing — which is exactly what
     /// "sometimes it works" looks like from the outside. The caller forces that pass now, before any
     /// animation is set up.
-    private static func makeCard(of view: UIView, bounds: CGRect) -> UIView? {
+    /// ⛔ FOURTH ATTEMPT, AND THE FIRST THREE ALL SHARE ONE MISTAKE — owner, 2026-08-25, still square
+    /// on opening after three fixes shipped: "deep research that bug".
+    ///
+    /// ⚠️ EVERY PREVIOUS FIX TRIED TO MAKE `containerConcentric` RESOLVE **DURING** THE TRANSITION,
+    /// and each one had a plausible story: set it on a plain view instead of the snapshot, force a
+    /// layout pass, give the container a radius too, start the layout pass at the window. The stories
+    /// were plausible and the bug did not move, three times. That is the signal to stop diagnosing
+    /// the resolution and stop depending on it.
+    ///
+    /// The property is a QUESTION asked of a live view hierarchy: "what is my container's corner?"
+    /// Inside a `.overFullScreen` presentation's transition container, on the way in, nothing in that
+    /// chain has an answer, so it answers zero — and zero is square. On the way out UIKit's own
+    /// dismissal container happens to carry a radius, so the same line of code returns a real number.
+    /// One expression, two results, decided by scaffolding nobody in this file owns. It was never
+    /// going to be made reliable by asking it more carefully.
+    ///
+    /// ⚠️ SO THE NUMBER IS RESOLVED ONCE, SOMEWHERE IT DOES WORK, AND REUSED. `displayCorner(in:)`
+    /// puts a hidden probe view directly in the WINDOW — the one container iOS does resolve to the
+    /// physical display corner, which is the documented purpose of the API — reads the number it
+    /// resolves to, throws the probe away and caches it. Both directions then paint the SAME
+    /// concrete radius, and neither depends on what the transition container happens to be.
+    ///
+    /// This still honours his original rule: the value is iOS's own answer for this device, not a
+    /// number typed here, and it keeps being right on hardware that does not exist yet. What changed
+    /// is only WHERE it is asked — in the window, where the question has an answer, instead of in a
+    /// transition container, where it does not.
+    private static func makeCard(of view: UIView, bounds: CGRect, radius: CGFloat) -> UIView? {
         guard let snapshot = view.snapshotView(afterScreenUpdates: false) else { return nil }
         let card = UIView(frame: bounds)
+        card.layer.cornerRadius = radius
+        card.layer.cornerCurve = .continuous
         card.layer.masksToBounds = true
         snapshot.frame = card.bounds
         snapshot.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         card.addSubview(snapshot)
-        if #available(iOS 26.0, *) {
-            // ⚠️ THE SHAPE OF THIS CALL IS EASY TO GET WRONG AND THE FIRST ATTEMPT DID. The radius
-            // and the configuration are two different types: `containerConcentric` is a
-            // `UICornerRadius`, and it has to be wrapped by a `UICornerConfiguration` that says which
-            // corners it applies to. `.containerConcentric()` on its own does not compile.
-            //
-            // ⚠️ IT RESOLVES AGAINST THE SUPERVIEW, which here is the transition's own container. If
-            // that reads as square then this comes out square, and the fix is a `minimum:` floor
-            // rather than a stated radius — his rule was no hardcoded radius, and a floor is not one.
-            card.cornerConfiguration = .corners(radius: .containerConcentric())
-        } else {
-            card.layer.cornerRadius = legacyCardRadius
-            card.layer.cornerCurve = .continuous
-        }
         return card
+    }
+
+    /// iOS's own corner radius for this display, asked once in the one place that answers.
+    ///
+    /// ⚠️ THE PROBE IS HIDDEN AND LASTS ONE LAYOUT PASS. It is never drawn and never hit-tested; it
+    /// exists only so `containerConcentric` has a window to resolve against, which is exactly the
+    /// case the API documents. `layoutIfNeeded` on the window is what forces the resolution — the
+    /// same missing pass that the third attempt correctly identified and then applied in the wrong
+    /// place.
+    ///
+    /// ⚠️ CACHED FOR THE PROCESS. The display corner cannot change while the app runs, and a probe
+    /// per transition would put a layout pass on the window in the frame before an animation starts.
+    ///
+    /// The fallback is only reached if the probe itself answers zero, and it is deliberately a modest
+    /// card corner rather than a guess at the hardware: a wrong big number looks broken, a modest one
+    /// looks like a card. Square is the one outcome this cannot produce any more.
+    private static var cachedDisplayCorner: CGFloat?
+    private static func displayCorner(in window: UIWindow?) -> CGFloat {
+        if let cached = cachedDisplayCorner { return cached }
+        guard #available(iOS 26.0, *), let window else { return legacyCardRadius }
+        let probe = UIView(frame: window.bounds)
+        probe.isHidden = true
+        probe.isUserInteractionEnabled = false
+        probe.cornerConfiguration = .corners(radius: .containerConcentric())
+        window.addSubview(probe)
+        window.layoutIfNeeded()
+        let resolved = probe.layer.cornerRadius
+        probe.removeFromSuperview()
+        // Only a REAL answer is cached. A zero means the probe found nothing to resolve against this
+        // time — a window mid-setup, say — and caching the fallback there would make one bad moment
+        // permanent for the whole process. Falling back without caching costs a probe next time.
+        guard resolved > 0 else { return legacyCardRadius }
+        cachedDisplayCorner = resolved
+        return resolved
     }
 
     func animateTransition(using ctx: UIViewControllerContextTransitioning) {
@@ -136,41 +184,10 @@ final class StoryCameraSlideAnimator: NSObject, UIViewControllerAnimatedTransiti
         let width = container.bounds.width
         let duration = transitionDuration(using: ctx)
 
-        // ⛔ THE CONTAINER HAS TO CARRY A RADIUS TOO, OR OPENING IS SQUARE — owner, 2026-08-24, and
-        // this time it was not intermittent: closing rounded correctly, opening never did.
-        //
-        // ⚠️ A CONCENTRIC CORNER RESOLVES AGAINST ITS SUPERVIEW, and the card's superview is this
-        // transition container. We never gave the container a radius, so on the way IN there was
-        // nothing to be concentric with and it resolved to square. On the way OUT it happened to
-        // work, because UIKit's dismissal container already carries one — which is the worst kind of
-        // working: the same line of code producing two results because it was leaning on something
-        // nobody set.
-        //
-        // Asking the CONTAINER to be concentric too ends the chain at the window, which is the one
-        // container iOS resolves to the physical display corner. Both directions then read the same
-        // radius from the same place, and it is still the system's number rather than ours.
-        //
-        // ⚠️ Deliberately NOT clipping the container. A radius here is being set to be READ, not to
-        // cut anything: `masksToBounds` stays false so the camera underneath is never trimmed.
-        if #available(iOS 26.0, *) {
-            container.cornerConfiguration = .corners(radius: .containerConcentric())
-            // ⛔ AND THE LAYOUT PASS HAS TO START ABOVE THE CONTAINER — owner, 2026-08-25, third
-            // report on this same corner: still square opening, still correct closing.
-            //
-            // ⚠️ THE PREVIOUS FIX SET THE RIGHT PROPERTY AND THEN NEVER LET IT RESOLVE. A view's own
-            // concentric corner is worked out when its SUPERVIEW lays it out — it is a question about
-            // where this view sits inside that one. Below, `container.layoutIfNeeded()` is called to
-            // settle the card, and that lays out the container's SUBTREE; it does not ask the
-            // container's parent to lay the container out, so the container's own corner was still
-            // unresolved when the card asked what it should be concentric WITH. The card then read a
-            // container that was square-by-default and came out square.
-            //
-            // Starting the pass at the window resolves the whole chain — window, UIKit's transition
-            // view, this container — before anything asks a question of it. It is also why closing
-            // has always worked: UIKit's dismissal container arrives with a radius already on it, so
-            // nothing had to resolve for the card to find one.
-            (container.window ?? container.superview)?.layoutIfNeeded()
-        }
+        // The radius is settled BEFORE anything is built, once per process, in the window. Nothing
+        // about the transition container matters to it any more — see `makeCard` for why three
+        // fixes that did care about the container all failed.
+        let cardRadius = Self.displayCorner(in: container.window)
 
         // Underneath, the camera only ever covers the last 30% of the distance. On top, the page
         // being left travels the whole width.
@@ -184,15 +201,8 @@ final class StoryCameraSlideAnimator: NSObject, UIViewControllerAnimatedTransiti
             camera.transform = beneathStart
 
             // Added AFTER the camera, so it sits above it.
-            let card = Self.makeCard(of: fromVC.view, bounds: container.bounds)
-            if let card {
-                container.addSubview(card)
-                // ⚠️ RESOLVE THE CORNER BEFORE THE FIRST ANIMATED FRAME, NOT DURING IT. See
-                // `makeCard`: a concentric corner is worked out in layout, and without this the
-                // card was created, added and animated inside one runloop turn — so it rounded or
-                // did not depending on whether a layout pass happened to land first.
-                container.layoutIfNeeded()
-            }
+            let card = Self.makeCard(of: fromVC.view, bounds: container.bounds, radius: cardRadius)
+            if let card { container.addSubview(card) }
 
             UIView.animate(withDuration: duration, delay: 0, options: Self.refSpringCurve) {
                 camera.transform = .identity
@@ -204,10 +214,9 @@ final class StoryCameraSlideAnimator: NSObject, UIViewControllerAnimatedTransiti
         } else {
             let camera = fromVC.view!
             // Coming back, the app arrives on top from the right and the camera slips away under it.
-            let card = Self.makeCard(of: toVC.view, bounds: container.bounds)
+            let card = Self.makeCard(of: toVC.view, bounds: container.bounds, radius: cardRadius)
             if let card {
                 container.addSubview(card)
-                container.layoutIfNeeded()   // same reason as the opening half
                 card.transform = aboveOffscreen
             }
             UIView.animate(withDuration: duration, delay: 0, options: Self.refSpringCurve) {

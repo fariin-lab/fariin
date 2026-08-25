@@ -3201,11 +3201,15 @@ struct ThreadView: View {
                 }
                 .padding(.horizontal, 6)
                 .frame(height: Self.attachBarHeight)
-                // ⛔ APPLE'S GLASS ON 26; THEIR BLUR ONLY ON 27 — owner, 2026-08-25. On 26 this is
-                // still `liquidGlass(Capsule())` and nothing about it has changed. See
-                // `attachPanelSurface` for why the split exists and `PanelBlur` for what the 27 side
-                // actually is.
-                .attachPanelSurface(Capsule(), dark: dark)
+                // ⛔ GLASS ON EVERY OS, AND THE PORTED BLUR IS GONE — owner, 2026-08-25, seeing it on
+                // his 27 device: "attach bar and caption bar, you removed liquid glass, make it how
+                // it was working before." He asked for their blur here earlier the same day, on 27
+                // only; with it in front of him the answer changed, and this is the answer.
+                //
+                // The port is not left dormant behind a flag to rot — it is in the history, commits
+                // `2b9bb0a5` (the blur, with their numbers and how they were read) and `c94bb7be`
+                // (the 27 gate), if the 27 bottom-bar change ever does need answering.
+                .liquidGlass(Capsule())   // the ONE piece of glass here, and the only background
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
