@@ -95,31 +95,7 @@ struct MainShell: View {
         // SEPARATE circular button detached to the right. Older OS (deployment target 17.0)
         // can't use the `Tab` API, so it falls back to the classic `.tabItem` bar with a
         // normal 4th Search tab — same screens, just not the floating/detached styling.
-        Group {
-            if #available(iOS 26.0, *) {
-                modernTabView
-            } else {
-                legacyTabView
-            }
-        }
-        // ⛔ A POSTED STORY LANDS YOU ON THE CHATS TAB — owner, 2026-08-25, after posting: the camera
-        // was still on screen, and behind it he had no sight of the story he had just sent.
-        //
-        // The reference app switches to its chat list BEFORE the upload even starts, then scrolls
-        // that list's story row to your own avatar, and only then lets the editor collapse into it —
-        // so the uploading ring is the thing you are looking at when the editor leaves. Ours draws
-        // the same ring in the row's first slot; this is the half that takes you to it, and
-        // `StoriesRowUIKit.applyMyCard` brings the row itself back to the front.
-        //
-        // ⚠️ KEYED TO THE UPLOAD STARTING, not to the post button, because that is the one signal
-        // that exists wherever a story can be posted from — the camera, the library picker, a text
-        // story, the audience sheet. A flag flipped at each of those call sites would be four places
-        // to keep in step and a fifth to forget.
-        .onChange(of: storyBudget.uploading) { _, uploading in
-            guard uploading, !sawStoryUpload else { sawStoryUpload = uploading; return }
-            sawStoryUpload = true
-            if tab != 0 { tab = 0 }
-        }
+        tabsLandingOnPostedStory
         // THE VOICE NOTE THAT IS STILL PLAYING, wherever you have walked to.
         //
         // `safeAreaInset` rather than an overlay, deliberately: an overlay would sit ON TOP of each
@@ -205,6 +181,42 @@ struct MainShell: View {
                 Image(systemName: tab == 2 ? "person.crop.circle.fill" : "person.crop.circle")
                     .contentTransition(.symbolEffect(.replace))   // smooth fill<->outline swap
             }
+        }
+    }
+
+    /// The tab view, plus the one observer that lands a posted story on the Chats tab.
+    ///
+    /// ⚠️ A PROPERTY RATHER THAN ANOTHER MODIFIER ON `body`, and that is not style. Adding this
+    /// `onChange` directly to the body's chain tipped it past the type-checker's budget — "unable to
+    /// type-check this expression in reasonable time" — which this file has hit before. A separate
+    /// property gets its own budget and the chain in `body` is left as it was.
+    ///
+    /// ⛔ A POSTED STORY LANDS YOU ON THE CHATS TAB — owner, 2026-08-25, after posting: the camera
+    /// was still on screen, and behind it he had no sight of the story he had just sent.
+    ///
+    /// The reference app switches to its chat list BEFORE the upload even starts, then scrolls that
+    /// list's story row to your own avatar, and only then lets the editor collapse into it — so the
+    /// uploading ring is what you are looking at when the editor leaves. Ours draws that ring in the
+    /// row's first slot; this is the half that takes you to it, and `StoriesRowUIKit.applyMyCard`
+    /// brings the row itself back to the front.
+    ///
+    /// ⚠️ KEYED TO THE UPLOAD STARTING, not to the post button, because that is the one signal that
+    /// exists wherever a story can be posted from — the camera, the library picker, a text story, the
+    /// audience sheet. A flag at each of those call sites would be four places to keep in step and a
+    /// fifth to forget.
+    private var tabsLandingOnPostedStory: some View {
+        Group {
+            if #available(iOS 26.0, *) {
+                modernTabView
+            } else {
+                legacyTabView
+            }
+        }
+        .onChange(of: StoriesService.shared.uploading) { _, uploading in
+            let wasUploading = sawStoryUpload
+            sawStoryUpload = uploading
+            guard uploading, !wasUploading, tab != 0 else { return }
+            tab = 0
         }
     }
 
