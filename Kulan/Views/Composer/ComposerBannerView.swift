@@ -23,7 +23,7 @@ final class ComposerBannerView: UIView {
     private let bar = UIView()
     private let pencil = UIImageView(image: UIImage(systemName: "pencil",
                                                     withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)))
-    private let thumb = ThumbImageView()
+    private let thumb = ThumbImageView(frame: .zero)
     private let title = UILabel()
     private let detailIcon = UIImageView()
     private let bars = MiniBarsView()
