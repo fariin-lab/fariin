@@ -242,6 +242,10 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
                     guard self.playing else { return }
                     self.resumeAfterInterruption = true
                     self.pause(byUser: false)   // a call is not them finishing — see pausedByUser
+                    // The system took the session; `pause()` deliberately does not give it back, so
+                    // nothing else would clear this. Without the line, `.ended` below reaches
+                    // `start()`, which skips re-activating and plays into a dead session — silence.
+                    self.sessionActive = false
                 case .ended:
                     guard self.resumeAfterInterruption else { return }
                     self.resumeAfterInterruption = false
@@ -425,6 +429,8 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
                 guard let self, self.messageId == forNote else { return }   // another note took over meanwhile
                 guard let p = built.player else { self.clearNowPlaying(); return }
                 self.player = p
+                // Activated off-main just above, so `start()` must not pay for it again on main.
+                self.sessionActive = true
                 self.start()
             }
         }
@@ -445,8 +451,27 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         // and the audio. None of it has to. The reference app orders it the same way and goes one
         // further: it flips its own playing state BEFORE telling the engine anything, so the button
         // answers the tap even when the audio needs a moment. `playing = true` below is that flip.
+        //
+        // ⛔ AND THE FLIP HAS TO COME FIRST TO BE THE FLIP — his "play/pause feels laggy",
+        // 2026-08-25. It sat BELOW `p.play()`, so the icon still waited on the two session calls
+        // underneath this comment: `setActive(true)` renegotiates the audio hardware and blocks
+        // MAIN for 100-300ms, which is the whole delay he is describing. The note above already
+        // said the reference flips its state first; the code just never did it.
+        playing = true
+        // ⛔ AND THE SESSION IS ONLY TOUCHED WHEN IT IS NOT ALREADY OURS. `pause()` deliberately
+        // keeps the session (see its own note), and `open()` activates it off-main before ever
+        // calling here — so on every resume, and on every first play, these two lines were
+        // re-doing work that was already done, on the main thread, in front of the finger.
+        //
+        // The CATEGORY check stays unconditional: it is a property read that returns immediately in
+        // the normal case, and it is the one that catches the recorder having left the session on
+        // `.playAndRecord` — which would otherwise route a note to the earpiece and keep the mic hot.
+        // Only `setActive` is gated, because only `setActive` is the one that blocks.
         Self.setCategoryIfNeeded(.playback)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        if !sessionActive {
+            try? AVAudioSession.sharedInstance().setActive(true)
+            sessionActive = true
+        }
         p.enableRate = true
         p.rate = rateByCid[cid] ?? 1
         // Resume where it was left, including a position chosen by scrubbing before the first play.
@@ -456,7 +481,6 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             progress = saved
         }
         p.play()
-        playing = true
         hasNote = true
         // (One-time notes are not consumed here any more: they play in OneTimeVoicePage, never
         // through this engine, and CLOSING that page is what spends the listen — his order, the
@@ -619,7 +643,19 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             Self.setCategoryIfNeeded(.playback)
             Self.deactivate()
         }
+        // The session is gone, so the next `start()` has to pay for it again. Cleared unconditionally:
+        // during a call we did not deactivate, but the call owns the session and will hand it back in
+        // its own state, which is not a state we may assume is still activated for us.
+        sessionActive = false
     }
+
+    /// Whether the audio session is currently activated FOR US, so `start()` can skip re-activating it.
+    ///
+    /// Not a question that can be asked of `AVAudioSession` — it has no "is active" property — so it
+    /// is tracked. Anything that gives the session up, or that could have taken it from us (a call,
+    /// raise-to-ear re-routing, an interruption), clears this; the cost of a wrong `false` is one
+    /// redundant activation, and the cost of a wrong `true` is silence, so it errs toward false.
+    private var sessionActive = false
 
     /// Touch the session only when the answer would actually change. `setCategory` is not free — it can
     /// renegotiate the route — and `start()` calls it on every single play. The reference app guards the

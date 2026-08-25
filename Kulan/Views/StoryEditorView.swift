@@ -92,6 +92,44 @@ final class KeyboardWatcher: ObservableObject {
         })
     }
 
+    /// Run `body` once the keyboard has FINISHED leaving the screen, not once it has been told to go.
+    ///
+    /// ⛔ THE SYSTEM'S OWN "IT IS DOWN" SIGNAL, INSTEAD OF A GUESSED DELAY — owner, 2026-08-25, on
+    /// tapping "+" with the keyboard up: the keyboard and the composer "start fighting/jittering
+    /// instead of closing smoothly, and then the attachment sheet appears while the keyboard and
+    /// composer are still in an incorrect state".
+    ///
+    /// `willHide` fires when the keyboard STARTS to leave; `didHide` fires when it is gone. A sheet
+    /// presented anywhere between the two is presented into a moving layout, and UIKit then has a
+    /// presentation animation and a keyboard animation running over the same view — which is the
+    /// jitter, not a slowness that a bigger delay would cure.
+    ///
+    /// The timeout is a safety net, never the mechanism: `didHide` does not arrive if something else
+    /// takes first responder on the way down, and a caller that never runs would strand the button.
+    func onceHidden(timeout: TimeInterval = 0.6, _ body: @escaping () -> Void) {
+        // Already down — there is nothing to wait for, and waiting would put a delay on the one case
+        // that never needed one.
+        guard height > 0 else { body(); return }
+        let shot = OneShot(body)
+        shot.token = NotificationCenter.default.addObserver(
+            forName: UIResponder.keyboardDidHideNotification, object: nil, queue: nil) { [shot] _ in shot.fire() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [shot] in shot.fire() }
+    }
+
+    /// Whichever of the two arrives first wins; the other becomes a no-op. Kept as a small class so
+    /// the observer token and the fired flag are one shared thing rather than two captured copies.
+    private final class OneShot {
+        var token: NSObjectProtocol?
+        private var body: (() -> Void)?
+        init(_ body: @escaping () -> Void) { self.body = body }
+        func fire() {
+            guard let b = body else { return }
+            body = nil
+            if let token { NotificationCenter.default.removeObserver(token) }
+            b()
+        }
+    }
+
     private func readClock(from n: Notification) {
         if let d = (n.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue {
             animationDuration = d

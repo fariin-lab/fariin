@@ -195,8 +195,10 @@ struct OfficialChatView: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 14)
             .liquidGlass(RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .padding(.horizontal, 12)
-            .padding(.bottom, 6)
+            // ⛔ THE INPUT BAR'S OWN INSETS — owner, 2026-08-25. This bar stands where the composer
+            // stands, so it is edge-attached SYSTEM CHROME and takes the device's margins and the
+            // indicator-band dip, not the 12/6 that used to be written here. See `SystemBarChrome`.
+            .systemBarChrome()
             .background(GeometryReader { g in
                 Color.clear.preference(key: OfficialBarHeightKey.self, value: g.size.height)
             })

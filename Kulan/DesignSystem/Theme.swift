@@ -182,12 +182,16 @@ extension View {
 /// The app's standard 48pt Liquid Glass close button — a round X, used in toolbars in place of a
 /// "Cancel" text button (GIF picker, Edit Profile, wallpaper sheet) so every dismiss looks the same.
 struct CloseXButton: View {
+    /// 48 everywhere by default. The GIF picker asks for 44 (owner, 2026-08-25) because its X sits
+    /// on a hidden bar directly above the mood pills, where a 48 circle crowds the row beneath it.
+    /// A parameter rather than a second copy of the button, so there is still one X in the app.
+    var diameter: CGFloat = 48
     let action: () -> Void
     var body: some View {
         Button(action: action) {
             Image(systemName: "xmark").font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(.primary)
-                .frame(width: 48, height: 48)
+                .frame(width: diameter, height: diameter)
                 .liquidGlass(Circle(), interactive: true)
                 .contentShape(Circle())
         }

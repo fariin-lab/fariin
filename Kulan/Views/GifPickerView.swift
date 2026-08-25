@@ -201,10 +201,10 @@ struct GifPickerView: View {
                 }
                 // Hide the toolbar's own glass so CloseXButton's circle isn't double-wrapped (iOS 26).
                 if #available(iOS 26.0, *) {
-                    ToolbarItem(placement: .topBarLeading) { CloseXButton { dismiss() } }
+                    ToolbarItem(placement: .topBarLeading) { CloseXButton(diameter: 44) { dismiss() } }
                         .sharedBackgroundVisibility(.hidden)
                 } else {
-                    ToolbarItem(placement: .topBarLeading) { CloseXButton { dismiss() } }
+                    ToolbarItem(placement: .topBarLeading) { CloseXButton(diameter: 44) { dismiss() } }
                 }
             }
             .safeAreaInset(edge: .bottom) {

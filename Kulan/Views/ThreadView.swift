@@ -4457,22 +4457,45 @@ struct ThreadView: View {
     ///
     /// They are glass now, in the composer's own shape and its own inset, so swapping between typing
     /// and any of these states changes the words and nothing else about the furniture.
-    private func composerNotice<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+    /// `liquidGlass` takes a concrete `some Shape`, so the two shapes cannot be a ternary at the
+    /// call site — one modifier picking between them keeps a single glass call for both notices.
+    private struct ComposerNoticeGlass: ViewModifier {
+        let hugsContent: Bool
+        @ViewBuilder func body(content: Content) -> some View {
+            if hugsContent {
+                // A capsule, because a pill sized to two short lines is nearly as round as it is wide
+                // and a 26pt corner on it reads as a rectangle that lost its nerve.
+                content.liquidGlass(Capsule())
+            } else {
+                content.liquidGlass(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            }
+        }
+    }
+
+    /// `hugsContent` draws the pill around its words instead of across the bar, centred in the slot.
+    private func composerNotice<Content: View>(hugsContent: Bool = false,
+                                               @ViewBuilder _ content: () -> Content) -> some View {
         content()
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 18)
+            .frame(maxWidth: hugsContent ? nil : .infinity)
+            .padding(.horizontal, hugsContent ? 30 : 18)
             .padding(.vertical, 14)
-            .liquidGlass(RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .padding(.horizontal, 12)
-            .padding(.bottom, 6)
+            .modifier(ComposerNoticeGlass(hugsContent: hugsContent))
+            // A hugging pill still occupies the whole slot, so it lands centred rather than leading.
+            .frame(maxWidth: .infinity)
+            // ⛔ THE COMPOSER'S OWN INSETS, NOT HAND-WRITTEN ONES — owner, 2026-08-25: "make it like
+            // input bar". See `SystemBarChrome`.
+            .systemBarChrome()
     }
 
     private var blockedBar: some View {
-        composerNotice {
-            VStack(spacing: 6) {
-                Text("You blocked \(title)").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+        // ⛔ A PILL AROUND THE WORDS, NOT A STRIP ACROSS THE BAR — owner, 2026-08-25, with the shape
+        // drawn out. The other notices state a rule about the room; this one names a person and
+        // offers the one action that undoes it, so it reads as a card rather than as furniture.
+        composerNotice(hugsContent: true) {
+            VStack(spacing: 2) {
+                Text("You blocked \(title)").font(.body).foregroundStyle(.primary)
                 Button("Unblock") { Task { await ChatService.setBlocked(cid, false) } }
-                    .font(.subheadline.weight(.semibold))
+                    .font(.body)
                     .tint(.red)
             }
         }
@@ -4951,10 +4974,18 @@ struct ThreadView: View {
         .padding(.bottom, composerKeyboardUp || chromeBottomInset <= 0
                  ? Self.composerKeyboardGap : -Self.composerRestDip)
         .background { SystemChromeReader(margin: $chromeMargin, bottomInset: $chromeBottomInset) }
-        .animation(.easeOut(duration: 0.25), value: composerKeyboardUp)
-        // The bar's CONTENT still changes on focus — the send button appears, the mic leaves —
-        // so that animation stays keyed to it even though the geometry no longer is.
-        .animation(.easeOut(duration: 0.25), value: inputFocused)
+        // ⛔ THE KEYBOARD'S OWN CLOCK, NOT A CURVE OF OURS — owner, 2026-08-25, on the "+" transition
+        // "fighting/jittering". `KeyboardWatcher` already reads the duration and curve off the
+        // notification (see `systemAnimation`), and the composer was the one thing on screen not
+        // using them: it moved on a hand-written `easeOut(0.25)` while the keys moved on the
+        // system's curve 7. Same start, same end, different shape in between — so the bar ran ahead
+        // of the keyboard through the middle of every open and close and then waited for it. That
+        // mismatch IS the jitter; no duration tweak fixes a wrong curve.
+        .animation(keyboard.systemAnimation, value: composerKeyboardUp)
+        // The bar's CONTENT still changes on focus — the send button appears, the mic leaves — so
+        // that animation stays keyed to it even though the geometry no longer is. Same clock though:
+        // two curves on one bar is what the line above was just fixed for.
+        .animation(keyboard.systemAnimation, value: inputFocused)
         .overlay(alignment: .top) {
             if holdHint {
                 Text("Hold to record, release to send")
@@ -5021,22 +5052,28 @@ struct ThreadView: View {
             // can't disturb the recording gesture.
             if !recordingHeld {
                 Button {
-                    // Fully resign the composer keyboard BEFORE opening the sheet, so iOS doesn't remember
-                    // it as first responder and briefly RESTORE the keyboard when the sheet closes (the
-                    // flash before the image editor opens).
-                    let keyboardWasUp = inputFocused
+                    // ⛔ ONE DISMISSAL, THEN WAIT FOR THE SYSTEM TO SAY IT IS DOWN — owner, 2026-08-25:
+                    // tapping "+" with the keyboard up made the keyboard and the composer "fight",
+                    // and the sheet arrived over the mess. Two separate bugs stood here.
+                    //
+                    // ONE: this resigned TWICE. `inputFocused = false` is the field's own focus
+                    // binding, and the `sendAction(resignFirstResponder)` broadcast underneath it was
+                    // a second, blunter route to the same responder. SwiftUI processes the focus flag
+                    // on its next update; the broadcast lands immediately. So the keyboard was told to
+                    // go by two mechanisms one runloop turn apart, and the composer — which reads the
+                    // keyboard's notifications — was driven by both of them in turn. The focus binding
+                    // alone is the native path for a SwiftUI `TextField`, and it is enough.
+                    //
+                    // TWO: the sheet was presented on a 0.08s guess. That number was chosen for the
+                    // OPPOSITE report ("still up, closes late") on the theory that overlapping the two
+                    // animations would look faster, and it does not: it puts a modal presentation on
+                    // top of a keyboard dismissal in the same frames, which is what his two
+                    // screenshots show — the composer already at its resting position with the
+                    // keyboard band still on screen behind the rising sheet. His word now is that they
+                    // must be sequential, so the trigger is the keyboard's own `didHide` instead of a
+                    // stopwatch. `onceHidden` fires straight away when the keyboard was never up.
                     inputFocused = false
-                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                    if keyboardWasUp {
-                        // Let the keyboard-HIDE animation start first: presenting in the same instant made
-                        // iOS serialize the animations (sheet first), so the chat + composer stayed lifted
-                        // at keyboard height under the open sheet and only settled once the presentation
-                        // finished (the "still up, closes late" report). A few frames later, both run
-                        // concurrently — keyboard slides down while the sheet slides up.
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { showAttachPanel = true }
-                    } else {
-                        showAttachPanel = true
-                    }
+                    keyboard.onceHidden { showAttachPanel = true }
                 } label: {
                     Image(systemName: sendingPhoto ? "ellipsis" : "plus")
                         .font(.system(size: 20, weight: .regular))
@@ -5073,8 +5110,27 @@ struct ThreadView: View {
                 // glyphs that is spacing at all — the other ~17pt is the empty room inside their two
                 // 40pt tap targets, which is not mine to take without making them harder to hit.
                 HStack(alignment: .bottom, spacing: 3) {
-                    // Field content swaps between the text field and the recording bar…
-                    if recordingHeld { recordingHoldRow } else { messageField }
+                    // ⛔ THE FIELD IS NEVER UNMOUNTED — owner, 2026-08-25: "when the keyboard is open
+                    // and I record, the keyboard closes". This line used to be an if/else, and the
+                    // `else` branch is where the TextField lives. Taking a first responder out of the
+                    // view tree IS a resign, so recording dismissed the keyboard as a side effect
+                    // that nothing in the recording code asked for — there is no `inputFocused =
+                    // false` anywhere near `beginHoldRecording`, which is why it never looked like
+                    // ours. Same fix as the locked bar two states up: keep both mounted and change
+                    // only the alpha, so focus is never a casualty of a layout swap.
+                    //
+                    // An OVERLAY rather than a ZStack, deliberately: a ZStack would size itself to
+                    // the wider of the two, and `recordingHoldRow` carries Spacers that expand to
+                    // infinity — it would shove the GIF and mic buttons out of the pill while idle.
+                    // The overlay takes the field's frame, which is the slot the row had anyway.
+                    messageField
+                        .opacity(recordingHeld ? 0 : 1)
+                        .allowsHitTesting(!recordingHeld)
+                        .overlay {
+                            recordingHoldRow
+                                .opacity(recordingHeld ? 1 : 0)
+                                .allowsHitTesting(recordingHeld)
+                        }
                     // …sticker + camera show only when idle & empty…
                     // ⛔ NO CAMERA HERE (owner 2026-08-22: "the camera is already inside the photo
                     // picker, remove the one inside the composer"). It was a second door to the same
@@ -5257,8 +5313,11 @@ struct ThreadView: View {
     // Live recording row inside the capsule: red dot + timer + "‹ slide to cancel".
     private var recordingHoldRow: some View {
         HStack(spacing: 10) {
+            // Same 24pt box as the locked bar — the reference app keeps ONE mic view across both
+            // states, so it must not change size when the recording locks.
             Image(systemName: "mic.fill")
-                .font(.system(size: 18)).foregroundStyle(.red)
+                .font(.system(size: 20)).foregroundStyle(.red)
+                .frame(width: 24, height: 24)
                 .symbolEffect(.pulse, options: .repeating)   // gentle live pulse
             RecordTimerText(recorder: recorder)
             Spacer(minLength: 8)
@@ -5557,13 +5616,18 @@ struct ThreadView: View {
                         // you might actually want mid-recording, and putting it here is what lets the
                         // bin leave the row entirely. The finished waveform still appears on pause,
                         // where it is a thing you can scrub.
+                        // ⛔ 24pt BOX — the reference app draws this mic as a 24×24 image, not a
+                        // text-sized glyph, so it reads bigger than the timer beside it. An SF
+                        // Symbol at 20 fills a 24pt box to about the same height.
                         Image(systemName: "mic.fill")
-                            .font(.system(size: 17)).foregroundStyle(.red)
+                            .font(.system(size: 20)).foregroundStyle(.red)
+                            .frame(width: 24, height: 24)
                             .symbolEffect(.pulse, options: .repeating)
                         RecordTimerText(recorder: recorder)
                         Button { cancelRecording() } label: {
+                            // Headline, i.e. 17 semibold — the reference app's locked-state Cancel.
                             Text("Cancel")
-                                .font(.system(size: 17))
+                                .font(.system(size: 17, weight: .semibold))
                                 .foregroundStyle(.red)
                                 .frame(maxWidth: .infinity)
                                 .contentShape(Rectangle())
@@ -8374,7 +8438,11 @@ private struct MessageActionDialogs: ViewModifier {
 private struct RecordTimerText: View {
     var recorder: AudioRecorder
     var body: some View {
-        Text(format(recorder.elapsed)).font(.subheadline.monospacedDigit())
+        // ⛔ 17 SEMIBOLD, NOT SUBHEADLINE — the reference app's duration label is body-size at
+        // semibold with monospaced digits, and the same label serves both the hold and the
+        // locked bar. Ours was 15 regular, which is why the timer sat quieter than their's.
+        Text(format(recorder.elapsed))
+            .font(.system(size: 17, weight: .semibold).monospacedDigit())
     }
     private func format(_ t: TimeInterval) -> String {
         let s = Int(t); return String(format: "%d:%02d", s / 60, s % 60)
