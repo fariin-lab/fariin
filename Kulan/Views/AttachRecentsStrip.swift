@@ -108,6 +108,7 @@ struct AttachRecentsStrip: View {
     /// complaint), so the one thing that must travel back is a removal — otherwise a video dropped
     /// in the editor is still ticked here (owner 2026-08-04).
     var removedIds: Set<String> = []
+    @Environment(\.colorScheme) private var colorScheme
     @FocusState private var captionFocused: Bool
     /// The KEYBOARD's state, which is not the same thing as `captionFocused`. The composer moved off
     /// its focus flag for exactly this reason — focus flips a beat before the keys move, and on one
@@ -311,7 +312,10 @@ struct AttachRecentsStrip: View {
                 }
             }
             .padding(.leading, 16).padding(.trailing, 4).frame(minHeight: 40)
-            .liquidGlass(RoundedRectangle(cornerRadius: 23, style: .continuous), interactive: true)   // real native Liquid Glass
+            // ⛔ THEIR BLUR, NOT OUR GLASS — owner, 2026-08-25, same call as the attach bar above it:
+            // the two bars share a sheet, so they have to share a material. Shape and 23pt radius are
+            // untouched; only what fills them changed. See `PanelBlur`.
+            .panelBlur(RoundedRectangle(cornerRadius: 23, style: .continuous), dark: colorScheme == .dark)
             Button { sendSelected() } label: {
                 // Match the main composer send: WHITE arrow on a blue-tinted glass circle (was a blue
                 // arrow on clear glass, which read as a different, washed-out button).

@@ -3201,7 +3201,11 @@ struct ThreadView: View {
                 }
                 .padding(.horizontal, 6)
                 .frame(height: Self.attachBarHeight)
-                .liquidGlass(Capsule())   // the ONE piece of glass here, and the only background
+                // ⛔ THEIR BLUR, NOT OUR GLASS — owner, 2026-08-25, after reading their attachment
+                // panel next to ours. Their panel is a stripped `UIBlurEffect` with a translucent
+                // wash, not a Liquid Glass lens; see `PanelBlur` for what "stripped" means and why
+                // the difference is visible rather than academic.
+                .panelBlur(Capsule(), dark: dark)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 16)
