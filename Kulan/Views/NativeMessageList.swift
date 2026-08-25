@@ -2696,12 +2696,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         UIView.animate(withDuration: 0.2) { b.alpha = 1 }
     }
 
-    /// The send button's column (the composer's side inset), `composerBarH + 16` above the physical
-    /// bottom — the same numbers the old overlay used, so it sits where it has been sitting.
+    /// The send button's column (the composer's side inset), 16 above the composer bar's top edge.
+    ///
+    /// ⛔ THE BAND IS PART OF THE HEIGHT IT SITS ABOVE — owner, 2026-08-25, build 683: the pause and
+    /// the send button "are overlapping", his screenshot showing the pause resting on the send.
+    /// `composerBarH` is the bar's own height and nothing else; the bar sits on top of the
+    /// home-indicator band (or the keyboard), so measuring only the bar from the physical bottom
+    /// put this button a whole band too low — straight onto the send button in the same column.
+    /// `keyboardBand + composerBarH` is exactly the bar's top edge, which is what the old SwiftUI
+    /// overlay measured against too (a bottom padding there starts at the safe area, not the
+    /// physical edge). It rides the keyboard for free: the band grows, this rises with it.
     private func positionVoiceControl() {
         guard let b = voiceControlButton else { return }
         b.frame = CGRect(x: view.bounds.maxX - voiceControlInset - 40,
-                         y: view.bounds.maxY - composerBarH - 16 - 40,
+                         y: view.bounds.maxY - keyboardBand - composerBarH - 16 - 40,
                          width: 40, height: 40)
     }
 }

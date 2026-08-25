@@ -224,7 +224,7 @@ final class ChatComposerView: UIView {
 
         // The hold row: red dot + timer + "‹ slide to cancel".
         pill.contentView.addSubview(holdRow)
-        holdRow.isUserInteractionEnabled = false
+        holdRow.isUserInteractionEnabled = false   // becomes true only while a finger is holding
         holdRow.addSubview(holdMic)
         holdRow.addSubview(holdTimer)
         holdRow.addSubview(holdHint)
@@ -454,8 +454,15 @@ final class ChatComposerView: UIView {
                                                                 y: b === trashButton ? 0.6 : 0.1)
         }
         fieldRow.alpha = s.recordingActive ? 0 : 1
-        fieldRow.isUserInteractionEnabled = !s.recordingActive
+        // ⛔ NEVER DISABLE THE ANCESTOR OF THE FIRST RESPONDER — owner, 2026-08-25, build 683: "when
+        // the keyboard is open and I start recording, the keyboard automatically closes". Nothing
+        // asked it to: this line did, by turning off interaction on the view the text view lives in
+        // the instant a recording began. The field then resigned, our own delegate reported the
+        // resignation as the user's intent, and the flag went false — so it stayed closed. The row
+        // is covered by `holdRow` (held) or `strip` (locked) either way, so making the COVER take
+        // the taps is all that was ever needed, and it cannot touch focus.
         holdRow.alpha = s.recordingHeld ? 1 : 0
+        holdRow.isUserInteractionEnabled = s.recordingHeld
         strip.alpha = s.recordLocked ? 1 : 0
         strip.isUserInteractionEnabled = s.recordLocked
         stripRecording.alpha = s.reviewing ? 0 : 1
