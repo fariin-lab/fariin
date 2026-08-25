@@ -53,12 +53,10 @@ enum SampledWaveform {
             // Their `sampleCount(from:)`: frames from the container metadata × channels, because the
             // channels come interleaved and one waveform is drawn from the average of them.
             let frames = Int(duration.value)
-            let channels: Int = {
-                guard let descs = (try? await track.load(.formatDescriptions)) ?? nil,
-                      let first = descs.first,
-                      let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(first) else { return 1 }
-                return max(1, Int(asbd.pointee.mChannelsPerFrame))
-            }()
+            let descs = (try? await track.load(.formatDescriptions)) ?? []
+            let channels: Int = descs.first
+                .flatMap { CMAudioFormatDescriptionGetStreamBasicDescription($0) }
+                .map { max(1, Int($0.pointee.mChannelsPerFrame)) } ?? 1
             let (inputCount, overflow) = frames.multipliedReportingOverflow(by: channels)
             guard !overflow else { return [] }
 
