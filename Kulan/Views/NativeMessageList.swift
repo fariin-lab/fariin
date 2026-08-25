@@ -1655,6 +1655,35 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
         }
     }
+
+    /// Set the moment a finger first moves the list; never reset while the chat is open.
+    private var readerHasScrolled = false
+
+    /// ⛔ THE FIRST-OPEN NET — owner, 2026-08-25, build 681, twice ("when open first time chat,
+    /// messages is entering under composer… need scroll", then again opening from the chat list).
+    ///
+    /// The clearance under the last bubble is assembled from parts that arrive a beat apart on a
+    /// cold open: the composer's height is measured by SwiftUI and reported a pass later, the
+    /// keyboard guide resolves on its own first layout, image rows re-measure. A reader pinned to
+    /// the newest bound BEFORE a late part lands is left exactly that part short — visibly under the
+    /// bar, healing only when a scroll recomputes everything. WHICH pass completes the clearance
+    /// cannot be named in advance (his two OSes have already disagreed over exactly such orderings),
+    /// so the net is positional rather than causal: until the reader scrolls for the first time, a
+    /// reader whose RECORDED place is the newest message is kept at the newest bound on every layout
+    /// pass. One comparison when nothing changed; dies at the first real scroll.
+    ///
+    /// The RECORDED distance, deliberately: a first-unread landing records its real distance, and
+    /// every programmatic jump records where it put the reader, so none of them are touched.
+    private func keepNewestUntilFirstScroll() {
+        guard didFirstLand, !isDisappearing, !readerHasScrolled,
+              lastKnownDistanceFromBottom <= 5,
+              !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
+              !sendAnimating, !programmaticScrollAnimating else { return }
+        let bound = maxContentOffsetY
+        guard abs(collectionView.contentOffset.y - bound) > 0.5 else { return }
+        collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
+        lastStableOffset = bound
+    }
     // The looser test, for the jump-to-latest BUTTON only: an affordance, not a decision about moving
     // someone. Deliberately separate so the two can never be confused again.
     private var isNearNewest: Bool { collectionView.contentOffset.y >= maxContentOffsetY - 44 }
@@ -1704,7 +1733,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // their safe area never carries the keyboard; ours cannot, so the question is asked against the
     // geometry this method last left behind.
     private var keyboardBand: CGFloat {
-        max(0, view.bounds.maxY - view.keyboardLayoutGuide.layoutFrame.minY)
+        let frame = view.keyboardLayoutGuide.layoutFrame
+        // The guide's frame is a zero RECT until UIKit first resolves it (distinct from the resolved
+        // zero-HEIGHT frame a home-button phone reports at rest, whose minY is the view's bottom).
+        // Unresolved means "no keyboard": the band is the safe-area bottom, which is exactly what
+        // the guide itself answers once resolved at rest.
+        guard frame.height > 0 || frame.minY > 0 else { return view.safeAreaInsets.bottom }
+        return max(0, view.bounds.maxY - frame.minY)
     }
     private var bottomClearance: CGFloat { keyboardBand + composerBarH + 12 }
 
@@ -1943,6 +1978,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // bound. Catches the tail of an interactive keyboard dismissal, where `updateInsets` correctly
         // stands down because a finger owns the list while the clearance shrinks.
         clampToNewestIfBeyond()
+        keepNewestUntilFirstScroll()
         // The visible message viewport in window coordinates, for the media transitions' clipping view
         // (the reference app passes `collectionView.adjustedContentInset` as `clippingAreaInsets`; this
         // is the same region expressed as a rect).
@@ -2398,6 +2434,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // nothing.
         if Date() < captureFreezeUntil { return }
         if scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating {
+            readerHasScrolled = true     // the first-open net stands down for good — see it for why
             lastStableOffset = scrollView.contentOffset.y
             recordDistanceFromBottom()   // the reader is choosing a position; remember it
             userScrolledSinceTimer = true
