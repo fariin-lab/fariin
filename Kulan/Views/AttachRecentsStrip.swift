@@ -275,14 +275,22 @@ struct AttachRecentsStrip: View {
     // Caption + Send bar shown while items are selected (replaces the source row). The selected COUNT is
     // shown at the header top-right (not on the send button); the send button is real Liquid Glass.
     private var captionBar: some View {
-        HStack(alignment: .bottom, spacing: 10) {   // send hugs the bottom as the caption grows
-            HStack(alignment: .bottom, spacing: 8) {
+        // ⛔ THE COMPOSER'S OWN NUMBERS — owner, 2026-08-25: "make it like what size is using attach
+        // bar". This is the same object in a different room: a glass pill with a growing field, a
+        // trailing toggle inside it and a tinted send circle beside it. It had drifted on every
+        // measurement that shows — 23pt corners against the composer's 20, a 16pt leading inset
+        // against 14, 8 and 10 where the composer spaces 3 and 8, and a 17pt arrow against 19 — so
+        // the two read as different-sized versions of one control. Numbers below are the composer's,
+        // taken from `ThreadView.inputRow` and `ThreadView.rightButton`.
+        HStack(alignment: .bottom, spacing: 8) {   // send hugs the bottom as the caption grows
+            HStack(alignment: .bottom, spacing: 3) {
                 // View-once media can't carry a caption, so the field is disabled + the
                 // prompt says why when View Once is on.
                 TextField("", text: $caption,
                           prompt: Text(viewOnce ? "No caption for View Once" : "Add a caption…")
                             .foregroundColor(Color(.systemGray)),
                           axis: .vertical)
+                    .font(.system(size: 17))   // stated, like the composer's, rather than left to .body
                     .lineLimit(1...7)   // multi-line caption, grows up to ~7 lines then scrolls
                     .foregroundStyle(.primary)
                     .focused($captionFocused)
@@ -306,12 +314,14 @@ struct AttachRecentsStrip: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.leading, 16).padding(.trailing, 4).frame(minHeight: 40)
-            .liquidGlass(RoundedRectangle(cornerRadius: 23, style: .continuous), interactive: true)   // real native Liquid Glass
+            .padding(.leading, 14).padding(.trailing, 4).frame(minHeight: 40)
+            .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)   // real native Liquid Glass
             Button { sendSelected() } label: {
                 // Match the main composer send: WHITE arrow on a blue-tinted glass circle (was a blue
-                // arrow on clear glass, which read as a different, washed-out button).
-                Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold))
+                // arrow on clear glass, which read as a different, washed-out button). The GLYPH was
+                // still 17 against the composer's 19 — the circle matched and the arrow inside it
+                // did not, which is the half of "same button" that is easiest to miss.
+                Image(systemName: "arrow.up").font(.system(size: 19, weight: .bold))
                     .foregroundStyle(.white)
                     .frame(width: 40, height: 40)   // 40px send (user spec)
                     .liquidGlass(Circle(), interactive: true, tint: Theme.defaultBubble(false))
