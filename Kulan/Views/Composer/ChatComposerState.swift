@@ -110,9 +110,6 @@ struct ChatComposerActions {
     var cancelRecording: () -> Void = {}
     var sendRecording: () -> Void = {}
     var togglePreview: () -> Void = {}
-    /// The floating button above the send: pause while recording, continue while reviewing.
-    var pauseRecording: () -> Void = {}
-    var resumeRecording: () -> Void = {}
     var seekPreview: (Double) -> Void = { _ in }
     var toggleVoiceOnce: () -> Void = {}
 }

@@ -36,11 +36,6 @@ final class ChatComposerView: UIView {
         static let disc: CGFloat = 56
         static let overlayTrailing: CGFloat = 12 // the old `.padding(.trailing, 12)` on the overlay
         static let toastLift: CGFloat = 8        // the old `.offset(y: -8)` on both toasts
-        /// ⛔ THE PAUSE-TO-SEND GAP, AND IT IS THE ARROW'S GAP — owner, 2026-08-24: "increase the
-        /// space between the Pause and Send buttons so it matches the spacing between the arrow
-        /// button and the composer". The jump arrow floats 10 above the bar and the bar carries 6 of
-        /// top padding before its pill, so the gap a reader sees is the two added together.
-        static let pauseGap: CGFloat = 10 + 6
         static let onceBlue = UIColor(red: 0x3D / 255, green: 0xA1 / 255, blue: 0xFD / 255, alpha: 1)
     }
 
@@ -111,12 +106,9 @@ final class ChatComposerView: UIView {
     private let plusButton = ChatComposerView.glassButton(symbol: "plus", size: 20, weight: .regular, color: .label)
     private let trashButton = ChatComposerView.glassButton(symbol: "trash.fill", size: 18, weight: .regular, color: .systemRed)
     private let sendButton = ChatComposerView.glassButton(symbol: "arrow.up", size: 19, weight: .bold, color: .white, prominent: true)
-    /// ⛔ ONE ROW TALL, WITH THE PAUSE FLOATING OVER THE CHAT — owner, 2026-08-24: locking a
-    /// recording must not scroll the chat up to make room; "it can overlap the chat, it's a button,
-    /// everyone can see it". It sits above the send button, OUTSIDE this view's bounds, and
-    /// `point(inside:)` reaches out to it, so the bar's height — which is the list's bottom inset —
-    /// never grows by it. Pause while recording (red); the red mic to continue while reviewing.
-    private let pauseButton = ChatComposerView.glassButton(symbol: "pause.fill", size: 16, weight: .semibold, color: .systemRed)
+    // ⛔ NO PAUSE BUTTON HERE — it floats above the bar, and the hosting view never delivers touches
+    // to a platform view outside the frame SwiftUI gave it (proven on device, build 682). It lives
+    // in `MessageListController.setVoiceControl`, whose view owns that region of the screen.
     private let pill: UIVisualEffectView = {
         let g = UIGlassEffect(style: .regular)
         g.isInteractive = true
@@ -201,16 +193,6 @@ final class ChatComposerView: UIView {
             guard let self else { return }
             if self.shown.recordLocked { self.actions.sendRecording() } else { self.actions.send() }
         }, for: .touchUpInside)
-        // The pause is not part of the glass container: it stands alone over the chat, as the old
-        // overlay did, and is added to the view itself so nothing in the container can clip it.
-        addSubview(pauseButton)
-        pauseButton.alpha = 0
-        pauseButton.isHidden = true
-        pauseButton.addAction(UIAction { [weak self] _ in
-            guard let self else { return }
-            if self.shown.reviewing { self.actions.resumeRecording() } else { self.actions.pauseRecording() }
-        }, for: .touchUpInside)
-
         // The field row: text and GIF. ⛔ THE MIC IS NOT INSIDE THE PILL'S GLASS — owner, 2026-08-25,
         // build 681: sliding up to lock, "the blur is following me". Interactive Liquid Glass tracks
         // a touch that begins inside it and follows the finger; the mic lived in the pill's
@@ -377,7 +359,7 @@ final class ChatComposerView: UIView {
 
         // A glass view scaled to a dot is still a glass view: unhide before any entrance, hide
         // after any exit, so nothing invisible is left rendering.
-        for b in [plusButton, trashButton, sendButton, pauseButton] where targetAlpha(for: b) > 0 { b.isHidden = false }
+        for b in [plusButton, trashButton, sendButton] where targetAlpha(for: b) > 0 { b.isHidden = false }
         let changes = { [self] in
             refreshAppearance()
             setNeedsLayout()
@@ -385,7 +367,7 @@ final class ChatComposerView: UIView {
         }
         let finish: (Bool) -> Void = { [weak self] _ in
             guard let self else { return }
-            for b in [self.plusButton, self.trashButton, self.sendButton, self.pauseButton] where b.alpha == 0 { b.isHidden = true }
+            for b in [self.plusButton, self.trashButton, self.sendButton] where b.alpha == 0 { b.isHidden = true }
         }
         if let clock { clock.run(changes, done: finish) } else { changes(); finish(true) }
 
@@ -434,13 +416,6 @@ final class ChatComposerView: UIView {
         // tint, so a chat colour cannot reach one and miss the other.
         sendButton.configuration?.baseBackgroundColor = s.sendTint
         sendButton.tintColor = s.sendTint
-        // Pause (16 semibold) while recording; the review's red mic (18) to continue. RED, not the
-        // accent — red is the recording signal everywhere here.
-        pauseButton.configuration?.image = UIImage(systemName: s.reviewing ? "mic.fill" : "pause.fill")
-        pauseButton.configuration?.preferredSymbolConfigurationForImage = s.reviewing
-            ? UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)
-            : UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
-        pauseButton.accessibilityLabel = s.reviewing ? "Continue recording" : "Pause and listen back"
 
         playButton.icon.image = UIImage(systemName: s.previewPlaying ? "pause.fill" : "play.fill",
                                         withConfiguration: UIImage.SymbolConfiguration(pointSize: 22))
@@ -472,12 +447,11 @@ final class ChatComposerView: UIView {
     /// Alphas and transforms for the current state. Frames are `layoutSubviews`'s.
     private func refreshAppearance() {
         let s = shown
-        for b in [plusButton, trashButton, sendButton, pauseButton] {
+        for b in [plusButton, trashButton, sendButton] {
             let a = targetAlpha(for: b)
             b.alpha = a
-            // The pause only fades (the old `.transition(.opacity)`); the others leave as a dot.
-            let exitScale: CGFloat = b === trashButton ? 0.6 : b === pauseButton ? 1 : 0.1
-            b.transform = a > 0 ? .identity : CGAffineTransform(scaleX: exitScale, y: exitScale)
+            b.transform = a > 0 ? .identity : CGAffineTransform(scaleX: b === trashButton ? 0.6 : 0.1,
+                                                                y: b === trashButton ? 0.6 : 0.1)
         }
         fieldRow.alpha = s.recordingActive ? 0 : 1
         fieldRow.isUserInteractionEnabled = !s.recordingActive
@@ -501,7 +475,6 @@ final class ChatComposerView: UIView {
         let s = shown
         if b === plusButton { return s.recordingActive ? 0 : 1 }
         if b === trashButton { return s.recordLocked && s.reviewing ? 1 : 0 }
-        if b === pauseButton { return s.recordLocked ? 1 : 0 }
         return (s.hasText || s.recordLocked) ? 1 : 0
     }
 
@@ -604,18 +577,6 @@ final class ChatComposerView: UIView {
         let c: UIColor = armed ? .systemRed : .secondaryLabel
         holdChevron.tintColor = c
         holdHintLabel.textColor = c
-    }
-
-    // MARK: - Hit-testing beyond the bounds
-
-    /// The pause button hangs above the bar. UIKit asks a subview whether a point is inside it
-    /// before it ever calls `hitTest`, and the default answer for a point above the bounds is no —
-    /// so the button drew and was never reachable (the exact failure the 2026-08-24 SwiftUI overlay
-    /// was built around). Saying yes for the button's own frame is all it takes; the default
-    /// `hitTest` then walks the subviews and finds it.
-    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-        if !pauseButton.isHidden, pauseButton.alpha > 0.01, pauseButton.frame.contains(point) { return true }
-        return super.point(inside: point, with: event)
     }
 
     // The timer and the halo follow the recorder at 30Hz while a recording exists. A display link
@@ -773,9 +734,6 @@ final class ChatComposerView: UIView {
         micGlyph.frame = CGRect(x: (M.button - 22) / 2, y: (M.button - 24) / 2, width: 22, height: 24)
         gifButton.frame = CGRect(x: micX - M.inPillSpacing - M.button, y: fh - M.button,
                                  width: M.button, height: M.button)
-        // The pause floats above the send button, outside the bounds, 16 above the padded bar top.
-        pauseButton.frame = CGRect(x: W - M.button, y: -(s.outerInsets.top + M.pauseGap + M.button),
-                                   width: M.button, height: M.button)
         textView.frame = CGRect(x: 0, y: 0, width: max(0, tw), height: fh)
         let fit = ceil(textView.sizeThatFits(CGSize(width: max(1, tw), height: .greatestFiniteMagnitude)).height)
         textView.isScrollEnabled = fit > maxTextHeight

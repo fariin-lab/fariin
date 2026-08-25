@@ -433,12 +433,11 @@ struct ThreadView: View {
                         }
                     }
             }
-            // ⛔ THE RECORDING PAUSE / CONTINUE BUTTON IS THE BAR'S OWN NOW — owner, 2026-08-25, on
-            // build 681: "pause is not working". It stood here as a SwiftUI overlay floating over the
-            // UIKit list since 2026-08-24, and that placement was never verified on a device; with the
-            // bar itself UIKit now, `ChatComposerView` draws it above its send button and extends its
-            // own hit-test to reach it (`point(inside:)`), so no SwiftUI-over-UIKit question is left
-            // to ask. The bar is still not grown to contain it: its height is the list's bottom inset.
+            // ⛔ THE RECORDING PAUSE / CONTINUE BUTTON IS THE LIST'S NOW — its third home, and the
+            // one where touches provably land (owner, builds 681 and 682: dead as a SwiftUI overlay
+            // here, dead again as the bar's own subview above the bar's bounds). See
+            // `MessageListController.setVoiceControl`; ThreadView only tells it what to be, via the
+            // `voiceControl` parameters on the list.
             // A key that changes WHILE the chat is open (their reinstall lands mid-conversation) has
             // to say so there and then, not on the next open.
             .onReceive(NotificationCenter.default.publisher(for: .peerKeyChanged)) { note in
@@ -2684,6 +2683,11 @@ struct ThreadView: View {
             },
             loadingOlder: repo.loadingOlder,
             composerBarHeight: composerBarHeight,   // extra bottom clearance so the newest msg clears the bar
+            // The recording's floating pause / continue — drawn and hit-tested by the LIST, which
+            // owns the screen above the bar (see `MessageListController.setVoiceControl`).
+            voiceControl: recordLocked ? (reviewingNote ? 2 : 1) : 0,
+            voiceControlInset: composerSideInset,
+            onVoiceControlTap: { if reviewingNote { resumeRecording() } else { beginPreview() } },
             menuActionTick: menuActionTick,         // SwiftUI menu action fired → hold reloads through its dismissal
             topOverlayHeight: searchActive ? 0 : pinBarHeight,   // floating date pill drops below the pin bar
             isAtBottom: $isAtBottom,
@@ -5057,10 +5061,6 @@ struct ThreadView: View {
         a.cancelRecording = { cancelRecording() }
         a.sendRecording = { sendRecording() }
         a.togglePreview = { togglePreview() }
-        // PAUSE IS THE ONE RECORDING CONTROL: it lands on the review with everything waiting.
-        // CONTINUE is the review's red mic: the next stretch; the stitcher joins them at send.
-        a.pauseRecording = { beginPreview() }
-        a.resumeRecording = { resumeRecording() }
         a.seekPreview = { seekPreview($0) }
         a.toggleVoiceOnce = {
             // ONE-TIME LISTEN — arming it flashes the little confirmation over the bar.

@@ -88,6 +88,9 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // clears the bar: the list is full-bleed UNDER the composer, so the composer's own safe-area inset is
     // not folded for us. It goes into contentInset.bottom; see updateInsets().
     var composerBarHeight: CGFloat = 0
+    var voiceControl: Int = 0                  // 0 none · 1 pause · 2 continue — the recording's floating control
+    var voiceControlInset: CGFloat = 20        // the composer's side inset (the send button's column)
+    var onVoiceControlTap: () -> Void = {}
     // Bumped by ThreadView from inside a SWIFTUI context-menu action (e.g. Select). UIKit's
     // context-menu callbacks cannot see SwiftUI-presented menus, so this is how the controller learns
     // "a menu is dismissing right now" and holds cell reloads until the animation is over.
@@ -126,6 +129,8 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onMenuCloseKeyboard = onMenuCloseKeyboard
         vc.onMenuRestoreKeyboard = onMenuRestoreKeyboard
         vc.setComposerBarHeight(composerBarHeight)
+        vc.onVoiceControlTap = onVoiceControlTap
+        vc.setVoiceControl(voiceControl, inset: voiceControlInset)
         vc.setTopOverlayHeight(topOverlayHeight)
         vc.noteMenuActionTick(menuActionTick)   // BEFORE setSelecting/apply: arm the dismissal grace first
         vc.setSelecting(selecting)
@@ -490,6 +495,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // device attempts on the inverted list washed the entire chat; the verdict that stood here
         // recommended exactly this un-inversion. Nothing is configured: `.automatic` on both edges is
         // what the reference app's list has, because it sets nothing either.
+        // ⛔ EXCEPT THE BOTTOM ONE, ON HIS ORDER — 2026-08-25, build 682, screenshot of a wall of
+        // frost over the chat: "remove chat bottom blur, don't touch top header". The bottom edge
+        // effect covers the whole clearance band above the composer, and our clearance is large.
+        // The TOP one stays: it is the header blur he asked for.
+        collectionView.bottomEdgeEffect.isHidden = true
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
         NSLayoutConstraint.activate([
@@ -592,6 +602,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // handler is inert outside an armed menu-dismissal grace window.
         NotificationCenter.default.addObserver(self, selector: #selector(menuWindowDidHide(_:)),
                                                name: UIWindow.didBecomeHiddenNotification, object: nil)
+        // KEYBOARD, BY NOTIFICATION — see `notifiedKeyboardBand` for why the layout guide alone
+        // could not be trusted inside this hosted controller.
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChangeFrame(_:)),
+                                               name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHideNote(_:)),
+                                               name: UIResponder.keyboardWillHideNotification, object: nil)
         // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
         NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
                                                name: UIApplication.userDidTakeScreenshotNotification, object: nil)
@@ -1732,7 +1748,52 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // a reader who was at the newest message no longer looks it. Theirs can use the live test because
     // their safe area never carries the keyboard; ours cannot, so the question is asked against the
     // geometry this method last left behind.
+    /// The keyboard band the NOTIFICATION most recently announced; nil at rest.
+    ///
+    /// ⛔ THE GUIDE ALONE WAS NOT ENOUGH ON HIS PHONE — owner, 2026-08-25, build 682, iOS 26: typing
+    /// left the bubbles BEHIND the keys, and the open "feels small… bubbles under keyboard". The
+    /// layout guide never moved inside this hosted controller on that device, and with the
+    /// safe-area route deliberately severed (see `nativeList` in ThreadView) the keyboard had no way
+    /// into the list at all; the rest fallback in `keyboardBand` masked it whenever the keyboard was
+    /// down, which is why everything at rest looked fixed. At-rest truth still comes from the guide
+    /// or the safe area; a MOVING keyboard announces itself here, and the announcement carries its
+    /// own duration and curve, so `rideKeyboard` wraps the inset work in exactly that animation —
+    /// the reference app's own shipped mechanism from before the guide existed, and the one route
+    /// that cannot depend on how a hosted view controller is plumbed. Where the guide does work, the
+    /// two agree and every write is idempotent.
+    private var notifiedKeyboardBand: CGFloat?
+
+    @objc private func keyboardWillChangeFrame(_ note: Notification) { rideKeyboard(note, hiding: false) }
+    @objc private func keyboardWillHideNote(_ note: Notification) { rideKeyboard(note, hiding: true) }
+
+    private func rideKeyboard(_ note: Notification, hiding: Bool) {
+        guard isViewLoaded, view.window != nil, !isDisappearing,
+              let info = note.userInfo,
+              let end = (info[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+        // The end frame is in screen coordinates; its overlap with THIS view is the band. A hide's
+        // end frame is off the bottom, so its overlap never exceeds the resting safe area.
+        let local = view.convert(end, from: nil)
+        let overlap = max(0, view.bounds.maxY - local.minY)
+        notifiedKeyboardBand = (hiding || overlap <= view.safeAreaInsets.bottom + 0.5) ? nil : overlap
+        let d = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
+        let curve = (info[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.uintValue ?? 7
+        if d > 0 {
+            // The keyboard's own duration and curve (7, its private one, handed to UIKit as
+            // `rawValue << 16`): the offset write inside rides the keys on every OS, whether or not
+            // the guide also fires.
+            UIView.animate(withDuration: d, delay: 0,
+                           options: [UIView.AnimationOptions(rawValue: curve << 16),
+                                     .beginFromCurrentState, .allowUserInteraction],
+                           animations: { self.updateInsets(); self.view.layoutIfNeeded() })
+        } else {
+            // An interactive drag reports no duration: the finger owns the motion.
+            updateInsets()
+        }
+    }
+
     private var keyboardBand: CGFloat {
+        // A present keyboard is whatever the notification said — see `notifiedKeyboardBand`.
+        if let band = notifiedKeyboardBand { return band }
         let frame = view.keyboardLayoutGuide.layoutFrame
         // The guide's frame is a zero RECT until UIKit first resolves it (distinct from the resolved
         // zero-HEIGHT frame a home-button phone reports at rest, whose minY is the view's bottom).
@@ -1979,6 +2040,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // stands down because a finger owns the list while the clearance shrinks.
         clampToNewestIfBeyond()
         keepNewestUntilFirstScroll()
+        positionVoiceControl()
         // The visible message viewport in window coordinates, for the media transitions' clipping view
         // (the reference app passes `collectionView.adjustedContentInset` as `clippingAreaInsets`; this
         // is the same region expressed as a rect).
@@ -2513,6 +2575,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
               !collectionView.isDragging, !collectionView.isTracking,
               !collectionView.isDecelerating else { return }
         captureFreezeUntil = Date().addingTimeInterval(1.5)
+        // ⛔ THE SCREENSHOT WAS CLOSING THE KEYBOARD — owner, 2026-08-25, build 682: "when I open
+        // keyboard then I take screenshot, keyboard start disappearing". The full-page capture
+        // scrolls this list, and with `keyboardDismissMode = .interactive` a system-driven downward
+        // scroll reads as a dismiss drag. The mode is parked at `.none` for the capture window and
+        // restored with the snap-back.
+        collectionView.keyboardDismissMode = .none
         let snapBack: () -> Void = { [weak self] in
             guard let self else { return }
             let target = self.clampOffset(self.lastStableOffset)
@@ -2523,8 +2591,73 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         DispatchQueue.main.async(execute: snapBack)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.55) { [weak self] in
             snapBack()
+            self?.collectionView.keyboardDismissMode = .interactive
             self?.settleFlush()
         }
+    }
+
+    // MARK: - Voice pause / continue (the recording's floating control)
+
+    /// ⛔ THIRD HOME, AND THE ONE WHERE TOUCHES PROVABLY LAND — owner, 2026-08-25, build 682: "still
+    /// is not working pause button". As a SwiftUI overlay over this list it was dead (08-24), and as
+    /// the composer bar's own subview reaching outside its bounds it was dead again: the hosting
+    /// view resolves hits from its own layout and never asks a platform view about points outside
+    /// the frame SwiftUI gave it. The region ABOVE the bar belongs to THIS view — the jump arrow
+    /// beside it takes taps every day — so the button lives here, told what to be by ThreadView.
+    var onVoiceControlTap: () -> Void = {}
+    private var voiceControlButton: UIButton?
+    private var voiceControlKind = 0          // 0 none · 1 pause · 2 continue (reviewing)
+    private var voiceControlInset: CGFloat = 20
+
+    func setVoiceControl(_ kind: Int, inset: CGFloat) {
+        voiceControlInset = inset
+        positionVoiceControl()
+        guard kind != voiceControlKind else { return }
+        voiceControlKind = kind
+        if kind == 0 {
+            guard let b = voiceControlButton else { return }
+            UIView.animate(withDuration: 0.2, animations: { b.alpha = 0 },
+                           completion: { [weak self] _ in
+                if self?.voiceControlKind == 0 { b.isHidden = true }
+            })
+            return
+        }
+        let b: UIButton
+        if let existing = voiceControlButton {
+            b = existing
+        } else {
+            var cfg = UIButton.Configuration.glass()
+            cfg.cornerStyle = .capsule
+            cfg.contentInsets = .zero
+            b = UIButton(configuration: cfg)
+            b.alpha = 0
+            b.addAction(UIAction { [weak self] _ in self?.onVoiceControlTap() }, for: .touchUpInside)
+            view.addSubview(b)
+            voiceControlButton = b
+        }
+        // PAUSE (16 semibold) while recording; the review's red mic (18) to CONTINUE. RED, not the
+        // accent — red is the recording signal everywhere in the bar.
+        var cfg = b.configuration ?? .glass()
+        cfg.image = UIImage(systemName: kind == 2 ? "mic.fill" : "pause.fill")
+        cfg.preferredSymbolConfigurationForImage = kind == 2
+            ? UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)
+            : UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
+        cfg.baseForegroundColor = .systemRed
+        b.configuration = cfg
+        b.accessibilityLabel = kind == 2 ? "Continue recording" : "Pause and listen back"
+        b.isHidden = false
+        view.bringSubviewToFront(b)
+        positionVoiceControl()
+        UIView.animate(withDuration: 0.2) { b.alpha = 1 }
+    }
+
+    /// The send button's column (the composer's side inset), `composerBarH + 16` above the physical
+    /// bottom — the same numbers the old overlay used, so it sits where it has been sitting.
+    private func positionVoiceControl() {
+        guard let b = voiceControlButton else { return }
+        b.frame = CGRect(x: view.bounds.maxX - voiceControlInset - 40,
+                         y: view.bounds.maxY - composerBarH - 16 - 40,
+                         width: 40, height: 40)
     }
 }
 
