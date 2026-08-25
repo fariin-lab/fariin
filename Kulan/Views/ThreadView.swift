@@ -119,6 +119,9 @@ struct ThreadView: View {
     // waveform of everything recorded so far; drawing it is what makes the review step feel like
     // listening rather than staring at a number.
     @State private var previewWaveform: [Int] = []
+    /// The review strip's bars, sampled from the stitched file the way the reference app samples a
+    /// note (see `SampledWaveform`). Filled by the `.task(id: previewURL)` on the strip.
+    @State private var previewDecibels: [Float] = []
     @State private var previewProgress: Double = 0
     @State private var previewTimer: Timer?
     @State private var holdHint = false             // "hold to record" flash after an accidental tap
@@ -5684,12 +5687,24 @@ struct ThreadView: View {
                         // wherever we want?"), reversing the old checking-is-not-editing stance. Same
                         // gesture machinery as the sent bubble: tap lands, horizontal drag scrubs,
                         // vertical is refused so nothing else moves.
-                        WaveformBars(bars: previewWaveform.isEmpty ? Array(repeating: 30, count: 28) : previewWaveform,
-                                     progress: previewProgress,
-                                     played: Theme.accent(dark),
-                                     unplayed: Theme.accent(dark).opacity(0.35),
-                                     onSeek: { pct in seekPreview(pct) })
+                        // ⛔ THE REFERENCE APP'S WAVEFORM, FROM THE FILE — owner, 2026-08-25: paused,
+                        // ours "looks like dots". Their strip is sampled from the audio itself and
+                        // drawn with their geometry; `SampledWaveform` is that pipeline and this view
+                        // is their draw routine. The metered `previewWaveform` still travels with the
+                        // note for the bubble; it just no longer draws this strip.
+                        SampledWaveformView(decibels: previewDecibels,
+                                            progress: previewProgress,
+                                            played: Theme.accent(dark),
+                                            unplayed: Theme.accent(dark).opacity(0.35),
+                                            onSeek: { pct in seekPreview(pct) })
                             .frame(height: 22).frame(maxWidth: .infinity)
+                            // Re-sampled whenever the file changes: the first pause, and every later
+                            // pause after a resume, when the stitch is a new file.
+                            .task(id: previewURL) {
+                                guard let url = previewURL else { previewDecibels = []; return }
+                                let db = await SampledWaveform.decibels(of: url)
+                                if !Task.isCancelled, previewURL == url { previewDecibels = db }
+                            }
                         // Total on the right, the reference's order: play · wave · time.
                         Text(timeString(recorder.elapsed)).font(.system(size: 15).monospacedDigit())
                             .foregroundStyle(.secondary)
@@ -5933,6 +5948,7 @@ struct ThreadView: View {
         previewPlayer = nil
         previewPlaying = false
         previewURL = nil
+        previewDecibels = []
         previewWaveform = []
         previewProgress = 0
         reviewingNote = false
