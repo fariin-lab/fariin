@@ -1598,6 +1598,24 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             .sorted()
     }
 
+    /// How far a thread falls short of filling the room between the bars, or zero once it fills it.
+    ///
+    /// Carried as extra TOP inset by `updateInsets`, which is what makes a short conversation hang
+    /// from the composer the way every messenger draws it, instead of sitting under the header with
+    /// the screen empty below. See the note at its call site for why this went missing.
+    ///
+    /// ⚠️ THE SAFE AREA IS READ, NOT ASSUMED. With the keyboard up `safeAreaInsets.bottom` IS the
+    /// keyboard, so the room shrinks by exactly what the keys took and the shortfall shrinks with it
+    /// — which is the same arithmetic in both keyboard states rather than a special case for one.
+    private func bottomAlignShortfall(bottomInset: CGFloat) -> CGFloat {
+        let safe = collectionView.safeAreaInsets
+        let room = collectionView.bounds.height
+            - (safe.top + topOverlayHeight)
+            - (safe.bottom + bottomInset)
+        guard room > 0 else { return 0 }
+        return max(0, room - collectionView.contentSize.height)
+    }
+
     private var minContentOffsetY: CGFloat { -collectionView.adjustedContentInset.top }
     private var maxContentOffsetY: CGFloat {
         max(minContentOffsetY,
@@ -1669,14 +1687,37 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let pop = navigationController?.interactivePopGestureRecognizer {
             switch pop.state { case .possible, .failed: break; default: return }
         }
-        let top = topOverlayHeight
         let bottom = composerBarH + 12
+        // ⛔ A SHORT CONVERSATION HANGS FROM THE BOTTOM, NOT THE TOP — owner, 2026-08-25, iPhone 13
+        // Pro Max on iOS 27, after three keyboard fixes: "when open keyboard message is jumping",
+        // with a screenshot of six rows pinned under the header and most of the screen empty below
+        // them.
+        //
+        // ⚠️ THIS WAS NEVER AN ANIMATION BUG, AND I SPENT THREE ROUNDS TREATING IT AS ONE. A top-down
+        // list puts content shorter than the viewport at the TOP; that is simply what a scroll view
+        // does. The inverted list gave the chat behaviour for free — item 0 sat at content y = 0,
+        // which the flip put at the bottom of the screen — and un-inverting it removed that property
+        // without replacing it. Every messenger bottom-aligns a short thread, so a chat with a
+        // handful of messages has looked wrong since the un-inversion.
+        //
+        // ⚠️ AND THE KEYBOARD IS WHAT MAKES IT READ AS A JUMP. The gap under the last message is
+        // whatever the viewport has left over; opening the keyboard takes ~340pt of that away, the
+        // leftover changes by the same amount, and the whole block moves. Nothing was animating
+        // badly — the destination itself was wrong, and it moved.
+        //
+        // The shortfall is carried as TOP inset: content shorter than the room available is pushed
+        // down until its last row sits just above the composer, and a thread long enough to fill the
+        // screen adds nothing, so this is invisible in every conversation with real history.
+        let shortfall = bottomAlignShortfall(bottomInset: bottom)
+        let top = topOverlayHeight + shortfall
         let insetsChanged = abs(collectionView.contentInset.top - top) > 0.5
             || abs(collectionView.contentInset.bottom - bottom) > 0.5
         if insetsChanged {
             collectionView.contentInset.top = top
             collectionView.contentInset.bottom = bottom
-            collectionView.verticalScrollIndicatorInsets.top = top
+            // The INDICATOR keeps the real top: the shortfall is padding, not content the scroll bar
+            // should pretend exists.
+            collectionView.verticalScrollIndicatorInsets.top = topOverlayHeight
             collectionView.verticalScrollIndicatorInsets.bottom = bottom
         }
         // The keyboard and the safe area reach this method through the ADJUSTED inset, not through
