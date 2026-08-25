@@ -2693,6 +2693,28 @@ struct ThreadView: View {
             // written on scroll, so scrolling never re-runs the conversation tree.
             dayLabelFor: { id in repo.indexById[id].map { dayLabel(repo.items[$0].createdAt) } }
         )
+        // ⛔ THE KEYBOARD MUST NOT REACH THE LIST THROUGH SWIFTUI'S SAFE AREA — owner, 2026-08-25,
+        // build 681, GIF and "+" with the keyboard up: "the chat/message list jumps downward during
+        // the transition", with a screenshot of the list already at its keyboard-down position while
+        // the keys were a third of the way down.
+        //
+        // ⚠️ THE JUMP IS UISCROLLVIEW'S OWN CLAMP, AND IT HAPPENS BEFORE ANY ANIMATION. SwiftUI folds
+        // the keyboard into the safe area it hands the hosted list; on a close it shrinks that safe
+        // area, `.always` shrinks the adjusted bottom inset by the keyboard's height in the same
+        // instant, and a scroll view whose offset is now past its maximum clamps it — unanimated,
+        // outside the keyboard's animation block, before the layout guide has moved. On an OPEN the
+        // inset only grows, nothing is out of range, nothing clamps: which is why only the close ever
+        // jumped, and why it jumped on the OS that applies the safe-area change in one step. No
+        // arithmetic in `updateInsets` can undo a clamp that ran before it was called.
+        //
+        // The reference app's list never has the keyboard in its safe area at all; its bar hangs
+        // from `keyboardLayoutGuide` and the inset is written by hand inside the keyboard's block.
+        // Ignoring the keyboard region here gives the list the same footing: `keyboardTracker` and
+        // the guide are then the ONLY way the keyboard changes its geometry, and that way is animated.
+        // The container region was already ignored (full-bleed under both bars); the overlays on the
+        // outer layer (jump arrow, recording bubble) keep their keyboard-aware placement because
+        // this is applied to the list alone.
+        .ignoresSafeArea(.keyboard)
     }
 
     // Native-list jump: flash the message (highlightId) and scroll the collection view to it.
@@ -5008,9 +5030,14 @@ struct ThreadView: View {
             keyboard.onceHidden { showAttachPanel = true }
         }
         a.gif = {
-            // Same as "+": resign the keyboard first so it doesn't flash back after the picker.
+            // Same as "+", all the way — owner, 2026-08-25, build 681: "the keyboard goes away, but
+            // the composer is still visible while the GIF sheet is opening… close the keyboard and
+            // composer first, then open the sheet." The picker used to be presented in the same
+            // instant the field resigned, so a modal presentation ran over a keyboard dismissal in
+            // the same frames. It waits for the keyboard's own `didHide` now (immediate if the
+            // keyboard was never up), exactly as the attach sheet does.
             inputFocused = false
-            showGifPicker = true
+            keyboard.onceHidden { showGifPicker = true }
         }
         a.send = { if editingMessage != nil { saveEdit() } else { send() } }
         a.dismissBanner = { style in

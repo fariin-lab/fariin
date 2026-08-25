@@ -478,8 +478,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         collectionView.delegate = self
         collectionView.keyboardDismissMode = .interactive
         // `.always`: UIKit folds the safe area in on the correct sides now that nothing is mirrored.
-        // The nav bar lands in adjustedContentInset.top and the home indicator or keyboard in .bottom,
-        // and updateInsets() adds only the two things UIKit cannot know: the pinned bar and the composer.
+        // The nav bar lands in adjustedContentInset.top and the home indicator in .bottom. NOT the
+        // keyboard: the SwiftUI side ignores the keyboard region for this list (see `nativeList` in
+        // ThreadView for the clamp-jump that came with it), so the keyboard reaches this view only
+        // through `keyboardTracker` and the layout guide, inside the keyboard's own animation block.
+        // updateInsets() adds the rest: the keyboard band, the pinned bar and the composer.
         collectionView.contentInsetAdjustmentBehavior = .always
         // THE SYSTEM'S SCROLL EDGE EFFECTS ARE ON, UNTOUCHED (owner, 2026-08-25). This is the iOS 26
         // Liquid Glass blur under the header he asked for, and it is the whole reason the list is
