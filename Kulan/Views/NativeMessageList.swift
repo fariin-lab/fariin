@@ -290,7 +290,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var shouldAnimateKeyboardChanges = false     // true only between viewDidAppear and viewWillDisappear
     private var keyboardWasAtNewest = false              // latched at willHide: reader was at the newest message
     private var keyboardSettlePending = false            // didHide fired mid-drag; settle at drag/decel end
-    private var keyboardClosing = false                  // willHide → didHide: the per-layout glue window
     private var isDisappearing = false        // swipe-back / pop in progress â†’ freeze all content-offset work
     private var lastStableOffset: CGFloat = 0 // last user/our-intent offset â†’ screenshot-capture recovery
     // Selection-mode animation coordination: the land that CARRIES the checkbox change passes (even
@@ -1615,8 +1614,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// bottom bounce region with the last bubble under the composer, and nothing pulls them back on its
     /// own because no finger is there to end a drag. Being beyond the bound at rest is never legitimate,
     /// so it is enforced wherever the list comes to rest rather than patched per timing.
+    ///
+    /// ⚠️ AND NOT WHILE THE KEYBOARD IS MOVING. `maxContentOffsetY` shrinks continuously as the keys
+    /// leave, so a reader riding the animation down is "beyond the bound" on every intermediate frame
+    /// — and this would snap them to it, unanimated, on every layout pass. That is the second of the
+    /// three writers that used to fight the close. The bound is only meaningful once it has stopped
+    /// moving, which is what `keyboardClock == nil` says; `keyboardDidHide` runs this the instant the
+    /// clock is spent, so the invariant is enforced no later than before.
     private func clampToNewestIfBeyond() {
-        guard didFirstLand, !isDisappearing,
+        guard didFirstLand, !isDisappearing, keyboardClock == nil,
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
               !sendAnimating, !programmaticScrollAnimating else { return }
         let bound = maxContentOffsetY
@@ -1845,9 +1851,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // The recorded distance, not a live test: by the time this fires the bound may already
             // have moved. 44 is the loose neighbourhood a dismiss drag can pull the reader into.
             keyboardWasAtNewest = lastKnownDistanceFromBottom <= 44
-            keyboardClosing = true   // the glue in viewDidLayoutSubviews runs until didHide
-        } else {
-            keyboardClosing = false  // reopened mid-close — stop gluing, the open owns it now
         }
         updateInsets()
     }
@@ -1861,17 +1864,26 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// cannot be working from a bound that is still moving. The clock is dropped afterwards, so a
     /// later composer-growth write snaps as it should instead of inheriting a keyboard animation.
     @objc private func keyboardDidShow() {
-        updateInsets(force: true)   // final geometry; see updateInsets(force:)
-        recordDistanceFromBottom()
+        // ⚠️ THE CLOCK IS SPENT BEFORE THE SETTLE, NOT AFTER. The keys have landed, so this pass must
+        // SETTLE against final geometry; leaving the clock alive would start a fresh animation of a
+        // full keyboard duration after the keyboard had already finished, which is the "delayed
+        // movement" it is meant to prevent. If the animated write already arrived, the settle's own
+        // `abs(offset - want) > 0.5` test makes this do nothing at all.
         keyboardClockToken &+= 1
         keyboardClock = nil
+        updateInsets(force: true)
+        recordDistanceFromBottom()
     }
 
     @objc private func keyboardDidHide() {
+        // The keys have landed: spend the clock first, so what follows settles rather than starting a
+        // second animation behind them. Same reasoning as `keyboardDidShow`.
+        keyboardClockToken &+= 1
+        keyboardClock = nil
         // One more recompute once the safe area has stopped moving. Forced for the same reason
         // did-show is: an earlier pass may already have eaten the change signal.
         updateInsets(force: true)
-        clampToNewestIfBeyond()   // the invariant, before the latch logic below
+        clampToNewestIfBeyond()   // the invariant, now that the bound has stopped moving
         // THE SETTLE THE CLOSE WAS MISSING (build 8069d37, user screenshot: the newest bubble at rest
         // under the composer after open-then-close). Two holes conspired:
         //   * updateInsets' change-detection guard protects the OFFSET work too â€” once the insets are
@@ -1891,9 +1903,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             }
         }
         keyboardWasAtNewest = false
-        keyboardClosing = false   // the glue window ends where the settle takes over
-        keyboardClockToken &+= 1
-        keyboardClock = nil       // the keys have landed; see `keyboardClock`
         settleFlush()
     }
 
@@ -2023,18 +2032,19 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // We own the insets now, so nothing folds a geometry change in for us. Cheap: updateInsets()
         // returns immediately unless a value actually moved.
         updateInsets()
-        // THE CLOSE GLUE (larger-iPhone report: the last bubble visibly sat under the composer for the
-        // beat between the close and the didHide settle — a taller keyboard displaces more, so big
-        // screens made the transient obvious). One settle at the END means every frame before it can be
-        // wrong. the reference app recomputes on every layout pass while the bar moves; this is that: for the whole
-        // willHide→didHide window, a reader the latch says was at the newest message is HELD there on
-        // every pass — updateInsets can't do it, its change-detection guard stops running once the
-        // insets have landed. Never while a finger or fling owns the list.
-        if keyboardClosing, keyboardWasAtNewest, didFirstLand, !isDisappearing,
-           !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
-           abs(collectionView.contentOffset.y - maxContentOffsetY) > 0.5 {
-            collectionView.setContentOffset(CGPoint(x: 0, y: maxContentOffsetY), animated: false)
-        }
+        // ⛔ THE CLOSE GLUE IS GONE, AND IT WAS WHAT MADE THE CLOSE SNAP — owner, 2026-08-25, asking
+        // for the close to be as smooth as the open now is.
+        //
+        // ⚠️ IT WAS RIGHT FOR A WORLD WITH NO ANIMATED WRITER. It ran on EVERY layout pass of the
+        // willHide→didHide window and wrote `maxContentOffsetY` unanimated, because back then the
+        // only alternative was one settle at the very end and every frame before it was wrong. Now
+        // `updateInsets` animates the offset over the keyboard's own duration and curve, so this ran
+        // ON TOP of that animation, several times, each write teleporting the offset to a bound that
+        // was itself still moving. An animation cannot survive being overwritten every frame: what
+        // the eye gets is the snap this was written to prevent, arriving from the other direction.
+        //
+        // The job it did is done properly now: the animated write in `updateInsets` carries the
+        // reader down WITH the keys, and `keyboardDidHide` forces a settle against final geometry.
         // The invariant net, independent of any keyboard bookkeeping: at rest, never beyond the newest
         // bound. Catches the interactive keyboard dismissal, where every keyboard-aware correction
         // above correctly stands down because a finger owns the list while the inset shrinks.
