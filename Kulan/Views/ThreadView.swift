@@ -5008,8 +5008,32 @@ struct ThreadView: View {
             }
         }
         // Big red mic + lock, ON TOP of the whole composer so it's never clipped/behind the pill.
+        //
+        // ⛔ ITS EXIT IS THE ONE THING IN THE LOCK THAT IS NOT ON THE CONTROL SPRING — owner,
+        // 2026-08-25, after the comparison. The reference app runs the whole lock on its one
+        // 0.25 animator EXCEPT the big circle and the lock chevron leaving, which it hands to a
+        // plain `UIView.animate(withDuration: 0.2)` that takes them to alpha 0 and scale 0.9. A
+        // spring on something that is disappearing can overshoot, and an overshoot nobody can see
+        // the end of just reads as slack.
+        //
+        // ASYMMETRIC ON PURPOSE: only the removal is specified. The entrance is left exactly as it
+        // was — his "keep everything else unchanged" — even though the reference plays the same
+        // 0.9 on the way in too.
+        //
+        // The ZStack is what makes the curve stick. `.animation(_:value:)` has to sit on a view
+        // that SURVIVES the change to govern it, so it goes on the container rather than on the
+        // thing being removed; being the inner-most animation for this subtree, it also wins over
+        // the `refControlSpring` further down, which would otherwise claim this the moment
+        // `recordLocked` flipped in the same instant.
         .overlay(alignment: .bottomTrailing) {
-            if recordingHeld { recordingMicOverlay }
+            ZStack {
+                if recordingHeld {
+                    recordingMicOverlay
+                        .transition(.asymmetric(insertion: .identity,
+                                                removal: .scale(scale: 0.9).combined(with: .opacity)))
+                }
+            }
+            .animation(Self.refMicExit, value: recordingHeld)
         }
         // ONE CURVE FOR THE WHOLE LOCK, and it is theirs. Everything keyed to `recordLocked` — the
         // two states cross-fading, the send button growing in, the mic overlay leaving — rides this
@@ -5549,6 +5573,10 @@ struct ThreadView: View {
     /// Reserved for anything that changes this bar's HEIGHT. Nothing does today — both composer
     /// states are 40 — but their split is kept so a future height change uses the stiffer one.
     private static let refHeightSpring: Animation = .spring(response: 0.3, dampingFraction: 0.9)
+    /// The big red mic's EXIT, and nothing else. Their `lockVoiceMemoUI` takes the circle and the
+    /// lock chevron off on a plain 0.2s ease rather than on the control animator, so this is the
+    /// one place the "one curve per moment" rule is deliberately broken — by them, first.
+    private static let refMicExit: Animation = .easeOut(duration: 0.2)
 
     private var lockedRecordingBar: some View {
         // ⛔ ONE ROW TALL, WITH THE PAUSE FLOATING OVER THE CHAT — owner, 2026-08-24: locking a
