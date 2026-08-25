@@ -142,6 +142,7 @@ struct OfficialChatView: View {
         m.avatarAsset = UIImage(named: "welcome-mark")
         m.subtitle = OfficialChannel.subtitle
         m.titleIcon = ChatHeaderModel.officialTick()
+        m.backdrop = WallpaperBlur.headerBackdrop(for: OfficialChannel.cid, dark: dark)
         return m
     }
 

@@ -3372,6 +3372,8 @@ struct ThreadView: View {
         // Constant reminder that messages self-delete here — this timer being invisible is how a
         // whole chat history vanished unnoticed.
         if repo.disappearSeconds > 0 { m.secondaryIcon = ChatHeaderModel.disappearingTimer() }
+        // Light text over a dark wallpaper, dark over a bright one, measured rather than hoped for.
+        m.backdrop = chatHasWallpaper ? WallpaperBlur.headerBackdrop(for: cid, dark: dark) : .unspecified
         return m
     }
 

@@ -53,6 +53,66 @@ import UIKit
     private static let radius: CGFloat = 20
 
     private static var cache: [String: WallpaperBlurState] = [:]
+    private static var backdropCache: [String: UIUserInterfaceStyle] = [:]
+
+    /// THE INTERFACE STYLE THE HEADER'S TEXT NEEDS over this chat's wallpaper: `.dark` (light text)
+    /// when the band under the navigation bar is dark, `.light` when it is bright, `.unspecified`
+    /// when there is no wallpaper and the app's own appearance is the right answer.
+    ///
+    /// ⛔ THE NAME VANISHED ON A BLACK WALLPAPER — owner, 2026-08-25, screenshot: "name and subtitle
+    /// like last seen, if I use a black wallpaper no one can see". The header carries the reference
+    /// app's mechanism for this, a 10pt glass probe behind the avatar whose light/dark trait is meant
+    /// to follow the picture beneath and flip the labels; on his phone it did not fire, and a
+    /// mechanism that answers "sometimes" is not an answer for the one label a chat cannot do
+    /// without. This is the deterministic one: read the picture, measure the band the header sits
+    /// on, decide. The probe stays as the fallback for a chat with no wallpaper.
+    ///
+    /// Relative luminance with the gamma undone (the number contrast is actually defined on, see
+    /// `ProfilePalette`), averaged over the top 150pt: the status bar, the bar, the header. The whole
+    /// band rather than a point, so a dark picture with one bright highlight does not flip the text.
+    /// Cached per chat, theme and wallpaper version like the blur itself.
+    static func headerBackdrop(for cid: String, dark: Bool) -> UIUserInterfaceStyle {
+        let store = WallpaperStore.shared
+        guard store.hasWallpaper(for: cid) else { return .unspecified }
+        let frame = windowFrame
+        guard frame.width > 1, frame.height > 1 else { return .unspecified }
+        let key = "hdr|\(cid)|\(dark)|\(store.version)"
+        if let hit = backdropCache[key] { return hit }
+        guard let picture = renderWallpaper(cid: cid, dark: dark, size: frame.size) else { return .unspecified }
+        let band = CGRect(x: 0, y: 0, width: picture.size.width, height: min(150, picture.size.height))
+        let style: UIUserInterfaceStyle = averageLuminance(of: picture, in: band) < 0.4 ? .dark : .light
+        if backdropCache.count >= 8 { backdropCache.removeAll() }
+        backdropCache[key] = style
+        return style
+    }
+
+    /// Mean relative luminance of `rect` in `image`, 0 (black) to 1 (white). The band is drawn down
+    /// into a 4×4 bitmap with high-quality interpolation, which is a box average of the pixels, then
+    /// the sixteen samples are linearised and averaged. Cheap enough to run once per wallpaper.
+    private static func averageLuminance(of image: UIImage, in rect: CGRect) -> CGFloat {
+        guard let cg = image.cgImage else { return 0.5 }
+        let scale = CGFloat(cg.width) / max(1, image.size.width)
+        let pixelRect = CGRect(x: rect.minX * scale, y: rect.minY * scale,
+                               width: rect.width * scale, height: rect.height * scale)
+        guard let band = cg.cropping(to: pixelRect) else { return 0.5 }
+        let n = 4
+        var px = [UInt8](repeating: 0, count: n * n * 4)
+        guard let ctx = CGContext(data: &px, width: n, height: n, bitsPerComponent: 8, bytesPerRow: n * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return 0.5 }
+        ctx.interpolationQuality = .high
+        ctx.draw(band, in: CGRect(x: 0, y: 0, width: n, height: n))
+        func lin(_ v: UInt8) -> CGFloat {
+            let c = CGFloat(v) / 255
+            return c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+        }
+        var total: CGFloat = 0
+        for i in 0..<(n * n) {
+            let r = lin(px[i * 4]), g = lin(px[i * 4 + 1]), b = lin(px[i * 4 + 2])
+            total += 0.2126 * r + 0.7152 * g + 0.0722 * b
+        }
+        return total / CGFloat(n * n)
+    }
 
     /// The state for this chat, or nil when no picture is wanted: no wallpaper, or Reduce
     /// Transparency on (theirs shows the plain theme background then, and so do we — see

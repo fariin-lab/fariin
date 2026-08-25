@@ -100,6 +100,10 @@ final class ChatHeaderView: UIView {
 
     /// Kept so the glass-tracking handler can reach it; see init.
     private let textRows = UIStackView()
+    /// What the model said the backdrop is. `.unspecified` means "not known": no wallpaper, so the
+    /// glass probe below is allowed to decide. Anything else is a measured answer and the probe
+    /// must not overwrite it — see `WallpaperBlur.headerBackdrop`.
+    private var statedBackdrop: UIUserInterfaceStyle = .unspecified
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -161,8 +165,12 @@ final class ChatHeaderView: UIView {
         ])
         glassTrackingView.contentView.registerForTraitChanges(
             [UITraitUserInterfaceStyle.self],
-            handler: { [weak textRows] (view: UIView, _) in
-                textRows?.overrideUserInterfaceStyle = view.traitCollection.userInterfaceStyle
+            handler: { [weak self] (view: UIView, _) in
+                // The probe answers only when nothing measured has. On his phone it did not fire over
+                // a black wallpaper at all; where a wallpaper exists the model carries a measured
+                // answer, and this is the fallback for a chat drawn on the plain theme background.
+                guard let self, self.statedBackdrop == .unspecified else { return }
+                self.textRows.overrideUserInterfaceStyle = view.traitCollection.userInterfaceStyle
             }
         )
 
@@ -184,6 +192,12 @@ final class ChatHeaderView: UIView {
         subtitleLabel.textColor = model.subtitleIsLive ? .tintColor : .secondaryLabel
         titleIcon = model.titleIcon
         secondaryTitleIcon = model.secondaryIcon
+        // The measured answer wins; `.unspecified` hands the decision back to the glass probe.
+        statedBackdrop = model.backdrop
+        if model.backdrop != .unspecified { textRows.overrideUserInterfaceStyle = model.backdrop }
+        // The timer glyph is a template so it re-resolves through `textRows`' style like the labels
+        // do; a pre-tinted image would keep light-mode grey over a black wallpaper.
+        secondaryIconView.tintColor = .secondaryLabel
         avatarView.configure(name: model.name, photoUrl: model.photoUrl, asset: model.avatarAsset)
         accessibilityLabel = model.name
     }
@@ -219,6 +233,9 @@ struct ChatHeaderModel: Equatable {
     var titleIcon: UIImage?
     /// The disappearing-messages timer. See the file comment for why it is a second slot.
     var secondaryIcon: UIImage?
+    /// The interface style the text needs over the wallpaper under the bar, or `.unspecified` to let
+    /// the header's own glass probe decide. From `WallpaperBlur.headerBackdrop`.
+    var backdrop: UIUserInterfaceStyle = .unspecified
 
     /// The verified mark drawn the way `VerifiedMark` draws it in SwiftUI — a palette seal, white
     /// tick on the brand blue — so the UIKit header and every SwiftUI badge in the app agree.
@@ -237,16 +254,17 @@ struct ChatHeaderModel: Equatable {
             .withRenderingMode(.alwaysOriginal)
     }
 
-    /// The timer, as the old SwiftUI header drew it: 13pt semibold, secondary.
+    /// The timer, as the old SwiftUI header drew it: 13pt semibold. A TEMPLATE, tinted by the image
+    /// view, so it follows the header's light/dark decision instead of freezing one appearance in.
     static func disappearingTimer() -> UIImage? {
         let config = UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
         return UIImage(systemName: "timer", withConfiguration: config)?
-            .withTintColor(.secondaryLabel, renderingMode: .alwaysOriginal)
+            .withRenderingMode(.alwaysTemplate)
     }
 
     static func == (a: ChatHeaderModel, b: ChatHeaderModel) -> Bool {
         a.name == b.name && a.photoUrl == b.photoUrl && a.subtitle == b.subtitle
-            && a.subtitleIsLive == b.subtitleIsLive
+            && a.subtitleIsLive == b.subtitleIsLive && a.backdrop == b.backdrop
             && (a.titleIcon == nil) == (b.titleIcon == nil)
             && (a.secondaryIcon == nil) == (b.secondaryIcon == nil)
             && (a.avatarAsset == nil) == (b.avatarAsset == nil)
