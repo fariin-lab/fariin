@@ -20,7 +20,7 @@ import Foundation
 // note to lose height, and a quiet four-second test note lost all of it: dots. Theirs has no knee,
 // no perceptual curve and no metering timer; it has the file. This is that, in three pieces:
 // `SampledWaveform.decibels(of:)` reads the file, `Sampler` is their class, `levels(for:count:)` is
-// their `normalizedLevelsToDisplay`. The drawing half lives in `SampledWaveformView`.
+// their `normalizedLevelsToDisplay`. The drawing half lives in `ComposerWaveformView`.
 enum SampledWaveform {
     /// Their `silenceThreshold` / `clippingThreshold`.
     static let silenceThreshold: Float = -50

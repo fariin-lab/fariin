@@ -114,7 +114,7 @@ struct ThreadView: View {
     // Hold-to-record voice gesture state (standard hold-to-record).
     @State private var recordLocked = false        // recording continues after finger lifts
     // Listening back to a paused note before sending it. Not one-way: the review bar's red mic
-    // records the next stretch and the recorder stitches them at send. See lockedRecordingBar.
+    // records the next stretch and the recorder stitches them at send. See ChatComposerView's strip.
     @State private var reviewingNote = false
     @State private var previewPlayer: AVAudioPlayer?
     @State private var previewPlaying = false
@@ -131,7 +131,6 @@ struct ThreadView: View {
     @State private var holdHint = false             // "hold to record" flash after an accidental tap
     @State private var voiceViewOnce = false        // "1" armed on the recording bar → send as one-time listen
     @State private var voiceOnceToast = false       // the little auto-fading confirmation when it arms
-    @State private var micPulse = false             // continuous "breathing" of the recording halo
     @State private var pinIndex = 0                  // which of the (≤5) pinned messages the bar shows
     @State private var showPinnedSheet = false       // "See All" → full sheet of pinned messages
     @State private var recordDrag: CGSize = .zero   // live finger translation while holding
@@ -259,7 +258,10 @@ struct ThreadView: View {
     @State private var pendingDelete: Message?
     @State private var editingMessage: Message?   // INLINE edit — no modal/sheet
     @State private var forwardTarget: Message?    // forward-to-chat picker
-    @FocusState private var inputFocused: Bool
+    /// A plain flag now that the field is a `UITextView`: in, it asks the field to take or give up
+    /// first responder; out, the field's delegate writes what actually happened (see
+    /// `ChatComposerView.syncText`). `@FocusState` only ever spoke for a SwiftUI `TextField`.
+    @State private var inputFocused = false
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dismiss) private var dismiss
     @AppStorage("typingIndicators") private var typingPref = true
@@ -432,7 +434,7 @@ struct ThreadView: View {
                     }
             }
             // ⛔ THE RECORDING PAUSE / CONTINUE BUTTON LIVES HERE, ON THE CHAT, NOT ON THE BAR — owner,
-            // 2026-08-24: it did nothing when tapped. See `lockedRecordingBar` for the mechanism; in
+            // 2026-08-24: it did nothing when tapped. See `lockedBarRowGap` for the mechanism; in
             // one line, an overlay offset above its parent's frame draws but is never hit-tested, and
             // the bar cannot be grown to contain it because its height is the list's bottom inset.
             //
@@ -4652,7 +4654,7 @@ struct ThreadView: View {
         }
     }
 
-    // The reply preview now nests INSIDE the input capsule (see inputRow).
+    // The reply preview nests INSIDE the input pill (see `ChatComposerView` / `ComposerBannerView`).
     private var composerArea: some View {
         composer
             // LINK DETECTION while typing (debounced): resolve the first https link into a draft
@@ -4683,89 +4685,46 @@ struct ThreadView: View {
                     }
                 }
             }
-    }
-
-    // The composer's draft card (user reference: the reference app shows the preview BEFORE sending):
-    // thumb + title + description + domain, X to send without a preview.
-    private func linkDraftRow(_ d: LinkPreviewService.LinkDraft) -> some View {
-        HStack(spacing: 10) {
-            if let img = d.image {
-                Image(uiImage: img).resizable().scaledToFill()
-                    .frame(width: 44, height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(d.title).font(.caption.weight(.semibold)).lineLimit(1)
-                if !d.desc.isEmpty {
-                    Text(d.desc).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            // TYPING BROADCAST + the first-message cap. This sat on the SwiftUI field's own
+            // `.onChange`; the field is UIKit now and reports through `input`, so the composer
+            // slot is the one place that sees every change, typed or programmatic.
+            .onChange(of: input) { _, v in
+                // A first message to a stranger is capped. Trimmed as it is typed rather than
+                // refused on send, so you can see the limit instead of losing what you wrote to it.
+                if requestStance == .firstMessage, v.count > MessageRequests.firstMessageLimit {
+                    input = String(v.prefix(MessageRequests.firstMessageLimit))
+                    return
                 }
-                Text(d.host).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
-            }
-            Spacer(minLength: 8)
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    suppressedLinkUrl = d.url.absoluteString
-                    linkDraft = nil
+                // Programmatic set (draft restore / edit teardown) — no typing implications (audit M6).
+                if typingBox.suppressNext { typingBox.suppressNext = false; return }
+                // Don't broadcast "typing" while we're seeding the field for an inline EDIT.
+                let now = editingMessage == nil && !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                if now != typingSent {
+                    typingSent = now
+                    broadcastTyping(now)   // serialized — writes can't land out of order
+                    // Receivers self-clear at 15s and composing produces no doc changes — the 10s
+                    // refresh (a changing "text-<seconds>" value) keeps a long burst alive (audit).
+                    typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
+                    if now {
+                        typingBox.typingRefresh = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
+                            broadcastTyping(true)
+                        }
+                    }
                 }
-            } label: {
-                Image(systemName: "xmark.circle.fill").font(.system(size: 20)).foregroundStyle(.secondary)
+                // Idle pause timer: typing auto-stops after 3s of no keystrokes (even with text still
+                // in the field), so a parked draft doesn't show "typing…" forever on the other side.
+                typingIdleStop?.cancel()
+                if now {
+                    let work = DispatchWorkItem {
+                        guard typingSent else { return }
+                        typingSent = false
+                        broadcastTyping(false)
+                        typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
+                    }
+                    typingIdleStop = work
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
+                }
             }
-        }
-        .padding(.leading, 14).padding(.trailing, 12).padding(.vertical, 8)
-    }
-
-    // Active-reply preview row, shown inside the input capsule above the text field.
-    private func replyPreviewRow(_ r: Message) -> some View {
-        HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 1.5).fill(Color.accentColor).frame(width: 3, height: 34)
-            // Real media thumbnail when replying to a photo / GIF / video.
-            if r.isImage, let url = r.imageUrl {
-                SecureImageView(imageUrl: url, enc: r.enc, cid: cid)
-                    .frame(width: 36, height: 36)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            } else if r.isGif, let url = r.imageUrl {
-                AnimatedGifView(url: url)
-                    .frame(width: 36, height: 36)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            } else if r.isVideo, let url = r.thumbUrl {
-                SecureImageView(imageUrl: url, enc: r.thumbEnc, cid: cid)
-                    .frame(width: 36, height: 36)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Reply to \(r.authorId == me ? "yourself" : personName(r.authorId))")
-                    .font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
-                replyContentPreview(r)
-            }
-            Spacer(minLength: 8)
-            Button { withAnimation(.easeInOut(duration: 0.2)) { replyingTo = nil } } label: {
-                Image(systemName: "xmark.circle.fill").font(.system(size: 20)).foregroundStyle(.secondary)
-            }
-        }
-        .padding(.leading, 14).padding(.trailing, 12).padding(.vertical, 8)
-        // Consume taps so they don't fall THROUGH the (partly transparent) reply bar to the photo bubble
-        // behind it (the X button keeps its own tap).
-        .contentShape(Rectangle())
-        .onTapGesture { }
-    }
-
-    // Inline edit preview: pencil + "Edit Message" + snippet + cancel (X).
-    private func editPreviewRow(_ e: Message) -> some View {
-        HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 1.5).fill(Color.accentColor).frame(width: 3, height: 34)
-            Image(systemName: "pencil").font(.system(size: 15, weight: .semibold)).foregroundStyle(Color.accentColor)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Edit Message").font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
-                Text(e.text).font(.caption).lineLimit(1).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 8)
-            Button { cancelEdit() } label: {
-                Image(systemName: "xmark.circle.fill").font(.system(size: 20)).foregroundStyle(.secondary)
-            }
-        }
-        .padding(.leading, 14).padding(.trailing, 12).padding(.vertical, 8)
-        .contentShape(Rectangle())
-        .onTapGesture { }
     }
 
     private func cancelEdit() {
@@ -4789,54 +4748,43 @@ struct ThreadView: View {
         inputFocused = false
     }
 
-    // The actual replied content: waveform for voice, "Photo" for images, the text/emoji otherwise.
-    @ViewBuilder private func replyContentPreview(_ r: Message) -> some View {
+    /// What the reply card says under "Reply to …" — the branches the old SwiftUI row drew.
+    private func replyDetail(_ r: Message) -> ChatComposerBanner.Detail {
         if r.isAudio {
-            HStack(spacing: 6) {
-                Image(systemName: "mic.fill").font(.system(size: 11)).foregroundStyle(.secondary)
-                WaveformBars(bars: r.waveform.isEmpty ? Array(repeating: 30, count: 16) : Array(r.waveform.prefix(28)),
-                             progress: 0, played: Color.secondary, unplayed: Color.secondary.opacity(0.5)) { _ in }
-                    .frame(width: 72, height: 14)
-                Text(replyVoiceDuration(r)).font(.caption2).foregroundStyle(.secondary)
-            }
+            return .voice(bars: r.waveform.isEmpty ? Array(repeating: 30, count: 16) : Array(r.waveform.prefix(28)),
+                          duration: replyVoiceDuration(r))
         } else if r.isAlbum {
             let n = r.album.isEmpty ? r.localAlbum.count : r.album.count
-            HStack(spacing: 4) {
-                Image(systemName: "photo.on.rectangle").font(.system(size: 11)).foregroundStyle(.secondary)
-                Text(r.text.isEmpty ? "\(n) Photos" : r.text).font(.caption).lineLimit(1).foregroundStyle(.secondary)
-            }
+            return .labelled(symbol: "photo.on.rectangle", text: r.text.isEmpty ? "\(n) Photos" : r.text)
         } else if r.isImage {
-            Text(r.viewOnce ? "View-once photo" : "Photo").font(.caption).foregroundStyle(.secondary)
+            return .text(r.viewOnce ? "View-once photo" : "Photo")
         } else if r.isGif {
-            Text("GIF").font(.caption).foregroundStyle(.secondary)
+            return .text("GIF")
         } else if r.isCall {
-            // A call carries no text at all, so the banner drew an empty line under the name until
-            // this branch existed. Its own glyph, like the file and voice rows above.
-            HStack(spacing: 4) {
-                Image(systemName: r.callVideo ? "video.fill" : "phone.fill")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                Text(r.callVideo ? "Video call" : "Voice call")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
+            // A call carries no text at all; its own glyph, like the file and voice rows.
+            return .labelled(symbol: r.callVideo ? "video.fill" : "phone.fill",
+                             text: r.callVideo ? "Video call" : "Voice call")
         } else if r.isVideo {
-            Text("Video").font(.caption).foregroundStyle(.secondary)
+            return .text("Video")
         } else if r.isFile {
-            HStack(spacing: 4) {
-                Image(systemName: "doc.fill").font(.system(size: 11)).foregroundStyle(.secondary)
-                Text(r.fileName ?? "File").font(.caption).lineLimit(1).foregroundStyle(.secondary)
-            }
-        } else {
-            // quoteSafeLabel: a contact/location card's text is a raw kulan-…: marker (uid + storage
-            // URL) — the live banner must show "Contact"/"Location", never the payload.
-            Text(quoteSafeLabel(r.text)).font(.caption).lineLimit(1).foregroundStyle(.secondary)
+            return .labelled(symbol: "doc.fill", text: r.fileName ?? "File")
         }
+        // quoteSafeLabel: a contact/location card's text is a raw kulan-…: marker (uid + storage
+        // URL) — the card must show "Contact"/"Location", never the payload.
+        return .text(quoteSafeLabel(r.text))
     }
+
+    /// The reply card's thumbnail when replying to a photo / GIF / video.
+    private func replyThumb(_ r: Message) -> ChatComposerBanner.Thumb? {
+        if r.isImage, let url = r.imageUrl { return .cached(url: url) }
+        if r.isGif, let url = r.imageUrl { return .gif(url: url) }
+        if r.isVideo, let url = r.thumbUrl { return .cached(url: url) }
+        return nil
+    }
+
     private func replyVoiceDuration(_ r: Message) -> String {
         let d = Int(r.duration ?? 0); return String(format: "%d:%02d", d / 60, d % 60)
     }
-
-    // Subtle neutral fill (no glass, no shadow) — the native field tint.
-    private var fieldFill: Color { dark ? Color(hex: 0x2A2A2E) : Color(hex: 0xEEEEF2) }
 
     // True while the finger is held down recording (not yet locked).
     // Driven by holdStarted (set on touch-down) NOT recorder.isRecording, so the recording
@@ -4849,7 +4797,7 @@ struct ThreadView: View {
     ///
     /// ⚠️ THAT BOUNCE IS A FIRST RESPONDER BEING REBUILT, AND `recordingHeld` IS WHY. It is
     /// `holdStarted && !recordLocked`, so locking flips it FALSE — the same instant the row it
-    /// controls is fading to invisible. Every `!recordingHeld` branch inside `inputRow` therefore
+    /// controls is fading to invisible. Every `!recordingHeld` branch inside the input row therefore
     /// fires on lock: the "+" and the GIF button are re-INSERTED into the composer's
     /// `GlassEffectContainer`, and the text field un-hides. Rebuilding that subtree costs the field
     /// its responder, and because `inputFocused` is still `true` SwiftUI immediately puts it back —
@@ -4865,20 +4813,12 @@ struct ThreadView: View {
     /// right now" and is exactly right for the big red overlay and the hold row, which must both go
     /// the moment the finger is off. This one means "the composer is not the composer at the moment".
     private var recordingActive: Bool { holdStarted || recordLocked }
-    // Live finger translation, clamped to up/left (the two meaningful directions).
+    // Live finger translation, rubber-banded to up/left (the two meaningful directions). The SAME
+    // function the bar draws the mic with, so the cancel and lock thresholds fire exactly where the
+    // eye sees the mic reach them.
     private var clampedDrag: CGSize {
-        // Rubber-band the visual mic offset: 1:1 up to the lock/cancel limit, then diminishing
-        // resistance past it (the UIScrollView overscroll curve) so it feels physical, not hard-clamped.
-        CGSize(width: Self.rubberband(recordDrag.width, limit: 90),
-               height: Self.rubberband(recordDrag.height, limit: 100))
-    }
-    // iOS overscroll: within `limit` it's linear; beyond, r = limit + (1 − 1/(over·c/dim + 1))·dim.
-    private static func rubberband(_ x: CGFloat, limit: CGFloat, dim: CGFloat = 220, c: CGFloat = 0.55) -> CGFloat {
-        guard x < 0 else { return 0 }          // only up/left drags move the mic
-        let d = -x
-        if d <= limit { return x }
-        let over = d - limit
-        return -(limit + (1 - 1 / (over * c / dim + 1)) * dim)
+        CGSize(width: ChatComposerView.rubberband(recordDrag.width, limit: 90),
+               height: ChatComposerView.rubberband(recordDrag.height, limit: 100))
     }
 
     // ⛔ THE COMPOSER'S POSITION IS APPLE'S NOW, NOT OURS — owner, 2026-08-24: "go make it like
@@ -4962,31 +4902,13 @@ struct ThreadView: View {
     private var composer: some View {
         VStack(spacing: 6) {
             if !mentionCandidates.isEmpty { mentionPicker }
-            // ⛔ ONE SLOT, BOTH STATES RESIDENT, CROSS-FADED IN PLACE — the reference app's structure,
-            // read from its source and ported on his order 2026-08-24.
-            //
-            // ⚠️ THIS REVERSES THE if/else RULE THAT STOOD HERE THIS MORNING, AND ONLY BECAUSE THE
-            // THING THAT FORCED IT IS GONE. That rule was right when it was written: a ZStack sizes to
-            // its tallest child, the locked bar was TWO rows (~96pt) against this row's 40, so holding
-            // both made the composer permanently 96 — and this bar's height IS the list's bottom
-            // inset, so everything above it shifted. The locked bar became ONE row this afternoon when
-            // the pause button moved onto the chat container, and `inputRow` carries `minHeight: 40`,
-            // so the two states are now the same 40 and a shared slot cannot inflate anything.
-            // ⚠️ If either state ever grows a second row again, this has to go back to an if/else.
-            //
-            // WHY THIS SHAPE AND NOT A NICER `.transition`: an if/else INSERTS one view tree and
-            // REMOVES another, and an insertion cannot cross-fade with a removal — they are two
-            // separate events that happen to overlap, which is what made every attempt read as a pop.
-            // Theirs never inserts or removes anything: the recording UI and the text field are pinned
-            // to the same four anchors and only their alpha changes. This is that, in SwiftUI.
-            ZStack {
-                inputRow
-                    .opacity(recordLocked ? 0 : 1)
-                    .allowsHitTesting(!recordLocked)
-                lockedRecordingBar
-                    .opacity(recordLocked ? 1 : 0)
-                    .allowsHitTesting(recordLocked)
-            }
+            // ⛔ THE BAR IS UIKIT — owner, 2026-08-25: "The Composer input text is currently
+            // implemented in SwiftUI. Please completely convert it to UIKit." Everything drawn — the
+            // "+", the pill and its field, the reply / edit / link cards, GIF, mic, send, the hold
+            // row, the locked recording bar, the big mic and the toasts — is `ChatComposerView`.
+            // SwiftUI keeps this slot and the insets below, which are about WHERE the bar sits and
+            // were settled on 2026-08-24/25. See the note at the top of `ChatComposerState.swift`.
+            ChatComposerHost(state: composerState, actions: composerActions, recorder: recorder)
         }
         // ⛔ AT REST THE SIDES MATCH THE BOTTOM — owner, 2026-08-24, from the preview of the pure
         // system-margin version: "when keyboard off, left and right padding is small, use same size
@@ -4996,15 +4918,12 @@ struct ThreadView: View {
         // floor so a home-button phone (inset 0) keeps the system number instead of collapsing.
         // With the keyboard up the flat edge takes over and the sides drop to the system margin,
         // which is iMessage's own open-state number.
-        .padding(.horizontal, composerKeyboardUp
-                 ? chromeMargin
-                 : max(chromeMargin, chromeBottomInset - Self.composerRestDip))
+        .padding(.horizontal, composerSideInset)
         .padding(.top, 6)
         // At rest the pill sinks `composerRestDip` below the safe-area line, into the indicator
         // band, exactly as the system bars sit. Riding the keyboard it keeps the 8 above the keys.
         // Home-button phones (inset 0) have no band, so rest matches the keyboard gap.
-        .padding(.bottom, composerKeyboardUp || chromeBottomInset <= 0
-                 ? Self.composerKeyboardGap : -Self.composerRestDip)
+        .padding(.bottom, composerBottomInset)
         .background { SystemChromeReader(margin: $chromeMargin, bottomInset: $chromeBottomInset) }
         // ⛔ THE KEYBOARD'S OWN CLOCK, NOT A CURVE OF OURS — owner, 2026-08-25, on the "+" transition
         // "fighting/jittering". `KeyboardWatcher` already reads the duration and curve off the
@@ -5014,63 +4933,120 @@ struct ThreadView: View {
         // of the keyboard through the middle of every open and close and then waited for it. That
         // mismatch IS the jitter; no duration tweak fixes a wrong curve.
         .animation(keyboard.systemAnimation, value: composerKeyboardUp)
-        // The bar's CONTENT still changes on focus — the send button appears, the mic leaves — so
-        // that animation stays keyed to it even though the geometry no longer is. Same clock though:
-        // two curves on one bar is what the line above was just fixed for.
-        .animation(keyboard.systemAnimation, value: inputFocused)
-        .overlay(alignment: .top) {
-            if holdHint {
-                Text("Hold to record, release to send")
-                    .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                    .background(.black.opacity(0.8), in: Capsule())
-                    .offset(y: -8)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
-            }
-            // The reference's little confirmation when the "1" is armed, in OUR notice style —
-            // appears over the bar and goes by itself, same rhythm as the hold hint above.
-            if voiceOnceToast {
-                HStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle.fill").font(.system(size: 14))
-                    Text("Set to one-time listen").font(.system(size: 13, weight: .medium))
+    }
+
+    /// The bar's side inset: the system margin with the keyboard up, the margin-or-band expression
+    /// at rest. One expression, read by the bar, the floating buttons and the pause button.
+    private var composerSideInset: CGFloat {
+        composerKeyboardUp ? chromeMargin : max(chromeMargin, chromeBottomInset - Self.composerRestDip)
+    }
+
+    private var composerBottomInset: CGFloat {
+        composerKeyboardUp || chromeBottomInset <= 0 ? Self.composerKeyboardGap : -Self.composerRestDip
+    }
+
+    /// Everything the bar draws, from this view's state. Cheap to build; the bar diffs it.
+    private var composerState: ChatComposerState {
+        var s = ChatComposerState()
+        s.text = input
+        s.placeholder = requestStance == .firstMessage ? "Say hello" : "Message"
+        s.focused = inputFocused
+        s.editing = editingMessage != nil
+        s.attachBusy = sendingPhoto
+        s.banners = composerBanners
+        s.holdStarted = holdStarted
+        s.recordLocked = recordLocked
+        s.recordDrag = recordDrag
+        s.cancelArmed = recordCancelArmed
+        s.reviewing = reviewingNote
+        s.previewPlaying = previewPlaying
+        s.previewProgress = previewProgress
+        s.previewDecibels = previewDecibels
+        s.voiceOnce = voiceViewOnce
+        s.holdHint = holdHint
+        s.voiceOnceToast = voiceOnceToast
+        s.dark = dark
+        // ⛔ THE CHAT'S OWN COLOUR, NOT A FIXED BLUE — the same expression the bubbles resolve, so a
+        // chat colour cannot reach the bubble and miss the send button.
+        s.sendTint = UIColor(chatColorSpec?.swatch ?? Theme.defaultBubble(dark))
+        s.noticeSurface = Theme.receivedSurface(dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur)
+        s.onWallpaper = chatHasWallpaper
+        s.outerInsets = UIEdgeInsets(top: 6, left: composerSideInset, bottom: composerBottomInset, right: composerSideInset)
+        return s
+    }
+
+    /// The cards above the field, in the order the old SwiftUI pill stacked them. None while a
+    /// recording is running — the pill is one row then.
+    private var composerBanners: [ChatComposerBanner] {
+        guard !recordingActive else { return [] }
+        var out: [ChatComposerBanner] = []
+        if let r = replyingTo {
+            out.append(ChatComposerBanner(id: "reply:\(r.id)", style: .reply,
+                                          title: "Reply to \(r.authorId == me ? "yourself" : personName(r.authorId))",
+                                          detail: replyDetail(r), thumb: replyThumb(r), footnote: nil))
+        }
+        if let e = editingMessage {
+            out.append(ChatComposerBanner(id: "edit:\(e.id)", style: .edit, title: "Edit Message",
+                                          detail: .text(e.text), thumb: nil, footnote: nil))
+        }
+        // Link-preview draft rides the same slot as the reply preview (reference behaviour).
+        if let d = linkDraft, editingMessage == nil {
+            out.append(ChatComposerBanner(id: "link:\(d.url.absoluteString)", style: .link, title: d.title,
+                                          detail: .text(d.desc), thumb: d.image.map { .image($0) }, footnote: d.host))
+        }
+        return out
+    }
+
+    /// What the bar can ask of the chat. Each one is the exact body the SwiftUI button carried.
+    private var composerActions: ChatComposerActions {
+        var a = ChatComposerActions()
+        a.textChanged = { input = $0 }
+        a.focusChanged = { inputFocused = $0 }
+        a.attach = {
+            // ⛔ ONE DISMISSAL, THEN WAIT FOR THE SYSTEM TO SAY IT IS DOWN — owner, 2026-08-25:
+            // tapping "+" with the keyboard up made the keyboard and the composer "fight", and the
+            // sheet arrived over the mess. The focus flag is the one route to the responder now
+            // (the field resigns when it goes false), and the sheet waits for the keyboard's own
+            // `didHide` instead of a stopwatch. `onceHidden` fires straight away when the keyboard
+            // was never up.
+            inputFocused = false
+            keyboard.onceHidden { showAttachPanel = true }
+        }
+        a.gif = {
+            // Same as "+": resign the keyboard first so it doesn't flash back after the picker.
+            inputFocused = false
+            showGifPicker = true
+        }
+        a.send = { if editingMessage != nil { saveEdit() } else { send() } }
+        a.dismissBanner = { style in
+            switch style {
+            case .reply: withAnimation(.easeInOut(duration: 0.2)) { replyingTo = nil }
+            case .edit: cancelEdit()
+            case .link:
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    suppressedLinkUrl = linkDraft?.url.absoluteString
+                    linkDraft = nil
                 }
-                .modifier(ChatNoticePill(dark: dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur))
-                .offset(y: -8)
-                .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
         }
-        // Big red mic + lock, ON TOP of the whole composer so it's never clipped/behind the pill.
-        //
-        // ⛔ ITS EXIT IS THE ONE THING IN THE LOCK THAT IS NOT ON THE CONTROL SPRING — owner,
-        // 2026-08-25, after the comparison. The reference app runs the whole lock on its one
-        // 0.25 animator EXCEPT the big circle and the lock chevron leaving, which it hands to a
-        // plain `UIView.animate(withDuration: 0.2)` that takes them to alpha 0 and scale 0.9. A
-        // spring on something that is disappearing can overshoot, and an overshoot nobody can see
-        // the end of just reads as slack.
-        //
-        // ASYMMETRIC ON PURPOSE: only the removal is specified. The entrance is left exactly as it
-        // was — his "keep everything else unchanged" — even though the reference plays the same
-        // 0.9 on the way in too.
-        //
-        // The ZStack is what makes the curve stick. `.animation(_:value:)` has to sit on a view
-        // that SURVIVES the change to govern it, so it goes on the container rather than on the
-        // thing being removed; being the inner-most animation for this subtree, it also wins over
-        // the `refControlSpring` further down, which would otherwise claim this the moment
-        // `recordLocked` flipped in the same instant.
-        .overlay(alignment: .bottomTrailing) {
-            ZStack {
-                if recordingHeld {
-                    recordingMicOverlay
-                        .transition(.asymmetric(insertion: .identity,
-                                                removal: .scale(scale: 0.9).combined(with: .opacity)))
+        a.holdBegan = { beginHoldRecording() }
+        a.holdChanged = { updateHoldRecording($0) }
+        a.holdEnded = { t, cancelled in endHoldRecording(t, cancelled: cancelled) }
+        a.cancelRecording = { cancelRecording() }
+        a.sendRecording = { sendRecording() }
+        a.togglePreview = { togglePreview() }
+        a.seekPreview = { seekPreview($0) }
+        a.toggleVoiceOnce = {
+            // ONE-TIME LISTEN — arming it flashes the little confirmation over the bar.
+            voiceViewOnce.toggle()
+            if voiceViewOnce {
+                withAnimation(.easeOut(duration: 0.2)) { voiceOnceToast = true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+                    withAnimation(.easeIn(duration: 0.25)) { voiceOnceToast = false }
                 }
             }
-            .animation(Self.refMicExit, value: recordingHeld)
         }
-        // ONE CURVE FOR THE WHOLE LOCK, and it is theirs. Everything keyed to `recordLocked` — the
-        // two states cross-fading, the send button growing in, the mic overlay leaving — rides this
-        // single spring, which is what their one-animator-per-moment rule buys. See `refControlSpring`.
-        .animation(Self.refControlSpring, value: recordLocked)
+        return a
     }
 
     // @-mention autocomplete shown above the input while typing "@" in a group.
@@ -5091,232 +5067,6 @@ struct ThreadView: View {
             }
         }
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-    }
-
-    private var inputRow: some View {
-        // CRITICAL: the glass container's `grouped` flag must NOT depend on recordingHeld. When it
-        // flipped on record-start, SwiftUI swapped GlassEffectContainer <-> plain content, which
-        // re-created the entire subtree — destroying the mic's live DragGesture mid-touch (the
-        // frozen/stuck recording). Kept constant, the subtree is stable and the gesture survives.
-        // (No blur bridge now: the recording mic is a red circle, not a glass element.)
-        composerGlassContainer(grouped: true) {
-        HStack(alignment: .bottom, spacing: 8) {   // "+" outside-left; the field (with the mic INSIDE); Send
-            // Hidden ENTIRELY while recording (the attach button is removed from the
-            // toolbar during a voice memo). Collapsing via opacity/frame did NOT work — iOS 26's
-            // native glassEffect ignores .opacity, so the "+" kept showing. Fully removing it is the
-            // reliable fix; the mic is a separate stable slot (its own .id), so this sibling change
-            // can't disturb the recording gesture.
-            if !recordingActive {
-                Button {
-                    // ⛔ ONE DISMISSAL, THEN WAIT FOR THE SYSTEM TO SAY IT IS DOWN — owner, 2026-08-25:
-                    // tapping "+" with the keyboard up made the keyboard and the composer "fight",
-                    // and the sheet arrived over the mess. Two separate bugs stood here.
-                    //
-                    // ONE: this resigned TWICE. `inputFocused = false` is the field's own focus
-                    // binding, and the `sendAction(resignFirstResponder)` broadcast underneath it was
-                    // a second, blunter route to the same responder. SwiftUI processes the focus flag
-                    // on its next update; the broadcast lands immediately. So the keyboard was told to
-                    // go by two mechanisms one runloop turn apart, and the composer — which reads the
-                    // keyboard's notifications — was driven by both of them in turn. The focus binding
-                    // alone is the native path for a SwiftUI `TextField`, and it is enough.
-                    //
-                    // TWO: the sheet was presented on a 0.08s guess. That number was chosen for the
-                    // OPPOSITE report ("still up, closes late") on the theory that overlapping the two
-                    // animations would look faster, and it does not: it puts a modal presentation on
-                    // top of a keyboard dismissal in the same frames, which is what his two
-                    // screenshots show — the composer already at its resting position with the
-                    // keyboard band still on screen behind the rising sheet. His word now is that they
-                    // must be sequential, so the trigger is the keyboard's own `didHide` instead of a
-                    // stopwatch. `onceHidden` fires straight away when the keyboard was never up.
-                    inputFocused = false
-                    keyboard.onceHidden { showAttachPanel = true }
-                } label: {
-                    Image(systemName: sendingPhoto ? "ellipsis" : "plus")
-                        .font(.system(size: 20, weight: .regular))
-                        .foregroundStyle(.primary)
-                        .contentTransition(.symbolEffect(.replace))   // smooth +/… swap
-                        .frame(width: 40, height: 40)
-                        .liquidGlass(Circle(), interactive: true)
-                }
-                .tint(.primary)
-                .transition(.scale.combined(with: .opacity))   // smooth fade/scale out when recording starts
-            }
-
-            // The field holds reply preview + text/record row, with the camera kept INSIDE
-            // on the right. The mic/send live OUTSIDE as a standalone right sibling (like "+").
-            VStack(spacing: 0) {
-                // Reply preview spans the FULL field width (so the X sits at the far right).
-                if let r = replyingTo, !recordingActive {
-                    replyPreviewRow(r)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                    Divider().padding(.horizontal, 12)
-                }
-                if let e = editingMessage, !recordingActive {
-                    editPreviewRow(e)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                    Divider().padding(.horizontal, 12)
-                }
-                // Link-preview draft rides the same slot as the reply preview (reference behaviour).
-                if let d = linkDraft, !recordingActive, editingMessage == nil {
-                    linkDraftRow(d)
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                    Divider().padding(.horizontal, 12)
-                }
-                // 3, down from 4 (owner 2026-08-22). It is the only part of the gap between the two
-                // glyphs that is spacing at all — the other ~17pt is the empty room inside their two
-                // 40pt tap targets, which is not mine to take without making them harder to hit.
-                HStack(alignment: .bottom, spacing: 3) {
-                    // ⛔ THE FIELD IS NEVER UNMOUNTED — owner, 2026-08-25: "when the keyboard is open
-                    // and I record, the keyboard closes". This line used to be an if/else, and the
-                    // `else` branch is where the TextField lives. Taking a first responder out of the
-                    // view tree IS a resign, so recording dismissed the keyboard as a side effect
-                    // that nothing in the recording code asked for — there is no `inputFocused =
-                    // false` anywhere near `beginHoldRecording`, which is why it never looked like
-                    // ours. Same fix as the locked bar two states up: keep both mounted and change
-                    // only the alpha, so focus is never a casualty of a layout swap.
-                    //
-                    // An OVERLAY rather than a ZStack, deliberately: a ZStack would size itself to
-                    // the wider of the two, and `recordingHoldRow` carries Spacers that expand to
-                    // infinity — it would shove the GIF and mic buttons out of the pill while idle.
-                    // The overlay takes the field's frame, which is the slot the row had anyway.
-                    messageField
-                        .opacity(recordingActive ? 0 : 1)
-                        .allowsHitTesting(!recordingActive)
-                        .overlay {
-                            recordingHoldRow
-                                .opacity(recordingHeld ? 1 : 0)
-                                .allowsHitTesting(recordingHeld)
-                        }
-                    // …sticker + camera show only when idle & empty…
-                    // ⛔ NO CAMERA HERE (owner 2026-08-22: "the camera is already inside the photo
-                    // picker, remove the one inside the composer"). It was a second door to the same
-                    // room standing next to the first: "+" opens the picker and the picker has its
-                    // own camera tile. `showCamera` and its cover stay — the picker's tile is what
-                    // raises them now, and that path was always the one that mattered.
-                    if !recordingActive && !hasText { inFieldGif }
-                    // …and the MIC lives INSIDE the pill (clean idle: sticker · camera · mic in one bar).
-                    // ONE stable slot gated by !hasText (unchanged during a recording) + a stable .id so
-                    // the DragGesture survives record-start; zIndex keeps the red circle in front of the
-                    // pill glass. The red is sized to FIT the 40px bar, so it never overflows/clips.
-                    if !hasText { micButton.id("record-mic").zIndex(1) }
-                }
-                .frame(minHeight: 40)   // input row stays 40px even in voice mode
-            }
-            // Real Liquid Glass on the field in BOTH states — including the recording bar (user spec).
-            // Interactive Liquid Glass restored (the field looked flat without it). Hold-to-record
-            // speed is kept up by the snappy record-start animation + the pre-warmed audio session.
-            .liquidGlass(RoundedRectangle(cornerRadius: 20, style: .continuous), interactive: true)
-
-            // Send button (only while typing) — the mic lives INSIDE the pill now.
-            rightButton
-        }
-        }
-        .animation(.easeInOut(duration: 0.2), value: hasText)
-        // Snappy so the recording bar appears near-instantly on hold (was 0.3s -> read as lag).
-        .animation(.spring(response: 0.14, dampingFraction: 0.9), value: recordingActive)
-    }
-
-    // Native iOS 26: group the composer's glass shapes (the + and the field) so they
-    // render as ONE cohesive liquid-glass system, the way Apple's own bars do — instead
-    // of two disconnected glass blobs. No-op layout-wise; pure native glass rendering.
-    @ViewBuilder private func composerGlassContainer<C: View>(grouped: Bool = true, @ViewBuilder _ content: () -> C) -> some View {
-        if grouped, #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 8) { content() }
-        } else {
-            content()
-        }
-    }
-
-    // Just the text field — trailing buttons are stable siblings (so the mic view never
-    // unmounts when the field swaps to the recording row mid-hold).
-    private var messageField: some View {
-        TextField(requestStance == .firstMessage ? "Say hello" : "Message", text: $input, axis: .vertical)
-            .font(.system(size: 17))
-            .lineLimit(1...6)
-            .focused($inputFocused)
-            .padding(.leading, 14)
-            .padding(.vertical, 9)   // single-line field height ~40 to match the + button
-            .onChange(of: input) { _, v in
-                // A first message to a stranger is capped. Trimmed as it is typed rather than
-                // refused on send, so you can see the limit instead of losing what you wrote to it.
-                if requestStance == .firstMessage, v.count > MessageRequests.firstMessageLimit {
-                    input = String(v.prefix(MessageRequests.firstMessageLimit))
-                    return
-                }
-                // Programmatic set (draft restore / edit teardown) — no typing implications (audit M6).
-                if typingBox.suppressNext { typingBox.suppressNext = false; return }
-                // Don't broadcast "typing" while we're seeding the field for an inline EDIT.
-                let now = editingMessage == nil && !v.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                if now != typingSent {
-                    typingSent = now
-                    broadcastTyping(now)   // serialized — writes can't land out of order
-                    // Receivers self-clear at 15s and composing produces no doc changes — the 10s
-                    // refresh (a changing "text-<seconds>" value) keeps a long burst alive (audit).
-                    typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
-                    if now {
-                        typingBox.typingRefresh = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { _ in
-                            broadcastTyping(true)
-                        }
-                    }
-                }
-                // Idle pause timer: typing auto-stops after 3s of no keystrokes (even with text still
-                // in the field), so a parked draft doesn't show "typing…" forever on the other side.
-                typingIdleStop?.cancel()
-                if now {
-                    let work = DispatchWorkItem {
-                        guard typingSent else { return }
-                        typingSent = false
-                        broadcastTyping(false)
-                        typingBox.typingRefresh?.invalidate(); typingBox.typingRefresh = nil
-                    }
-                    typingIdleStop = work
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
-                }
-            }
-    }
-
-    // Camera lives INSIDE the field (right), only when not typing/recording.
-    // Solid, high-contrast icon (.primary = white in dark / black in light, 100% opacity) in a
-    // a 40x40 tap target.
-    // One-tap GIFs from the field (big apps keep GIFs next to the camera, not buried in +).
-    /// HIS ORDER, 2026-08-14: back to what it was before tonight. Tap it, the keyboard goes, the
-    /// picker opens as its own page.
-    ///
-    /// The keyboard-slot panel that replaced this for two builds is gone with it — all of it, rather
-    /// than left dormant where it rots. It is in the history if it is ever wanted again: the panel
-    /// and its keyboard toggle (ed4832c9), pull-to-expand on their fraction and release rules
-    /// (e579878d), the card corners (eac156d6, e8d9099c) and the search button (2062f43c).
-    private var inFieldGif: some View {
-        Button {
-            // Same as "+": resign the keyboard first so it doesn't flash back after the picker.
-            inputFocused = false
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-            showGifPicker = true
-        } label: {
-            Image("ic_gif").renderingMode(.template).resizable().scaledToFit()
-                // ⛔ DIMMER THAN THE MIC, AND ONLY THIS ONE (owner 2026-08-22: "GIF icon make it low
-                // brightness but don't touch the voice recording icon"). The mic is the button people
-                // reach for without looking; the stickers are a browse. Two weights say which is
-                // which without moving or resizing anything.
-                //
-                // ⚠️ AN EXPLICIT `Color.primary.opacity`, NOT `.secondary`. The hierarchical styles
-                // resolve against a Button's TINT rather than against the label's own colour — the
-                // trap this app has already paid for once — and this button carries `.tint(.primary)`
-                // a few lines down. A plain colour cannot be reinterpreted by anything.
-                .frame(width: 24, height: 24).foregroundStyle(Color.primary.opacity(0.55))
-                .frame(width: 40, height: 40)
-        }
-        // ⚠️ `.tint`, AND `.foregroundStyle` INSIDE THE LABEL IS NOT ENOUGH — his 2026-08-18
-        // screenshot with the in-field icons circled blue. A `Button` tints its own label with the
-        // ambient accent, applied AROUND what the label asked for rather than under it, so a
-        // template image inside a button comes out accent-coloured however the image is styled.
-        //
-        // This app's accent is `.primary`, which is why it looked right everywhere that reaches —
-        // but a chat opened from a STORY is presented out of the story's own UIKit host and the root
-        // tint does not follow it there, leaving the system's blue. The `+` has carried this line for
-        // the same reason since it was written. (The camera button beside this one carried it too,
-        // and its removal is why the reasoning now lives here rather than being pointed at.)
-        .tint(.primary)
     }
 
     /// One send for both GIF routes (the composer's panel and the attach sheet's tile).
@@ -5347,51 +5097,6 @@ struct ThreadView: View {
         }
     }
 
-    // Standalone SEND button OUTSIDE the field (like "+"), only while typing. When not typing the
-    // mic lives INSIDE the pill (next to sticker/camera), so there's no outside button then.
-    @ViewBuilder private var rightButton: some View {
-        if hasText {
-            Button { if editingMessage != nil { saveEdit() } else { send() } } label: {
-                Image(systemName: editingMessage != nil ? "checkmark" : "arrow.up")
-                    .font(.system(size: 19, weight: .bold))
-                    // Matches the bubble: white glyph on the chosen chat colour, or on the default systemBlue.
-                    .foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    // Real Liquid Glass, tinted to MATCH the bubble colour (the chosen chat colour / default).
-                    .liquidGlass(Circle(), interactive: true, tint: chatColorSpec?.swatch ?? Theme.defaultBubble(dark))
-                    .contentTransition(.symbolEffect(.replace))
-            }
-            .transition(.scale.combined(with: .opacity))
-        }
-        // When not typing, the mic is INSIDE the pill (see the field row) — no button here.
-    }
-
-    // Live recording row inside the capsule: red dot + timer + "‹ slide to cancel".
-    private var recordingHoldRow: some View {
-        HStack(spacing: 10) {
-            // Same 24pt box as the locked bar — the reference app keeps ONE mic view across both
-            // states, so it must not change size when the recording locks.
-            Image(systemName: "mic.fill")
-                .font(.system(size: 20)).foregroundStyle(.red)
-                .frame(width: 24, height: 24)
-                .symbolEffect(.pulse, options: .repeating)   // gentle live pulse
-            RecordTimerText(recorder: recorder)
-            Spacer(minLength: 8)
-            HStack(spacing: 3) {
-                Image(systemName: "chevron.left").font(.system(size: 12, weight: .semibold))
-                Text("Slide to cancel").font(.system(size: 15))
-            }
-            .foregroundStyle(recordCancelArmed ? Color.red : Color.secondary)
-            .animation(.easeInOut(duration: 0.15), value: recordCancelArmed)
-            // Fade the hint as the finger slides toward the cancel threshold.
-            .opacity(1.0 - min(1.0, Double(-clampedDrag.width) / 90.0) * 0.6)
-            // Second Spacer: the hint sits CENTRED in the bar the way the reference draws it,
-            // instead of hugging the trailing edge.
-            Spacer(minLength: 8)
-        }
-        .padding(.horizontal, 14).frame(height: 40)   // strict 40px during recording — no vertical distortion
-    }
-
     // Hold-to-record (standard hold-to-record, our own code on the AudioRecorder engine):
     //   • press & hold the mic  → recording starts instantly (session is pre-warmed)
     //   • slide LEFT past the threshold, release → cancel (discard)
@@ -5400,31 +5105,6 @@ struct ThreadView: View {
     // Rubber-banded drag + haptics at each threshold. A quick tap (too short) flashes the hint.
     private static let cancelThreshold: CGFloat = 80
     private static let lockThreshold: CGFloat = 88
-    private var lockProgress: CGFloat { min(1, max(0, -clampedDrag.height / Self.lockThreshold)) }
-
-    // In-pill mic: the small idle icon (matches sticker/camera) AND the drag gesture's hit target.
-    // While recording it's invisible (opacity 0) — the BIG red mic is drawn by `recordingMicOverlay`
-    // on top of the whole composer, so it's never clipped by / behind the pill's glass. The gesture
-    // still lives here (opacity doesn't affect hit-testing), keeping a stable identity (no freeze).
-    private var micButton: some View {
-        Image("ic_mic")
-            .renderingMode(.template).resizable().scaledToFit()
-            .foregroundStyle(.primary)                     // solid white (dark) / black (light)
-            .frame(width: 22, height: 24)
-            .frame(width: 40, height: 40)                  // 40x40 tap target
-            .opacity(recordingHeld ? 0 : 1)
-            // Instant UIKit hold gesture (minimumPressDuration 0) — fires on touch-down, no SwiftUI
-            // arbitration lag. Overlay stays mounted during recording so it keeps tracking the drag.
-            .overlay {
-                HoldToRecordView(
-                    onBegan: { beginHoldRecording() },
-                    onChanged: { t in updateHoldRecording(t) },
-                    onEnded: { t, cancelled in endHoldRecording(t, cancelled: cancelled) }
-                )
-            }
-            .padding(.trailing, 4)                         // last icon 4pt from the bar edge
-    }
-
     private func beginHoldRecording() {
         guard !holdStarted, !recordLocked else { return }
         // A live call OWNS the microphone. CallKit holds the audio session in manual mode and WebRTC has
@@ -5495,65 +5175,6 @@ struct ThreadView: View {
         }
     }
 
-    // The BIG red mic + lock pill, rendered as an overlay ON TOP of the composer during recording,
-    // aligned over the in-pill mic. Non-interactive (the gesture is on micButton); follows the drag.
-    private var recordingMicOverlay: some View {
-        ZStack(alignment: .center) {
-            // Lock pill floats above, FIXED — the mic slides up to it.
-            if !recordCancelArmed {
-                lockTarget.offset(y: -86)
-            }
-            // The big mic under the finger, follows it 1:1. ACCENT, NOT RED — his screenshot of the
-            // reference: the button is the chat colour sitting in a soft halo of itself; red is the
-            // recording signal on the LEFT of the bar, not the button.
-            //
-            // THE HALO IS ALIVE — restored, not invented: `3c6674de` built exactly this on his
-            // request (a halo that breathes on its own and SWELLS with the live voice level, the
-            // reference's blob idea) and it was lost in a later mic rebuild. He asked for it again
-            // on 2026-08-11 with the reference open. Two rings at different depths, both riding
-            // the recorder's metered level, whose VU ballistics already smooth the motion.
-            ZStack {
-                let lvl = CGFloat(recorder.levels.last ?? 0)
-                Circle().fill(Theme.accent(dark).opacity(0.12))
-                    .frame(width: 78, height: 78)
-                    .scaleEffect(1.10 + 0.85 * lvl + (micPulse ? 0.08 : 0))
-                Circle().fill(Theme.accent(dark).opacity(0.22))
-                    .frame(width: 78, height: 78)
-                    .scaleEffect(1 + 0.40 * lvl)
-                Circle().fill(Theme.accent(dark))
-                    .frame(width: 56, height: 56)
-                // The disc is `Theme.accent(dark)`, which IS white at night — so a hardcoded white
-                // mic drew nothing at all while recording, on the one control you are watching.
-                Image("ic_mic").renderingMode(.template).resizable().scaledToFit()
-                    .frame(width: 24, height: 28).foregroundStyle(Theme.onAccent(dark))
-            }
-            .animation(.easeOut(duration: 0.12), value: recorder.levels.last ?? 0)
-            .animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: micPulse)
-            .onAppear { micPulse = true }
-            .onDisappear { micPulse = false }
-            .offset(x: clampedDrag.width, y: clampedDrag.height)
-        }
-        .padding(.trailing, 12).padding(.bottom, 0)   // centre over the in-pill mic
-        .allowsHitTesting(false)
-        .animation(.easeInOut(duration: 0.12), value: recordCancelArmed)
-    }
-
-    // Lock target floating above the mic — fills toward accent as you slide up, then locks.
-    private var lockTarget: some View {
-        VStack(spacing: 7) {
-            Image(systemName: lockProgress > 0.7 ? "lock.fill" : "lock.open.fill")
-                .font(.system(size: 17, weight: .semibold))
-            Image(systemName: "chevron.up")
-                .font(.system(size: 13, weight: .bold))
-                .opacity(1 - lockProgress)
-        }
-        .foregroundStyle(.primary)               // native adaptive: black in light mode, white in dark
-        .frame(width: 48)                        // bigger 48px pill (spec: looked small)
-        .padding(.vertical, 14)
-        .liquidGlass(Capsule(), interactive: true)   // real Liquid Glass (spec)
-        .scaleEffect(0.92 + lockProgress * 0.12)
-    }
-
     // Locked (hands-free) recording bar.
     /// TWO ROWS NOW — his 2026-08-11 side-by-side of ours against the reference: everything was
     /// packed into one row, so the waveform got whatever width was left after four buttons and
@@ -5605,173 +5226,6 @@ struct ThreadView: View {
     /// Reserved for anything that changes this bar's HEIGHT. Nothing does today — both composer
     /// states are 40 — but their split is kept so a future height change uses the stiffer one.
     private static let refHeightSpring: Animation = .spring(response: 0.3, dampingFraction: 0.9)
-    /// The big red mic's EXIT, and nothing else. Their `lockVoiceMemoUI` takes the circle and the
-    /// lock chevron off on a plain 0.2s ease rather than on the control animator, so this is the
-    /// one place the "one curve per moment" rule is deliberately broken — by them, first.
-    private static let refMicExit: Animation = .easeOut(duration: 0.2)
-
-    private var lockedRecordingBar: some View {
-        // ⛔ ONE ROW TALL, WITH THE PAUSE FLOATING OVER THE CHAT — owner, 2026-08-24: locking a
-        // recording "scrolls the chat up to give space for the pause button… it can overlap the
-        // chat, it's a button, everyone can see it, no need for the chat to scroll".
-        //
-        // ⚠️ THIS BAR'S HEIGHT IS SPENT TWICE, which is why the pause cost so much room. It is the
-        // safeAreaBar's inset AND it is measured into `composerBarHeight`, which the list takes as
-        // extra bottom clearance — so a second 40pt row pushed the conversation up by its own height
-        // plus the gap, every time you locked. Only the strip row is the bar now; the pause is an
-        // overlay, which draws and takes touches outside the bar's bounds without being part of its
-        // height. The hold hint and the big record mic in `composer` already ride outside it the
-        // same way, so this is the shape this bar already uses rather than a new trick.
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                // ⛔ THE BIN BELONGS TO THE REVIEW, NOT TO THE RECORDING — owner, 2026-08-24, image 1:
-                // while it is still recording there is no trash button and the pill runs the full
-                // width, with a red Cancel in the middle of it doing that job instead. The bin comes
-                // back the moment it pauses, which is his image 2.
-                if reviewingNote {
-                    Button { cancelRecording() } label: {
-                        Image(systemName: "trash.fill").font(.system(size: 18)).foregroundStyle(.red)
-                            .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true)
-                    }
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
-                }
-                // THE STRIP: the wave owns whatever the two buttons leave.
-                HStack(spacing: 8) {
-                    if reviewingNote {
-                        // REVIEWING: play it back. The waveform is the finished one, not the live meter —
-                        // same component the sent bubble uses, so what you check is what they will see.
-                        Button { togglePreview() } label: {
-                            // ⛔ 22, AND IT GOES UP FROM THE ORIGINAL 15 — owner, 2026-08-24. I read his
-                            // "play icon add small size" as "make it a small size" and shrank it to
-                            // 13; he meant ADD size, by a small amount. Measured off the image he
-                            // sent to settle it, the triangle stands about 60% of the pill's height,
-                            // which on a 40pt pill is 22-24pt of glyph.
-                            //
-                            // A bare glyph with no disc, which is what his picture shows — the sent
-                            // bubble's filled disc is a different control and this one lives inside
-                            // the pill.
-                            Image(systemName: previewPlaying ? "pause.fill" : "play.fill")
-                                .font(.system(size: 22)).foregroundStyle(Theme.accent(dark))
-                                .frame(width: 26, height: 26)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        // SCRUBBABLE — his order with the reference's review open ("can we move sound
-                        // wherever we want?"), reversing the old checking-is-not-editing stance. Same
-                        // gesture machinery as the sent bubble: tap lands, horizontal drag scrubs,
-                        // vertical is refused so nothing else moves.
-                        // ⛔ THE REFERENCE APP'S WAVEFORM, FROM THE FILE — owner, 2026-08-25: paused,
-                        // ours "looks like dots". Their strip is sampled from the audio itself and
-                        // drawn with their geometry; `SampledWaveform` is that pipeline and this view
-                        // is their draw routine. The metered `previewWaveform` still travels with the
-                        // note for the bubble; it just no longer draws this strip.
-                        SampledWaveformView(decibels: previewDecibels,
-                                            progress: previewProgress,
-                                            played: Theme.accent(dark),
-                                            unplayed: Theme.accent(dark).opacity(0.35),
-                                            onSeek: { pct in seekPreview(pct) })
-                            .frame(height: 22).frame(maxWidth: .infinity)
-                            // Re-sampled whenever the file changes: the first pause, and every later
-                            // pause after a resume, when the stitch is a new file.
-                            .task(id: previewURL) {
-                                guard let url = previewURL else { previewDecibels = []; return }
-                                let db = await SampledWaveform.decibels(of: url)
-                                if !Task.isCancelled, previewURL == url { previewDecibels = db }
-                            }
-                        // Total on the right, the reference's order: play · wave · time.
-                        Text(timeString(recorder.elapsed)).font(.system(size: 15).monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    } else {
-                        // ⛔ RECORDING: mic · timer · CANCEL · the "1" — owner's image 1, replacing the
-                        // live waveform that used to fill this space. The wave was showing the level
-                        // of something you cannot hear yet and cannot act on; Cancel is the one thing
-                        // you might actually want mid-recording, and putting it here is what lets the
-                        // bin leave the row entirely. The finished waveform still appears on pause,
-                        // where it is a thing you can scrub.
-                        // ⛔ 24pt BOX — the reference app draws this mic as a 24×24 image, not a
-                        // text-sized glyph, so it reads bigger than the timer beside it. An SF
-                        // Symbol at 20 fills a 24pt box to about the same height.
-                        Image(systemName: "mic.fill")
-                            .font(.system(size: 20)).foregroundStyle(.red)
-                            .frame(width: 24, height: 24)
-                            .symbolEffect(.pulse, options: .repeating)
-                        RecordTimerText(recorder: recorder)
-                        Button { cancelRecording() } label: {
-                            // Headline, i.e. 17 semibold — the reference app's locked-state Cancel.
-                            Text("Cancel")
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(.red)
-                                .frame(maxWidth: .infinity)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    // ONE-TIME LISTEN — the "1" at the strip's end, both states, fill-when-armed like
-                    // the photo picker's badge. Arming it flashes the little confirmation over the bar.
-                    Button {
-                        voiceViewOnce.toggle()
-                        if voiceViewOnce {
-                            withAnimation(.easeOut(duration: 0.2)) { voiceOnceToast = true }
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
-                                withAnimation(.easeIn(duration: 0.25)) { voiceOnceToast = false }
-                            }
-                        }
-                    } label: {
-                        Image(systemName: voiceViewOnce ? "1.circle.fill" : "1.circle")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundStyle(voiceViewOnce ? Color(hex: 0x3DA1FD) : .primary)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(voiceViewOnce ? "One-time listen on" : "One-time listen off")
-                }
-                .padding(.horizontal, 14).frame(minHeight: 40)
-                .liquidGlass(Capsule(), interactive: true)
-                .clipShape(Capsule())   // keep the dotted waveform fully inside the pill's rounded edges
-                Button { sendRecording() } label: {
-                    // ⛔ THE CHAT'S OWN COLOUR, NOT A FIXED BLUE — owner, 2026-08-24, with a red chat
-                    // open and a blue arrow in it: "it should work like the Send Message button, with
-                    // a colour that matches the bubble colour I'm using".
-                    //
-                    // The comment that stood here said this matched the composer send, and it had
-                    // stopped being true: that one resolves `chatColorSpec?.swatch` and falls back to
-                    // the default only when the chat has no custom colour, while this one named the
-                    // default outright. Same expression on both now, so a chat colour cannot reach one
-                    // send button and miss the other.
-                    Image(systemName: "arrow.up").font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 40, height: 40)
-                        .liquidGlass(Circle(), interactive: true,
-                                     tint: chatColorSpec?.swatch ?? Theme.defaultBubble(dark))
-                        .contentShape(Circle())
-                        // ⛔ IT GROWS FROM A DOT — their entrance, stated in their source as
-                        // `transform = isHidden ? .scale(0.1) : .identity` alongside the alpha, on the
-                        // control spring. Ours had no entrance of its own: it simply came with the bar
-                        // that appeared, which is the difference between a button arriving and a
-                        // button being revealed. 0.1 is their number, not a rounded-off tenth.
-                        .scaleEffect(recordLocked ? 1 : 0.1)
-                }
-            }
-            .frame(height: 40)
-        }
-        // ⛔ THE PAUSE BUTTON IS NOT ATTACHED HERE ANY MORE, AND THAT IS THE FIX — owner, 2026-08-24,
-        // circled: tapping it did nothing. It was an overlay on this bar, offset up by its own height
-        // plus the gap, and it DREW in exactly the right place the whole time, which is why it read
-        // as a dead button rather than a missing one.
-        //
-        // ⚠️ AN OVERLAY OFFSET OUTSIDE ITS PARENT'S FRAME IS DRAWN BUT NEVER HIT-TESTED. A touch is
-        // resolved by walking down the hierarchy, and this bar's frame rejects every point above its
-        // own top edge before the overlay is reached — so the taps went to the message list behind
-        // it. The note that stood here claimed the opposite, citing the hold hint and the record mic
-        // as riding outside the same way; both are things nobody taps, so neither could have shown
-        // this up.
-        //
-        // Growing this bar to contain the button is not available: its height is spent twice, as the
-        // safeAreaBar inset AND as `composerBarHeight`, so containing it here is precisely the
-        // chat-scrolls-up behaviour he rejected. It hangs off the chat container instead, which has
-        // full-screen bounds, so the touch lands and not one point of height is added here.
-        .animation(.spring(response: 0.28, dampingFraction: 0.85), value: reviewingNote)
-    }
 
     /// Pause while recording, continue while reviewing. Extracted only so the layout above reads as
     /// the arrangement it is; the two branches are untouched.
@@ -8514,34 +7968,6 @@ private struct MessageActionDialogs: ViewModifier {
 // the whole message list on every tick: the cause of voice-recording stutter/frame drops).
 // Audio-reactive recording halo, isolated so its 30 Hz metering re-render never touches the mic
 // button (which owns the drag-to-lock offset). Breathes continuously and swells with the live level.
-private struct RecordTimerText: View {
-    var recorder: AudioRecorder
-    var body: some View {
-        // ⛔ 17 SEMIBOLD, NOT SUBHEADLINE — the reference app's duration label is body-size at
-        // semibold with monospaced digits, and the same label serves both the hold and the
-        // locked bar. Ours was 15 regular, which is why the timer sat quieter than their's.
-        Text(format(recorder.elapsed))
-            .font(.system(size: 17, weight: .semibold).monospacedDigit())
-    }
-    private func format(_ t: TimeInterval) -> String {
-        let s = Int(t); return String(format: "%d:%02d", s / 60, s % 60)
-    }
-}
-
-private struct RecordWaveform: View {
-    var recorder: AudioRecorder
-    var color: Color
-    var body: some View {
-        // The SCROLLING live view — bars enter right, travel left, die at the edge (his report on
-        // the whole-note compressed strip: it re-bucketed every tick, shimmered in place, "laggy",
-        // and carried a playback knob that means nothing while recording). The 10Hz liveWindow
-        // sets a pace the eye can follow, and display()'s physics makes silence enter as dots.
-        // The full note is still shown where it belongs: the review strip, after pause.
-        LiveWaveform(levels: recorder.liveWindow, color: color, stamp: recorder.liveStamp)
-            .frame(maxWidth: .infinity, maxHeight: 22)
-    }
-}
-
 // Identifiable wrapper so a decrypted file can drive a .sheet(item:).
 struct PreviewFile: Identifiable { let id = UUID(); let url: URL }
 struct PDFDocWrap: Identifiable { let id = UUID(); let url: URL; let title: String }
