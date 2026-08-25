@@ -1968,8 +1968,13 @@ struct ThreadView: View {
             .equatable()
             .padding(.top, topGap(at: index))
             .id(msg.id)
-            .onAppear { visibleRows.ids.insert(msg.id); schedulePersistScrollPosition() }
-            .onDisappear { visibleRows.ids.remove(msg.id) }
+            // NOT a bare `.onAppear`: the off-screen sizer renders this same view to measure it, and
+            // SwiftUI fires onAppear there too — so measuring a row used to tell the app it was on
+            // screen, and the persisted "where I left off" became a row nobody was looking at. See
+            // `RowVisibilityReporter`.
+            .modifier(RowVisibilityReporter(
+                onVisible: { visibleRows.ids.insert(msg.id); schedulePersistScrollPosition() },
+                onHidden: { visibleRows.ids.remove(msg.id) }))
             .transition(.identity)
             .modifier(SelectableRow(selecting: selecting, selected: selectedIds.contains(msg.id),
                                     onToggle: { toggleSelect(msg.id) }))

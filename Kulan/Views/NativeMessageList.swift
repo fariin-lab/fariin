@@ -161,6 +161,39 @@ struct NativeMessageList: UIViewControllerRepresentable {
     }
 }
 
+/// TRUE WHILE A ROW IS BEING RENDERED BY THE OFF-SCREEN SIZER rather than by a real cell.
+///
+/// ⛔ THE SIZER RENDERS THE SAME VIEW AS THE CELL, SIDE EFFECTS AND ALL — owner, 2026-08-25, on the
+/// chat reopening in the wrong place. `measure()` hands `parent.row(id)` to a `UIHostingController`
+/// that lives in the view hierarchy (at alpha 0, deliberately, so it inherits traits). SwiftUI does
+/// not know that host is a measuring rig: it fires `onAppear` for whatever is in it. The row's
+/// `onAppear` inserts its id into ThreadView's visible-rows set and schedules the "where I left off"
+/// save — so measuring a row told the app that row was ON SCREEN, and the position it then persisted
+/// was a row nobody was looking at.
+///
+/// Rows read this and skip anything that reports visibility. Nothing about their LAYOUT changes, which
+/// is the point: the measurement has to stay identical to the render, and only the side effect goes.
+private struct MeasuringRowKey: EnvironmentKey { static let defaultValue = false }
+
+extension EnvironmentValues {
+    var isMeasuringRow: Bool {
+        get { self[MeasuringRowKey.self] }
+        set { self[MeasuringRowKey.self] = newValue }
+    }
+}
+
+/// Report a row's on-screen visibility, except when the off-screen sizer is the one rendering it.
+struct RowVisibilityReporter: ViewModifier {
+    @Environment(\.isMeasuringRow) private var isMeasuring
+    var onVisible: () -> Void
+    var onHidden: () -> Void
+    func body(content: Content) -> some View {
+        content
+            .onAppear { if !isMeasuring { onVisible() } }
+            .onDisappear { if !isMeasuring { onHidden() } }
+    }
+}
+
 // Per-cell rendered-height report (SwiftUI truth). Scoped per hosting cell, so cells never interfere.
 private struct RowHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
@@ -219,6 +252,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // Rows whose rendered height the SIZER can never reproduce (async content, e.g. link-preview cards).
     private var sizerRefused = Set<String>()
+    /// The height a refused row actually RENDERED at. Once the sizer has been proven wrong for a row,
+    /// this is that row's height everywhere — `measure()` returns it, so the apply path and the report
+    /// path cannot hand the layout two different answers. See `reportHeight`.
+    private var renderedHeights: [String: CGFloat] = [:]
     private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
     private var popGestureHooked = false                 // interactive-pop target attached once
     // The recognizer we attached to, so it can be released again. It belongs to the NAVIGATION
@@ -362,9 +399,30 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     override func viewDidLoad() {
         super.viewDidLoad()
         layout = MessageLayout()
+        // ⛔ THE HEIGHT IS RESOLVED THROUGH THE DATA SOURCE, NEVER THROUGH `currentIds` — owner,
+        // 2026-08-25, reporting rows that jump and draw on top of each other while scrolling.
+        //
+        // ⚠️ TWO SOURCES OF TRUTH, AND THEY DISAGREE FOR A WINDOW. `prepare()` walks
+        // `0..<collectionView.numberOfItems`, i.e. the COLLECTION VIEW's idea of the list. This closure
+        // used to index `currentIds`, which `apply()` assigns BEFORE handing the snapshot over — so
+        // between those two statements the collection view still holds the OLD order while this array
+        // holds the NEW one, and index i means two different rows to the two of them.
+        //
+        // While the list was inverted that was harmless: history was APPENDED, so indices 0..<oldCount
+        // still meant the same rows and the frames came out identical. Top-down, history is PREPENDED —
+        // index 0 becomes a different message — so every frame in the rebuild got some other row's
+        // height. Rows land in the wrong places and a tall row inside a short frame spills over its
+        // neighbour: exactly the jumping and overlapping he photographed.
+        //
+        // Asking the data source removes the second source entirely. `itemIdentifier(for:)` and
+        // `numberOfItems` are the same object's view of the world, so they cannot disagree: mid-window
+        // the rebuild produces correct OLD frames, and the moment the snapshot lands the count/generation
+        // guard rebuilds correct NEW ones.
         layout.heightForItem = { [weak self] index in
-            guard let self, index < self.currentIds.count else { return 44 }
-            return self.heights[self.currentIds[index]] ?? 44
+            guard let self,
+                  let id = self.dataSource.itemIdentifier(for: IndexPath(item: index, section: 0))
+            else { return 44 }
+            return self.heights[id] ?? 44
         }
         collectionView = HardenedCollectionView(frame: view.bounds, collectionViewLayout: layout)
         collectionView.isPrefetchingEnabled = false   // off until first appearance (faster, jank-free open)
@@ -590,12 +648,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let m = uikitModels[id], width > 0 {
             return UIKitBubbleView.sizes(m, width: width).cell.height
         }
+        // A ROW THE SIZER HAS BEEN PROVEN WRONG ABOUT KEEPS WHAT IT RENDERED. Asking again would return
+        // the same wrong number; the render is the only measurement of such a row that was ever true.
+        if let rendered = renderedHeights[id] { return rendered }
         // Measure EXACTLY as the cell renders: the cell wraps its content in `.frame(width: hostWidth)`,
         // so the sizer must apply the SAME explicit width frame â€” not just a sizeThatFits width proposal.
         // The two constraint mechanisms wrap Text differently in edge cases, and any disagreement made the
         // layout frame not match the rendered cell â†’ overlap, and a permanent rendered-vs-measured
         // mismatch that reconciled forever.
-        sizer.rootView = AnyView(coordinator.parent.row(id).frame(width: width))
+        // `.isMeasuringRow` mutes the row's visibility side effects for this pass; see the key's note.
+        // It changes nothing about layout, so the measurement stays identical to the render.
+        sizer.rootView = AnyView(coordinator.parent.row(id).frame(width: width)
+            .environment(\.isMeasuringRow, true))
         let size = sizer.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude))
         return ceil(size.height)
     }
@@ -629,23 +693,59 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             heights[id] = hh
             return
         }
-        guard didReveal else { return }   // never re-lay-out during the open â€” the pre-measure owns it
-        // ROWS THE SIZER CAN NEVER AGREE WITH. A LinkPreviewCard renders nothing until an async fetch
-        // completes, while measure() is synchronous â€” so for any message containing a link the sizer is
-        // permanently short and the rendered height NEVER matches. Left alone, such a row re-armed the
-        // settle machinery on every single dequeue. Once the sizer has refused a row, stop asking it.
-        if sizerRefused.contains(id) { return }
+        guard didReveal else { return }   // never re-lay-out during the open — the pre-measure owns it
+        // ⛔ AND NEVER SYNCHRONOUSLY, BECAUSE THIS IS A RENDER PASS. `reportHeight` is called from a
+        // SwiftUI `onPreferenceChange` inside the cell's own update, and the tail of this method
+        // invalidates the layout and calls `layoutIfNeeded()`. Doing that from inside a layout/render
+        // pass re-enters UIKit's layout while it is still walking the previous one, which is a
+        // documented way to get inconsistent frames — bubbles landing on top of one another mid-scroll.
+        // The reference app never invalidates layout from a cell at all; a size change there goes
+        // through a fresh load. One runloop hop is the cheap equivalent of that rule.
+        DispatchQueue.main.async { [weak self] in self?.applyReportedHeight(hh, for: id) }
+    }
+
+    /// The tail of `reportHeight`, one runloop tick later. Re-checks staleness because the row may have
+    /// been re-measured, replaced or trimmed in the gap.
+    private func applyReportedHeight(_ hh: CGFloat, for id: String) {
+        guard isViewLoaded, !isDisappearing, currentIds.contains(id) else { return }
+        guard let cached = heights[id], abs(cached - hh) > 2 else { return }
         guard canLandLoad else { needsRefreshOnSettle = true; pendingSettleHeights.insert(id); return }
-        // The rendered report is only a SIGNAL that something changed â€” the SIZER is the single height
-        // authority. (Adopting the rendered value here while the apply path adopts the sizer value made
-        // two authorities fight: any row where they disagreed by more than 2pt reconciled back and forth
-        // forever, invalidating the layout mid-scroll = overlapping bubbles.)
         let w = collectionView.bounds.width
         guard w > 0 else { return }
+        // ⛔ A REFUSED ROW TAKES THE HEIGHT IT RENDERED AT — owner, 2026-08-25, bubbles drawn on top of
+        // one another. This used to `return` for a refused row and, before that, adopt the SIZER's
+        // number for every row: so a row the sizer measured SHORT kept a short frame while its content
+        // drew at full height, and `MessageLayout` refuses self-sizing, so the overflow landed on the
+        // next bubble. `sizerRefused` then guaranteed it was never revisited: permanent overlap.
+        //
+        // ⚠️ THE JUSTIFICATION THAT USED TO STAND HERE IS STALE, and it is worth knowing why. It said a
+        // LinkPreviewCard "renders nothing until an async fetch completes". That has not been true since
+        // previews started travelling WITH the message (see `ThreadView`, the card is built from
+        // `message.linkPreview` and there is no viewer-side fetch). Audited today, EVERY bubble type
+        // measures deterministically — images and video from stored width/height, albums from a pure
+        // solver, voice from stated constants. So this branch should now be close to dead. It is kept
+        // as a net, not a routine path: if a row ever does render at a height the sizer cannot produce,
+        // the render is what the person can see, and the layout must agree with it rather than with a
+        // number that has already been proven wrong.
+        //
+        // ⚠️ THE OLD COMMENT'S FEAR WAS REAL BUT ITS FIX WAS BACKWARDS. Two authorities did fight:
+        // reportHeight adopted the render, the apply path re-measured with the sizer and put the wrong
+        // number back, and the pair reconciled forever. The answer is not to crown the wrong one — it is
+        // to make there be ONE. `renderedHeights` records the truth for that row and `measure()` returns
+        // it, so both paths now say the same thing and the loop cannot form. It also self-terminates:
+        // once adopted, the next report matches the cache and returns at the guard above.
+        if sizerRefused.contains(id) {
+            renderedHeights[id] = hh
+            adoptHeight(hh, for: id)
+            return
+        }
         let sized = measure(id, width: w)
-        // The sizer disagrees with what was actually rendered and will keep doing so. Record it once so
-        // the loop above never re-arms for this row again.
-        if abs(sized - hh) > 2 { sizerRefused.insert(id) }
+        if abs(sized - hh) > 2 {
+            sizerRefused.insert(id)
+            renderedHeights[id] = hh
+            adoptHeight(hh, for: id)   // the render is the truth for this row from here on
+            return
+        }
         adoptHeight(sized, for: id)
     }
 
@@ -1215,6 +1315,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             heights = heights.filter { keep.contains($0.key) }
             configuredRoutes = configuredRoutes.filter { keep.contains($0.key) }
             sizerRefused = sizerRefused.filter { keep.contains($0) }
+            renderedHeights = renderedHeights.filter { keep.contains($0.key) }
         }
         let afterY = frameMinY(for: ids)
 
@@ -1762,6 +1863,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if w > 0, measuredWidth > 0, w != measuredWidth {
             heights.removeAll(keepingCapacity: true)
             sizerRefused.removeAll()
+            renderedHeights.removeAll()   // a rendered height is only true at the width it rendered at
             for id in currentIds { heights[id] = measure(id, width: w) }
             measuredWidth = w
             layout.generation += 1
