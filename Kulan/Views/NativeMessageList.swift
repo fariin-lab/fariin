@@ -428,9 +428,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// while it is set and snaps as before when it is not (composer growth, pinned bar, rotation).
     private var keyboardClock: (duration: TimeInterval, curve: UInt)?
     private var keyboardClockToken = 0
-    /// Unique key per ride, so overlapping keyboard moves compose additively instead of replacing
-    /// one another. Theirs does the same with `animation-\(takeNextAnimationId())`.
-    private var keyboardRideId = 0
 
     /// Record where the reader is, as a distance from the newest message. Cheap; called often.
     private func recordDistanceFromBottom() {
@@ -1713,110 +1710,99 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // screen adds nothing, so this is invisible in every conversation with real history.
         let shortfall = bottomAlignShortfall(bottomInset: bottom)
         let top = topOverlayHeight + shortfall
-        // Where the content SITS right now, in screen terms. The ride below animates from here, so it
-        // is measured rather than predicted — see `rideKeyboardVisually`.
-        let beforeTop = collectionView.contentInset.top
-        let beforeOffset = collectionView.contentOffset.y
-        let insetsChanged = abs(collectionView.contentInset.top - top) > 0.5
-            || abs(collectionView.contentInset.bottom - bottom) > 0.5
+
+        // ⛔ THE REFERENCE APP'S KEYBOARD PATH, READ FROM ITS SOURCE — owner, 2026-08-25: "read their
+        // implementation and verify both directions". Of the two references, THIS one's architecture
+        // is ours: an upright `UICollectionView` pinned to the full view bounds, never resized and
+        // never inverted, with everything done through `contentInset`. (The other app's list is a
+        // rotated `ASDisplayNode` that moves item nodes itself and rides a layer animation; its
+        // pinning is a property of the rotation, which we no longer have, so it cannot be copied.)
+        //
+        // Their `updateContentInsets` does four things in this order, and the order is the mechanism:
+        //
+        //   1. SNAPSHOT "was I at the bottom" and the old offset, BEFORE touching anything, so the
+        //      test uses pre-keyboard geometry.
+        //   2. Write the insets inside `performWithoutAnimation`, and immediately write the offset
+        //      BACK to what it was. That second write is not the follow — it CANCELS the implicit
+        //      offset jump `UIScrollView` applies of its own accord when `contentInset` changes.
+        //      Without it the content teleports before the real motion begins.
+        //   3. Stand down entirely if the user is dragging: `keyboardDismissMode = .interactive`
+        //      means UIKit is already tracking the offset, and helping would fight it.
+        //   4. Write the offset OUTSIDE the `performWithoutAnimation` wrapper, `animated: false`.
+        //
+        // ⚠️ STEP 4 IS THE WHOLE TRICK, AND IT IS WHY THEY NEVER READ A DURATION OR A CURVE. This
+        // method is reached from `viewDidLayoutSubviews`, which UIKit runs INSIDE the keyboard's own
+        // animation transaction. An unanimated `setContentOffset` there is picked up by that
+        // transaction and inherits the keyboard's exact duration and curve, for free. Their own
+        // comment says so: "This offset change will be animated by UIKit's UIView animation block
+        // which updateContentInsets() is called within."
+        //
+        // ⚠️ AND IT ONLY WORKS SYNCHRONOUSLY. Their code routes the safe-area path through a debounce
+        // and the keyboard path NOT — a debounced write lands outside the transaction and hard-jumps.
+        // So nothing on this path may be deferred.
+        let oldTop = collectionView.contentInset.top
+        let oldBottom = collectionView.contentInset.bottom
+        let previousAdjustedBottom = lastAdjustedInset.bottom
+        let wasScrolledToBottom = isAtNewest              // pre-keyboard geometry — step 1
+        let oldYOffset = collectionView.contentOffset.y
+        let insetsChanged = abs(oldTop - top) > 0.5 || abs(oldBottom - bottom) > 0.5
+
         if insetsChanged {
-            collectionView.contentInset.top = top
-            collectionView.contentInset.bottom = bottom
-            // The INDICATOR keeps the real top: the shortfall is padding, not content the scroll bar
-            // should pretend exists.
-            collectionView.verticalScrollIndicatorInsets.top = topOverlayHeight
-            collectionView.verticalScrollIndicatorInsets.bottom = bottom
+            // Step 2. The offset restore cancels UIScrollView's own implicit shift, nothing more.
+            UIView.performWithoutAnimation {
+                let keep = collectionView.contentOffset
+                collectionView.contentInset.top = top
+                collectionView.contentInset.bottom = bottom
+                collectionView.setContentOffset(keep, animated: false)
+                // The INDICATOR keeps the real top: the shortfall is padding, not content the scroll
+                // bar should pretend exists.
+                collectionView.verticalScrollIndicatorInsets.top = topOverlayHeight
+                collectionView.verticalScrollIndicatorInsets.bottom = bottom
+            }
         }
-        // The keyboard and the safe area reach this method through the ADJUSTED inset, not through
-        // ours. Compare against what we last acted on, or a keyboard opening is invisible here (674).
+
+        // The keyboard reaches us through the ADJUSTED inset, not through ours: `.always` folds the
+        // safe area (and therefore the keyboard) in on UIKit's side, so our own two numbers do not
+        // move when the keys do. Compare against what we last acted on, or a keyboard opening is
+        // invisible here — which is exactly what build 674 shipped.
         let adjusted = collectionView.adjustedContentInset
         let adjustedChanged = abs(adjusted.top - lastAdjustedInset.top) > 0.5
-            || abs(adjusted.bottom - lastAdjustedInset.bottom) > 0.5
+            || abs(adjusted.bottom - previousAdjustedBottom) > 0.5
         guard force || insetsChanged || adjustedChanged else { return }
         lastAdjustedInset = adjusted
-        // While the list is moving, UIKit is already compensating for the range change on the finger's or
-        // the fling's behalf. A write from us here would fight it, and a write LATER â€” which is what the
-        // old deferred inset update did â€” lands as a visible jump the moment the user lets go. Do neither:
-        // the inset above has already landed, and only the offset work stands down.
-        let listIsMoving = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
-        // ⛔ AND A SEND GLIDE COUNTS AS MOVING — owner, 2026-08-25: sending a LONG message leaves "more
-        // space empty" above the composer; a short one is fine.
-        //
-        // ⚠️ THE LENGTH IS THE WHOLE CLUE. A short message does not change the composer's height, so
-        // `setComposerBarHeight` never fires and this method never runs during the send. A long one
-        // collapses the composer from several lines back to one, which fires it in the middle of the
-        // glide — and the glide is a PROGRAMMATIC animated scroll, which sets none of the three flags
-        // above. So `listIsMoving` was false, `isAtNewest` was false (the reader is mid-flight, not
-        // yet at the newest), and the `else` branch below wrote the pre-shrink offset back: the
-        // animation died where it stood and the clearance that had just shrunk was left as dead space.
-        //
-        // Standing down is correct rather than merely safe. The glide already knows where it is going,
-        // and `scrollViewDidEndScrollingAnimation` re-runs this the moment it lands — by which time
-        // the inset above is the new one, so it settles against the right number instead of a stale one.
-        guard !listIsMoving, !keyboardAnimating, didFirstLand,
+
+        // Step 3. Theirs: "UIKit updates collection view's scroll position when user drags with the
+        // keyboard. We don't need to do anything."
+        guard !collectionView.isDragging, !collectionView.isTracking else { return }
+        // Ours additionally: a send glide or a jump is a programmatic animated scroll that already
+        // knows where it is going, and `scrollViewDidEndScrollingAnimation` re-runs this when it
+        // lands, against the settled inset.
+        guard didFirstLand, !collectionView.isDecelerating,
               !sendAnimating, !programmaticScrollAnimating else { return }
-        // THE REFERENCE APP'S RULE, verbatim in intent: "If we were scrolled to the bottom, don't do any
-        // fancy math. Just stay at the bottom." Otherwise keep the reader the same distance from the
-        // bottom they were before the geometry moved. One rule for the keyboard, the composer growing
-        // while typing, the pinned bar appearing, and rotation. The distance was recorded BEFORE the
-        // change (see `lastKnownDistanceFromBottom`), so it does not depend on a bound that has moved.
-        collectionView.layoutIfNeeded()   // contentSize must be current before the bound is read
-        let want = lastKnownDistanceFromBottom <= 5
-            ? maxContentOffsetY
-            : clampOffset(maxContentOffsetY - lastKnownDistanceFromBottom)
-        guard abs(collectionView.contentOffset.y - want) > 0.5 else { return }
-        collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
-        rideKeyboardVisually(beforeTop: beforeTop, beforeOffset: beforeOffset)
+
+        // Step 4. Plain writes, outside any `performWithoutAnimation`, so they ride the keyboard.
+        collectionView.layoutIfNeeded()   // contentSize current before the bound is read
+        if wasScrolledToBottom {
+            // Theirs, verbatim: "If we were scrolled to the bottom, don't do any fancy math. Just
+            // stay at the bottom."
+            let bound = maxContentOffsetY
+            if abs(collectionView.contentOffset.y - bound) > 0.5 {
+                collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
+            }
+        } else {
+            // Theirs: "shift the content in lockstep with the keyboard, up to the limits of the
+            // content bounds." The delta is the ADJUSTED bottom's change, because that is where the
+            // keyboard lands for us; theirs reads its own inset because its bar's height carries it.
+            let insetChange = adjusted.bottom - previousAdjustedBottom
+            if abs(insetChange) > 0.5 {
+                let want = clampOffset(oldYOffset + insetChange)
+                if abs(collectionView.contentOffset.y - want) > 0.5 {
+                    collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
+                }
+            }
+        }
     }
 
-    /// ⛔ THE REFERENCE APP'S ACTUAL MECHANISM, READ FROM `ListView.swift` — owner, 2026-08-25, after
-    /// two wrong attempts: "don't guess, read their implementation and verify both directions".
-    ///
-    /// What they do (`ListView.replayOperations`, the block at :3244):
-    ///
-    ///   1. `offsetFix = newInsets.top - oldInsets.top`  — ONE formula. Positive when the keyboard
-    ///      opens, negative when it closes; the sign is the only difference and there is no separate
-    ///      close path. Their `keyboardWillHide` handler is literally empty, because
-    ///      `keyboardWillChangeFrame` already carries both.
-    ///   2. Every item node is moved to its FINAL position synchronously (:3277).
-    ///   3. ONE additive animation on the list layer's `sublayerTransform`, from
-    ///      `translate(0, -completeOffset)` to identity, carries the whole thing visually (:3302-3357).
-    ///
-    /// ⚠️ AND THAT IS WHY MY TWO ATTEMPTS BOTH FAILED. The first ran a second `UIView.animate` with
-    /// the keyboard's duration and curve — two animations of the same length still drift, because
-    /// they start on different frames, which is "ahead of the keys" one way and "behind them" the
-    /// other. The second relied on the write landing inside UIKit's own animation block, which is a
-    /// dependency on WHEN UIKit calls us and differs between iOS 26 and 27 — the exact split he
-    /// reported. Theirs depends on neither: the position is committed instantly, so there is no
-    /// timing relationship left to get wrong, and the travel is one animation they own outright.
-    ///
-    /// ⚠️ WHAT CANNOT BE COPIED, STATED PLAINLY. Their list is a rotated `ASDisplayNode` that moves
-    /// item nodes itself, so the keyboard lands in its TOP inset and the newest message is pinned by
-    /// geometry. Ours is a `UIScrollView` and is no longer inverted. So the TECHNIQUE ports — commit,
-    /// then ride the layer — while their pinning is replaced by `lastKnownDistanceFromBottom` above
-    /// and by `bottomAlignShortfall` for a thread shorter than the screen.
-    ///
-    /// The curve is their curve 7 written out as a bezier: this app already states it once, in
-    /// `KeyboardWatcher.systemAnimation`, with the note that 0.23/1.0/0.32/1.0 is their own form of
-    /// it. Additive with a unique key, as theirs is, so an open interrupted by a close composes
-    /// instead of snapping.
-    private func rideKeyboardVisually(beforeTop: CGFloat, beforeOffset: CGFloat) {
-        guard let clock = keyboardClock, clock.duration > 0 else { return }
-        // How far the content actually travelled on screen: what the inset gave it, minus what the
-        // offset took away. Measured across the commit, so it needs no model of the geometry.
-        let travelled = (collectionView.contentInset.top - beforeTop)
-            - (collectionView.contentOffset.y - beforeOffset)
-        guard abs(travelled) > 0.5 else { return }
-        let ride = CABasicAnimation(keyPath: "sublayerTransform")
-        ride.fromValue = NSValue(caTransform3D: CATransform3DMakeTranslation(0, -travelled, 0))
-        ride.toValue = NSValue(caTransform3D: CATransform3DIdentity)
-        ride.duration = clock.duration
-        ride.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1.0, 0.32, 1.0)
-        ride.isAdditive = true
-        ride.isRemovedOnCompletion = true
-        keyboardRideId &+= 1
-        collectionView.layer.add(ride, forKey: "keyboard-ride-\(keyboardRideId)")
-    }
 
     func setComposerBarHeight(_ h: CGFloat) {
         // Reject implausible reports: the composer bar is never under ~40pt â€” a transient near-zero from
