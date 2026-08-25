@@ -12,50 +12,45 @@ extension Notification.Name {
 // via UIHostingConfiguration, so no bubble feature is lost â€” only the scroll container differs.
 //
 // ============================================================================================
-// THE INVERTED MODEL, AND WHY THE LIST IS BUILT UPSIDE DOWN (2026-07-28 rewrite)
+// TOP-DOWN, THE WAY THE REFERENCE APP'S LIST IS (2026-08-25, un-inverting the 2026-07-28 rewrite)
 // ============================================================================================
-// This list used to stack messages downward from content y = 0, oldest first, exactly like a normal
-// table. That single decision is what produced the scroll jump, and it produced it four different ways
-// over ten days â€” every fix found a real cause, and the bug came back from a new direction, because in a
-// top-down chat list KEEPING THE READER STILL IS A CALCULATION rather than a property:
+// From 2026-07-28 to today this list was drawn UPSIDE DOWN: the collection view carried a scaleY(-1)
+// transform, every cell carried the counter-flip, item 0 was the newest message at content y = 0, and
+// paging history appended beyond the far edge so nothing the reader could see ever moved. That bought
+// a real thing: "keep the reader still" became a property of the coordinate system instead of a
+// calculation, and a family of scroll-jump bugs died with it. The record of those bugs, and of the
+// four fixes that each found a real cause before the inversion, is in the git history of this file.
 //
-//   * Older messages page in ABOVE the reader, so every row they can see moves down by the height of
-//     what landed. The only thing holding them in place is a compensating contentOffset write that has
-//     to be exactly right and land in exactly the same transaction as the content change.
-//   * That compensation needs the exact height of every row above the viewport â€” including forty rows
-//     that have never been on screen, sized by an off-screen SwiftUI sizer that is documented (see
-//     `sizerRefused`) to be permanently wrong for async content. A height that is wrong by four points
-//     is a four-point jump now and a second jump later when the row is finally rendered and corrected.
-//   * Because every mechanism (a load, a reaction, a media height, a reconfigure, the keyboard, the
-//     composer, a rotation) can move rows above the reader, EVERY mechanism needed its own compensation
-//     and its own guard. There were roughly twenty-five contentOffset/contentInset writers in this file,
-//     each guarded by whoever wrote it, and each one was a chance to get it wrong.
+// IT IS TOP-DOWN AGAIN, AND THE REASON IS THE HEADER (owner, 2026-08-25: "where is the iOS 26 Liquid
+// Glass blur in the top header? [The reference app] has it."). That blur is not a view anybody writes;
+// it is the system's scroll edge effect, which iOS 26 draws under a navigation bar for any scroll view
+// by default. Their list is a plain top-down collection view, so they get it free. Ours was inverted,
+// and the system's effect cannot tell which edge is which on a mirrored scroll view: on device it
+// washed the whole chat three separate ways in July, and five hand-made blur bands failed after that.
+// The verdict written at the old setup site ended: "the honest answer is to stop imitating it and
+// un-invert the list so Apple's own effect works." This is that.
 //
-// So the list is now INVERTED, which is what the standard messengers all do:
+// WHAT THE UN-INVERSION KEEPS, so the jump family does not simply come back:
 //
-//   * The collection view carries a scaleY(-1) transform and so does every cell, so the two flips cancel
-//     and content renders upright. Only the VIEWPORT is mirrored.
-//   * Item 0 is the NEWEST message and sits at content y = 0, which the flip puts at the bottom of the
-//     screen. Older messages extend to larger y, which the flip puts further up.
-//   * Paging in history therefore APPENDS beyond the far edge of the content. Nothing between the origin
-//     and the viewport changes, so no frame the reader can see moves, so there is nothing to compensate
-//     for and nothing that can be got wrong. A badly measured row that the reader has never seen can no
-//     longer move them: it is on the far side of the viewport from the coordinate origin.
-//   * "At the bottom" becomes `contentOffset.y == -adjustedContentInset.top`, a fixed number that does
-//     not depend on contentSize at all. Every bug in the old at-bottom family died with it: the negative
-//     `safeDistanceFromBottom` during a keyboard fold that read as "at the bottom" and yanked a reader
-//     down, the pin that fired against a stale contentSize, the clamp that stranded content after a
-//     resize. Staying at the newest message is now free â€” the scroll view already does it.
+//   * Heights are still measured up-front (UIHostingController.sizeThatFits at the real width, cached
+//     by row id) and fed to a layout that stacks exact frames. Cells never self-size and the first
+//     frame drawn is final. That was never the problem.
+//   * The continuity mechanism is unchanged and it was always orientation-agnostic: the visible row
+//     nearest the coordinate origin is the anchor, its frame is mapped before and after every change,
+//     and the difference rides the layout's own `contentOffsetAdjustment` INSIDE the update
+//     transaction, never a frame late. In the inverted list that delta was almost always zero. Here it
+//     is non-zero for exactly the changes that happen ABOVE the reader: a page of history landing, a
+//     row above them growing, a deletion above them. Same one formula, one net behind it.
+//   * "At the newest message" is `contentOffset.y >= maxContentOffsetY - 5`, which depends on
+//     contentSize. That is the dependency the inversion removed, and the reason it was removed is
+//     written down: a keyboard fold could shrink the maximum under a reader in history and read as
+//     "at the bottom". Every place that asks the question now asks it at rest, with the layout
+//     settled, and the keyboard code latches the answer BEFORE geometry moves (see rideKeyboard).
 //
-// What remains is one narrow case that genuinely needs compensation: a NEW message arriving while the
-// reader is scrolled up in history. That inserts at index 0 and does shift everything. It is one row, of
-// a height we measured a moment ago, through one code path, and it rides the layout's own
-// `contentOffsetAdjustment` inside the update transaction. There is exactly one at-rest verification net
-// behind it, in one place.
-//
-// Heights are still measured up-front (UIHostingController.sizeThatFits at the real width, cached by row
-// id) and fed to a layout that stacks exact frames, so cells never self-size and the first frame drawn is
-// already final. That part was never the problem and is unchanged.
+// What can bite again, said plainly: a row the reader has never seen, sized wrong by the off-screen
+// sizer (see `sizerRefused`), now sits ABOVE them after a page-in, and a wrong height there is a jump
+// of that many points when the row finally renders and corrects. The reference app carries the same
+// exposure with the same mitigation, measurement before layout, and lives with it.
 struct NativeMessageList: UIViewControllerRepresentable {
     var rowIds: [String]                       // stable ids in CHRONOLOGICAL order (Message.rowId)
     var rowSignatures: [String: String] = [:]  // per-row CONTENT signature â†’ same-ids apply reconfigures ONLY changed rows
@@ -90,7 +85,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var loadingOlder: Bool = false             // show the top spinner while older messages page in
     // Composer bar height (SwiftUI-measured). Extra clearance at the VISUAL BOTTOM so the newest message
     // clears the bar: the list is full-bleed UNDER the composer, so the composer's own safe-area inset is
-    // not folded for us. Under the flip the visual bottom is contentInset.top â€” see updateInsets().
+    // not folded for us. It goes into contentInset.bottom; see updateInsets().
     var composerBarHeight: CGFloat = 0
     // Bumped by ThreadView from inside a SWIFTUI context-menu action (e.g. Select). UIKit's
     // context-menu callbacks cannot see SwiftUI-presented menus, so this is how the controller learns
@@ -175,10 +170,11 @@ private struct RowHeightKey: PreferenceKey {
 // Hardened collection view: Auto Layout transiently zeroes frames during presentation, and accepting a
 // zero size destroys the contentOffset/scroll state.
 //
-// The old file also overrode contentOffset to reject UIScrollView's internal pre-content reset to zero,
-// which used to snap a top-down list to its very first message. Inverted, content y = 0 IS the newest
-// message â€” the position the list wants to be in â€” so that reset is no longer something to defend
-// against, and the override is gone with it.
+// The pre-inversion file also overrode contentOffset to reject UIScrollView's internal pre-content
+// reset to zero, which snapped a top-down list to its very first message. That override is NOT back:
+// it was a blanket refusal, and a blanket refusal also eats a legitimate scroll to the top. If the
+// snap reappears, the answer is the layout's `targetContentOffset(forProposedContentOffset:)`
+// (the reference app's route), not this class.
 final class HardenedCollectionView: UICollectionView {
     override var frame: CGRect {
         get { super.frame }
@@ -193,13 +189,12 @@ final class HardenedCollectionView: UICollectionView {
 final class MessageListController: UIViewController, UICollectionViewDelegate, UIGestureRecognizerDelegate {
     var coordinator: NativeMessageList.Coordinator!
     private var collectionView: UICollectionView!
-    private var layout: InvertedMessageLayout!
+    private var layout: MessageLayout!
     private var dataSource: UICollectionViewDiffableDataSource<Int, String>!
     private var reg: UICollectionView.CellRegistration<UICollectionViewCell, String>!
 
-    // LAYOUT ORDER: index 0 is the NEWEST message. This is the reverse of the chronological `rowIds`
-    // ThreadView hands us, and it is reversed exactly once, at the top of apply(). Everything below this
-    // line thinks in layout order, so there are no mixed conventions to get wrong.
+    // LAYOUT ORDER IS CHRONOLOGICAL: index 0 is the OLDEST loaded message and the newest is last, the
+    // same order ThreadView hands us. Nothing is reversed anywhere.
     private var currentIds: [String] = []
     private var heights: [String: CGFloat] = [:]   // rowId -> exact measured height (cell-size cache)
     private var measuredWidth: CGFloat = 0
@@ -366,86 +361,27 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        layout = InvertedMessageLayout()
+        layout = MessageLayout()
         layout.heightForItem = { [weak self] index in
             guard let self, index < self.currentIds.count else { return 44 }
             return self.heights[self.currentIds[index]] ?? 44
         }
         collectionView = HardenedCollectionView(frame: view.bounds, collectionViewLayout: layout)
-        // THE INVERSION. Mirroring the viewport is what puts content y = 0 (the newest message) at the
-        // bottom of the screen and makes paging history a pure append beyond the far edge. Each cell
-        // carries the same flip (applied through its layout attributes), so the two cancel and every
-        // bubble draws upright. Nothing else in the app needs to know.
-        collectionView.transform = InvertedMessageLayout.flip
         collectionView.isPrefetchingEnabled = false   // off until first appearance (faster, jank-free open)
         collectionView.backgroundColor = .clear
         collectionView.alpha = 0   // invisible until the first render is final â€” never shows a mid-measure frame
         collectionView.delegate = self
         collectionView.keyboardDismissMode = .interactive
-        // .never â€” WE own both insets. This was `.always` for one build and it was wrong, in the exact way
-        // the comment here predicted: UIKit does NOT map the safe area through the flip. It kept adding
-        // `safeAreaInsets.top` (the status bar and nav bar, about 103pt) to `contentInset.top`, which under
-        // the flip is the VISUAL BOTTOM â€” so roughly 80pt of dead space opened between the last bubble and
-        // the composer, while the visual top got the home indicator's 34pt instead of the nav bar's 103.
-        // The two contributions were simply swapped, and swapping our own two writes could not fix that
-        // because the safe-area half was not ours to swap.
-        //
-        // So the safe area is read from THIS CONTROLLER'S VIEW instead, which carries no transform and is
-        // the same value the old top-down list called reliable and un-desyncable. updateInsets() adds it on
-        // the correct side by hand. The totals are identical to what `.always` produced before the
-        // inversion (safe.bottom + composerBar + 12 at the composer edge, safe.top + pinned bar at the nav
-        // edge) â€” only the side changed.
-        // REVERTED TO .always (2026-07-28, build 388 regression). I switched this to .never and computed
-        // both insets from `view.safeAreaInsets`, on the theory that the controller's own view carries
-        // the real safe area. On device it does not â€” the values came out near zero, so the list lost
-        // BOTH its clearances at once: bubbles ran under the nav bar and under the composer, and because
-        // minContentOffsetY is derived from the same inset, the keyboard and scroll positions went with
-        // them. The user asked for one spacing fix and got a change of inset OWNERSHIP; that was my
-        // mistake, not a tuning error.
-        //
-        // UIKit computes the collection view's safe area from the WINDOW, which is why .always worked
-        // here for months. Do not take these insets over again without device proof.
+        // `.always`: UIKit folds the safe area in on the correct sides now that nothing is mirrored.
+        // The nav bar lands in adjustedContentInset.top and the home indicator or keyboard in .bottom,
+        // and updateInsets() adds only the two things UIKit cannot know: the pinned bar and the composer.
         collectionView.contentInsetAdjustmentBehavior = .always
-        // SCROLL EDGE BLUR: PERMANENTLY OFF for this list, verdict FINAL (2026-07-29, three device
-        // strikes). Apple's effect cannot survive the inverted list in ANY configuration: the default
-        // washed whole chats on iOS 26; blindly enabled it drew nothing on 27; and PROPERLY REGISTERED
-        // (UIScrollEdgeElementContainerInteraction on containers over the real bar regions, .soft, the
-        // documented custom-bar way) it washed the ENTIRE chat again — user screenshot, every bubble
-        // ghosted. The hand-made gradient bands failed separately (frosted blocks mid-chat).
-        // DO NOT TRY AGAIN without a device in hand: not the system effect, not custom bands. The chat
-        // scrolls raw under its bars, which the user has accepted over any of the failure modes.
-        //
-        // ATTEMPT 5 (2026-08-01) — also removed, and this time the reason is written down, because
-        // attempts 4 and 5 were both reverted with EMPTY revert messages and that cost a full session
-        // to reconstruct. Whoever is next: the record below is the point of it.
-        //
-        // What 5 fixed, both real bugs in 4, both confirmed against Apple's own words:
-        //   • 4 set `blurView.layer.mask`. Apple's forum answer says masking a UIVisualEffectView's
-        //     layer is "not guaranteed to work", and the documented symptom is the blur silently not
-        //     rendering, leaving a flat alpha wash. 5 put the blur inside a plain host and masked the
-        //     host instead.
-        //   • 4 ramped the mask across the whole band. Fading a UNIFORM blur shows the sharp bubble
-        //     and a blurred copy at once, which is the "every bubble ghosted" report. 5 kept the band
-        //     solid over the bar and dissolved it over 22pt.
-        //
-        // SYMPTOM ON DEVICE: nothing drew at all. Not washed, not ghosted, absent. Same shape as
-        // attempt 2's failure on iOS 27.
-        //
-        // BEST UNTESTED HYPOTHESIS, for whoever picks this up: the bands are hidden by their own
-        // guard. `layoutEdgeBlur` sized them from `view.safeAreaInsets` on THIS controller's view,
-        // and the note above (the .never inset experiment, build 388) records that on device those
-        // insets "came out near zero". With safe.top ≈ 0 and topOverlayHeight 0 in a chat with no
-        // pinned bar, `topBar <= 0` is true and the band hides itself. Check that before rewriting
-        // anything: log the two numbers on a device first.
-        //
-        // AND THE THING THAT MAY MAKE ALL OF THIS MOOT: every version we can legally build varies
-        // the blur's OPACITY. Apple's `.soft` varies its RADIUS. Those look the same only while the
-        // fade is very short. If a sixth attempt draws but still looks wrong, that is why, and the
-        // honest answer is to stop imitating it and un-invert the list so Apple's own effect works.
-        if #available(iOS 26.0, *) {
-            collectionView.topEdgeEffect.isHidden = true
-            collectionView.bottomEdgeEffect.isHidden = true
-        }
+        // THE SYSTEM'S SCROLL EDGE EFFECTS ARE ON, UNTOUCHED (owner, 2026-08-25). This is the iOS 26
+        // Liquid Glass blur under the header he asked for, and it is the whole reason the list is
+        // top-down again (see the file comment). They were hidden here from 2026-07-29, after three
+        // device attempts on the inverted list washed the entire chat; the verdict that stood here
+        // recommended exactly this un-inversion. Nothing is configured: `.automatic` on both edges is
+        // what the reference app's list has, because it sets nothing either.
         collectionView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(collectionView)
         NSLayoutConstraint.activate([
@@ -528,11 +464,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             dateLabel.trailingAnchor.constraint(equalTo: datePill.contentView.trailingAnchor, constant: -14),
         ])
 
-        // KEYBOARD. In the inverted list the keyboard is no longer a position problem, only an inset one:
-        // the newest message lives at a fixed offset, so all that is needed is to move the offset by the
-        // same amount the clearance grows, with the keyboard's own duration and curve. Two observers
-        // replace the display-link close drive, the at-bottom latches, the backstop volley and the
-        // geometric composer signal that all used to be needed to keep a moving target in view.
+        // KEYBOARD. Insets only: the clearance grows by the keyboard, and a reader who was at the
+        // newest message is put back at the newest message. See rideKeyboard for the latch.
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillShow(_:)),
                                                name: UIResponder.keyboardWillShowNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHide(_:)),
@@ -674,8 +607,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         measuredWidth = width
     }
 
-    // Frame minY per row for an id order â€” exactly what InvertedMessageLayout will produce (y-accumulated
-    // heights from the newest). Used to build the before/after maps of the scroll-continuity token.
+    // Frame minY per row for an id order, exactly what MessageLayout will produce (y-accumulated heights
+    // from the oldest). Used to build the before/after maps of the scroll-continuity token.
     private func frameMinY(for ids: [String]) -> [String: CGFloat] {
         var out = [String: CGFloat](minimumCapacity: ids.count)
         var y: CGFloat = 0
@@ -724,10 +657,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // late-height story: there is no second mechanism, no capture/restore, no post-hoc setContentOffset.
     //
     // The correction rides `contentOffsetAdjustment` on the invalidation context, so it lands in the same
-    // layout transaction as the frame change â€” never a frame late. And because the list is inverted, the
-    // delta is ZERO unless the changed row lies BETWEEN the coordinate origin and the reader, which means
-    // between the newest message and where they are reading. A row older than the reader â€” every row a
-    // history reader is scrolling towards, and every row a page-in brings â€” moves nothing at all.
+    // layout transaction as the frame change, never a frame late. The delta is zero unless the changed row
+    // lies ABOVE the reader's anchor; a row below the viewport moves nothing they can see.
     private func adoptHeight(_ h: CGFloat, for id: String) {
         guard collectionView.bounds.height > 0, let cached = heights[id], abs(cached - h) > 2 else { return }
         guard canLandLoad else {
@@ -752,8 +683,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     // The row the reader's position is measured against: the visible row CLOSEST TO THE ORIGIN, i.e. the
-    // lowest one on screen. Everything between it and the origin is content that has already been
-    // rendered, so a delta computed against it is a delta over known-good heights.
+    // topmost one on screen. A change above it is what can move the reader; the delta is measured there.
     //
     // A cascade rather than a single pick, so a row that is deleted or trimmed in the same update falls
     // through to the next candidate instead of giving up.
@@ -776,10 +706,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     // THE ONLY VERIFICATION NET IN THE FILE, and the only place outside a declared scroll intent that
-    // writes contentOffset. It runs after a land that carried a non-zero adjustment, which in the inverted
-    // model means only "a new message arrived while you were reading history". It never runs during a
-    // healthy scroll and it never runs when the adjustment was zero, which is the overwhelming majority of
-    // updates. A live finger is excluded because a pan re-derives the offset from its own baseline every
+    // writes contentOffset. It runs after a land that carried a non-zero adjustment: a page of history
+    // landing above a reader, a row above them changing height, a deletion above them. It never runs
+    // during a healthy scroll and it never runs when the adjustment was zero. A live finger is excluded because a pan re-derives the offset from its own baseline every
     // tick and would visibly fight a correction.
     private func verifyAnchor(_ anchor: Anchor?) {
         guard let anchor,
@@ -834,7 +763,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 guard !isUserScrolling else { pendingNewestJump = animated; return }
             }
             pendingNewestJump = nil
-            scrollToOffset(minContentOffsetY, animated: animated)
+            scrollToOffset(maxContentOffsetY, animated: animated)
         case .message(let id):
             guard let ip = dataSource.indexPath(for: id),
                   let attr = collectionView.layoutAttributesForItem(at: ip) else { return }
@@ -850,21 +779,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             if visible.contains(attr.frame) { return }
             scrollToOffset(clampOffset(attr.frame.midY - collectionView.bounds.height / 2), animated: true)
         case .initialPosition:
-            // With nothing unread the answer needs no measurement at all: the newest message is at the
-            // coordinate origin by construction, so the first open is exact before a single height is
-            // known. This is the one line that replaced the whole measure-everything-then-land-then-
-            // re-land-then-reveal open sequence.
+            // Nothing unread: the newest message, which is the bottom of the content.
             guard let target = initialScrollId,
                   let ip = dataSource.indexPath(for: target),
                   let attr = layout.layoutAttributesForItem(at: ip) else {
-                collectionView.setContentOffset(CGPoint(x: 0, y: minContentOffsetY), animated: false)
-                lastStableOffset = minContentOffsetY
+                collectionView.setContentOffset(CGPoint(x: 0, y: maxContentOffsetY), animated: false)
+                lastStableOffset = maxContentOffsetY
                 return
             }
-            // First unread near the VISUAL TOP, with 12pt of breathing room under the nav bar. Under the
-            // flip the visual top of the viewport is the far edge of the visible content rect.
-            let visualTopInset = collectionView.adjustedContentInset.bottom
-            let y = clampOffset(attr.frame.maxY - collectionView.bounds.height + visualTopInset + 12)
+            // First unread near the top, with 12pt of breathing room under the nav bar.
+            let y = clampOffset(attr.frame.minY - collectionView.adjustedContentInset.top - 12)
             collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
             lastStableOffset = y
         }
@@ -920,10 +844,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // 2026-07-27). Note what is NOT in it: isDragging, isTracking, isDecelerating. Loads land WHILE your
     // finger is down; the reader is kept still by the layout, not by refusing the work.
     //
-    // The one place we used to diverge â€” a PREPEND waited for the finger to lift, because a page-in
-    // shifted every visible frame and we could not prove UIScrollView would honour the adjustment under a
-    // live pan â€” is GONE. Inverted, a page-in does not move a visible frame at all, so there is nothing to
-    // hold back and nothing left to prove.
+    // A page of history landing above a live finger is held still by the layout's own
+    // contentOffsetAdjustment inside the batch update, which UIScrollView honours under a pan; the
+    // reference app lands loads mid-drag the same way.
     private var canLandLoad: Bool {
         if keyboardAnimating, selectionAnimationState != .willAnimate { return false }
         if selectionAnimationState == .animating { return false }
@@ -987,7 +910,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         scrollAnimationWatchdog = nil
         programmaticScrollAnimating = false
         // ⛔ THE GLIDE WAS AIMED BEFORE THE COMPOSER SHRANK — the other half of the long-message gap.
-        // `perform(.newest(animated:))` captures `minContentOffsetY` when it starts, and on a long
+        // `perform(.newest(animated:))` captures `maxContentOffsetY` when it starts, and on a long
         // send the composer collapses WHILE it is flying, which moves that bound. Landing on the old
         // one is short of the newest message by exactly the height the composer gave back, which is
         // the empty space he photographed. The clamp is already the app's stated invariant for this —
@@ -1181,8 +1104,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             assertionFailure("Duplicate rowIds reached the list: \(dupes.sorted())")
         }
         #endif
-        // THE ONE REVERSAL. Everything below thinks in layout order: index 0 is the newest message.
-        let ids = Array(unique.reversed())
+        // Chronological, as handed to us. Index 0 is the oldest loaded row, the newest is last.
+        let ids = unique
         let width = collectionView.bounds.width
 
         if didFirstLand, ids != currentIds, scrollTarget == nil, !canLandLoad {
@@ -1240,19 +1163,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             return
         }
 
-        // WHAT KIND OF CHANGE IS THIS, in layout order.
-        //
-        // `newlyNewest` is the count of rows added at the FRONT (index 0), which is a sent or received
-        // message. Those are the only rows that can move the reader, because they are the only ones
-        // between the origin and the viewport.
-        //
-        // Rows added at the BACK are paged-in history. They are deliberately not detected, counted or
-        // classified anywhere: appending beyond the far edge of the content is invisible to the reader by
-        // construction, so there is no case to handle. The old file's isAppend/isPrepend pair â€” which
-        // silently classified a mixed batch (history AND a new message in one Firestore emission) as
-        // NEITHER, skipping the join re-measure and mis-firing the pin â€” has no counterpart here.
+        // WHAT KIND OF CHANGE IS THIS. `newlyNewest` counts rows added at the END, which is a sent or
+        // received message. Rows added at the FRONT are paged-in history; they sit above the reader and
+        // the continuity delta below holds the reader still across them. A mixed batch (history AND a
+        // new message in one emission) is handled by the same delta, not classified.
         let oldSet = Set(currentIds)
-        let newlyNewest = ids.prefix(while: { !oldSet.contains($0) }).count
+        let newlyNewest = ids.reversed().prefix(while: { !oldSet.contains($0) }).count
         let wasAtNewest = isAtNewest
 
         // Content changes that BATCH with an ids change (a reaction or read-tick arriving in the same repo
@@ -1283,20 +1199,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
         measureMissing(ids, width: width)   // exact heights BEFORE the layout prepares (no self-size correction)
         for id in contentChanged { heights[id] = measure(id, width: width) }
-        // THE DATE-SEPARATOR JOIN. Date pills and cluster spacing are baked into the message row, and
-        // ThreadView computes them from the CHRONOLOGICAL index â€” so the oldest loaded row always carries
-        // a date pill, and paging history takes it away from the row that used to be oldest. That row's
-        // height genuinely changes.
-        //
-        // In the old top-down list this was a bug: the stale height fed the offset compensation, which was
-        // then wrong by that amount and corrected a frame late â€” the small jump when older messages
-        // landed. Here the same rows are at the FAR END of the layout, past everything the reader can see,
-        // so a stale height there cannot move anyone. It is re-measured purely so the row RENDERS
-        // correctly. (Modelling the separator as its own list item, the way the reference app does, would remove even
-        // this; it is no longer urgent.)
+        // THE DATE-SEPARATOR JOIN. Date pills and cluster spacing are baked into the message row and
+        // computed from the chronological index, so the oldest loaded row always carries a date pill and
+        // paging history takes it away from the row that used to be oldest. That row's height changes,
+        // and it is ABOVE the reader, so it is re-measured BEFORE the frames are mapped: the continuity
+        // delta then includes it, and the reader does not move. (Modelling the separator as its own
+        // item, as the reference app does, would remove even this.)
         let keep = newSet
-        if currentIds.last != ids.last {   // the oldest loaded row changed â†’ the join moved
-            for id in currentIds.suffix(3) where keep.contains(id) {
+        if currentIds.first != ids.first {   // the oldest loaded row changed, so the join moved
+            for id in currentIds.prefix(3) where keep.contains(id) {
                 heights[id] = measure(id, width: width)
             }
         }
@@ -1309,17 +1220,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
         if selectionAnimationState == .willAnimate { beginSelectionAnimationWindow() }
 
-        // THE CONTINUITY DELTA. One formula for every kind of change â€” insert, delete, trim, height
-        // change, or any mixture: how far did the reader's anchor row move? Because the anchor is the
-        // visible row nearest the origin, this only ever sums rows NEWER than the reader. Paging history
-        // leaves every term untouched and the delta comes out exactly zero, which is the entire point of
-        // the rewrite: the common case is not compensated correctly, it is not compensated at all.
+        // THE CONTINUITY DELTA. One formula for every kind of change: how far did the reader's anchor
+        // row move? The anchor is the topmost visible row, so the delta sums exactly the rows that
+        // landed, grew, shrank or left ABOVE the reader. A page of history is the common case now, and
+        // it is compensated inside the same update transaction (see MessageLayout.targetContentOffset).
         var adjustment: CGFloat = 0
         var landedAnchor: Anchor?
-        if !wasAtNewest {
-            for a in anchors {
-                if let b = beforeY[a.id], let f = afterY[a.id] { adjustment = f - b; landedAnchor = a; break }
-            }
+        // Computed for EVERY reader, including one at the newest message: a page of history landing
+        // above them moves their rows too, and the delta is what holds them still. (In the inverted
+        // list this was skipped at the newest message because an append could not move anyone; an
+        // append still cannot, the anchor row does not move, so the delta comes out zero on its own.)
+        for a in anchors {
+            if let b = beforeY[a.id], let f = afterY[a.id] { adjustment = f - b; landedAnchor = a; break }
         }
 
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
@@ -1340,17 +1252,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             return
         }
 
-        // THE SEND / RECEIVE GLIDE. At the newest message a new row inserts at the origin, which shifts
-        // everything else away and would simply appear, instantly. To keep the glide the list has always
-        // had, hold the reader where they are for one frame (an adjustment equal to what was inserted,
-        // exactly the same mechanism continuity uses) and then animate back to the origin, so the list
-        // slides up to reveal the new bubble. The bubble itself never animates â€” only the scroll does.
-        let insertedHeight = ids.prefix(newlyNewest).reduce(CGFloat(0)) { $0 + (heights[$1] ?? 0) }
+        // THE SEND / RECEIVE GLIDE. At the newest message a new row appends below the viewport; nothing
+        // the reader can see moves, and the list then animates down to reveal it. The bubble itself
+        // never animates, only the scroll does.
         let glide = wasAtNewest && newlyNewest == 1 && scrollTarget == nil && !isUserScrolling
-        if glide {
-            adjustment = insertedHeight
-            sendAnimating = true
-        }
+        if glide { sendAnimating = true }
         if adjustment != 0 { layout.pendingContentOffsetAdjustment = adjustment }
 
         // THE GLIDE STARTS ON THE FRAME THE ROW LANDS. It used to start in the apply's completion,
@@ -1400,7 +1306,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // inserted cell's SwiftUI out at the pre-final width and does NOT re-flow it until a later update
         // â€” that's the "newest bubble wraps narrow until the next message" bug.
         if newlyNewest > 0 {
-            let inserted = Array(ids.prefix(newlyNewest))
+            let inserted = Array(ids.suffix(newlyNewest))
             DispatchQueue.main.async { [weak self] in self?.reflowInserted(inserted) }
         }
     }
@@ -1456,9 +1362,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         guard !changed.isEmpty else { return }
         layout.generation += 1
-        // These rows are at the origin end of the list, so unlike every other late height change they CAN
-        // move a reader who is up in history. Same one mechanism: the delta rides the update, the net
-        // checks it at rest.
+        // These rows are at the bottom of the list, below anyone reading history, so the delta is
+        // normally zero. Same one mechanism regardless: the delta rides the update, the net checks it.
         let afterY = frameMinY(for: currentIds)
         var delta: CGFloat = 0
         if let a = anchor, let b = beforeY[a.id], let f = afterY[a.id] { delta = f - b }
@@ -1489,10 +1394,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard !didFirstLand,
               collectionView.bounds.width > 0, collectionView.bounds.height > 0,
               !currentIds.isEmpty else { return }
-        // The landing offset is -contentInset.top, so the insets must be current BEFORE we land, and
-        // the composer height and safe area can both arrive after the first apply.
-        // (Comment corrected, audit: this claimed contentInsetAdjustmentBehavior = .never; the list
-        // reverted to .always — see the setup site — so UIKit contributes the safe-area part.)
+        // The landing offset depends on contentSize and both insets, so the insets must be current and
+        // the layout settled BEFORE we land; the composer height and safe area can arrive after the
+        // first apply.
         updateInsets()
         measureMissing(currentIds, width: collectionView.bounds.width)
         layout.generation += 1
@@ -1526,8 +1430,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // MARK: - Geometry helpers
 
-    // Index paths of cells actually INSIDE the viewport, in LAYOUT order â€” so `.first` is the row nearest
-    // the origin (visually the LOWEST on screen) and `.last` is the visually topmost. The layout keeps an
+    // Index paths of cells actually INSIDE the viewport, in layout order: `.first` is the topmost row on
+    // screen (nearest the origin) and `.last` the lowest. The layout keeps an
     // extra viewport of cells alive on each side for the pre-render, so indexPathsForVisibleItems includes
     // off-screen rows; anchors and the date pill must never pick one of those.
     private func viewportIndexPaths() -> [IndexPath] {
@@ -1546,107 +1450,55 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
     private func clampOffset(_ y: CGFloat) -> CGFloat { min(max(minContentOffsetY, y), maxContentOffsetY) }
 
-    // AT THE NEWEST MESSAGE. Note what this does NOT read: contentSize. In the top-down list the same
-    // question was `maxContentOffsetY - contentOffset.y <= 44`, which depended on the total height of
-    // every loaded row and on both insets â€” so a keyboard fold could drop the maximum by the keyboard's
-    // height and make a reader scrolled far up measure a large NEGATIVE distance and answer "yes, at the
-    // bottom", which then yanked them down. Here the newest message is at a fixed coordinate and the
-    // question is just "are we there". It cannot be wrong. 5pt is the reference app's tolerance.
-    private var isAtNewest: Bool { collectionView.contentOffset.y <= minContentOffsetY + 5 }
+    // AT THE NEWEST MESSAGE: within 5pt of the bottom of the content (the reference app's tolerance).
+    // This reads contentSize, so it is only asked with the layout settled; see the file comment.
+    private var isAtNewest: Bool { collectionView.contentOffset.y >= maxContentOffsetY - 5 }
 
-    /// AT REST, THE READER CAN NEVER BE BEYOND THE NEWEST MESSAGE. This is the invariant the keyboard
-    /// close kept violating (Pro Max / iOS 27 report, and it was never really about the screen size).
-    ///
-    /// `minContentOffsetY` is `-adjustedContentInset.top`, and under the flip that inset CONTAINS the
-    /// bottom safe area — which is the keyboard while it is up. A reader sitting exactly at the newest
-    /// message with the keyboard up is at offset `-(composer + 12 + keyboardHeight)`. When the keyboard
-    /// leaves, that inset shrinks by the keyboard's height, so the SAME offset is now ~250-300pt BELOW
-    /// the new bound: the list is parked in its bottom bounce region and the last bubble sits under the
-    /// composer. Nothing pulls it back on its own, because the finger is not there to end a drag.
-    ///
-    /// Why the existing corrections missed it: `updateInsets()` deliberately stands down while the list
-    /// is moving ("never fight the finger") — and `keyboardDismissMode = .interactive` means dismissing
-    /// the keyboard by dragging IS a live drag, for the whole time the inset is shrinking. The
-    /// keyboardDidHide settle then fixed it a beat later, which is exactly the "jumps back after about a
-    /// second" the user sees. On the smaller device the timings happened to line up so a layout pass
-    /// landed the correction first; that is luck, not correctness.
-    ///
-    /// So instead of another timing-shaped patch, state the invariant and enforce it wherever the list
-    /// comes to rest. Being beyond the newest bound at rest is never a legitimate state: it is the
-    /// bounce region, which only exists while a finger or a fling owns the list.
+    /// AT REST, THE READER CAN NEVER BE BEYOND THE NEWEST MESSAGE. The keyboard leaving shrinks the
+    /// bottom inset, which shrinks `maxContentOffsetY`; a reader parked at the old maximum is then in the
+    /// bottom bounce region with the last bubble under the composer, and nothing pulls them back on its
+    /// own because no finger is there to end a drag. Being beyond the bound at rest is never legitimate,
+    /// so it is enforced wherever the list comes to rest rather than patched per timing.
     private func clampToNewestIfBeyond() {
         guard didFirstLand, !isDisappearing,
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
               !sendAnimating, !programmaticScrollAnimating else { return }
-        let bound = minContentOffsetY
-        guard collectionView.contentOffset.y < bound - 0.5 else { return }
+        let bound = maxContentOffsetY
+        guard collectionView.contentOffset.y > bound + 0.5 else { return }
         UIView.performWithoutAnimation {
             collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
         }
     }
     // The looser test, for the jump-to-latest BUTTON only: an affordance, not a decision about moving
     // someone. Deliberately separate so the two can never be confused again.
-    private var isNearNewest: Bool { collectionView.contentOffset.y <= minContentOffsetY + 44 }
+    private var isNearNewest: Bool { collectionView.contentOffset.y >= maxContentOffsetY - 44 }
 
     // MARK: - Insets
 
-    // Under the flip, contentInset.top is the VISUAL BOTTOM (where the composer is) and contentInset.bottom
-    // is the VISUAL TOP (where the nav bar and any pinned-message bar are).
+    // Two things UIKit cannot know, on the sides they belong: the pinned-message bar at the top, and the
+    // composer (plus the reference app's small gap) at the bottom. `.always` folds the nav bar into the
+    // top and the home indicator or keyboard into the bottom on its own. Totals:
     //
-    // Both totals are assembled here, from this controller's own untransformed `view.safeAreaInsets` plus
-    // the one thing UIKit cannot know (the SwiftUI composer bar's height). They come to exactly what the
-    // top-down list produced when UIKit folded the safe area for us:
+    //   top    = safe.top + pinned bar            status bar + nav bar, plus the pin bar if shown
+    //   bottom = safe.bottom + composerBar + 12   home indicator or keyboard, then the bar, then the gap
     //
-    //   visual bottom = safe.bottom + composerBar + 12   home indicator, or the keyboard when it is up,
-    //                                                    then the bar riding on top of it, then the reference app's
-    //                                                    small gap so the last bubble clears the pills
-    //   visual top    = safe.top + pinned bar            status bar + nav bar, plus the pin bar if shown
-    //
-    // The list is full-bleed under both bars (ThreadView ignores the container safe area), which is why the
-    // composer's height has to be added by hand â€” its own safe-area inset is not folded in for us.
-    //
-    // In the top-down list an inset write MOVED THE DESTINATION: "the bottom" was derived from the total
-    // content height plus both insets, so growing the composer changed where the newest message belonged
-    // and every writer needed its own re-pin. The newest message is now at a fixed coordinate that no
-    // inset can move. What is left is two cases, both stated once, both at rest: a reader who is AT the
-    // newest message follows the clearance so the last bubble stays just above the composer, and a reader
-    // in history does not move at all.
+    // Two cases, both at rest: a reader AT the newest message follows the clearance so the last bubble
+    // stays just above the composer; a reader in history does not move at all.
     private func updateInsets() {
         guard isViewLoaded, !isDisappearing else { return }
         if let pop = navigationController?.interactivePopGestureRecognizer {
             switch pop.state { case .possible, .failed: break; default: return }
         }
-        // UNDO UIKIT'S SWAP, WITHOUT TAKING THE INSETS OVER.
-        //
-        // `.always` folds the collection view's safe area into adjustedContentInset, and that safe area
-        // is NOT mapped through the flip â€” `safeAreaInsets.top` is still the nav bar even though, under
-        // the transform, contentInset.top is the VISUAL BOTTOM. So UIKit reliably puts the nav bar's
-        // clearance where the composer is and the home indicator's where the nav bar is. Both halves of
-        // what the user sees: content running up under the header, and a gap above the composer.
-        //
-        // Two failed attempts are worth recording, because the obvious ones are both wrong:
-        //   * Changing only OUR number cannot fix it. The wrong part is the safe-area half, which is
-        //     UIKit's, and shrinking our own contribution to compensate breaks the moment the keyboard
-        //     changes the safe area.
-        //   * Taking the insets over with `.never` and computing from `view.safeAreaInsets` is what
-        //     regressed build 388 â€” that view does not carry the real safe area, so both clearances
-        //     collapsed at once.
-        //
-        // What does work is to keep UIKit's values, which ARE right, and cancel the swap: add the far
-        // edge's inset and subtract the near one, so each side ends up with the total it should have.
-        // `collectionView.safeAreaInsets` (window-derived, the same value `.always` is folding) is the
-        // reliable source here â€” not the controller's view.
-        let safe = collectionView.safeAreaInsets
-        let visualBottom = composerBarH + 12 + safe.bottom - safe.top
-        let visualTop = topOverlayHeight + safe.top - safe.bottom
-        guard abs(collectionView.contentInset.top - visualBottom) > 0.5
-                || abs(collectionView.contentInset.bottom - visualTop) > 0.5 else { return }
+        let top = topOverlayHeight
+        let bottom = composerBarH + 12
+        guard abs(collectionView.contentInset.top - top) > 0.5
+                || abs(collectionView.contentInset.bottom - bottom) > 0.5 else { return }
         let wasAtNewest = isAtNewest
         let stash = collectionView.contentOffset
-        collectionView.contentInset.top = visualBottom
-        collectionView.contentInset.bottom = visualTop
-        collectionView.verticalScrollIndicatorInsets.top = visualBottom
-        collectionView.verticalScrollIndicatorInsets.bottom = visualTop
+        collectionView.contentInset.top = top
+        collectionView.contentInset.bottom = bottom
+        collectionView.verticalScrollIndicatorInsets.top = top
+        collectionView.verticalScrollIndicatorInsets.bottom = bottom
         // While the list is moving, UIKit is already compensating for the range change on the finger's or
         // the fling's behalf. A write from us here would fight it, and a write LATER â€” which is what the
         // old deferred inset update did â€” lands as a visible jump the moment the user lets go. Do neither:
@@ -1671,7 +1523,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         UIView.performWithoutAnimation {
             if wasAtNewest {
                 // Follow the clearance: the newest message stays exactly above the composer.
-                collectionView.setContentOffset(CGPoint(x: 0, y: minContentOffsetY), animated: false)
+                collectionView.layoutIfNeeded()   // contentSize must be current before the bound is read
+                collectionView.setContentOffset(CGPoint(x: 0, y: maxContentOffsetY), animated: false)
             } else if collectionView.contentOffset != stash {
                 // A reader in history must not move at all. Changing an inset can make UIScrollView move
                 // the offset on its own; put it back, and only when it actually did (an unconditional
@@ -1766,7 +1619,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         //     readable signal there.
         if note.name == UIResponder.keyboardWillHideNotification {
             keyboardWasAtNewest = collectionView.isTracking || collectionView.isDecelerating
-                ? collectionView.contentOffset.y <= minContentOffsetY + 44
+                ? collectionView.contentOffset.y >= maxContentOffsetY - 44
                 : isAtNewest
             keyboardClosing = true   // the glue in viewDidLayoutSubviews runs until didHide
         } else {
@@ -1798,7 +1651,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             if collectionView.isTracking || collectionView.isDragging || collectionView.isDecelerating {
                 keyboardSettlePending = true
             } else if !isAtNewest {
-                collectionView.setContentOffset(CGPoint(x: 0, y: minContentOffsetY), animated: false)
+                collectionView.setContentOffset(CGPoint(x: 0, y: maxContentOffsetY), animated: false)
             }
         }
         keyboardWasAtNewest = false
@@ -1816,8 +1669,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // keyboard-minus-home-indicator inset delta (~300pt), so the gate is half a screen — big enough
         // to always catch the bug, small enough that a reader who deliberately carried the dismiss drag
         // far into history is respected.
-        guard collectionView.contentOffset.y <= minContentOffsetY + collectionView.bounds.height * 0.5 else { return }
-        collectionView.setContentOffset(CGPoint(x: 0, y: minContentOffsetY), animated: false)
+        guard collectionView.contentOffset.y >= maxContentOffsetY - collectionView.bounds.height * 0.5 else { return }
+        collectionView.setContentOffset(CGPoint(x: 0, y: maxContentOffsetY), animated: false)
     }
 
     // MARK: - Lifecycle
@@ -1940,36 +1793,27 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // insets have landed. Never while a finger or fling owns the list.
         if keyboardClosing, keyboardWasAtNewest, didFirstLand, !isDisappearing,
            !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
-           abs(collectionView.contentOffset.y - minContentOffsetY) > 0.5 {
-            collectionView.setContentOffset(CGPoint(x: 0, y: minContentOffsetY), animated: false)
+           abs(collectionView.contentOffset.y - maxContentOffsetY) > 0.5 {
+            collectionView.setContentOffset(CGPoint(x: 0, y: maxContentOffsetY), animated: false)
         }
         // The invariant net, independent of any keyboard bookkeeping: at rest, never beyond the newest
         // bound. Catches the interactive keyboard dismissal, where every keyboard-aware correction
         // above correctly stands down because a finger owns the list while the inset shrinks.
         clampToNewestIfBeyond()
         // The visible message viewport in window coordinates, for the media transitions' clipping view
-        // (the reference app passes `collectionView.adjustedContentInset` as `clippingAreaInsets`; this is the same
-        // region expressed as a rect). Remember the flip: adjusted .bottom is the VISUAL TOP inset (nav
-        // bar) and adjusted .top is the visual bottom (composer). The controller's view is untransformed,
-        // so its window frame is the plain screen region the list occupies.
+        // (the reference app passes `collectionView.adjustedContentInset` as `clippingAreaInsets`; this
+        // is the same region expressed as a rect).
         let winFrame = view.convert(view.bounds, to: nil)
         let inset = collectionView.adjustedContentInset
         MediaOpenRects.clipRect = CGRect(x: winFrame.minX,
-                                         y: winFrame.minY + inset.bottom,
+                                         y: winFrame.minY + inset.top,
                                          width: winFrame.width,
-                                         height: max(0, winFrame.height - inset.bottom - inset.top))
-        // Report the GEOMETRIC nav-bar overlap (view.safeAreaInsets.top â€” this controller's view is NOT
-        // transformed, so this is the plain, reliable value). Async so the SwiftUI state write never lands
-        // mid-layout.
+                                         height: max(0, winFrame.height - inset.top - inset.bottom))
+        // Report the GEOMETRIC nav-bar overlap. Async so the SwiftUI state write never lands mid-layout.
         let top = view.safeAreaInsets.top
         if abs(top - lastReportedTop) > 0.5 {
             lastReportedTop = top
             DispatchQueue.main.async { [weak self] in self?.onTopInset?(top) }
-        }
-        // Keep the system edge effects OFF (UIKit can reset the flags) — see the verdict at setup.
-        if #available(iOS 26.0, *) {
-            if !collectionView.topEdgeEffect.isHidden { collectionView.topEdgeEffect.isHidden = true }
-            if !collectionView.bottomEdgeEffect.isHidden { collectionView.bottomEdgeEffect.isHidden = true }
         }
         // SCROLL-LOCK BACKSTOP. handleSwipePan disables the scroll view's pan for the duration of a
         // swipe-to-reply and resetSwipe is the single choke point that restores it â€” so ANY path that ends
@@ -2126,8 +1970,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
-    // The reply arrow sits in the space the bubble vacates. It goes into the CELL's content view, not the
-    // collection view: the cell is already counter-flipped, so the arrow draws upright there, and the cell
+    // The reply arrow sits in the space the bubble vacates. It goes into the CELL's content view: the cell
     // itself never moves during a swipe (only the bubble inside it does).
     private func addSwipeArrow(for cell: UICollectionViewCell) {
         swipeArrow?.removeFromSuperview()
@@ -2414,9 +2257,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating {
             lastStableOffset = scrollView.contentOffset.y
             userScrolledSinceTimer = true
-            // Topmost visible row â†’ the floating date pill. Under the flip that is the LAST viewport index
-            // path, not the first: layout order runs from the newest (visually lowest) upward.
-            let top = viewportIndexPaths().last.flatMap { dataSource.itemIdentifier(for: $0) }
+            // Topmost visible row, for the floating date pill.
+            let top = viewportIndexPaths().first.flatMap { dataSource.itemIdentifier(for: $0) }
             updateDatePill(topId: top)
         }
         // Heavier per-scroll work (pagination trigger, the isAtBottom SwiftUI write) is DEBOUNCED onto a
@@ -2443,14 +2285,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         userScrolledSinceTimer = false
     }
 
-    // Page history in when the reader gets within three screens of the OLDEST loaded row â€” which under the
-    // flip is the far end of the content, not the near end. Throttled to one load per 2s. There is no
-    // zone-entry debounce: a short page leaves the reader still inside the zone, and the time throttle
-    // alone lets the chain continue until content outruns the threshold.
+    // Page history in when the reader gets within three screens of the OLDEST loaded row, the top of the
+    // content. Throttled; there is no zone-entry debounce, a short page leaves the reader inside the zone
+    // and the time throttle alone lets the chain continue until content outruns the threshold.
     private func autoLoadMoreIfNeeded() {
         guard didReveal, Date() >= captureFreezeUntil else { return }
         let threshold = max(72, collectionView.bounds.height * 3)
-        guard maxContentOffsetY - collectionView.contentOffset.y <= threshold,
+        guard collectionView.contentOffset.y - minContentOffsetY <= threshold,
               // ⚠️ THIS WAS 2 SECONDS AND IT WAS THE WALL. Three screens of lead is generous, but a
               // hard flick clears three screens in well under two seconds — so the reader arrived at
               // the oldest row with the next page still forbidden and the scroll stopped dead. That
@@ -2463,15 +2304,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
               Date().timeIntervalSince(lastLoadOlderAt) > 0.3 else { return }
         lastLoadOlderAt = Date()
         coordinator.parent.onReachedTop()
-    }
-
-    // Status-bar tap. The default scroll-to-top would fly to content y = 0, which under the flip is the
-    // NEWEST message â€” the opposite of what the gesture means. Take it over and glide to the visual top of
-    // what is loaded, which is what it did before the inversion.
-    func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
-        guard abs(collectionView.contentOffset.y - maxContentOffsetY) > 0.5 else { return false }
-        scrollToOffset(maxContentOffsetY, animated: true)
-        return false
     }
 
     // Show the day of the topmost visible row while scrolling; fade ~1.2s after it stops. Runs entirely in
@@ -2515,16 +2347,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 }
 
-// Pre-measured, INVERTED layout: cell heights are known before layout (never self-sized), so every frame
-// is exact on the first pass, and item 0 (the newest message) sits at content y = 0. `heightForItem` reads
-// the controller's measured-height cache; prepare() stacks the rows into exact frames and an exact content
-// height.
-//
-// Every cell carries the counter-flip in its attributes, so the collection view's own scaleY(-1) is
-// cancelled and content draws upright. Doing it here rather than in the cell means it survives reuse,
-// reconfiguration and every cell class without anyone having to remember.
-final class InvertedMessageLayout: UICollectionViewLayout {
-    static let flip = CGAffineTransform(scaleX: 1, y: -1)
+// Pre-measured layout: cell heights are known before layout (never self-sized), so every frame is
+// exact on the first pass. Item 0 is the oldest loaded message at content y = 0; rows stack downward.
+// `heightForItem` reads the controller's measured-height cache; prepare() stacks the rows into exact
+// frames and an exact content height.
+final class MessageLayout: UICollectionViewLayout {
 
     var heightForItem: ((Int) -> CGFloat)?
     // A render-state id: an O(1) identity check instead of re-stacking frames on every prepare(). The
@@ -2595,7 +2422,6 @@ final class InvertedMessageLayout: UICollectionViewLayout {
     private func attributes(for item: Int) -> UICollectionViewLayoutAttributes {
         let a = UICollectionViewLayoutAttributes(forCellWith: IndexPath(item: item, section: 0))
         a.frame = frames[item]
-        a.transform = Self.flip   // cancel the collection view's flip so the row draws upright
         return a
     }
 
@@ -2619,9 +2445,8 @@ final class InvertedMessageLayout: UICollectionViewLayout {
     // update â€” answering with proposed + delta shifts the offset ATOMICALLY with the layout change, so no
     // frame ever renders at the stale offset.
     //
-    // In the inverted list this is almost always zero, because almost every update happens on the far side
-    // of the viewport from the origin. It is fed for exactly one case: a new message arriving while the
-    // reader is scrolled up in history.
+    // Fed by the controller for any change above the reader: a page of history, a row above them that
+    // changed height, a deletion above them. Zero for everything at or below the viewport.
     var pendingContentOffsetAdjustment: CGFloat = 0
 
     override func targetContentOffset(forProposedContentOffset proposed: CGPoint) -> CGPoint {
