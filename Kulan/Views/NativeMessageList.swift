@@ -1758,19 +1758,27 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             ? maxContentOffsetY
             : clampOffset(maxContentOffsetY - lastKnownDistanceFromBottom)
         guard abs(collectionView.contentOffset.y - want) > 0.5 else { return }
-        if let clock = keyboardClock, clock.duration > 0 {
-            // With the keys, not ahead of them. `beginFromCurrentState` so a reopen mid-close picks
-            // up from wherever the content is; `allowUserInteraction` so a finger is never locked out.
-            let curve = UIView.AnimationOptions(rawValue: clock.curve << 16)
-            UIView.animate(withDuration: clock.duration, delay: 0,
-                           options: [curve, .beginFromCurrentState, .allowUserInteraction]) {
-                self.collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
-            }
-        } else {
-            UIView.performWithoutAnimation {
-                collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
-            }
-        }
+        // ⛔ NO ANIMATION OF OUR OWN, AND NO `performWithoutAnimation` EITHER — owner, 2026-08-25,
+        // reporting both halves of the same mistake: on iOS 27 the content lagged the keys going up,
+        // and on iOS 26 it "goes down before the keyboard finishes" coming back.
+        //
+        // ⚠️ I WAS REPLICATING UIKIT'S ANIMATION INSTEAD OF JOINING IT. The previous version captured
+        // the keyboard's duration and curve and ran its own `UIView.animate` with them. Two
+        // animations of the same nominal length still drift: they start on different frames, and the
+        // one that starts first arrives first. That is precisely "ahead of the keys" one way and
+        // "behind them" the other, and no amount of matching numbers fixes a second animation.
+        //
+        // ⚠️ AND THE OLD `performWithoutAnimation` WAS THE SNAP. Every caller that matters here —
+        // `viewSafeAreaInsetsDidChange` and `viewDidLayoutSubviews` — is invoked by UIKit INSIDE the
+        // keyboard's own animation block while the keys move. A plain write there is picked up by
+        // that block and animates with the keyboard exactly, for free, with its real duration and its
+        // real curve. Wrapping it in `performWithoutAnimation` explicitly opted OUT of the very
+        // animation we were trying to match, which is why it landed in one frame.
+        //
+        // So the write is plain. Inside a keyboard move it rides the keys; outside one — the composer
+        // growing a line, a pinned bar appearing — there is no ambient animation and it is immediate,
+        // which is correct for those too.
+        collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
     }
 
     func setComposerBarHeight(_ h: CGFloat) {
@@ -2072,7 +2080,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         super.viewDidLayoutSubviews()
         // We own the insets now, so nothing folds a geometry change in for us. Cheap: updateInsets()
         // returns immediately unless a value actually moved.
-        updateInsets()
+        //
+        // ⚠️ FORCED WHILE THE KEYS ARE MOVING. This pass runs inside UIKit's keyboard animation
+        // block, so it is the one place a write inherits the keyboard's real timing (see the write in
+        // `updateInsets`). The change-detection guard would skip most of these passes once the insets
+        // had landed, and skipping them is what leaves the content parked while the keys carry on.
+        updateInsets(force: keyboardClock != nil)
         // ⛔ THE CLOSE GLUE IS GONE, AND IT WAS WHAT MADE THE CLOSE SNAP — owner, 2026-08-25, asking
         // for the close to be as smooth as the open now is.
         //
