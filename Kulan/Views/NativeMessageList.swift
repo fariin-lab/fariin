@@ -575,6 +575,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                                name: UIResponder.keyboardWillHideNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHide),
                                                name: UIResponder.keyboardDidHideNotification, object: nil)
+        // The keyboard is fully up: one last recompute against the settled geometry, then the clock
+        // is spent. See `keyboardClock` for why a timer alone was not enough.
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidShow),
+                                               name: UIResponder.keyboardDidShowNotification, object: nil)
         // Context-menu dismissal end detector — see menuWindowDidHide. Registered permanently; the
         // handler is inert outside an armed menu-dismissal grace window.
         NotificationCenter.default.addObserver(self, selector: #selector(menuWindowDidHide(_:)),
@@ -1759,7 +1763,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             keyboardClock = d > 0 ? (d, c) : nil
             keyboardClockToken &+= 1
             let token = keyboardClockToken
-            DispatchQueue.main.asyncAfter(deadline: .now() + d + 0.1) { [weak self] in
+            // ⛔ THE CLOCK OUTLIVES THE NOTIFICATION, AND THE OLD WINDOW WAS THE BUG — owner,
+            // 2026-08-25: the list follows the keyboard in the simulator preview and still snaps on
+            // the phone, from the SAME commit. Both build 6ffe6a59; the difference is Debug/simulator
+            // against Release/device.
+            //
+            // ⚠️ WHAT LETS `updateInsets` ACT IS THE SAFE-AREA CHANGE, WHICH ARRIVES AFTER THIS
+            // NOTIFICATION. `keyboardWillShow` fires before UIKit has folded the keyboard into the
+            // safe area, so the call at the bottom of this method usually returns at its
+            // change-detection guard; the call that does the work is the later
+            // `viewSafeAreaInsetsDidChange`. This clock used to be cleared `duration + 0.1` after the
+            // notification — on the simulator that later call lands inside the window and the offset
+            // animates, on a device it can land outside it, and then the write snaps. A timer racing
+            // the thing it is meant to cover is not a window, it is a coin toss.
+            //
+            // So it is cleared by `keyboardDidShow`/`keyboardDidHide`, which is the keyboard saying
+            // it has finished, and the timer is only a backstop for a notification that never comes.
+            // A clock that lives slightly too long costs nothing: the next geometry change animates
+            // over a keyboard duration instead of snapping, which is the correct look anyway.
+            DispatchQueue.main.asyncAfter(deadline: .now() + d + 1.0) { [weak self] in
                 guard let self, self.keyboardClockToken == token else { return }
                 self.keyboardClock = nil
             }
@@ -1816,6 +1838,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // The keyboard is fully gone and the safe area has finished shrinking. Settle onto the exact newest
     // position, but ONLY for a session that latched "was at newest" at willHide â€” never as a blanket
     // re-pin, which is how the old close path could yank a reader who had scrolled up mid-session.
+    /// The keys have finished arriving. `updateInsets` here is the net for a safe-area change that
+    /// landed while the list was busy; it runs against the final geometry, so it is the one call that
+    /// cannot be working from a bound that is still moving. The clock is dropped afterwards, so a
+    /// later composer-growth write snaps as it should instead of inheriting a keyboard animation.
+    @objc private func keyboardDidShow() {
+        updateInsets()
+        recordDistanceFromBottom()
+        keyboardClockToken &+= 1
+        keyboardClock = nil
+    }
+
     @objc private func keyboardDidHide() {
         // One more recompute once the safe area has stopped moving.
         updateInsets()
@@ -1840,6 +1873,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         keyboardWasAtNewest = false
         keyboardClosing = false   // the glue window ends where the settle takes over
+        keyboardClockToken &+= 1
+        keyboardClock = nil       // the keys have landed; see `keyboardClock`
         settleFlush()
     }
 
