@@ -1,21 +1,31 @@
 import SwiftUI
 import UIKit
 
-// Bridges a SwiftUI view into the navigation bar as the native `UINavigationItem.titleView` — the
-// standard approach. A titleView is a subview of the UINavigationBar, so it renders ON TOP
-// of the bar's native blur (never covered), left-aligns after the back button, slides with the
-// native swipe-back, and its tap is a native gesture — no custom overlay/blur.
+// Installs the UIKit `ChatHeaderView` as the native `UINavigationItem.titleView` of the screen this
+// sits in — the reference app's own approach (`navigationItem.titleView = headerView`), reached from
+// inside a SwiftUI `NavigationStack`.
 //
-// Usage: `.background(NavTitleView(onTap: { ... }) { avatarNameView })` in the pushed view.
-struct NavTitleView<Content: View>: UIViewRepresentable {
+// ⛔ THE CONTENT IS UIKIT NOW; ONLY THE INSTALL IS BRIDGED — owner, 2026-08-25, "match [the reference]
+// 100%… if [it] uses UIKit for its top header, use UIKit for my top header as well". This file used
+// to host a SwiftUI view in a `UIHostingController` inside a width-forcing container and set THAT as
+// the titleView. Both wrappers are gone: `ChatHeaderView` is a plain `UIView` that declares its own
+// intrinsic size the way theirs does, and it is assigned directly.
+//
+// What has to remain bridged, and why: their header is set from a `UIViewController` that owns its
+// own `navigationItem`. A SwiftUI screen has no such handle, so a hidden marker view is planted to
+// find the owning controller, and the titleView is re-asserted when SwiftUI's own nav-item
+// reconcile clears it. Every safeguard below exists because of a real crash or a real flicker, and
+// each carries its history. None of it is about what the header looks like.
+struct NavTitleView: UIViewRepresentable {
     /// False while some other owner should have the title area — selection mode, which puts its own
     /// centred `.principal` item there. We then hand the title back instead of fighting for it; see
     /// `suspend()` for why that matters beyond tidiness.
     var isActive: Bool = true
+    var model: ChatHeaderModel
     var onTap: () -> Void
-    @ViewBuilder var content: () -> Content
+    var onTapAvatar: (() -> Void)? = nil
 
-    func makeCoordinator() -> Coordinator { Coordinator(onTap: onTap) }
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> UIView {
         let marker = NavTitleMarkerView()
@@ -37,12 +47,17 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
     }
 
     func updateUIView(_ marker: UIView, context: Context) {
-        context.coordinator.onTap = onTap
-        context.coordinator.host.rootView = AnyView(content())
-        context.coordinator.isActive = isActive
-        guard isActive else { context.coordinator.suspend(); return }
-        context.coordinator.install(from: marker)          // synchronous — install as early as possible
-        DispatchQueue.main.async { context.coordinator.install(from: marker) }   // retry once laid out
+        let c = context.coordinator
+        c.header.onTap = onTap
+        c.header.onTapAvatar = onTapAvatar
+        if c.lastModel != model {
+            c.lastModel = model
+            c.header.configure(model)
+        }
+        c.isActive = isActive
+        guard isActive else { c.suspend(); return }
+        c.install(from: marker)          // synchronous — install as early as possible
+        DispatchQueue.main.async { c.install(from: marker) }   // retry once laid out
     }
 
     static func dismantleUIView(_ marker: UIView, coordinator: Coordinator) {
@@ -50,12 +65,12 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject {
-        var onTap: () -> Void
         /// Mirrors the representable's `isActive`, so the marker's attach callback cannot install
         /// over selection mode's principal item while we are suspended.
         var isActive = true
-        let host = UIHostingController(rootView: AnyView(EmptyView()))
-        private let container = TitleContainerView()
+        /// The header itself — their `ConversationHeaderView`, ours. Assigned as the titleView directly.
+        let header = ChatHeaderView()
+        var lastModel: ChatHeaderModel?
         private weak var target: UIViewController?
         private var observation: NSKeyValueObservation?
         private var backObservation: NSKeyValueObservation?   // back-button visibility — the title area's left edge
@@ -63,29 +78,7 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         private var relayoutScheduled = false   // coalesces back-button re-seats the same way
         private var needsReseatOnResume = false // set by suspend(): the next install re-seats once
 
-        init(onTap: @escaping () -> Void) {
-            self.onTap = onTap
-            super.init()
-            host.view.backgroundColor = .clear
-            host.sizingOptions = [.intrinsicContentSize]
-            host.view.translatesAutoresizingMaskIntoConstraints = false
-            container.backgroundColor = .clear
-            container.addSubview(host.view)
-            NSLayoutConstraint.activate([
-                // Left-align the avatar+name; top/bottom pinned so the container gets a real height.
-                host.view.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-                host.view.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor),
-                host.view.topAnchor.constraint(equalTo: container.topAnchor),
-                host.view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            ])
-            container.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped)))
-        }
-
-        @objc private func tapped() { onTap() }
-
         func install(from marker: UIView) {
-            // The nav bar reads the navigation controller's TOP view controller's navigationItem —
-            // target that one, not whatever intermediate host controller owns the marker.
             // Target the OWNING (pushed) view controller — NOT navigationController.topViewController,
             // which during a push is still the PREVIOUS screen, so the title only landed after the
             // transition finished (it "came in late"). The owning VC's navigationItem is the one the
@@ -105,7 +98,7 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
                 needsReseatOnResume = false
                 scheduleTitleRelayout()
             }
-            applyBlurAppearance(to: vc)
+            clearBarAppearance(on: vc)
             // SwiftUI re-manages the navigationItem on its own update cycles and clears titleView
             // (the "avatar+name sometimes gone" flicker). Observe it and put ours back — but ASYNC and
             // coalesced (never synchronously from inside the KVO). Re-asserting synchronously here set
@@ -134,7 +127,7 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
             }
         }
 
-        // A REAL nil→container re-assignment, not just a layout flag: releasing and re-setting the
+        // A REAL nil→header re-assignment, not just a layout flag: releasing and re-setting the
         // titleView is what provably makes the bar recompute the title frame (see suspend()); a
         // setNeedsLayout alone left the stale frame on device. Both assignments land in one runloop
         // tick, so nothing flickers. Only when we currently own the title — during selection mode the
@@ -146,9 +139,9 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
                 guard let self else { return }
                 self.relayoutScheduled = false
                 guard let item = self.target?.navigationItem else { return }
-                if item.titleView === self.container {
+                if item.titleView === self.header {
                     item.titleView = nil
-                    item.titleView = self.container
+                    item.titleView = self.header
                 }
                 self.target?.navigationController?.navigationBar.setNeedsLayout()
             }
@@ -165,52 +158,39 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
             }
         }
 
-        // ALWAYS-ON native blur (the secret): a nav bar has two backgrounds — standardAppearance (once
-        // scrolled) and scrollEdgeAppearance (at the top). The scroll-edge one defaults to TRANSPARENT,
-        // so the blur only showed after scrolling ("sometimes works"). Set BOTH to the system
-        // default-background blur so the native iOS 26 liquid-glass blur is present in every state.
-        // Re-apply only when it's been cleared (SwiftUI resets it), to avoid flicker.
         // Be IDENTICAL to the Chats-list header: the list sets no per-item appearance, so the bar uses
         // the system default (transparent at the top, blur when scrolled, no visible border). Any
-        // per-navigationItem override we set here — even a "transparent" one — diverges from that and
-        // showed the band/border the user kept seeing. So clear every override and inherit the native
-        // default, exactly like the list. We only install the titleView (the native way to put an
-        // avatar+name in the real nav bar); we never restyle the bar itself.
-        private func applyBlurAppearance(to vc: UIViewController) {
-            // BUILD 282's borderless header (user: "use 282"): set NO custom nav appearance — clear every
-            // override so the bar inherits the system default, exactly like the Chats list. A custom
-            // appearance (configureWithDefaultBackground / any blur material) draws the grey band; the
-            // default does not. Header only — nothing here touches sending or scroll.
+        // per-navigationItem override set here — even a "transparent" one — diverges from that and
+        // showed the band/border the user kept seeing (build 282, "use 282"). So clear every override
+        // and inherit the native default. The reference app does not restyle its bar either.
+        private func clearBarAppearance(on vc: UIViewController) {
             if vc.navigationItem.standardAppearance != nil { vc.navigationItem.standardAppearance = nil }
             if vc.navigationItem.scrollEdgeAppearance != nil { vc.navigationItem.scrollEdgeAppearance = nil }
             if vc.navigationItem.compactAppearance != nil { vc.navigationItem.compactAppearance = nil }
         }
 
         private func assertTitleView() {
-            guard let item = target?.navigationItem, item.titleView !== container else { return }
-            item.titleView = container
-            // Ask for a fresh bar layout with the CURRENT leading items. The container declares a
-            // 10,000pt intrinsic width so the bar hands it the whole title area and the avatar can
+            guard let item = target?.navigationItem, item.titleView !== header else { return }
+            item.titleView = header
+            // Ask for a fresh bar layout with the CURRENT leading items. The header declares an
+            // unbounded intrinsic width so the bar hands it the whole title area and the avatar can
             // left-align in it — which means its frame depends entirely on where that area starts, and
-            // that moves when the back button appears or disappears. Selection mode hides the back
-            // button; on the way out the bar restored it but kept the title frame it had computed while
-            // the leading area was empty, so the avatar and name sat UNDERNEATH the back chevron (user
-            // report, screenshot). Only a flag is set here, never a synchronous layout — this can be
-            // reached from the KVO path, and a synchronous re-layout there is what once span the bar
-            // into a watchdog kill.
+            // that moves when the back button appears or disappears. Only a flag is set here, never a
+            // synchronous layout — this can be reached from the KVO path, and a synchronous re-layout
+            // there is what once span the bar into a watchdog kill.
             target?.navigationController?.navigationBar.setNeedsLayout()
         }
 
         /// Hand the title area back to whoever else wants it (selection mode's `.principal` item).
-        /// Without this the KVO below simply re-asserted our container over SwiftUI's centred title, so
-        /// the two took turns owning `titleView` for the whole of selection mode. Releasing it also means
-        /// the re-install on the way out is a REAL assignment rather than an early return, which is what
+        /// Without this the KVO simply re-asserted our header over SwiftUI's centred title, so the two
+        /// took turns owning `titleView` for the whole of selection mode. Releasing it also means the
+        /// re-install on the way out is a REAL assignment rather than an early return, which is what
         /// forces the bar to recompute the title frame now that the back button is back.
         func suspend() {
             observation?.invalidate(); observation = nil
             backObservation?.invalidate(); backObservation = nil
             needsReseatOnResume = true
-            guard let item = target?.navigationItem, item.titleView === container else { return }
+            guard let item = target?.navigationItem, item.titleView === header else { return }
             item.titleView = nil
             target?.navigationController?.navigationBar.setNeedsLayout()
         }
@@ -218,7 +198,7 @@ struct NavTitleView<Content: View>: UIViewRepresentable {
         func remove() {
             observation?.invalidate(); observation = nil
             backObservation?.invalidate(); backObservation = nil
-            if target?.navigationItem.titleView === container { target?.navigationItem.titleView = nil }
+            if target?.navigationItem.titleView === header { target?.navigationItem.titleView = nil }
         }
     }
 }
@@ -230,15 +210,6 @@ final class NavTitleMarkerView: UIView {
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window != nil { onAttach?() }
-    }
-}
-
-// Full-width title container (the standard trick): a large finite intrinsic width so the nav bar hands
-// the title view the whole title area, letting its content left-align. A finite value (not
-// .greatestFiniteMagnitude) avoids Auto Layout blowing up.
-final class TitleContainerView: UIView {
-    override var intrinsicContentSize: CGSize {
-        CGSize(width: 10_000, height: UIView.noIntrinsicMetric)
     }
 }
 

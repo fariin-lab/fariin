@@ -38,7 +38,7 @@ struct OfficialChatView: View {
             // nothing at all — I left the closure empty when this screen was built, so the one chat
             // people are most likely to be suspicious of was the one that would not tell them
             // anything about itself. Owner caught it.
-            .background(NavTitleView(onTap: { showInfo = true }) { headerLabel })
+            .background(NavTitleView(model: headerModel, onTap: { showInfo = true }))
             .navigationDestination(isPresented: $showInfo) { OfficialChatInfoView() }
             .toolbar(.hidden, for: .tabBar)
             // Belt and braces under the custom header: UIKit shows the plain string title only
@@ -135,21 +135,14 @@ struct OfficialChatView: View {
 
     // MARK: Header
 
-    /// Same measurements as a normal chat header (40pt avatar, 12pt gap, .headline name, .caption2
-    /// subtitle, a 16x16 icon at 5pt in the title row) so this reads as the same app. The tick sits in
-    /// the exact slot the disappearing-messages timer uses over there.
-    private var headerLabel: some View {
-        HStack(spacing: 12) {
-            OfficialAvatar(size: 40)
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 5) {
-                    Text(OfficialChannel.name).font(.headline).foregroundStyle(.primary).lineLimit(1)
-                    VerifiedTick(size: 16)
-                }
-                Text(OfficialChannel.subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-            }
-            .fixedSize()
-        }
+    /// The official channel in the UIKit header: its bundled mark for the avatar, its tick in the
+    /// reference app's title-icon slot, its tagline as the subtitle.
+    private var headerModel: ChatHeaderModel {
+        var m = ChatHeaderModel(name: OfficialChannel.name, photoUrl: nil)
+        m.avatarAsset = UIImage(named: "welcome-mark")
+        m.subtitle = OfficialChannel.subtitle
+        m.titleIcon = ChatHeaderModel.officialTick()
+        return m
     }
 
     /// Not named `toolbar`: `.toolbar { toolbar }` reads a property with the same name as the

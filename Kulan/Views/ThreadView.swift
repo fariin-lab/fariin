@@ -827,17 +827,17 @@ struct ThreadView: View {
         // repeated user request ("completely go back build 341"). Known risk: setting titleView directly
         // fights SwiftUI's NavigationStack reconciler and can spin a CPU redisplay loop (0x8BADF00D hang);
         // the coalesced async re-assert in NavTitleView is the mitigation.
-        .background(NavTitleView(isActive: !selecting, onTap: {
+        // ⛔ THE HEADER IS A UIKIT VIEW NOW, FED A MODEL — owner, 2026-08-25, "match [the reference]
+        // 100%". The SwiftUI `headerLabel` that used to be hosted here is gone; `ChatHeaderView`
+        // draws avatar, name, icons and subtitle with the reference app's own metrics. Selection mode
+        // hides it the same way as before: `isActive` hands the title area to the `.principal` item.
+        .background(NavTitleView(isActive: !selecting, model: headerModel, onTap: {
             // Close the keyboard before pushing the profile, else it stays up behind the pushed screen
             // and is still there when you swipe back (the reported bug).
             inputFocused = false
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             showContactInfo = true
-        }) {
-            // Selection mode replaces the title with just the toolbar (Delete All / count / X) — hide the
-            // avatar + name so it reads as a clean selection bar.
-            if !selecting { headerLabel }
-        })
+        }))
         .toolbar(.hidden, for: .tabBar)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(selecting)   // selection mode → only Delete All / X, no back
@@ -2955,12 +2955,17 @@ struct ThreadView: View {
                     callGlyph("ic_call_voice")
                 }
                 .tint(.primary)
+                // The reference: `isEnabled = currentCall == nil`, and a spoken label for each.
+                .disabled(callInProgress)
+                .accessibilityLabel("Voice call")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl, video: true) } label: {
                     callGlyph("ic_call_video")
                 }
                 .tint(.primary)
+                .disabled(callInProgress)
+                .accessibilityLabel("Video call")
             }
         } else if isGroup {
             ToolbarItem(placement: .topBarTrailing) {
@@ -2971,6 +2976,12 @@ struct ThreadView: View {
             }
         }
         }   // end !selecting
+    }
+
+    /// Their `currentCall == nil` guard on both call items.
+    private var callInProgress: Bool {
+        let s = CallService.shared.state
+        return s != .idle && s != .ended
     }
 
     // Custom call/video toolbar glyphs (template-tinted, sized to the toolbar).
@@ -3366,37 +3377,23 @@ struct ThreadView: View {
         return ConversationsRepository.shared.conversations.first { $0.id == cid }?.displayName(me) ?? title
     }
 
-    // Avatar + name + presence shown in the chat header (kept glass-free — see chatToolbar).
-    private var headerLabel: some View {
-        // Measurements matched to a reference conversation header (iOS 26 variant): 40pt avatar,
-        // 12pt avatar→name spacing, 17pt-semibold title (.headline), a 16×16 title-row icon at 5pt.
-        HStack(spacing: 12) {
-            AvatarView(name: liveTitle, photoUrl: photoUrl, size: 40)
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 5) {
-                    Text(liveTitle).font(.headline).foregroundStyle(.primary).lineLimit(1)
-                    // Who you are actually talking to. The header is the surface that matters most
-                    // for this mark: it is on screen for the whole conversation, and it is the last
-                    // thing somebody sees before they answer a stranger.
-                    if !isGroup { VerifiedMark(uid: otherUid, size: 14) }
-                    // Constant reminder that messages self-delete here —
-                    // this timer being invisible is how a whole chat history vanished unnoticed.
-                    if repo.disappearSeconds > 0 {
-                        Image(systemName: "timer")
-                            .font(.system(size: 13, weight: .semibold))
-                            .frame(width: 16, height: 16)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                if let sub = presenceSubtitle {
-                    Text(sub).font(.caption2)
-                        .foregroundStyle(repo.otherTyping ? Color.accentColor : Color.secondary)
-                        .lineLimit(1)
-                        .animation(.easeInOut(duration: 0.2), value: repo.otherTyping)
-                }
-            }
-            .fixedSize()
+    /// What the UIKit header shows. The reference app's `configure(threadViewModel:)` reads a thread
+    /// record; ours reads the same live sources the old SwiftUI header read, so nothing about WHEN the
+    /// header updates changed — only what draws it.
+    private var headerModel: ChatHeaderModel {
+        var m = ChatHeaderModel(name: liveTitle, photoUrl: photoUrl)
+        m.subtitle = presenceSubtitle
+        m.subtitleIsLive = repo.otherTyping
+        // Who you are actually talking to. The header is the surface that matters most for this
+        // mark: it is on screen for the whole conversation, and it is the last thing somebody sees
+        // before they answer a stranger.
+        if !isGroup, VerificationIndex.of(otherUid)?.showsBadge == true {
+            m.titleIcon = ChatHeaderModel.verifiedMark()
         }
+        // Constant reminder that messages self-delete here — this timer being invisible is how a
+        // whole chat history vanished unnoticed.
+        if repo.disappearSeconds > 0 { m.secondaryIcon = ChatHeaderModel.disappearingTimer() }
+        return m
     }
 
     // MARK: - @mentions (groups)
