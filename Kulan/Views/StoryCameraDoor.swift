@@ -29,8 +29,25 @@ final class StoryCameraSlideAnimator: NSObject, UIViewControllerAnimatedTransiti
     private let presenting: Bool
     init(presenting: Bool) { self.presenting = presenting }
 
-    /// Apple's own push/pop duration.
-    func transitionDuration(using _: UIViewControllerContextTransitioning?) -> TimeInterval { 0.35 }
+    /// ⛔ 0.3 AND THEIR SPRING, READ FROM THEIR SOURCE — owner, 2026-08-25: "the camera speed is
+    /// slow… read then get the speed number [the reference app] is using then use it, the speed you
+    /// are using is wrong."
+    ///
+    /// Their `CameraScreen.animateIn` / `animateOut` drive every part of the entrance and the exit —
+    /// preview position, bounds, scale, the chrome views — at `duration: 0.3` with
+    /// `kCAMediaTimingFunctionSpring`, without exception. Ours was 0.35 on `.curveEaseInOut`: a
+    /// twentieth of a second longer AND a curve that decelerates lazily where theirs arrives, which
+    /// is why it read as slow rather than as slightly slow.
+    func transitionDuration(using _: UIViewControllerContextTransitioning?) -> TimeInterval { 0.3 }
+
+    /// Their timing function, handed to UIKit the way UIKit accepts it.
+    ///
+    /// ⚠️ `kCAMediaTimingFunctionSpring` is a Core Animation name with no `UIView.AnimationOptions`
+    /// spelling, but the curve behind it is the system's curve 7 — the same one the keyboard reports
+    /// and the same one `KeyboardWatcher.systemAnimation` already writes out for SwiftUI in this app.
+    /// `7 << 16` is the documented shape of the options field (curve in the high bits), and it is how
+    /// the reference app itself passes this curve to UIKit.
+    private static let refSpringCurve = UIView.AnimationOptions(rawValue: 7 << 16)
 
     /// ⛔ THIS IS A POP, NOT A PUSH — owner, 2026-08-24, with ours beside theirs: "the camera page
     /// must be UNDER the page that is going up, and the page that is going must have rounded corners
@@ -137,6 +154,22 @@ final class StoryCameraSlideAnimator: NSObject, UIViewControllerAnimatedTransiti
         // cut anything: `masksToBounds` stays false so the camera underneath is never trimmed.
         if #available(iOS 26.0, *) {
             container.cornerConfiguration = .corners(radius: .containerConcentric())
+            // ⛔ AND THE LAYOUT PASS HAS TO START ABOVE THE CONTAINER — owner, 2026-08-25, third
+            // report on this same corner: still square opening, still correct closing.
+            //
+            // ⚠️ THE PREVIOUS FIX SET THE RIGHT PROPERTY AND THEN NEVER LET IT RESOLVE. A view's own
+            // concentric corner is worked out when its SUPERVIEW lays it out — it is a question about
+            // where this view sits inside that one. Below, `container.layoutIfNeeded()` is called to
+            // settle the card, and that lays out the container's SUBTREE; it does not ask the
+            // container's parent to lay the container out, so the container's own corner was still
+            // unresolved when the card asked what it should be concentric WITH. The card then read a
+            // container that was square-by-default and came out square.
+            //
+            // Starting the pass at the window resolves the whole chain — window, UIKit's transition
+            // view, this container — before anything asks a question of it. It is also why closing
+            // has always worked: UIKit's dismissal container arrives with a radius already on it, so
+            // nothing had to resolve for the card to find one.
+            (container.window ?? container.superview)?.layoutIfNeeded()
         }
 
         // Underneath, the camera only ever covers the last 30% of the distance. On top, the page
@@ -161,7 +194,7 @@ final class StoryCameraSlideAnimator: NSObject, UIViewControllerAnimatedTransiti
                 container.layoutIfNeeded()
             }
 
-            UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseInOut]) {
+            UIView.animate(withDuration: duration, delay: 0, options: Self.refSpringCurve) {
                 camera.transform = .identity
                 card?.transform = aboveOffscreen
             } completion: { _ in
@@ -177,7 +210,7 @@ final class StoryCameraSlideAnimator: NSObject, UIViewControllerAnimatedTransiti
                 container.layoutIfNeeded()   // same reason as the opening half
                 card.transform = aboveOffscreen
             }
-            UIView.animate(withDuration: duration, delay: 0, options: [.curveEaseInOut]) {
+            UIView.animate(withDuration: duration, delay: 0, options: Self.refSpringCurve) {
                 camera.transform = beneathStart
                 card?.transform = .identity
             } completion: { _ in
