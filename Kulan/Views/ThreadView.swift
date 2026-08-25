@@ -4486,7 +4486,12 @@ struct ThreadView: View {
         content()
             .frame(maxWidth: hugsContent ? nil : .infinity)
             .padding(.horizontal, hugsContent ? 30 : 18)
-            .padding(.vertical, 14)
+            // ⛔ THE HUGGING PILL IS 48pt, STATED — owner, 2026-08-25. It carries one short word now,
+            // and vertical padding around one line lands wherever the font does; a height says what
+            // he asked for and keeps saying it if the label ever changes. The full-width notices keep
+            // their padding, because their text wraps and a fixed height would clip it.
+            .frame(height: hugsContent ? 48 : nil)
+            .padding(.vertical, hugsContent ? 0 : 14)
             .modifier(ComposerNoticeGlass(hugsContent: hugsContent))
             // A hugging pill still occupies the whole slot, so it lands centred rather than leading.
             .frame(maxWidth: .infinity)
@@ -4499,13 +4504,17 @@ struct ThreadView: View {
         // ⛔ A PILL AROUND THE WORDS, NOT A STRIP ACROSS THE BAR — owner, 2026-08-25, with the shape
         // drawn out. The other notices state a rule about the room; this one names a person and
         // offers the one action that undoes it, so it reads as a card rather than as furniture.
+        // ⛔ THE ACTION ALONE — owner, 2026-08-25: "remove this (you blocked ty)". The line above the
+        // button was saying what the empty composer already says, and it said it with a name in it,
+        // which is the one thing on this screen nobody needs reminding of.
+        //
+        // ⚠️ THE LABEL IS NOW THE WHOLE BAR, so it carries the accessibility meaning on its own.
+        // "Unblock" alone reads as an action without a subject to a screen reader, hence the hint.
         composerNotice(hugsContent: true) {
-            VStack(spacing: 2) {
-                Text("You blocked \(title)").font(.body).foregroundStyle(.primary)
-                Button("Unblock") { Task { await ChatService.setBlocked(cid, false) } }
-                    .font(.body)
-                    .tint(.red)
-            }
+            Button("Unblock") { Task { await ChatService.setBlocked(cid, false) } }
+                .font(.body)
+                .tint(.red)
+                .accessibilityHint("Unblocks \(title)")
         }
     }
 
