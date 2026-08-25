@@ -64,7 +64,10 @@ final class ChatHeaderView: UIView {
 
     let subtitleLabel: UILabel = {
         let label = UILabel()
-        label.textColor = .label
+        // Secondary, not their full-opacity label: owner, 2026-08-25, with the header on his phone.
+        // The one place this port departs from their numbers on purpose; everything else about the
+        // line (13 medium, its slot, its spacing) is theirs.
+        label.textColor = .secondaryLabel
         label.lineBreakMode = .byTruncatingTail
         label.font = .systemFont(ofSize: 13, weight: .medium)
         label.setContentHuggingPriority(.defaultHigh, for: .horizontal)
@@ -75,7 +78,12 @@ final class ChatHeaderView: UIView {
     private static func makeIconView() -> UIImageView {
         let v = UIImageView()
         v.isHidden = true
-        v.contentMode = .scaleAspectFit
+        // `.center`, NOT `.scaleAspectFit`: owner, 2026-08-25, "the icons next to the name are too
+        // large". Theirs are aspect-fit because their icons are 16pt assets that fill the slot by
+        // design. Ours are SF Symbols configured at 13-14pt, and aspect-fit was scaling them UP to
+        // the 16pt slot, which is why the timer read bigger here than it did in the SwiftUI header.
+        // Centred, the glyph draws at the size it was configured with and the slot stays their 16.
+        v.contentMode = .center
         v.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
         v.setContentCompressionResistancePriority(.defaultHigh, for: .vertical)
         v.translatesAutoresizingMaskIntoConstraints = false
@@ -173,7 +181,7 @@ final class ChatHeaderView: UIView {
         subtitleLabel.isHidden = model.subtitle == nil
         // Typing is the one state that colours the line; everything else is their full-opacity label.
         // `.tintColor` is UIKit's `Color.accentColor`, which is what the SwiftUI line used for typing.
-        subtitleLabel.textColor = model.subtitleIsLive ? .tintColor : .label
+        subtitleLabel.textColor = model.subtitleIsLive ? .tintColor : .secondaryLabel
         titleIcon = model.titleIcon
         secondaryTitleIcon = model.secondaryIcon
         avatarView.configure(name: model.name, photoUrl: model.photoUrl, asset: model.avatarAsset)
