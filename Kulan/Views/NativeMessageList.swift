@@ -234,6 +234,21 @@ final class HardenedCollectionView: UICollectionView {
         get { super.bounds }
         set { if newValue.width > 0, newValue.height > 0 { super.bounds = newValue } }
     }
+    /// ⛔ NO SCROLL POSITION BEFORE THERE IS CONTENT — the reference app's own guard, read from
+    /// their `ConversationCollectionView` and ported 2026-08-25.
+    ///
+    /// ⚠️ A WRITE OF ZERO-OR-LESS INTO AN EMPTY LAYOUT IS NEVER A READER'S INTENT. It is a stray
+    /// correction landing in the gap between a reset and the first measure — the layout has no
+    /// frames yet, so every bound computes to the top — and it parks the list at the top of an
+    /// empty list, which is precisely where the first real content then appears. The size guards
+    /// above cover the same window for geometry; this covers it for position.
+    override var contentOffset: CGPoint {
+        get { super.contentOffset }
+        set {
+            if contentSize.height < 1, newValue.y <= 0 { return }
+            super.contentOffset = newValue
+        }
+    }
 }
 
 final class MessageListController: UIViewController, UICollectionViewDelegate, UIGestureRecognizerDelegate {
@@ -842,20 +857,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             needsRefreshOnSettle = true
             return
         }
+        // Captured BEFORE the height lands, so the anchors describe the layout the reader is
+        // looking at rather than the one being built (their token is taken before the update too).
+        let anchors = continuityAnchors()
         let beforeY = frameMinY(for: currentIds)
         heights[id] = h
         let afterY = frameMinY(for: currentIds)
         layout.generation += 1
-        let anchor = continuityAnchor()
-        let delta = anchor.flatMap { a -> CGFloat? in
-            guard let b = beforeY[a.id], let f = afterY[a.id] else { return nil }
-            return f - b
-        } ?? 0
+        let landed = continuityDelta(anchors, before: beforeY, after: afterY)
+        let delta = landed?.delta ?? 0
         let ctx = UICollectionViewLayoutInvalidationContext()
         if delta != 0 { ctx.contentOffsetAdjustment = CGPoint(x: 0, y: delta) }
         layout.invalidateLayout(with: ctx)
         collectionView.layoutIfNeeded()
-        if delta != 0 { verifyAnchor(anchor) }
+        if delta != 0 { verifyAnchor(landed?.anchor) }
     }
 
     // The row the reader's position is measured against: the visible row CLOSEST TO THE ORIGIN, i.e. the
@@ -870,8 +885,33 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             return Anchor(id: id, distanceFromOrigin: attr.frame.minY - collectionView.contentOffset.y)
         }
     }
-    private func continuityAnchor() -> Anchor? {
-        continuityAnchors().first
+
+    /// ⛔ THE FIRST ANCHOR THAT SURVIVED THE CHANGE, NOT THE FIRST ANCHOR — the reference app's
+    /// fallback chain (`invalidationContentOffsetAdjustment`: preferred row → every visible row →
+    /// any row present both before and after), ported 2026-08-25 after reading their layout.
+    ///
+    /// ⚠️ ONE ANCHOR IS A SINGLE POINT OF FAILURE, AND IT FAILS SILENTLY. The row a correction is
+    /// measured against can be gone by the time the correction is computed — deleted, expired, or
+    /// trimmed off the far end of the load window by the very update being landed. With one anchor
+    /// there is then nothing to measure, the delta comes out ZERO, and the offset is left alone
+    /// while the content above the reader has moved: a jump, arriving from the one path that exists
+    /// to prevent jumps. The cascade was already written and only the load path used it.
+    private func continuityDelta(_ anchors: [Anchor],
+                                 before: [String: CGFloat],
+                                 after: [String: CGFloat]) -> (delta: CGFloat, anchor: Anchor)? {
+        for a in anchors {
+            guard let b = before[a.id], let f = after[a.id] else { continue }
+            return (f - b, a)
+        }
+        return nil
+    }
+
+    /// Re-pin against the first anchor that still resolves, for the same reason.
+    private func verifyAnchor(_ anchors: [Anchor]) {
+        for a in anchors where dataSource.indexPath(for: a.id) != nil {
+            verifyAnchor(a)
+            return
+        }
     }
 
     // Where one row sat, measured from the coordinate origin. The whole "keep the reader still" contract
@@ -1218,7 +1258,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Before-map first: any of these measurements may change a height, and the correction has to be
         // computed against the frames as they stand right now.
         let beforeY = frameMinY(for: currentIds)
-        let anchor = continuityAnchor()
+        let anchors = continuityAnchors()
         var heightChanged = false
         if width > 0 {
             for id in target {
@@ -1239,16 +1279,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if !split.reconfigure.isEmpty { snapshot.reconfigureItems(split.reconfigure) }
         queueReload(split.reload, into: &snapshot)
         var delta: CGFloat = 0
+        var landedAnchor: Anchor?
         if heightChanged {
             layout.generation += 1
             let afterY = frameMinY(for: currentIds)
-            if let a = anchor, let b = beforeY[a.id], let f = afterY[a.id] { delta = f - b }
+            if let landed = continuityDelta(anchors, before: beforeY, after: afterY) {
+                delta = landed.delta
+                landedAnchor = landed.anchor
+            }
             if delta != 0 { layout.pendingContentOffsetAdjustment = delta }
         }
         dataSource.apply(snapshot, animatingDifferences: false) { [weak self] in
             guard let self else { return }
             self.layout.pendingContentOffsetAdjustment = 0
-            if delta != 0 { self.verifyAnchor(anchor) }
+            if delta != 0 { self.verifyAnchor(landedAnchor) }
         }
     }
 
@@ -1409,8 +1453,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // above them moves their rows too, and the delta is what holds them still. (In the inverted
         // list this was skipped at the newest message because an append could not move anyone; an
         // append still cannot, the anchor row does not move, so the delta comes out zero on its own.)
-        for a in anchors {
-            if let b = beforeY[a.id], let f = afterY[a.id] { adjustment = f - b; landedAnchor = a; break }
+        if let landed = continuityDelta(anchors, before: beforeY, after: afterY) {
+            adjustment = landed.delta
+            landedAnchor = landed.anchor
         }
 
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
@@ -1531,7 +1576,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // final wrap already (the hostWidth pin makes the first wrap the final wrap), so reconfiguring it
         // here just re-rendered the new bubble alone one beat after it appeared.
         let beforeY = frameMinY(for: currentIds)
-        let anchor = continuityAnchor()
+        let anchors = continuityAnchors()
         var changed: [String] = []
         for id in present {
             let h = measure(id, width: collectionView.bounds.width)
@@ -1544,8 +1589,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // These rows are at the bottom of the list, below anyone reading history, so the delta is
         // normally zero. Same one mechanism regardless: the delta rides the update, the net checks it.
         let afterY = frameMinY(for: currentIds)
-        var delta: CGFloat = 0
-        if let a = anchor, let b = beforeY[a.id], let f = afterY[a.id] { delta = f - b }
+        let landed = continuityDelta(anchors, before: beforeY, after: afterY)
+        let delta = landed?.delta ?? 0
         if delta != 0 { layout.pendingContentOffsetAdjustment = delta }
         // Route-flip split, same as every other refresh path (build-542 .ips): this runs one runloop
         // after the insert, and the just-sent message is EXACTLY the row whose route flips when the
@@ -1556,7 +1601,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         dataSource.apply(snap, animatingDifferences: false) { [weak self] in
             guard let self else { return }
             self.layout.pendingContentOffsetAdjustment = 0
-            if delta != 0 { self.verifyAnchor(anchor) }
+            if delta != 0 { self.verifyAnchor(landed?.anchor) }
         }
     }
 
@@ -1973,12 +2018,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         super.viewWillTransition(to: size, with: coordinator)
         guard didFirstLand else { return }
         let wasAtNewest = isAtNewest
-        let anchor = wasAtNewest ? nil : continuityAnchor()
+        let anchors = wasAtNewest ? [] : continuityAnchors()
         coordinator.animate(alongsideTransition: nil) { [weak self] _ in
             guard let self else { return }
             self.collectionView.layoutIfNeeded()   // the width-change re-measure ran in viewWillLayoutSubviews
             if wasAtNewest { self.perform(.newest(animated: false)) }
-            else { self.verifyAnchor(anchor) }
+            else { self.verifyAnchor(anchors) }
         }
     }
 
