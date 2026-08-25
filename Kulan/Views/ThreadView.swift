@@ -825,16 +825,16 @@ struct ThreadView: View {
     private var threadCovers: some View {
         threadScroll
         // Avatar + name installed as the native UINavigationItem.titleView (left-aligned after the back
-        // button, slides with the native swipe-back). NavTitleView clears the bar appearance overrides,
+        // button, slides with the native swipe-back). ChatNavigationItem clears the bar appearance overrides,
         // so there's no border — same native bar as the Chats list. RESTORED build-341 header on explicit
         // repeated user request ("completely go back build 341"). Known risk: setting titleView directly
         // fights SwiftUI's NavigationStack reconciler and can spin a CPU redisplay loop (0x8BADF00D hang);
-        // the coalesced async re-assert in NavTitleView is the mitigation.
+        // the coalesced async re-assert in ChatNavigationItem is the mitigation.
         // ⛔ THE HEADER IS A UIKIT VIEW NOW, FED A MODEL — owner, 2026-08-25, "match [the reference]
         // 100%". The SwiftUI `headerLabel` that used to be hosted here is gone; `ChatHeaderView`
         // draws avatar, name, icons and subtitle with the reference app's own metrics. Selection mode
         // hides it the same way as before: `isActive` hands the title area to the `.principal` item.
-        .background(NavTitleView(isActive: !selecting, model: headerModel, onTap: {
+        .background(ChatNavigationItem(model: headerModel, bar: navigationBar, onTap: {
             // Close the keyboard before pushing the profile, else it stays up behind the pushed screen
             // and is still there when you swipe back (the reported bug).
             inputFocused = false
@@ -843,8 +843,9 @@ struct ThreadView: View {
         }))
         .toolbar(.hidden, for: .tabBar)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(selecting)   // selection mode → only Delete All / X, no back
-        .toolbar { chatToolbar }
+        // ⛔ NO `.toolbar` AND NO `.navigationBarBackButtonHidden` HERE ANY MORE — owner,
+        // 2026-08-25. Both are set on the navigationItem from UIKit by `ChatNavigationItem`, the way
+        // the reference app sets them; see `navigationBar` for what goes where.
         // Leaving the chat (swipe-back to the list, or any pop) closes the keyboard so it never
         // lingers over the chat list.
         .onDisappear {
@@ -2923,78 +2924,30 @@ struct ThreadView: View {
         }
     }
 
-    // Native toolbar header (real Liquid Glass + native back/swipe), same approach as the
-    // Chats list. Avatar + name (+ presence) centered; voice + video as trailing glass items.
-    // The native back button (leading) owns the real edge-swipe-back gesture.
-    @ToolbarContentBuilder private var chatToolbar: some ToolbarContent {
-        // Selection mode (reference design): "Delete All" (leading) · name (centre) · X (trailing).
-        // Native toolbar buttons render as real Liquid Glass on iOS 26.
+    /// What sits either side of the header, as the reference app's `updateBarButtonItems` decides
+    /// it: audio and video (disabled while a call is up) normally; "Delete All" / Cancel and no back
+    /// button in selection mode. The header itself stays up in both — theirs never touches the
+    /// titleView when selection begins, and neither does this.
+    private var navigationBar: ChatNavigationItem.Bar {
         if selecting {
-            ToolbarItem(placement: .topBarLeading) {
-                Button("Delete All") { showBulkDeleteConfirm = true }.tint(.red).disabled(selectedIds.isEmpty)
-            }
-            ToolbarItem(placement: .principal) {
-                Text(title).font(.headline)
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                // Sized and shaped like the call glyphs next door, not left as a bare SF Symbol: an
-                // icon-only button's hit area is the GLYPH ITSELF, so the X was only tappable on the two
-                // thin strokes (user report: "the x button touch area is so small"). The explicit frame
-                // plus .contentShape makes the whole square live. Same lesson as the video-call minimise
-                // chevron in build 381, which was dead for exactly this reason.
-                Button { exitSelection() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .semibold))
-                        .frame(width: 22, height: 22)
-                        .contentShape(Rectangle())
-                }
-                .tint(.primary)
-            }
-        } else {
-        // Avatar + name are the native UINavigationItem.titleView (see NavTitleView, installed in
-        // threadCovers), left-aligned after the back button and sliding with the swipe-back — only the
-        // call/video buttons live here in the toolbar.
-        // 1:1 call buttons only — group calls need an SFU (not built yet). Show whenever we have a
-        // resolved 1:1 partner (works for real cids AND demo chats like "demo-kasim" that have no
-        // underscore; the old cid.contains("_") heuristic hid them in the preview).
-        if !isGroup && !otherUid.isEmpty {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl) } label: {
-                    callGlyph("ic_call_voice")
-                }
-                .tint(.primary)
-                // The reference: `isEnabled = currentCall == nil`, and a spoken label for each.
-                .disabled(callInProgress)
-                .accessibilityLabel("Voice call")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl, video: true) } label: {
-                    callGlyph("ic_call_video")
-                }
-                .tint(.primary)
-                .disabled(callInProgress)
-                .accessibilityLabel("Video call")
-            }
-        } else if isGroup {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { startGroupCall(video: false) } label: { callGlyph("ic_call_voice") }.tint(.primary)
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { startGroupCall(video: true) } label: { callGlyph("ic_call_video") }.tint(.primary)
-            }
+            return .selection(deleteAll: { showBulkDeleteConfirm = true },
+                              deleteEnabled: !selectedIds.isEmpty,
+                              cancel: { exitSelection() })
         }
-        }   // end !selecting
-    }
-
-    /// Their `currentCall == nil` guard on both call items.
-    private var callInProgress: Bool {
-        let s = CallService.shared.state
-        return s != .idle && s != .ended
-    }
-
-    // Custom call/video toolbar glyphs (template-tinted, sized to the toolbar).
-    private func callGlyph(_ asset: String) -> some View {
-        Image(asset).renderingMode(.template).resizable().scaledToFit().frame(width: 22, height: 22)
+        let state = CallService.shared.state
+        let callsEnabled = state == .idle || state == .ended   // their `currentCall == nil`
+        if !isGroup && !otherUid.isEmpty {
+            return .conversation(
+                audio: { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl) },
+                video: { CallService.shared.startCall(to: otherUid, name: title, photo: photoUrl, video: true) },
+                callsEnabled: callsEnabled)
+        }
+        if isGroup {
+            return .conversation(audio: { startGroupCall(video: false) },
+                                 video: { startGroupCall(video: true) },
+                                 callsEnabled: callsEnabled)
+        }
+        return .conversation(audio: nil, video: nil, callsEnabled: true)
     }
 
     private func startGroupCall(video: Bool) {

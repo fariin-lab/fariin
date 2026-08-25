@@ -38,7 +38,8 @@ struct OfficialChatView: View {
             // nothing at all — I left the closure empty when this screen was built, so the one chat
             // people are most likely to be suspicious of was the one that would not tell them
             // anything about itself. Owner caught it.
-            .background(NavTitleView(model: headerModel, onTap: { showInfo = true }))
+            .background(ChatNavigationItem(model: headerModel, bar: .custom([bellButton]),
+                                           onTap: { showInfo = true }))
             .navigationDestination(isPresented: $showInfo) { OfficialChatInfoView() }
             .toolbar(.hidden, for: .tabBar)
             // Belt and braces under the custom header: UIKit shows the plain string title only
@@ -46,7 +47,6 @@ struct OfficialChatView: View {
             // the avatar+name header replaces it the instant it installs.
             .navigationTitle(OfficialChannel.name)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { officialToolbar }
             .navigationDestination(item: $pushedScreen) { screen in
                 switch screen {
                 case .appearance:    AppearanceSettingsView()
@@ -148,26 +148,22 @@ struct OfficialChatView: View {
     /// Not named `toolbar`: `.toolbar { toolbar }` reads a property with the same name as the
     /// modifier it is being handed to, which is exactly the kind of thing the type-checker resolves
     /// differently on a bad day.
-    @ToolbarContentBuilder private var officialToolbar: some ToolbarContent {
-        ToolbarItem(placement: .topBarTrailing) {
-            // The bell IS the state, the way the reference app's screenshot shows it: a struck-through bell means
-            // this chat is quiet. It starts struck through for everybody and stays that way unless
-            // somebody deliberately turns it on.
-            Button { store.setMuted(!store.state.muted) } label: {
-                Image(store.state.muted ? "ic_bell_off" : "ic_bell")
-                    .renderingMode(.template)
-                    .resizable().scaledToFit()
-                    .frame(width: 22, height: 22)
-                    .contentShape(Rectangle())
-            }
-            .tint(.primary)
-        }
-        // NO "..." MENU. It held Mute, Clear Chat and Block — all three of which are in Chat Info,
-        // one tap away on the header, with the sentences that explain what each one actually does.
-        // Three doors to three actions on a chat you cannot even reply to is clutter, and the menu
-        // copy had to say the same things in fewer words than the screen that says them properly.
-        // The bell stays because it is not a duplicate: it is the mute STATE, readable without
-        // opening anything (owner, 2026-08-05).
+    /// The bell IS the state, the way the reference app's screenshot shows it: a struck-through bell
+    /// means this chat is quiet. It starts struck through for everybody and stays that way unless
+    /// somebody deliberately turns it on. A UIKit bar item now, set on the navigationItem by
+    /// `ChatNavigationItem` like everything else in the header.
+    ///
+    /// NO "..." MENU. It held Mute, Clear Chat and Block — all three of which are in Chat Info, one
+    /// tap away on the header, with the sentences that explain what each one actually does. Three
+    /// doors to three actions on a chat you cannot even reply to is clutter. The bell stays because
+    /// it is not a duplicate: it is the mute STATE, readable without opening anything (owner,
+    /// 2026-08-05).
+    private var bellButton: ChatNavigationItem.BarButton {
+        ChatNavigationItem.BarButton(
+            id: "bell",
+            image: store.state.muted ? "ic_bell_off" : "ic_bell",
+            accessibilityLabel: store.state.muted ? "Notifications off" : "Notifications on",
+            action: { store.setMuted(!store.state.muted) })
     }
 
     // MARK: The bar where the composer would be
