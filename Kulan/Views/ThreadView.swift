@@ -4841,6 +4841,29 @@ struct ThreadView: View {
     // Driven by holdStarted (set on touch-down) NOT recorder.isRecording, so the recording
     // UI appears the instant you press — no waiting for the audio session to warm up.
     private var recordingHeld: Bool { holdStarted && !recordLocked }
+
+    /// ⛔ THE INPUT ROW'S SHAPE MUST NOT CHANGE AT THE MOMENT OF LOCKING — owner, 2026-08-25:
+    /// recording with the keyboard up works, but locking made "the keyboard jump down immediately and
+    /// then instantly come back up".
+    ///
+    /// ⚠️ THAT BOUNCE IS A FIRST RESPONDER BEING REBUILT, AND `recordingHeld` IS WHY. It is
+    /// `holdStarted && !recordLocked`, so locking flips it FALSE — the same instant the row it
+    /// controls is fading to invisible. Every `!recordingHeld` branch inside `inputRow` therefore
+    /// fires on lock: the "+" and the GIF button are re-INSERTED into the composer's
+    /// `GlassEffectContainer`, and the text field un-hides. Rebuilding that subtree costs the field
+    /// its responder, and because `inputFocused` is still `true` SwiftUI immediately puts it back —
+    /// which is precisely a keyboard that drops and returns in one motion. Nothing ever asked for the
+    /// keyboard to go; it was collateral from a tree changing shape underneath it.
+    ///
+    /// So the row's contents key off "a recording is happening at all" instead. Locking then changes
+    /// nothing structural — the "+" and GIF stay away, the field stays hidden, and the row simply
+    /// fades out — which is also more honest: a composer has no reason to rebuild its buttons behind
+    /// a layer the person cannot see.
+    ///
+    /// ⚠️ NOT a replacement for `recordingHeld`. That one still means "a finger is holding the mic
+    /// right now" and is exactly right for the big red overlay and the hold row, which must both go
+    /// the moment the finger is off. This one means "the composer is not the composer at the moment".
+    private var recordingActive: Bool { holdStarted || recordLocked }
     // Live finger translation, clamped to up/left (the two meaningful directions).
     private var clampedDrag: CGSize {
         // Rubber-band the visual mic offset: 1:1 up to the lock/cancel limit, then diminishing
@@ -5082,7 +5105,7 @@ struct ThreadView: View {
             // native glassEffect ignores .opacity, so the "+" kept showing. Fully removing it is the
             // reliable fix; the mic is a separate stable slot (its own .id), so this sibling change
             // can't disturb the recording gesture.
-            if !recordingHeld {
+            if !recordingActive {
                 Button {
                     // ⛔ ONE DISMISSAL, THEN WAIT FOR THE SYSTEM TO SAY IT IS DOWN — owner, 2026-08-25:
                     // tapping "+" with the keyboard up made the keyboard and the composer "fight",
@@ -5122,18 +5145,18 @@ struct ThreadView: View {
             // on the right. The mic/send live OUTSIDE as a standalone right sibling (like "+").
             VStack(spacing: 0) {
                 // Reply preview spans the FULL field width (so the X sits at the far right).
-                if let r = replyingTo, !recordingHeld {
+                if let r = replyingTo, !recordingActive {
                     replyPreviewRow(r)
                         .transition(.move(edge: .top).combined(with: .opacity))
                     Divider().padding(.horizontal, 12)
                 }
-                if let e = editingMessage, !recordingHeld {
+                if let e = editingMessage, !recordingActive {
                     editPreviewRow(e)
                         .transition(.move(edge: .top).combined(with: .opacity))
                     Divider().padding(.horizontal, 12)
                 }
                 // Link-preview draft rides the same slot as the reply preview (reference behaviour).
-                if let d = linkDraft, !recordingHeld, editingMessage == nil {
+                if let d = linkDraft, !recordingActive, editingMessage == nil {
                     linkDraftRow(d)
                         .transition(.move(edge: .top).combined(with: .opacity))
                     Divider().padding(.horizontal, 12)
@@ -5156,8 +5179,8 @@ struct ThreadView: View {
                     // infinity — it would shove the GIF and mic buttons out of the pill while idle.
                     // The overlay takes the field's frame, which is the slot the row had anyway.
                     messageField
-                        .opacity(recordingHeld ? 0 : 1)
-                        .allowsHitTesting(!recordingHeld)
+                        .opacity(recordingActive ? 0 : 1)
+                        .allowsHitTesting(!recordingActive)
                         .overlay {
                             recordingHoldRow
                                 .opacity(recordingHeld ? 1 : 0)
@@ -5169,7 +5192,7 @@ struct ThreadView: View {
                     // room standing next to the first: "+" opens the picker and the picker has its
                     // own camera tile. `showCamera` and its cover stay — the picker's tile is what
                     // raises them now, and that path was always the one that mattered.
-                    if !recordingHeld && !hasText { inFieldGif }
+                    if !recordingActive && !hasText { inFieldGif }
                     // …and the MIC lives INSIDE the pill (clean idle: sticker · camera · mic in one bar).
                     // ONE stable slot gated by !hasText (unchanged during a recording) + a stable .id so
                     // the DragGesture survives record-start; zIndex keeps the red circle in front of the
@@ -5189,7 +5212,7 @@ struct ThreadView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: hasText)
         // Snappy so the recording bar appears near-instantly on hold (was 0.3s -> read as lag).
-        .animation(.spring(response: 0.14, dampingFraction: 0.9), value: recordingHeld)
+        .animation(.spring(response: 0.14, dampingFraction: 0.9), value: recordingActive)
     }
 
     // Native iOS 26: group the composer's glass shapes (the + and the field) so they
