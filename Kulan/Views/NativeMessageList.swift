@@ -428,6 +428,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// while it is set and snaps as before when it is not (composer growth, pinned bar, rotation).
     private var keyboardClock: (duration: TimeInterval, curve: UInt)?
     private var keyboardClockToken = 0
+    /// Unique key per ride, so overlapping keyboard moves compose additively instead of replacing
+    /// one another. Theirs does the same with `animation-\(takeNextAnimationId())`.
+    private var keyboardRideId = 0
 
     /// Record where the reader is, as a distance from the newest message. Cheap; called often.
     private func recordDistanceFromBottom() {
@@ -1710,6 +1713,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // screen adds nothing, so this is invisible in every conversation with real history.
         let shortfall = bottomAlignShortfall(bottomInset: bottom)
         let top = topOverlayHeight + shortfall
+        // Where the content SITS right now, in screen terms. The ride below animates from here, so it
+        // is measured rather than predicted — see `rideKeyboardVisually`.
+        let beforeTop = collectionView.contentInset.top
+        let beforeOffset = collectionView.contentOffset.y
         let insetsChanged = abs(collectionView.contentInset.top - top) > 0.5
             || abs(collectionView.contentInset.bottom - bottom) > 0.5
         if insetsChanged {
@@ -1758,27 +1765,57 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             ? maxContentOffsetY
             : clampOffset(maxContentOffsetY - lastKnownDistanceFromBottom)
         guard abs(collectionView.contentOffset.y - want) > 0.5 else { return }
-        // ⛔ NO ANIMATION OF OUR OWN, AND NO `performWithoutAnimation` EITHER — owner, 2026-08-25,
-        // reporting both halves of the same mistake: on iOS 27 the content lagged the keys going up,
-        // and on iOS 26 it "goes down before the keyboard finishes" coming back.
-        //
-        // ⚠️ I WAS REPLICATING UIKIT'S ANIMATION INSTEAD OF JOINING IT. The previous version captured
-        // the keyboard's duration and curve and ran its own `UIView.animate` with them. Two
-        // animations of the same nominal length still drift: they start on different frames, and the
-        // one that starts first arrives first. That is precisely "ahead of the keys" one way and
-        // "behind them" the other, and no amount of matching numbers fixes a second animation.
-        //
-        // ⚠️ AND THE OLD `performWithoutAnimation` WAS THE SNAP. Every caller that matters here —
-        // `viewSafeAreaInsetsDidChange` and `viewDidLayoutSubviews` — is invoked by UIKit INSIDE the
-        // keyboard's own animation block while the keys move. A plain write there is picked up by
-        // that block and animates with the keyboard exactly, for free, with its real duration and its
-        // real curve. Wrapping it in `performWithoutAnimation` explicitly opted OUT of the very
-        // animation we were trying to match, which is why it landed in one frame.
-        //
-        // So the write is plain. Inside a keyboard move it rides the keys; outside one — the composer
-        // growing a line, a pinned bar appearing — there is no ambient animation and it is immediate,
-        // which is correct for those too.
         collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
+        rideKeyboardVisually(beforeTop: beforeTop, beforeOffset: beforeOffset)
+    }
+
+    /// ⛔ THE REFERENCE APP'S ACTUAL MECHANISM, READ FROM `ListView.swift` — owner, 2026-08-25, after
+    /// two wrong attempts: "don't guess, read their implementation and verify both directions".
+    ///
+    /// What they do (`ListView.replayOperations`, the block at :3244):
+    ///
+    ///   1. `offsetFix = newInsets.top - oldInsets.top`  — ONE formula. Positive when the keyboard
+    ///      opens, negative when it closes; the sign is the only difference and there is no separate
+    ///      close path. Their `keyboardWillHide` handler is literally empty, because
+    ///      `keyboardWillChangeFrame` already carries both.
+    ///   2. Every item node is moved to its FINAL position synchronously (:3277).
+    ///   3. ONE additive animation on the list layer's `sublayerTransform`, from
+    ///      `translate(0, -completeOffset)` to identity, carries the whole thing visually (:3302-3357).
+    ///
+    /// ⚠️ AND THAT IS WHY MY TWO ATTEMPTS BOTH FAILED. The first ran a second `UIView.animate` with
+    /// the keyboard's duration and curve — two animations of the same length still drift, because
+    /// they start on different frames, which is "ahead of the keys" one way and "behind them" the
+    /// other. The second relied on the write landing inside UIKit's own animation block, which is a
+    /// dependency on WHEN UIKit calls us and differs between iOS 26 and 27 — the exact split he
+    /// reported. Theirs depends on neither: the position is committed instantly, so there is no
+    /// timing relationship left to get wrong, and the travel is one animation they own outright.
+    ///
+    /// ⚠️ WHAT CANNOT BE COPIED, STATED PLAINLY. Their list is a rotated `ASDisplayNode` that moves
+    /// item nodes itself, so the keyboard lands in its TOP inset and the newest message is pinned by
+    /// geometry. Ours is a `UIScrollView` and is no longer inverted. So the TECHNIQUE ports — commit,
+    /// then ride the layer — while their pinning is replaced by `lastKnownDistanceFromBottom` above
+    /// and by `bottomAlignShortfall` for a thread shorter than the screen.
+    ///
+    /// The curve is their curve 7 written out as a bezier: this app already states it once, in
+    /// `KeyboardWatcher.systemAnimation`, with the note that 0.23/1.0/0.32/1.0 is their own form of
+    /// it. Additive with a unique key, as theirs is, so an open interrupted by a close composes
+    /// instead of snapping.
+    private func rideKeyboardVisually(beforeTop: CGFloat, beforeOffset: CGFloat) {
+        guard let clock = keyboardClock, clock.duration > 0 else { return }
+        // How far the content actually travelled on screen: what the inset gave it, minus what the
+        // offset took away. Measured across the commit, so it needs no model of the geometry.
+        let travelled = (collectionView.contentInset.top - beforeTop)
+            - (collectionView.contentOffset.y - beforeOffset)
+        guard abs(travelled) > 0.5 else { return }
+        let ride = CABasicAnimation(keyPath: "sublayerTransform")
+        ride.fromValue = NSValue(caTransform3D: CATransform3DMakeTranslation(0, -travelled, 0))
+        ride.toValue = NSValue(caTransform3D: CATransform3DIdentity)
+        ride.duration = clock.duration
+        ride.timingFunction = CAMediaTimingFunction(controlPoints: 0.23, 1.0, 0.32, 1.0)
+        ride.isAdditive = true
+        ride.isRemovedOnCompletion = true
+        keyboardRideId &+= 1
+        collectionView.layer.add(ride, forKey: "keyboard-ride-\(keyboardRideId)")
     }
 
     func setComposerBarHeight(_ h: CGFloat) {
