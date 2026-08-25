@@ -1640,7 +1640,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     //
     // Two cases, both at rest: a reader AT the newest message follows the clearance so the last bubble
     // stays just above the composer; a reader in history does not move at all.
-    private func updateInsets() {
+    /// `force` bypasses the CHANGE-DETECTION guard only; every motion guard below still applies and
+    /// the offset write is still idempotent.
+    ///
+    /// ⛔ WITHOUT IT THE FINAL SETTLE COULD NEVER RUN — owner, 2026-08-25: the list follows the
+    /// keyboard on the iOS 26 simulator and does not on his iOS 27 phone, from one commit. This file
+    /// already records two places where those two OSes propagate differently, so the fix cannot be a
+    /// guess about which one is right; it has to work whichever order the geometry arrives in.
+    ///
+    /// ⚠️ THE HOLE IS THE GUARD EATING ITS OWN SIGNAL. `lastAdjustedInset` is written the first time
+    /// any caller notices a change — often `viewDidLayoutSubviews`, mid-animation, while the bound is
+    /// still moving, so the offset it computes is against geometry that has not settled. The next
+    /// caller, `keyboardDidShow`, then finds nothing changed and returns at the guard, so the one
+    /// call that runs against FINAL geometry never does its work. Whether that first pass lands
+    /// early enough to be right is precisely the sort of thing that differs between two OS versions.
+    ///
+    /// So the keyboard's own did-show and did-hide force a last pass. It is idempotent: if the
+    /// earlier one already landed the reader correctly, the `abs(offset - want) > 0.5` test makes
+    /// this one do nothing at all.
+    private func updateInsets(force: Bool = false) {
         guard isViewLoaded, !isDisappearing else { return }
         if let pop = navigationController?.interactivePopGestureRecognizer {
             switch pop.state { case .possible, .failed: break; default: return }
@@ -1660,7 +1678,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let adjusted = collectionView.adjustedContentInset
         let adjustedChanged = abs(adjusted.top - lastAdjustedInset.top) > 0.5
             || abs(adjusted.bottom - lastAdjustedInset.bottom) > 0.5
-        guard insetsChanged || adjustedChanged else { return }
+        guard force || insetsChanged || adjustedChanged else { return }
         lastAdjustedInset = adjusted
         // While the list is moving, UIKit is already compensating for the range change on the finger's or
         // the fling's behalf. A write from us here would fight it, and a write LATER â€” which is what the
@@ -1843,15 +1861,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// cannot be working from a bound that is still moving. The clock is dropped afterwards, so a
     /// later composer-growth write snaps as it should instead of inheriting a keyboard animation.
     @objc private func keyboardDidShow() {
-        updateInsets()
+        updateInsets(force: true)   // final geometry; see updateInsets(force:)
         recordDistanceFromBottom()
         keyboardClockToken &+= 1
         keyboardClock = nil
     }
 
     @objc private func keyboardDidHide() {
-        // One more recompute once the safe area has stopped moving.
-        updateInsets()
+        // One more recompute once the safe area has stopped moving. Forced for the same reason
+        // did-show is: an earlier pass may already have eaten the change signal.
+        updateInsets(force: true)
         clampToNewestIfBeyond()   // the invariant, before the latch logic below
         // THE SETTLE THE CLOSE WAS MISSING (build 8069d37, user screenshot: the newest bubble at rest
         // under the composer after open-then-close). Two holes conspired:
