@@ -433,27 +433,12 @@ struct ThreadView: View {
                         }
                     }
             }
-            // ⛔ THE RECORDING PAUSE / CONTINUE BUTTON LIVES HERE, ON THE CHAT, NOT ON THE BAR — owner,
-            // 2026-08-24: it did nothing when tapped. See `lockedBarRowGap` for the mechanism; in
-            // one line, an overlay offset above its parent's frame draws but is never hit-tested, and
-            // the bar cannot be grown to contain it because its height is the list's bottom inset.
-            //
-            // This container is the whole chat, so a point above the bar is inside it and the touch
-            // lands. It is positioned from the same two numbers the old offset used — the measured bar
-            // height and `lockedBarRowGap` — so it sits where it has been sitting, and the trailing
-            // inset repeats the composer's own resting expression so it stays in the send button's
-            // column on every device instead of on the one it was eyeballed against.
-            .overlay(alignment: .bottomTrailing) {
-                if recordLocked {
-                    recordStateButton
-                        .frame(width: 40, height: 40)
-                        .padding(.trailing, composerKeyboardUp
-                                 ? chromeMargin
-                                 : max(chromeMargin, chromeBottomInset - Self.composerRestDip))
-                        .padding(.bottom, composerBarHeight + Self.lockedBarRowGap)
-                        .transition(.opacity)
-                }
-            }
+            // ⛔ THE RECORDING PAUSE / CONTINUE BUTTON IS THE BAR'S OWN NOW — owner, 2026-08-25, on
+            // build 681: "pause is not working". It stood here as a SwiftUI overlay floating over the
+            // UIKit list since 2026-08-24, and that placement was never verified on a device; with the
+            // bar itself UIKit now, `ChatComposerView` draws it above its send button and extends its
+            // own hit-test to reach it (`point(inside:)`), so no SwiftUI-over-UIKit question is left
+            // to ask. The bar is still not grown to contain it: its height is the list's bottom inset.
             // A key that changes WHILE the chat is open (their reinstall lands mid-conversation) has
             // to say so there and then, not on the next open.
             .onReceive(NotificationCenter.default.publisher(for: .peerKeyChanged)) { note in
@@ -4909,6 +4894,16 @@ struct ThreadView: View {
             // SwiftUI keeps this slot and the insets below, which are about WHERE the bar sits and
             // were settled on 2026-08-24/25. See the note at the top of `ChatComposerState.swift`.
             ChatComposerHost(state: composerState, actions: composerActions, recorder: recorder)
+                // The review strip's waveform is sampled from the paused FILE (the reference app's
+                // way — see `SampledWaveform`), re-sampled whenever the file changes: the first
+                // pause, and every later pause after a resume, when the stitch is a new file. This
+                // rode the old SwiftUI strip as its `.task`; the strip is UIKit now and only draws
+                // what it is handed, so the sampling lives on the slot.
+                .task(id: previewURL) {
+                    guard let url = previewURL else { previewDecibels = []; return }
+                    let db = await SampledWaveform.decibels(of: url)
+                    if !Task.isCancelled, previewURL == url { previewDecibels = db }
+                }
         }
         // ⛔ AT REST THE SIDES MATCH THE BOTTOM — owner, 2026-08-24, from the preview of the pure
         // system-margin version: "when keyboard off, left and right padding is small, use same size
@@ -5035,6 +5030,10 @@ struct ThreadView: View {
         a.cancelRecording = { cancelRecording() }
         a.sendRecording = { sendRecording() }
         a.togglePreview = { togglePreview() }
+        // PAUSE IS THE ONE RECORDING CONTROL: it lands on the review with everything waiting.
+        // CONTINUE is the review's red mic: the next stretch; the stitcher joins them at send.
+        a.pauseRecording = { beginPreview() }
+        a.resumeRecording = { resumeRecording() }
         a.seekPreview = { seekPreview($0) }
         a.toggleVoiceOnce = {
             // ONE-TIME LISTEN — arming it flashes the little confirmation over the bar.
@@ -5175,36 +5174,6 @@ struct ThreadView: View {
         }
     }
 
-    // Locked (hands-free) recording bar.
-    /// TWO ROWS NOW — his 2026-08-11 side-by-side of ours against the reference: everything was
-    /// packed into one row, so the waveform got whatever width was left after four buttons and
-    /// read as a crumb. Both references give the WAVE the whole top strip and put the three
-    /// controls in their own row underneath (trash · pause-or-mic · send), and the bottom bar's
-    /// height is measured and fed back as the list inset, so the taller bar costs nothing.
-    ///
-    /// Pause opens the review; the red mic records the next stretch; send stitches. See
-    /// AudioRecorder's segment note for why pause and append can never share one file.
-    /// ⛔ ONE ROW, WITH THE PAUSE FLOATING ABOVE IT (owner 2026-08-22, with both layouts side by
-    /// side). It was a full-width pill with three buttons in a row underneath. His arrangement puts
-    /// the wave BETWEEN the two decisions — throw it away on the left, send it on the right — so the
-    /// two things you might do with the recording sit either side of the recording itself, and the
-    /// one control that only changes the recording's state stands out of that line entirely.
-    /// ⛔ THE PAUSE-TO-SEND GAP, AND IT IS THE ARROW'S GAP — owner, 2026-08-24: "increase the space
-    /// between the Pause and Send buttons so it matches the spacing between the arrow button and the
-    /// composer". I had read his earlier "make it 10pt" as the number he wanted and pinned the rows
-    /// to make 10 exact; he meant the gap should be BIGGER, and named the arrow as the thing to
-    /// match.
-    ///
-    /// The arrow floats `10` above the composer bar and the bar carries `6` of top padding before
-    /// its pill, so the gap a reader actually sees between the arrow and the composer's pill is the
-    /// two added together. That sum is this number, which is why it is written as the sum rather
-    /// than as 16 — if either of those two moves, this follows instead of drifting.
-    ///
-    /// ⚠️ THE ROW PINS BELOW ARE WHAT MAKE IT EXACT and they stay. Both rows are free-height
-    /// otherwise, so each takes the tallest thing in it and centres the rest, and the slack lands on
-    /// top of this spacing — which is how the old stated 10 rendered as about 14.
-    private static let lockedBarRowGap: CGFloat = 10 + 6
-
     /// ⛔ THE REFERENCE APP'S OWN TWO SPRINGS, READ FROM ITS SOURCE — ported on his order 2026-08-24
     /// after asking for their numbers rather than for an eyeball match.
     ///
@@ -5226,32 +5195,6 @@ struct ThreadView: View {
     /// Reserved for anything that changes this bar's HEIGHT. Nothing does today — both composer
     /// states are 40 — but their split is kept so a future height change uses the stiffer one.
     private static let refHeightSpring: Animation = .spring(response: 0.3, dampingFraction: 0.9)
-
-    /// Pause while recording, continue while reviewing. Extracted only so the layout above reads as
-    /// the arrangement it is; the two branches are untouched.
-    @ViewBuilder private var recordStateButton: some View {
-        if reviewingNote {
-            // CONTINUE RECORDING — the reference's centre red mic. The next stretch; the
-            // stitcher joins them at send.
-            Button { resumeRecording() } label: {
-                Image(systemName: "mic.fill")
-                    .font(.system(size: 18)).foregroundStyle(.red)
-                    .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true)
-                    .contentShape(Circle())
-            }
-            .accessibilityLabel("Continue recording")
-        } else {
-            // PAUSE IS THE ONE RECORDING CONTROL: it lands on the review with everything
-            // waiting. RED, not the accent — red is the recording signal everywhere here.
-            Button { beginPreview() } label: {
-                Image(systemName: "pause.fill")
-                    .font(.system(size: 16, weight: .semibold)).foregroundStyle(.red)
-                    .frame(width: 40, height: 40).liquidGlass(Circle(), interactive: true)
-                    .contentShape(Circle())
-            }
-            .accessibilityLabel("Pause and listen back")
-        }
-    }
 
     /// Pause: close the current stretch and show the review. NOT one-way any more — the red mic on
     /// the review bar records the next stretch, and send stitches them into one note.
