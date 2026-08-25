@@ -16,8 +16,8 @@ import UIKit
 //
 // THEIR NUMBERS, STATED ONCE HERE:
 //   title      17pt semibold, full-opacity label colour, truncating tail, hugs
-//   subtitle   13pt medium,   full-opacity label colour (NOT secondary), truncating tail, hugs
-//   title icon 16 × 16, aspect-fit, hidden when nil
+//   subtitle   13pt medium,   truncating tail, hugs (colour: ours is secondary, see the label)
+//   title icon 16 × 16 slot, hidden when nil (content mode: ours is centred, see makeIconView)
 //   avatar     40pt on iOS 26 ("one size for the navigation bar on iOS 26")
 //   root stack margins h 0 / v 4, leading 4 on iOS 26; spacing 12 on iOS 26; alignment centre
 //   title row spacing 5, min height = title font line height rounded up
