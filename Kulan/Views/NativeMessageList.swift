@@ -45,7 +45,8 @@ extension Notification.Name {
 //     contentSize. That is the dependency the inversion removed, and the reason it was removed is
 //     written down: a keyboard fold could shrink the maximum under a reader in history and read as
 //     "at the bottom". Every place that asks the question now asks it at rest, with the layout
-//     settled, and the keyboard code latches the answer BEFORE geometry moves (see rideKeyboard).
+//     settled, and the keyboard path asks it against the clearance it last established, i.e. BEFORE
+//     geometry moves (see `updateInsets`).
 //
 // What can bite again, said plainly: a row the reader has never seen, sized wrong by the off-screen
 // sizer (see `sizerRefused`), now sits ABOVE them after a page-in, and a wrong height there is a jump
@@ -287,9 +288,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // moves the offset by the clearance delta instead. Do NOT trust the comments at those two sites;
     // if a future keyboard fix needs a hold, wire this flag for real rather than assuming it works.
     private let keyboardAnimating = false
-    private var shouldAnimateKeyboardChanges = false     // true only between viewDidAppear and viewWillDisappear
-    private var keyboardWasAtNewest = false              // latched at willHide: reader was at the newest message
-    private var keyboardSettlePending = false            // didHide fired mid-drag; settle at drag/decel end
     private var isDisappearing = false        // swipe-back / pop in progress â†’ freeze all content-offset work
     private var lastStableOffset: CGFloat = 0 // last user/our-intent offset â†’ screenshot-capture recovery
     // Selection-mode animation coordination: the land that CARRIES the checkbox change passes (even
@@ -414,20 +412,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// moment is no good either, because the bound has already moved. A distance recorded BEFORE the
     /// change is the only honest answer, which is exactly why theirs keeps one.
     private var lastKnownDistanceFromBottom: CGFloat = 0
-    /// The adjusted inset `updateInsets` last acted on, so a safe-area change (keyboard, rotation) is
-    /// noticed even when our own two contentInset numbers did not move.
-    private var lastAdjustedInset: UIEdgeInsets = .zero
-    /// THE KEYBOARD'S OWN DURATION AND CURVE, read off its notification, alive only while it moves.
+    /// ⛔ THE KEYBOARD REACHES THIS LIST THROUGH UIKIT'S OWN LAYOUT GUIDE — the reference app's
+    /// mechanism, ported on the owner's order 2026-08-25 ("copy their approach for both directions…
+    /// 100%, not an approximation"). See the note above `updateInsets`.
     ///
-    /// THE LIST JUMPED WHEN THE KEYBOARD OPENED (owner, 2026-08-25, build 675 screenshot): the content
-    /// sat at its final height with a gap under it while the keys were still on their way up. The
-    /// offset was being written inside `performWithoutAnimation`, so it landed in one frame while the
-    /// keyboard took its 0.25s. Native is the offset moving WITH the keys: the same duration, the same
-    /// curve (7, the keyboard's private one, handed to UIKit as `7 << 16`), so the last bubble looks
-    /// pinned to the top of the keyboard the whole way. `updateInsets` animates its write with this
-    /// while it is set and snaps as before when it is not (composer growth, pinned bar, rotation).
-    private var keyboardClock: (duration: TimeInterval, curve: UInt)?
-    private var keyboardClockToken = 0
+    /// An invisible, zero-height view whose bottom is pinned to `view.keyboardLayoutGuide.topAnchor`.
+    /// It draws nothing and is never read; its one job is theirs (their bottom bar is constrained to
+    /// the guide): when the keyboard moves, UIKit changes the guide INSIDE its own keyboard animation
+    /// block, this constraint dirties the view's layout, and `viewDidLayoutSubviews` therefore runs
+    /// inside that block — which is what lets an unanimated offset write ride the keys.
+    private let keyboardTracker = UIView()
+    /// The clearance under the last bubble / over the first one that `updateInsets` last established,
+    /// in ADJUSTED terms (what the reader actually had), so a change is noticed whichever of our
+    /// inset and SwiftUI's safe area carried it, and so "was I at the bottom" can be asked against
+    /// pre-change geometry.
+    private var lastBottomClearance: CGFloat = 0
+    private var lastTopClearance: CGFloat = 0
+    /// Theirs: safe-area changes are debounced (0.01s, last only) because an interactive dismiss
+    /// updates the safe area "rapidly in quick succession". The layout path is never debounced.
+    private var safeAreaInsetsWork: DispatchWorkItem?
 
     /// Record where the reader is, as a distance from the newest message. Cheap; called often.
     private func recordDistanceFromBottom() {
@@ -491,6 +494,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
+
+        // The keyboard's own layout guide, the way the reference app's bottom bar hangs from it. See
+        // `keyboardTracker`. Touched once here first: theirs notes that on iOS 26 a guide first read
+        // late reports the home-indicator height (34) instead of the keyboard's, and that reading it
+        // early is what fixes that.
+        _ = view.keyboardLayoutGuide
+        keyboardTracker.isUserInteractionEnabled = false
+        keyboardTracker.isHidden = true
+        keyboardTracker.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(keyboardTracker)
+        NSLayoutConstraint.activate([
+            keyboardTracker.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            keyboardTracker.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            keyboardTracker.heightAnchor.constraint(equalToConstant: 0),
+            keyboardTracker.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
         ])
 
         // Single swipe-to-reply pan. Its delegate gates it to horizontal-left drags so vertical scrolling
@@ -566,18 +585,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             dateLabel.trailingAnchor.constraint(equalTo: datePill.contentView.trailingAnchor, constant: -14),
         ])
 
-        // KEYBOARD. Insets only: the clearance grows by the keyboard, and a reader who was at the
-        // newest message is put back at the newest message. See rideKeyboard for the latch.
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillShow(_:)),
-                                               name: UIResponder.keyboardWillShowNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHide(_:)),
-                                               name: UIResponder.keyboardWillHideNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidHide),
-                                               name: UIResponder.keyboardDidHideNotification, object: nil)
-        // The keyboard is fully up: one last recompute against the settled geometry, then the clock
-        // is spent. See `keyboardClock` for why a timer alone was not enough.
-        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidShow),
-                                               name: UIResponder.keyboardDidShowNotification, object: nil)
         // Context-menu dismissal end detector — see menuWindowDidHide. Registered permanently; the
         // handler is inert outside an armed menu-dismissal grace window.
         NotificationCenter.default.addObserver(self, selector: #selector(menuWindowDidHide(_:)),
@@ -1558,7 +1565,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         didFirstLand = true
         perform(.initialPosition)
         recordDistanceFromBottom()
-        lastAdjustedInset = collectionView.adjustedContentInset
+        lastBottomClearance = bottomClearance
+        lastTopClearance = collectionView.contentInset.top
         DispatchQueue.main.async { [weak self] in self?.reveal() }
     }
 
@@ -1602,16 +1610,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     ///
     /// Carried as extra TOP inset by `updateInsets`, which is what makes a short conversation hang
     /// from the composer the way every messenger draws it, instead of sitting under the header with
-    /// the screen empty below. See the note at its call site for why this went missing.
-    ///
-    /// ⚠️ THE SAFE AREA IS READ, NOT ASSUMED. With the keyboard up `safeAreaInsets.bottom` IS the
-    /// keyboard, so the room shrinks by exactly what the keys took and the shortfall shrinks with it
-    /// — which is the same arithmetic in both keyboard states rather than a special case for one.
-    private func bottomAlignShortfall(bottomInset: CGFloat) -> CGFloat {
+    /// the screen empty below. The room is measured against the bottom CLEARANCE (keyboard band, bar,
+    /// gap), so with the keyboard up it shrinks by exactly what the keys took and the shortfall
+    /// shrinks with it — the same arithmetic in both keyboard states rather than a special case.
+    private func bottomAlignShortfall(bottomClearance: CGFloat) -> CGFloat {
         let safe = collectionView.safeAreaInsets
-        let room = collectionView.bounds.height
-            - (safe.top + topOverlayHeight)
-            - (safe.bottom + bottomInset)
+        let room = collectionView.bounds.height - (safe.top + topOverlayHeight) - bottomClearance
         guard room > 0 else { return 0 }
         return max(0, room - collectionView.contentSize.height)
     }
@@ -1633,14 +1637,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// own because no finger is there to end a drag. Being beyond the bound at rest is never legitimate,
     /// so it is enforced wherever the list comes to rest rather than patched per timing.
     ///
-    /// ⚠️ AND NOT WHILE THE KEYBOARD IS MOVING. `maxContentOffsetY` shrinks continuously as the keys
-    /// leave, so a reader riding the animation down is "beyond the bound" on every intermediate frame
-    /// — and this would snap them to it, unanimated, on every layout pass. That is the second of the
-    /// three writers that used to fight the close. The bound is only meaningful once it has stopped
-    /// moving, which is what `keyboardClock == nil` says; `keyboardDidHide` runs this the instant the
-    /// clock is spent, so the invariant is enforced no later than before.
+    /// ⚠️ HARMLESS WHILE THE KEYBOARD MOVES, by construction rather than by a flag. The guide changes
+    /// the bound ONCE, inside the keyboard's animation block, and `updateInsets` writes the final
+    /// offset in that same pass; the model offset is therefore already at the bound while the
+    /// presentation animates, and this finds nothing beyond it. The old keyboard clock that used to
+    /// gate this went with the rest of the notification machinery (see `updateInsets`).
     private func clampToNewestIfBeyond() {
-        guard didFirstLand, !isDisappearing, keyboardClock == nil,
+        guard didFirstLand, !isDisappearing,
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
               !sendAnimating, !programmaticScrollAnimating else { return }
         let bound = maxContentOffsetY
@@ -1655,133 +1658,107 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // MARK: - Insets
 
-    // Two things UIKit cannot know, on the sides they belong: the pinned-message bar at the top, and the
-    // composer (plus the reference app's small gap) at the bottom. `.always` folds the nav bar into the
-    // top and the home indicator or keyboard into the bottom on its own. Totals:
+    // ⛔ THE REFERENCE APP'S `updateContentInsets`, AND ITS WHOLE KEYBOARD MECHANISM — owner,
+    // 2026-08-25: "copy their approach for both directions… 100%, not an approximation", after the
+    // open jumped on his iOS 27 phone and the close ran ahead of the keys on his iOS 26 one.
     //
-    //   top    = safe.top + pinned bar            status bar + nav bar, plus the pin bar if shown
-    //   bottom = safe.bottom + composerBar + 12   home indicator or keyboard, then the bar, then the gap
+    // WHAT THEIRS DOES, read from source (ConversationViewController+OWS.swift, +BottomBar.swift,
+    // ConversationViewController.swift):
+    //   · NO keyboard notification observers at all on iOS 16+. Their bottom bar is constrained to
+    //     `view.keyboardLayoutGuide.topAnchor`. When the keyboard moves, UIKit changes that guide
+    //     INSIDE its own keyboard animation block; the constraint dirties the view's layout, so
+    //     `viewDidLayoutSubviews` runs inside that block and calls this, synchronously.
+    //   · newInsets.bottom = bottomBarContainer.height − collectionView.safeAreaInsets.bottom. The
+    //     container is pinned to the view's bottom and the bar to the guide, so its height carries
+    //     the keyboard; the subtraction is because the safe area is folded in as well.
+    //   · Snapshot "was I at the bottom" and the old offset BEFORE touching anything. Write the
+    //     insets inside `performWithoutAnimation` and restore the offset, which cancels the implicit
+    //     shift UIScrollView applies when contentInset changes. Stand down while the user drags:
+    //     "UIKit updates collection view's scroll position when user drags with the keyboard." Then
+    //     write the offset OUTSIDE the wrapper with `animated: false`: "This offset change will be
+    //     animated by UIKit's UIView animation block which updateContentInsets() is called within."
+    //   · Safe-area changes go through a 0.01s last-only debounce; the layout path never does.
     //
-    // Two cases, both at rest: a reader AT the newest message follows the clearance so the last bubble
-    // stays just above the composer; a reader in history does not move at all.
-    /// `force` bypasses the CHANGE-DETECTION guard only; every motion guard below still applies and
-    /// the offset write is still idempotent.
-    ///
-    /// ⛔ WITHOUT IT THE FINAL SETTLE COULD NEVER RUN — owner, 2026-08-25: the list follows the
-    /// keyboard on the iOS 26 simulator and does not on his iOS 27 phone, from one commit. This file
-    /// already records two places where those two OSes propagate differently, so the fix cannot be a
-    /// guess about which one is right; it has to work whichever order the geometry arrives in.
-    ///
-    /// ⚠️ THE HOLE IS THE GUARD EATING ITS OWN SIGNAL. `lastAdjustedInset` is written the first time
-    /// any caller notices a change — often `viewDidLayoutSubviews`, mid-animation, while the bound is
-    /// still moving, so the offset it computes is against geometry that has not settled. The next
-    /// caller, `keyboardDidShow`, then finds nothing changed and returns at the guard, so the one
-    /// call that runs against FINAL geometry never does its work. Whether that first pass lands
-    /// early enough to be right is precisely the sort of thing that differs between two OS versions.
-    ///
-    /// So the keyboard's own did-show and did-hide force a last pass. It is idempotent: if the
-    /// earlier one already landed the reader correctly, the `abs(offset - want) > 0.5` test makes
-    /// this one do nothing at all.
-    private func updateInsets(force: Bool = false) {
+    // WHAT WAS WRONG HERE, and why every earlier attempt split between his two phones: the keyboard
+    // reached this list only through the safe area SwiftUI hands the hosted controller, and WHEN that
+    // arrives relative to the keyboard's animation block is SwiftUI's business and differs by OS.
+    // Each attempt added a clock, a latch or a settle to paper over that ordering. Theirs has no
+    // ordering to get wrong: the guide is UIKit's, it changes inside the keyboard's own block, and the
+    // one offset write there inherits the keys' real duration and curve. Every notification observer,
+    // the captured clock, the willHide latch, the did-show/did-hide settles and the pending-settle
+    // hand-off are gone with it.
+    //
+    // OURS, in their terms:
+    //   bottom clearance    = keyboard band + composer bar + 12. The band is the guide's height: the
+    //                         keyboard when it is up, the home-indicator strip when it is down.
+    //   contentInset.bottom = bottom clearance − safeAreaInsets.bottom, so the ADJUSTED bottom is the
+    //                         clearance whatever SwiftUI puts in the safe area and whenever it does.
+    //   top clearance       = pinned bar + a short thread's shortfall; `.always` folds the nav bar.
+    //
+    // ⚠️ "WAS AT THE BOTTOM" IS ASKED AGAINST THE CLEARANCE LAST ESTABLISHED, not the live adjusted
+    // inset. If SwiftUI's safe area moves before the guide does, the live bound has already moved and
+    // a reader who was at the newest message no longer looks it. Theirs can use the live test because
+    // their safe area never carries the keyboard; ours cannot, so the question is asked against the
+    // geometry this method last left behind.
+    private var keyboardBand: CGFloat {
+        max(0, view.bounds.maxY - view.keyboardLayoutGuide.layoutFrame.minY)
+    }
+    private var bottomClearance: CGFloat { keyboardBand + composerBarH + 12 }
+
+    /// The at-rest bottom bound the list had under a given bottom clearance.
+    private func boundForClearance(_ bottomClearance: CGFloat) -> CGFloat {
+        max(minContentOffsetY, collectionView.contentSize.height + bottomClearance - collectionView.bounds.height)
+    }
+
+    private func updateInsets() {
         guard isViewLoaded, !isDisappearing else { return }
+        // Theirs: not during an interactive pop.
         if let pop = navigationController?.interactivePopGestureRecognizer {
             switch pop.state { case .possible, .failed: break; default: return }
         }
-        let bottom = composerBarH + 12
-        // ⛔ A SHORT CONVERSATION HANGS FROM THE BOTTOM, NOT THE TOP — owner, 2026-08-25, iPhone 13
-        // Pro Max on iOS 27, after three keyboard fixes: "when open keyboard message is jumping",
-        // with a screenshot of six rows pinned under the header and most of the screen empty below
-        // them.
-        //
-        // ⚠️ THIS WAS NEVER AN ANIMATION BUG, AND I SPENT THREE ROUNDS TREATING IT AS ONE. A top-down
-        // list puts content shorter than the viewport at the TOP; that is simply what a scroll view
-        // does. The inverted list gave the chat behaviour for free — item 0 sat at content y = 0,
-        // which the flip put at the bottom of the screen — and un-inverting it removed that property
-        // without replacing it. Every messenger bottom-aligns a short thread, so a chat with a
-        // handful of messages has looked wrong since the un-inversion.
-        //
-        // ⚠️ AND THE KEYBOARD IS WHAT MAKES IT READ AS A JUMP. The gap under the last message is
-        // whatever the viewport has left over; opening the keyboard takes ~340pt of that away, the
-        // leftover changes by the same amount, and the whole block moves. Nothing was animating
-        // badly — the destination itself was wrong, and it moved.
-        //
-        // The shortfall is carried as TOP inset: content shorter than the room available is pushed
-        // down until its last row sits just above the composer, and a thread long enough to fill the
-        // screen adds nothing, so this is invisible in every conversation with real history.
-        let shortfall = bottomAlignShortfall(bottomInset: bottom)
-        let top = topOverlayHeight + shortfall
+        view.layoutIfNeeded()   // theirs: the guide's frame is current before it is read
 
-        // ⛔ THE REFERENCE APP'S KEYBOARD PATH, READ FROM ITS SOURCE — owner, 2026-08-25: "read their
-        // implementation and verify both directions". Of the two references, THIS one's architecture
-        // is ours: an upright `UICollectionView` pinned to the full view bounds, never resized and
-        // never inverted, with everything done through `contentInset`. (The other app's list is a
-        // rotated `ASDisplayNode` that moves item nodes itself and rides a layer animation; its
-        // pinning is a property of the rotation, which we no longer have, so it cannot be copied.)
-        //
-        // Their `updateContentInsets` does four things in this order, and the order is the mechanism:
-        //
-        //   1. SNAPSHOT "was I at the bottom" and the old offset, BEFORE touching anything, so the
-        //      test uses pre-keyboard geometry.
-        //   2. Write the insets inside `performWithoutAnimation`, and immediately write the offset
-        //      BACK to what it was. That second write is not the follow — it CANCELS the implicit
-        //      offset jump `UIScrollView` applies of its own accord when `contentInset` changes.
-        //      Without it the content teleports before the real motion begins.
-        //   3. Stand down entirely if the user is dragging: `keyboardDismissMode = .interactive`
-        //      means UIKit is already tracking the offset, and helping would fight it.
-        //   4. Write the offset OUTSIDE the `performWithoutAnimation` wrapper, `animated: false`.
-        //
-        // ⚠️ STEP 4 IS THE WHOLE TRICK, AND IT IS WHY THEY NEVER READ A DURATION OR A CURVE. This
-        // method is reached from `viewDidLayoutSubviews`, which UIKit runs INSIDE the keyboard's own
-        // animation transaction. An unanimated `setContentOffset` there is picked up by that
-        // transaction and inherits the keyboard's exact duration and curve, for free. Their own
-        // comment says so: "This offset change will be animated by UIKit's UIView animation block
-        // which updateContentInsets() is called within."
-        //
-        // ⚠️ AND IT ONLY WORKS SYNCHRONOUSLY. Their code routes the safe-area path through a debounce
-        // and the keyboard path NOT — a debounced write lands outside the transaction and hard-jumps.
-        // So nothing on this path may be deferred.
-        let oldTop = collectionView.contentInset.top
-        let oldBottom = collectionView.contentInset.bottom
-        let previousAdjustedBottom = lastAdjustedInset.bottom
-        let wasScrolledToBottom = isAtNewest              // pre-keyboard geometry — step 1
+        let bottom = bottomClearance
+        let top = topOverlayHeight + bottomAlignShortfall(bottomClearance: bottom)
+        let safe = collectionView.safeAreaInsets
+        let oldInsets = collectionView.contentInset
+        var newInsets = oldInsets
+        newInsets.bottom = bottom - safe.bottom
+        newInsets.top = top
+
+        // Step 1: pre-change geometry.
+        let previousBottom = lastBottomClearance
         let oldYOffset = collectionView.contentOffset.y
-        let insetsChanged = abs(oldTop - top) > 0.5 || abs(oldBottom - bottom) > 0.5
+        let wasScrolledToBottom = oldYOffset >= boundForClearance(previousBottom) - 5
 
-        if insetsChanged {
-            // Step 2. The offset restore cancels UIScrollView's own implicit shift, nothing more.
-            UIView.performWithoutAnimation {
+        let didChangeInsets = abs(oldInsets.top - newInsets.top) > 0.5 || abs(oldInsets.bottom - newInsets.bottom) > 0.5
+        // Step 2: the insets, with UIScrollView's implicit offset shift cancelled.
+        UIView.performWithoutAnimation {
+            if didChangeInsets {
                 let keep = collectionView.contentOffset
-                collectionView.contentInset.top = top
-                collectionView.contentInset.bottom = bottom
-                collectionView.setContentOffset(keep, animated: false)
-                // The INDICATOR keeps the real top: the shortfall is padding, not content the scroll
-                // bar should pretend exists.
-                collectionView.verticalScrollIndicatorInsets.top = topOverlayHeight
-                collectionView.verticalScrollIndicatorInsets.bottom = bottom
+                collectionView.contentInset = newInsets
+                if collectionView.contentOffset != keep { collectionView.setContentOffset(keep, animated: false) }
             }
+            // The INDICATOR keeps the real top: the shortfall is padding, not content it should
+            // pretend exists.
+            collectionView.verticalScrollIndicatorInsets = UIEdgeInsets(top: topOverlayHeight, left: 0,
+                                                                        bottom: newInsets.bottom, right: 0)
         }
 
-        // The keyboard reaches us through the ADJUSTED inset, not through ours: `.always` folds the
-        // safe area (and therefore the keyboard) in on UIKit's side, so our own two numbers do not
-        // move when the keys do. Compare against what we last acted on, or a keyboard opening is
-        // invisible here — which is exactly what build 674 shipped.
-        let adjusted = collectionView.adjustedContentInset
-        let adjustedChanged = abs(adjusted.top - lastAdjustedInset.top) > 0.5
-            || abs(adjusted.bottom - previousAdjustedBottom) > 0.5
-        guard force || insetsChanged || adjustedChanged else { return }
-        lastAdjustedInset = adjusted
+        let clearanceChanged = abs(bottom - previousBottom) > 0.5 || abs(top - lastTopClearance) > 0.5
+        guard didChangeInsets || clearanceChanged else { return }
+        lastBottomClearance = bottom
+        lastTopClearance = top
 
-        // Step 3. Theirs: "UIKit updates collection view's scroll position when user drags with the
-        // keyboard. We don't need to do anything."
-        guard !collectionView.isDragging, !collectionView.isTracking else { return }
+        // Step 3. Theirs: the finger owns the offset while it drags the keyboard down.
+        guard !collectionView.isDragging else { return }
         // Ours additionally: a send glide or a jump is a programmatic animated scroll that already
-        // knows where it is going, and `scrollViewDidEndScrollingAnimation` re-runs this when it
-        // lands, against the settled inset.
+        // knows where it is going, and `scrollViewDidEndScrollingAnimation` lands it.
         guard didFirstLand, !collectionView.isDecelerating,
               !sendAnimating, !programmaticScrollAnimating else { return }
 
-        // Step 4. Plain writes, outside any `performWithoutAnimation`, so they ride the keyboard.
-        collectionView.layoutIfNeeded()   // contentSize current before the bound is read
+        // Step 4. Plain writes, outside the wrapper. Inside the keyboard's block they ride the keys;
+        // anywhere else (composer growth, the pinned bar) they land at once, as theirs do.
         if wasScrolledToBottom {
             // Theirs, verbatim: "If we were scrolled to the bottom, don't do any fancy math. Just
             // stay at the bottom."
@@ -1791,9 +1768,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             }
         } else {
             // Theirs: "shift the content in lockstep with the keyboard, up to the limits of the
-            // content bounds." The delta is the ADJUSTED bottom's change, because that is where the
-            // keyboard lands for us; theirs reads its own inset because its bar's height carries it.
-            let insetChange = adjusted.bottom - previousAdjustedBottom
+            // content bounds." The delta is the clearance's, which is where the keyboard lands for us.
+            let insetChange = bottom - previousBottom
             if abs(insetChange) > 0.5 {
                 let want = clampOffset(oldYOffset + insetChange)
                 if abs(collectionView.contentOffset.y - want) > 0.5 {
@@ -1802,7 +1778,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             }
         }
     }
-
 
     func setComposerBarHeight(_ h: CGFloat) {
         // Reject implausible reports: the composer bar is never under ~40pt â€” a transient near-zero from
@@ -1837,167 +1812,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // (curve 7 is the private keyboard curve) so the bubbles track it frame for frame instead of snapping.
     // A reader in history is not moved at all, and does not need to be.
     //
-    // Gone with the top-down layout: the keyboardCloseFromBottom latch, the CADisplayLink close drive, the
-    // four-shot backstop volley, atBottomForKeyboard, keyboardSessionWasAtBottom, the geometric composer
-    // signal and its trailing settle. Every one of them existed to keep a target still that has stopped
-    // moving.
-    @objc private func keyboardWillShow(_ note: Notification) { rideKeyboard(note) }
-    @objc private func keyboardWillHide(_ note: Notification) { rideKeyboard(note) }
-
-    private func rideKeyboard(_ note: Notification) {
-        guard shouldAnimateKeyboardChanges, didFirstLand, !isDisappearing else { return }
-        if let pop = navigationController?.interactivePopGestureRecognizer {
-            switch pop.state { case .possible, .failed: break; default: return }
-        }
-        // The keyboard says how long it will take and on what curve; the offset write in
-        // updateInsets rides exactly that. Cleared a beat after the keys have landed, so a later
-        // composer-growth write does not inherit a stale animation. Zero duration (an interactive
-        // dismiss drag) is treated as "no clock": the finger owns that motion.
-        if let info = note.userInfo {
-            let d = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
-            let c = (info[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.uintValue ?? 7
-            keyboardClock = d > 0 ? (d, c) : nil
-            keyboardClockToken &+= 1
-            let token = keyboardClockToken
-            // ⛔ THE CLOCK OUTLIVES THE NOTIFICATION, AND THE OLD WINDOW WAS THE BUG — owner,
-            // 2026-08-25: the list follows the keyboard in the simulator preview and still snaps on
-            // the phone, from the SAME commit. Both build 6ffe6a59; the difference is Debug/simulator
-            // against Release/device.
-            //
-            // ⚠️ WHAT LETS `updateInsets` ACT IS THE SAFE-AREA CHANGE, WHICH ARRIVES AFTER THIS
-            // NOTIFICATION. `keyboardWillShow` fires before UIKit has folded the keyboard into the
-            // safe area, so the call at the bottom of this method usually returns at its
-            // change-detection guard; the call that does the work is the later
-            // `viewSafeAreaInsetsDidChange`. This clock used to be cleared `duration + 0.1` after the
-            // notification — on the simulator that later call lands inside the window and the offset
-            // animates, on a device it can land outside it, and then the write snaps. A timer racing
-            // the thing it is meant to cover is not a window, it is a coin toss.
-            //
-            // So it is cleared by `keyboardDidShow`/`keyboardDidHide`, which is the keyboard saying
-            // it has finished, and the timer is only a backstop for a notification that never comes.
-            // A clock that lives slightly too long costs nothing: the next geometry change animates
-            // over a keyboard duration instead of snapping, which is the correct look anyway.
-            DispatchQueue.main.asyncAfter(deadline: .now() + d + 1.0) { [weak self] in
-                guard let self, self.keyboardClockToken == token else { return }
-                self.keyboardClock = nil
-            }
-        }
-        // Only a reader who is AT the newest message follows the keyboard. This is the exact test, not the
-        // 44pt affordance: moving someone is a decision, and a decision takes the strict answer.
-        // THE REFERENCE APP'S MODEL, replacing everything that used to be below this line.
-        //
-        // Read from the reference implementation's content-inset update. They never touch the
-        // keyboard notification's geometry. The inset comes from the bottom bar's own frame height minus
-        // the safe area â€” the bar rides the keyboard, so its height already contains it, and the
-        // subtraction is there so the home-indicator strip is not counted twice. Then, for position:
-        //
-        //     } else if wasScrolledToBottom {
-        //         // "If we were scrolled to the bottom, don't do any fancy math. Just stay at the bottom."
-        //
-        // An ABSOLUTE destination, not a delta. That is the whole fix. Our ride moved the content by the
-        // keyboard's on-screen height, but `adjustedContentInset.top` does not change by that amount: with
-        // the keyboard up the safe area's bottom IS the keyboard and the home indicator hides inside it;
-        // with it down the safe area's bottom is the home indicator alone. The inset moves by
-        // keyboard-minus-home-indicator, so every transition over-moved by ~34pt â€” down past the composer
-        // on close, and back again when the settle corrected it. Exactly the reported overshoot, and
-        // exactly the double-count the reference app's subtraction exists to avoid.
-        //
-        // With no delta there is no arithmetic left to be wrong. updateInsets already recomputes the
-        // clearance and, if the reader was at the newest message, puts them at the newest message â€”
-        // which is the reference app's rule verbatim. the reference app does this with performWithoutAnimation on every layout
-        // pass while the bar moves; the smoothness comes from the BAR animating, not from us animating
-        // alongside it. So the private-curve ride, the notification frames, the begin/end delta and the
-        // close-ownership flag are all gone.
-        //
-        // LATCH "was at the newest message" for the CLOSE (the reference app's `wasScrolledToBottom` — theirs is
-        // captured before the bar moves too). The live test cannot answer this later: a close can leave
-        // the reader displaced (see keyboardDidHide), and once displaced they look like a reader in
-        // history, whom nothing may move. So the question is asked NOW, while it is still answerable:
-        //   * non-interactive close (send bar, Done): geometry has not moved yet at willHide — exact test.
-        //   * interactive close (dragging the list down over the keyboard): the finger has already moved
-        //     the offset, so the exact test is noise. But a dismiss drag at the newest message only pulls
-        //     INTO the bottom bounce (below the minimum), never far above it — while a reader who
-        //     genuinely scrolled up sits far beyond the 44pt neighbourhood. The loose test is the
-        //     readable signal there.
-        if note.name == UIResponder.keyboardWillHideNotification {
-            // The recorded distance, not a live test: by the time this fires the bound may already
-            // have moved. 44 is the loose neighbourhood a dismiss drag can pull the reader into.
-            keyboardWasAtNewest = lastKnownDistanceFromBottom <= 44
-        }
-        updateInsets()
-    }
-
-
-    // The keyboard is fully gone and the safe area has finished shrinking. Settle onto the exact newest
-    // position, but ONLY for a session that latched "was at newest" at willHide â€” never as a blanket
-    // re-pin, which is how the old close path could yank a reader who had scrolled up mid-session.
-    /// The keys have finished arriving. `updateInsets` here is the net for a safe-area change that
-    /// landed while the list was busy; it runs against the final geometry, so it is the one call that
-    /// cannot be working from a bound that is still moving. The clock is dropped afterwards, so a
-    /// later composer-growth write snaps as it should instead of inheriting a keyboard animation.
-    @objc private func keyboardDidShow() {
-        // ⚠️ THE CLOCK IS SPENT BEFORE THE SETTLE, NOT AFTER. The keys have landed, so this pass must
-        // SETTLE against final geometry; leaving the clock alive would start a fresh animation of a
-        // full keyboard duration after the keyboard had already finished, which is the "delayed
-        // movement" it is meant to prevent. If the animated write already arrived, the settle's own
-        // `abs(offset - want) > 0.5` test makes this do nothing at all.
-        keyboardClockToken &+= 1
-        keyboardClock = nil
-        updateInsets(force: true)
-        recordDistanceFromBottom()
-    }
-
-    @objc private func keyboardDidHide() {
-        // The keys have landed: spend the clock first, so what follows settles rather than starting a
-        // second animation behind them. Same reasoning as `keyboardDidShow`.
-        keyboardClockToken &+= 1
-        keyboardClock = nil
-        // One more recompute once the safe area has stopped moving. Forced for the same reason
-        // did-show is: an earlier pass may already have eaten the change signal.
-        updateInsets(force: true)
-        clampToNewestIfBeyond()   // the invariant, now that the bound has stopped moving
-        // THE SETTLE THE CLOSE WAS MISSING (build 8069d37, user screenshot: the newest bubble at rest
-        // under the composer after open-then-close). Two holes conspired:
-        //   * updateInsets' change-detection guard protects the OFFSET work too â€” once the insets are
-        //     already correct, no later call can ever fix a wrong offset. And a displaced reader fails
-        //     the live at-newest test, so the at-newest branch cannot rescue them either.
-        //   * during an INTERACTIVE close (list dragged down over the keyboard) every offset write
-        //     stands down while the finger owns the list â€” correctly â€” but nothing was left to run
-        //     AFTER. The displacement survived at rest.
-        // The latch from willHide is the answer to "may I move this reader": it was captured while the
-        // question was still answerable. Consume it here if the list is at rest; if the dismiss drag is
-        // still live, hand it to the scroll-end callbacks â€” never fight the finger.
-        if keyboardWasAtNewest, didFirstLand, !isDisappearing {
-            if collectionView.isTracking || collectionView.isDragging || collectionView.isDecelerating {
-                keyboardSettlePending = true
-            } else if !isAtNewest {
-                collectionView.setContentOffset(CGPoint(x: 0, y: maxContentOffsetY), animated: false)
-            }
-        }
-        keyboardWasAtNewest = false
-        settleFlush()
-    }
-
-    // The deferred half of keyboardDidHide's settle: the keyboard finished hiding while the dismiss drag
-    // still owned the list. Runs from the scroll-end callbacks, when the offset is finally at rest.
-    private func consumeKeyboardSettleIfPending() {
-        guard keyboardSettlePending else { return }
-        keyboardSettlePending = false
-        guard didFirstLand, !isDisappearing, !isAtNewest else { return }
-        // Neighbourhood rule, sized to the failure it fixes: the close's displacement can reach the
-        // keyboard-minus-home-indicator inset delta (~300pt), so the gate is half a screen — big enough
-        // to always catch the bug, small enough that a reader who deliberately carried the dismiss drag
-        // far into history is respected.
-        guard collectionView.contentOffset.y >= maxContentOffsetY - collectionView.bounds.height * 0.5 else { return }
-        collectionView.setContentOffset(CGPoint(x: 0, y: maxContentOffsetY), animated: false)
-    }
-
     // MARK: - Lifecycle
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         isDisappearing = true
-        shouldAnimateKeyboardChanges = false
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -2015,7 +1834,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         isDisappearing = false
-        shouldAnimateKeyboardChanges = true
         collectionView.isPrefetchingEnabled = true     // re-enable after the jank-sensitive first presentation
         updateInsets()
         // Swiping back with the KEYBOARD UP: dismiss the keyboard the moment the pop gesture begins, so the
@@ -2067,7 +1885,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewSafeAreaInsetsDidChange() {
         super.viewSafeAreaInsetsDidChange()
-        updateInsets()
+        // Theirs: debounced, last-only, 0.01s — "when performing an interactive dismiss, safe area
+        // updates rapidly in quick succession, which causes this method to go haywire, recomputing
+        // insets a few times and incorrectly determining that it needs to scroll as a result." The
+        // keyboard itself never comes through here any more; it comes through the layout pass the
+        // guide dirties, which is synchronous. This path is for rotation and the bars.
+        safeAreaInsetsWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.updateInsets() }
+        safeAreaInsetsWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01, execute: work)
     }
 
     override func viewWillLayoutSubviews() {
@@ -2101,30 +1927,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // We own the insets now, so nothing folds a geometry change in for us. Cheap: updateInsets()
-        // returns immediately unless a value actually moved.
-        //
-        // ⚠️ FORCED WHILE THE KEYS ARE MOVING. This pass runs inside UIKit's keyboard animation
-        // block, so it is the one place a write inherits the keyboard's real timing (see the write in
-        // `updateInsets`). The change-detection guard would skip most of these passes once the insets
-        // had landed, and skipping them is what leaves the content parked while the keys carry on.
-        updateInsets(force: keyboardClock != nil)
-        // ⛔ THE CLOSE GLUE IS GONE, AND IT WAS WHAT MADE THE CLOSE SNAP — owner, 2026-08-25, asking
-        // for the close to be as smooth as the open now is.
-        //
-        // ⚠️ IT WAS RIGHT FOR A WORLD WITH NO ANIMATED WRITER. It ran on EVERY layout pass of the
-        // willHide→didHide window and wrote `maxContentOffsetY` unanimated, because back then the
-        // only alternative was one settle at the very end and every frame before it was wrong. Now
-        // `updateInsets` animates the offset over the keyboard's own duration and curve, so this ran
-        // ON TOP of that animation, several times, each write teleporting the offset to a bound that
-        // was itself still moving. An animation cannot survive being overwritten every frame: what
-        // the eye gets is the snap this was written to prevent, arriving from the other direction.
-        //
-        // The job it did is done properly now: the animated write in `updateInsets` carries the
-        // reader down WITH the keys, and `keyboardDidHide` forces a settle against final geometry.
+        // ⛔ THE KEYBOARD'S ONE WRITER, THE REFERENCE APP'S WAY. Their `viewDidLayoutSubviews` calls
+        // `updateContentInsets()` synchronously and that is their entire keyboard handling: when the
+        // keyboard moves, UIKit changes `keyboardLayoutGuide` inside its own animation block, the
+        // constraint on `keyboardTracker` dirties this view's layout, and this pass therefore runs
+        // INSIDE that block — so the one unanimated offset write in `updateInsets` inherits the keys'
+        // real duration and curve. Not forced, not clocked, never deferred: a deferred write lands
+        // outside the block and hard-jumps, which is why theirs debounces the safe-area path and not
+        // this one. Cheap otherwise: it returns as soon as nothing has moved.
+        updateInsets()
         // The invariant net, independent of any keyboard bookkeeping: at rest, never beyond the newest
-        // bound. Catches the interactive keyboard dismissal, where every keyboard-aware correction
-        // above correctly stands down because a finger owns the list while the inset shrinks.
+        // bound. Catches the tail of an interactive keyboard dismissal, where `updateInsets` correctly
+        // stands down because a finger owns the list while the clearance shrinks.
         clampToNewestIfBeyond()
         // The visible message viewport in window coordinates, for the media transitions' clipping view
         // (the reference app passes `collectionView.adjustedContentInset` as `clippingAreaInsets`; this
@@ -2554,7 +2368,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard !ignoringScrollEvents else { return }
         // The finger has left. If the keyboard shrank the inset out from under a reader who was at the
         // newest message (interactive dismissal), this is the first honest moment to put them back.
-        if !decelerate { consumeKeyboardSettleIfPending(); clampToNewestIfBeyond(); recordDistanceFromBottom(); settleFlush() }
+        if !decelerate { clampToNewestIfBeyond(); recordDistanceFromBottom(); settleFlush() }
         // The lift is the moment a jump asked for mid-drag becomes allowed. It runs whether the list
         // is about to coast or not: perform() kills the coast on its way past.
         if let animated = pendingNewestJump {
@@ -2564,7 +2378,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         guard !ignoringScrollEvents else { return }   // our own stop, not the reader's — see stopScrolling
-        consumeKeyboardSettleIfPending(); clampToNewestIfBeyond(); recordDistanceFromBottom(); settleFlush()
+        clampToNewestIfBeyond(); recordDistanceFromBottom(); settleFlush()
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
