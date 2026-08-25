@@ -1537,6 +1537,21 @@ final class StoriesRowUIView: UIView, UIScrollViewDelegate {
 
         let showUploading: CGFloat = uploading ? 1 : 0
         guard myCard.alpha != 1 - showUploading || uploadingCard.alpha != showUploading else { return }
+        // ⛔ AND THE ROW COMES BACK TO THE FRONT SO IT CAN BE SEEN — owner, 2026-08-25, after posting
+        // a story. The reference app lands you on the chat list and scrolls its row to your own
+        // avatar before the editor collapses into it, so the uploading ring is the thing you are
+        // looking at when the editor leaves. Ours already draws that ring in the first slot and
+        // already switches to the Chats tab (see `MainShell`); what was missing was the row being
+        // scrolled anywhere near it — post from a row scrolled ten people along and the ring appeared
+        // off-screen behind you.
+        //
+        // ⚠️ ONLY ON THE WAY IN. Guarded by the alpha test above, so it fires on the transition into
+        // uploading and never on the cross-fade back out — the row must not yank itself sideways when
+        // an upload merely finishes. Animated, unlike `scrollToAuthor`'s deliberate un-animated
+        // ensure-visible: this one is a place the person is being taken to, not a correction.
+        if uploading, scrollView.contentOffset.x > 1 {
+            scrollView.setContentOffset(.zero, animated: animated)
+        }
         // A cross-fade, so the "Uploading…" placeholder morphs straight into the final card in the
         // same frame — no jump. `.animation(.easeInOut(duration: 0.3), value: stories.uploading)`.
         let swap = {

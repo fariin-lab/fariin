@@ -50,6 +50,8 @@ struct MainShell: View {
     private var callsRepo = CallsRepository.shared   // @Observable: drives the missed-call tab badge
     @State private var settingsIcon: UIImage?
     @State private var tab = 0
+    /// Was a story upload in flight on the last body pass? Drives the tab switch below; see its note.
+    @State private var sawStoryUpload = false
     @State private var previousTab = 0   // last non-search tab → drives what the search circle searches
     // Missed-call badge on the Calls tab: incoming missed calls newer
     // than the last time the tab was viewed. Local-only "seen" watermark.
@@ -99,6 +101,24 @@ struct MainShell: View {
             } else {
                 legacyTabView
             }
+        }
+        // ⛔ A POSTED STORY LANDS YOU ON THE CHATS TAB — owner, 2026-08-25, after posting: the camera
+        // was still on screen, and behind it he had no sight of the story he had just sent.
+        //
+        // The reference app switches to its chat list BEFORE the upload even starts, then scrolls
+        // that list's story row to your own avatar, and only then lets the editor collapse into it —
+        // so the uploading ring is the thing you are looking at when the editor leaves. Ours draws
+        // the same ring in the row's first slot; this is the half that takes you to it, and
+        // `StoriesRowUIKit.applyMyCard` brings the row itself back to the front.
+        //
+        // ⚠️ KEYED TO THE UPLOAD STARTING, not to the post button, because that is the one signal
+        // that exists wherever a story can be posted from — the camera, the library picker, a text
+        // story, the audience sheet. A flag flipped at each of those call sites would be four places
+        // to keep in step and a fifth to forget.
+        .onChange(of: storyBudget.uploading) { _, uploading in
+            guard uploading, !sawStoryUpload else { sawStoryUpload = uploading; return }
+            sawStoryUpload = true
+            if tab != 0 { tab = 0 }
         }
         // THE VOICE NOTE THAT IS STILL PLAYING, wherever you have walked to.
         //
