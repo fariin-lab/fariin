@@ -418,6 +418,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// The adjusted inset `updateInsets` last acted on, so a safe-area change (keyboard, rotation) is
     /// noticed even when our own two contentInset numbers did not move.
     private var lastAdjustedInset: UIEdgeInsets = .zero
+    /// THE KEYBOARD'S OWN DURATION AND CURVE, read off its notification, alive only while it moves.
+    ///
+    /// THE LIST JUMPED WHEN THE KEYBOARD OPENED (owner, 2026-08-25, build 675 screenshot): the content
+    /// sat at its final height with a gap under it while the keys were still on their way up. The
+    /// offset was being written inside `performWithoutAnimation`, so it landed in one frame while the
+    /// keyboard took its 0.25s. Native is the offset moving WITH the keys: the same duration, the same
+    /// curve (7, the keyboard's private one, handed to UIKit as `7 << 16`), so the last bubble looks
+    /// pinned to the top of the keyboard the whole way. `updateInsets` animates its write with this
+    /// while it is set and snaps as before when it is not (composer growth, pinned bar, rotation).
+    private var keyboardClock: (duration: TimeInterval, curve: UInt)?
+    private var keyboardClockToken = 0
 
     /// Record where the reader is, as a distance from the newest message. Cheap; called often.
     private func recordDistanceFromBottom() {
@@ -1673,12 +1684,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // bottom they were before the geometry moved. One rule for the keyboard, the composer growing
         // while typing, the pinned bar appearing, and rotation. The distance was recorded BEFORE the
         // change (see `lastKnownDistanceFromBottom`), so it does not depend on a bound that has moved.
-        UIView.performWithoutAnimation {
-            collectionView.layoutIfNeeded()   // contentSize must be current before the bound is read
-            let want = lastKnownDistanceFromBottom <= 5
-                ? maxContentOffsetY
-                : clampOffset(maxContentOffsetY - lastKnownDistanceFromBottom)
-            if abs(collectionView.contentOffset.y - want) > 0.5 {
+        collectionView.layoutIfNeeded()   // contentSize must be current before the bound is read
+        let want = lastKnownDistanceFromBottom <= 5
+            ? maxContentOffsetY
+            : clampOffset(maxContentOffsetY - lastKnownDistanceFromBottom)
+        guard abs(collectionView.contentOffset.y - want) > 0.5 else { return }
+        if let clock = keyboardClock, clock.duration > 0 {
+            // With the keys, not ahead of them. `beginFromCurrentState` so a reopen mid-close picks
+            // up from wherever the content is; `allowUserInteraction` so a finger is never locked out.
+            let curve = UIView.AnimationOptions(rawValue: clock.curve << 16)
+            UIView.animate(withDuration: clock.duration, delay: 0,
+                           options: [curve, .beginFromCurrentState, .allowUserInteraction]) {
+                self.collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
+            }
+        } else {
+            UIView.performWithoutAnimation {
                 collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
             }
         }
@@ -1728,6 +1748,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard shouldAnimateKeyboardChanges, didFirstLand, !isDisappearing else { return }
         if let pop = navigationController?.interactivePopGestureRecognizer {
             switch pop.state { case .possible, .failed: break; default: return }
+        }
+        // The keyboard says how long it will take and on what curve; the offset write in
+        // updateInsets rides exactly that. Cleared a beat after the keys have landed, so a later
+        // composer-growth write does not inherit a stale animation. Zero duration (an interactive
+        // dismiss drag) is treated as "no clock": the finger owns that motion.
+        if let info = note.userInfo {
+            let d = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
+            let c = (info[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.uintValue ?? 7
+            keyboardClock = d > 0 ? (d, c) : nil
+            keyboardClockToken &+= 1
+            let token = keyboardClockToken
+            DispatchQueue.main.asyncAfter(deadline: .now() + d + 0.1) { [weak self] in
+                guard let self, self.keyboardClockToken == token else { return }
+                self.keyboardClock = nil
+            }
         }
         // Only a reader who is AT the newest message follows the keyboard. This is the exact test, not the
         // 44pt affordance: moving someone is a decision, and a decision takes the strict answer.
