@@ -708,10 +708,22 @@ final class ChatComposerView: UIView {
         container.frame = bounds
 
         // The three round buttons and the pill between them, all bottom-aligned.
+        //
+        // ⛔ BOUNDS + CENTER, NEVER FRAME — owner, 2026-08-25, build 683: "the send button appears
+        // too large first and then shrinks", and grows again on send. These buttons carry a
+        // scale(0.1) transform while hidden, and setting `frame` back-computes bounds THROUGH the
+        // transform: a 0.1-scaled button asked to occupy 40pt is given 400pt of bounds, which is
+        // the giant circle he photographed. `bounds` and `center` are transform-independent, which
+        // is exactly why UIKit documents `frame` as undefined when a transform is set.
         let rowY = H - M.button
-        plusButton.frame = CGRect(x: 0, y: rowY, width: M.button, height: M.button)
-        trashButton.frame = plusButton.frame
-        sendButton.frame = CGRect(x: W - M.button, y: rowY, width: M.button, height: M.button)
+        let buttonBounds = CGRect(x: 0, y: 0, width: M.button, height: M.button)
+        let buttonMidY = rowY + M.button / 2
+        plusButton.bounds = buttonBounds
+        plusButton.center = CGPoint(x: M.button / 2, y: buttonMidY)
+        trashButton.bounds = buttonBounds
+        trashButton.center = plusButton.center
+        sendButton.bounds = buttonBounds
+        sendButton.center = CGPoint(x: W - M.button / 2, y: buttonMidY)
         let span = pillSpan(width: W)
         let pw = span.right - span.left
         pill.frame = CGRect(x: span.left, y: 0, width: pw, height: H)
@@ -780,10 +792,17 @@ final class ChatComposerView: UIView {
         overlayGroup.center = discCenter
         discGroup.bounds = overlayGroup.bounds
         discGroup.center = CGPoint(x: M.halo / 2, y: M.halo / 2)
-        pulseWrap.frame = discGroup.bounds
-        haloOuter.frame = discGroup.bounds
+        // Same rule as the buttons: the pulse wrapper and both halo rings are scaled live (the
+        // breathing pulse, the voice level), so they take bounds + center, never frame.
+        let haloBounds = discGroup.bounds
+        let haloCenter = CGPoint(x: M.halo / 2, y: M.halo / 2)
+        pulseWrap.bounds = haloBounds
+        pulseWrap.center = haloCenter
+        haloOuter.bounds = haloBounds
+        haloOuter.center = haloCenter
         haloOuter.layer.cornerRadius = M.halo / 2
-        haloInner.frame = discGroup.bounds
+        haloInner.bounds = haloBounds
+        haloInner.center = haloCenter
         haloInner.layer.cornerRadius = M.halo / 2
         disc.bounds = CGRect(x: 0, y: 0, width: M.disc, height: M.disc)
         disc.center = CGPoint(x: M.halo / 2, y: M.halo / 2)
