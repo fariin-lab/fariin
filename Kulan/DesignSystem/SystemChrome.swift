@@ -100,7 +100,41 @@ struct SystemBarChrome: ViewModifier {
     }
 }
 
+/// JUST THE BOTTOM INSET, for a bar that already has sides it is keeping.
+///
+/// ⛔ THE BOTTOM PADDING ONLY — owner, 2026-08-25, on the attach sheet's caption bar: "keep it at
+/// 40pt and only change the spacing/positioning bottom padding behaviour to match the attach bar".
+/// The caption bar is the composer's twin in a sheet, and it was sitting on a flat 4 while the
+/// composer's bottom is device-derived — so the same control rested at two different heights above
+/// the indicator depending on which screen you were looking at.
+///
+/// ⚠️ SIZE AND SIDES ARE NOT THIS MODIFIER'S BUSINESS, deliberately. `SystemBarChrome` above also
+/// claims the horizontal margins, which is right for a bar standing in the composer's own slot and
+/// wrong here: he asked for the bottom and said twice not to touch anything else.
+///
+/// `keyboardUp` is the composer's own branch — 8pt above the keys when they are up, and the dip into
+/// the indicator band only at rest. Pass the KEYBOARD'S state, not a focus flag: focus and keyboard
+/// geometry are not the same thing, which the composer learned the hard way (see `composerKeyboardUp`).
+struct SystemBarBottomChrome: ViewModifier {
+    var keyboardUp: Bool
+
+    @State private var margin: CGFloat = 16
+    @State private var bottomInset: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.bottom, keyboardUp || bottomInset <= 0
+                     ? SystemBarChrome.keyboardGap : -SystemBarChrome.restDip)
+            .background { SystemChromeReader(margin: $margin, bottomInset: $bottomInset) }
+    }
+}
+
 extension View {
     /// Position this view as edge-attached system chrome, the way the composer positions itself.
     func systemBarChrome() -> some View { modifier(SystemBarChrome()) }
+
+    /// Take the composer's BOTTOM inset and nothing else — sides, height and corners stay yours.
+    func systemBarBottomChrome(keyboardUp: Bool) -> some View {
+        modifier(SystemBarBottomChrome(keyboardUp: keyboardUp))
+    }
 }

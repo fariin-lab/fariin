@@ -109,6 +109,10 @@ struct AttachRecentsStrip: View {
     /// in the editor is still ticked here (owner 2026-08-04).
     var removedIds: Set<String> = []
     @FocusState private var captionFocused: Bool
+    /// The KEYBOARD's state, which is not the same thing as `captionFocused`. The composer moved off
+    /// its focus flag for exactly this reason — focus flips a beat before the keys move, and on one
+    /// of his two phones it flipped without them moving at all. See `ThreadView.composerKeyboardUp`.
+    @StateObject private var keyboard = KeyboardWatcher()
 
     @State private var status: PHAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     @State private var assets: [PHAsset] = []
@@ -319,7 +323,12 @@ struct AttachRecentsStrip: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
+        // ⛔ THE COMPOSER'S BOTTOM, NOT A FLAT 4 — owner, 2026-08-25. Sides, top, height and corners
+        // are untouched: he asked for the bottom padding behaviour and said twice not to change the
+        // bar's size. At rest this dips into the indicator band exactly as the composer does; with
+        // the keyboard up it keeps the composer's 8pt gap above the keys.
+        .padding(.horizontal, 16).padding(.top, 8)
+        .systemBarBottomChrome(keyboardUp: keyboard.height > 0)
         // Focusing the caption grows the sheet to .large so this bar pins above the keyboard instead of
         // the medium sheet shoving the whole content up (the caption "jumping" to mid-screen).
         .onChange(of: captionFocused) { _, focused in if focused { onCaptionFocused() } }
