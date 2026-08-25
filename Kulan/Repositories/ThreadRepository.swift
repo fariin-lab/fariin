@@ -72,6 +72,12 @@ enum PendingOutbox {
     }
 }
 
+extension Notification.Name {
+    /// Posted after a message or album tile is hidden "for me". The set is process-wide and has no
+    /// observation of its own; a chat that is open needs to know so the row can re-measure.
+    static let hiddenMessagesChanged = Notification.Name("hiddenMessagesChanged")
+}
+
 enum HiddenMessages {
     private static var cache = Set<String>((UserDefaults.standard.string(forKey: "hiddenMessages") ?? "")
         .split(separator: " ").map(String.init))
@@ -80,6 +86,7 @@ enum HiddenMessages {
         guard !id.isEmpty, !cache.contains(id) else { return }
         cache.insert(id)
         UserDefaults.standard.set(cache.joined(separator: " "), forKey: "hiddenMessages")
+        NotificationCenter.default.post(name: .hiddenMessagesChanged, object: id)
     }
     /// Sign-out: the stored key is cleared by SessionWipe, but this in-memory copy would keep
     /// hiding the previous account's ids until relaunch.

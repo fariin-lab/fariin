@@ -74,6 +74,10 @@ struct ThreadView: View {
     // the tapped one.
     struct AlbumViewerWrap: Identifiable { let id = UUID(); let gallery: [Message]; let startId: String }
     @State private var viewedOnceTick = 0            // bump after consuming a view-once photo → bubbles refresh
+    /// Bumped when a message or album tile is hidden "for me", so the row re-measures. The hide is a
+    /// process-wide set with no observation of its own; without this the album kept its OLD height
+    /// in the layout cache while the mosaic re-solved to a new one.
+    @State private var hiddenTick = 0
     @State private var pendingViewOnceConsume: Message?   // view-once photo open in the viewer → mark on close
     @State private var sendingPhoto = false
     @State private var typingSent = false
@@ -1510,6 +1514,9 @@ struct ThreadView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in
             if recordLocked { parkRecordingDraft() }
         }
+        // A hide from anywhere (the image viewer, the gallery, the row itself) reaches the signature
+        // through this tick. See `hiddenTick`.
+        .onReceive(NotificationCenter.default.publisher(for: .hiddenMessagesChanged)) { _ in hiddenTick += 1 }
         // Scrubbing the review knob right-to-left runs along the HOME INDICATOR's strip, and iOS
         // read it as the app-switch swipe (his report: "the app thinks I am swiping to leave").
         // While the locked bar owns the bottom edge, the system gesture goes soft: the first swipe
@@ -2161,7 +2168,7 @@ struct ThreadView: View {
         // CONTENT AND HEIGHT (140pt card → one line of text), and height only updates through the
         // signature path. Reading it here also makes the body observe story changes at all.
         let storiesRepo = StoriesRepository.shared
-        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)"
+        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)"
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
@@ -2224,7 +2231,13 @@ struct ThreadView: View {
                 // `registerForTraitChanges`. So the bug only appears in a chat with a custom chat
                 // colour, because `chatColorSpec == nil` in the UIKit route guard sends EVERY row to
                 // SwiftUI there. That is why it hid for months.
-                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)"
+                // Which album tiles are hidden "for me" is part of the row's VALUE: hiding one re-solves
+                // the mosaic to a different height, and a signature that did not change meant a layout
+                // frame that did not change either. (`hiddenTick` in the key is what makes this
+                // recompute at all; this token is what makes the right row differ.)
+                let hiddenTiles = m.album.isEmpty ? "-"
+                    : (0..<m.album.count).filter { HiddenMessages.isHidden("\(m.id)-\($0)") }.map(String.init).joined(separator: ",")
+                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)"
             }
             sigCache.key = key
             sigCache.base = out
@@ -6757,9 +6770,15 @@ struct MessageBubble: View, Equatable {
         .foregroundStyle(isMe ? onMyBubble.opacity(0.7) : Color.secondary)
     }
 
-    // Bubbles cap at 72% of screen width and wrap; the right (sent) / left (received)
-    // edge stays a clean, uniform line regardless of length.
-    private var maxBubbleWidth: CGFloat { UIScreen.main.bounds.width * 0.72 }
+    /// The width the list is laying this row out at. Zero only outside the list (previews), where the
+    /// screen is the right fallback.
+    @Environment(\.rowWidth) private var rowWidth
+
+    // Bubbles cap at 72% of the LIST's width and wrap; the right (sent) / left (received) edge stays
+    // a clean, uniform line regardless of length. The list's width, not the screen's: on a phone they
+    // are the same number, on an iPad in Stage Manager they are not, and the sizer and the cell are
+    // both handed the same value so measurement still equals render. See `RowWidthKey`.
+    private var maxBubbleWidth: CGFloat { (rowWidth > 0 ? rowWidth : UIScreen.main.bounds.width) * 0.72 }
 
     /// The sending clock with its 0.8s grace window — see the `.sending` case above. The glyph is
     /// drawn at opacity 0 during the grace so the slot's size never shifts; `bornAt` anchors the

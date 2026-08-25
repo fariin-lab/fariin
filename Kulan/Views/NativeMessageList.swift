@@ -175,10 +175,21 @@ struct NativeMessageList: UIViewControllerRepresentable {
 /// is the point: the measurement has to stay identical to the render, and only the side effect goes.
 private struct MeasuringRowKey: EnvironmentKey { static let defaultValue = false }
 
+/// THE WIDTH THE ROW IS BEING LAID OUT AT, from the list, for anything in a row that sizes itself
+/// against "the width". `MessageBubble.maxBubbleWidth` used to read `UIScreen.main.bounds.width`,
+/// which equals the list on a phone and is wrong the moment the list is narrower than the screen
+/// (iPad multitasking, Stage Manager). Set identically on the sizer and on the cell, so measurement
+/// and render still agree; only the number they agree on is now the right one.
+private struct RowWidthKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+
 extension EnvironmentValues {
     var isMeasuringRow: Bool {
         get { self[MeasuringRowKey.self] }
         set { self[MeasuringRowKey.self] = newValue }
+    }
+    var rowWidth: CGFloat {
+        get { self[RowWidthKey.self] }
+        set { self[RowWidthKey.self] = newValue }
     }
 }
 
@@ -390,6 +401,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var datePillTop: NSLayoutConstraint!   // top constant grows by the pinned-bar height when pinned
     private var topOverlayHeight: CGFloat = 0
     private var composerBarH: CGFloat = 0
+    /// THE REFERENCE APP'S `lastKnownDistanceFromBottom`, and the whole answer to "what happens to the
+    /// reader when the geometry changes". Recorded whenever the reader (or one of our own scroll
+    /// intents) puts the list somewhere; consulted whenever an inset, the keyboard, the composer or the
+    /// safe area moves the bounds. Zero means "at the newest message", which is where a keyboard open
+    /// must keep them: the composer rides up, and the last bubble stays just above it.
+    ///
+    /// ⛔ THE LIST SLID UNDER THE KEYBOARD IN BUILD 674 — owner, 2026-08-25, screenshot. Un-inverting
+    /// moved the safe-area terms out of `updateInsets` (UIKit folds them correctly now), and with them
+    /// went the only thing that made that method NOTICE a keyboard: its early-return compared our two
+    /// contentInset values, which a keyboard does not change. The adjusted inset grew by 300pt, the
+    /// offset stayed, and the content sat under the keys. Reading the live "am I at the newest?" at that
+    /// moment is no good either, because the bound has already moved. A distance recorded BEFORE the
+    /// change is the only honest answer, which is exactly why theirs keeps one.
+    private var lastKnownDistanceFromBottom: CGFloat = 0
+    /// The adjusted inset `updateInsets` last acted on, so a safe-area change (keyboard, rotation) is
+    /// noticed even when our own two contentInset numbers did not move.
+    private var lastAdjustedInset: UIEdgeInsets = .zero
+
+    /// Record where the reader is, as a distance from the newest message. Cheap; called often.
+    private func recordDistanceFromBottom() {
+        guard didFirstLand else { return }
+        lastKnownDistanceFromBottom = max(0, maxContentOffsetY - collectionView.contentOffset.y)
+    }
     private let dateLabel = UILabel()
     private var dateFadeWork: DispatchWorkItem?
     private var lastDateId: String?
@@ -582,6 +616,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             cell.contentConfiguration = UIHostingConfiguration {
                 content
                     .frame(width: hostW > 0 ? hostW : nil)
+                    .environment(\.rowWidth, hostW)   // same number the sizer measured with
                     .background(GeometryReader { g in
                         Color.clear.preference(key: RowHeightKey.self, value: g.size.height)
                     })
@@ -659,7 +694,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // `.isMeasuringRow` mutes the row's visibility side effects for this pass; see the key's note.
         // It changes nothing about layout, so the measurement stays identical to the render.
         sizer.rootView = AnyView(coordinator.parent.row(id).frame(width: width)
-            .environment(\.isMeasuringRow, true))
+            .environment(\.isMeasuringRow, true)
+            .environment(\.rowWidth, width))
         let size = sizer.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude))
         return ceil(size.height)
     }
@@ -935,6 +971,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             }
         } else {
             collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+            recordDistanceFromBottom()
         }
     }
 
@@ -1019,6 +1056,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // ⚠️ AFTER the flags are cleared, never before: `clampToNewestIfBeyond` stands down while
         // either animation flag is set, so calling it any earlier is a no-op.
         clampToNewestIfBeyond()
+        recordDistanceFromBottom()   // a glide or jump has landed; this is where the reader now is
         settleFlush()
         autoLoadMoreIfNeeded()
     }
@@ -1505,6 +1543,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         collectionView.layoutIfNeeded()
         didFirstLand = true
         perform(.initialPosition)
+        recordDistanceFromBottom()
+        lastAdjustedInset = collectionView.adjustedContentInset
         DispatchQueue.main.async { [weak self] in self?.reveal() }
     }
 
@@ -1592,14 +1632,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         let top = topOverlayHeight
         let bottom = composerBarH + 12
-        guard abs(collectionView.contentInset.top - top) > 0.5
-                || abs(collectionView.contentInset.bottom - bottom) > 0.5 else { return }
-        let wasAtNewest = isAtNewest
-        let stash = collectionView.contentOffset
-        collectionView.contentInset.top = top
-        collectionView.contentInset.bottom = bottom
-        collectionView.verticalScrollIndicatorInsets.top = top
-        collectionView.verticalScrollIndicatorInsets.bottom = bottom
+        let insetsChanged = abs(collectionView.contentInset.top - top) > 0.5
+            || abs(collectionView.contentInset.bottom - bottom) > 0.5
+        if insetsChanged {
+            collectionView.contentInset.top = top
+            collectionView.contentInset.bottom = bottom
+            collectionView.verticalScrollIndicatorInsets.top = top
+            collectionView.verticalScrollIndicatorInsets.bottom = bottom
+        }
+        // The keyboard and the safe area reach this method through the ADJUSTED inset, not through
+        // ours. Compare against what we last acted on, or a keyboard opening is invisible here (674).
+        let adjusted = collectionView.adjustedContentInset
+        let adjustedChanged = abs(adjusted.top - lastAdjustedInset.top) > 0.5
+            || abs(adjusted.bottom - lastAdjustedInset.bottom) > 0.5
+        guard insetsChanged || adjustedChanged else { return }
+        lastAdjustedInset = adjusted
         // While the list is moving, UIKit is already compensating for the range change on the finger's or
         // the fling's behalf. A write from us here would fight it, and a write LATER â€” which is what the
         // old deferred inset update did â€” lands as a visible jump the moment the user lets go. Do neither:
@@ -1621,17 +1668,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // the inset above is the new one, so it settles against the right number instead of a stale one.
         guard !listIsMoving, !keyboardAnimating, didFirstLand,
               !sendAnimating, !programmaticScrollAnimating else { return }
+        // THE REFERENCE APP'S RULE, verbatim in intent: "If we were scrolled to the bottom, don't do any
+        // fancy math. Just stay at the bottom." Otherwise keep the reader the same distance from the
+        // bottom they were before the geometry moved. One rule for the keyboard, the composer growing
+        // while typing, the pinned bar appearing, and rotation. The distance was recorded BEFORE the
+        // change (see `lastKnownDistanceFromBottom`), so it does not depend on a bound that has moved.
         UIView.performWithoutAnimation {
-            if wasAtNewest {
-                // Follow the clearance: the newest message stays exactly above the composer.
-                collectionView.layoutIfNeeded()   // contentSize must be current before the bound is read
-                collectionView.setContentOffset(CGPoint(x: 0, y: maxContentOffsetY), animated: false)
-            } else if collectionView.contentOffset != stash {
-                // A reader in history must not move at all. Changing an inset can make UIScrollView move
-                // the offset on its own; put it back, and only when it actually did (an unconditional
-                // write here is a second offset write per call, and at the end of a drag it kills
-                // residual velocity).
-                collectionView.setContentOffset(stash, animated: false)
+            collectionView.layoutIfNeeded()   // contentSize must be current before the bound is read
+            let want = lastKnownDistanceFromBottom <= 5
+                ? maxContentOffsetY
+                : clampOffset(maxContentOffsetY - lastKnownDistanceFromBottom)
+            if abs(collectionView.contentOffset.y - want) > 0.5 {
+                collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
             }
         }
     }
@@ -1719,9 +1767,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         //     genuinely scrolled up sits far beyond the 44pt neighbourhood. The loose test is the
         //     readable signal there.
         if note.name == UIResponder.keyboardWillHideNotification {
-            keyboardWasAtNewest = collectionView.isTracking || collectionView.isDecelerating
-                ? collectionView.contentOffset.y >= maxContentOffsetY - 44
-                : isAtNewest
+            // The recorded distance, not a live test: by the time this fires the bound may already
+            // have moved. 44 is the loose neighbourhood a dismiss drag can pull the reader into.
+            keyboardWasAtNewest = lastKnownDistanceFromBottom <= 44
             keyboardClosing = true   // the glue in viewDidLayoutSubviews runs until didHide
         } else {
             keyboardClosing = false  // reopened mid-close — stop gluing, the open owns it now
@@ -2330,7 +2378,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard !ignoringScrollEvents else { return }
         // The finger has left. If the keyboard shrank the inset out from under a reader who was at the
         // newest message (interactive dismissal), this is the first honest moment to put them back.
-        if !decelerate { consumeKeyboardSettleIfPending(); clampToNewestIfBeyond(); settleFlush() }
+        if !decelerate { consumeKeyboardSettleIfPending(); clampToNewestIfBeyond(); recordDistanceFromBottom(); settleFlush() }
         // The lift is the moment a jump asked for mid-drag becomes allowed. It runs whether the list
         // is about to coast or not: perform() kills the coast on its way past.
         if let animated = pendingNewestJump {
@@ -2340,7 +2388,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         guard !ignoringScrollEvents else { return }   // our own stop, not the reader's — see stopScrolling
-        consumeKeyboardSettleIfPending(); clampToNewestIfBeyond(); settleFlush()
+        consumeKeyboardSettleIfPending(); clampToNewestIfBeyond(); recordDistanceFromBottom(); settleFlush()
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -2358,6 +2406,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if Date() < captureFreezeUntil { return }
         if scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating {
             lastStableOffset = scrollView.contentOffset.y
+            recordDistanceFromBottom()   // the reader is choosing a position; remember it
             userScrolledSinceTimer = true
             // Topmost visible row, for the floating date pill.
             let top = viewportIndexPaths().first.flatMap { dataSource.itemIdentifier(for: $0) }
