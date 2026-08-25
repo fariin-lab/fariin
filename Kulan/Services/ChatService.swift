@@ -492,16 +492,20 @@ enum ChatService {
 
     /// A system-event message: PLAINTEXT (membership/rename events aren't private content),
     /// shown centered in the thread. Also updates the chat-list preview.
-    private static func writeSystemMessage(cid: String, text: String) async throws {
+    /// `extra` rides on the message document beside the text, for notices that carry a value the
+    /// reader's phone needs in order to word the line itself.
+    private static func writeSystemMessage(cid: String, text: String, extra: [String: Any] = [:]) async throws {
         let convRef = db.collection("conversations").document(cid)
         let msgRef = convRef.collection("messages").document()
         let batch = db.batch()
-        batch.setData([
+        var doc: [String: Any] = [
             "text": text,
             "authorId": uid,
             "type": "system",
             "createdAt": FieldValue.serverTimestamp(),
-        ], forDocument: msgRef)
+        ]
+        doc.merge(extra) { _, new in new }
+        batch.setData(doc, forDocument: msgRef)
         batch.updateData([
             "lastMessage": text,
             "lastSender": uid,
@@ -2467,10 +2471,14 @@ enum ChatService {
         guard current != seconds else { return }   // no change → no write, no duplicate notice
         try? await ref.setData(["disappearSeconds": seconds], merge: true)
         let name = await MainActor.run { ProfileStore.shared.me?.name ?? "Someone" }
+        // ⛔ "<name> set disappearing message time to 1 week." — owner, 2026-08-25, replacing
+        // "turned on disappearing messages (8 hours)". This string is what the chat LIST shows and
+        // what an older build renders; the chat itself re-words it per reader from
+        // `disappearSeconds` (see `ThreadView.systemRow`), which is why the value travels too.
         let text = seconds > 0
-            ? "\(name) turned on disappearing messages (\(disappearLabel(seconds)))"
-            : "\(name) turned off disappearing messages"
-        try? await writeSystemMessage(cid: cid, text: text)
+            ? "\(name) set disappearing message time to \(disappearLabel(seconds))."
+            : "\(name) turned off disappearing messages."
+        try? await writeSystemMessage(cid: cid, text: text, extra: ["disappearSeconds": seconds])
     }
 
     static func setBlocked(_ cid: String, _ value: Bool) async {

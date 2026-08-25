@@ -2355,6 +2355,11 @@ struct ThreadView: View {
     private func customMenuActions(for rowId: String) -> [CMAction] {
         guard let idx = repo.indexById[rowId], idx < repo.items.count else { return [] }
         let m = repo.items[idx]
+        // ⛔ A NOTICE HAS NO MENU — owner, 2026-08-25: the disappearing-timer badge could be
+        // long-pressed like a message. It is a line about the room, not a message in it; nothing on
+        // that menu (reply, forward, copy, delete) means anything for it. An empty list is what stops
+        // the press ripening: `beginCustomMenu` opens nothing when there is nothing to open.
+        guard !m.isSystem else { return [] }
         let mine = m.authorId == me
         let canPin = !isGroup || (conversation?.adminCan(me, .pinMessages) ?? false)
         let isPinned = repo.pinnedMessageIds.contains(m.id)
@@ -3897,11 +3902,25 @@ struct ThreadView: View {
     }
 
     private func systemRow(_ m: Message) -> some View {
-        Text(m.text)
+        systemText(m)
             .multilineTextAlignment(.center)
             .modifier(ChatNoticePill(dark: dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 6)
+    }
+
+    /// ⛔ "(icon) You set disappearing message time to 1 week." — owner, 2026-08-25. The timer notice
+    /// is worded HERE, per reader, from the value the writer attached: "You" when I set it, the
+    /// person's name when they did, the timer glyph in front. The stored sentence (with the writer's
+    /// name baked in) is still what the chat list and older builds show; every other system notice
+    /// still renders its stored text unchanged.
+    private func systemText(_ m: Message) -> Text {
+        guard let secs = m.disappearSeconds else { return Text(m.text) }
+        let who = personName(m.authorId)
+        let line = secs > 0
+            ? " \(who) set disappearing message time to \(ChatService.disappearLabel(secs))."
+            : " \(who) turned off disappearing messages."
+        return Text(Image(systemName: "timer")) + Text(line)
     }
 
     // DISPLAY-TIME guard for reply-quote snippets: quotes persisted BEFORE the safeText fix carry the

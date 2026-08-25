@@ -139,6 +139,10 @@ struct Message: Identifiable, Equatable, Codable {
     var callOutcome: String? = nil          // answered | missed | ringing/ongoing (live row) | declined (legacy, renders missed)
     var callVideo: Bool = false             // placed as a video call (older records default to voice)
     var callDuration: Int? = nil            // seconds (0 if not answered)
+    /// A disappearing-timer system notice carries the value it set (0 = turned off), so each phone
+    /// can word the line for its own reader ("You set…" / "<name> set…") instead of showing the
+    /// writer's baked-in sentence. nil on every other message, including older notices.
+    var disappearSeconds: Int? = nil
     var edited: Bool = false                // text was edited after sending
     /// Deleted for everyone. The document SURVIVES as a tombstone so both sides see that something
     /// was here and removed, the way the standard messengers do it, instead of a message silently
@@ -495,6 +499,7 @@ struct Message: Identifiable, Equatable, Codable {
         self.callOutcome = data["callOutcome"] as? String
         self.callVideo = data["callVideo"] as? Bool ?? false
         self.callDuration = (data["callDuration"] as? NSNumber)?.intValue
+        self.disappearSeconds = (data["disappearSeconds"] as? NSNumber)?.intValue
         self.edited = data["edited"] as? Bool ?? false
         self.deleted = data["deleted"] as? Bool ?? false
         self.forwarded = data["forwarded"] as? Bool ?? false
