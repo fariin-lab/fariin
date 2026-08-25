@@ -986,6 +986,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         scrollAnimationWatchdog?.invalidate()
         scrollAnimationWatchdog = nil
         programmaticScrollAnimating = false
+        // ⛔ THE GLIDE WAS AIMED BEFORE THE COMPOSER SHRANK — the other half of the long-message gap.
+        // `perform(.newest(animated:))` captures `minContentOffsetY` when it starts, and on a long
+        // send the composer collapses WHILE it is flying, which moves that bound. Landing on the old
+        // one is short of the newest message by exactly the height the composer gave back, which is
+        // the empty space he photographed. The clamp is already the app's stated invariant for this —
+        // at rest the reader is never beyond the newest — so the landing simply has to consult it.
+        //
+        // ⚠️ AFTER the flags are cleared, never before: `clampToNewestIfBeyond` stands down while
+        // either animation flag is set, so calling it any earlier is a no-op.
+        clampToNewestIfBeyond()
         settleFlush()
         autoLoadMoreIfNeeded()
     }
@@ -1642,7 +1652,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // old deferred inset update did â€” lands as a visible jump the moment the user lets go. Do neither:
         // the inset above has already landed, and only the offset work stands down.
         let listIsMoving = collectionView.isDragging || collectionView.isTracking || collectionView.isDecelerating
-        guard !listIsMoving, !keyboardAnimating, didFirstLand else { return }
+        // ⛔ AND A SEND GLIDE COUNTS AS MOVING — owner, 2026-08-25: sending a LONG message leaves "more
+        // space empty" above the composer; a short one is fine.
+        //
+        // ⚠️ THE LENGTH IS THE WHOLE CLUE. A short message does not change the composer's height, so
+        // `setComposerBarHeight` never fires and this method never runs during the send. A long one
+        // collapses the composer from several lines back to one, which fires it in the middle of the
+        // glide — and the glide is a PROGRAMMATIC animated scroll, which sets none of the three flags
+        // above. So `listIsMoving` was false, `isAtNewest` was false (the reader is mid-flight, not
+        // yet at the newest), and the `else` branch below wrote the pre-shrink offset back: the
+        // animation died where it stood and the clearance that had just shrunk was left as dead space.
+        //
+        // Standing down is correct rather than merely safe. The glide already knows where it is going,
+        // and `scrollViewDidEndScrollingAnimation` re-runs this the moment it lands — by which time
+        // the inset above is the new one, so it settles against the right number instead of a stale one.
+        guard !listIsMoving, !keyboardAnimating, didFirstLand,
+              !sendAnimating, !programmaticScrollAnimating else { return }
         UIView.performWithoutAnimation {
             if wasAtNewest {
                 // Follow the clearance: the newest message stays exactly above the composer.
