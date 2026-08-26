@@ -438,16 +438,16 @@ struct VideoApprovalView: View {
 
     private func exportTrimmed(url: URL, start: Double, end: Double) async -> URL? {
         let asset = AVURLAsset(url: url)
-        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else { return nil }
+        // Tracks loaded before the export is asked for — the build-695 crash, see the same helper
+        // in `MediaApprovalView` for the trace.
+        guard let tracks = try? await asset.load(.tracks), !tracks.isEmpty,
+              let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality)
+        else { return nil }
         let out = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
-        session.outputURL = out
-        session.outputFileType = .mp4
         session.timeRange = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 600),
                                         end: CMTime(seconds: end, preferredTimescale: 600))
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            session.exportAsynchronously { cont.resume() }
-        }
-        return session.status == .completed ? out : nil
+        do { try await session.export(to: out, as: .mp4) } catch { return nil }
+        return out
     }
 }
 

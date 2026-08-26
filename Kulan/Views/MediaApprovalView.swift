@@ -472,16 +472,21 @@ struct MediaApprovalView: View {
 
     private static func exportTrimmed(url: URL, start: Double, end: Double) async -> URL? {
         let asset = AVURLAsset(url: url)
-        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else { return nil }
+        // ⛔ THE TRACKS ARE LOADED BEFORE THE SESSION IS ASKED TO EXPORT. Crash on build 695, iOS 27
+        // beta, 2026-08-26 22:36: SIGSEGV at address 0 on a background task inside
+        // `exportAsynchronously` → `IsExportPresetCompatibleWithAssetAndOutputFileType` →
+        // `CFArrayGetCount`. The old call had the session load an unloaded asset's tracks itself,
+        // and a clip it cannot read came back as no array at all. Loading here turns that into a
+        // nil return (the caller then sends the untrimmed original), and `export(to:as:)` is the
+        // API every other export in the app already uses.
+        guard let tracks = try? await asset.load(.tracks), !tracks.isEmpty,
+              let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality)
+        else { return nil }
         let out = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
-        session.outputURL = out
-        session.outputFileType = .mp4
         session.timeRange = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 600),
                                         end: CMTime(seconds: end, preferredTimescale: 600))
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            session.exportAsynchronously { cont.resume() }
-        }
-        return session.status == .completed ? out : nil
+        do { try await session.export(to: out, as: .mp4) } catch { return nil }
+        return out
     }
 
     private func fmt(_ s: Double) -> String {
