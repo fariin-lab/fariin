@@ -72,8 +72,18 @@ service firebase.storage {
       // Different enough that it should work, not different enough to ship on a hunch: getting it
       // wrong breaks every photo, video and voice note in the app. It needs the Storage emulator
       // first. Until then create-only stands, which stops the vandalism but not the free storage.
+      // ⛔ 64 MB, UP FROM 25 (owner, 2026-08-25: long videos arrive as mush). 25 MB was not a
+      // storage rule so much as a quality rule: the exporter was told to make EVERY clip fit inside
+      // it, so a ten minute video was crushed to about 300 kbps. The client now targets a bitrate
+      // instead of a flat size (see `VideoTranscoder.prepare`), and it needs somewhere to put a long
+      // clip that is compressed sensibly rather than destroyed.
+      //
+      // ⚠️ AND IT RAISES WHAT AN ABUSER CAN PUSH PER REQUEST BY THE SAME TWO AND A HALF TIMES. The warning
+      // directly above still stands: this path does not check conversation membership, so the only
+      // things holding it are `resource == null` and this number. Whoever adds the membership check
+      // makes this cheaper; until then, do not raise it again.
       allow write: if request.auth != null
-        && request.resource.size < 25 * 1024 * 1024
+        && request.resource.size < 64 * 1024 * 1024
         && resource == null;
     }
 

@@ -1015,13 +1015,13 @@ service cloud.firestore {
                 && request.resource.data.get('type', '-') == 'text'
                 && !request.resource.data.keys().hasAny(
                      ['enc', 'imageUrl', 'videoUrl', 'thumbUrl', 'audioUrl', 'fileUrl', 'album',
-                      'fileName', 'fileSize', 'waveform', 'duration', 'blurhash', 'linkPreview',
-                      'poll', 'locationCard', 'contactCard', 'replyTo', 'reactions',
+                      'fileName', 'fileSize', 'waveform', 'duration', 'blurhash', 'thumb',
+                      'linkPreview', 'poll', 'locationCard', 'contactCard', 'replyTo', 'reactions',
                       'videoEnc', 'thumbEnc', 'viewOnce', 'mentions', 'forwarded'])
                 && request.resource.data.diff(resource.data).affectedKeys().hasOnly(
                      ['deleted', 'text', 'type', 'enc', 'imageUrl', 'videoUrl', 'thumbUrl',
                       'audioUrl', 'fileUrl', 'album', 'fileName', 'fileSize', 'waveform',
-                      'duration', 'blurhash', 'linkPreview', 'poll', 'locationCard',
+                      'duration', 'blurhash', 'thumb', 'linkPreview', 'poll', 'locationCard',
                       'contactCard', 'replyTo', 'reactions', 'videoEnc', 'thumbEnc',
                       'viewOnce', 'mentions', 'forwarded']))
             // LIVE CALL ROW (2026-08-12): a call record is created at ring time ("Ringing") and the

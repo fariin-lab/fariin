@@ -52,6 +52,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         Storage.storage().maxUploadRetryTime = 120
         Storage.storage().maxOperationRetryTime = 60   // downloadURL, delete, metadata
 
+        // Transfers the SYSTEM was still carrying for a process that no longer exists. Nobody is
+        // waiting on them and nothing will attach their result to a message, so they are cancelled
+        // rather than left to finish into storage we pay for. See `BackgroundUploader.adopt`.
+        if UploadEngine.backgroundEnabled { BackgroundUploader.shared.adopt() }
+
         // REAL on-disk offline persistence (the win the JS SDK couldn't do in Hermes).
         let settings = FirestoreSettings()
         settings.cacheSettings = PersistentCacheSettings()
@@ -102,6 +107,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
     func application(_ application: UIApplication,
                      didFailToRegisterForRemoteNotificationsWithError error: Error) {
         print("push: APNs registration failed:", error)
+    }
+
+    /// iOS finished carrying an upload while the app was not running and has woken it only to say
+    /// so. The handler MUST be called once the session has delivered its events, or the watchdog
+    /// kills the app — `BackgroundUploader` calls it from `urlSessionDidFinishEvents`.
+    func application(_ application: UIApplication,
+                     handleEventsForBackgroundURLSession identifier: String,
+                     completionHandler: @escaping () -> Void) {
+        guard identifier == BackgroundUploader.sessionIdentifier else { completionHandler(); return }
+        BackgroundUploader.shared.systemCompletionHandler = completionHandler
+        BackgroundUploader.shared.adopt()   // recreating the session is what delivers those events
     }
 
     // FCM rotation token → save it so the Cloud Function can target this device.

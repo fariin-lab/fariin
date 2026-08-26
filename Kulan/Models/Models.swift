@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import FirebaseFirestore
+import UIKit   // the inline thumbnail is decoded here, next to the field that carries it
 
 // Domain models. Field names match the existing Firestore schema EXACTLY so the
 // native client reads the same data the RN app writes (see MIGRATION.md).
@@ -91,6 +92,25 @@ struct ReplyRef: Equatable, Codable {
 // (its receipt is derived from the other person's lastRead instead).
 enum MessageSendState: Equatable { case sending, failed }
 
+/// Decoded inline thumbnails, held OUTSIDE the model.
+///
+/// `Message` is a struct that is copied constantly and re-parsed on every snapshot, and the bubble
+/// asks for its preview on every body evaluation. Decoding a base64 JPEG each of those times is
+/// pointless work on the main thread, and a stored `UIImage` would make every copy of the struct
+/// heavier. Keyed by `rowId` because that is the id a bubble keeps across the optimistic-to-real
+/// handover. NSCache, so memory pressure empties it and the next draw simply decodes again.
+enum InlineThumbCache {
+    private static let cache = NSCache<NSString, UIImage>()
+
+    static func image(id: String, base64: String?) -> UIImage? {
+        guard let base64, !base64.isEmpty else { return nil }
+        if let hit = cache.object(forKey: id as NSString) { return hit }
+        guard let data = Data(base64Encoded: base64), let img = UIImage(data: data) else { return nil }
+        cache.setObject(img, forKey: id as NSString)
+        return img
+    }
+}
+
 struct Message: Identifiable, Equatable, Codable {
     let id: String
     var authorId: String
@@ -133,6 +153,12 @@ struct Message: Identifiable, Equatable, Codable {
     var localFile: Bool = false             // optimistic file bubble shown before upload (no fileUrl yet)
     var width: Double? = nil                // image pixel size -> natural aspect ratio bubble
     var blurhash: String? = nil             // sealed BlurHash of the photo → instant blurred placeholder
+    /// THE PICTURE THAT NEEDS NO DOWNLOAD. A ~40px JPEG of the photo (or of a video's poster frame),
+    /// base64'd and sealed like the caption, riding INSIDE the message document. Under a kilobyte on
+    /// the wire, and it is on screen the instant the bubble is, with no URL, no fetch and no policy
+    /// to satisfy — owner, 2026-08-25: "when someone sends something I see nothing until it
+    /// downloads, only loading". See `ChatService.inlineThumb`.
+    var thumb: String? = nil
     var localMediaURL: String? = nil        // pending video/file payload persisted to tmp → retry can re-send the REAL bytes
     var height: Double? = nil
     var callerUid: String? = nil            // call record: who placed the call (viewer derives direction)
@@ -192,7 +218,19 @@ struct Message: Identifiable, Equatable, Codable {
     var isFile: Bool { type == "file" && (fileUrl?.isEmpty == false || localFile) }
     var isGif: Bool { type == "gif" && (imageUrl?.isEmpty == false) }   // public Giphy url (not E2EE)
     var isAlbum: Bool { type == "album" && (!album.isEmpty || !localAlbum.isEmpty) }
-    /// A photo whose bytes have not landed yet: draw the blurhash at the real aspect ratio, with a
+    /// WHAT TO DRAW BEFORE THE REAL BYTES EXIST, and every media bubble asks this one question
+    /// rather than each deciding for itself.
+    ///
+    /// The inline thumbnail wins when there is one: it is a real picture of the actual photo, and it
+    /// is already in this message. The blurhash is the fallback for everything sent before the
+    /// thumbnail existed, and for anything whose thumbnail did not unseal. Nil means neither, and a
+    /// plain fill is then the honest placeholder (a view-once photo publishes no preview at all, on
+    /// purpose).
+    var previewImage: UIImage? {
+        InlineThumbCache.image(id: rowId, base64: thumb) ?? blurhash.flatMap { BlurHash.decode($0) }
+    }
+
+    /// A photo whose bytes have not landed yet: draw the preview at the real aspect ratio, with a
     /// spinner. Only ever true on the RECEIVING side — the sender keeps showing their own local copy
     /// until the upload completes (see ThreadRepository.refreshItems).
     var isPendingImage: Bool { pendingMediaKind == "image" }
@@ -245,7 +283,7 @@ struct Message: Identifiable, Equatable, Codable {
         m.thumbUrl = nil; m.thumbEnc = nil
         m.fileName = nil; m.fileSize = nil
         m.duration = nil; m.waveform = []
-        m.width = nil; m.height = nil; m.blurhash = nil
+        m.width = nil; m.height = nil; m.blurhash = nil; m.thumb = nil
         m.album = []; m.localAlbum = []; m.localAlbumIsVideo = []
         m.linkPreview = nil
         m.replyTo = nil
@@ -443,7 +481,7 @@ struct Message: Identifiable, Equatable, Codable {
         case imageUrl, audioUrl, videoUrl, thumbUrl, thumbEnc
         case fileUrl, fileName, fileSize, duration, waveform, enc
         case clientId, replyTo, reactions, mentions, viewOnce, album
-        case createdAt, width, blurhash, height
+        case createdAt, width, blurhash, thumb, height
         case callerUid, callOutcome, callVideo, callDuration
         case edited, deleted, forwarded, clientTs, linkPreview, hasServerTime, uploading, albumSizes
         // ⚠️ THE PATH TO A PENDING SEND'S OWN BYTES, and it has to persist or a failed voice note
@@ -476,6 +514,12 @@ struct Message: Identifiable, Equatable, Codable {
         if let bh = data["blurhash"] as? String, !bh.isEmpty {
             let clear = crypto.decrypt(bh, cid: cid, authorId: data["authorId"] as? String ?? "")
             self.blurhash = (clear.isEmpty || clear == "…" || clear == "🔒") ? nil : clear
+        }
+        // Sealed the same way, read the same way, and the same sentinels mean the same thing: an
+        // unreadable one is no thumbnail rather than a broken image.
+        if let th = data["thumb"] as? String, !th.isEmpty {
+            let clear = crypto.decrypt(th, cid: cid, authorId: data["authorId"] as? String ?? "")
+            self.thumb = (clear.isEmpty || clear == "…" || clear == "🔒") ? nil : clear
         }
         // The embedded link preview, sealed like the caption/blurhash. Sentinels (key not warm /
         // tampered) drop the whole card rather than rendering garbage.

@@ -29,8 +29,26 @@ enum Limits {
     //
     // If one of these changes, change storage.rules with it. A limit the client believes and the
     // server does not is worse than either number alone.
-    static let fileUploadBytes = 25 * 1024 * 1024                  // 25 MB — storage.rules chat/
-    static let videoMessageBytes = 25 * 1024 * 1024                // 25 MB — storage.rules chat/
+    static let fileUploadBytes = 25 * 1024 * 1024                  // 25 MB — deliberately BELOW the rule
+    /// ⛔ 100 MB (owner, 2026-08-25). The old 25 was doing two jobs and failing the second: it capped
+    /// storage AND, through `VideoTranscoder`'s flat `fileLengthLimit`, it decided quality — every
+    /// clip was squeezed to fit it, so a long one came out at roughly 300 kbps. The exporter targets
+    /// a bitrate now and this is only the ceiling it may not pass.
+    ///
+    /// ⚠️ `storage.rules` was raised to match and MUST be deployed with any build carrying this.
+    /// `fileUploadBytes` above stays at 25 on purpose: documents gain nothing from the room, and the
+    /// chat Storage rule still has no membership check, so a smaller client-side cap is worth having.
+    ///
+    /// ⛔ AND 64 IS WHY IT IS NOT 100 OR 2000. A video is held in memory THREE TIMES on its way out:
+    /// the transcoded `Data`, the byte array libsodium seals from, and the ciphertext that comes
+    /// back. At 64 MB that peak is around 200 MB, which an older phone survives; at 2 GB, which is
+    /// the number the reference app quotes, nothing here survives at all. Raising this further means
+    /// sealing the clip in chunks first (libsodium secretstream), not editing this line.
+    ///
+    /// For scale: most chat clips are under two minutes, which at the exporter's 2 Mbps target is
+    /// about 30 MB. 64 covers roughly three and a half minutes at full quality, and anything longer
+    /// degrades smoothly instead of failing.
+    static let videoMessageBytes = 64 * 1024 * 1024                // 64 MB — storage.rules chat/
     static let voiceNoteSeconds: TimeInterval = 30 * 60           // 30 min
     static let editWindowSeconds: TimeInterval = 15 * 60          // 15 min
     static let deleteForEveryoneSeconds: TimeInterval = 48 * 3600 // 48 h

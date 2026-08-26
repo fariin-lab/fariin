@@ -11,6 +11,12 @@ struct SecureImageView: View {
     let cid: String
     var fill: Bool = true
     var placeholderHash: String? = nil   // BlurHash → a real blurred preview instead of the gray shimmer
+    /// THE INLINE THUMBNAIL, already decoded. Beats the hash whenever there is one: it is an actual
+    /// small photo rather than a sketch of one, and it came inside the message, so it is ready
+    /// before this view has asked the network for anything. Callers pass `message.previewImage`,
+    /// which already resolves thumbnail-then-hash — the hash below stays for the places that have
+    /// only that (a message sent before the thumbnail existed).
+    var placeholderImage: UIImage? = nil
     // Chat photo bubbles pass true: the photos auto-download POLICY can hold the download
     // until tapped (blur + arrow shown). Everything already cached is untouched.
     var gated: Bool = false
@@ -41,10 +47,11 @@ struct SecureImageView: View {
             } else if failed {
                 Rectangle().fill(Color.gray.opacity(0.18))
                     .overlay { Image(systemName: "exclamationmark.triangle").foregroundStyle(.secondary) }
-            } else if let hash = placeholderHash, let blur = BlurHash.decode(hash) {
-                // Placeholder chain: a recognizable blur of the ACTUAL photo (decoded from the
-                // ~28-char hash that travels in the message) beats a gray skeleton while bytes download.
-                Image(uiImage: blur).resizable().scaledToFill()
+            } else if let preview = placeholderImage ?? placeholderHash.flatMap({ BlurHash.decode($0) }) {
+                // Placeholder chain, best first: the inline thumbnail is a real (tiny) photo carried
+                // inside the message, and the blurhash is a ~28-char sketch of one. Either beats a
+                // grey skeleton while the bytes download.
+                Image(uiImage: preview).resizable().scaledToFill()
                     .overlay { if waitingTap { downloadBadge } }
             } else if waitingTap {
                 Rectangle().fill(Color.gray.opacity(0.18)).overlay { downloadBadge }

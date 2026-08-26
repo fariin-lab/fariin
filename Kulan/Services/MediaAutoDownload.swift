@@ -13,11 +13,26 @@ final class NetworkState {
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
-            self?.isWifi = path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet)
-            self?.isOnline = path.status == .satisfied
+            guard let self else { return }
+            let wasOnline = self.isOnline
+            self.isWifi = path.usesInterfaceType(.wifi) || path.usesInterfaceType(.wiredEthernet)
+            self.isOnline = path.status == .satisfied
+            // THE MOMENT THE SIGNAL COMES BACK, and it is announced rather than polled. A send that
+            // died on a dropped connection has no way of knowing the line is up again, so it sat
+            // there saying "Not delivered" until somebody tapped it — on a phone in a place where
+            // the connection drops several times an hour, that is most sends (owner, 2026-08-25:
+            // "every corner, even bad network").
+            if !wasOnline, self.isOnline {
+                DispatchQueue.main.async { NotificationCenter.default.post(name: .networkCameBack, object: nil) }
+            }
         }
         monitor.start(queue: DispatchQueue(label: "NetworkState"))
     }
+}
+
+extension Notification.Name {
+    /// Offline → online. Posted on the main queue, so a view may act on it directly.
+    static let networkCameBack = Notification.Name("kulan.networkCameBack")
 }
 
 // Media auto-download policies (Settings > Storage and Data), honored for real:

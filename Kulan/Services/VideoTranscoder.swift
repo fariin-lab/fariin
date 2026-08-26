@@ -175,8 +175,29 @@ enum VideoTranscoder {
         // as far as it must to obey. A video can now be long, 60fps, portrait, HDR, whatever it
         // likes, and the export still fits.
         //
-        // The margin covers AVFoundation overshooting slightly and the few bytes encryption adds.
-        session.fileLengthLimit = Int64(Limits.videoMessageBytes - 2 * 1024 * 1024)
+        // ⛔ AND THE TARGET FOLLOWS THE LENGTH NOW, INSTEAD OF BEING ONE FLAT NUMBER (owner,
+        // 2026-08-25: "does it shrink less over there, mine looks bad").
+        //
+        // A single ceiling for every clip gets BOTH ends wrong, and it did:
+        //   · his 18 second clip came out at 19 MB — about 8 Mbps at 540p, which is three to four
+        //     times what that resolution needs. The recipient paid for every one of those megabytes,
+        //     on data this app's own notes say we must assume is expensive.
+        //   · a ten minute clip was crushed into the same 23 MB, roughly 300 kbps, which is mush.
+        // Same number, opposite failures, because file size is not a quality setting.
+        //
+        // So: a BITRATE, which is what quality actually is, multiplied by the length. 2 Mbps at 540p
+        // and 4 Mbps at 1080p are ordinary messenger numbers and hold up on a phone screen. His 18
+        // second clip becomes about 4.5 MB instead of 19 — better for him to send and four times
+        // cheaper for the person receiving it — while a ten minute clip gets 150 MB of room and is
+        // clamped to the ceiling below, landing near 1.3 Mbps instead of 300 kbps.
+        //
+        // The ceiling is still absolute: Storage refuses anything over it, so the clamp is what keeps
+        // a very long clip sendable at all. The 2 MB margin covers AVFoundation overshooting slightly
+        // and the few bytes encryption adds.
+        let bytesPerSecond: Double = hd ? 500_000 : 250_000        // ≈ 4 Mbps / 2 Mbps, audio included
+        let ceiling = Int64(Limits.videoMessageBytes - 2 * 1024 * 1024)
+        let wanted = Int64(max(1, duration) * bytesPerSecond)
+        session.fileLengthLimit = min(ceiling, wanted)
         // STRIP THE METADATA. An iPhone recording carries the GPS coordinates it was taken at, the
         // device model and the original timestamps, and we were passing all of it straight through.
         // The clip is end-to-end encrypted so the server never sees any of it — but the person

@@ -42,6 +42,12 @@ final class MediaSend: ObservableObject {
 
     func register(_ clientId: String, _ task: Task<Void, Error>) { sendTasks[clientId] = task }
 
+    /// Is a send for this clientId running in THIS process right now? Asked by the stuck-send sweep,
+    /// which must never delete a message whose upload is simply taking a long time. False after a
+    /// relaunch by definition: the task died with the process, which is exactly the case the sweep
+    /// exists to clean up.
+    func isInFlight(_ clientId: String) -> Bool { sendTasks[clientId] != nil }
+
     /// Cancel the whole send: the outer task AND every item upload currently in flight under it.
     /// Both matter — cancelling only the outer task would leave the current item's own child task
     /// running (an unstructured Task does not inherit its awaiter's cancellation).

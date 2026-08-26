@@ -188,12 +188,30 @@ enum ChatService {
                     // the chunk size to LLONG_MAX, so nothing is ever chunked and a dropped upload
                     // starts over — a ring left at 80% while the bytes go again would be a lie.
                     if let progressId, attempt > 0 { await UploadProgress.shared.reset(progressId) }
+                    // THE SWITCH, AND IT SHIPS OFF. `BackgroundUploader` hands the file to iOS, so
+                    // the transfer survives leaving the app and a broken connection resumes from
+                    // where it stopped instead of from zero — the two things this loop cannot fix by
+                    // trying harder. It is new code on the path every photo, video, voice note and
+                    // document takes, and it could not be compiled or run where it was written, so
+                    // it is opt-in until a real phone has proved it. Settings → Storage and Data.
+                    if UploadEngine.backgroundEnabled {
+                        return try await BackgroundUploader.shared.upload(file: tmp, to: path,
+                                                                          contentType: contentType,
+                                                                          progressId: progressId)
+                    }
                     try await putFileReportingProgress(ref, from: tmp, metadata: meta, progressId: progressId)
                     return try await ref.downloadURL().absoluteString
                 } catch {
                     attempt += 1
-                    guard attempt < 4, !Task.isCancelled, isRetryableUpload(error) else { throw error }
-                    await Backoff.sleep(attempt: attempt, base: 2, cap: 30)
+                    // ⛔ SIX, NOT FOUR, AND A MINUTE OF PATIENCE (owner, 2026-08-25: "every corner,
+                    // even bad network"). Four tries over about half a minute is tuned for a
+                    // connection that hiccups. On a phone that loses signal for a minute at a time it
+                    // simply runs out of attempts and hands back a red bubble, and the person is then
+                    // waiting on a finger. Six tries reach roughly two minutes, which covers a lift,
+                    // a tunnel or a cell handover — and `autoRetryFailedMedia` picks up whatever is
+                    // still failing after that, the moment the signal is genuinely back.
+                    guard attempt < 6, !Task.isCancelled, isRetryableUpload(error) else { throw error }
+                    await Backoff.sleep(attempt: attempt, base: 2, cap: 60)
                 }
             }
         }
@@ -698,6 +716,34 @@ enum ChatService {
                          : downscaledJPEG(data)
     }
 
+    /// ⛔ THE PICTURE THAT TRAVELS WITH THE MESSAGE. About 40px on its long side at low quality is
+    /// 600 to 900 bytes of JPEG, so it fits inside the message document beside the caption and is on
+    /// the recipient's screen the instant the bubble is — no URL, no download, no auto-download
+    /// policy to satisfy. That is the whole of the owner's report (2026-08-25): a spinner on an empty
+    /// box until the full file lands.
+    ///
+    /// The reference goes one further and strips the JPEG's header off the wire, rebuilding it on the
+    /// phone, which saves a few hundred more bytes. Not copied: sealed and base64'd this is around a
+    /// kilobyte either way, and a hand-rebuilt header is a decode failure waiting to happen.
+    ///
+    /// Rebuilt from raw pixels like every other send path here, so the camera's metadata does not
+    /// ride along inside the preview.
+    static func inlineThumb(_ data: Data, maxDimension: CGFloat = 40) -> String? {
+        guard let img = UIImage(data: data) else { return nil }
+        let longest = max(img.size.width, img.size.height)
+        guard longest > 0 else { return nil }
+        let scale = min(1, maxDimension / longest)
+        let size = CGSize(width: max(1, (img.size.width * scale).rounded()),
+                          height: max(1, (img.size.height * scale).rounded()))
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1        // 40 POINTS would be 120 pixels on a 3x phone, and three times the bytes
+        format.opaque = true    // no alpha channel: this is a JPEG and a photo has no transparency
+        let small = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            img.draw(in: CGRect(origin: .zero, size: size))
+        }
+        return small.jpegData(compressionQuality: 0.45)?.base64EncodedString()
+    }
+
     static func downscaledJPEG(_ data: Data, maxDimension: CGFloat = 1600, quality: CGFloat = 0.72) -> Data {
         // The three `?? data` fallbacks used to hand back the ORIGINAL FILE. Photos are normally
         // rebuilt from raw pixels here, which drops the camera's metadata as a side effect — but on
@@ -855,6 +901,15 @@ enum ChatService {
                 ? (try? await Crypto.shared.encryptForGroup(hash, members: members!))
                 : (try? await Crypto.shared.encryptForConversation(cid, hash))
         }
+        // And the real one. Same moment, same seal, same reason as the blurhash above — this is just
+        // a picture instead of a sketch of one. A view-once photo publishes neither: both are a copy
+        // the recipient would keep after the single view is spent.
+        var thumbSealed: String?
+        if !viewOnce, let tiny = inlineThumb(data) {
+            thumbSealed = members != nil
+                ? (try? await Crypto.shared.encryptForGroup(tiny, members: members!))
+                : (try? await Crypto.shared.encryptForConversation(cid, tiny))
+        }
 
         // ⛔ THE MESSAGE IS WRITTEN NOW, BEFORE THE UPLOAD IS COLLECTED.
         //
@@ -887,6 +942,7 @@ enum ChatService {
         }
         // Sealed above, while the upload was in flight.
         if let blurSealed, !blurSealed.isEmpty { imgMsg["blurhash"] = blurSealed }
+        if let thumbSealed, !thumbSealed.isEmpty { imgMsg["thumb"] = thumbSealed }
         batch.setData(imgMsg, forDocument: msgRef)
         // A VIEW-ONCE photo publishes NO thumbnail to the conversation doc (audit): lastImageUrl +
         // lastImageEnc are a decryptable copy both sides keep forever, and the chat list rendered it
@@ -1056,6 +1112,14 @@ enum ChatService {
                 ? (try? await Crypto.shared.encryptForGroup(hash, members: members!))
                 : (try? await Crypto.shared.encryptForConversation(cid, hash))
             if let sealed, !sealed.isEmpty { msg["blurhash"] = sealed }
+        }
+        // The same first tile as a real picture instead of a sketch — one per message, matching the
+        // model, and drawn on the grid's first cell while every tile's bytes are still coming.
+        if let firstData = images.first, let tiny = inlineThumb(firstData) {
+            let sealed = members != nil
+                ? (try? await Crypto.shared.encryptForGroup(tiny, members: members!))
+                : (try? await Crypto.shared.encryptForConversation(cid, tiny))
+            if let sealed, !sealed.isEmpty { msg["thumb"] = sealed }
         }
         if let clientId { msg["clientId"] = clientId }
         // The LAST moment Cancel can win. Without this, a Cancel that lands while the caption is
@@ -1281,6 +1345,14 @@ enum ChatService {
                 : (try? await Crypto.shared.encryptForConversation(cid, hash))
             if let sealed, !sealed.isEmpty { msg["blurhash"] = sealed }
         }
+        // And as a picture. `firstTile` is already a photo or a video's poster, so one call covers
+        // a mixed album the same way the hash above does.
+        if let firstTile, let tiny = inlineThumb(firstTile) {
+            let sealed = members != nil
+                ? (try? await Crypto.shared.encryptForGroup(tiny, members: members!))
+                : (try? await Crypto.shared.encryptForConversation(cid, tiny))
+            if let sealed, !sealed.isEmpty { msg["thumb"] = sealed }
+        }
         if let clientId { msg["clientId"] = clientId }
         if forwarded { msg["forwarded"] = true }
         // The LAST moment Cancel can win — same line, same reason as sendAlbum's.
@@ -1398,6 +1470,145 @@ enum ChatService {
     /// AND its thumbnail are sealed separately; the server stores only ciphertext. The
     /// thumbnail rides on the message (and the chat-list preview) so bubbles render
     /// instantly without downloading the video.
+    /// PHASE ONE OF A VIDEO SEND: the message, written before the clip it describes even exists.
+    ///
+    /// ⛔ WHY THIS IS SPLIT OFF FROM `sendVideo` (owner, 2026-08-25: "when someone sends something I
+    /// see nothing until it downloads"). A video is TRANSCODED before it can be sent, and he timed
+    /// that at 3.88 seconds on an eighteen second clip. `sendVideo` cannot be called until the
+    /// transcode finishes, so for those seconds the RECIPIENT had nothing whatsoever — no bubble, no
+    /// poster, no progress. The sender's own optimistic bubble hid that from the person sending.
+    ///
+    /// Everything the recipient needs to draw the real bubble exists BEFORE the transcode starts: the
+    /// poster frame, the duration, the pixel size, the caption, the inline thumbnail. So it all goes
+    /// out here, and `attachVideo` hangs the clip on it afterwards. That is the same two-phase shape
+    /// `sendImage` has used since 2026-08-16, through the same rules branch.
+    ///
+    /// ⚠️ THE MESSAGE HAS NO `enc` UNTIL PHASE TWO. `enc` on a video message is the CLIP's seal, and
+    /// there is no clip yet. `pendingMediaKind` keys on a missing `videoUrl`, not on `enc`, so the
+    /// bubble is correct in the gap.
+    ///
+    /// Returns the message id, which `attachVideo` needs. A send that dies between the two phases
+    /// must call `cancelAnnounced`, or the recipient is left with a bubble that never fills.
+    static func announceVideo(cid: String, poster: Data, duration: Double, width: Double, height: Double,
+                              caption: String = "", clientId: String? = nil, group: [String]? = nil,
+                              forwarded: Bool = false) async throws -> String {
+        let clientTs = Date().timeIntervalSince1970 * 1000   // when SEND was tapped, not when it landed
+        var members = group
+        if members == nil, !cid.contains("_") {
+            let snap = try? await db.collection("conversations").document(cid).getDocument()
+            members = snap?.data()?["users"] as? [String]
+        }
+        var captionCipher = ""
+        let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedCaption.isEmpty {
+            if let m = members { captionCipher = (try? await Crypto.shared.encryptForGroup(trimmedCaption, members: m)) ?? "" }
+            else { captionCipher = (try? await Crypto.shared.encryptForConversation(cid, trimmedCaption)) ?? "" }
+        }
+        let convRef = db.collection("conversations").document(cid)
+        let msgRef = convRef.collection("messages").document()
+        var ensureConv: Task<Void, Error>?
+        let thCipher: Data, thMeta: EncMeta
+        if let members {
+            (thCipher, thMeta) = try await Crypto.shared.encryptBytesForGroup(poster, members: members)
+        } else {
+            (thCipher, thMeta) = try await Crypto.shared.encryptBytes(cid, poster)
+            let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
+            ensureConv = Task {
+                try await convRef.setData(["users": [uid, other],
+                                           "updatedAt": FieldValue.serverTimestamp()], merge: true)
+            }
+        }
+        // The poster is a few KB and it is the only upload standing between the tap and the bubble
+        // appearing on the other phone. The clip, which is the slow one, has not even been compressed
+        // yet — that runs while this is in flight.
+        let thumbUrl = try await uploadEncrypted(thCipher, to: "chat/\(cid)/\(msgRef.documentID).thumb.enc")
+        try await ensureConv?.value
+        // Seed the cache so the sender's optimistic bubble reconciles with no shimmer (photo parity).
+        if let ui = UIImage(data: poster) { DiskImageCache.shared.store(ui, for: thumbUrl, owned: true) }
+
+        var msg: [String: Any] = [
+            "type": "video",
+            "thumbUrl": thumbUrl, "thumbEnc": thMeta.asDict,
+            "duration": duration, "width": width, "height": height,
+            "text": captionCipher, "authorId": uid, "createdAt": FieldValue.serverTimestamp(),
+            "clientTs": clientTs, "uploading": true,
+        ]
+        if let posterImage = UIImage(data: poster), let hash = BlurHash.encode(posterImage) {
+            let sealed = members != nil
+                ? (try? await Crypto.shared.encryptForGroup(hash, members: members!))
+                : (try? await Crypto.shared.encryptForConversation(cid, hash))
+            if let sealed, !sealed.isEmpty { msg["blurhash"] = sealed }
+        }
+        // The picture that needs no download at all — see `inlineThumb`. It matters most here: even
+        // the poster above has to be fetched before it can be drawn, and this does not.
+        if let tiny = inlineThumb(poster) {
+            let sealed = members != nil
+                ? (try? await Crypto.shared.encryptForGroup(tiny, members: members!))
+                : (try? await Crypto.shared.encryptForConversation(cid, tiny))
+            if let sealed, !sealed.isEmpty { msg["thumb"] = sealed }
+        }
+        if let clientId { msg["clientId"] = clientId }
+        if forwarded { msg["forwarded"] = true }
+
+        let batch = db.batch()
+        batch.setData(msg, forDocument: msgRef)
+        var convUpdate: [String: Any] = [
+            "lastMessage": "🎥 Video · " + voiceDurationLabel(duration),
+            "lastImageUrl": thumbUrl,
+            "lastImageEnc": thMeta.asDict,
+            "lastSender": uid,
+            "updatedAt": FieldValue.serverTimestamp(),
+        ]
+        if let members {
+            for m in members where m != uid { convUpdate["unreadCount.\(m)"] = FieldValue.increment(Int64(1)) }
+        } else {
+            let other = cid.split(separator: "_").map(String.init).first { $0 != uid } ?? ""
+            convUpdate["unreadCount.\(other)"] = FieldValue.increment(Int64(1))
+        }
+        batch.updateData(convUpdate, forDocument: convRef)
+        try await batch.commit()
+        return msgRef.documentID
+    }
+
+    /// PHASE TWO: the clip itself, sealed and uploaded, hung on the message `announceVideo` wrote.
+    /// The recipient has been looking at that bubble, with its real picture in it, for the whole of
+    /// the transcode and this upload.
+    static func attachVideo(cid: String, messageId: String, video: Data,
+                            clientId: String? = nil, group: [String]? = nil) async throws {
+        var members = group
+        if members == nil, !cid.contains("_") {
+            let snap = try? await db.collection("conversations").document(cid).getDocument()
+            members = snap?.data()?["users"] as? [String]
+        }
+        let msgRef = db.collection("conversations").document(cid).collection("messages").document(messageId)
+        // Mailman model: the SENDER's copy lives on their own device from day one — the server object
+        // exists only to deliver, and the recipient deletes it on pickup. Stored before the upload so
+        // it survives a send that never completes.
+        VideoCache.store(video, for: messageId)
+        let cipher: Data, meta: EncMeta
+        if let members {
+            (cipher, meta) = try await Crypto.shared.encryptBytesForGroup(video, members: members)
+        } else {
+            (cipher, meta) = try await Crypto.shared.encryptBytes(cid, video)
+        }
+        let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(messageId).mp4.enc", progressId: clientId)
+        // The clip has landed — the ring comes off here rather than when the message commits, the
+        // same reasoning the photo path spells out.
+        if let clientId { await MediaSend.shared.markItemDone(clientId) }
+        // `enc` rides along because phase one had no clip to seal. The rules' finish-an-upload branch
+        // names both fields.
+        try await attachMedia(["videoUrl": url, "enc": meta.asDict], to: msgRef)
+    }
+
+    /// A video announced but never delivered — the transcode failed, the clip was over the limit, the
+    /// upload died. Without this the recipient keeps a bubble that spins for ever. Hard delete, which
+    /// the rules allow the author of a message to do; the conversation row is left alone because the
+    /// next message rewrites it anyway.
+    static func cancelAnnounced(cid: String, messageId: String) async {
+        try? await db.collection("conversations").document(cid)
+            .collection("messages").document(messageId).delete()
+    }
+
     static func sendVideo(cid: String, video: Data, thumbnail: Data, duration: Double,
                           width: Double, height: Double, caption: String = "", clientId: String? = nil, group: [String]? = nil, forwarded: Bool = false) async throws {
         let clientTs = Date().timeIntervalSince1970 * 1000   // captured BEFORE the upload
@@ -1473,6 +1684,15 @@ enum ChatService {
                 ? (try? await Crypto.shared.encryptForGroup(hash, members: members!))
                 : (try? await Crypto.shared.encryptForConversation(cid, hash))
             if let sealed, !sealed.isEmpty { msg["blurhash"] = sealed }
+        }
+        // And the inline thumbnail, from that same poster. The poster above is a real file with a
+        // URL, so even the "instant" case still costs a download before anything is drawn. This one
+        // costs none: it IS the message.
+        if let tiny = inlineThumb(thumbnail) {
+            let sealed = members != nil
+                ? (try? await Crypto.shared.encryptForGroup(tiny, members: members!))
+                : (try? await Crypto.shared.encryptForConversation(cid, tiny))
+            if let sealed, !sealed.isEmpty { msg["thumb"] = sealed }
         }
         if let clientId { msg["clientId"] = clientId }
         if forwarded { msg["forwarded"] = true }

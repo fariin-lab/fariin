@@ -13,6 +13,9 @@ struct StorageDataView: View {
     @AppStorage("autodl.documents") private var pDocs = AutoDownloadPrefs.Kind.documents.defaultPolicy
     @AppStorage("sentMediaQuality") private var quality = "standard"
     @AppStorage("calls.lessData") private var lessData = "never"
+    /// ⚠️ THE SAME KEY `UploadEngine` READS, spelled out because that lives in a service with no
+    /// business importing SwiftUI. If either changes, change both.
+    @AppStorage("upload.background.enabled") private var backgroundUploads = false
 
     /// Nothing to reset. Same rule the owner asked for on Notifications ("the Reset text is always
     /// red, even when all settings are already at their default values") — this row was the other
@@ -70,6 +73,23 @@ struct StorageDataView: View {
                 Text("Sent Media")
             } footer: {
                 Text("Choose the quality you send photos and videos.")
+            }
+
+            // ⛔ A SWITCH, NOT A SHIPPED DEFAULT (owner, 2026-08-25). `BackgroundUploader` is new
+            // code on the path every photo, video, voice note and document takes, and it could not
+            // be compiled or run on the machine it was written on. Off by default means a wrong
+            // detail in it cannot stop media sending for everyone; flipping it here costs a tap
+            // instead of a forty minute build, and flipping it back is just as cheap.
+            //
+            // Once a real phone has sent a photo, left the app mid-video and had it arrive, this
+            // stops being a setting and becomes the only path — and this Section is deleted.
+            Section {
+                Toggle("Keep uploading in the background", isOn: $backgroundUploads)
+                    .onChange(of: backgroundUploads) { _, on in UploadEngine.backgroundEnabled = on }
+            } header: {
+                Text("Uploads (testing)")
+            } footer: {
+                Text("Hands photos and videos to iOS instead of sending them inside the app, so leaving Fariin mid-send no longer cancels them and a dropped connection continues where it stopped. Turn it off if anything stops sending.")
             }
 
             Section {
