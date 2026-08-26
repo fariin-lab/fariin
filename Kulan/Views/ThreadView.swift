@@ -1373,21 +1373,10 @@ struct ThreadView: View {
             let resolved = list.first { $0.id == cid }   // O(n) ONCE per change, not per render
             if resolved != cachedConv { cachedConv = resolved }
         }
-        // The signal came back. Everything that failed on the way down gets one more go, without
-        // anybody having to notice it failed. See `autoRetryFailedMedia`.
-        .onReceive(NotificationCenter.default.publisher(for: .networkCameBack)) { _ in
-            autoRetried.removeAll()
-            autoRetryFailedMedia()
-        }
-        // ⚠️ NOT IN `onAppear`. The pendings are restored by `repo.start()`, which is asynchronous —
-        // a sweep on the way in reads an empty list and finds nothing to retry. This waits for the
-        // conversation to actually have contents and then runs ONCE, which is what `sweptOnOpen`
-        // guards. The count changes constantly; the guard exits on the first word.
-        .onChange(of: repo.items.count) { _, _ in
-            guard !sweptOnOpen, !repo.items.isEmpty else { return }
-            sweptOnOpen = true
-            autoRetryFailedMedia()
-        }
+        // Both retry triggers, as ONE modifier taking two method references — see `RetrySweep`.
+        .modifier(RetrySweep(itemCount: repo.items.count,
+                             onNetworkBack: signalReturned,
+                             onFirstLoad: sweepOnFirstLoad))
         .onAppear {
             cachedConv = ConversationsRepository.shared.conversations.first { $0.id == cid }
             repo.start()
@@ -3519,6 +3508,22 @@ struct ThreadView: View {
             return
         }
         repo.hideForMe(m.id)
+    }
+
+    /// The signal came back: everything that failed on the way down gets one more go, without
+    /// anybody having to notice it failed.
+    private func signalReturned() {
+        autoRetried.removeAll()
+        autoRetryFailedMedia()
+    }
+
+    /// ⚠️ NOT `onAppear`. The pendings are restored by `repo.start()`, which is asynchronous, so a
+    /// sweep on the way in reads an empty list and finds nothing to retry. This waits for the
+    /// conversation to actually have contents and then runs once.
+    private func sweepOnFirstLoad() {
+        guard !sweptOnOpen, !repo.items.isEmpty else { return }
+        sweptOnOpen = true
+        autoRetryFailedMedia()
     }
 
     /// ⛔ A FAILED MEDIA SEND NOW RETRIES ITSELF (owner, 2026-08-25: "every corner, even bad
@@ -7934,6 +7939,27 @@ private struct ReplyStoryAnchor: ViewModifier {
 // "Recording a voice note" indicator: received-style bubble, accent mic + three sound bars rising
 // and falling in turn. Our own design (owner's rule: study the references, then draw our own) —
 // the bars say "sound", where the dots would have said "typing".
+/// ⛔ THE RETRY WIRING LIVES OUT HERE BECAUSE `body` HAS NO ROOM LEFT.
+///
+/// Two plain modifiers — an `onReceive` and an `onChange` — appended to ThreadView's body chain were
+/// enough to tip it over: "the compiler is unable to type-check this expression in reasonable time"
+/// (build 32919542500). That chain is already at the budget, which is why the file resets complexity
+/// with `AnyView` boundaries elsewhere and why `chatListRow` was extracted from its own call site.
+///
+/// One modifier taking two METHOD REFERENCES costs the type-checker almost nothing: the closures are
+/// not inline expressions any more, they are named functions on the view.
+private struct RetrySweep: ViewModifier {
+    let itemCount: Int
+    let onNetworkBack: () -> Void
+    let onFirstLoad: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .networkCameBack)) { _ in onNetworkBack() }
+            .onChange(of: itemCount) { _, _ in onFirstLoad() }
+    }
+}
+
 struct RecordingBubble: View {
     let dark: Bool
     @State private var animating = false
