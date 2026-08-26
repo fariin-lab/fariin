@@ -27,12 +27,17 @@ final class RowImageView: UIImageView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(url: String?, enc: EncMeta?, cid: String, cornerRadius: CGFloat = 0) {
+    /// `placeholder` is what to draw while the real bytes are still coming: the inline thumbnail
+    /// that travelled inside the message, or the blurhash behind it. Either beats a grey box, and
+    /// the inline thumb beats the hash because it is an actual (tiny) photo rather than a sketch of
+    /// one — and it is already in hand, before anything has been asked of the network.
+    func configure(url: String?, enc: EncMeta?, cid: String,
+                   cornerRadius: CGFloat = 0, placeholder: UIImage? = nil) {
         layer.cornerRadius = cornerRadius
         layer.cornerCurve = .continuous
         token += 1
         let mine = token
-        guard let url, !url.isEmpty else { currentUrl = nil; image = nil; return }
+        guard let url, !url.isEmpty else { currentUrl = nil; image = placeholder; return }
         guard url != currentUrl || image == nil else { return }   // same photo, already drawn
         currentUrl = url
 
@@ -41,7 +46,7 @@ final class RowImageView: UIImageView {
         // Small images opt into the synchronous DISK read: memory is empty on every launch, so a
         // thumbnail that IS on disk would otherwise appear a beat late.
         if let warm = DiskImageCache.shared.smallImageSync(url) { image = warm; return }
-        image = nil
+        image = placeholder
 
         Task { @MainActor [weak self] in
             guard let self else { return }

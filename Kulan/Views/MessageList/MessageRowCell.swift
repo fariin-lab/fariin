@@ -15,6 +15,7 @@ protocol MessageRowCellDelegate: AnyObject {
     func rowCell(_ cell: MessageRowCell, didTapLink url: URL)
     func rowCell(_ cell: MessageRowCell, didTapQuoteJumpTo id: String)
     func rowCell(_ cell: MessageRowCell, didTapStoryQuote id: String)
+    func rowCellDidTapMedia(_ cell: MessageRowCell)
     func rowCellDidTapReactions(_ cell: MessageRowCell)
     func rowCellDidTapRetry(_ cell: MessageRowCell)
     func rowCellDidToggleSelection(_ cell: MessageRowCell)
@@ -192,6 +193,12 @@ final class MessageRowCell: UICollectionViewCell {
             }
             if rowView.hitsReactions(p) {
                 delegate?.rowCellDidTapReactions(self)
+                return
+            }
+            // The picture opens the viewer. Before the quote test, because a media bubble's quote
+            // sits above the picture and the two rects never overlap.
+            if rowView.hitsMedia(p) {
+                delegate?.rowCellDidTapMedia(self)
                 return
             }
             if rowView.hitsQuote(p), let q = b.quote {

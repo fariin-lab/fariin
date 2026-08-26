@@ -307,6 +307,7 @@ final class MessageRowView: UIView {
     private let bodyLabel = UILabel()
     private let metaLabel = UILabel()
 
+    private var mediaView: MediaBubbleView?
     private var quoteView: BubbleQuoteView?
     private var avatarView: RowAvatarView?
     private var senderLabel: UILabel?
@@ -493,12 +494,51 @@ final class MessageRowView: UIView {
         metaLabel.frame = b.meta
         metaLabel.isHidden = b.meta == .zero
 
+        applyMedia(b, model: m, cid: cid)
         applyTombstone(b)
         applyQuote(b, model: m, cid: cid)
         applySender(b, model: m)
         applyForwarded(b)
         applyReactions(b)
         applyRetry(b)
+    }
+
+    private func applyMedia(_ b: BubblePlan, model m: MessageRowModel, cid: String) {
+        guard let plan = b.mediaPlan,
+              case .bubble(let row) = m.content,
+              case .media(let media) = row.body else {
+            mediaView?.isHidden = true
+            mediaView?.prepareForReuse()
+            return
+        }
+        let v = mediaView ?? {
+            // BELOW the fill's siblings but above the fill itself: the picture is the bubble's
+            // surface here, and the rim and the flash still have to sit over it.
+            let v = MediaBubbleView(); bubbleBox.insertSubview(v, aboveSubview: fill); mediaView = v; return v
+        }()
+        v.isHidden = false
+        v.frame = CGRect(origin: .zero, size: b.bubble.size)
+        // ⛔ THE PICTURE IS CLIPPED BY THE BUBBLE'S OWN PATH, not by a corner radius. These bubbles
+        // have four different radii (a cluster squares off the side that continues), so a rounded
+        // rect mask would round the two corners the shape deliberately keeps sharp.
+        let mask = CAShapeLayer()
+        mask.path = (b.isCapsule ? BubbleShape.capsulePath(b.bubble.size)
+                                 : BubbleShape.path(b.bubble.size, b.radii)).cgPath
+        v.layer.mask = mask
+        v.configure(media, plan: plan, cid: cid)
+
+        // ⛔ REGISTER THE PICTURE AS THE FLIGHT'S SOURCE. Opening a photo flies the MEDIA out of its
+        // bubble and lands it back on the same rectangle; with nothing registered, `MediaOpen`
+        // falls through to a plain presentation and the transition simply does not happen.
+        //
+        // The corner radius handed over is the one this bubble ACTUALLY draws. The open used to
+        // leave it at a 14pt default while the close read the real value, so media whose bubble had
+        // a different radius started the flight at one shape and finished at another.
+        let key = MediaOpenRects.key(.chat, m.id)
+        let inWindow = v.convert(plan.media, to: nil)
+        if inWindow.width > 1, inWindow.height > 1 {
+            MediaOpenRects.capture(key, inWindow, cornerRadius: b.radii.topLeading)
+        }
     }
 
     private func applyTombstone(_ b: BubblePlan) {
@@ -700,6 +740,13 @@ final class MessageRowView: UIView {
         return q.offsetBy(dx: b.bubble.minX, dy: b.bubble.minY).contains(point)
     }
 
+    /// Is this point on the picture? A tap there opens the viewer; a tap on the CAPTION does not,
+    /// which is why this asks about the media rect and not about the whole bubble.
+    func hitsMedia(_ point: CGPoint) -> Bool {
+        guard let p = plan, case .bubble(let b) = p.body, let media = b.mediaPlan else { return false }
+        return media.media.offsetBy(dx: b.bubble.minX, dy: b.bubble.minY).contains(point)
+    }
+
     func hitsReactions(_ point: CGPoint) -> Bool {
         guard let p = plan, case .bubble(let b) = p.body else { return false }
         return b.reactions.contains { $0.contains(point) }
@@ -797,6 +844,7 @@ final class MessageRowView: UIView {
         }
         quoteView?.isHidden = true
         avatarView?.isHidden = true
+        mediaView?.prepareForReuse()
         model = nil
         plan = nil
     }

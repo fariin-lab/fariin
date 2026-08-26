@@ -73,6 +73,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onTapLink: (URL) -> Void = { _ in }
     var onTapQuote: (String) -> Void = { _ in }              // jump to the quoted message
     var onTapStoryQuote: (_ rowId: String, _ replyId: String) -> Void = { _, _ in }
+    var onTapMedia: (String) -> Void = { _ in }        // the picture opens the viewer
     var onTapReactions: (String) -> Void = { _ in }
     var onTapRetry: (String) -> Void = { _ in }
     var onToggleSelect: (String) -> Void = { _ in }
@@ -152,6 +153,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onTapLink = onTapLink
         vc.onTapQuote = onTapQuote
         vc.onTapStoryQuote = onTapStoryQuote
+        vc.onTapMedia = onTapMedia
         vc.onTapReactions = onTapReactions
         vc.onTapRetry = onTapRetry
         vc.onToggleSelect = onToggleSelect
@@ -426,6 +428,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onTapLink: (URL) -> Void = { _ in }
     var onTapQuote: (String) -> Void = { _ in }
     var onTapStoryQuote: (_ rowId: String, _ replyId: String) -> Void = { _, _ in }
+    var onTapMedia: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
     var onTapRetry: (String) -> Void = { _ in }
     var onToggleSelect: (String) -> Void = { _ in }
@@ -2856,6 +2859,11 @@ extension MessageListController: MessageRowCellDelegate {
     func rowCell(_ cell: MessageRowCell, didTapStoryQuote id: String) {
         guard let rowId = cell.rowId else { return }
         onTapStoryQuote(rowId, id)
+    }
+
+    func rowCellDidTapMedia(_ cell: MessageRowCell) {
+        guard let id = cell.rowId else { return }
+        onTapMedia(id)
     }
 
     func rowCellDidTapReactions(_ cell: MessageRowCell) {

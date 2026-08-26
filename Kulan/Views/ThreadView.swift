@@ -2669,6 +2669,27 @@ struct ThreadView: View {
                 guard let m = repo.items.first(where: { $0.rowId == rowId }), let r = m.replyTo else { return }
                 openStory(replyId, r.authorId, anchorId: "replyquote-\(m.id)")
             },
+            // OPEN LIKE THE REFERENCE APP: fly only the MEDIA out of its bubble, then reveal the
+            // viewer. `MediaOpen.flyOrPresent` falls straight through to a plain presentation when
+            // there is no live rect or no decoded image, so opening can never be blocked.
+            onTapMedia: { id in
+                guard let m = repo.items.first(where: { $0.rowId == id }) else { return }
+                // A GIF opens nothing — it plays where it sits. That is deliberate and it is also
+                // why a gif keeps the double-tap-to-react shortcut that photos and videos give up.
+                guard !m.isGif else { return }
+                guard m.sendState == nil else { return }   // only delivered media opens
+                let key = MediaOpenRects.key(.chat, m.id)
+                if m.isVideo {
+                    MediaOpen.flyOrPresent(
+                        imageUrl: m.thumbUrl, rectKey: key, clip: MediaOpenRects.clipRect,
+                        present: { MediaPresentGate.present { viewerVideo = m } })
+                } else {
+                    // Scoped key (.chat): All Media and the profile strip register the SAME ids.
+                    MediaOpen.flyOrPresent(
+                        imageUrl: m.imageUrl, rectKey: key, clip: MediaOpenRects.clipRect,
+                        present: { MediaPresentGate.present { viewerImage = m } })
+                }
+            },
             onTapReactions: { id in
                 if let m = repo.items.first(where: { $0.rowId == id }) { reactorsTarget = m }
             },

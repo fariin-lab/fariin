@@ -48,10 +48,14 @@ enum MessageRowModelBuilder {
         if m.isCall { return true }
         if m.isSystem { return true }
         if m.pinNotice != nil { return true }
-        // Media, cards and pending media: phases 2 and 3.
-        if m.isImage || m.isVideo || m.isGif || m.isAlbum || m.isAudio || m.isFile { return false }
-        if m.pendingMediaKind != nil || m.isPendingImage { return false }
+        // ⚠️ VIEW-ONCE FIRST, before the kind tests below say yes to its photo. A view-once photo is
+        // a PILL, not a picture — routing it to the media path would put the secret on screen.
         if m.viewOnce { return false }
+        // Phase 2: a photo, a video and a gif are drawn here now.
+        if m.isImage || m.isVideo || m.isGif { return true }
+        // Album, voice and file are the rest of phase 2; the cards are phase 3.
+        if m.isAlbum || m.isAudio || m.isFile { return false }
+        if m.pendingMediaKind != nil || m.isPendingImage { return false }
         if m.poll != nil || m.locationCard != nil || m.contactCard != nil { return false }
         if m.linkPreview != nil { return false }           // the OG card is phase 3
         if m.isFeatureMarker { return true }               // the "update the app" notice
@@ -111,6 +115,8 @@ enum MessageRowModelBuilder {
         let body: BubbleBody
         if msg.deleted {
             body = .tombstone(isMe ? "You deleted this message" : "This message was deleted")
+        } else if msg.isImage || msg.isVideo || msg.isGif {
+            body = .media(mediaBody(msg, ctx: ctx))
         } else if text.jumbomojiCount > 0, msg.replyTo == nil {
             // Borderless applies only to a TEXT-ONLY message: an emoji-only REPLY keeps its bubble,
             // because the quote shares the box with it.
@@ -197,6 +203,37 @@ enum MessageRowModelBuilder {
             canSwipeToReply: msg.sendState == nil && !msg.deleted,
             opensOnTap: false,
             canDoubleTapReact: msg.sendState == nil && !msg.deleted)
+    }
+
+    private static func mediaBody(_ m: Message, ctx: MessageRowContext) -> BubbleBody.MediaBody {
+        let kind: BubbleBody.MediaBody.Kind = m.isGif ? .gif : (m.isVideo ? .video : .photo)
+        let caption = m.text.isEmpty ? nil : BubbleBody.TextBody(
+            text: m.text, searchTerm: ctx.searchTerm,
+            mentionTokens: m.mentions.map { "@\(ctx.nameFor($0))" })
+        let duration: String? = {
+            guard kind == .video, let d = m.duration, d > 0 else { return nil }
+            let s = Int(d)
+            return String(format: "%d:%02d", s / 60, s % 60)
+        }()
+        return BubbleBody.MediaBody(
+            kind: kind,
+            url: m.imageUrl,
+            enc: m.enc,
+            posterUrl: m.thumbUrl,
+            posterEnc: m.thumbEnc,
+            localData: m.localImageData,
+            blurhash: m.blurhash,
+            inlineThumbBase64: m.thumb,
+            thumbCacheId: m.rowId,
+            pixelWidth: m.width,
+            pixelHeight: m.height,
+            durationText: duration,
+            caption: caption,
+            uploading: m.sendState == .sending || m.uploading,
+            clientId: m.clientId,
+            // A gif is a public url with nothing to hold back; a photo goes through the
+            // auto-download policy, which may keep it behind a tap.
+            gated: kind == .photo)
     }
 
     private static func myFill(_ ctx: MessageRowContext) -> BubbleFill {
