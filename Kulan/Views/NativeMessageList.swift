@@ -949,6 +949,52 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     // Frame minY per row for an id order, exactly what MessageLayout will produce (y-accumulated heights
     // from the oldest). Used to build the before/after maps of the scroll-continuity token.
+    /// ⛔ A ROW THAT CHANGED WHILE OFF SCREEN STILL CHANGED HEIGHT — his report, 2026-08-26, with a
+    /// photograph of the unread divider stacked into the bubbles around it, and the second time that
+    /// exact picture has been sent.
+    ///
+    /// Every path that lands content asks `rowSignatures` which rows changed, and every one of them
+    /// asked it about the VISIBLE rows only — then wrote `lastRowSigs = rowSignatures`, marking the
+    /// off-screen changes as seen. That is right for RECONFIGURE (reconfiguring a cell you cannot
+    /// see is wasted work, and reconfiguring every visible cell on every emission was the flashing),
+    /// and wrong for MEASUREMENT, which is not about cells at all.
+    ///
+    /// The unread divider is the case that proves it: the chat opens at the newest message and
+    /// `anchorUnread` then marks the first unread, which is by definition a screen or more above the
+    /// reader. That row grows by ~33pt, nothing re-measures it, and when the reader scrolls up the
+    /// cell draws a divider inside a frame that never made room for it.
+    ///
+    /// The reader is held still by the same anchor the load paths use: rows above them that changed
+    /// height move their content, and the delta puts it back.
+    private func remeasureOffscreenChanged(_ changed: [String], visible: Set<String>) {
+        let width = collectionView.bounds.width
+        guard width > 0 else { return }
+        let offscreen = changed.filter { !visible.contains($0) }
+        guard !offscreen.isEmpty else { return }
+        collectionView.layoutIfNeeded()
+        let anchors = continuityAnchors()
+        let before = frameMinY(for: currentIds)
+        var moved = false
+        for id in offscreen {
+            let h = measure(id, width: width)
+            guard abs((heights[id] ?? h) - h) > 0.5 else { continue }
+            heights[id] = h
+            moved = true
+        }
+        guard moved else { return }
+        let after = frameMinY(for: currentIds)
+        layout.generation += 1
+        layout.invalidateLayout()
+        guard let landed = continuityDelta(anchors, before: before, after: after),
+              abs(landed.delta) > 0.5 else { return }
+        collectionView.layoutIfNeeded()
+        let y = clampOffset(collectionView.contentOffset.y + landed.delta)
+        guard abs(collectionView.contentOffset.y - y) > 0.5 else { return }
+        UIView.performWithoutAnimation {
+            collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+        }
+    }
+
     private func frameMinY(for ids: [String]) -> [String: CGFloat] {
         var out = [String: CGFloat](minimumCapacity: ids.count)
         var y: CGFloat = 0
@@ -1353,9 +1399,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             if !live.isEmpty { refreshVisible(live) }
             return
         }
-        let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
-        let changed = visible.filter { rowSignatures[$0] != lastRowSigs[$0] }   // content changes
+        let visibleSet = Set(collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) })
+        let allChanged = currentIds.filter { rowSignatures[$0] != lastRowSigs[$0] }   // content changes
         lastRowSigs = rowSignatures
+        remeasureOffscreenChanged(allChanged, visible: visibleSet)              // heights are not about cells
+        let changed = allChanged.filter { visibleSet.contains($0) }
         let heightIds = pendingSettleHeights                                    // late height reports
         pendingSettleHeights.removeAll()
         let target = Array(Set(changed).union(heightIds))
@@ -1562,9 +1610,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // NOT every visible cell on every SwiftUI re-render. ThreadView's body re-runs constantly on
             // presence/typing/read churn with the SAME row content; reconfiguring all visible cells each
             // time re-rendered every bubble = the flashing.
-            let visible = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
-            let changed = visible.filter { rowSignatures[$0] != lastRowSigs[$0] }
+            let visible = Set(collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) })
+            let allChanged = ids.filter { rowSignatures[$0] != lastRowSigs[$0] }
             lastRowSigs = rowSignatures
+            guard !allChanged.isEmpty else { return }
+            // The unread divider arrives on exactly this path: the chat opens at the newest message
+            // and `anchorUnread` then marks a row well above the reader.
+            remeasureOffscreenChanged(allChanged, visible: visible)
+            let changed = allChanged.filter { visible.contains($0) }
             guard !changed.isEmpty else { return }
             refreshVisible(changed)
             return
@@ -1594,8 +1647,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // It must be BOTH: present in the new snapshot (or the reconfigure aborts the app) and changed
         // since the last apply (or every visible bubble re-renders on every emission â€” the flashing).
         let newSet = Set(ids)
-        let liveIds = collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) }
-        let contentChanged = liveIds.filter { newSet.contains($0) && rowSignatures[$0] != lastRowSigs[$0] }
+        let liveSet = Set(collectionView.indexPathsForVisibleItems.compactMap { dataSource.itemIdentifier(for: $0) })
+        // EVERY changed row is re-measured; only the visible ones are reconfigured. See
+        // `remeasureOffscreenChanged` for why those are two different questions.
+        let sigChanged = ids.filter { rowSignatures[$0] != lastRowSigs[$0] }
+        let contentChanged = sigChanged.filter { liveSet.contains($0) }
         lastRowSigs = rowSignatures
 
         // Radar 28167779: settle any dirty layout against the OLD data BEFORE mutating heights/ids â€” a
@@ -1605,7 +1661,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let anchors = continuityAnchors()
 
         measureMissing(ids, width: width)   // exact heights BEFORE the layout prepares (no self-size correction)
-        for id in contentChanged { heights[id] = measure(id, width: width) }
+        // Every row whose content changed, on screen or not — this whole block is already bracketed
+        // by `beforeY` / `afterY`, so a row above the reader growing is compensated like any other.
+        for id in sigChanged { heights[id] = measure(id, width: width) }
         // THE DATE-SEPARATOR JOIN. Date pills and cluster spacing are baked into the message row and
         // computed from the chronological index, so the oldest loaded row always carries a date pill and
         // paging history takes it away from the row that used to be oldest. That row's height changes,
