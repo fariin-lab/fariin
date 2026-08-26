@@ -13,15 +13,28 @@ import SwiftUI
 ///   · every progress tick re-rendered it, because it lives inside a view that redraws on each one.
 ///   · and its icon arrived a frame late, which is the flicker he screen-recorded and slowed down.
 ///
-/// A `UIControl` fixes the first for nothing: a scroll view cancels content touches on drag by
-/// itself, which is exactly why the text bubbles and the stories row have never had this problem.
+/// ⛔ AND IT IS A RECOGNISER, NOT A `UIControl` — his report, 2026-08-25: "first play voice note
+/// won't play at all". THIS IS THE TRAP, AND IT IS WORTH READING BEFORE MOVING ANYTHING ELSE ACROSS.
+///
+/// A `UIControl` answers TOUCH DELIVERY. Inside a scroll view that is not the same thing as a tap:
+/// `delaysContentTouches` holds touchesBegan back from subviews on purpose, and the list runs its
+/// own 0.2s long press with `cancelsTouchesInView` left at the default — so a touch that reaches the
+/// control can still be taken away before it becomes `.touchUpInside`, and the first tap on a
+/// settling list is exactly the one that loses.
+///
+/// A UIGestureRecognizer is not delayed and is not cancelled that way; it negotiates with the list's
+/// recognisers as a peer. The SwiftUI `onTapGesture` this replaced was one, which is why it worked,
+/// and the waveform beside it is one, which is why the waveform never had this bug.
+///
+/// So the disc keeps its own drawing and its own touch, and takes them the way the rest of this
+/// screen does.
 ///
 /// ⚠️ THE PLAY STATE IS STILL PASSED IN, NOT OWNED HERE. That is deliberate and it is step two.
 /// `VoiceMessageView` already resolves `playing` and `loading` correctly, including the half-second
 /// hold that stops the engine's settling publishes flicking the icon; moving state ownership AND the
 /// drawing in one go would leave nothing to bisect if the feel is wrong. This step changes who owns
 /// the TOUCH and the PIXELS, nothing else.
-final class VoicePlayDiscControl: UIControl {
+final class VoicePlayDiscControl: UIView {
 
     var discTint: UIColor = .label {
         didSet { if discTint != oldValue { setNeedsDisplay() } }
@@ -56,7 +69,9 @@ final class VoicePlayDiscControl: UIControl {
         spinner.hidesWhenStopped = true
         spinner.isHidden = true
         addSubview(spinner)
-        addTarget(self, action: #selector(tapped), for: .touchUpInside)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
+        tap.delegate = self
+        addGestureRecognizer(tap)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -98,6 +113,13 @@ final class VoicePlayDiscControl: UIControl {
                               width: glyph.size.width, height: glyph.size.height))
         ctx.setBlendMode(.normal)
     }
+}
+
+extension VoicePlayDiscControl: UIGestureRecognizerDelegate {
+    /// Coexist with the list's long press and its scroll pan, exactly as the waveform does. Refusing
+    /// simultaneity here would put this tap back in a fight it does not need to win.
+    func gestureRecognizer(_ g: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 }
 
 /// The seam. Kept deliberately thin: the bubble's layout, its bubble chrome, its context menu and its
