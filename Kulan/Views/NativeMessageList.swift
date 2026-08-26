@@ -179,6 +179,10 @@ struct NativeMessageList: UIViewControllerRepresentable {
         // pass late is a reader left short.
         if let st = composerState, let acts = composerActions, let rec = composerRecorder {
             vc.applyComposer(state: st, actions: acts, recorder: rec, margin: composerMargin)
+        } else {
+            // Selection, search, blocked, a message request: SwiftUI draws the bar for those, so
+            // ours must leave rather than sit under it. See `hideComposer`.
+            vc.hideComposer()
         }
         vc.rowModels = rowModels   // BEFORE apply: measure + cell provider see the same frozen routing
         vc.cid = cid
@@ -395,6 +399,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var barTrailing: NSLayoutConstraint?
     private var barBottom: NSLayoutConstraint?
     private var barHeightC: NSLayoutConstraint?
+    /// The container's top, tied to the bar's. Deactivated while the composer is hidden so the
+    /// container can collapse — a hidden view still takes part in Auto Layout. See `hideComposer`.
+    private var barTopPin: NSLayoutConstraint?
     /// The system layout margin, from ThreadView. The bar's insets are derived from it in
     /// `positionBottomBar`, which is the ONE writer of the bar's constraints.
     private var composerMargin: CGFloat = 20
@@ -2195,7 +2202,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// ⚠️ It falls back to the assembled sum only until the bar exists (the announcements list has
     /// none, and the first pass runs before ThreadView has handed the composer over).
     private var bottomClearance: CGFloat {
-        guard composerBar != nil, bottomBarContainer.frame.height > 1 else {
+        // A HIDDEN bar is not a bar: while SwiftUI owns the bottom (selection, search, blocked) the
+        // container is collapsed and the clearance comes from the fallback, exactly as it does for
+        // the announcements list. See `hideComposer`.
+        guard let bar = composerBar, !bar.isHidden, bottomBarContainer.frame.height > 1 else {
             return keyboardBand + composerBarH + 12
         }
         return bottomBarContainer.frame.height
@@ -2417,7 +2427,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // .bottom > 100` test could never be true and the keyboard stayed up through the pop.
             if keyboardBand > view.safeAreaInsets.bottom + 0.5 { view.window?.endEditing(true) }
         case .ended, .cancelled, .failed:
-            UIView.performWithoutAnimation { updateInsets() }
+            // ⛔ ONE RUNLOOP LATER, OR IT DOES NOTHING. `updateInsets` refuses to run while the pop
+            // recogniser is in any state but `.possible` or `.failed` — the reference's own rule —
+            // and at the moment this fires the state IS `.ended` or `.cancelled`. So the repair
+            // this line exists for has never run for a completed or cancelled swipe-back. By the
+            // next turn the recogniser is back to `.possible` and the call lands.
+            DispatchQueue.main.async { [weak self] in
+                UIView.performWithoutAnimation { self?.updateInsets() }
+            }
         default:
             break
         }
@@ -3180,9 +3197,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // layout rather than a number kept in step by hand. When the bar grows a reply preview
             // inside its own animation, the container grows in that same animation, and so does the
             // inset — which is exactly why theirs never jumps.
-            NSLayoutConstraint.activate([
-                bottomBarContainer.topAnchor.constraint(equalTo: bar.topAnchor, constant: -Self.barTopPad),
-            ])
+            let topPin = bottomBarContainer.topAnchor.constraint(equalTo: bar.topAnchor,
+                                                                 constant: -Self.barTopPad)
+            barTopPin = topPin
+            NSLayoutConstraint.activate([topPin])
             // The bar asks for a new height when its contents change (a banner, a second line).
             // It arrives on the bar's OWN animation clock, and the container follows on the same
             // one — which is the same rule the keyboard block follows one level up.
@@ -3194,11 +3212,35 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // wrong when ThreadView's values were written here instead: the keyboard handler and this
         // method were two authors of one constraint, and the bottom one was NEVER written until the
         // first keyboard event — the composer rested on the screen edge (his 2026-08-26 report).
+        // Coming back from selection / search / a blocked chat — see `hideComposer`.
+        if bar.isHidden {
+            bar.isHidden = false
+            barTopPin?.isActive = true
+        }
         composerMargin = margin
         positionBottomBar()
         bar.actions = actions
         bar.apply(state)
         resizeBottomBar()
+    }
+
+    /// ⛔ THE COMPOSER LEAVES WHEN SOMETHING ELSE TAKES THE BOTTOM. The reference SWAPS its bottom
+    /// bar — `updateBottomBar` installs the one the conversation currently needs and the previous
+    /// one is gone. Ours built the composer once and never removed it, so entering selection,
+    /// opening search, or a chat that is blocked / a message request / muted drew SwiftUI's bar on
+    /// top of a composer that was still there and still taking taps. `canShowComposer`'s own note
+    /// warns about two bars stacked; this is that, from the other side.
+    ///
+    /// ⚠️ HIDING IS NOT ENOUGH ON ITS OWN: a hidden view still takes part in Auto Layout, so the
+    /// container's top pin would hold it open at the composer's full height. The pin comes out and
+    /// the low-priority height constant (0) takes over, which is exactly the state the announcements
+    /// list has always run in.
+    func hideComposer() {
+        guard let bar = composerBar, !bar.isHidden else { return }
+        bar.isHidden = true
+        barTopPin?.isActive = false
+        bottomBarHeight?.constant = 0
+        updateInsets()
     }
 
     /// The bar changed height — a reply preview arrived or left, the text grew a line.

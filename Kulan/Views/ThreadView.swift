@@ -5285,7 +5285,16 @@ struct ThreadView: View {
 
     private var composer: some View {
         VStack(spacing: 6) {
-            if !mentionCandidates.isEmpty { mentionPicker }
+            // ⛔ ABOVE THE COMPOSER, NOT ON IT. This slot's own content is a zero-height spacer now
+            // that the bar is UIKit's, so anything left in it lands exactly where the bar is drawn
+            // and the picker covered the pill. `composerLift` is the bar's real height plus its
+            // gaps, reported by the controller that places it; subtracting the pad and this slot's
+            // own bottom inset leaves precisely the bar's height, so the picker sits on the bar's
+            // top edge rather than a guessed distance above it.
+            if !mentionCandidates.isEmpty {
+                mentionPicker
+                    .padding(.bottom, max(0, composerLift - 8 - composerBottomInset))
+            }
             // ⛔ THE BAR IS UIKIT — owner, 2026-08-25: "The Composer input text is currently
             // implemented in SwiftUI. Please completely convert it to UIKit." Everything drawn — the
             // "+", the pill and its field, the reply / edit / link cards, GIF, mic, send, the hold

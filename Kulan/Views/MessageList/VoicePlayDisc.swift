@@ -83,6 +83,14 @@ final class VoicePlayDiscControl: UIView {
 
     @objc private func tapped() { onTap() }
 
+    /// Black on a light disc, white on a dark one. Resolved against the view's own traits so it
+    /// answers correctly in both appearances.
+    private static func contrasting(with colour: UIColor) -> UIColor {
+        var white: CGFloat = 0, alpha: CGFloat = 0
+        guard colour.getWhite(&white, alpha: &alpha) else { return .black }
+        return white > 0.6 ? .black : .white
+    }
+
     override func draw(_ rect: CGRect) {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
         let side = min(rect.width, rect.height)
@@ -102,16 +110,26 @@ final class VoicePlayDiscControl: UIView {
         // ⚠️ NO ANIMATION ON THE SWAP, and that is a decision with history: a symbol-effect bounce
         // was tried in the SwiftUI version and he read the travelling icon as LAG. The glyph changes
         // between frames or not at all.
+        // ⛔ THE GLYPH IS PAINTED, NOT PUNCHED — his report, 2026-08-26: in light mode the play
+        // icon cannot be seen at all, the disc is a solid black circle.
+        //
+        // This used to draw with `.destinationOut` so the bubble showed through the play shape, on
+        // the theory that a hole needs to know nothing about the bubble's colour and therefore
+        // survives gradients and wallpaper. In this hierarchy the erase does not reveal the bubble;
+        // it comes out black. On a WHITE disc (dark mode, or any bubble I sent) a black triangle is
+        // exactly right, which is why this shipped and looked correct — and on a BLACK disc (an
+        // incoming bubble in light mode, where the tint is `.label`) it is black on black.
+        //
+        // Painted in the disc's own opposite instead: the contrast is guaranteed for any tint, on
+        // any bubble, with no knowledge of what is behind it.
         let config = UIImage.SymbolConfiguration(pointSize: 17, weight: .regular)
         guard let glyph = UIImage(systemName: showsPause ? "pause.fill" : "play.fill",
                                   withConfiguration: config)?
-            .withTintColor(.black, renderingMode: .alwaysOriginal) else { return }
+            .withTintColor(Self.contrasting(with: discTint), renderingMode: .alwaysOriginal) else { return }
 
-        ctx.setBlendMode(.destinationOut)   // the hole, not a dark shape
         glyph.draw(in: CGRect(x: circle.midX - glyph.size.width / 2,
                               y: circle.midY - glyph.size.height / 2,
                               width: glyph.size.width, height: glyph.size.height))
-        ctx.setBlendMode(.normal)
     }
 }
 

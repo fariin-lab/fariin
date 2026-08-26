@@ -968,6 +968,19 @@ final class ComposerTextView: UITextView {
 // MARK: - Small controls
 
 /// A 40×40 tap target around a fixed-size glyph. The old `Image(...).frame(w,h).frame(40,40)`.
+/// ⛔ ITS TAP IS A GESTURE RECOGNISER, NOT UICONTROL TRACKING — his reports, 2026-08-26: the GIF
+/// button does nothing, and the reply banner's X does nothing.
+///
+/// Those two are the only controls in the composer that live INSIDE the pill. The pill is a
+/// `UIVisualEffectView` carrying a `UIGlassEffect` with `isInteractive = true`, which installs its
+/// own press handling over the whole effect view; a `UIControl` beneath it never completes a
+/// `.touchUpInside`. Everything that does work — "+", trash, send, the mic — is a SIBLING of the
+/// pill, outside the glass.
+///
+/// This is the same lesson `VoicePlayDiscControl` records at the head of its own file: a recogniser
+/// is not delayed and is not cancelled the way tracking is, it negotiates as a peer. The control
+/// keeps its `.touchUpInside` API, so every call site is unchanged; only the route the touch takes
+/// is different.
 final class IconButton: UIControl {
     let icon = UIImageView()
     private let iconSize: CGSize
@@ -980,9 +993,20 @@ final class IconButton: UIControl {
         icon.tintColor = .label
         icon.isUserInteractionEnabled = false
         addSubview(icon)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(tapFired))
+        tap.delegate = self
+        addGestureRecognizer(tap)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    @objc private func tapFired() {
+        guard isEnabled else { return }
+        // The press flash the tracking path used to give, kept by hand so the button still answers.
+        isHighlighted = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in self?.isHighlighted = false }
+        sendActions(for: .touchUpInside)
+    }
 
     override var isHighlighted: Bool {
         didSet { icon.alpha = isHighlighted ? 0.5 : 1 }
@@ -993,6 +1017,13 @@ final class IconButton: UIControl {
         icon.bounds = CGRect(origin: .zero, size: iconSize)
         icon.center = CGPoint(x: bounds.midX, y: bounds.midY)
     }
+}
+
+extension IconButton: UIGestureRecognizerDelegate {
+    /// Coexist with the glass effect's own press and with anything the pill or the list runs.
+    /// Refusing simultaneity here would put this tap back in the fight it just lost.
+    func gestureRecognizer(_ g: UIGestureRecognizer,
+                           shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 }
 
 /// The "Set to one-time listen" toast: the composer's notice in the chat's own bubble surface — the
