@@ -233,6 +233,7 @@ enum MessageRowModelBuilder {
                               : (mine ? "\(ctx.nameFor(msg.authorId)) replied to your story"
                                       : "\(ctx.nameFor(msg.authorId)) replied to their story"),
                 thumbUrl: reply.storyThumbUrl,
+                anchorKey: "storyreply-\(msg.id)",
                 unavailable: !live,
                 opens: live)
         }
@@ -296,6 +297,8 @@ enum MessageRowModelBuilder {
             blurhash: m.blurhash,
             inlineThumbBase64: m.thumb,
             thumbCacheId: m.rowId,
+            // The MESSAGE id, not the row id — see MediaBody.flightKey.
+            flightKey: MediaOpenRects.key(.chat, m.id),
             pixelWidth: m.width,
             pixelHeight: m.height,
             durationText: duration,
@@ -347,6 +350,7 @@ enum MessageRowModelBuilder {
                 url: item?.imageUrl, enc: item?.enc, aspect: aspect,
                 isVideo: isVideo, durationText: duration,
                 localData: m.localAlbum.indices.contains(i) ? m.localAlbum[i] : nil,
+                flightKey: MediaOpenRects.key(.chat, "\(m.id)-\(i)"),
                 uploadKey: m.clientId.map { MediaSend.itemKey($0, i) }))
         }
         let caption = m.text.isEmpty ? nil : BubbleBody.TextBody(

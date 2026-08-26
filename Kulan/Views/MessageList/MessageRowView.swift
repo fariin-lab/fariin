@@ -569,17 +569,52 @@ final class MessageRowView: UIView {
         v.layer.mask = bubbleMask(b)
         v.configure(media, plan: plan, cid: cid)
 
-        // ⛔ REGISTER THE PICTURE AS THE FLIGHT'S SOURCE. Opening a photo flies the MEDIA out of its
-        // bubble and lands it back on the same rectangle; with nothing registered, `MediaOpen`
-        // falls through to a plain presentation and the transition simply does not happen.
-        //
-        // The corner radius handed over is the one this bubble ACTUALLY draws. The open used to
-        // leave it at a 14pt default while the close read the real value, so media whose bubble had
-        // a different radius started the flight at one shape and finished at another.
-        let key = MediaOpenRects.key(.chat, m.id)
-        let inWindow = v.convert(plan.media, to: nil)
-        if inWindow.width > 1, inWindow.height > 1 {
-            MediaOpenRects.capture(key, inWindow, cornerRadius: b.radii.topLeading)
+        registerFlightRects(b, model: m)
+    }
+
+    /// ⛔ PUBLISH EVERY FLIGHT RECT THIS ROW OWNS, IN WINDOW COORDINATES.
+    ///
+    /// Opening a photo flies the MEDIA out of its bubble and lands it back on the same rectangle.
+    /// With nothing registered `MediaOpen` falls through to a plain presentation — the photo comes
+    /// up from the BOTTOM of the screen instead of out of the message, which is exactly what he
+    /// reported.
+    ///
+    /// ⚠️ THE KEY COMES FROM THE MODEL, NOT FROM THE ROW'S id. The row's id is `clientId ?? id`,
+    /// which differs from the message id for every message this device sent — so deriving the key
+    /// here registered the rect under one name while the tap looked it up under another. His own
+    /// photos were the ones that opened wrong.
+    ///
+    /// ⚠️ AND IT IS CALLED AGAIN AT TAP TIME. A rect published when the cell was configured is
+    /// stale the moment the list scrolls, and the registry's own note calls flying from a stale
+    /// rect "the wrong area class of bug this registry exists to prevent".
+    func registerFlightRects(_ b: BubblePlan, model m: MessageRowModel) {
+        guard case .bubble(let row) = m.content else { return }
+        switch row.body {
+        case .media(let media):
+            guard let v = mediaView, let plan = b.mediaPlan else { return }
+            let rect = v.convert(plan.media, to: nil)
+            guard rect.width > 1, rect.height > 1 else { return }
+            // The radius handed over is the one this bubble ACTUALLY draws. The open used to leave
+            // it at a 14pt default while the close read the real value, so media whose bubble had a
+            // different radius started the flight at one shape and finished at another.
+            MediaOpenRects.capture(media.flightKey, rect, cornerRadius: b.radii.topLeading)
+        case .album(let album):
+            guard let v = albumView, let plan = b.albumPlan else { return }
+            for (i, tile) in plan.tiles.enumerated() where i < album.tiles.count {
+                let inGrid = tile.rect.offsetBy(dx: plan.grid.minX, dy: plan.grid.minY)
+                let rect = v.convert(inGrid, to: nil)
+                guard rect.width > 1, rect.height > 1 else { continue }
+                // A tile's corner is the GRID's, not the bubble's: only the outer tiles touch the
+                // bubble's rounded edge and the inner ones are square.
+                MediaOpenRects.capture(album.tiles[i].flightKey, rect, cornerRadius: 0)
+            }
+        default:
+            break
+        }
+        if let sr = row.storyReply, sr.opens,
+           let plan = b.storyReplyPlan, let thumb = plan.thumb {
+            let rect = convert(thumb, to: nil)
+            if rect.width > 1 { MediaOpenRects.capture(sr.anchorKey, rect, cornerRadius: 14) }
         }
     }
 
@@ -740,15 +775,13 @@ final class MessageRowView: UIView {
         v.frame = bounds
         v.configure(sr, plan: plan, cid: cid)
 
-        // The card is a DOOR: register its rect so the story flies out of THIS thumbnail and lands
-        // back on it. Its own key, never the quote's — one message can carry both anchors, and when
-        // they shared a key whichever mounted last owned it and the story flew from the wrong one.
-        if sr.opens, let thumb = plan.thumb {
-            let inWindow = v.convert(thumb, to: nil)
-            if inWindow.width > 1 {
-                MediaOpenRects.capture("storyreply-\(m.id)", inWindow, cornerRadius: 14)
-            }
-        }
+    }
+
+    /// Re-publish this row's flight rects from their CURRENT positions. Called on the tap that is
+    /// about to open something, because a rect published at configure time is stale after a scroll.
+    func refreshFlightRects() {
+        guard let m = model, let p = plan, case .bubble(let b) = p.body else { return }
+        registerFlightRects(b, model: m)
     }
 
     /// The story-reply card — tapping it opens the story.

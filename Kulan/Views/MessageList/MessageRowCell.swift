@@ -225,14 +225,20 @@ final class MessageRowCell: UICollectionViewCell {
                 return
             }
             if rowView.hitsMedia(p) {
+                // Re-publish the rect from where the picture is RIGHT NOW. The one written when
+                // this cell was configured is stale the moment the list scrolls, and a flight from
+                // a stale rect leaves the photo out of its own bubble.
+                rowView.refreshFlightRects()
                 delegate?.rowCellDidTapMedia(self)
                 return
             }
             if let tile = rowView.albumTileIndex(at: p) {
+                rowView.refreshFlightRects()
                 delegate?.rowCell(self, didTapAlbumTile: tile)
                 return
             }
             if rowView.hitsStoryReply(p) {
+                rowView.refreshFlightRects()
                 delegate?.rowCellDidTapStoryReply(self)
                 return
             }

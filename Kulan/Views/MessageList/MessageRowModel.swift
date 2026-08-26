@@ -149,6 +149,9 @@ enum BubbleBody: Equatable {
             var isVideo: Bool
             var durationText: String?
             var localData: Data?
+            /// This tile's own flight key, "<messageId>-<index>" — the same name the album pager
+            /// is handed as its `startId`. See MediaBody.flightKey for why it is carried.
+            var flightKey: String
             /// "clientId#index" while this ITEM is still uploading. Per-item, because `sendState` is
             /// per-MESSAGE and stays `.sending` until the whole batch commits — a finished tile kept
             /// its overlay while its siblings uploaded, and with its bytes gone from UploadProgress
@@ -198,6 +201,13 @@ enum BubbleBody: Equatable {
         /// before anything has been asked of the network. Beats the hash whenever there is one.
         var inlineThumbBase64: String?
         var thumbCacheId: String
+        /// ⛔ THE FLIGHT'S REGISTRY KEY, CARRIED EXPLICITLY. It is built from the MESSAGE id, and
+        /// the row's own `id` is `clientId ?? id` — which differs for every message this device
+        /// sent. Deriving it from the row id registered the rect under one name while the tap
+        /// looked it up under another, `MediaOpenRects.rect` came back nil, and the viewer fell
+        /// through to a plain presentation: the photo opened from the BOTTOM instead of out of its
+        /// own bubble.
+        var flightKey: String
         var pixelWidth: Double?
         var pixelHeight: Double?
         var durationText: String?        // a video's badge, "0:42"
@@ -251,6 +261,10 @@ struct StoryReplyChrome: Equatable {
     var authorId: String
     var caption: String              // "You replied to their story" / "<name> replied to your story"
     var thumbUrl: String?
+    /// This card's own anchor key. ⚠️ NEVER the quote's: one message can carry BOTH the big card
+    /// above the bubble and a small thumbnail inside a quote, and when they shared a key whichever
+    /// mounted last owned it and the story flew out of the wrong one.
+    var anchorKey: String
     /// The story has expired or was deleted: the card says so instead of drawing an empty frame.
     var unavailable: Bool
     /// This card is a DOOR — tapping it flies the story open — so it registers a flight rect.

@@ -2754,7 +2754,7 @@ struct ThreadView: View {
             onTapStoryReplyCard: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }), let r = m.replyTo else { return }
                 // The card's OWN anchor, never the quote's — one message can carry both.
-                openStory(r.id, r.authorId, anchorId: "storyreply-\(m.id)")
+                openStory(r.id, r.authorId, anchorId: "storyreply-\(m.id)")   // matches StoryReplyChrome.anchorKey
             },
             onTapLinkCard: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }),
