@@ -193,6 +193,10 @@ struct ThreadView: View {
     // Reported by the list, NOT `!isAtBottom`: the arrow now waits until the reader is about five
     // bubbles up, while isAtBottom stays at 44pt for everything that moves or marks read.
     @State private var showJumpButton = false
+    /// How far the composer bar stands above the keyboard (or above the safe-area line at rest),
+    /// reported by the list's controller, which is what places it. The floating overlays clear the
+    /// bar by this. The default is one bar's worth so the first frame is not wrong.
+    @State private var composerLift: CGFloat = 48
     /// clientIds already re-driven automatically. Cleared whenever the signal drops, so every
     /// reconnection is worth one fresh attempt — see `autoRetryFailedMedia`.
     @State private var autoRetried: Set<String> = []
@@ -409,7 +413,12 @@ struct ThreadView: View {
                     reactionJumpButton   // sits ABOVE the arrow, like the reference
                     jumpToBottomButton
                 }
-                .padding(.bottom, 10)
+                // ⛔ ABOVE THE COMPOSER, MEASURED WHERE THE COMPOSER IS PUT. This was a bare 10,
+                // which worked only while the bar was SwiftUI's `safeAreaBar` and grew the bottom
+                // safe area. The bar is UIKit's now, so the padding started at the keyboard and the
+                // arrow landed on the mic button (his screenshot, 2026-08-26).
+                .padding(.bottom, composerLift + 10)
+                .animation(keyboard.systemAnimation, value: composerLift)
             }
             // "Recording a voice note" indicator (their side): floats OVER the list at bottom-leading.
             // Deliberately NOT a list row — inserting transient rows touches the inverted-list scroll
@@ -417,7 +426,8 @@ struct ThreadView: View {
             .overlay(alignment: .bottomLeading) {
                 if repo.otherRecording, typingPref, !repo.iBlocked {
                     RecordingBubble(dark: dark)
-                        .padding(.leading, 12).padding(.bottom, 10)
+                        // Same rule as the jump arrow above: clear the composer, not the keyboard.
+                        .padding(.leading, 12).padding(.bottom, composerLift + 10)
                         .transition(.scale(scale: 0.5, anchor: .bottomLeading).combined(with: .opacity))
                 }
             }
@@ -2899,6 +2909,10 @@ struct ThreadView: View {
             menuActionTick: menuActionTick,         // SwiftUI menu action fired → hold reloads through its dismissal
             sendTick: sendTick,                     // Send tapped → the list holds its offset until the row lands
             topOverlayHeight: searchActive ? 0 : pinBarHeight,   // floating date pill drops below the pin bar
+            // How far the composer stands above the keyboard, measured where it is placed. The
+            // floating overlays sit on top of that instead of on the bottom safe area, which no
+            // longer contains the bar. See `onComposerLift` in the controller.
+            onComposerLift: { composerLift = $0 },
             onJumpButtonVisibility: { showJumpButton = $0 },
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,

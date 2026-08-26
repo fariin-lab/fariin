@@ -125,6 +125,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // Height of the top overlay (pinned-message bar) the list runs UNDER. The floating date pill drops below
     // it so it isn't hidden behind the pin (the reference app behavior). 0 â†’ pill sits at its normal top position.
     var topOverlayHeight: CGFloat = 0
+    var onComposerLift: (CGFloat) -> Void = { _ in }   // how far the composer stands above the keyboard
     var onTopInset: (CGFloat) -> Void = { _ in }   // reports the GEOMETRIC nav-bar overlap (UIKit safe area â€” reliable)
     // Whether the floating jump-to-latest button should be on screen. Reported on its own instead of
     // being derived from `isAtBottom`, because the two answer different questions: isAtBottom decides
@@ -220,6 +221,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onSwipeReply = onSwipeReply
         vc.dayLabelFor = dayLabelFor
         vc.onTopInset = onTopInset
+        vc.onComposerLift = onComposerLift
         vc.setLoadingOlder(loadingOlder)
         vc.rowSignatures = rowSignatures
         // The scroll target RIDES the apply (a jump is a scroll ACTION attached to the load, landed
@@ -609,6 +611,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var dateFadeWork: DispatchWorkItem?
     private var lastDateId: String?
     var onTopInset: ((CGFloat) -> Void)?      // ThreadView positions the date pill / pinned bar with this
+    /// ⛔ HOW FAR THE COMPOSER RISES ABOVE THE KEYBOARD (or above the safe-area line at rest): the
+    /// container's height less the keyboard band. SwiftUI's floating overlays — the jump-to-latest
+    /// arrow, the reaction jump, the other side's recording bubble — sit above the bar by this.
+    ///
+    /// They used to need no such number: the bar was SwiftUI's `safeAreaBar`, so it GREW the bottom
+    /// safe area and a `.padding(.bottom, 10)` landed above it for free. The bar is UIKit's now and
+    /// the SwiftUI slot is a zero-height spacer, so that padding started from the keyboard instead
+    /// and the arrow came down on top of the mic button — his report, 2026-08-26, and the same shape
+    /// of failure as the pause button in `positionVoiceControl`.
+    var onComposerLift: ((CGFloat) -> Void)?
+    private var lastReportedLift: CGFloat = -1
     private var lastReportedTop: CGFloat = -1
 
     override func viewDidLoad() {
@@ -2523,6 +2536,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if abs(top - lastReportedTop) > 0.5 {
             lastReportedTop = top
             DispatchQueue.main.async { [weak self] in self?.onTopInset?(top) }
+        }
+        // And how far the composer stands above the keyboard, for the floating overlays. Same async
+        // rule, same change guard: this runs on every layout pass.
+        if composerBar != nil {
+            let lift = max(0, bottomBarContainer.frame.height - keyboardBand)
+            if abs(lift - lastReportedLift) > 0.5 {
+                lastReportedLift = lift
+                DispatchQueue.main.async { [weak self] in self?.onComposerLift?(lift) }
+            }
         }
         // SCROLL-LOCK BACKSTOP. handleSwipePan disables the scroll view's pan for the duration of a
         // swipe-to-reply and resetSwipe is the single choke point that restores it â€” so ANY path that ends
