@@ -1,3 +1,4 @@
+import FirebaseFirestore
 import UIKit
 
 // ===== The card bubbles =====
@@ -70,6 +71,195 @@ final class LocationBubbleView: UIView {
     func prepareForReuse() {
         renderedKey = nil
         map.image = nil
+    }
+}
+
+// ── A poll ──
+
+/// ⛔ THE ONLY ROW IN THIS DIRECTORY THAT OWNS A SUBSCRIPTION, and it is careful about it.
+///
+/// Votes arrive from a Firestore listener and change constantly. They change NO geometry — the bar
+/// fills inside a fixed track and the percentage sits in a fixed slot — so the row is planned once
+/// and this view repaints in place. A poll never re-measures, which is why a vote landing cannot
+/// move the conversation under the reader.
+///
+/// ⚠️ THE LISTENER IS KEYED AND TORN DOWN ON REUSE. A recycled cell that kept its old listener would
+/// paint another poll's votes into this one, and forty scrolled-past polls would each still hold a
+/// live query.
+final class PollBubbleView: UIView {
+    private let question = UILabel()
+    private let subtitle = UILabel()
+    private let total = UILabel()
+    private var rows: [PollOptionRow] = []
+
+    private var listener: ListenerRegistration?
+    private var listeningKey: String?
+    private var votes: [String: [Int]] = [:]
+    private var plan: PollPlan?
+    private var body: BubbleBody.PollBody?
+    private var tint: UIColor = .label
+    private var cid: String = ""
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        question.numberOfLines = 0
+        question.lineBreakMode = .byWordWrapping
+        addSubview(question)
+        subtitle.lineBreakMode = .byTruncatingTail
+        addSubview(subtitle)
+        total.lineBreakMode = .byTruncatingTail
+        addSubview(total)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    deinit { listener?.remove() }
+
+    func configure(_ p: BubbleBody.PollBody, plan: PollPlan, tint: UIColor, cid: String) {
+        self.plan = plan
+        self.body = p
+        self.tint = tint
+        self.cid = cid
+
+        question.frame = plan.question
+        question.attributedText = plan.questionAttr
+        subtitle.frame = plan.subtitle
+        subtitle.attributedText = plan.subtitleAttr
+        total.frame = plan.total
+
+        while rows.count < plan.options.count {
+            let r = PollOptionRow()
+            addSubview(r)
+            rows.append(r)
+        }
+        for (i, r) in rows.enumerated() {
+            guard i < plan.options.count else { r.isHidden = true; continue }
+            r.isHidden = false
+            r.frame = bounds
+            r.apply(plan.options[i], tint: tint)
+        }
+
+        let key = "\(cid)|\(p.messageId)"
+        if listeningKey != key {
+            listener?.remove()
+            listeningKey = key
+            votes = [:]
+            listener = PollService.listen(cid: cid, messageId: p.messageId) { [weak self] v in
+                guard let self, self.listeningKey == key else { return }
+                self.votes = v
+                self.paintVotes()
+            }
+        }
+        paintVotes()
+    }
+
+    /// Vote counts → the bar fills and the percentages. Geometry is untouched.
+    private func paintVotes() {
+        guard let plan, let body else { return }
+        let voters = votes.count
+        let mine = Set(votes[AuthService.shared.uid ?? ""] ?? [])
+        total.attributedText = NSAttributedString(
+            string: "\(voters) vote\(voters == 1 ? "" : "s")",
+            attributes: [.font: UIFont.systemFont(ofSize: 11),
+                         .foregroundColor: tint.withAlphaComponent(0.7)])
+        for (i, r) in rows.enumerated() where i < plan.options.count {
+            let count = votes.values.reduce(0) { $0 + ($1.contains(i) ? 1 : 0) }
+            let fraction = voters > 0 ? Double(count) / Double(voters) : 0
+            r.paint(fraction: fraction, chosen: mine.contains(i),
+                    multiple: body.multiple, tint: tint)
+        }
+    }
+
+    /// Cast a vote on this option.
+    ///
+    /// ⚠️ THE WRITE IS BUILT HERE, not up in ThreadView, because a vote is a TOGGLE against what the
+    /// voter can currently see — and the live selection only exists in this view's listener. Routing
+    /// the tap upwards would have meant a second copy of the votes, one update behind.
+    func castVote(option i: Int) {
+        guard let body else { return }
+        let me = AuthService.shared.uid ?? ""
+        var mine = Set(votes[me] ?? [])
+        if body.multiple {
+            if mine.contains(i) { mine.remove(i) } else { mine.insert(i) }
+        } else {
+            // Single choice REPLACES, and tapping your own answer clears it.
+            mine = mine == [i] ? [] : [i]
+        }
+        PollService.setVote(cid: cid, messageId: body.messageId, options: mine.sorted())
+    }
+
+    /// Which option is at this point, for the tap that casts a vote.
+    func optionIndex(at point: CGPoint) -> Int? {
+        guard let plan else { return nil }
+        for (i, o) in plan.options.enumerated() {
+            let hit = o.glyph.union(o.label).union(o.percent).insetBy(dx: 0, dy: -4)
+            if hit.contains(point) { return i }
+        }
+        return nil
+    }
+
+    func prepareForReuse() {
+        listener?.remove()
+        listener = nil
+        listeningKey = nil
+        votes = [:]
+    }
+}
+
+final class PollOptionRow: UIView {
+    private let glyph = UIImageView()
+    private let label = UILabel()
+    private let percent = UILabel()
+    private let track = UIView()
+    private let fill = UIView()
+    private var option: PollPlan.Option?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        glyph.contentMode = .scaleAspectFit
+        addSubview(glyph)
+        label.numberOfLines = 0
+        label.lineBreakMode = .byWordWrapping
+        addSubview(label)
+        percent.textAlignment = .right
+        addSubview(percent)
+        track.clipsToBounds = true
+        addSubview(track)
+        track.addSubview(fill)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func apply(_ o: PollPlan.Option, tint: UIColor) {
+        option = o
+        glyph.frame = o.glyph
+        label.frame = o.label
+        label.attributedText = o.labelAttr
+        percent.frame = o.percent
+        track.frame = o.track
+        track.layer.cornerRadius = o.track.height / 2
+        track.backgroundColor = tint.withAlphaComponent(0.18)
+        fill.layer.cornerRadius = o.track.height / 2
+    }
+
+    func paint(fraction: Double, chosen: Bool, multiple: Bool, tint: UIColor) {
+        guard let o = option else { return }
+        let symbol = multiple
+            ? (chosen ? "checkmark.square.fill" : "square")
+            : (chosen ? "largecircle.fill.circle" : "circle")
+        glyph.image = UIImage(systemName: symbol,
+                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 16))
+        glyph.tintColor = tint
+        percent.attributedText = NSAttributedString(
+            string: "\(Int((fraction * 100).rounded()))%",
+            attributes: [.font: UIFont.systemFont(ofSize: 13, weight: .semibold),
+                         .foregroundColor: tint.withAlphaComponent(0.85)])
+        fill.backgroundColor = tint
+        // The one thing that animates in a poll: the bar growing as a vote lands.
+        UIView.animate(withDuration: 0.25) {
+            self.fill.frame = CGRect(x: 0, y: 0,
+                                     width: o.track.width * CGFloat(max(0, min(1, fraction))),
+                                     height: o.track.height)
+        }
     }
 }
 

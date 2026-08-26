@@ -71,6 +71,20 @@ enum BubbleBody: Equatable {
     case location(LocationBody)
     /// A shared contact: avatar, name, and a "message" button.
     case contact(ContactBody)
+    /// A poll: the question and its options, with live vote bars.
+    case poll(PollBody)
+
+    /// ⚠️ THE VOTES ARE NOT IN HERE, AND THAT IS THE DESIGN. They arrive from a Firestore listener
+    /// and change constantly; putting them in the model would re-plan the row on every vote. They
+    /// change no geometry — the bars fill inside a fixed track and the percentage sits in a fixed
+    /// slot — so the plan is static and the VIEW subscribes and repaints. A poll never re-measures.
+    struct PollBody: Equatable {
+        var pollId: String
+        var messageId: String
+        var question: String
+        var options: [String]
+        var multiple: Bool
+    }
 
     struct LocationBody: Equatable {
         var lat: Double

@@ -97,6 +97,23 @@ struct ContactPlan {
     var buttonAttr: NSAttributedString?
 }
 
+/// A poll. Every rect is fixed; only the bars' FILL and the percentages change as votes land.
+struct PollPlan {
+    struct Option {
+        var glyph: CGRect
+        var label: CGRect
+        var labelAttr: NSAttributedString
+        var percent: CGRect             // the slot, right-aligned; the text is written live
+        var track: CGRect
+    }
+    var question: CGRect
+    var questionAttr: NSAttributedString
+    var subtitle: CGRect
+    var subtitleAttr: NSAttributedString
+    var options: [Option]
+    var total: CGRect                   // "N votes", written live
+}
+
 struct BubblePlan {
     var bubble: CGRect                  // the bubble's own frame, row coordinates
     var radii: BubbleRadii
@@ -123,6 +140,7 @@ struct BubblePlan {
     var filePlan: FilePlan?
     var locationPlan: LocationPlan?
     var contactPlan: ContactPlan?
+    var pollPlan: PollPlan?
 
     // Outside the bubble, row coordinates
     var avatar: CGRect?
@@ -393,6 +411,12 @@ enum MessageRowLayout {
                             topSpacing: topSpacing, y: y,
                             senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
                             forwardedSize: forwardedSize, forwardedIconW: forwardedIconW)
+        case .poll(let p):
+            return poll(p, row: b, originX: originX, columnX: columnX, columnW: columnW,
+                        maxBubble: maxBubble, textColor: textColor, metaColor: metaColor,
+                        topSpacing: topSpacing, y: y,
+                        senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                        forwardedSize: forwardedSize, forwardedIconW: forwardedIconW)
         case .contact(let c):
             return contact(c, row: b, originX: originX, columnX: columnX, columnW: columnW,
                            maxBubble: maxBubble, textColor: textColor, metaColor: metaColor,
@@ -419,7 +443,7 @@ enum MessageRowLayout {
                 meta: .zero, metaOnOwnLine: false, quote: nil, quoteInner: nil,
                 bodyAttr: bodyAttr, links: [], textColor: textColor, metaColor: metaColor,
                 tombstoneIcon: CGRect(x: 14, y: (bubbleH - iconW) / 2, width: iconW, height: iconW),
-                mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil,
+                mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil,
                 avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
                 forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
                 retry: nil)
@@ -494,7 +518,7 @@ enum MessageRowLayout {
             text: textRect, meta: metaRect, metaOnOwnLine: metaOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: bodyAttr, links: links, textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -698,7 +722,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: plan, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil,
+            tombstoneIcon: nil, mediaPlan: plan, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -804,7 +828,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: plan, filePlan: nil, locationPlan: nil, contactPlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: plan, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -889,7 +913,100 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: true,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: plan, locationPlan: nil, contactPlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: plan, locationPlan: nil, contactPlan: nil, pollPlan: nil,
+            avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
+            forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
+            retry: nil)
+        let bottom = decorations(b, plan: &out, bubbleRect: bubbleRect, columnX: columnX,
+                                 columnW: columnW, originX: originX, topSpacing: topSpacing,
+                                 senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                                 forwardedSize: forwardedSize, forwardedIconW: forwardedIconW,
+                                 y: bubbleRect.maxY)
+        return BubbleResult(plan: out, totalHeight: bottom)
+    }
+
+    // ── A poll ──
+
+    private static func poll(_ p: BubbleBody.PollBody, row b: BubbleRow,
+                             originX: CGFloat, columnX: CGFloat, columnW: CGFloat,
+                             maxBubble: CGFloat, textColor: UIColor, metaColor: UIColor,
+                             topSpacing: CGFloat, y startY: CGFloat,
+                             senderNameAttr: NSAttributedString?, senderNameSize: CGSize,
+                             forwardedSize: CGSize, forwardedIconW: CGFloat) -> BubbleResult {
+        let y = startY
+        let pad: CGFloat = 12
+        let bubbleW = min(columnW, maxBubble * 0.9)
+        let contentW = max(1, bubbleW - pad * 2)
+        var innerY = pad
+
+        var quoteRect: CGRect?
+        var quoteInner: QuoteInnerPlan?
+        if let q = b.quote {
+            let (size, inner) = quoteSize(q, textColor: textColor, maxWidth: contentW)
+            quoteInner = inner
+            quoteRect = CGRect(x: pad, y: innerY, width: contentW, height: size.height)
+            innerY += size.height + 8
+        }
+
+        let questionAttr = NSAttributedString(string: p.question, attributes: [
+            .font: UIFont.systemFont(ofSize: 16, weight: .semibold), .foregroundColor: textColor])
+        let qSize = BubbleText.size(questionAttr, width: contentW)
+        let question = CGRect(x: pad, y: innerY, width: contentW, height: qSize.height)
+        innerY = question.maxY + 2
+
+        let subtitleAttr = NSAttributedString(
+            string: p.multiple ? "Select one or more" : "Select one",
+            attributes: [.font: UIFont.systemFont(ofSize: 11),
+                         .foregroundColor: textColor.withAlphaComponent(0.7)])
+        let sSize = lineSizeOf(subtitleAttr, cap: contentW)
+        let subtitle = CGRect(x: pad, y: innerY, width: contentW, height: sSize.height)
+        innerY = subtitle.maxY + 12
+
+        let glyphW: CGFloat = 16, gap: CGFloat = 8, percentW: CGFloat = 42, trackH: CGFloat = 6
+        var options: [PollPlan.Option] = []
+        for (i, opt) in p.options.enumerated() {
+            let labelAttr = NSAttributedString(string: opt, attributes: [
+                .font: UIFont.systemFont(ofSize: 15), .foregroundColor: textColor])
+            let labelW = max(1, contentW - glyphW - gap - percentW - gap)
+            let lSize = BubbleText.size(labelAttr, width: labelW)
+            let rowH = max(glyphW, lSize.height)
+            options.append(PollPlan.Option(
+                glyph: CGRect(x: pad, y: innerY + (rowH - glyphW) / 2, width: glyphW, height: glyphW),
+                label: CGRect(x: pad + glyphW + gap, y: innerY + (rowH - lSize.height) / 2,
+                              width: labelW, height: lSize.height),
+                labelAttr: labelAttr,
+                percent: CGRect(x: pad + contentW - percentW, y: innerY + (rowH - 16) / 2,
+                                width: percentW, height: 16),
+                track: CGRect(x: pad, y: innerY + rowH + 5, width: contentW, height: trackH)))
+            innerY += rowH + 5 + trackH
+            if i < p.options.count - 1 { innerY += 12 }
+        }
+        innerY += 12
+
+        let totalAttr = NSAttributedString(string: "0 votes", attributes: [
+            .font: UIFont.systemFont(ofSize: 11), .foregroundColor: textColor.withAlphaComponent(0.7)])
+        let tSize = lineSizeOf(totalAttr, cap: contentW)
+        let total = CGRect(x: pad, y: innerY, width: contentW, height: tSize.height)
+        innerY = total.maxY + 8
+
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
+        let metaSize = BubbleText.lineSize(metaAttr)
+        let metaRect = CGRect(x: pad + contentW - metaSize.width, y: innerY,
+                              width: metaSize.width, height: metaSize.height)
+        innerY = metaRect.maxY + pad
+
+        let plan = PollPlan(question: question, questionAttr: questionAttr,
+                            subtitle: subtitle, subtitleAttr: subtitleAttr,
+                            options: options, total: total)
+        let bubbleRect = CGRect(x: b.isMe ? (columnX + columnW - bubbleW) : columnX,
+                                y: y, width: bubbleW, height: innerY)
+        var out = BubblePlan(
+            bubble: bubbleRect, radii: b.radii, isCapsule: false, fill: b.fill, rim: b.rim,
+            text: .zero, meta: metaRect, metaOnOwnLine: true,
+            quote: quoteRect, quoteInner: quoteInner,
+            bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
+            locationPlan: nil, contactPlan: nil, pollPlan: plan,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -962,7 +1079,7 @@ enum MessageRowLayout {
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
-            locationPlan: plan, contactPlan: nil,
+            locationPlan: plan, contactPlan: nil, pollPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -1041,7 +1158,7 @@ enum MessageRowLayout {
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
-            locationPlan: nil, contactPlan: plan,
+            locationPlan: nil, contactPlan: plan, pollPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)

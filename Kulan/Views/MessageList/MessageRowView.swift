@@ -312,6 +312,7 @@ final class MessageRowView: UIView {
     private var fileView: FileBubbleView?
     private var locationView: LocationBubbleView?
     private var contactView: ContactBubbleView?
+    private var pollView: PollBubbleView?
     private var quoteView: BubbleQuoteView?
     private var avatarView: RowAvatarView?
     private var senderLabel: UILabel?
@@ -510,6 +511,7 @@ final class MessageRowView: UIView {
         applyFile(b, model: m, cid: cid)
         applyLocation(b, model: m, dark: dark)
         applyContact(b, model: m)
+        applyPoll(b, model: m, cid: cid)
         applyTombstone(b)
         applyQuote(b, model: m, cid: cid)
         applySender(b, model: m)
@@ -613,6 +615,30 @@ final class MessageRowView: UIView {
         v.frame = CGRect(origin: .zero, size: b.bubble.size)
         v.configure(c, plan: plan, tint: b.textColor)
     }
+
+    private func applyPoll(_ b: BubblePlan, model m: MessageRowModel, cid: String) {
+        guard let plan = b.pollPlan,
+              case .bubble(let row) = m.content, case .poll(let p) = row.body else {
+            pollView?.isHidden = true
+            pollView?.prepareForReuse()
+            return
+        }
+        let v = pollView ?? {
+            let v = PollBubbleView(); bubbleBox.insertSubview(v, aboveSubview: fill); pollView = v; return v
+        }()
+        v.isHidden = false
+        v.frame = CGRect(origin: .zero, size: b.bubble.size)
+        v.configure(p, plan: plan, tint: b.textColor, cid: cid)
+    }
+
+    /// Which poll option is under this point, for the tap that casts a vote.
+    func pollOptionIndex(at point: CGPoint) -> Int? {
+        guard let p = plan, case .bubble(let b) = p.body, b.pollPlan != nil else { return nil }
+        let local = CGPoint(x: point.x - b.bubble.minX, y: point.y - b.bubble.minY)
+        return pollView?.optionIndex(at: local)
+    }
+
+    func castPollVote(option i: Int) { pollView?.castVote(option: i) }
 
     /// The bubble's own outline as a mask. These bubbles carry four different radii (a cluster
     /// squares off the side that continues), so a corner RADIUS would round the two corners the
@@ -963,6 +989,7 @@ final class MessageRowView: UIView {
         albumView?.prepareForReuse()
         fileView?.prepareForReuse()
         locationView?.prepareForReuse()
+        pollView?.prepareForReuse()
         model = nil
         plan = nil
     }

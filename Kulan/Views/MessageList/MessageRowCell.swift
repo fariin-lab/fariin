@@ -210,6 +210,12 @@ final class MessageRowCell: UICollectionViewCell {
                 delegate?.rowCell(self, didTapAlbumTile: tile)
                 return
             }
+            if let option = rowView.pollOptionIndex(at: p) {
+                // Straight to the row: a vote is a toggle against the live selection, which only
+                // the poll view holds. Nothing upstream would have a fresher copy.
+                rowView.castPollVote(option: option)
+                return
+            }
             if rowView.hitsFile(p) {
                 delegate?.rowCellDidTapFile(self)
                 return

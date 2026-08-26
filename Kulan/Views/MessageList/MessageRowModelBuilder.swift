@@ -58,7 +58,7 @@ enum MessageRowModelBuilder {
         if m.isAudio { return false }
         if m.pendingMediaKind != nil || m.isPendingImage { return false }
         if m.locationCard != nil || m.contactCard != nil { return true }
-        if m.poll != nil { return false }
+        if m.poll != nil { return true }
         if m.linkPreview != nil { return false }           // the OG card is phase 3
         if m.isFeatureMarker { return true }               // the "update the app" notice
         if m.replyTo?.isStatus == true { return false }    // the big story card above the bubble is phase 3
@@ -130,6 +130,10 @@ enum MessageRowModelBuilder {
                 // deliberately not on the face of it: the map replaced them, and a coordinate is
                 // the one thing about a place that tells you nothing.
                 label: (loc.label?.isEmpty == false ? loc.label! : "Location")))
+        } else if let poll = msg.poll {
+            body = .poll(BubbleBody.PollBody(
+                pollId: poll.id, messageId: msg.id, question: poll.question,
+                options: poll.options, multiple: poll.multiple))
         } else if let card = msg.contactCard {
             body = .contact(BubbleBody.ContactBody(
                 uid: card.uid, name: card.name, photo: card.photo,
