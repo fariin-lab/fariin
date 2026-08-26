@@ -180,7 +180,7 @@ final class SelectionCheckboxView: UIView {
 
 // ── A centred capsule notice ──
 
-final class NoticePillView: UIView {
+final class RowNoticePillView: UIView {
     private let fill = BubbleFillView()
     private let label = UILabel()
     private let rim = BubbleShapeView()
@@ -314,11 +314,11 @@ final class MessageRowView: UIView {
     private var retryLabel: UILabel?
     private var retryIcon: UIImageView?
     private var reactionViews: [ReactionChipView] = []
-    private var headerPill: NoticePillView?
+    private var headerPill: RowNoticePillView?
     private var dividerLeft: UIView?
     private var dividerRight: UIView?
     private var dividerLabel: UILabel?
-    private var noticeView: NoticePillView?
+    private var noticeView: RowNoticePillView?
     private var callView: CallBubbleView?
     private var checkbox: SelectionCheckboxView?
 
@@ -379,7 +379,7 @@ final class MessageRowView: UIView {
             bubbleBox.isHidden = true
             callView?.isHidden = true
             let v = noticeView ?? {
-                let v = NoticePillView(); addSubview(v); noticeView = v; return v
+                let v = RowNoticePillView(); addSubview(v); noticeView = v; return v
             }()
             v.isHidden = false
             v.configure(n, dark: dark)
@@ -399,7 +399,7 @@ final class MessageRowView: UIView {
     private func applyHeader(_ p: RowPlan, dark: Bool) {
         guard let h = p.dateHeader else { headerPill?.isHidden = true; return }
         let v = headerPill ?? {
-            let v = NoticePillView(); addSubview(v); headerPill = v; return v
+            let v = RowNoticePillView(); addSubview(v); headerPill = v; return v
         }()
         v.isHidden = false
         v.configure(h, dark: dark)
@@ -428,13 +428,25 @@ final class MessageRowView: UIView {
     }
 
     private func applyCheckbox(_ m: MessageRowModel, _ p: RowPlan) {
-        guard let rect = p.checkbox else { checkbox?.isHidden = true; return }
+        guard let rect = p.checkbox else {
+            // Leaving selection: the circle slides back out the way it came rather than vanishing.
+            if let box = checkbox, !box.isHidden {
+                box.alpha = 0
+                box.transform = CGAffineTransform(translationX: -MessageRowLayout.selectionShift, y: 0)
+            }
+            return
+        }
         let v = checkbox ?? {
             let v = SelectionCheckboxView(); addSubview(v); checkbox = v; return v
         }()
         v.isHidden = false
         v.frame = rect
         v.setSelected(m.selected)
+        // The arrival state. When this call is wrapped in the selection animation the from-state was
+        // already seeded by `prepareSelectionEntry`, so writing the destination here is what makes
+        // the circle slide in; on every ordinary configure it is simply the correct state.
+        v.alpha = 1
+        v.transform = .identity
     }
 
     private func applyBubble(_ b: BubblePlan, model m: MessageRowModel, dark: Bool, cid: String) {
@@ -720,6 +732,26 @@ final class MessageRowView: UIView {
             a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             highlight.shape.add(a, forKey: "flash")
         }
+    }
+
+    /// Seat the checkbox at the state it should animate FROM — offset to the leading edge and
+    /// invisible — BEFORE the animation block runs.
+    ///
+    /// ⚠️ It has to happen outside that block. `UIView.animate` interpolates from the values that
+    /// were in place when the block STARTED, so seeding alpha 0 inside it and then setting alpha 1
+    /// in the same block nets to "already visible" and nothing moves at all.
+    ///
+    /// Leaving selection needs no seed: the circle is on screen at alpha 1, and `applyCheckbox`
+    /// writes the fade-out from inside the block, which is the right way round.
+    func prepareSelectionEntry(entering: Bool, plan: RowPlan) {
+        guard entering, let rect = plan.checkbox else { return }
+        let v = checkbox ?? {
+            let v = SelectionCheckboxView(); addSubview(v); checkbox = v; return v
+        }()
+        v.isHidden = false
+        v.frame = rect
+        v.alpha = 0
+        v.transform = CGAffineTransform(translationX: -MessageRowLayout.selectionShift, y: 0)
     }
 
     /// The box a long press lifts and a swipe translates. A notice and a call row are not bubbles,

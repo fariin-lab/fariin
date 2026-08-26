@@ -63,10 +63,27 @@ final class MessageRowCell: UICollectionViewCell {
     // MARK: - Configure
 
     func configure(_ m: MessageRowModel, plan: RowPlan, cid: String) {
+        let previous = model
         rowId = m.id
         model = m
         rowView.frame = CGRect(origin: .zero, size: CGSize(width: plan.width, height: plan.height))
-        rowView.apply(m, plan: plan, cid: cid)
+
+        // Entering or leaving selection mode SLIDES: the checkbox comes in from the leading edge and
+        // the content moves over to make room, on the same 0.2s ease the toolbar uses.
+        //
+        // Gated to a cell that is already showing THIS row. Reconfigure and dequeue call the same
+        // method, so without the id test a cell being recycled during a scroll would animate its way
+        // from the last row's layout into this one's — motion out of nowhere, mid-scroll.
+        let togglingSelection = previous?.id == m.id && previous?.selecting != m.selecting
+        guard togglingSelection else {
+            rowView.apply(m, plan: plan, cid: cid)
+            scheduleClockRepaint()
+            return
+        }
+        rowView.prepareSelectionEntry(entering: m.selecting, plan: plan)
+        UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseInOut, .allowUserInteraction]) {
+            self.rowView.apply(m, plan: plan, cid: cid)
+        }
         scheduleClockRepaint()
     }
 

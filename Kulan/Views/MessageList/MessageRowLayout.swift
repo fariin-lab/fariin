@@ -208,35 +208,37 @@ enum MessageRowLayout {
 
         var y = topSpacing
 
-        // Sender name (first of the cluster) and the Forwarded tag stack above the bubble, 3pt apart.
-        var senderNameRect: CGRect?
+        // ── The two tags above the bubble ──
+        //
+        // ⚠️ THEY ARE MEASURED NOW AND POSITIONED LATER, once the bubble's own edges are known.
+        // The SwiftUI column was a VStack whose width was its widest child — almost always the
+        // bubble — so `.padding(.trailing, 12)` on the Forwarded tag meant "12 from the BUBBLE's
+        // trailing edge", not from the screen's. Placing it against the full row width instead
+        // parked it out at the margin, far from the message it belongs to.
+
         var senderNameAttr: NSAttributedString?
-        var verifiedRect: CGRect?
+        var senderNameSize: CGSize = .zero
         if let s = b.sender, s.showsName {
             let attr = NSAttributedString(string: s.name, attributes: [
                 .font: BubbleMetrics.senderNameFont,
                 .foregroundColor: BubblePalette.senderColor(s.colorSeed)])
-            let size = BubbleText.size(attr, width: maxContent)
-            senderNameRect = CGRect(x: columnX + 12, y: y, width: size.width, height: size.height)
             senderNameAttr = attr
-            if s.verified {
-                verifiedRect = CGRect(x: columnX + 12 + size.width + 4, y: y + (size.height - 11) / 2,
-                                      width: 11, height: 11)
-            }
-            y += size.height + BubbleMetrics.senderNameGap
+            senderNameSize = BubbleText.size(attr, width: maxContent)
+            y += senderNameSize.height + BubbleMetrics.senderNameGap
         }
 
-        var forwardedRect: CGRect?
-        var forwardedIconRect: CGRect?
+        var forwardedSize: CGSize = .zero
+        var forwardedIconW: CGFloat = 0
         if b.forwarded {
-            let h: CGFloat = ceil(BubbleMetrics.forwardedFont.lineHeight)
-            let w = ceil(("Forwarded" as NSString).size(withAttributes: [.font: BubbleMetrics.forwardedFont]).width)
-            let iconW: CGFloat = 11
-            let total = iconW + 3 + w
-            // Mirrored like the SwiftUI tag: 12pt in from the bubble's own side.
-            let x = b.isMe ? (columnX + columnW - 12 - total) : (columnX + 12)
-            forwardedIconRect = CGRect(x: x, y: y + (h - 9) / 2, width: iconW, height: 9)
-            forwardedRect = CGRect(x: x + iconW + 3, y: y, width: w, height: h)
+            // The glyph's real width, not a guess: an SF Symbol at 9pt is not a square, and a
+            // hard-coded box would leave the word sitting at the wrong distance from it.
+            let icon = UIImage(systemName: "arrowshape.turn.up.right.fill",
+                               withConfiguration: UIImage.SymbolConfiguration(pointSize: 9))
+            forwardedIconW = ceil(icon?.size.width ?? 11)
+            let h = ceil(BubbleMetrics.forwardedFont.lineHeight)
+            let w = ceil(("Forwarded" as NSString)
+                .size(withAttributes: [.font: BubbleMetrics.forwardedFont]).width)
+            forwardedSize = CGSize(width: forwardedIconW + 3 + w, height: h)
             y += h + BubbleMetrics.senderNameGap
         }
 
@@ -307,11 +309,19 @@ enum MessageRowLayout {
                 plan.avatar = CGRect(x: originX, y: rect.maxY - BubbleMetrics.avatarSize,
                                      width: BubbleMetrics.avatarSize, height: BubbleMetrics.avatarSize)
             }
-            plan.senderName = senderNameRect
-            plan.senderNameAttr = senderNameAttr
-            plan.verifiedMark = verifiedRect
-            plan.forwarded = forwardedRect
-            plan.forwardedIcon = forwardedIconRect
+            // A tombstone carries neither an edited tag nor a Forwarded one — the notice replaced
+            // the message — but a group sender's name still sits above it, so the run reads
+            // correctly. Positioned against the capsule's own edge, like every other tag.
+            if let attr = senderNameAttr {
+                plan.senderName = CGRect(x: rect.minX + 12, y: topSpacing,
+                                         width: senderNameSize.width, height: senderNameSize.height)
+                plan.senderNameAttr = attr
+                if b.sender?.verified == true {
+                    plan.verifiedMark = CGRect(x: rect.minX + 12 + senderNameSize.width + 4,
+                                               y: topSpacing + (senderNameSize.height - 11) / 2,
+                                               width: 11, height: 11)
+                }
+            }
             return BubbleResult(plan: plan, totalHeight: rect.maxY)
         }
 
@@ -415,10 +425,36 @@ enum MessageRowLayout {
 
         var avatarRect: CGRect?
         if let s = b.sender, s.showsAvatar {
-            // Bottom-aligned with the bubble (the HStack's `.bottom` alignment), so a cluster's
-            // face sits on the last bubble's baseline.
-            avatarRect = CGRect(x: originX, y: bubbleRect.maxY - BubbleMetrics.avatarSize,
+            // Bottom-aligned with the COLUMN, not with the bubble — the row is an
+            // `HStack(alignment: .bottom)` and the column's bottom edge is `y`, which by now
+            // includes the reaction overhang and the retry line. Aligning to the bubble instead
+            // would float the face above the badges on any reacted message.
+            avatarRect = CGRect(x: originX, y: y - BubbleMetrics.avatarSize,
                                 width: BubbleMetrics.avatarSize, height: BubbleMetrics.avatarSize)
+        }
+
+        // Now the bubble's edges are known, the two tags can take their real positions.
+        var senderNameRect: CGRect?
+        var verifiedRect: CGRect?
+        var forwardedRect: CGRect?
+        var forwardedIconRect: CGRect?
+        var tagY = topSpacing
+        if senderNameAttr != nil {
+            senderNameRect = CGRect(x: bubbleRect.minX + 12, y: tagY,
+                                    width: senderNameSize.width, height: senderNameSize.height)
+            if b.sender?.verified == true {
+                verifiedRect = CGRect(x: bubbleRect.minX + 12 + senderNameSize.width + 4,
+                                      y: tagY + (senderNameSize.height - 11) / 2, width: 11, height: 11)
+            }
+            tagY += senderNameSize.height + BubbleMetrics.senderNameGap
+        }
+        if b.forwarded {
+            let x = b.isMe ? (bubbleRect.maxX - 12 - forwardedSize.width) : (bubbleRect.minX + 12)
+            forwardedIconRect = CGRect(x: x, y: tagY + (forwardedSize.height - 9) / 2,
+                                       width: forwardedIconW, height: 9)
+            forwardedRect = CGRect(x: x + forwardedIconW + 3, y: tagY,
+                                   width: forwardedSize.width - forwardedIconW - 3,
+                                   height: forwardedSize.height)
         }
 
         let plan = BubblePlan(
