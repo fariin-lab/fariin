@@ -624,10 +624,12 @@ struct ThreadView: View {
                 // BEFORE the interaction, not at the moment of it — called on the tap it is worth
                 // nothing. Opening the composer is the earliest honest signal that a send is coming.
                 if focused { Haptics.prepare(.light) }
-                guard focused, isAtBottom else { return }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    nativeScrollTarget = "BOTTOM"
-                }
+                // ⛔ NO SCROLL FROM HERE. This used to fire a 0.05s-delayed animated scroll to the
+                // bottom on focus, "belt and braces" for the inset pin. The reference app moves its
+                // list ONLY through the inset update inside the keyboard's own animation, and so
+                // does ours now: a reader at the bottom is kept there by `updateInsets` on the keys'
+                // curve. A second, delayed scroll was a second clock, and the exact thing his
+                // 2026-08-26 spec forbids ("no arbitrary delays, no scrollToBottom()").
             }
             // (Jump-to-bottom button moved: it's anchored ABOVE the composer bar in scrollStack — the list
             // is full-bleed now, so a list-anchored overlay landed at the raw screen bottom UNDER the bar.)
@@ -675,6 +677,10 @@ struct ThreadView: View {
             }
             .buttonStyle(.plain)
             .padding(.trailing, floatingButtonInset)   // the composer's edge — see `floatingButtonInset`
+            // On the keyboard's own curve, as the composer's slot is: the bar's side inset animates
+            // inside the keyboard block in UIKit, and without this the button snapped 29 → 20
+            // while the bar slid (the 2026-08-26 audit).
+            .animation(keyboard.systemAnimation, value: composerKeyboardUp)
             .transition(.scale.combined(with: .opacity))
         }
     }
@@ -794,6 +800,10 @@ struct ThreadView: View {
                     }
             }
             .padding(.trailing, floatingButtonInset)   // the composer's edge — see `floatingButtonInset`
+            // On the keyboard's own curve, as the composer's slot is: the bar's side inset animates
+            // inside the keyboard block in UIKit, and without this the button snapped 29 → 20
+            // while the bar slid (the 2026-08-26 audit).
+            .animation(keyboard.systemAnimation, value: composerKeyboardUp)
             .transition(.scale.combined(with: .opacity))
             .animation(.spring(response: 0.32, dampingFraction: 0.72), value: showsJumpButton)
         }

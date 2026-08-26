@@ -374,8 +374,21 @@ final class ChatComposerView: UIView {
         // A glass view scaled to a dot is still a glass view: unhide before any entrance, hide
         // after any exit, so nothing invisible is left rendering.
         for b in [plusButton, trashButton, sendButton] where targetAlpha(for: b) > 0 { b.isHidden = false }
+        // Height: decided up front, told to the host INSIDE the animation block below. The
+        // reference app animates its toolbar's height change in one animator and its list follows
+        // from within it; ours used to report after the block, and the host then ran a second
+        // spring of its own, so a banner faded in on one curve while the frame grew on another
+        // (the 2026-08-26 audit). Now the host's constraint, inset and layout writes ride this
+        // block, whichever clock it is.
+        let h = preferredHeight(forWidth: bounds.width)
+        let heightChanged = h != lastHeight
+        if heightChanged { lastHeight = h }
         let changes = { [self] in
             refreshAppearance()
+            if heightChanged {
+                invalidateIntrinsicContentSize()
+                onHeightChange?(clock?.swiftUI)
+            }
             setNeedsLayout()
             layoutIfNeeded()
         }
@@ -384,14 +397,6 @@ final class ChatComposerView: UIView {
             for b in [self.plusButton, self.trashButton, self.sendButton] where b.alpha == 0 { b.isHidden = true }
         }
         if let clock { clock.run(changes, done: finish) } else { changes(); finish(true) }
-
-        // Height: told to the host on the same clock, so SwiftUI's frame and our contents agree.
-        let h = preferredHeight(forWidth: bounds.width)
-        if h != lastHeight {
-            lastHeight = h
-            invalidateIntrinsicContentSize()
-            onHeightChange?(clock?.swiftUI)
-        }
 
         // Side channels — disjoint views, their own clocks.
         if old.recordingHeld != new.recordingHeld { setOverlay(shown: new.recordingHeld) }
@@ -883,8 +888,18 @@ extension ChatComposerView: UITextViewDelegate {
         let h = preferredHeight(forWidth: bounds.width)
         if h != lastHeight {
             lastHeight = h
-            invalidateIntrinsicContentSize()
-            onHeightChange?(nil)
+            // Their text growth, from the reference toolbar: a 0.25s critically damped spring
+            // (`springDamping: 1, springResponse: 0.25`) around the height constraint and the
+            // superview's layout, and the list follows from inside it. The host is told inside
+            // this block for that reason; ours used to report bare and let the host spring on
+            // its own, with overshoot.
+            UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0,
+                           options: [.beginFromCurrentState, .allowUserInteraction]) {
+                self.invalidateIntrinsicContentSize()
+                self.onHeightChange?(nil)
+                self.setNeedsLayout()
+                self.layoutIfNeeded()
+            }
         }
     }
 
