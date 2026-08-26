@@ -1215,11 +1215,13 @@ enum MessageRowLayout {
                                     host: host, hostAttr: hostAttr,
                                     divider: nil, button: nil, buttonLabel: nil, buttonAttr: nil))
 
-        case .profile(let handle), .profileUnavailable:
-            let unavailable: Bool
+        case .profile, .profileUnavailable:
+            // The two profile shapes share one layout and differ only in their words, so they share
+            // a case. A binding cannot ride a multi-pattern case — only `.profile` carries a handle
+            // — so it is read out below instead.
             var handleText = ""
+            var unavailable = true
             if case .profile(let h) = p.shape { unavailable = false; handleText = h }
-            else { unavailable = true }
 
             let avatarSize: CGFloat = 44, gap: CGFloat = 10
             y = 10
