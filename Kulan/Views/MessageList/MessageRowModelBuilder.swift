@@ -34,6 +34,11 @@ struct MessageRowContext {
     var storyIsLive: (_ storyId: String, _ author: String) -> Bool = { _, _ in true }
 }
 
+/// ⚠️ `@MainActor` because it genuinely is main-actor work, not to silence a warning: it reads
+/// `AuthService`, `PlayedVoice`, `HiddenMessages`, `VerificationIndex` and `MediaOpenRects`, and it
+/// is only ever called from ThreadView's body. Saying so is cheaper than a nonisolated shim that
+/// pretends otherwise.
+@MainActor
 enum MessageRowModelBuilder {
 
     /// Can this message be drawn by the UIKit row system yet?
