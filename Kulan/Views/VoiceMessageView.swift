@@ -440,7 +440,23 @@ struct VoiceMessageView: View {
     /// and picks it up when you press play.
     private func seek(_ pct: Double) { engine.seek(pct, id: message.id) }
 
-    private func toggle() { engine.toggle(message: message, cid: cid, isMe: isMe) }
+    /// ⛔ THE ICON FLIPS ON THE TAP, NOT ON THE ENGINE'S ANSWER — owner, 2026-08-25: "play pause
+    /// play pause, when I do it fast the button itself is a bit delayed".
+    ///
+    /// The engine was already made instant (see `playing = true` above `p.play()` in
+    /// `VoiceNotePlayer.start`). This half was still slow, and it is the half he can see: `playing`
+    /// here is a COPY of the engine's state, refreshed from `objectWillChange` through a main-queue
+    /// hop. `objectWillChange` fires before the values land, so the hop is not optional — which means
+    /// the copy, and the icon with it, can never repaint on the same frame as the finger.
+    ///
+    /// So the tap moves the copy itself and the engine call follows. `sync()` still runs a moment
+    /// later and is still the truth: anything that refuses to play (a live call owns the session, a
+    /// decrypt that fails) corrects the disc back within the same breath. Skipped while LOADING,
+    /// where the disc is a spinner and there is no icon to flip.
+    private func toggle() {
+        if !loading { playing.toggle() }
+        engine.toggle(message: message, cid: cid, isMe: isMe)
+    }
 
 }
 
