@@ -495,7 +495,7 @@ enum MessageRowLayout {
                     labelAttr: attr, symbol: p.symbol, busy: p.busy, dimmed: p.spent),
                 avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
                 forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
-                retry: nil)
+                failBadge: nil)
             let bottomP = decorations(b, plan: &outP, bubbleRect: rectP, columnX: columnX,
                                       columnW: columnW, originX: originX, topSpacing: topSpacing,
                                       senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
@@ -570,7 +570,7 @@ enum MessageRowLayout {
                 mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
                 avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
                 forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
-                retry: nil)
+                failBadge: nil)
             if let s = b.sender, s.showsAvatar {
                 plan.avatar = CGRect(x: originX, y: rect.maxY - BubbleMetrics.avatarSize,
                                      width: BubbleMetrics.avatarSize, height: BubbleMetrics.avatarSize)
@@ -657,7 +657,7 @@ enum MessageRowLayout {
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: linkPlan, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
-            retry: nil)
+            failBadge: nil)
 
         // Reactions, the retry line, the avatar and the two tags are the same for every bubble
         // kind, so they are placed in ONE function. A media bubble that grew its own copy would be
@@ -882,7 +882,7 @@ enum MessageRowLayout {
             tombstoneIcon: nil, mediaPlan: plan, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
-            retry: nil)
+            failBadge: nil)
 
         let bottom = decorations(b, plan: &out, bubbleRect: bubbleRect, columnX: columnX,
                                  columnW: columnW, originX: originX, topSpacing: topSpacing,
@@ -988,7 +988,7 @@ enum MessageRowLayout {
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: plan, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
-            retry: nil)
+            failBadge: nil)
         let bottom = decorations(b, plan: &out, bubbleRect: bubbleRect, columnX: columnX,
                                  columnW: columnW, originX: originX, topSpacing: topSpacing,
                                  senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
@@ -1073,7 +1073,7 @@ enum MessageRowLayout {
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: plan, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
-            retry: nil)
+            failBadge: nil)
         let bottom = decorations(b, plan: &out, bubbleRect: bubbleRect, columnX: columnX,
                                  columnW: columnW, originX: originX, topSpacing: topSpacing,
                                  senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
@@ -1186,7 +1186,7 @@ enum MessageRowLayout {
             storyReplyPlan: nil, voicePlan: plan, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
-            retry: nil)
+            failBadge: nil)
         let bottom = decorations(b, plan: &out, bubbleRect: bubbleRect, columnX: columnX,
                                  columnW: columnW, originX: originX, topSpacing: topSpacing,
                                  senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
@@ -1459,7 +1459,7 @@ enum MessageRowLayout {
             locationPlan: nil, contactPlan: nil, pollPlan: plan, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
-            retry: nil)
+            failBadge: nil)
         let bottom = decorations(b, plan: &out, bubbleRect: bubbleRect, columnX: columnX,
                                  columnW: columnW, originX: originX, topSpacing: topSpacing,
                                  senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
@@ -1532,7 +1532,7 @@ enum MessageRowLayout {
             locationPlan: plan, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
-            retry: nil)
+            failBadge: nil)
         let bottom = decorations(b, plan: &out, bubbleRect: bubbleRect, columnX: columnX,
                                  columnW: columnW, originX: originX, topSpacing: topSpacing,
                                  senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
@@ -1611,7 +1611,7 @@ enum MessageRowLayout {
             locationPlan: nil, contactPlan: plan, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
-            retry: nil)
+            failBadge: nil)
         let bottom = decorations(b, plan: &out, bubbleRect: bubbleRect, columnX: columnX,
                                  columnW: columnW, originX: originX, topSpacing: topSpacing,
                                  senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
