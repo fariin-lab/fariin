@@ -138,9 +138,16 @@ enum MessageRowModelBuilder {
             body = .tombstone(isMe ? "You deleted this message" : "This message was deleted")
         } else if msg.viewOnce {
             body = .pill(viewOncePill(msg, ctx: ctx, isMe: isMe))
-        } else if let pending = msg.pendingMediaKind ?? (msg.isPendingImage ? "image" : nil) {
+        // ⛔ A VOICE NOTE IS NEVER A PLACEHOLDER PILL. `ChatService.sendAudio` writes the duration
+        // and the true waveform into the document BEFORE the first byte is uploaded, and says why:
+        // "the recipient can be shown a REAL voice bubble immediately". The generic pending branch
+        // below was overriding that and drawing a text-shaped bubble with a spinner and the words
+        // "Voice message" — his screenshot, 2026-08-26: "when it is loading don't change the whole
+        // voice bubble". A photo has nothing to draw before its bytes arrive; a voice note has
+        // everything except the URL, which is needed only to press play.
+        } else if let pending = msg.pendingMediaKind, pending != "audio" {
             // Still being prepared: a spinner and a word. The real bubble arrives when the write
-            // lands, carrying the poster, the duration and the waveform the placeholder cannot know.
+            // lands, carrying the poster and the dimensions the placeholder cannot know.
             body = .pill(BubbleBody.PillBody(
                 symbol: "arrow.up.circle", label: pendingLabel(pending),
                 spent: false, opens: false, busy: true))
@@ -157,7 +164,9 @@ enum MessageRowModelBuilder {
                 // deliberately not on the face of it: the map replaced them, and a coordinate is
                 // the one thing about a place that tells you nothing.
                 label: (loc.label?.isEmpty == false ? loc.label! : "Location")))
-        } else if msg.isAudio {
+        // ⚠️ `isAudio` REQUIRES A URL OR LOCAL BYTES, so an uploading note is not `isAudio` yet —
+        // it has to be named here as well, or it falls through to a plain text bubble.
+        } else if msg.isAudio || msg.pendingMediaKind == "audio" {
             body = .voice(voiceBody(msg, ctx: ctx))
         } else if let poll = msg.poll {
             body = .poll(BubbleBody.PollBody(
@@ -414,7 +423,9 @@ enum MessageRowModelBuilder {
             // ⚠️ A CONSTANT DERIVED FROM THE NOTE'S OWN DURATION AND NOTHING ELSE, so it is the same
             // number at pre-measure, at render and in every playback state. That is the property
             // the old bubble's width-on-play bloom fix actually needed.
-            contentWidth: Double(VoiceMessageView.contentWidth(for: m)))
+            contentWidth: Double(VoiceMessageView.contentWidth(for: m)),
+            // Still uploading: everything is drawn, only the disc spins. See `VoiceBody.loading`.
+            loading: m.pendingMediaKind == "audio")
     }
 
     private static func linkPreviewBody(_ p: Message.LinkPreviewData) -> BubbleBody.LinkPreview {

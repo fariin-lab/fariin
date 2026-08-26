@@ -60,7 +60,11 @@ final class VoiceBubbleView: UIView {
         micGlyph.isUserInteractionEnabled = false
         addSubview(micGlyph)
 
-        disc.onTap = { [weak self] in self?.onPlayToggle() }
+        // Nothing to play while the bytes are still going up; the disc is already spinning.
+        disc.onTap = { [weak self] in
+            guard let self, self.body?.loading != true else { return }
+            self.onPlayToggle()
+        }
         wave.onSeek = { [weak self] fraction in
             guard let b = self?.body else { return }
             VoiceNotePlayer.shared.seek(fraction, id: b.messageId)
@@ -120,8 +124,10 @@ final class VoiceBubbleView: UIView {
     private func paint() {
         guard let b = body else { return }
         let player = VoiceNotePlayer.shared
-        disc.showsPause = player.isPlaying(b.messageId)
-        disc.isBusy = player.isLoading(b.messageId)
+        disc.showsPause = player.isPlaying(b.messageId) && !b.loading
+        // The upload's spinner and the player's are the same spinner: there is nothing to play
+        // until the bytes land, and the disc is the one place that says so.
+        disc.isBusy = b.loading || player.isLoading(b.messageId)
         wave.progress = player.progress(for: b.messageId)
         // The dot is live, not planned: its slot is reserved either way, so hiding it the moment
         // this note is heard costs no layout. Playing it at all counts as hearing it.
