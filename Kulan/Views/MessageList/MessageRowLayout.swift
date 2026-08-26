@@ -1132,12 +1132,25 @@ enum MessageRowLayout {
                              y: stackTop + waveH + 6 + (durH - 10) / 2, width: 10, height: 10))
         innerY += contentH
 
-        // The footer is laid OVER the trailing edge of the duration line, so the clock and the
-        // length share one row — an overlay adds no size, which is the shape that is safe here.
+        // ⛔ ANCHORED TO THE BUBBLE'S BOTTOM, exactly as the text bubble's footer is — his order,
+        // 2026-08-26, after comparing the two side by side.
+        //
+        // It used to be centred on the DURATION LINE (`plan.duration.midY - metaSize.height / 2`),
+        // which is a different anchor from every other bubble in the chat: the voice column is
+        // vertically centred inside a 55pt floor, so whenever that floor was taller than the column
+        // the badge floated in the middle instead of sitting where a timestamp sits.
+        //
+        // `innerY` is the content's bottom at this point (the bubble's own `vPad` is added on the
+        // next line), so `innerY - height - 1` is the same expression the text path uses. The
+        // duration is at the column's LEADING edge and this is at the trailing one, so they still
+        // share the row without touching.
+        //
+        // ⚠️ An overlay, adding no height — which is the shape this bubble's own notes call the safe
+        // one, because the row is pre-measured and anything that adds size here would bloom it.
         let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
         let metaSize = BubbleText.lineSize(metaAttr)
         let metaRect = CGRect(x: hPad + contentW - metaSize.width,
-                              y: plan.duration.midY - metaSize.height / 2,
+                              y: innerY - metaSize.height - 1,
                               width: metaSize.width, height: metaSize.height)
         innerY += vPad
 
