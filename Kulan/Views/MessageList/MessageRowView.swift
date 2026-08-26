@@ -317,6 +317,7 @@ final class MessageRowView: UIView {
     private var storyReplyView: StoryReplyCardView?
     private var voiceView: VoiceBubbleView?
     private var pillView: PillBubbleView?
+    private var sendingSpinner: UIImageView?
     private var quoteView: BubbleQuoteView?
     private var avatarView: RowAvatarView?
     private var senderLabel: UILabel?
@@ -525,8 +526,10 @@ final class MessageRowView: UIView {
 
         bodyLabel.attributedText = b.bodyAttr
         bodyLabel.frame = b.text
-        metaLabel.attributedText = BubbleText.meta(metaChrome(m), isMe: isMe(m), color: b.metaColor,
-                                                   showClock: shouldShowClock(m))
+        metaLabel.attributedText = BubbleText.meta(metaChrome(m), isMe: isMe(m), color: b.metaColor)
+        // Theirs SPINS while a message is in flight (`isAnimated: true` on the sending indicator,
+        // a full turn a second, repeating). A still clock reads as a stuck message.
+        setSendingSpin(metaChrome(m).tick == .sending, over: b)
         metaLabel.frame = b.meta
         metaLabel.isHidden = b.meta == .zero
 
@@ -951,29 +954,43 @@ final class MessageRowView: UIView {
         return MetaChrome(timeText: "", edited: false, tick: .none, bornAt: nil)
     }
 
-    /// The sending clock's 0.8s grace window. The reference app never shows a clock on a healthy
-    /// send — the tick lands before the eye can catch a pending state — so the slot stays EMPTY
-    /// until the send has actually been slow. Anchored to the message, so a recycled cell showing
-    /// an already-slow send draws the clock at once.
-    private func shouldShowClock(_ m: MessageRowModel) -> Bool {
-        let meta = metaChrome(m)
-        guard meta.tick == .sending, let born = meta.bornAt else { return true }
-        return Date().timeIntervalSince(born) > 0.8
-    }
-
-    /// True when this row is still inside the clock's grace window, so the cell knows to schedule
-    /// one repaint rather than polling.
-    func pendingClockDeadline() -> TimeInterval? {
-        guard let m = model else { return nil }
-        let meta = metaChrome(m)
-        guard meta.tick == .sending, let born = meta.bornAt else { return nil }
-        let remaining = 0.8 - Date().timeIntervalSince(born)
-        return remaining > 0 ? remaining : nil
+    /// The spinning sending indicator, drawn over the footer's tick slot.
+    ///
+    /// ⚠️ A SEPARATE VIEW, not the label's attachment: an attachment cannot rotate, and rotating
+    /// the whole footer would spin the timestamp with it.
+    private func setSendingSpin(_ on: Bool, over b: BubblePlan) {
+        guard on else {
+            sendingSpinner?.layer.removeAllAnimations()
+            sendingSpinner?.isHidden = true
+            return
+        }
+        let v = sendingSpinner ?? {
+            let x = UIImageView(image: UIImage(systemName: "clock",
+                                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 9, weight: .semibold)))
+            x.contentMode = .center
+            bubbleBox.addSubview(x)
+            sendingSpinner = x
+            return x
+        }()
+        v.isHidden = false
+        v.tintColor = b.metaColor
+        // Over the tick, at the footer's trailing edge.
+        let side: CGFloat = 10
+        v.frame = CGRect(x: b.meta.maxX - side, y: b.meta.midY - side / 2, width: side, height: side)
+        bubbleBox.bringSubviewToFront(v)
+        guard v.layer.animation(forKey: "spin") == nil else { return }
+        // Their numbers, verbatim: one full turn, one second, cumulative, forever.
+        let a = CABasicAnimation(keyPath: "transform.rotation.z")
+        a.toValue = CGFloat.pi * 2
+        a.duration = 1
+        a.isCumulative = true
+        a.repeatCount = .greatestFiniteMagnitude
+        v.layer.add(a, forKey: "spin")
     }
 
     func refreshMeta() {
         guard let m = model, let p = plan, case .bubble(let b) = p.body else { return }
-        metaLabel.attributedText = BubbleText.meta(b: b, m: m, showClock: shouldShowClock(m))
+        metaLabel.attributedText = BubbleText.meta(b: b, m: m)
         metaLabel.frame = b.meta
     }
 
@@ -1158,6 +1175,8 @@ final class MessageRowView: UIView {
         storyReplyView?.prepareForReuse()
         voiceView?.prepareForReuse()
         pillView?.prepareForReuse()
+        sendingSpinner?.layer.removeAllAnimations()
+        sendingSpinner?.isHidden = true
         model = nil
         plan = nil
     }
@@ -1166,8 +1185,8 @@ final class MessageRowView: UIView {
 private extension BubbleText {
     /// The meta string for a bubble that is already planned — keeps the two call sites in
     /// `MessageRowView` from restating the colour and the isMe test.
-    static func meta(b: BubblePlan, m: MessageRowModel, showClock: Bool) -> NSAttributedString {
+    static func meta(b: BubblePlan, m: MessageRowModel) -> NSAttributedString {
         guard case .bubble(let row) = m.content else { return NSAttributedString() }
-        return meta(row.meta, isMe: row.isMe, color: b.metaColor, showClock: showClock)
+        return meta(row.meta, isMe: row.isMe, color: b.metaColor)
     }
 }

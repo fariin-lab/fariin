@@ -461,7 +461,7 @@ enum MessageRowLayout {
                                : UIFont.systemFont(ofSize: 15, weight: .medium),
                 .foregroundColor: textColor.withAlphaComponent(p.spent ? 0.6 : 1)])
             let labelSize = lineSizeOf(attr, cap: maxContent)
-            let metaAttrP = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
+            let metaAttrP = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
             let metaSizeP = BubbleText.lineSize(metaAttrP)
             let innerW = glyphW + gap + labelSize.width + gap + metaSizeP.width
             let bubbleWP = min(maxBubble, innerW + hPadP * 2)
@@ -543,7 +543,7 @@ enum MessageRowLayout {
                            forwardedSize: forwardedSize, forwardedIconW: forwardedIconW)
         }
 
-        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
         let metaSize = BubbleText.lineSize(metaAttr)
 
         // A tombstone is a capsule with its own insets and no footer at all — a notice has no
@@ -809,7 +809,7 @@ enum MessageRowLayout {
         innerY = mediaRect.maxY
 
         // The footer: in the caption row when there is a caption, floating on the picture when not.
-        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
         var plan = MediaPlan(media: mediaRect, caption: nil, captionText: nil, captionAttr: nil,
                              captionMetaOnOwnLine: false, metaCapsule: nil, duration: nil,
                              playBadge: nil, uploadRing: nil, kind: m.kind)
@@ -941,7 +941,7 @@ enum MessageRowLayout {
 
         var plan = AlbumPlan(grid: grid, tiles: tiles, caption: nil, captionText: nil,
                              captionAttr: nil, captionMetaOnOwnLine: false, metaCapsule: nil)
-        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
         var metaRect: CGRect
         if let caption = a.caption, !caption.text.isEmpty {
             let r = captionBlock(caption, meta: b.meta, metaAttr: metaAttr, row: b,
@@ -997,7 +997,7 @@ enum MessageRowLayout {
         let sizeAttr = NSAttributedString(string: f.sizeLabel, attributes: [
             .font: UIFont.systemFont(ofSize: 12),
             .foregroundColor: b.isMe ? UIColor.white.withAlphaComponent(0.8) : UIColor.secondaryLabel])
-        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
         let metaSize = BubbleText.lineSize(metaAttr)
 
         let textAvail = max(1, maxContent - slotSize.width - gap)
@@ -1134,7 +1134,7 @@ enum MessageRowLayout {
 
         // The footer is laid OVER the trailing edge of the duration line, so the clock and the
         // length share one row — an overlay adds no size, which is the shape that is safe here.
-        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
         let metaSize = BubbleText.lineSize(metaAttr)
         let metaRect = CGRect(x: hPad + contentW - metaSize.width,
                               y: plan.duration.midY - metaSize.height / 2,
@@ -1407,7 +1407,7 @@ enum MessageRowLayout {
         let total = CGRect(x: pad, y: innerY, width: contentW, height: tSize.height)
         innerY = total.maxY + 8
 
-        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
         let metaSize = BubbleText.lineSize(metaAttr)
         let metaRect = CGRect(x: pad + contentW - metaSize.width, y: innerY,
                               width: metaSize.width, height: metaSize.height)
@@ -1483,7 +1483,7 @@ enum MessageRowLayout {
             chevron: CGRect(x: bubbleW - pad - chevW, y: rowTop + (rowH - chevW) / 2,
                             width: chevW, height: chevW))
 
-        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
         let metaSize = BubbleText.lineSize(metaAttr)
         let metaRect = CGRect(x: bubbleW - pad - metaSize.width, y: rowTop + rowH + 8,
                               width: metaSize.width, height: metaSize.height)
@@ -1548,7 +1548,7 @@ enum MessageRowLayout {
             button: nil, buttonLabel: nil, buttonAttr: nil)
         innerY += rowH + 10
 
-        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
         let metaSize = BubbleText.lineSize(metaAttr)
         let metaRect = CGRect(x: bubbleW - pad - metaSize.width, y: innerY,
                               width: metaSize.width, height: metaSize.height)

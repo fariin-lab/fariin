@@ -39,7 +39,6 @@ final class MessageRowCell: UICollectionViewCell {
 
     private let rowView = MessageRowView()
     private var tap: UITapGestureRecognizer!
-    private var clockWork: DispatchWorkItem?
 
     weak var delegate: MessageRowCellDelegate?
     private(set) var rowId: String?
@@ -92,14 +91,12 @@ final class MessageRowCell: UICollectionViewCell {
         let togglingSelection = previous?.id == m.id && previous?.selecting != m.selecting
         guard togglingSelection else {
             rowView.apply(m, plan: plan, cid: cid)
-            scheduleClockRepaint()
-            return
+                return
         }
         rowView.prepareSelectionEntry(entering: m.selecting, plan: plan)
         UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseInOut, .allowUserInteraction]) {
             self.rowView.apply(m, plan: plan, cid: cid)
         }
-        scheduleClockRepaint()
     }
 
     /// A geometry-neutral repaint — the tick upgraded, the time changed, the row was selected. Held
@@ -120,7 +117,6 @@ final class MessageRowCell: UICollectionViewCell {
             rowView.apply(m, plan: plan, cid: cid)
         }
         rowView.animateDecorations(fromSelected: old.selected, fromHighlighted: old.highlighted)
-        scheduleClockRepaint()
     }
 
     private func tickChanged(_ a: MessageRowModel, _ b: MessageRowModel) -> Bool {
@@ -149,22 +145,8 @@ final class MessageRowCell: UICollectionViewCell {
         }
     }
 
-    /// The sending clock's grace window closes on a timer, not on a data change — so a send that is
-    /// genuinely slow has to repaint itself once when the window expires. One scheduled repaint per
-    /// pending row; nothing polls.
-    private func scheduleClockRepaint() {
-        clockWork?.cancel()
-        clockWork = nil
-        guard let remaining = rowView.pendingClockDeadline() else { return }
-        let work = DispatchWorkItem { [weak self] in self?.rowView.refreshMeta() }
-        clockWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + remaining + 0.02, execute: work)
-    }
-
     override func prepareForReuse() {
         super.prepareForReuse()
-        clockWork?.cancel()
-        clockWork = nil
         rowId = nil
         model = nil
         rowView.prepareForReuse()

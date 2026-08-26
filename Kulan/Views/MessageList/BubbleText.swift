@@ -107,7 +107,20 @@ enum BubbleText {
     // ── The footer ──
 
     /// The VISIBLE footer: "edited", the time, and the tick.
-    static func meta(_ m: MetaChrome, isMe: Bool, color: UIColor, showClock: Bool) -> NSAttributedString {
+    /// ⛔ `showClock` IS GONE, AND THAT REVERSES AN OLDER RULE OF HIS ON HIS NEWER WORD.
+    ///
+    /// This footer used to hold the sending glyph back for 0.8s, on a 2026-08-12 note reasoning
+    /// that "the reference never shows a clock on a healthy send". Read from their own source
+    /// (`CVComponentFooter`, the `messageStatus` switch) that is not what they do:
+    ///
+    ///     case .uploading, .sending:
+    ///         statusIndicator = StatusIndicator(imageName: "message_status_sending", isAnimated: true)
+    ///
+    /// No window, no delay — the indicator is there from the first frame and it SPINS. His report,
+    /// 2026-08-26, with a photograph of the empty gap the grace window leaves: "time icon is
+    /// coming late". So the glyph appears immediately, and `VoiceBubbleView`-style live state is
+    /// not needed for it because the state it draws is already in the model.
+    static func meta(_ m: MetaChrome, isMe: Bool, color: UIColor) -> NSAttributedString {
         let s = NSMutableAttributedString()
         if m.edited {
             s.append(NSAttributedString(string: "edited ", attributes: [
@@ -115,12 +128,7 @@ enum BubbleText {
         }
         s.append(NSAttributedString(string: m.timeText, attributes: [
             .font: BubbleMetrics.metaFont, .foregroundColor: color]))
-        guard isMe, m.tick != .none else { return s }
-        // The clock earns its place: the slot stays EMPTY for the first 0.8s of a send, so a normal
-        // send flips to a tick inside that window and the clock is never seen. `showClock` is the
-        // window's verdict, decided by the cell against `bornAt`.
-        if m.tick == .sending, !showClock { return s }
-        guard let img = BubbleTicks.image(m.tick) else { return s }
+        guard isMe, m.tick != .none, let img = BubbleTicks.image(m.tick) else { return s }
         let a = NSTextAttachment()
         a.image = img.withTintColor(m.tick == .failed ? .systemRed : color, renderingMode: .alwaysOriginal)
         a.bounds = CGRect(x: 0, y: -1, width: img.size.width, height: img.size.height)
