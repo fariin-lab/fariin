@@ -2282,17 +2282,19 @@ struct ThreadView: View {
     // once per data/read/highlight change, NOT on every body run.
     private final class UikitModelCache {
         var key = ""
-        var models: [String: UIKitBubbleModel] = [:]
+        var models: [String: MessageRowModel] = [:]
         // Bumped only when the models are actually rebuilt. The list uses it to skip its direct repaint
         // pass entirely when nothing can have changed — see `uikitModelsVersion` at the call site.
         var version = 0
     }
     @State private var uikitModelCache = UikitModelCache()
 
-    private var uikitModels: [String: UIKitBubbleModel] {
-        // Search highlights text inside SwiftUI bubbles; selection/custom-color/group cases render
-        // SwiftUI-only — in those states everything routes SwiftUI (empty dict).
-        guard Self.useUIKitBubbles, !isGroup, !selecting, chatColorSpec == nil, !searchActive else { return [:] }
+    private var uikitModels: [String: MessageRowModel] {
+        // ⛔ PHASE 1 OF THE FULL UIKIT MIGRATION. The old gate refused a whole CHAT the moment it was
+        // a group, was in selection mode, had a custom colour or had search open — every row in it
+        // went to SwiftUI. The UIKit rows draw all four now, so the gate is per-MESSAGE only:
+        // `MessageRowModelBuilder.canRender` decides, and it is the one place that decides.
+        guard Self.useUIKitBubbles else { return [:] }
         // Audit M5: iBlocked and the read-receipts pref feed the tick, so they must key the cache —
         // toggling the pref (or a block-state change) left uikit rows showing stale ticks.
         // The wallpaper and its blurred picture are INSIDE the model (`onWallpaper`, `wallpaperBlur`),
@@ -2308,11 +2310,43 @@ struct ThreadView: View {
         // ⚠️ This is the fifth time this exact mistake has been found in this file's caches. The rule
         // it keeps breaking: if a value is READ while building a row, it has to be in the key that
         // decides whether that row is rebuilt — a picture cannot be the proxy for a theme.
-        let key = "\(repo.itemsVersion)|\(repo.otherLastReadMillis)|\(highlightId ?? "-")|\(repo.iBlocked)|\(readReceiptsOn)|\(dark)|\(chatHasWallpaper):\(wallpaperBlur?.id ?? 0)"
+        // ⚠️ EVERY VALUE READ WHILE BUILDING A ROW HAS TO BE IN THIS KEY. The file's own note says
+        // this mistake has been found five times; the four values added on this pass are the four
+        // states the old gate used to dodge by refusing the whole chat — `selecting`, the selection
+        // SET, the chat colour and the search term — plus `firstUnreadId`, which draws the divider,
+        // and the group roster's version, which draws sender names and avatars.
+        let key = [
+            "\(repo.itemsVersion)", "\(repo.otherLastReadMillis)", highlightId ?? "-",
+            "\(repo.iBlocked)", "\(readReceiptsOn)", "\(dark)",
+            "\(chatHasWallpaper):\(wallpaperBlur?.id ?? 0)",
+            "\(selecting)", selectedIds.sorted().joined(separator: ","),
+            chatColorSpec?.stored ?? "-", firstUnreadId ?? "-",
+            searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
+            "\(isGroup)", "\(groupMembers.count)",
+        ].joined(separator: "|")
         if uikitModelCache.key == key { return uikitModelCache.models }
-        var out: [String: UIKitBubbleModel] = [:]
-        for m in repo.items {
-            if let model = uikitBubbleModel(for: m.rowId) { out[m.rowId] = model }
+
+        let ctx = MessageRowContext(
+            me: me, cid: cid, isGroup: isGroup, dark: dark,
+            selecting: selecting, selectedIds: selectedIds,
+            highlightId: highlightId, firstUnreadId: firstUnreadId,
+            chatColor: chatColorSpec,
+            onWallpaper: chatHasWallpaper, wallpaperBlur: wallpaperBlur,
+            otherLastReadMillis: repo.otherLastReadMillis, iBlocked: repo.iBlocked,
+            searchTerm: searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
+            nameFor: { personName($0) },
+            avatarFor: { conversation?.photos[$0] },
+            resolveOriginal: { id in repo.items.first { $0.id == id } })
+
+        var out: [String: MessageRowModel] = [:]
+        for (idx, m) in repo.items.enumerated() {
+            guard let model = MessageRowModelBuilder.model(
+                for: m, at: idx, ctx: ctx,
+                isFirstInCluster: isFirstInCluster(at: idx),
+                isLastInCluster: isLastInCluster(at: idx),
+                dateHeader: shouldShowDate(at: idx) ? dayLabel(m.createdAt) : nil,
+                topSpacing: topGap(at: idx)) else { continue }
+            out[m.rowId] = model
         }
         uikitModelCache.key = key
         uikitModelCache.models = out
@@ -2553,66 +2587,27 @@ struct ThreadView: View {
         }
     }
 
-    private func uikitBubbleModel(for rowId: String) -> UIKitBubbleModel? {
-        guard Self.useUIKitBubbles else { return nil }
-        guard !isGroup, !selecting, chatColorSpec == nil,
-              let idx = repo.indexById[rowId], idx < repo.items.count else { return nil }
-        guard !shouldShowDate(at: idx) else { return nil }             // date-header rows render the pill in SwiftUI
-        // The "Unread Messages" divider is drawn by rowView in SwiftUI. A plain delivered 1:1 text took
-        // the UIKit path, which draws a bubble and nothing else and measures itself the same way, so in
-        // the commonest case the divider was missing from BOTH render and measurement.
-        guard rowId != firstUnreadId else { return nil }
-        let m = repo.items[idx]
-        guard m.id != highlightId, m.sendState == nil,                 // delivered only
-              m.replyTo == nil, m.reactions.isEmpty,
-              !m.isFeatureMarker, !m.viewOnce, !m.forwarded,           // Forwarded tag is SwiftUI-only
-              !m.isImage, !m.isVideo, !m.isGif, !m.isFile, !m.isAudio, !m.isAlbum, !m.isCall,
-              // ⛔ A SYSTEM NOTICE IS NOT A MESSAGE — owner, 2026-08-24: turning on disappearing
-              // messages posted "adnan abdi turned on disappearing messages (5 minutes)" as a real
-              // blue bubble with delivery ticks, where it should read like the pin notice.
-              //
-              // ⚠️ NOTHING WAS WRONG WITH THE WRITE OR THE RENDERER. `setDisappear` writes
-              // `type: "system"`, and `rowView` routes `isSystem` to `systemRow`, which is the same
-              // centred pill the pin notice uses. This guard was the whole bug: it lists every kind
-              // that must stay in SwiftUI and never learned about system rows, so a plain-text
-              // system notice matched "delivered 1:1 text" and took the UIKit bubble path — which
-              // draws a bubble and a tick and knows nothing about pills.
-              //
-              // ⚠️ IT ONLY SHOWS IN A CHAT WITH NO CUSTOM CHAT COLOUR, because `chatColorSpec == nil`
-              // in this function's own guard sends every row to SwiftUI when one is set. That is why
-              // it appeared now and not while his test chat was red.
-              !m.isSystem, m.pinNotice == nil,
-              m.mentions.isEmpty else { return nil }
-        let text = m.safeText
-        guard !text.isEmpty else { return nil }
-        // Jumbomoji rows render borderless at up to 3.5x the body size — a shape the UIKit bubble path
-        // does not draw and does not measure. They stay in SwiftUI.
-        guard text.jumbomojiCount == 0 else { return nil }
-        // Links (OG preview card + tappable ranges) stay in SwiftUI for now; '@' may be a username/mention.
-        let lower = text.lowercased()
-        guard !lower.contains("http"), !lower.contains("www."), !text.contains("@") else { return nil }
-
-        let isMe = m.authorId == me
-        let first = isFirstInCluster(at: idx)
-        let last = isLastInCluster(at: idx)
-        let big: CGFloat = 18, small: CGFloat = 6
-        let radii: UIKitBubbleModel.Radii = isMe
-            ? .init(topLeading: big, topTrailing: first ? big : small, bottomLeading: big, bottomTrailing: last ? big : small)
-            : .init(topLeading: first ? big : small, topTrailing: big, bottomLeading: last ? big : small, bottomTrailing: big)
-        let tick: UIKitBubbleModel.Tick
-        if isMe {
-            // Parity with the SwiftUI path (audit M5): a blocked contact's lastRead is ignored there
-            // (otherLastRead passed as 0 when iBlocked) — the uikit tick must match, or a blocked chat
-            // shows ✓✓ on text rows and ✓ on media rows, and a route flip visibly demotes the tick.
-            let read = !repo.iBlocked && repo.otherLastReadMillis >= m.createdAt.timeIntervalSince1970 * 1000
-            tick = read ? .read : .sent   // same rule as the SwiftUI bubble and the chat list
-        } else { tick = .none }
-
-        return UIKitBubbleModel(
-            isMe: isMe, text: text, edited: m.edited,
-            timeText: m.createdAt.formatted(date: .omitted, time: .shortened),
-            tick: tick, radii: radii, topSpacing: first ? 14 : 2,
-            onWallpaper: chatHasWallpaper, wallpaperBlur: wallpaperBlur)
+    /// Route a link tapped inside a UIKit row: a web url asks "Open link?" first, and
+    /// `kulan://u/<handle>` opens that person (or reports that they do not exist).
+    ///
+    /// The confirm and the not-found alert are presented ONCE here at screen level, never per row —
+    /// forty live cells each carrying their own `confirmationDialog` is forty presentation machines,
+    /// and a dialog anchored inside a recycled cell can be torn down under the user's finger.
+    private func routeThreadURL(_ url: URL) {
+        guard url.scheme == "kulan", url.host == "u" else {
+            tappedLink = url
+            return
+        }
+        let handle = url.lastPathComponent
+        Task { @MainActor in
+            if let u = await ChatService.findByHandle(handle) {
+                AppRouter.shared.pendingChatName = u.name
+                AppRouter.shared.pendingChatPhoto = u.photoUrl
+                AppRouter.shared.pendingChatId = ChatService.convId(me, u.id)
+            } else {
+                tappedUserNotFound = true
+            }
+        }
     }
 
     // UIKit message list. Reuses the SAME rowView, so every bubble feature is identical.
@@ -2642,10 +2637,63 @@ struct ThreadView: View {
             },
             // UIKit bubble migration: plain 1:1 delivered text renders as a native UIKit cell. The models
             // are a frozen per-emission snapshot (routing can never flip between measure and render).
-            uikitModels: uikitModels,
-            // MUST stay directly after `uikitModels:` — argument expressions evaluate in source order, and
+            rowModels: uikitModels,
+            // MUST stay directly after `rowModels:` — argument expressions evaluate in source order, and
             // reading `uikitModels` above is what refreshes the cache this version comes from.
             uikitModelsVersion: uikitModelCache.version,
+            onTapLink: { url in routeThreadURL(url) },
+            onTapQuote: { id in
+                // This tap was FOR the quote — keep the keyboard (the reference app keeps it too).
+                // Cancels the list's deferred tap-to-dismiss before it can run.
+                pendingKeyboardDismiss = false
+                Task {
+                    await repo.ensureLoaded(id)
+                    await MainActor.run {
+                        // Reply-to-deleted: if the original is gone, say so instead of silently
+                        // doing nothing. The quote still shows its saved snapshot, so the reply is
+                        // never blank.
+                        if repo.items.contains(where: { $0.id == id }) { flashAndScroll(id) }
+                        else { showJumpToast("Original message was deleted") }
+                    }
+                }
+            },
+            onTapStoryQuote: { rowId, replyId in
+                guard let m = repo.items.first(where: { $0.rowId == rowId }), let r = m.replyTo else { return }
+                openStory(replyId, r.authorId, anchorId: "replyquote-\(m.id)")
+            },
+            onTapReactions: { id in
+                if let m = repo.items.first(where: { $0.rowId == id }) { reactorsTarget = m }
+            },
+            onTapRetry: { id in
+                if let m = repo.items.first(where: { $0.rowId == id }) { resend(m) }
+            },
+            onToggleSelect: { id in
+                if let m = repo.items.first(where: { $0.rowId == id }) { toggleSelect(m.id) }
+            },
+            onTapSender: { uid in
+                tappedMember = GroupInfoView.MemberAction(
+                    id: uid, name: personName(uid), isAdmin: conversation?.isAdmin(uid) ?? false)
+            },
+            onTapCallRow: { id in
+                // CONFIRM before calling back: a stray tap on a call row must never place a call
+                // instantly. A LIVE row offers no call-back — that call is still happening.
+                guard let m = repo.items.first(where: { $0.rowId == id }) else { return }
+                let age = Date().timeIntervalSince(m.createdAt)
+                let live = (m.callOutcome == "ringing" && age < 120)
+                    || (m.callOutcome == "ongoing" && age < 4 * 3600)
+                guard !live else { return }
+                pendingCallBack = m.callVideo ? .video : .voice
+            },
+            onTapPinNotice: { id in
+                pendingKeyboardDismiss = false
+                Task {
+                    await repo.ensureLoaded(id)
+                    await MainActor.run {
+                        if repo.items.contains(where: { $0.id == id }) { flashAndScroll(id) }
+                        else { showJumpToast("Original message was deleted") }
+                    }
+                }
+            },
             uikitMenu: { id in uikitMenu(for: id) },
             onUikitDoubleTap: { id in uikitQuickReact(id) },
             // CUSTOM LONG-PRESS MENU (experiment): every row's actions, the bar's config, and the
@@ -2712,7 +2760,8 @@ struct ThreadView: View {
             // The floating date pill is now rendered + updated in UIKit (NativeMessageList) directly from
             // the scroll callback. We only hand it a pure rowId → day-label mapping; no SwiftUI state is
             // written on scroll, so scrolling never re-runs the conversation tree.
-            dayLabelFor: { id in repo.indexById[id].map { dayLabel(repo.items[$0].createdAt) } }
+            dayLabelFor: { id in repo.indexById[id].map { dayLabel(repo.items[$0].createdAt) } },
+            cid: cid
         )
         // ⛔ THE KEYBOARD MUST NOT REACH THE LIST THROUGH SWIFTUI'S SAFE AREA — owner, 2026-08-25,
         // build 681, GIF and "+" with the keyboard up: "the chat/message list jumps downward during
