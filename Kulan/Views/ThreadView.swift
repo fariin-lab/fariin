@@ -2321,6 +2321,7 @@ struct ThreadView: View {
         // states the old gate used to dodge by refusing the whole chat — `selecting`, the selection
         // SET, the chat colour and the search term — plus `firstUnreadId`, which draws the divider,
         // and the group roster's version, which draws sender names and avatars.
+        let storiesRepo = StoriesRepository.shared
         let key = [
             "\(repo.itemsVersion)", "\(repo.otherLastReadMillis)", highlightId ?? "-",
             "\(repo.iBlocked)", "\(readReceiptsOn)", "\(dark)",
@@ -2725,28 +2726,6 @@ struct ThreadView: View {
             onTapFile: { id in
                 if let m = repo.items.first(where: { $0.rowId == id }), m.sendState == nil { openFile(m) }
             },
-            onTapLocation: { id in
-                guard let m = repo.items.first(where: { $0.rowId == id }), let loc = m.locationCard else { return }
-                let q = (loc.label ?? "Shared Location")
-                    .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "Location"
-                // WebLink deliberately does NOT sheet maps.apple.com: a shared location has to land
-                // in the Maps app with the pin on it, not on a web page.
-                if let u = URL(string: "http://maps.apple.com/?ll=\(loc.lat),\(loc.lon)&q=\(q)") {
-                    WebLink.open(u)
-                }
-            },
-            onTapContactCard: { id in
-                guard let m = repo.items.first(where: { $0.rowId == id }), let card = m.contactCard else { return }
-                tappedMember = GroupInfoView.MemberAction(
-                    id: card.uid, name: card.name, isAdmin: false)
-            },
-            onTapContactMessage: { id in
-                guard let m = repo.items.first(where: { $0.rowId == id }), let card = m.contactCard else { return }
-                guard card.uid != me, ChatService.convId(me, card.uid) != cid else { return }
-                AppRouter.shared.pendingChatName = card.name     // so a brand-new chat shows the name
-                AppRouter.shared.pendingChatPhoto = card.photo   // and photo, not the placeholder
-                AppRouter.shared.pendingChatId = ChatService.convId(me, card.uid)
-            },
             onToggleVoice: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }) else { return }
                 VoiceNotePlayer.shared.toggle(message: m, cid: cid, isMe: m.authorId == me)
@@ -2772,6 +2751,28 @@ struct ThreadView: View {
                           let openedCid = try? await ChatService.openConversation(other: user) else { return }
                     await MainActor.run { AppRouter.shared.pendingChatId = openedCid }
                 }
+            },
+            onTapLocation: { id in
+                guard let m = repo.items.first(where: { $0.rowId == id }), let loc = m.locationCard else { return }
+                let q = (loc.label ?? "Shared Location")
+                    .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "Location"
+                // WebLink deliberately does NOT sheet maps.apple.com: a shared location has to land
+                // in the Maps app with the pin on it, not on a web page.
+                if let u = URL(string: "http://maps.apple.com/?ll=\(loc.lat),\(loc.lon)&q=\(q)") {
+                    WebLink.open(u)
+                }
+            },
+            onTapContactCard: { id in
+                guard let m = repo.items.first(where: { $0.rowId == id }), let card = m.contactCard else { return }
+                tappedMember = GroupInfoView.MemberAction(
+                    id: card.uid, name: card.name, isAdmin: false)
+            },
+            onTapContactMessage: { id in
+                guard let m = repo.items.first(where: { $0.rowId == id }), let card = m.contactCard else { return }
+                guard card.uid != me, ChatService.convId(me, card.uid) != cid else { return }
+                AppRouter.shared.pendingChatName = card.name     // so a brand-new chat shows the name
+                AppRouter.shared.pendingChatPhoto = card.photo   // and photo, not the placeholder
+                AppRouter.shared.pendingChatId = ChatService.convId(me, card.uid)
             },
             onTapReactions: { id in
                 if let m = repo.items.first(where: { $0.rowId == id }) { reactorsTarget = m }
