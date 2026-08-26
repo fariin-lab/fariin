@@ -1113,12 +1113,33 @@ enum MessageRowLayout {
         let stackTop = innerY + (contentH - stackH) / 2
 
         let waveW = max(1, columnW2 - gap - speed)
+
+        // ⛔ THE TIMESTAMP IS ANCHORED TO THE BUBBLE'S BOTTOM, exactly as the text bubble's footer
+        // is — his order, 2026-08-26, after comparing the two side by side. `innerY + contentH` is
+        // the content's bottom (the bubble's own `vPad` comes after), so `bottom - height - 1` is
+        // the same expression the text path uses.
+        //
+        // ⚠️ An overlay, adding no height — which is the shape this bubble's own notes call the safe
+        // one, because the row is pre-measured and anything that adds size here would bloom it.
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
+        let metaSize = BubbleText.lineSize(metaAttr)
+        let metaRect = CGRect(x: hPad + contentW - metaSize.width,
+                              y: innerY + contentH - metaSize.height - 1,
+                              width: metaSize.width, height: metaSize.height)
+        // ⛔ THE DURATION SHARES THE TIMESTAMP'S LINE — his order, 2026-08-26, with a screenshot
+        // of "0:11" sitting a line above "6:11 PM": "they should be aligned on the same horizontal
+        // baseline; the timestamp is correct, fix the duration and icon position." It used to hang
+        // 6pt under the wave as part of a centred stack, which is a different anchor from the
+        // timestamp's whenever the 55pt floor is taller than the stack. Centred on the timestamp's
+        // line now; the dot and the mic are centred on the duration, so they come with it. The
+        // wave, the speed pill and the disc keep their places.
+        let durY = metaRect.midY - durH / 2
         let plan = VoicePlan(
             disc: CGRect(x: hPad, y: innerY + (contentH - disc) / 2, width: disc, height: disc),
             wave: CGRect(x: columnStart, y: stackTop, width: waveW, height: waveH),
             speedPill: CGRect(x: columnStart + waveW + gap, y: stackTop + (waveH - 22) / 2,
                               width: speed, height: 22),
-            duration: CGRect(x: columnStart, y: stackTop + waveH + 6, width: durW, height: durH),
+            duration: CGRect(x: columnStart, y: durY, width: durW, height: durH),
             durationAttr: durationAttr,
             // ⛔ THE DOT'S SLOT IS ALWAYS RESERVED, whether or not the dot is drawn — and the mic
             // never moves because of it. This is the rule the old bubble states about its own speed
@@ -1126,32 +1147,11 @@ enum MessageRowLayout {
             // appears or disappears later would change a height that was already measured. The dot
             // is SHOWN or HIDDEN live by the view; the geometry is a constant.
             unreadDot: CGRect(x: columnStart + durW + 8,
-                              y: stackTop + waveH + 6 + (durH - 7) / 2,
+                              y: durY + (durH - 7) / 2,
                               width: 7, height: 7),
             micGlyph: CGRect(x: columnStart + durW + 19,
-                             y: stackTop + waveH + 6 + (durH - 10) / 2, width: 10, height: 10))
+                             y: durY + (durH - 10) / 2, width: 10, height: 10))
         innerY += contentH
-
-        // ⛔ ANCHORED TO THE BUBBLE'S BOTTOM, exactly as the text bubble's footer is — his order,
-        // 2026-08-26, after comparing the two side by side.
-        //
-        // It used to be centred on the DURATION LINE (`plan.duration.midY - metaSize.height / 2`),
-        // which is a different anchor from every other bubble in the chat: the voice column is
-        // vertically centred inside a 55pt floor, so whenever that floor was taller than the column
-        // the badge floated in the middle instead of sitting where a timestamp sits.
-        //
-        // `innerY` is the content's bottom at this point (the bubble's own `vPad` is added on the
-        // next line), so `innerY - height - 1` is the same expression the text path uses. The
-        // duration is at the column's LEADING edge and this is at the trailing one, so they still
-        // share the row without touching.
-        //
-        // ⚠️ An overlay, adding no height — which is the shape this bubble's own notes call the safe
-        // one, because the row is pre-measured and anything that adds size here would bloom it.
-        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
-        let metaSize = BubbleText.lineSize(metaAttr)
-        let metaRect = CGRect(x: hPad + contentW - metaSize.width,
-                              y: innerY - metaSize.height - 1,
-                              width: metaSize.width, height: metaSize.height)
         innerY += vPad
 
         let bubbleW = contentW + hPad * 2
