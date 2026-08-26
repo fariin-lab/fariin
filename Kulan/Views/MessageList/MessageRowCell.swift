@@ -16,6 +16,7 @@ protocol MessageRowCellDelegate: AnyObject {
     func rowCell(_ cell: MessageRowCell, didTapQuoteJumpTo id: String)
     func rowCell(_ cell: MessageRowCell, didTapStoryQuote id: String)
     func rowCellDidTapMedia(_ cell: MessageRowCell)
+    func rowCellDidTapPill(_ cell: MessageRowCell)
     func rowCell(_ cell: MessageRowCell, didTapAlbumTile index: Int)
     func rowCellDidTapFile(_ cell: MessageRowCell)
     func rowCellDidTapStoryReply(_ cell: MessageRowCell)
@@ -215,6 +216,14 @@ final class MessageRowCell: UICollectionViewCell {
             }
             // The picture opens the viewer. Before the quote test, because a media bubble's quote
             // sits above the picture and the two rects never overlap.
+            // A view-once pill opens the one-shot viewer; a pending placeholder opens nothing, and
+            // the model says which by leaving `opens` false.
+            if rowView.hitsPill(p) {
+                if case .pill(let pill) = b.body, pill.opens {
+                    delegate?.rowCellDidTapPill(self)
+                }
+                return
+            }
             if rowView.hitsMedia(p) {
                 delegate?.rowCellDidTapMedia(self)
                 return

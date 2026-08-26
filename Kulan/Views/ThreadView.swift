@@ -2705,6 +2705,12 @@ struct ThreadView: View {
             },
             // ALBUM TILES FLY TOO. A tile's rect is registered under "<messageId>-<index>", which is
             // exactly the `startId` the pager is handed — so the geometry was already there.
+            onTapPill: { id in
+                // Both view-once kinds take the photo pill's route: through the view-once cover,
+                // whose audio branch is the voice page and whose dismissal is the consumption mark.
+                guard let m = repo.items.first(where: { $0.rowId == id }) else { return }
+                MediaPresentGate.present { viewerImage = m }
+            },
             onTapAlbumTile: { id, index in
                 guard let m = repo.items.first(where: { $0.rowId == id }) else { return }
                 guard m.sendState == nil else { return }

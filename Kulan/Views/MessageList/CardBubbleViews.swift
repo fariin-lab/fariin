@@ -174,6 +174,50 @@ final class LinkPreviewBubbleView: UIView {
     func prepareForReuse() { hero.reset() }
 }
 
+// ── A capsule with a glyph and a word ──
+
+/// A view-once photo, a one-time voice note, or a message still being prepared.
+final class PillBubbleView: UIView {
+    private let glyph = UIImageView()
+    private let label = UILabel()
+    private var spinner: UIActivityIndicatorView?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        glyph.contentMode = .center
+        addSubview(glyph)
+        label.lineBreakMode = .byTruncatingTail
+        addSubview(label)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(_ plan: PillPlan, tint: UIColor) {
+        label.frame = plan.label
+        label.attributedText = plan.labelAttr
+        if plan.busy {
+            glyph.isHidden = true
+            let v = spinner ?? {
+                let v = UIActivityIndicatorView(style: .medium); addSubview(v); spinner = v; return v
+            }()
+            v.isHidden = false
+            v.frame = plan.glyph
+            v.color = tint
+            v.startAnimating()
+        } else {
+            spinner?.stopAnimating()
+            spinner?.isHidden = true
+            glyph.isHidden = false
+            glyph.frame = plan.glyph
+            glyph.image = UIImage(systemName: plan.symbol,
+                                  withConfiguration: UIImage.SymbolConfiguration(pointSize: 18, weight: .semibold))
+            glyph.tintColor = tint.withAlphaComponent(plan.dimmed ? 0.6 : 1)
+        }
+    }
+
+    func prepareForReuse() { spinner?.stopAnimating() }
+}
+
 // ── A reply to somebody's story ──
 
 /// The caption line and the big card that float ABOVE a story-reply bubble. It rides the reply

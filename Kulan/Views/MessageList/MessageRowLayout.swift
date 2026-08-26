@@ -114,6 +114,16 @@ struct PollPlan {
     var total: CGRect                   // "N votes", written live
 }
 
+/// A capsule with a glyph and a word.
+struct PillPlan {
+    var glyph: CGRect                   // bubble coordinates
+    var label: CGRect
+    var labelAttr: NSAttributedString
+    var symbol: String
+    var busy: Bool
+    var dimmed: Bool
+}
+
 /// A voice note. Every rect is fixed; only the waveform's progress and the disc's glyph change as
 /// it plays, and neither is geometry.
 struct VoicePlan {
@@ -183,6 +193,7 @@ struct BubblePlan {
     var linkPlan: LinkPreviewPlan?
     var storyReplyPlan: StoryReplyPlan?
     var voicePlan: VoicePlan?
+    var pillPlan: PillPlan?
 
     // Outside the bubble, row coordinates
     var avatar: CGRect?
@@ -441,6 +452,50 @@ enum MessageRowLayout {
                 .foregroundColor: (b.isMe ? UIColor.white.withAlphaComponent(0.72)
                                           : UIColor.secondaryLabel.withAlphaComponent(0.85))])
             bodySize = BubbleText.size(bodyAttr, width: max(1, maxContent - 18))
+        case .pill(let p):
+            // The same capsule the tombstone wears: a glyph, a word, and no footer of its own —
+            // except this one DOES carry the time, because a view-once photo is still a message.
+            let glyphW: CGFloat = 20, gap: CGFloat = 8, hPadP: CGFloat = 15, vPadP: CGFloat = 11
+            let attr = NSAttributedString(string: p.label, attributes: [
+                .font: p.spent ? UIFont.italicSystemFont(ofSize: 15)
+                               : UIFont.systemFont(ofSize: 15, weight: .medium),
+                .foregroundColor: textColor.withAlphaComponent(p.spent ? 0.6 : 1)])
+            let labelSize = lineSizeOf(attr, cap: maxContent)
+            let metaAttrP = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
+            let metaSizeP = BubbleText.lineSize(metaAttrP)
+            let innerW = glyphW + gap + labelSize.width + gap + metaSizeP.width
+            let bubbleWP = min(maxBubble, innerW + hPadP * 2)
+            let rowH = max(glyphW, max(labelSize.height, metaSizeP.height))
+            let bubbleHP = rowH + vPadP * 2
+            let xP = b.isMe ? (columnX + columnW - bubbleWP) : columnX
+            let rectP = CGRect(x: xP, y: y, width: bubbleWP, height: bubbleHP)
+            var outP = BubblePlan(
+                bubble: rectP, radii: .uniform(bubbleHP / 2), isCapsule: true,
+                fill: b.fill, rim: b.rim,
+                text: .zero,
+                meta: CGRect(x: bubbleWP - hPadP - metaSizeP.width,
+                             y: vPadP + (rowH - metaSizeP.height) / 2,
+                             width: metaSizeP.width, height: metaSizeP.height),
+                metaOnOwnLine: false, quote: nil, quoteInner: nil,
+                bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
+                tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
+                locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil,
+                storyReplyPlan: nil, voicePlan: nil,
+                pillPlan: PillPlan(
+                    glyph: CGRect(x: hPadP, y: vPadP + (rowH - glyphW) / 2,
+                                  width: glyphW, height: glyphW),
+                    label: CGRect(x: hPadP + glyphW + gap, y: vPadP + (rowH - labelSize.height) / 2,
+                                  width: labelSize.width, height: labelSize.height),
+                    labelAttr: attr, symbol: p.symbol, busy: p.busy, dimmed: p.spent),
+                avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
+                forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
+                retry: nil)
+            let bottomP = decorations(b, plan: &outP, bubbleRect: rectP, columnX: columnX,
+                                      columnW: columnW, originX: originX, topSpacing: topSpacing,
+                                      senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                                      forwardedSize: forwardedSize, forwardedIconW: forwardedIconW,
+                                      y: rectP.maxY)
+            return BubbleResult(plan: outP, totalHeight: bottomP)
         case .media(let m):
             // A media bubble is laid out entirely differently — the picture is flush to the
             // bubble's edges rather than inset by hPad/vPad, and the footer either joins the
@@ -506,7 +561,7 @@ enum MessageRowLayout {
                 meta: .zero, metaOnOwnLine: false, quote: nil, quoteInner: nil,
                 bodyAttr: bodyAttr, links: [], textColor: textColor, metaColor: metaColor,
                 tombstoneIcon: CGRect(x: 14, y: (bubbleH - iconW) / 2, width: iconW, height: iconW),
-                mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil,
+                mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
                 avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
                 forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
                 retry: nil)
@@ -593,7 +648,7 @@ enum MessageRowLayout {
             text: textRect, meta: metaRect, metaOnOwnLine: metaOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: bodyAttr, links: links, textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: linkPlan, storyReplyPlan: nil, voicePlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: linkPlan, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -805,7 +860,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: plan, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil,
+            tombstoneIcon: nil, mediaPlan: plan, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -911,7 +966,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: plan, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: plan, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -996,7 +1051,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: true,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: plan, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: plan, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -1096,7 +1151,7 @@ enum MessageRowLayout {
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
             locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil,
-            storyReplyPlan: nil, voicePlan: plan,
+            storyReplyPlan: nil, voicePlan: plan, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -1369,7 +1424,7 @@ enum MessageRowLayout {
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
-            locationPlan: nil, contactPlan: nil, pollPlan: plan, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil,
+            locationPlan: nil, contactPlan: nil, pollPlan: plan, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -1442,7 +1497,7 @@ enum MessageRowLayout {
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
-            locationPlan: plan, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil,
+            locationPlan: plan, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -1521,7 +1576,7 @@ enum MessageRowLayout {
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
-            locationPlan: nil, contactPlan: plan, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil,
+            locationPlan: nil, contactPlan: plan, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)

@@ -51,22 +51,32 @@ enum MessageRowModelBuilder {
         if m.isCall { return true }
         if m.isSystem { return true }
         if m.pinNotice != nil { return true }
-        // ⚠️ VIEW-ONCE FIRST, before the kind tests below say yes to its photo. A view-once photo is
-        // a PILL, not a picture — routing it to the media path would put the secret on screen.
-        if m.viewOnce { return false }
+        // ⚠️ VIEW-ONCE FIRST, before the kind tests below say yes to its photo. A view-once message
+        // is a PILL, not its media — the picture must never be drawn in the list, which is the
+        // whole security property. `bubble()` sends it to `.pill` for the same reason.
+        if m.viewOnce { return true }
         // ⛔ PENDING MEDIA BEFORE THE KIND TESTS, and this ordering is a real bug fixed rather than
         // a tidy-up. `isImage` is true for a message that merely has `localImageData` — which is
         // exactly what an optimistic, still-uploading photo has — so with the kind tests first a
         // pending photo matched "photo" and was drawn as a finished media bubble instead of the
         // pending placeholder. The old `content` chain tested pending first for the same reason.
-        if m.pendingMediaKind != nil || m.isPendingImage { return false }
+        if m.pendingMediaKind != nil || m.isPendingImage { return true }
         if m.isImage || m.isVideo || m.isGif { return true }
         if m.isAlbum || m.isFile { return true }
         if m.isAudio { return true }
         if m.locationCard != nil || m.contactCard != nil { return true }
         if m.poll != nil { return true }
         if m.isFeatureMarker { return true }               // the "update the app" notice
-        return !m.safeText.isEmpty
+        // ⛔ TOTAL. Every branch above returns true and so does this one: there is no message the
+        // UIKit rows cannot draw, and nothing routes to SwiftUI any more. A message with no kind
+        // and no words is a data anomaly, and it draws an empty bubble — which is exactly what the
+        // old `content` chain's final `else` did with it.
+        //
+        // ⚠️ THE LIST IS 100% UIKIT FROM HERE. This function is kept rather than deleted because it
+        // is the readable statement of WHICH kinds exist, and because a future kind added to
+        // `Message` should have to come here and say what it is instead of silently falling into
+        // "text" — the mistake that once drew a system notice as a blue bubble with delivery ticks.
+        return true
     }
 
     static func model(for msg: Message, at index: Int, ctx: MessageRowContext,
@@ -121,6 +131,14 @@ enum MessageRowModelBuilder {
         let body: BubbleBody
         if msg.deleted {
             body = .tombstone(isMe ? "You deleted this message" : "This message was deleted")
+        } else if msg.viewOnce {
+            body = .pill(viewOncePill(msg, ctx: ctx, isMe: isMe))
+        } else if let pending = msg.pendingMediaKind ?? (msg.isPendingImage ? "image" : nil) {
+            // Still being prepared: a spinner and a word. The real bubble arrives when the write
+            // lands, carrying the poster, the duration and the waveform the placeholder cannot know.
+            body = .pill(BubbleBody.PillBody(
+                symbol: "arrow.up.circle", label: pendingLabel(pending),
+                spent: false, opens: false, busy: true))
         } else if msg.isImage || msg.isVideo || msg.isGif {
             body = .media(mediaBody(msg, ctx: ctx))
         } else if msg.isAlbum {
@@ -338,6 +356,36 @@ enum MessageRowModelBuilder {
             tiles: tiles, extra: n - shown, caption: caption,
             uploading: m.sendState == .sending, blurhash: m.blurhash,
             inlineThumbBase64: m.thumb, thumbCacheId: m.rowId)
+    }
+
+    /// A view-once photo or a one-time voice note. Both are capsules; only the words differ.
+    ///
+    /// ⚠️ `spent` is what the RECIPIENT has used up, never the sender: my own view-once message is
+    /// not "Viewed" to me just because they opened it.
+    private static func viewOncePill(_ m: Message, ctx: MessageRowContext,
+                                     isMe: Bool) -> BubbleBody.PillBody {
+        let voice = m.isAudio
+        let spent = !isMe && ViewedOnce.contains(m.id)
+        if voice {
+            return BubbleBody.PillBody(
+                symbol: spent ? "circle.slash" : "1.circle",
+                label: spent ? "Played" : "Voice message",
+                spent: spent, opens: !spent, busy: false)
+        }
+        return BubbleBody.PillBody(
+            symbol: spent ? "circle.slash" : "1.circle",
+            label: spent ? "Viewed" : "Photo",
+            spent: spent, opens: !spent, busy: false)
+    }
+
+    private static func pendingLabel(_ kind: String) -> String {
+        switch kind {
+        case "video": return "Video"
+        case "audio": return "Voice message"
+        case "file":  return "Document"
+        case "album": return "Photos"
+        default:      return "Photo"
+        }
     }
 
     private static func voiceBody(_ m: Message, ctx: MessageRowContext) -> BubbleBody.VoiceBody {

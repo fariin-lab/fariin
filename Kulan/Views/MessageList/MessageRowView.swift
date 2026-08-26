@@ -316,6 +316,7 @@ final class MessageRowView: UIView {
     private var linkView: LinkPreviewBubbleView?
     private var storyReplyView: StoryReplyCardView?
     private var voiceView: VoiceBubbleView?
+    private var pillView: PillBubbleView?
     private var quoteView: BubbleQuoteView?
     private var avatarView: RowAvatarView?
     private var senderLabel: UILabel?
@@ -538,6 +539,7 @@ final class MessageRowView: UIView {
         applyLinkPreview(b, model: m, cid: cid)
         applyStoryReply(b, model: m, cid: cid)
         applyVoice(b, model: m, cid: cid)
+        applyPill(b)
         applyTombstone(b)
         applyQuote(b, model: m, cid: cid)
         applySender(b, model: m)
@@ -670,6 +672,26 @@ final class MessageRowView: UIView {
     /// whole `Message` and only ThreadView has one.
     var onVoicePlayToggle: (() -> Void)? {
         didSet { voiceView?.onPlayToggle = { [weak self] in self?.onVoicePlayToggle?() } }
+    }
+
+    private func applyPill(_ b: BubblePlan) {
+        guard let plan = b.pillPlan else {
+            pillView?.isHidden = true
+            pillView?.prepareForReuse()
+            return
+        }
+        let v = pillView ?? {
+            let x = PillBubbleView(); bubbleBox.insertSubview(x, aboveSubview: fill); pillView = x; return x
+        }()
+        v.isHidden = false
+        v.frame = CGRect(origin: .zero, size: b.bubble.size)
+        v.configure(plan, tint: b.textColor)
+    }
+
+    /// The pill — a view-once photo or voice note opens on tap.
+    func hitsPill(_ point: CGPoint) -> Bool {
+        guard let p = plan, case .bubble(let b) = p.body, b.pillPlan != nil else { return false }
+        return b.bubble.contains(point)
     }
 
     private func applyVoice(_ b: BubblePlan, model m: MessageRowModel, cid: String) {
@@ -1102,6 +1124,7 @@ final class MessageRowView: UIView {
         linkView?.prepareForReuse()
         storyReplyView?.prepareForReuse()
         voiceView?.prepareForReuse()
+        pillView?.prepareForReuse()
         model = nil
         plan = nil
     }

@@ -74,6 +74,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onTapQuote: (String) -> Void = { _ in }              // jump to the quoted message
     var onTapStoryQuote: (_ rowId: String, _ replyId: String) -> Void = { _, _ in }
     var onTapMedia: (String) -> Void = { _ in }        // the picture opens the viewer
+    var onTapPill: (String) -> Void = { _ in }         // a view-once photo or voice note
     var onTapAlbumTile: (_ rowId: String, _ index: Int) -> Void = { _, _ in }
     var onTapFile: (String) -> Void = { _ in }
     var onToggleVoice: (String) -> Void = { _ in }
@@ -163,6 +164,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onTapQuote = onTapQuote
         vc.onTapStoryQuote = onTapStoryQuote
         vc.onTapMedia = onTapMedia
+        vc.onTapPill = onTapPill
         vc.onTapAlbumTile = onTapAlbumTile
         vc.onTapFile = onTapFile
         vc.onToggleVoice = onToggleVoice
@@ -447,6 +449,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onTapQuote: (String) -> Void = { _ in }
     var onTapStoryQuote: (_ rowId: String, _ replyId: String) -> Void = { _, _ in }
     var onTapMedia: (String) -> Void = { _ in }
+    var onTapPill: (String) -> Void = { _ in }
     var onTapAlbumTile: (_ rowId: String, _ index: Int) -> Void = { _, _ in }
     var onTapFile: (String) -> Void = { _ in }
     var onToggleVoice: (String) -> Void = { _ in }
@@ -2886,6 +2889,11 @@ extension MessageListController: MessageRowCellDelegate {
     func rowCell(_ cell: MessageRowCell, didTapStoryQuote id: String) {
         guard let rowId = cell.rowId else { return }
         onTapStoryQuote(rowId, id)
+    }
+
+    func rowCellDidTapPill(_ cell: MessageRowCell) {
+        guard let id = cell.rowId else { return }
+        onTapPill(id)
     }
 
     func rowCellDidTapMedia(_ cell: MessageRowCell) {

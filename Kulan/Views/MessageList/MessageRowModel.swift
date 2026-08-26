@@ -75,6 +75,24 @@ enum BubbleBody: Equatable {
     case poll(PollBody)
     /// A voice note: the play disc, the waveform, the duration line.
     case voice(VoiceBody)
+    /// A capsule with a glyph and a word: a view-once photo, a one-time voice note, and the
+    /// placeholder a media message wears while its bytes are still being prepared.
+    ///
+    /// ⛔ A VIEW-ONCE MESSAGE IS A PILL, NOT ITS MEDIA. That is the whole security property — the
+    /// picture must never be drawn in the list — so these share a body kind precisely so no future
+    /// change can quietly give one of them a media box.
+    case pill(PillBody)
+
+    struct PillBody: Equatable {
+        var symbol: String
+        var label: String
+        /// Spent: viewed, or listened to. Drawn italic and dimmed.
+        var spent: Bool
+        /// The pill opens something (the view-once viewer). A pending placeholder does not.
+        var opens: Bool
+        /// A spinner in place of the glyph, for a message still being prepared.
+        var busy: Bool
+    }
 
     /// ⚠️ NO PLAYBACK STATE IN HERE, for the same reason the poll carries no votes: it changes
     /// many times a second and would re-plan the row on every tick. The WIDTH is a constant
