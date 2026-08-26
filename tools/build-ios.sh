@@ -5,8 +5,13 @@
 # until now starting one meant opening the browser. This does it from the terminal: pushes whatever
 # is committed, then dispatches the TestFlight lane on the current branch.
 #
-#   ./tools/build-ios.sh          TestFlight (signed, lands on the phone)
-#   ./tools/build-ios.sh check    "iOS Build" instead — compiles only, no upload, no TestFlight wait
+#   ./tools/build-ios.sh          "iOS Build" — compiles only. THIS IS THE DEFAULT AND THE FIRST STEP.
+#   ./tools/build-ios.sh ship     TestFlight — signed and uploaded, only once the check above is green.
+#
+# ⛔ THAT ORDER IS HIS, AND IT IS NOT A SUGGESTION (2026-08-25: "why did you skip iOS Build and go
+# straight to TestFlight"). A batch of unbuilt changes fails on a typo as easily as anything else,
+# and the check lane says so in about eight minutes without spending signing, upload or a TestFlight
+# processing wait. TestFlight is for a state already known to compile.
 #
 # ⚠️ THE LANES ARE MANUAL ON PURPOSE. `on: workflow_dispatch` in both workflow files, and the comment
 # there says why: macOS minutes are spent only when we mean to. A session pushes half a dozen
@@ -18,8 +23,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-LANE="TestFlight"
-[ "${1:-}" = "check" ] && LANE="iOS Build"
+LANE="iOS Build"
+[ "${1:-}" = "ship" ] && LANE="TestFlight"
 
 if [ -n "$(git status --porcelain)" ]; then
   echo "✗ Uncommitted changes. The build would not include them:"
