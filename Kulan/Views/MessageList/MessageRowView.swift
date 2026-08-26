@@ -313,6 +313,7 @@ final class MessageRowView: UIView {
     private var locationView: LocationBubbleView?
     private var contactView: ContactBubbleView?
     private var pollView: PollBubbleView?
+    private var linkView: LinkPreviewBubbleView?
     private var quoteView: BubbleQuoteView?
     private var avatarView: RowAvatarView?
     private var senderLabel: UILabel?
@@ -512,6 +513,7 @@ final class MessageRowView: UIView {
         applyLocation(b, model: m, dark: dark)
         applyContact(b, model: m)
         applyPoll(b, model: m, cid: cid)
+        applyLinkPreview(b, model: m, cid: cid)
         applyTombstone(b)
         applyQuote(b, model: m, cid: cid)
         applySender(b, model: m)
@@ -639,6 +641,35 @@ final class MessageRowView: UIView {
     }
 
     func castPollVote(option i: Int) { pollView?.castVote(option: i) }
+
+    private func applyLinkPreview(_ b: BubblePlan, model m: MessageRowModel, cid: String) {
+        guard let plan = b.linkPlan,
+              case .bubble(let row) = m.content, case .text(let t) = row.body,
+              let card = t.linkPreview else {
+            linkView?.isHidden = true
+            linkView?.prepareForReuse()
+            return
+        }
+        let v = linkView ?? {
+            let v = LinkPreviewBubbleView(); bubbleBox.insertSubview(v, aboveSubview: fill); linkView = v; return v
+        }()
+        v.isHidden = false
+        v.frame = CGRect(origin: .zero, size: b.bubble.size)
+        v.configure(card, plan: plan, tint: b.textColor, cid: cid)
+    }
+
+    /// The OG card — tapping it opens the link (or the person, on a profile card's button).
+    func hitsLinkCard(_ point: CGPoint) -> Bool {
+        guard let p = plan, case .bubble(let b) = p.body, let l = b.linkPlan else { return false }
+        return l.card.offsetBy(dx: b.bubble.minX, dy: b.bubble.minY).contains(point)
+    }
+
+    func hitsLinkButton(_ point: CGPoint) -> Bool {
+        guard let p = plan, case .bubble(let b) = p.body,
+              let l = b.linkPlan, let button = l.button else { return false }
+        return button.offsetBy(dx: b.bubble.minX + l.card.minX, dy: b.bubble.minY + l.card.minY)
+            .contains(point)
+    }
 
     /// The bubble's own outline as a mask. These bubbles carry four different radii (a cluster
     /// squares off the side that continues), so a corner RADIUS would round the two corners the
@@ -990,6 +1021,7 @@ final class MessageRowView: UIView {
         fileView?.prepareForReuse()
         locationView?.prepareForReuse()
         pollView?.prepareForReuse()
+        linkView?.prepareForReuse()
         model = nil
         plan = nil
     }

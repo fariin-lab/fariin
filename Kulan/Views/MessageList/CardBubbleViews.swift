@@ -74,6 +74,106 @@ final class LocationBubbleView: UIView {
     }
 }
 
+// ── The OG card inside a text bubble ──
+
+final class LinkPreviewBubbleView: UIView {
+    private let backing = UIView()
+    private let hero = RowImageView(frame: .zero)
+    private let avatar = RowAvatarView()
+    private let title = UILabel()
+    private let subtitle = UILabel()
+    private let host = UILabel()
+    private let divider = UIView()
+    private let button = UIView()
+    private let buttonLabel = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        backing.layer.cornerRadius = 12
+        backing.layer.cornerCurve = .continuous
+        backing.clipsToBounds = true
+        addSubview(backing)
+        hero.contentMode = .scaleAspectFill
+        backing.addSubview(hero)
+        backing.addSubview(avatar)
+        for l in [title, subtitle, host] {
+            l.numberOfLines = 2
+            l.lineBreakMode = .byTruncatingTail
+            backing.addSubview(l)
+        }
+        host.numberOfLines = 1
+        backing.addSubview(divider)
+        backing.addSubview(button)
+        buttonLabel.textAlignment = .center
+        backing.addSubview(buttonLabel)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(_ p: BubbleBody.LinkPreview, plan: LinkPreviewPlan, tint: UIColor, cid: String) {
+        backing.frame = plan.card
+        backing.backgroundColor = tint.withAlphaComponent(0.10)
+
+        if let rect = plan.hero {
+            hero.isHidden = false
+            hero.frame = rect
+            // `smallSync` in the SwiftUI card's terms: a preview picture is small and is read
+            // synchronously off disk, so it is there on the first frame instead of a beat late.
+            hero.configure(url: p.imageUrl, enc: p.imageEnc, cid: cid)
+        } else {
+            hero.isHidden = true
+            hero.reset()
+        }
+
+        if let rect = plan.avatar {
+            avatar.isHidden = false
+            avatar.frame = rect
+            avatar.configure(name: p.title, photoUrl: p.imageUrl)
+        } else {
+            avatar.isHidden = true
+        }
+
+        title.frame = plan.title
+        title.attributedText = plan.titleAttr
+        title.isHidden = plan.titleAttr.length == 0
+
+        if let rect = plan.subtitle, let attr = plan.subtitleAttr {
+            subtitle.isHidden = false
+            subtitle.frame = rect
+            subtitle.attributedText = attr
+        } else {
+            subtitle.isHidden = true
+        }
+
+        if let rect = plan.host, let attr = plan.hostAttr {
+            host.isHidden = false
+            host.frame = rect
+            host.attributedText = attr
+        } else {
+            host.isHidden = true
+        }
+
+        if let rect = plan.divider {
+            divider.isHidden = false
+            divider.frame = rect
+            divider.backgroundColor = tint.withAlphaComponent(0.12)
+        } else {
+            divider.isHidden = true
+        }
+
+        if let rect = plan.button, let labelRect = plan.buttonLabel, let attr = plan.buttonAttr {
+            button.isHidden = false; buttonLabel.isHidden = false
+            button.frame = rect
+            buttonLabel.frame = labelRect
+            buttonLabel.attributedText = attr
+        } else {
+            button.isHidden = true; buttonLabel.isHidden = true
+        }
+    }
+
+    func prepareForReuse() { hero.reset() }
+}
+
 // ── A poll ──
 
 /// ⛔ THE ONLY ROW IN THIS DIRECTORY THAT OWNS A SUBSCRIPTION, and it is careful about it.

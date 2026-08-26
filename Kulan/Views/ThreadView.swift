@@ -2735,6 +2735,23 @@ struct ThreadView: View {
                 AppRouter.shared.pendingChatPhoto = card.photo   // and photo, not the placeholder
                 AppRouter.shared.pendingChatId = ChatService.convId(me, card.uid)
             },
+            onTapLinkCard: { id in
+                guard let m = repo.items.first(where: { $0.rowId == id }),
+                      let lp = m.linkPreview, let u = URL(string: lp.url) else { return }
+                WebLink.open(u)   // the in-app Safari sheet, not a trip out to Safari
+            },
+            onTapLinkProfile: { id in
+                guard let m = repo.items.first(where: { $0.rowId == id }), let lp = m.linkPreview,
+                      let handle = URL(string: lp.url).flatMap({ LinkPreviewService.profileHandle(in: $0) })
+                else { return }
+                // The same two steps the deep link takes, so a tap here and a tap on the link
+                // itself land in exactly one place.
+                Task {
+                    guard let user = await ChatService.findByHandle(handle),
+                          let openedCid = try? await ChatService.openConversation(other: user) else { return }
+                    await MainActor.run { AppRouter.shared.pendingChatId = openedCid }
+                }
+            },
             onTapReactions: { id in
                 if let m = repo.items.first(where: { $0.rowId == id }) { reactorsTarget = m }
             },

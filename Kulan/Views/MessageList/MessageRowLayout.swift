@@ -114,6 +114,23 @@ struct PollPlan {
     var total: CGRect                   // "N votes", written live
 }
 
+/// The OG card inside a text bubble. Rects are in BUBBLE coordinates.
+struct LinkPreviewPlan {
+    var card: CGRect
+    var hero: CGRect?                   // an article's 170pt picture
+    var avatar: CGRect?                 // a profile's 44pt round photo
+    var title: CGRect
+    var titleAttr: NSAttributedString
+    var subtitle: CGRect?
+    var subtitleAttr: NSAttributedString?
+    var host: CGRect?
+    var hostAttr: NSAttributedString?
+    var divider: CGRect?
+    var button: CGRect?
+    var buttonLabel: CGRect?
+    var buttonAttr: NSAttributedString?
+}
+
 struct BubblePlan {
     var bubble: CGRect                  // the bubble's own frame, row coordinates
     var radii: BubbleRadii
@@ -141,6 +158,7 @@ struct BubblePlan {
     var locationPlan: LocationPlan?
     var contactPlan: ContactPlan?
     var pollPlan: PollPlan?
+    var linkPlan: LinkPreviewPlan?
 
     // Outside the bubble, row coordinates
     var avatar: CGRect?
@@ -354,6 +372,12 @@ enum MessageRowLayout {
             quoteInner = inner
         }
 
+        // The OG card, when one travelled with the message. It is FULL-WIDTH inside the bubble —
+        // it does not hug — so it always drives the bubble to the cap. Measured here because it
+        // sits between the quote and the words and therefore contributes to the height.
+        var linkCard: BubbleBody.LinkPreview?
+        if case .text(let t) = b.body { linkCard = t.linkPreview }
+
         // The body, measured at the width the text actually wraps in.
         var bodyAttr = NSAttributedString()
         var links: [BubbleText.LinkRun] = []
@@ -443,7 +467,7 @@ enum MessageRowLayout {
                 meta: .zero, metaOnOwnLine: false, quote: nil, quoteInner: nil,
                 bodyAttr: bodyAttr, links: [], textColor: textColor, metaColor: metaColor,
                 tombstoneIcon: CGRect(x: 14, y: (bubbleH - iconW) / 2, width: iconW, height: iconW),
-                mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil,
+                mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil,
                 avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
                 forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
                 retry: nil)
@@ -474,6 +498,8 @@ enum MessageRowLayout {
         // On its own line the footer is a real row, so it can drive the bubble wider than the words
         // do — a two-character message from me still has to fit "12:34 ✓✓".
         if metaOwnLine { contentW = max(contentW, metaSize.width) }
+        // A link card does not hug: it is drawn full-width, so it takes the bubble to the cap.
+        if linkCard != nil { contentW = maxContent }
         contentW = min(maxContent, ceil(contentW))
 
         var innerY: CGFloat = vPad
@@ -481,6 +507,16 @@ enum MessageRowLayout {
         if quoteOuter.height > 0 {
             quoteRect = CGRect(x: hPad, y: innerY, width: contentW, height: quoteOuter.height)
             innerY += quoteOuter.height + 4                   // VStack spacing 4
+        }
+
+        var linkPlan: LinkPreviewPlan?
+        if let card = linkCard {
+            let (size, plan) = linkPreview(card, textColor: textColor, width: contentW)
+            var placed = plan
+            let rect = CGRect(x: hPad, y: innerY, width: contentW, height: size.height)
+            placed.card = rect
+            linkPlan = placed
+            innerY += size.height + 4                   // VStack spacing 4
         }
 
         // Re-measure the body at the FINAL content width. With a quote driving the bubble wider the
@@ -518,7 +554,7 @@ enum MessageRowLayout {
             text: textRect, meta: metaRect, metaOnOwnLine: metaOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: bodyAttr, links: links, textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: linkPlan,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -722,7 +758,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: plan, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil,
+            tombstoneIcon: nil, mediaPlan: plan, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -828,7 +864,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: plan, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: plan, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -913,7 +949,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: true,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: plan, locationPlan: nil, contactPlan: nil, pollPlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: plan, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -923,6 +959,126 @@ enum MessageRowLayout {
                                  forwardedSize: forwardedSize, forwardedIconW: forwardedIconW,
                                  y: bubbleRect.maxY)
         return BubbleResult(plan: out, totalHeight: bottom)
+    }
+
+    // ── The OG card inside a text bubble ──
+
+    /// Returns the card's size at `width`, and a plan whose rects are relative to the card's own
+    /// origin. The caller places it and offsets.
+    private static func linkPreview(_ p: BubbleBody.LinkPreview, textColor: UIColor,
+                                    width: CGFloat) -> (CGSize, LinkPreviewPlan) {
+        let pad: CGFloat = 10
+        let inner = max(1, width - pad * 2)
+        var y: CGFloat = 0
+
+        switch p.shape {
+        case .article:
+            var hero: CGRect?
+            if p.imageUrl != nil {
+                // ⛔ 170, NOT 140. The reference card leads with a big photo and 140 read as a thin
+                // strip beside it (his side-by-side).
+                hero = CGRect(x: 0, y: 0, width: width, height: 170)
+                y = 170
+            }
+            y += 8
+            var titleRect = CGRect(x: pad, y: y, width: inner, height: 0)
+            var titleAttr = NSAttributedString()
+            if !p.title.isEmpty {
+                titleAttr = NSAttributedString(string: p.title, attributes: [
+                    .font: UIFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: textColor])
+                let h = cappedHeight(titleAttr, width: inner, lines: 2)
+                titleRect = CGRect(x: pad, y: y, width: inner, height: h)
+                y += h + 2
+            }
+            var subtitle: CGRect?
+            var subtitleAttr: NSAttributedString?
+            if !p.desc.isEmpty {
+                let attr = NSAttributedString(string: p.desc, attributes: [
+                    .font: UIFont.systemFont(ofSize: 12),
+                    .foregroundColor: textColor.withAlphaComponent(0.75)])
+                let h = cappedHeight(attr, width: inner, lines: 2)
+                subtitle = CGRect(x: pad, y: y, width: inner, height: h)
+                subtitleAttr = attr
+                y += h + 2
+            }
+            let hostAttr = NSAttributedString(string: p.host, attributes: [
+                .font: UIFont.systemFont(ofSize: 11),
+                .foregroundColor: textColor.withAlphaComponent(0.55)])
+            let hostH = lineSizeOf(hostAttr, cap: inner).height
+            let host = CGRect(x: pad, y: y, width: inner, height: hostH)
+            y += hostH + 8
+
+            return (CGSize(width: width, height: y),
+                    LinkPreviewPlan(card: .zero, hero: hero, avatar: nil,
+                                    title: titleRect, titleAttr: titleAttr,
+                                    subtitle: subtitle, subtitleAttr: subtitleAttr,
+                                    host: host, hostAttr: hostAttr,
+                                    divider: nil, button: nil, buttonLabel: nil, buttonAttr: nil))
+
+        case .profile(let handle), .profileUnavailable:
+            let unavailable: Bool
+            var handleText = ""
+            if case .profile(let h) = p.shape { unavailable = false; handleText = h }
+            else { unavailable = true }
+
+            let avatarSize: CGFloat = 44, gap: CGFloat = 10
+            y = 10
+            let textX = pad + avatarSize + gap
+            let textW = max(1, width - textX - pad)
+            let titleAttr = NSAttributedString(
+                string: unavailable ? "Unavailable" : p.title,
+                attributes: [.font: UIFont.systemFont(ofSize: 15, weight: .semibold),
+                             .foregroundColor: textColor])
+            let subAttr = NSAttributedString(
+                string: unavailable ? "This account is no longer available"
+                                    : (p.desc.isEmpty ? "@\(handleText)" : p.desc),
+                attributes: [.font: UIFont.systemFont(ofSize: 13),
+                             .foregroundColor: textColor.withAlphaComponent(0.75)])
+            let tH = lineSizeOf(titleAttr, cap: textW).height
+            let sH = lineSizeOf(subAttr, cap: textW).height
+            let rowH = max(avatarSize, tH + 1 + sH)
+            let stackTop = y + (rowH - (tH + 1 + sH)) / 2
+            let avatar = CGRect(x: pad, y: y + (rowH - avatarSize) / 2,
+                                width: avatarSize, height: avatarSize)
+            let title = CGRect(x: textX, y: stackTop, width: textW, height: tH)
+            let subtitle = CGRect(x: textX, y: stackTop + tH + 1, width: textW, height: sH)
+            y += rowH + (unavailable ? 10 : 8)
+
+            var divider: CGRect?
+            var button: CGRect?
+            var buttonLabel: CGRect?
+            var buttonAttr: NSAttributedString?
+            if !unavailable {
+                divider = CGRect(x: 0, y: y, width: width, height: BubbleMetrics.hairline)
+                y += BubbleMetrics.hairline
+                let attr = NSAttributedString(string: "Send Message", attributes: [
+                    .font: UIFont.systemFont(ofSize: 14, weight: .semibold), .foregroundColor: textColor])
+                let size = lineSizeOf(attr)
+                let b = CGRect(x: 0, y: y, width: width, height: 40)
+                button = b
+                buttonAttr = attr
+                buttonLabel = CGRect(x: b.midX - size.width / 2, y: b.midY - size.height / 2,
+                                     width: size.width, height: size.height)
+                y = b.maxY
+            }
+
+            return (CGSize(width: width, height: y),
+                    LinkPreviewPlan(card: .zero, hero: nil, avatar: avatar,
+                                    title: title, titleAttr: titleAttr,
+                                    subtitle: subtitle, subtitleAttr: subAttr,
+                                    host: nil, hostAttr: nil,
+                                    divider: divider, button: button,
+                                    buttonLabel: buttonLabel, buttonAttr: buttonAttr))
+        }
+    }
+
+    /// The height of an attributed string clamped to `lines` — the card's title and description are
+    /// both `lineLimit(2)`, and a plan that measured them unclamped would reserve room for a
+    /// paragraph the label will never draw.
+    private static func cappedHeight(_ s: NSAttributedString, width: CGFloat, lines: Int) -> CGFloat {
+        let full = BubbleText.size(s, width: width).height
+        let one = lineSizeOf(s, cap: width).height
+        return min(full, one * CGFloat(lines))
     }
 
     // ── A poll ──
@@ -1006,7 +1162,7 @@ enum MessageRowLayout {
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
-            locationPlan: nil, contactPlan: nil, pollPlan: plan,
+            locationPlan: nil, contactPlan: nil, pollPlan: plan, linkPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -1079,7 +1235,7 @@ enum MessageRowLayout {
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
-            locationPlan: plan, contactPlan: nil, pollPlan: nil,
+            locationPlan: plan, contactPlan: nil, pollPlan: nil, linkPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -1158,7 +1314,7 @@ enum MessageRowLayout {
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
-            locationPlan: nil, contactPlan: plan, pollPlan: nil,
+            locationPlan: nil, contactPlan: plan, pollPlan: nil, linkPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)

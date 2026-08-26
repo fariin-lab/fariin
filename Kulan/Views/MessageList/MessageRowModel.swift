@@ -172,6 +172,28 @@ enum BubbleBody: Equatable {
         var gated: Bool
     }
 
+    /// The OG card that travelled WITH the message. Two shapes, and they are not variations of one
+    /// layout: an article leads with a 170pt hero image, which for a PERSON would be their face
+    /// cropped into a letterbox above a headline. A profile takes the shape the rest of the app
+    /// uses for people — round photo, name, @handle — plus the button that is the whole point of
+    /// sending somebody's link.
+    struct LinkPreview: Equatable {
+        enum Shape: Equatable {
+            case article
+            case profile(handle: String)
+            /// The account could not be resolved when this was sent: deleted, renamed, or never
+            /// existed. The card says so rather than leaving a link that looks live.
+            case profileUnavailable
+        }
+        var shape: Shape
+        var url: String
+        var title: String
+        var desc: String
+        var host: String
+        var imageUrl: String?
+        var imageEnc: EncMeta?
+    }
+
     struct TextBody: Equatable {
         var text: String
         var searchTerm: String      // in-chat search highlights this run
@@ -180,6 +202,9 @@ enum BubbleBody: Equatable {
         /// is also the only way the measuring pass can agree with the drawing pass about how wide
         /// a mention is (a name that resolves late would change the width after measurement).
         var mentionTokens: [String]
+        /// The OG card, when one travelled with this message. It sits between the reply quote and
+        /// the words, inside the same bubble.
+        var linkPreview: LinkPreview? = nil
     }
 }
 

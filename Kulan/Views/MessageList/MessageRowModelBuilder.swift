@@ -59,7 +59,6 @@ enum MessageRowModelBuilder {
         if m.pendingMediaKind != nil || m.isPendingImage { return false }
         if m.locationCard != nil || m.contactCard != nil { return true }
         if m.poll != nil { return true }
-        if m.linkPreview != nil { return false }           // the OG card is phase 3
         if m.isFeatureMarker { return true }               // the "update the app" notice
         if m.replyTo?.isStatus == true { return false }    // the big story card above the bubble is phase 3
         return !m.safeText.isEmpty
@@ -148,7 +147,10 @@ enum MessageRowModelBuilder {
             body = .text(BubbleBody.TextBody(
                 text: text,
                 searchTerm: ctx.searchTerm,
-                mentionTokens: msg.mentions.map { "@\(ctx.nameFor($0))" }))
+                mentionTokens: msg.mentions.map { "@\(ctx.nameFor($0))" },
+                // Only what TRAVELLED with the message renders — there is no viewer-side fetch, so
+                // an older message without an embedded preview stays a plain link.
+                linkPreview: msg.linkPreview.map(linkPreviewBody)))
         }
 
         // MY fill is the chat colour if one is set, else the default blue — a colour is a colour and
@@ -308,6 +310,23 @@ enum MessageRowModelBuilder {
             tiles: tiles, extra: n - shown, caption: caption,
             uploading: m.sendState == .sending, blurhash: m.blurhash,
             inlineThumbBase64: m.thumb, thumbCacheId: m.rowId)
+    }
+
+    private static func linkPreviewBody(_ p: Message.LinkPreviewData) -> BubbleBody.LinkPreview {
+        // The handle is read from the URL rather than stored, so every message ever sent — including
+        // ones from before profile cards existed — answers the same way with no migration.
+        let handle = URL(string: p.url).flatMap { LinkPreviewService.profileHandle(in: $0) }
+        let shape: BubbleBody.LinkPreview.Shape
+        if handle != nil, p.desc.isEmpty, p.title == "Unavailable" {
+            shape = .profileUnavailable
+        } else if let handle {
+            shape = .profile(handle: handle)
+        } else {
+            shape = .article
+        }
+        return BubbleBody.LinkPreview(
+            shape: shape, url: p.url, title: p.title, desc: p.desc, host: p.host,
+            imageUrl: p.imageUrl, imageEnc: p.imageEnc)
     }
 
     private static func fileBody(_ m: Message) -> BubbleBody.FileBody {
