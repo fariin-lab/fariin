@@ -213,7 +213,8 @@ enum BubbleText {
     /// enough to drop the attachment — the owner's "2:44 PM…" with the ticks gone.
     static func lineSize(_ s: NSAttributedString) -> CGSize {
         guard s.length > 0 else { return .zero }
-        let r = s.boundingRect(with: CGSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude),
+        let unbounded = CGFloat.greatestFiniteMagnitude
+        let r = s.boundingRect(with: CGSize(width: unbounded, height: unbounded),
                                options: [.usesLineFragmentOrigin, .usesFontLeading],
                                context: nil)
         return CGSize(width: ceil(r.width) + 1, height: ceil(r.height))
