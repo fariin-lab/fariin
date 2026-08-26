@@ -137,16 +137,25 @@ struct BubbleRadii: Equatable {
 }
 
 enum BubbleShape {
-    /// A path with CONTINUOUS corners (the squircle SwiftUI draws for `style: .continuous`), per
-    /// corner, so the cluster's squared-off side is honoured.
+    /// The bubble's outline: a CIRCULAR arc per corner, so the cluster's squared-off side is
+    /// honoured.
     ///
-    /// ⚠️ Circular arcs are NOT the same shape and this matters here: nearly every row in the chat
-    /// is drawn by this file now, so if it used `addArc` the whole list would shift to a rounder
-    /// corner than the one that has been shipping. The 1.528 multiplier is the standard continuous
-    /// approximation — the curve reaches 1.528·r along each edge and meets the corner with control
-    /// points at 0.667·r, which lands within a fraction of a point of Apple's own curve at these
-    /// radii.
-    static func path(_ size: CGSize, _ r: BubbleRadii, continuous: Bool = true) -> UIBezierPath {
+    /// ⛔ THIS WAS A HAND-ROLLED SQUIRCLE AND IT WAS WRONG — owner, 2026-08-26, with two
+    /// screenshots: "message bubbles and call bubbles and reply bubbles is using wrong corners…
+    /// make it like before".
+    ///
+    /// The squircle approximation extends the curve 1.528·r from each corner. That is the right
+    /// EXTENT, but flattening the curve over that distance makes the corner READ far rounder than
+    /// its radius: a 16pt call bubble looked like 24, and on a one-line text bubble the two curves
+    /// on a ~37pt edge met in the middle and the whole thing collapsed into a capsule — which is
+    /// exactly what he circled.
+    ///
+    /// ⚠️ AND THE HISTORY SAID SO FIRST. The UIKit text bubble that shipped for weeks before this
+    /// migration used `addArc`, and nobody ever reported its corners. The squircle was introduced
+    /// by this rewrite on the theory that it matched SwiftUI's `.continuous` more closely; the
+    /// theory was wrong and the proven shape was already there. `continuous` is kept as an opt-in
+    /// for a caller that can prove it wants one — nothing passes it today.
+    static func path(_ size: CGSize, _ r: BubbleRadii, continuous: Bool = false) -> UIBezierPath {
         let w = size.width, h = size.height
         // A radius can never exceed half the shorter side, or opposite corners overlap and the
         // path folds in on itself (a one-line bubble with an 18pt radius is 34 tall — close).

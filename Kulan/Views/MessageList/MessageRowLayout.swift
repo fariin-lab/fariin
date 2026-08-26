@@ -321,7 +321,7 @@ enum MessageRowLayout {
         }
 
         let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
-        let metaSize = BubbleText.size(metaAttr, width: maxContent)
+        let metaSize = BubbleText.lineSize(metaAttr)
 
         // A tombstone is a capsule with its own insets and no footer at all — a notice has no
         // delivery state to report.
@@ -578,7 +578,7 @@ enum MessageRowLayout {
             let built = BubbleText.build(caption, meta: b.meta, isMe: b.isMe, textColor: textColor,
                                          accent: accent, textAvail: avail)
             let size = BubbleText.size(built.body, width: avail)
-            let metaSize = BubbleText.size(metaAttr, width: avail)
+            let metaSize = BubbleText.lineSize(metaAttr)
             let top = innerY + 8
             plan.captionAttr = built.body
             plan.captionMetaOnOwnLine = built.metaOnOwnLine
@@ -599,7 +599,7 @@ enum MessageRowLayout {
             innerY = bottom
         } else {
             // The floating capsule: 7pt padding inside it, 7pt in from the picture's corner.
-            let metaSize = BubbleText.size(metaAttr, width: bubbleW)
+            let metaSize = BubbleText.lineSize(metaAttr)
             let capsule = CGRect(x: mediaRect.maxX - 7 - (metaSize.width + 14),
                                  y: mediaRect.maxY - 7 - (metaSize.height + 6),
                                  width: metaSize.width + 14, height: metaSize.height + 6)

@@ -205,6 +205,20 @@ enum BubbleText {
         return CGSize(width: ceil(r.width), height: ceil(r.height))
     }
 
+    /// A single line that must never wrap or truncate — the footer, a duration badge, a chip.
+    ///
+    /// ⚠️ It measures against an UNBOUNDED width and adds a point of slack. `boundingRect` and a
+    /// UILabel's own typesetting can disagree by a fraction on a string carrying an image
+    /// attachment (the tick), and when the label's frame IS the measured width that fraction is
+    /// enough to drop the attachment — the owner's "2:44 PM…" with the ticks gone.
+    static func lineSize(_ s: NSAttributedString) -> CGSize {
+        guard s.length > 0 else { return .zero }
+        let r = s.boundingRect(with: CGSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude),
+                               options: [.usesLineFragmentOrigin, .usesFontLeading],
+                               context: nil)
+        return CGSize(width: ceil(r.width) + 1, height: ceil(r.height))
+    }
+
     /// The jumbomoji point size for a 1…5 emoji message — the reference app's multipliers on the
     /// body point size, verbatim.
     static func jumbomojiFont(_ count: Int) -> UIFont {

@@ -344,6 +344,13 @@ final class MessageRowView: UIView {
         // this whole directory exists to prevent.
         bodyLabel.lineBreakMode = .byWordWrapping
         bubbleBox.addSubview(bodyLabel)
+        // ⛔ NEVER TRUNCATE THE FOOTER — owner, 2026-08-26: his bubbles read "2:44 PM…" with the
+        // ticks replaced by an ellipsis. A UILabel defaults to `.byTruncatingTail`, and the meta's
+        // frame is its own measured width, so a fraction of a point of disagreement between
+        // `boundingRect` and the label's own typesetting is enough to eat the tick. The footer is
+        // one short line that is always given exactly the room it asked for; clipping is the honest
+        // failure mode here, and in practice it never has to.
+        metaLabel.lineBreakMode = .byClipping
         bubbleBox.addSubview(metaLabel)
         // The rim and the jump-to flash are `.overlay`s in the design: above the content, added
         // last so subview order puts them there.
