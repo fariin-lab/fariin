@@ -130,7 +130,13 @@ enum BubbleText {
             .font: BubbleMetrics.metaFont, .foregroundColor: color]))
         guard isMe, m.tick != .none, let img = BubbleTicks.image(m.tick) else { return s }
         let a = NSTextAttachment()
-        a.image = img.withTintColor(m.tick == .failed ? .systemRed : color, renderingMode: .alwaysOriginal)
+        // ⛔ WHILE SENDING THE SLOT IS RESERVED BUT EMPTY. The spinning clock is a separate view
+        // laid over this slot (`MessageRowView.setSendingSpin`), because an attachment cannot
+        // rotate. Drawing the glyph here as well put a still clock UNDER the spinning one — his
+        // 2026-08-26 screenshot, two clocks overlapping. Same image, same size, clear ink: the
+        // footer measures identically, so the bubble never resizes when the tick lands.
+        let ink: UIColor = m.tick == .sending ? .clear : (m.tick == .failed ? .systemRed : color)
+        a.image = img.withTintColor(ink, renderingMode: .alwaysOriginal)
         a.bounds = CGRect(x: 0, y: -1, width: img.size.width, height: img.size.height)
         s.append(NSAttributedString(string: " "))
         s.append(NSAttributedString(attachment: a))
