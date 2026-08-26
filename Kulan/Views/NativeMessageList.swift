@@ -2033,7 +2033,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                            })
         } else {
             // An interactive drag reports no duration: the finger owns the motion.
+            //
+            // ⚠️ THE CONTAINER'S HEIGHT MOVES WITH THE BAR HERE TOO. Its height is pinned twice on
+            // purpose — a constant, and its top following the bar's — and the two only agree while
+            // `syncBottomBarGeometry` rewrites the constant every time the bar's bottom changes.
+            // This branch moved the bar without it, so a finger-driven frame left Auto Layout with
+            // two answers for one height and free to drop either.
             positionBottomBar()
+            syncBottomBarGeometry()
             updateInsets()
         }
     }
