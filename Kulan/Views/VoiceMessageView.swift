@@ -247,7 +247,12 @@ struct VoiceMessageView: View {
             // through `contentHeight`'s minHeight, which is a floor rather than a fixed size.
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: Self.discGap) {
-                    WaveformBars(bars: displayBars, progress: progress, played: tint,
+                    // ⛔ STEP TWO: THE WAVE IS ONE UIKIT VIEW. It was a `Canvas`, a UIKit gesture
+                    // sheet laid over it, and a third overlay for the playhead — three views on the
+                    // same 104×22 points, one of them re-running on every progress tick. See
+                    // `VoiceWaveformView`. Same drawing, same heights (`WaveformBars.display` is
+                    // still the one place that decides those), same axis-locked recogniser.
+                    VoiceWaveform(bars: displayBars, progress: progress, played: tint,
                              // 0.45, not 0.3. The unplayed half is most of the bar for most of a
                              // note's life, and at 30% of the tint on a saturated bubble it read as
                              // washed rather than as a waveform waiting to be played. Still clearly
