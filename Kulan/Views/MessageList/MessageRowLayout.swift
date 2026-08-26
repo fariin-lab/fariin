@@ -114,6 +114,18 @@ struct PollPlan {
     var total: CGRect                   // "N votes", written live
 }
 
+/// A voice note. Every rect is fixed; only the waveform's progress and the disc's glyph change as
+/// it plays, and neither is geometry.
+struct VoicePlan {
+    var disc: CGRect                    // bubble coordinates
+    var wave: CGRect
+    var speedPill: CGRect
+    var duration: CGRect
+    var durationAttr: NSAttributedString
+    var unreadDot: CGRect?
+    var micGlyph: CGRect
+}
+
 /// The story-reply card that floats above a bubble. ROW coordinates — it is not inside the bubble.
 struct StoryReplyPlan {
     var caption: CGRect
@@ -170,6 +182,7 @@ struct BubblePlan {
     var pollPlan: PollPlan?
     var linkPlan: LinkPreviewPlan?
     var storyReplyPlan: StoryReplyPlan?
+    var voicePlan: VoicePlan?
 
     // Outside the bubble, row coordinates
     var avatar: CGRect?
@@ -455,6 +468,12 @@ enum MessageRowLayout {
                             topSpacing: topSpacing, y: y,
                             senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
                             forwardedSize: forwardedSize, forwardedIconW: forwardedIconW)
+        case .voice(let v):
+            return voice(v, row: b, originX: originX, columnX: columnX, columnW: columnW,
+                         maxBubble: maxBubble, textColor: textColor, metaColor: metaColor,
+                         topSpacing: topSpacing, y: y,
+                         senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                         forwardedSize: forwardedSize, forwardedIconW: forwardedIconW)
         case .poll(let p):
             return poll(p, row: b, originX: originX, columnX: columnX, columnW: columnW,
                         maxBubble: maxBubble, textColor: textColor, metaColor: metaColor,
@@ -487,7 +506,7 @@ enum MessageRowLayout {
                 meta: .zero, metaOnOwnLine: false, quote: nil, quoteInner: nil,
                 bodyAttr: bodyAttr, links: [], textColor: textColor, metaColor: metaColor,
                 tombstoneIcon: CGRect(x: 14, y: (bubbleH - iconW) / 2, width: iconW, height: iconW),
-                mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil,
+                mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil,
                 avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
                 forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
                 retry: nil)
@@ -574,7 +593,7 @@ enum MessageRowLayout {
             text: textRect, meta: metaRect, metaOnOwnLine: metaOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: bodyAttr, links: links, textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: linkPlan, storyReplyPlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: linkPlan, storyReplyPlan: nil, voicePlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -786,7 +805,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: plan, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil,
+            tombstoneIcon: nil, mediaPlan: plan, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -892,7 +911,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: plan, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: plan, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -977,7 +996,102 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: true,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: plan, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: plan, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil,
+            avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
+            forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
+            retry: nil)
+        let bottom = decorations(b, plan: &out, bubbleRect: bubbleRect, columnX: columnX,
+                                 columnW: columnW, originX: originX, topSpacing: topSpacing,
+                                 senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                                 forwardedSize: forwardedSize, forwardedIconW: forwardedIconW,
+                                 y: bubbleRect.maxY)
+        return BubbleResult(plan: out, totalHeight: bottom)
+    }
+
+    // ── A voice note ──
+    //
+    // ⛔ THE WIDTH IS A CONSTANT AND THAT IS THE WHOLE POINT. The old bubble bloomed on first play,
+    // and the cause was never the waveform: it was a greedy `Spacer` beside the footer, which
+    // SwiftUI re-resolved toward the bubble cap on the reconfigure that fired when playback began.
+    // Here nothing is flexible — every rect below comes from `VoiceMessageView.contentWidth`, which
+    // is worked out from the note's own duration and nothing else, so it is identical before,
+    // during and after playback.
+
+    private static func voice(_ v: BubbleBody.VoiceBody, row b: BubbleRow,
+                              originX: CGFloat, columnX: CGFloat, columnW: CGFloat,
+                              maxBubble: CGFloat, textColor: UIColor, metaColor: UIColor,
+                              topSpacing: CGFloat, y startY: CGFloat,
+                              senderNameAttr: NSAttributedString?, senderNameSize: CGSize,
+                              forwardedSize: CGSize, forwardedIconW: CGFloat) -> BubbleResult {
+        let y = startY
+        let hPad: CGFloat = 13, vPad: CGFloat = 8
+        let contentW = min(max(1, maxBubble - hPad * 2), CGFloat(v.contentWidth))
+        var innerY = vPad
+
+        var quoteRect: CGRect?
+        var quoteInner: QuoteInnerPlan?
+        if let q = b.quote {
+            let (size, inner) = quoteSize(q, textColor: textColor, maxWidth: contentW)
+            quoteInner = inner
+            // The quote FILLS the note's fixed column — the voice bubble is not free to hug, so a
+            // content-sized quote would leave bare bubble to its right.
+            quoteRect = CGRect(x: hPad, y: innerY, width: contentW, height: size.height)
+            innerY += size.height + 4
+        }
+
+        let disc = VoiceMessageView.discSize
+        let gap = VoiceMessageView.discGap
+        let waveH = VoiceMessageView.waveHeight
+        let speed = VoiceMessageView.speedSlot
+        let columnStart = hPad + disc + gap
+        let columnW2 = max(1, contentW - disc - gap)
+
+        let durationAttr = NSAttributedString(string: v.durationText, attributes: [
+            .font: UIFont.systemFont(ofSize: 11),
+            .foregroundColor: textColor.withAlphaComponent(0.8)])
+        let durH = lineSizeOf(durationAttr).height
+        let durW = lineSizeOf(durationAttr).width
+
+        // The column is the wave over the duration line; the disc is centred against the pair.
+        let stackH = waveH + 6 + durH
+        let contentH = max(VoiceMessageView.contentHeight, stackH)
+        let stackTop = innerY + (contentH - stackH) / 2
+
+        let waveW = max(1, columnW2 - gap - speed)
+        let plan = VoicePlan(
+            disc: CGRect(x: hPad, y: innerY + (contentH - disc) / 2, width: disc, height: disc),
+            wave: CGRect(x: columnStart, y: stackTop, width: waveW, height: waveH),
+            speedPill: CGRect(x: columnStart + waveW + gap, y: stackTop + (waveH - 22) / 2,
+                              width: speed, height: 22),
+            duration: CGRect(x: columnStart, y: stackTop + waveH + 6, width: durW, height: durH),
+            durationAttr: durationAttr,
+            unreadDot: v.unplayed ? CGRect(x: columnStart + durW + 8,
+                                           y: stackTop + waveH + 6 + (durH - 7) / 2,
+                                           width: 7, height: 7) : nil,
+            micGlyph: CGRect(x: columnStart + durW + (v.unplayed ? 19 : 8),
+                             y: stackTop + waveH + 6 + (durH - 10) / 2, width: 10, height: 10))
+        innerY += contentH
+
+        // The footer is laid OVER the trailing edge of the duration line, so the clock and the
+        // length share one row — an overlay adds no size, which is the shape that is safe here.
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
+        let metaSize = BubbleText.lineSize(metaAttr)
+        let metaRect = CGRect(x: hPad + contentW - metaSize.width,
+                              y: plan.duration.midY - metaSize.height / 2,
+                              width: metaSize.width, height: metaSize.height)
+        innerY += vPad
+
+        let bubbleW = contentW + hPad * 2
+        let bubbleRect = CGRect(x: b.isMe ? (columnX + columnW - bubbleW) : columnX,
+                                y: y, width: bubbleW, height: innerY)
+        var out = BubblePlan(
+            bubble: bubbleRect, radii: b.radii, isCapsule: false, fill: b.fill, rim: b.rim,
+            text: .zero, meta: metaRect, metaOnOwnLine: true,
+            quote: quoteRect, quoteInner: quoteInner,
+            bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
+            locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil,
+            storyReplyPlan: nil, voicePlan: plan,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -1248,7 +1362,7 @@ enum MessageRowLayout {
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
-            locationPlan: nil, contactPlan: nil, pollPlan: plan, linkPlan: nil, storyReplyPlan: nil,
+            locationPlan: nil, contactPlan: nil, pollPlan: plan, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -1321,7 +1435,7 @@ enum MessageRowLayout {
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
-            locationPlan: plan, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil,
+            locationPlan: plan, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -1400,7 +1514,7 @@ enum MessageRowLayout {
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
-            locationPlan: nil, contactPlan: plan, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil,
+            locationPlan: nil, contactPlan: plan, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)

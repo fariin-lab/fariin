@@ -2740,6 +2740,10 @@ struct ThreadView: View {
                 AppRouter.shared.pendingChatPhoto = card.photo   // and photo, not the placeholder
                 AppRouter.shared.pendingChatId = ChatService.convId(me, card.uid)
             },
+            onToggleVoice: { id in
+                guard let m = repo.items.first(where: { $0.rowId == id }) else { return }
+                VoiceNotePlayer.shared.toggle(message: m, cid: cid, isMe: m.authorId == me)
+            },
             onTapStoryReplyCard: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }), let r = m.replyTo else { return }
                 // The card's OWN anchor, never the quote's — one message can carry both.

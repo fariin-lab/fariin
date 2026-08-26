@@ -57,8 +57,7 @@ enum MessageRowModelBuilder {
         // Phase 2: a photo, a video and a gif are drawn here now.
         if m.isImage || m.isVideo || m.isGif { return true }
         if m.isAlbum || m.isFile { return true }
-        // Voice and the cards are the rest of the final phase.
-        if m.isAudio { return false }
+        if m.isAudio { return true }
         if m.pendingMediaKind != nil || m.isPendingImage { return false }
         if m.locationCard != nil || m.contactCard != nil { return true }
         if m.poll != nil { return true }
@@ -131,6 +130,8 @@ enum MessageRowModelBuilder {
                 // deliberately not on the face of it: the map replaced them, and a coordinate is
                 // the one thing about a place that tells you nothing.
                 label: (loc.label?.isEmpty == false ? loc.label! : "Location")))
+        } else if msg.isAudio {
+            body = .voice(voiceBody(msg, ctx: ctx))
         } else if let poll = msg.poll {
             body = .poll(BubbleBody.PollBody(
                 pollId: poll.id, messageId: msg.id, question: poll.question,
@@ -327,6 +328,23 @@ enum MessageRowModelBuilder {
             tiles: tiles, extra: n - shown, caption: caption,
             uploading: m.sendState == .sending, blurhash: m.blurhash,
             inlineThumbBase64: m.thumb, thumbCacheId: m.rowId)
+    }
+
+    private static func voiceBody(_ m: Message, ctx: MessageRowContext) -> BubbleBody.VoiceBody {
+        let secs = Int(m.duration ?? 0)
+        return BubbleBody.VoiceBody(
+            messageId: m.id,
+            url: m.audioUrl, enc: m.enc, localData: m.localAudioData,
+            bars: m.waveform,
+            durationText: String(format: "%d:%02d", secs / 60, secs % 60),
+            // The unread dot: a note I did not send, that is not my own optimistic copy, and that
+            // `PlayedVoice` has no record of me listening to.
+            unplayed: m.authorId != ctx.me && m.localAudioData == nil
+                && PlayedVoice.shared.isUnplayed(cid: ctx.cid, messageId: m.id, createdAt: m.createdAt),
+            // ⚠️ A CONSTANT DERIVED FROM THE NOTE'S OWN DURATION AND NOTHING ELSE, so it is the same
+            // number at pre-measure, at render and in every playback state. That is the property
+            // the old bubble's width-on-play bloom fix actually needed.
+            contentWidth: Double(VoiceMessageView.contentWidth(for: m)))
     }
 
     private static func linkPreviewBody(_ p: Message.LinkPreviewData) -> BubbleBody.LinkPreview {

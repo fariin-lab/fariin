@@ -19,6 +19,7 @@ protocol MessageRowCellDelegate: AnyObject {
     func rowCell(_ cell: MessageRowCell, didTapAlbumTile index: Int)
     func rowCellDidTapFile(_ cell: MessageRowCell)
     func rowCellDidTapStoryReply(_ cell: MessageRowCell)
+    func rowCellDidToggleVoice(_ cell: MessageRowCell)
     func rowCellDidTapLinkCard(_ cell: MessageRowCell)
     func rowCellDidTapLinkProfile(_ cell: MessageRowCell)
     func rowCellDidTapLocation(_ cell: MessageRowCell)
@@ -66,6 +67,10 @@ final class MessageRowCell: UICollectionViewCell {
         tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         tap.cancelsTouchesInView = false   // the list's tap-to-dismiss-keyboard still gets its turn
         contentView.addGestureRecognizer(tap)
+        rowView.onVoicePlayToggle = { [weak self] in
+            guard let self else { return }
+            self.delegate?.rowCellDidToggleVoice(self)
+        }
     }
     required init?(coder: NSCoder) { fatalError() }
 

@@ -315,6 +315,7 @@ final class MessageRowView: UIView {
     private var pollView: PollBubbleView?
     private var linkView: LinkPreviewBubbleView?
     private var storyReplyView: StoryReplyCardView?
+    private var voiceView: VoiceBubbleView?
     private var quoteView: BubbleQuoteView?
     private var avatarView: RowAvatarView?
     private var senderLabel: UILabel?
@@ -516,6 +517,7 @@ final class MessageRowView: UIView {
         applyPoll(b, model: m, cid: cid)
         applyLinkPreview(b, model: m, cid: cid)
         applyStoryReply(b, model: m, cid: cid)
+        applyVoice(b, model: m, cid: cid)
         applyTombstone(b)
         applyQuote(b, model: m, cid: cid)
         applySender(b, model: m)
@@ -643,6 +645,28 @@ final class MessageRowView: UIView {
     }
 
     func castPollVote(option i: Int) { pollView?.castVote(option: i) }
+
+    /// Set by the cell, so the disc's tap can reach ThreadView — `VoiceNotePlayer.toggle` needs a
+    /// whole `Message` and only ThreadView has one.
+    var onVoicePlayToggle: (() -> Void)? {
+        didSet { voiceView?.onPlayToggle = { [weak self] in self?.onVoicePlayToggle?() } }
+    }
+
+    private func applyVoice(_ b: BubblePlan, model m: MessageRowModel, cid: String) {
+        guard let plan = b.voicePlan,
+              case .bubble(let row) = m.content, case .voice(let v) = row.body else {
+            voiceView?.isHidden = true
+            voiceView?.prepareForReuse()
+            return
+        }
+        let v2 = voiceView ?? {
+            let x = VoiceBubbleView(); bubbleBox.insertSubview(x, aboveSubview: fill); voiceView = x; return x
+        }()
+        v2.isHidden = false
+        v2.frame = CGRect(origin: .zero, size: b.bubble.size)
+        v2.onPlayToggle = { [weak self] in self?.onVoicePlayToggle?() }
+        v2.configure(v, plan: plan, tint: b.textColor, cid: cid)
+    }
 
     private func applyLinkPreview(_ b: BubblePlan, model m: MessageRowModel, cid: String) {
         guard let plan = b.linkPlan,
@@ -1057,6 +1081,7 @@ final class MessageRowView: UIView {
         pollView?.prepareForReuse()
         linkView?.prepareForReuse()
         storyReplyView?.prepareForReuse()
+        voiceView?.prepareForReuse()
         model = nil
         plan = nil
     }

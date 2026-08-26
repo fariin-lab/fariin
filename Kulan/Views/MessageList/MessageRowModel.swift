@@ -73,6 +73,24 @@ enum BubbleBody: Equatable {
     case contact(ContactBody)
     /// A poll: the question and its options, with live vote bars.
     case poll(PollBody)
+    /// A voice note: the play disc, the waveform, the duration line.
+    case voice(VoiceBody)
+
+    /// ⚠️ NO PLAYBACK STATE IN HERE, for the same reason the poll carries no votes: it changes
+    /// many times a second and would re-plan the row on every tick. The WIDTH is a constant
+    /// derived from the note's own duration and nothing else, so it is identical at pre-measure,
+    /// at render, and in every playback state — which is the property the old bubble's
+    /// "width-on-play" bloom fix actually needed.
+    struct VoiceBody: Equatable {
+        var messageId: String
+        var url: String?
+        var enc: EncMeta?
+        var localData: Data?
+        var bars: [Int]
+        var durationText: String
+        var unplayed: Bool          // the unread dot beside the duration
+        var contentWidth: Double
+    }
 
     /// ⚠️ THE VOTES ARE NOT IN HERE, AND THAT IS THE DESIGN. They arrive from a Firestore listener
     /// and change constantly; putting them in the model would re-plan the row on every vote. They
