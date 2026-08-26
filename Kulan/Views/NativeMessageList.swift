@@ -387,6 +387,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var barBottom: NSLayoutConstraint?
     private var barHeightC: NSLayoutConstraint?
     private var barAnimator: UIViewPropertyAnimator?
+    /// The bar's own bottom inset, from ThreadView. Folded into `barBottom` by `positionBottomBar`.
+    private var composerBottomInset: CGFloat = 8
     /// The composer, once ThreadView hands it over. Nil for the announcements list, which has none.
     private(set) weak var composerBar: UIView?
 
@@ -2390,6 +2392,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // The BUBBLE only, not the full-width row: double-tapping the empty area beside a uikit bubble
             // hearted it, while SwiftUI rows react on the bubble content only.
             guard let cell = collectionView.cellForItem(at: ip) as? MessageRowCell else { return false }
+            // ⛔ NOT ON A ROW THAT OPENS ON A SINGLE TAP — his order, 2026-07-29: "video and images
+            // please remove double tap react, I need to open fast".
+            //
+            // A double-tap recogniser makes every SINGLE tap wait to find out whether a second one
+            // is coming; that wait is unavoidable, it is how tap counting works. On a photo it sits
+            // between the tap and the viewer. The old gate excluded media from this path entirely,
+            // so the migration silently re-armed it on every picture, video, album and file: slow
+            // opens, and a double tap that BOTH opened the viewer and toggled a reaction.
+            if case .bubble(let row)? = rowModels[id]?.content, row.opensOnTap { return false }
             let p = collectionView.convert(loc, to: cell.previewBubble)
             return cell.previewBubble.bounds.contains(p)
         }
@@ -2996,7 +3007,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         barLeading?.constant = sideInset
         barTrailing?.constant = -sideInset
-        barBottom?.constant = -bottomInset
+        // ⛔ THE BOTTOM INSET IS STORED, NOT WRITTEN STRAIGHT ONTO THE CONSTRAINT. `positionBottomBar`
+        // owns `barBottom` and rewrites it on every keyboard event, so writing the inset here was a
+        // second author for one constraint and the keyboard always won — the composer lost its gap
+        // above the keys entirely, and at rest it stopped dipping into the indicator band.
+        composerBottomInset = bottomInset
         bar.actions = actions
         bar.apply(state)
         resizeBottomBar()
@@ -3018,6 +3033,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
               let heightC = barHeightC, let containerC = bottomBarHeight else { return }
         let width = max(1, view.bounds.width - (barLeading?.constant ?? 0) * 2)
         let barH = bar.preferredHeight(forWidth: width)
+        // 6 (the bar's top padding) + the bar + everything below it (the keyboard and the bar's
+        // bottom inset, both carried by `barBottom`). That total IS the content inset, which is why
+        // it has to be complete — a term missing here is a term of clearance the newest message
+        // loses, and it lands under the composer.
         let container = 6 + barH + (-(barBottom?.constant ?? 0))
         // ⚠️ THEIR THRESHOLD IS 1pt, NOT A HAIR. Their toolbar's `bounds` observer reads
         // `abs(old.height - new.height) > 1` before telling anyone, so sub-point noise from a
@@ -3051,8 +3070,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     /// Put the container's bottom edge exactly on top of the keyboard. Called from inside
     /// `rideKeyboard`'s animation block, so the bar travels on the keyboard's own curve.
+    /// The bar's bottom edge: above the keyboard, plus the bar's own bottom inset.
+    ///
+    /// ⚠️ ONE CONSTRAINT, BOTH TERMS. They cannot be split across two writers — see `applyComposer`.
     private func positionBottomBar() {
-        barBottom?.constant = -keyboardBand
+        barBottom?.constant = -(keyboardBand + composerBottomInset)
     }
 
     /// The container's height without animating it — used inside a block that is already animating.
