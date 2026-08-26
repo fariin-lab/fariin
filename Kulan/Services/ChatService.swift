@@ -1698,7 +1698,16 @@ enum ChatService {
         //
         // Progress still reports the clip alone: the poster is too small to do anything but make the
         // ring jump, which was the other half of the original reasoning and still holds.
-        async let videoUp = uploadEncrypted(vidCipher, to: "chat/\(cid)/\(msgRef.documentID).mp4.enc", progressId: clientId)
+        async let videoUp = uploadEncrypted(vidCipher, to: "chat/\(cid)/\(msgRef.documentID).mp4.enc",
+                                            progressId: clientId,
+                                            // The same descriptor `attachVideo` carries. This path
+                                            // is the one forwarding and retry take, and leaving it
+                                            // out would mean a forwarded video is the only send that
+                                            // cannot survive the app being killed. `enc` rides along
+                                            // for the reason written there: a clip is sealed apart
+                                            // from its poster.
+                                            attach: .init(cid: cid, messageId: msgRef.documentID,
+                                                          urlField: "videoUrl", enc: vidMeta))
         async let thumbUp = uploadEncrypted(thCipher, to: "chat/\(cid)/\(msgRef.documentID).thumb.enc")
         // ⛔ ONLY THE POSTER IS AWAITED HERE. The video keeps uploading while the message goes out.
         //
