@@ -308,6 +308,8 @@ final class MessageRowView: UIView {
     private let metaLabel = UILabel()
 
     private var mediaView: MediaBubbleView?
+    private var albumView: AlbumBubbleView?
+    private var fileView: FileBubbleView?
     private var quoteView: BubbleQuoteView?
     private var avatarView: RowAvatarView?
     private var senderLabel: UILabel?
@@ -502,6 +504,8 @@ final class MessageRowView: UIView {
         metaLabel.isHidden = b.meta == .zero
 
         applyMedia(b, model: m, cid: cid)
+        applyAlbum(b, model: m, cid: cid)
+        applyFile(b, model: m, cid: cid)
         applyTombstone(b)
         applyQuote(b, model: m, cid: cid)
         applySender(b, model: m)
@@ -528,10 +532,7 @@ final class MessageRowView: UIView {
         // ⛔ THE PICTURE IS CLIPPED BY THE BUBBLE'S OWN PATH, not by a corner radius. These bubbles
         // have four different radii (a cluster squares off the side that continues), so a rounded
         // rect mask would round the two corners the shape deliberately keeps sharp.
-        let mask = CAShapeLayer()
-        mask.path = (b.isCapsule ? BubbleShape.capsulePath(b.bubble.size)
-                                 : BubbleShape.path(b.bubble.size, b.radii)).cgPath
-        v.layer.mask = mask
+        v.layer.mask = bubbleMask(b)
         v.configure(media, plan: plan, cid: cid)
 
         // ⛔ REGISTER THE PICTURE AS THE FLIGHT'S SOURCE. Opening a photo flies the MEDIA out of its
@@ -546,6 +547,47 @@ final class MessageRowView: UIView {
         if inWindow.width > 1, inWindow.height > 1 {
             MediaOpenRects.capture(key, inWindow, cornerRadius: b.radii.topLeading)
         }
+    }
+
+    private func applyAlbum(_ b: BubblePlan, model m: MessageRowModel, cid: String) {
+        guard let plan = b.albumPlan,
+              case .bubble(let row) = m.content, case .album(let a) = row.body else {
+            albumView?.isHidden = true
+            albumView?.prepareForReuse()
+            return
+        }
+        let v = albumView ?? {
+            let v = AlbumBubbleView(); bubbleBox.insertSubview(v, aboveSubview: fill); albumView = v; return v
+        }()
+        v.isHidden = false
+        v.frame = CGRect(origin: .zero, size: b.bubble.size)
+        v.layer.mask = bubbleMask(b)
+        v.configure(a, plan: plan, cid: cid)
+    }
+
+    private func applyFile(_ b: BubblePlan, model m: MessageRowModel, cid: String) {
+        guard let plan = b.filePlan,
+              case .bubble(let row) = m.content, case .file(let f) = row.body else {
+            fileView?.isHidden = true
+            fileView?.prepareForReuse()
+            return
+        }
+        let v = fileView ?? {
+            let v = FileBubbleView(); bubbleBox.insertSubview(v, aboveSubview: fill); fileView = v; return v
+        }()
+        v.isHidden = false
+        v.frame = CGRect(origin: .zero, size: b.bubble.size)
+        v.configure(f, plan: plan, tint: b.textColor, cid: cid)
+    }
+
+    /// The bubble's own outline as a mask. These bubbles carry four different radii (a cluster
+    /// squares off the side that continues), so a corner RADIUS would round the two corners the
+    /// shape deliberately keeps sharp.
+    private func bubbleMask(_ b: BubblePlan) -> CAShapeLayer {
+        let mask = CAShapeLayer()
+        mask.path = (b.isCapsule ? BubbleShape.capsulePath(b.bubble.size)
+                                 : BubbleShape.path(b.bubble.size, b.radii)).cgPath
+        return mask
     }
 
     private func applyTombstone(_ b: BubblePlan) {
@@ -852,6 +894,8 @@ final class MessageRowView: UIView {
         quoteView?.isHidden = true
         avatarView?.isHidden = true
         mediaView?.prepareForReuse()
+        albumView?.prepareForReuse()
+        fileView?.prepareForReuse()
         model = nil
         plan = nil
     }

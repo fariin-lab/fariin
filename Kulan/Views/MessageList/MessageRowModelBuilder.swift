@@ -53,8 +53,9 @@ enum MessageRowModelBuilder {
         if m.viewOnce { return false }
         // Phase 2: a photo, a video and a gif are drawn here now.
         if m.isImage || m.isVideo || m.isGif { return true }
-        // Album, voice and file are the rest of phase 2; the cards are phase 3.
-        if m.isAlbum || m.isAudio || m.isFile { return false }
+        if m.isAlbum || m.isFile { return true }
+        // Voice and the cards are the rest of the final phase.
+        if m.isAudio { return false }
         if m.pendingMediaKind != nil || m.isPendingImage { return false }
         if m.poll != nil || m.locationCard != nil || m.contactCard != nil { return false }
         if m.linkPreview != nil { return false }           // the OG card is phase 3
@@ -117,6 +118,10 @@ enum MessageRowModelBuilder {
             body = .tombstone(isMe ? "You deleted this message" : "This message was deleted")
         } else if msg.isImage || msg.isVideo || msg.isGif {
             body = .media(mediaBody(msg, ctx: ctx))
+        } else if msg.isAlbum {
+            body = .album(albumBody(msg, ctx: ctx))
+        } else if msg.isFile {
+            body = .file(fileBody(msg))
         } else if text.jumbomojiCount > 0, msg.replyTo == nil {
             // Borderless applies only to a TEXT-ONLY message: an emoji-only REPLY keeps its bubble,
             // because the quote shares the box with it.
@@ -234,6 +239,70 @@ enum MessageRowModelBuilder {
             // A gif is a public url with nothing to hold back; a photo goes through the
             // auto-download policy, which may keep it behind a tap.
             gated: kind == .photo)
+    }
+
+    private static func albumBody(_ m: Message, ctx: MessageRowContext) -> BubbleBody.AlbumBody {
+        // An optimistic album has only `localAlbum`; a receiver's has only `albumSizes` until the
+        // tiles land. Hidden-for-me tiles are dropped, but never while the album is still
+        // optimistic — nothing can have been hidden yet.
+        let optimistic = !m.localAlbum.isEmpty
+        let count = optimistic ? m.localAlbum.count : m.album.count
+        let visible: [Int] = optimistic
+            ? Array(0..<count)
+            : (0..<count).filter { !HiddenMessages.isHidden("\(m.id)-\($0)") }
+        let n = max(visible.count, 2)
+        let shown = min(n, 10)          // the album ceiling; the rest rides a "+N" on the last tile
+
+        var tiles: [BubbleBody.AlbumBody.Tile] = []
+        for slot in 0..<shown {
+            let i = slot < visible.count ? visible[slot] : slot
+            // ⚠️ THE ASPECT HAS TO BE RIGHT BEFORE THE TILES EXIST, or the mosaic solves one
+            // arrangement now and a different one when the real tiles land — it changes under the
+            // reader. Three sources, best first.
+            var aspect: Double = 1
+            if m.album.indices.contains(i), m.album[i].height > 0 {
+                aspect = m.album[i].width / m.album[i].height
+            } else if m.albumSizes.indices.contains(i), m.albumSizes[i].count == 2,
+                      m.albumSizes[i][1] > 0 {
+                aspect = m.albumSizes[i][0] / m.albumSizes[i][1]
+            } else if m.localAlbum.indices.contains(i),
+                      let ui = UIImage(data: m.localAlbum[i]), ui.size.height > 0 {
+                aspect = Double(ui.size.width / ui.size.height)
+            }
+            let item = m.album.indices.contains(i) ? m.album[i] : nil
+            let isVideo = m.localAlbumIsVideo.indices.contains(i) ? m.localAlbumIsVideo[i]
+                                                                  : (item?.isVideo ?? false)
+            let duration: String? = {
+                guard let d = item?.duration, d > 0 else { return nil }
+                let s = Int(d)
+                return String(format: "%d:%02d", s / 60, s % 60)
+            }()
+            tiles.append(BubbleBody.AlbumBody.Tile(
+                url: item?.imageUrl, enc: item?.enc, aspect: aspect,
+                isVideo: isVideo, durationText: duration,
+                localData: m.localAlbum.indices.contains(i) ? m.localAlbum[i] : nil,
+                uploadKey: m.clientId.map { MediaSend.itemKey($0, i) }))
+        }
+        let caption = m.text.isEmpty ? nil : BubbleBody.TextBody(
+            text: m.text, searchTerm: ctx.searchTerm,
+            mentionTokens: m.mentions.map { "@\(ctx.nameFor($0))" })
+        return BubbleBody.AlbumBody(
+            tiles: tiles, extra: n - shown, caption: caption,
+            uploading: m.sendState == .sending, blurhash: m.blurhash,
+            inlineThumbBase64: m.thumb, thumbCacheId: m.rowId)
+    }
+
+    private static func fileBody(_ m: Message) -> BubbleBody.FileBody {
+        let size: String = {
+            guard let b = m.fileSize else { return "Document" }
+            if b >= 1_048_576 { return String(format: "%.1f MB", Double(b) / 1_048_576) }
+            if b >= 1024 { return String(format: "%.0f KB", Double(b) / 1024) }
+            return "\(b) B"
+        }()
+        return BubbleBody.FileBody(
+            name: m.fileName ?? "Document", sizeLabel: size,
+            previewUrl: m.thumbUrl, previewEnc: m.thumbEnc, localPreview: m.localImageData,
+            uploading: m.sendState == .sending)
     }
 
     private static func myFill(_ ctx: MessageRowContext) -> BubbleFill {

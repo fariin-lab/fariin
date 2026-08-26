@@ -184,6 +184,233 @@ final class MediaBubbleView: UIView {
     }
 }
 
+// ── The album mosaic ──
+
+final class AlbumBubbleView: UIView {
+    private var tiles: [AlbumTileView] = []
+    private let metaCapsule = UIView()
+    private let captionLabel = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        metaCapsule.backgroundColor = UIColor.black.withAlphaComponent(0.35)
+        addSubview(metaCapsule)
+        captionLabel.numberOfLines = 0
+        captionLabel.lineBreakMode = .byWordWrapping
+        addSubview(captionLabel)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(_ a: BubbleBody.AlbumBody, plan: AlbumPlan, cid: String) {
+        while tiles.count < plan.tiles.count {
+            let v = AlbumTileView()
+            insertSubview(v, at: 0)
+            tiles.append(v)
+        }
+        for (i, v) in tiles.enumerated() {
+            guard i < plan.tiles.count else { v.isHidden = true; v.reset(); continue }
+            v.isHidden = false
+            let t = plan.tiles[i]
+            v.frame = t.rect.offsetBy(dx: plan.grid.minX, dy: plan.grid.minY)
+            v.configure(a.tiles.indices.contains(i) ? a.tiles[i] : nil, tile: t,
+                        // The blurhash and the inline thumbnail belong to the FIRST tile only —
+                        // they were sealed into the message for the album as a whole.
+                        placeholder: i == 0 ? (InlineThumbCache.image(id: a.thumbCacheId,
+                                                                      base64: a.inlineThumbBase64)
+                                               ?? a.blurhash.flatMap { BlurHash.decode($0) }) : nil,
+                        cid: cid)
+        }
+
+        if let capsule = plan.metaCapsule {
+            metaCapsule.isHidden = false
+            metaCapsule.frame = capsule
+            metaCapsule.layer.cornerRadius = capsule.height / 2
+        } else {
+            metaCapsule.isHidden = true
+        }
+        if let rect = plan.captionText, let attr = plan.captionAttr {
+            captionLabel.isHidden = false
+            captionLabel.frame = rect
+            captionLabel.attributedText = attr
+        } else {
+            captionLabel.isHidden = true
+        }
+    }
+
+    /// Which tile is at this point, in this view's coordinates? The album opens the tile you hit,
+    /// not the message.
+    func tileIndex(at point: CGPoint, plan: AlbumPlan) -> Int? {
+        for (i, t) in plan.tiles.enumerated()
+        where t.rect.offsetBy(dx: plan.grid.minX, dy: plan.grid.minY).contains(point) {
+            return i
+        }
+        return nil
+    }
+
+    func prepareForReuse() { tiles.forEach { $0.reset() } }
+}
+
+final class AlbumTileView: UIView {
+    private let picture = RowImageView(frame: .zero)
+    private let playBadge = UIImageView()
+    private let durationPill = UIView()
+    private let durationLabel = UILabel()
+    private let extraScrim = UIView()
+    private let extraLabel = UILabel()
+    private var ring: UploadRingView?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        clipsToBounds = true
+        addSubview(picture)
+        playBadge.contentMode = .scaleAspectFit
+        playBadge.tintColor = UIColor.white.withAlphaComponent(0.95)
+        addSubview(playBadge)
+        durationPill.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        addSubview(durationPill)
+        durationLabel.textAlignment = .center
+        addSubview(durationLabel)
+        extraScrim.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        addSubview(extraScrim)
+        extraLabel.textAlignment = .center
+        addSubview(extraLabel)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(_ model: BubbleBody.AlbumBody.Tile?, tile: AlbumPlan.Tile,
+                   placeholder: UIImage?, cid: String) {
+        let local = CGRect(origin: .zero, size: tile.rect.size)
+        picture.frame = local
+        if let data = model?.localData, let ui = UIImage(data: data) {
+            picture.reset()
+            picture.image = ui
+        } else {
+            picture.configure(url: model?.url, enc: model?.enc, cid: cid, placeholder: placeholder)
+        }
+
+        if let b = tile.playBadge {
+            playBadge.isHidden = false
+            playBadge.frame = b.offsetBy(dx: -tile.rect.minX, dy: -tile.rect.minY)
+            playBadge.image = UIImage(systemName: "play.circle.fill",
+                                      withConfiguration: UIImage.SymbolConfiguration(pointSize: b.height))
+        } else {
+            playBadge.isHidden = true
+        }
+
+        if let d = tile.duration, let attr = tile.durationAttr {
+            let r = d.offsetBy(dx: -tile.rect.minX, dy: -tile.rect.minY)
+            durationPill.isHidden = false; durationLabel.isHidden = false
+            durationPill.frame = r
+            durationPill.layer.cornerRadius = r.height / 2
+            durationLabel.frame = r
+            durationLabel.attributedText = attr
+        } else {
+            durationPill.isHidden = true; durationLabel.isHidden = true
+        }
+
+        if let attr = tile.extraAttr {
+            extraScrim.isHidden = false; extraLabel.isHidden = false
+            extraScrim.frame = local
+            extraLabel.frame = local
+            extraLabel.attributedText = attr
+        } else {
+            extraScrim.isHidden = true; extraLabel.isHidden = true
+        }
+
+        if let r = tile.ring {
+            let v = ring ?? {
+                let v = UploadRingView(frame: .zero); addSubview(v); ring = v; return v
+            }()
+            v.isHidden = false
+            v.frame = r.offsetBy(dx: -tile.rect.minX, dy: -tile.rect.minY)
+            v.clientId = model?.uploadKey
+            v.start()
+        } else {
+            ring?.stop(); ring?.isHidden = true
+        }
+    }
+
+    func reset() {
+        picture.reset()
+        ring?.stop()
+    }
+}
+
+// ── A document ──
+
+final class FileBubbleView: UIView {
+    private let preview = RowImageView(frame: .zero)
+    private let glyph = UIImageView()
+    private let nameLabel = UILabel()
+    private let sizeLabel = UILabel()
+    private var spinner: UIActivityIndicatorView?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        preview.layer.cornerRadius = 7
+        preview.layer.cornerCurve = .continuous
+        preview.layer.borderWidth = 0.5
+        preview.layer.borderColor = UIColor.black.withAlphaComponent(0.12).cgColor
+        preview.backgroundColor = .white
+        addSubview(preview)
+        glyph.contentMode = .center
+        addSubview(glyph)
+        nameLabel.lineBreakMode = .byTruncatingTail
+        sizeLabel.lineBreakMode = .byTruncatingTail
+        addSubview(nameLabel)
+        addSubview(sizeLabel)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(_ f: BubbleBody.FileBody, plan: FilePlan, tint: UIColor, cid: String) {
+        if plan.slotIsPreview {
+            preview.isHidden = false
+            glyph.isHidden = true
+            preview.frame = plan.slot
+            if let data = f.localPreview, let ui = UIImage(data: data) {
+                preview.reset()
+                preview.image = ui
+            } else {
+                preview.configure(url: f.previewUrl, enc: f.previewEnc, cid: cid, cornerRadius: 7)
+            }
+        } else {
+            preview.isHidden = true
+            preview.reset()
+            glyph.isHidden = false
+            glyph.frame = plan.slot
+            glyph.image = UIImage(systemName: "doc.fill",
+                                  withConfiguration: UIImage.SymbolConfiguration(pointSize: 26))
+            glyph.tintColor = tint
+        }
+
+        nameLabel.frame = plan.name
+        nameLabel.attributedText = plan.nameAttr
+        sizeLabel.frame = plan.size
+        sizeLabel.attributedText = plan.sizeAttr
+
+        if let rect = plan.spinner {
+            let v = spinner ?? {
+                let v = UIActivityIndicatorView(style: .medium); addSubview(v); spinner = v; return v
+            }()
+            v.isHidden = false
+            v.frame = rect
+            v.color = plan.slotIsPreview ? .white : tint
+            v.startAnimating()
+        } else {
+            spinner?.stopAnimating()
+            spinner?.isHidden = true
+        }
+    }
+
+    func prepareForReuse() {
+        preview.reset()
+        spinner?.stopAnimating()
+    }
+}
+
 /// The upload indicator: a thin white arc on a dark disc.
 ///
 /// ⚠️ INDETERMINATE ON PURPOSE. Firebase's `putFileAsync` reports no byte progress, so a filling

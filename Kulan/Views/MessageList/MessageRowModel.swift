@@ -63,6 +63,49 @@ enum BubbleBody: Equatable {
     /// A photo, a video or a gif: ONE media box that wears the bubble's own corners, with the
     /// caption (when there is one) flush below it under the same background — never two bubbles.
     case media(MediaBody)
+    /// 2+ photos and videos sent together as ONE message: a mosaic grid plus one caption.
+    case album(AlbumBody)
+    /// A document: an icon or a page preview, the name, the size.
+    case file(FileBody)
+
+    struct AlbumBody: Equatable {
+        struct Tile: Equatable {
+            var url: String?
+            var enc: EncMeta?
+            /// w/h. ⚠️ IT DECIDES THE ARRANGEMENT, so it has to be right BEFORE the tiles exist —
+            /// an optimistic album has only `localAlbum`, and a receiver's has only `albumSizes`.
+            /// Falling through to 1 there made every pending photo measure as a square, the mosaic
+            /// solved one arrangement, and it changed under the reader when the real tiles landed.
+            var aspect: Double
+            var isVideo: Bool
+            var durationText: String?
+            var localData: Data?
+            /// "clientId#index" while this ITEM is still uploading. Per-item, because `sendState` is
+            /// per-MESSAGE and stays `.sending` until the whole batch commits — a finished tile kept
+            /// its overlay while its siblings uploaded, and with its bytes gone from UploadProgress
+            /// the ring degraded into a forever-spinner.
+            var uploadKey: String?
+        }
+        var tiles: [Tile]
+        var extra: Int                   // "+N" on the last tile, past the 10-item ceiling
+        var caption: TextBody?
+        var uploading: Bool
+        var blurhash: String?
+        var inlineThumbBase64: String?
+        var thumbCacheId: String
+    }
+
+    struct FileBody: Equatable {
+        var name: String
+        var sizeLabel: String
+        /// A page preview (a PDF's first page) — 44×58 when there is one, else a 26pt doc glyph.
+        /// ⚠️ The two slots are deliberately checked in this order and BOTH exist in the sending
+        /// state, so only the spinner moves between them and the bubble never resizes mid-send.
+        var previewUrl: String?
+        var previewEnc: EncMeta?
+        var localPreview: Data?
+        var uploading: Bool
+    }
 
     /// Phase 2. Everything the media box needs, resolved — no message, no app state.
     struct MediaBody: Equatable {

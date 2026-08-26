@@ -44,6 +44,37 @@ struct MediaPlan {
     var kind: BubbleBody.MediaBody.Kind
 }
 
+/// The mosaic. Tile rects come from `MediaGroupLayout.solve`, the same solver the SwiftUI grid
+/// used — it is a pure function over aspects, so there was nothing to port.
+struct AlbumPlan {
+    struct Tile {
+        var rect: CGRect                // grid coordinates
+        var playBadge: CGRect?
+        var duration: CGRect?
+        var durationAttr: NSAttributedString?
+        var extraAttr: NSAttributedString?   // the "+N" that rides the last tile
+        var ring: CGRect?
+    }
+    var grid: CGRect                    // bubble coordinates
+    var tiles: [Tile]
+    var caption: CGRect?
+    var captionText: CGRect?
+    var captionAttr: NSAttributedString?
+    var captionMetaOnOwnLine: Bool
+    var metaCapsule: CGRect?
+}
+
+/// A document row: the slot (a 44×58 page preview or a 26pt glyph), the name, the size.
+struct FilePlan {
+    var slot: CGRect                    // bubble coordinates
+    var slotIsPreview: Bool
+    var name: CGRect
+    var nameAttr: NSAttributedString
+    var size: CGRect
+    var sizeAttr: NSAttributedString
+    var spinner: CGRect?
+}
+
 struct BubblePlan {
     var bubble: CGRect                  // the bubble's own frame, row coordinates
     var radii: BubbleRadii
@@ -66,6 +97,8 @@ struct BubblePlan {
     var metaColor: UIColor
     var tombstoneIcon: CGRect?          // the slashed circle on a deleted-message capsule
     var mediaPlan: MediaPlan?           // set only for a photo/video/gif bubble
+    var albumPlan: AlbumPlan?
+    var filePlan: FilePlan?
 
     // Outside the bubble, row coordinates
     var avatar: CGRect?
@@ -318,6 +351,18 @@ enum MessageRowLayout {
                          accent: accent, topSpacing: topSpacing, y: y,
                          senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
                          forwardedSize: forwardedSize, forwardedIconW: forwardedIconW)
+        case .album(let a):
+            return album(a, row: b, originX: originX, columnX: columnX, columnW: columnW,
+                         maxBubble: maxBubble, textColor: textColor, metaColor: metaColor,
+                         accent: accent, topSpacing: topSpacing, y: y,
+                         senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                         forwardedSize: forwardedSize, forwardedIconW: forwardedIconW)
+        case .file(let f):
+            return file(f, row: b, originX: originX, columnX: columnX, columnW: columnW,
+                        maxBubble: maxBubble, textColor: textColor, metaColor: metaColor,
+                        topSpacing: topSpacing, y: y,
+                        senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                        forwardedSize: forwardedSize, forwardedIconW: forwardedIconW)
         }
 
         let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
@@ -338,7 +383,7 @@ enum MessageRowLayout {
                 meta: .zero, metaOnOwnLine: false, quote: nil, quoteInner: nil,
                 bodyAttr: bodyAttr, links: [], textColor: textColor, metaColor: metaColor,
                 tombstoneIcon: CGRect(x: 14, y: (bubbleH - iconW) / 2, width: iconW, height: iconW),
-                mediaPlan: nil,
+                mediaPlan: nil, albumPlan: nil, filePlan: nil,
                 avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
                 forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
                 retry: nil)
@@ -413,7 +458,7 @@ enum MessageRowLayout {
             text: textRect, meta: metaRect, metaOnOwnLine: metaOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: bodyAttr, links: links, textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -573,39 +618,19 @@ enum MessageRowLayout {
         var metaRect: CGRect
 
         if let caption = m.caption, !caption.text.isEmpty {
-            let inset: CGFloat = 12
-            let avail = max(1, bubbleW - inset * 2)
-            let built = BubbleText.build(caption, meta: b.meta, isMe: b.isMe, textColor: textColor,
-                                         accent: accent, textAvail: avail)
-            let size = BubbleText.size(built.body, width: avail)
-            let metaSize = BubbleText.lineSize(metaAttr)
-            let top = innerY + 8
-            plan.captionAttr = built.body
-            plan.captionMetaOnOwnLine = built.metaOnOwnLine
-            plan.captionText = CGRect(x: inset, y: top, width: avail, height: size.height)
-            var bottom = top + size.height
-            if built.metaOnOwnLine {
-                bottom += 2
-                metaRect = CGRect(x: inset + avail - metaSize.width, y: bottom,
-                                  width: metaSize.width, height: metaSize.height)
-                bottom += metaSize.height
-            } else {
-                metaRect = CGRect(x: inset + avail - metaSize.width,
-                                  y: bottom - metaSize.height - 1,
-                                  width: metaSize.width, height: metaSize.height)
-            }
-            bottom += 10
-            plan.caption = CGRect(x: 0, y: innerY, width: bubbleW, height: bottom - innerY)
-            innerY = bottom
+            let r = captionBlock(caption, meta: b.meta, metaAttr: metaAttr, row: b,
+                                 textColor: textColor, accent: accent,
+                                 bubbleW: bubbleW, top: innerY)
+            plan.caption = r.block
+            plan.captionText = r.text
+            plan.captionAttr = r.attr
+            plan.captionMetaOnOwnLine = r.metaOnOwnLine
+            metaRect = r.meta
+            innerY = r.block.maxY
         } else {
-            // The floating capsule: 7pt padding inside it, 7pt in from the picture's corner.
-            let metaSize = BubbleText.lineSize(metaAttr)
-            let capsule = CGRect(x: mediaRect.maxX - 7 - (metaSize.width + 14),
-                                 y: mediaRect.maxY - 7 - (metaSize.height + 6),
-                                 width: metaSize.width + 14, height: metaSize.height + 6)
-            plan.metaCapsule = capsule
-            metaRect = CGRect(x: capsule.minX + 7, y: capsule.minY + 3,
-                              width: metaSize.width, height: metaSize.height)
+            let r = floatingMeta(metaAttr, over: mediaRect)
+            plan.metaCapsule = r.capsule
+            metaRect = r.text
         }
 
         if m.kind == .video {
@@ -637,7 +662,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: plan,
+            tombstoneIcon: nil, mediaPlan: plan, albumPlan: nil, filePlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -647,6 +672,252 @@ enum MessageRowLayout {
                                  senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
                                  forwardedSize: forwardedSize, forwardedIconW: forwardedIconW, y: y)
         return BubbleResult(plan: out, totalHeight: bottom)
+    }
+
+    // ── An album bubble ──
+
+    private static func album(_ a: BubbleBody.AlbumBody, row b: BubbleRow,
+                              originX: CGFloat, columnX: CGFloat, columnW: CGFloat,
+                              maxBubble: CGFloat, textColor: UIColor, metaColor: UIColor,
+                              accent: UIColor, topSpacing: CGFloat, y startY: CGFloat,
+                              senderNameAttr: NSAttributedString?, senderNameSize: CGSize,
+                              forwardedSize: CGSize, forwardedIconW: CGFloat) -> BubbleResult {
+        let y = startY
+        let albumWidth = min(maxBubble, 300)
+        // A SQUARE box: the width is the bubble's and the height only bounds the hand-tuned 2/3/4
+        // arrangements, exactly as the reference bounds them.
+        let sizes = a.tiles.map { CGSize(width: max(0.01, $0.aspect), height: 1) }
+        let solved = MediaGroupLayout.solve(itemSizes: sizes,
+                                            maxSize: CGSize(width: albumWidth, height: albumWidth))
+        let bubbleW = min(maxBubble, max(1, solved.size.width))
+
+        var innerY: CGFloat = 0
+        var quoteRect: CGRect?
+        var quoteInner: QuoteInnerPlan?
+        if let q = b.quote {
+            let (size, inner) = quoteSize(q, textColor: textColor,
+                                          maxWidth: max(1, bubbleW - BubbleMetrics.hPad * 2))
+            quoteInner = inner
+            innerY = BubbleMetrics.vPad
+            quoteRect = CGRect(x: BubbleMetrics.hPad, y: innerY,
+                               width: bubbleW - BubbleMetrics.hPad * 2, height: size.height)
+            innerY += size.height + 4
+        }
+
+        let grid = CGRect(x: 0, y: innerY, width: solved.size.width, height: solved.size.height)
+        innerY = grid.maxY
+
+        var tiles: [AlbumPlan.Tile] = []
+        for (i, t) in solved.tiles.enumerated() {
+            var tile = AlbumPlan.Tile(rect: t.rect, playBadge: nil, duration: nil,
+                                      durationAttr: nil, extraAttr: nil, ring: nil)
+            let model = a.tiles.indices.contains(t.index) ? a.tiles[t.index] : nil
+            let isLast = i == solved.tiles.count - 1
+            if a.extra > 0, isLast {
+                tile.extraAttr = NSAttributedString(string: "+\(a.extra)", attributes: [
+                    .font: UIFont.systemFont(ofSize: min(t.rect.width, t.rect.height) * 0.22, weight: .semibold),
+                    .foregroundColor: UIColor.white])
+            } else if model?.isVideo == true, !a.uploading {
+                // A play badge means "this is ready, tap it", which is not true mid-upload — and
+                // while the album uploads the tile shows its OWN ring instead.
+                let side = min(t.rect.width, t.rect.height) * 0.28
+                tile.playBadge = CGRect(x: t.rect.midX - side / 2, y: t.rect.midY - side / 2,
+                                        width: side, height: side)
+                if let d = model?.durationText {
+                    let attr = NSAttributedString(string: d, attributes: [
+                        .font: UIFont.systemFont(ofSize: 11, weight: .semibold),
+                        .foregroundColor: UIColor.white])
+                    let s = lineSizeOf(attr)
+                    tile.durationAttr = attr
+                    tile.duration = CGRect(x: t.rect.minX + 5, y: t.rect.maxY - 5 - (s.height + 4),
+                                           width: s.width + 12, height: s.height + 4)
+                }
+            }
+            if a.uploading, a.extra == 0 || !isLast {
+                let side = min(36, min(t.rect.width, t.rect.height) * 0.5)
+                tile.ring = CGRect(x: t.rect.midX - side / 2, y: t.rect.midY - side / 2,
+                                   width: side, height: side)
+            }
+            tiles.append(tile)
+        }
+
+        var plan = AlbumPlan(grid: grid, tiles: tiles, caption: nil, captionText: nil,
+                             captionAttr: nil, captionMetaOnOwnLine: false, metaCapsule: nil)
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
+        var metaRect: CGRect
+        if let caption = a.caption, !caption.text.isEmpty {
+            let r = captionBlock(caption, meta: b.meta, metaAttr: metaAttr, row: b,
+                                 textColor: textColor, accent: accent,
+                                 bubbleW: bubbleW, top: innerY)
+            plan.caption = r.block
+            plan.captionText = r.text
+            plan.captionAttr = r.attr
+            plan.captionMetaOnOwnLine = r.metaOnOwnLine
+            metaRect = r.meta
+            innerY = r.block.maxY
+        } else {
+            let r = floatingMeta(metaAttr, over: grid)
+            plan.metaCapsule = r.capsule
+            metaRect = r.text
+        }
+
+        let bubbleRect = CGRect(x: b.isMe ? (columnX + columnW - bubbleW) : columnX,
+                                y: y, width: bubbleW, height: innerY)
+        var out = BubblePlan(
+            bubble: bubbleRect, radii: b.radii, isCapsule: false, fill: b.fill, rim: b.rim,
+            text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
+            quote: quoteRect, quoteInner: quoteInner,
+            bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: plan, filePlan: nil,
+            avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
+            forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
+            retry: nil)
+        let bottom = decorations(b, plan: &out, bubbleRect: bubbleRect, columnX: columnX,
+                                 columnW: columnW, originX: originX, topSpacing: topSpacing,
+                                 senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                                 forwardedSize: forwardedSize, forwardedIconW: forwardedIconW,
+                                 y: bubbleRect.maxY)
+        return BubbleResult(plan: out, totalHeight: bottom)
+    }
+
+    // ── A file bubble ──
+
+    private static func file(_ f: BubbleBody.FileBody, row b: BubbleRow,
+                             originX: CGFloat, columnX: CGFloat, columnW: CGFloat,
+                             maxBubble: CGFloat, textColor: UIColor, metaColor: UIColor,
+                             topSpacing: CGFloat, y startY: CGFloat,
+                             senderNameAttr: NSAttributedString?, senderNameSize: CGSize,
+                             forwardedSize: CGSize, forwardedIconW: CGFloat) -> BubbleResult {
+        let y = startY
+        let hPad: CGFloat = 13, vPad: CGFloat = 10, gap: CGFloat = 10
+        let hasPreview = f.localPreview != nil || !(f.previewUrl?.isEmpty ?? true)
+        let slotSize = hasPreview ? CGSize(width: 44, height: 58) : CGSize(width: 26, height: 26)
+        let maxContent = max(1, maxBubble - hPad * 2)
+
+        let nameAttr = NSAttributedString(string: f.name, attributes: [
+            .font: UIFont.systemFont(ofSize: 15, weight: .medium), .foregroundColor: textColor])
+        let sizeAttr = NSAttributedString(string: f.sizeLabel, attributes: [
+            .font: UIFont.systemFont(ofSize: 12),
+            .foregroundColor: b.isMe ? UIColor.white.withAlphaComponent(0.8) : UIColor.secondaryLabel])
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
+        let metaSize = BubbleText.lineSize(metaAttr)
+
+        let textAvail = max(1, maxContent - slotSize.width - gap)
+        let nameSize = lineSizeOf(nameAttr, cap: textAvail)
+        let sizeSize = lineSizeOf(sizeAttr, cap: textAvail)
+        let textW = max(nameSize.width, sizeSize.width)
+
+        var quoteOuter: CGSize = .zero
+        var quoteInner: QuoteInnerPlan?
+        if let q = b.quote {
+            let (size, inner) = quoteSize(q, textColor: textColor, maxWidth: maxContent)
+            quoteOuter = size
+            quoteInner = inner
+        }
+
+        let rowW = slotSize.width + gap + textW
+        let contentW = min(maxContent, max(max(rowW, quoteOuter.width), metaSize.width))
+
+        var innerY = vPad
+        var quoteRect: CGRect?
+        if quoteOuter.height > 0 {
+            quoteRect = CGRect(x: hPad, y: innerY, width: contentW, height: quoteOuter.height)
+            innerY += quoteOuter.height + 4
+        }
+
+        // The slot and the two lines are centred against each other, as the HStack centred them.
+        let rowH = max(slotSize.height, nameSize.height + 2 + sizeSize.height)
+        let slot = CGRect(x: hPad, y: innerY + (rowH - slotSize.height) / 2,
+                          width: slotSize.width, height: slotSize.height)
+        let textX = hPad + slotSize.width + gap
+        let stackTop = innerY + (rowH - (nameSize.height + 2 + sizeSize.height)) / 2
+        let namesW = max(1, contentW - slotSize.width - gap)
+        let plan = FilePlan(
+            slot: slot, slotIsPreview: hasPreview,
+            name: CGRect(x: textX, y: stackTop, width: namesW, height: nameSize.height),
+            nameAttr: nameAttr,
+            size: CGRect(x: textX, y: stackTop + nameSize.height + 2, width: namesW, height: sizeSize.height),
+            sizeAttr: sizeAttr,
+            spinner: f.uploading ? slot : nil)
+        innerY += rowH + 4
+
+        let metaRect = CGRect(x: hPad + contentW - metaSize.width, y: innerY,
+                              width: metaSize.width, height: metaSize.height)
+        innerY += metaSize.height + vPad
+
+        let bubbleW = contentW + hPad * 2
+        let bubbleRect = CGRect(x: b.isMe ? (columnX + columnW - bubbleW) : columnX,
+                                y: y, width: bubbleW, height: innerY)
+        var out = BubblePlan(
+            bubble: bubbleRect, radii: b.radii, isCapsule: false, fill: b.fill, rim: b.rim,
+            text: .zero, meta: metaRect, metaOnOwnLine: true,
+            quote: quoteRect, quoteInner: quoteInner,
+            bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: plan,
+            avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
+            forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
+            retry: nil)
+        let bottom = decorations(b, plan: &out, bubbleRect: bubbleRect, columnX: columnX,
+                                 columnW: columnW, originX: originX, topSpacing: topSpacing,
+                                 senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                                 forwardedSize: forwardedSize, forwardedIconW: forwardedIconW,
+                                 y: bubbleRect.maxY)
+        return BubbleResult(plan: out, totalHeight: bottom)
+    }
+
+    // ── Shared pieces of a media-ish bubble ──
+
+    /// One line, capped. `lineSize` never wraps; this is for a label that truncates at a width.
+    private static func lineSizeOf(_ s: NSAttributedString, cap: CGFloat = .greatestFiniteMagnitude) -> CGSize {
+        let full = BubbleText.lineSize(s)
+        return CGSize(width: min(cap, full.width), height: full.height)
+    }
+
+    private struct CaptionResult {
+        var block: CGRect; var text: CGRect; var attr: NSAttributedString
+        var metaOnOwnLine: Bool; var meta: CGRect
+    }
+
+    /// The caption under a picture or a mosaic: the media's full width, 12pt insets, and the same
+    /// two footer branches the text bubble uses.
+    private static func captionBlock(_ caption: BubbleBody.TextBody, meta: MetaChrome,
+                                     metaAttr: NSAttributedString, row b: BubbleRow,
+                                     textColor: UIColor, accent: UIColor,
+                                     bubbleW: CGFloat, top: CGFloat) -> CaptionResult {
+        let inset: CGFloat = 12
+        let avail = max(1, bubbleW - inset * 2)
+        let built = BubbleText.build(caption, meta: meta, isMe: b.isMe, textColor: textColor,
+                                     accent: accent, textAvail: avail)
+        let size = BubbleText.size(built.body, width: avail)
+        let metaSize = BubbleText.lineSize(metaAttr)
+        let textTop = top + 8
+        var bottom = textTop + size.height
+        let metaRect: CGRect
+        if built.metaOnOwnLine {
+            bottom += 2
+            metaRect = CGRect(x: inset + avail - metaSize.width, y: bottom,
+                              width: metaSize.width, height: metaSize.height)
+            bottom += metaSize.height
+        } else {
+            metaRect = CGRect(x: inset + avail - metaSize.width, y: bottom - metaSize.height - 1,
+                              width: metaSize.width, height: metaSize.height)
+        }
+        bottom += 10
+        return CaptionResult(block: CGRect(x: 0, y: top, width: bubbleW, height: bottom - top),
+                             text: CGRect(x: inset, y: textTop, width: avail, height: size.height),
+                             attr: built.body, metaOnOwnLine: built.metaOnOwnLine, meta: metaRect)
+    }
+
+    /// The footer floating on a picture in its own dark capsule: 7pt padding inside, 7pt in from
+    /// the picture's corner.
+    private static func floatingMeta(_ attr: NSAttributedString,
+                                     over rect: CGRect) -> (capsule: CGRect, text: CGRect) {
+        let size = BubbleText.lineSize(attr)
+        let capsule = CGRect(x: rect.maxX - 7 - (size.width + 14),
+                             y: rect.maxY - 7 - (size.height + 6),
+                             width: size.width + 14, height: size.height + 6)
+        return (capsule, CGRect(x: capsule.minX + 7, y: capsule.minY + 3,
+                                width: size.width, height: size.height))
     }
 
     // ── Media boxes ──
