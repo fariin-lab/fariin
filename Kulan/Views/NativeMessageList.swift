@@ -687,7 +687,19 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Ours used to assemble `keyboardBand + composerBarH + 12`, and this file's own notes record
         // what that cost: "the clearance is assembled from parts arriving a beat apart… a reader
         // pinned before a late part is left that part short".
+        // ⛔ LOW PRIORITY, AND THAT IS THE WHOLE POINT. Once the bar exists, the container's height
+        // is fully determined by three REQUIRED constraints: its bottom is the view's, its top is
+        // the bar's top less `barTopPad`, and the bar has its own height and bottom. This constant
+        // is a fourth answer to the same question, and Auto Layout may satisfy it by breaking one
+        // of the others — including the top pin, which leaves the bar's upper part (the reply
+        // banner, and its X) OUTSIDE the container's bounds. A view does not hit-test outside its
+        // own bounds, and the container does not clip, so the banner drew normally and its close
+        // button was dead. His report, 2026-08-26: "Reply X button is not working."
+        //
+        // At `defaultLow` the constant can never break anything: it only answers when there is no
+        // bar at all (the announcements list), where nothing else gives the container a height.
         let containerHeight = bottomBarContainer.heightAnchor.constraint(equalToConstant: 0)
+        containerHeight.priority = .defaultLow
         bottomBarHeight = containerHeight
         NSLayoutConstraint.activate([
             bottomBarContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -3227,20 +3239,32 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         UIView.animate(withDuration: 0.2) { b.alpha = 1 }
     }
 
-    /// The send button's column (the composer's side inset), 16 above the composer bar's top edge.
+    /// The pause / continue button while recording: the composer's own side column, just above the
+    /// bar's top edge.
     ///
-    /// ⛔ THE BAND IS PART OF THE HEIGHT IT SITS ABOVE — owner, 2026-08-25, build 683: the pause and
-    /// the send button "are overlapping", his screenshot showing the pause resting on the send.
-    /// `composerBarH` is the bar's own height and nothing else; the bar sits on top of the
-    /// home-indicator band (or the keyboard), so measuring only the bar from the physical bottom
-    /// put this button a whole band too low — straight onto the send button in the same column.
-    /// `keyboardBand + composerBarH` is exactly the bar's top edge, which is what the old SwiftUI
-    /// overlay measured against too (a bottom padding there starts at the safe area, not the
-    /// physical edge). It rides the keyboard for free: the band grows, this rises with it.
+    /// ⛔ THE SAME OVERLAP HAS NOW BEEN REPORTED TWICE, WITH TWO DIFFERENT CAUSES. Build 683,
+    /// 2026-08-25: the pause and the send button "are overlapping" — that time the arithmetic
+    /// forgot that the bar sits ON TOP of the home-indicator band, so measuring only the bar from
+    /// the physical bottom put this a whole band too low. It was fixed by adding the band.
+    ///
+    /// ⛔ PLACED FROM THE BAR'S OWN CONTAINER, NOT FROM A MEASUREMENT THAT NO LONGER HAPPENS.
+    /// His report, 2026-08-26: the pause button and the send button overlap while recording.
+    ///
+    /// This used to be `maxY - keyboardBand - composerBarH - 16 - 40`, where `composerBarH` was the
+    /// bar's height as measured by SwiftUI's `GeometryReader`. When the bar moved into this
+    /// controller, that reader was left measuring a zero-height spacer, and `setComposerBarHeight`
+    /// rejects anything under 30 — so the value froze and the button was placed 56pt above the
+    /// screen bottom, which is the bar's own row.
+    ///
+    /// The container's top edge IS the bar's top less its pad, and it is live: it moves with the
+    /// keyboard and grows with the bar. The side inset is the bar's own leading constant, so the
+    /// two edges are one number by construction (his 2026-08-24 rule for the floating buttons).
     private func positionVoiceControl() {
         guard let b = voiceControlButton else { return }
-        b.frame = CGRect(x: view.bounds.maxX - voiceControlInset - 40,
-                         y: view.bounds.maxY - keyboardBand - composerBarH - 16 - 40,
+        let top = bottomBarContainer.frame.minY
+        let side = barLeading?.constant ?? voiceControlInset
+        b.frame = CGRect(x: view.bounds.maxX - side - 40,
+                         y: top - 12 - 40,
                          width: 40, height: 40)
     }
 }
