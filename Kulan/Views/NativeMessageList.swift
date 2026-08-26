@@ -381,11 +381,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // keyboard when you cannot type. Ours keeps its blocked / request / muted bars in SwiftUI for
     // the same reason.
     let bottomBarContainer = UIView()
-    private var bottomBarBottom: NSLayoutConstraint?
     private var bottomBarHeight: NSLayoutConstraint?
     private var barLeading: NSLayoutConstraint?
     private var barTrailing: NSLayoutConstraint?
     private var barBottom: NSLayoutConstraint?
+    private var barHeightC: NSLayoutConstraint?
     /// The composer, once ThreadView hands it over. Nil for the announcements list, which has none.
     private(set) weak var composerBar: UIView?
 
@@ -658,14 +658,23 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // The container paints nothing and must not swallow touches meant for the list; its
         // SUBVIEW (the composer) takes its own.
         view.addSubview(bottomBarContainer)
-        let barBottom = bottomBarContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        let barHeight = bottomBarContainer.heightAnchor.constraint(equalToConstant: 0)
-        bottomBarBottom = barBottom
-        bottomBarHeight = barHeight
+        // ⛔ THEIR SHAPE, AND THE HEIGHT IS THE WHOLE POINT. The container's BOTTOM is the view's
+        // bottom — not the keyboard's top — so it spans from the bar's top all the way down and its
+        // height ALREADY CONTAINS THE KEYBOARD. That is what lets the content inset be one
+        // expression rather than a sum of parts that arrive a beat apart:
+        //
+        //     newInsets.bottom = bottomBarContainer.frame.height - collectionView.safeAreaInsets.bottom
+        //
+        // Ours used to assemble `keyboardBand + composerBarH + 12`, and this file's own notes record
+        // what that cost: "the clearance is assembled from parts arriving a beat apart… a reader
+        // pinned before a late part is left that part short".
+        let containerHeight = bottomBarContainer.heightAnchor.constraint(equalToConstant: 0)
+        bottomBarHeight = containerHeight
         NSLayoutConstraint.activate([
             bottomBarContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             bottomBarContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            barBottom, barHeight,
+            bottomBarContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            containerHeight,
         ])
 
         // The keyboard's own layout guide, the way the reference app's bottom bar hangs from it. See
@@ -1999,6 +2008,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                // arrived first and a bubble appeared to slide under it. Two curves,
                                // one keyboard. Now there is one curve.
                                self.positionBottomBar()
+                               self.syncBottomBarGeometry()
                                self.updateInsets()
                                self.view.layoutIfNeeded()
                            })
@@ -2020,7 +2030,23 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard frame.height > 0 || frame.minY > 0 else { return view.safeAreaInsets.bottom }
         return max(0, view.bounds.maxY - frame.minY)
     }
-    private var bottomClearance: CGFloat { keyboardBand + composerBarH + 12 }
+    /// ⛔ THEIR ONE EXPRESSION, verbatim in intent:
+    ///
+    ///     newInsets.bottom = bottomBarContainer.frame.height - collectionView.safeAreaInsets.bottom
+    ///
+    /// The container reaches from the bar's top to the screen bottom, so its height already
+    /// contains the keyboard AND the bar AND the gap. This used to be `keyboardBand +
+    /// composerBarH + 12` — three numbers that arrive a beat apart, which is the failure this
+    /// file's own notes describe: "a reader pinned before a late part is left that part short".
+    ///
+    /// ⚠️ It falls back to the assembled sum only until the bar exists (the announcements list has
+    /// none, and the first pass runs before ThreadView has handed the composer over).
+    private var bottomClearance: CGFloat {
+        guard composerBar != nil, bottomBarContainer.frame.height > 1 else {
+            return keyboardBand + composerBarH + 12
+        }
+        return bottomBarContainer.frame.height
+    }
 
     /// The at-rest bottom bound the list had under a given bottom clearance.
     private func boundForClearance(_ bottomClearance: CGFloat) -> CGFloat {
@@ -2040,6 +2066,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let safe = collectionView.safeAreaInsets
         let oldInsets = collectionView.contentInset
         var newInsets = oldInsets
+        // Theirs, verbatim: `container.frame.height - collectionView.safeAreaInsets.bottom`.
         newInsets.bottom = bottom - safe.bottom
         newInsets.top = top
 
@@ -2896,11 +2923,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             bottomBarContainer.addSubview(bar)
             let lead = bar.leadingAnchor.constraint(equalTo: bottomBarContainer.leadingAnchor)
             let trail = bar.trailingAnchor.constraint(equalTo: bottomBarContainer.trailingAnchor)
-            let bottom = bar.bottomAnchor.constraint(equalTo: bottomBarContainer.bottomAnchor)
-            barLeading = lead; barTrailing = trail; barBottom = bottom
+            // Their `bottomView.bottomAnchor.constraint(equalTo: keyboardLayoutGuide.topAnchor)`,
+            // expressed against the view's bottom because the guide is dead in this hosted
+            // controller (build 682). The constant is the keyboard, from the same notification the
+            // insets read, so bar and list move in one animation.
+            let bottom = bar.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+            let height = bar.heightAnchor.constraint(equalToConstant: 40)
+            barLeading = lead; barTrailing = trail; barBottom = bottom; barHeightC = height
+            NSLayoutConstraint.activate([lead, trail, bottom, height])
+            // The container's TOP follows the bar's, so its height is a CONSEQUENCE of the bar's
+            // layout rather than a number kept in step by hand. When the bar grows a reply preview
+            // inside its own animation, the container grows in that same animation, and so does the
+            // inset — which is exactly why theirs never jumps.
             NSLayoutConstraint.activate([
-                bar.topAnchor.constraint(equalTo: bottomBarContainer.topAnchor, constant: 6),
-                lead, trail, bottom,
+                bottomBarContainer.topAnchor.constraint(equalTo: bar.topAnchor, constant: -6),
             ])
             // The bar asks for a new height when its contents change (a banner, a second line).
             // It arrives on the bar's OWN animation clock, and the container follows on the same
@@ -2915,21 +2951,53 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         resizeBottomBar()
     }
 
-    /// The container is the bar plus its outer insets. Its height feeds the list's clearance.
-    private func resizeBottomBar() {
-        guard let bar = composerBar as? ChatComposerView, let heightC = bottomBarHeight else { return }
+    /// The bar changed height — a reply preview arrived or left, the text grew a line.
+    ///
+    /// ⛔ THE INSET MOVES INSIDE THE SAME ANIMATION AS THE BAR. That is the entire reason their
+    /// reply preview never jumps, and their own comment says so at the offset write: "This offset
+    /// change will be animated by UIKit's UIView animation block which updateContentInsets() is
+    /// called within." One animation, one curve, one layout pass — the bar grows, the container
+    /// grows with it, the inset follows, and `updateInsets`'s lockstep shift keeps the reader on
+    /// the same message.
+    ///
+    /// Their numbers for a height change, from `ConversationInputToolbar`:
+    /// `UIViewPropertyAnimator(duration: 0.25, springDamping: 0.9, springResponse: 0.3)`.
+    private func resizeBottomBar(animated: Bool = true) {
+        guard let bar = composerBar as? ChatComposerView,
+              let heightC = barHeightC, let containerC = bottomBarHeight else { return }
         let width = max(1, view.bounds.width - (barLeading?.constant ?? 0) * 2)
         let barH = bar.preferredHeight(forWidth: width)
-        let total = 6 + barH - (barBottom?.constant ?? 0)
-        guard abs(heightC.constant - total) > 0.5 else { return }
-        heightC.constant = total
-        setComposerBarHeight(total)
+        let container = 6 + barH + (-(barBottom?.constant ?? 0))
+        guard abs(heightC.constant - barH) > 0.5 || abs(containerC.constant - container) > 0.5 else { return }
+
+        let apply = { [weak self] in
+            guard let self else { return }
+            heightC.constant = barH
+            containerC.constant = container
+            self.updateInsets()
+            self.view.layoutIfNeeded()
+        }
+        guard animated, view.window != nil else {
+            UIView.performWithoutAnimation(apply)
+            return
+        }
+        let animator = UIViewPropertyAnimator(duration: 0.25, dampingRatio: 0.9) { apply() }
+        animator.startAnimation()
     }
 
     /// Put the container's bottom edge exactly on top of the keyboard. Called from inside
     /// `rideKeyboard`'s animation block, so the bar travels on the keyboard's own curve.
     private func positionBottomBar() {
-        bottomBarBottom?.constant = -keyboardBand
+        barBottom?.constant = -keyboardBand
+    }
+
+    /// The container's height without animating it — used inside a block that is already animating.
+    private func syncBottomBarGeometry() {
+        guard let bar = composerBar as? ChatComposerView,
+              let heightC = barHeightC, let containerC = bottomBarHeight else { return }
+        let width = max(1, view.bounds.width - (barLeading?.constant ?? 0) * 2)
+        heightC.constant = bar.preferredHeight(forWidth: width)
+        containerC.constant = 6 + heightC.constant + (-(barBottom?.constant ?? 0))
     }
 
     func setVoiceControl(_ kind: Int, inset: CGFloat) {
