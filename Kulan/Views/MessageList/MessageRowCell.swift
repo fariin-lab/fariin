@@ -94,9 +94,23 @@ final class MessageRowCell: UICollectionViewCell {
         guard let old = model, m != old else { return }
         guard sameGeometry(old, m) else { return }
         model = m
-        rowView.apply(m, plan: plan, cid: cid)
+        // The tick's 0.25s cross-dissolve. A read receipt arriving is the commonest live change in a
+        // chat, and snapping ✓ to ✓✓ reads as a glitch rather than as news — the SwiftUI meta faded
+        // it and so did the UIKit cell this replaces.
+        if tickChanged(old, m) {
+            UIView.transition(with: rowView, duration: 0.25, options: [.transitionCrossDissolve]) {
+                self.rowView.apply(m, plan: plan, cid: cid)
+            }
+        } else {
+            rowView.apply(m, plan: plan, cid: cid)
+        }
         rowView.animateDecorations(fromSelected: old.selected, fromHighlighted: old.highlighted)
         scheduleClockRepaint()
+    }
+
+    private func tickChanged(_ a: MessageRowModel, _ b: MessageRowModel) -> Bool {
+        guard case .bubble(let x) = a.content, case .bubble(let y) = b.content else { return false }
+        return x.meta.tick != y.meta.tick
     }
 
     /// Do these two models produce the same rects? Only the fields that cannot move anything are

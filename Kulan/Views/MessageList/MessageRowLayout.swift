@@ -25,6 +25,10 @@ struct QuoteInnerPlan {
 struct BubblePlan {
     var bubble: CGRect                  // the bubble's own frame, row coordinates
     var radii: BubbleRadii
+    /// A true capsule, with CIRCULAR ends. Not the same shape as a continuous corner at half the
+    /// height — a squircle that far round reads as a lozenge, and the tombstone is a capsule in the
+    /// design precisely so it does not read as a bubble.
+    var isCapsule: Bool = false
     var fill: BubbleFill
     var rim: Bool
 
@@ -297,7 +301,7 @@ enum MessageRowLayout {
             let x = b.isMe ? (columnX + columnW - bubbleW) : columnX
             let rect = CGRect(x: x, y: y, width: bubbleW, height: bubbleH)
             var plan = BubblePlan(
-                bubble: rect, radii: .uniform(bubbleH / 2), fill: b.fill, rim: b.rim,
+                bubble: rect, radii: .uniform(bubbleH / 2), isCapsule: true, fill: b.fill, rim: b.rim,
                 text: CGRect(x: 14 + iconW + 6, y: 8, width: bubbleW - 28 - iconW - 6, height: bodySize.height),
                 meta: .zero, metaOnOwnLine: false, quote: nil, quoteInner: nil,
                 bodyAttr: bodyAttr, links: [], textColor: textColor, metaColor: metaColor,
@@ -460,6 +464,7 @@ enum MessageRowLayout {
         let plan = BubblePlan(
             bubble: bubbleRect,
             radii: isJumbo ? .uniform(0) : b.radii,
+            isCapsule: false,
             fill: isJumbo ? .clear : b.fill,                  // a jumbomoji bubble keeps its box and drops its fill
             rim: isJumbo ? false : b.rim,
             text: textRect, meta: metaRect, metaOnOwnLine: metaOwnLine,

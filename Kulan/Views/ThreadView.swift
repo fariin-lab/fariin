@@ -2319,7 +2319,9 @@ struct ThreadView: View {
             "\(repo.itemsVersion)", "\(repo.otherLastReadMillis)", highlightId ?? "-",
             "\(repo.iBlocked)", "\(readReceiptsOn)", "\(dark)",
             "\(chatHasWallpaper):\(wallpaperBlur?.id ?? 0)",
-            "\(selecting)", selectedIds.sorted().joined(separator: ","),
+            // Hashed, not joined: Set's hashValue is order-independent and does not allocate, and
+            // this runs on the body path — the same reason `rowSignatures` hashes it.
+            "\(selecting)", "\(selectedIds.count):\(selectedIds.hashValue)",
             chatColorSpec?.stored ?? "-", firstUnreadId ?? "-",
             searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
             "\(isGroup)", "\(groupMembers.count)",

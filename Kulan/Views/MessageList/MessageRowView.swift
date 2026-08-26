@@ -77,7 +77,10 @@ final class BubbleQuoteView: UIView {
 
     private func thumbView() -> RowImageView {
         if let thumb { return thumb }
-        let v = RowImageView()
+        // `RowImageView(frame:)`, not `RowImageView()`: UIImageView adds its own designated
+        // initialisers (`init(image:)`), so a subclass that overrides only `init(frame:)` does not
+        // inherit the no-argument one.
+        let v = RowImageView(frame: .zero)
         addSubview(v)
         thumb = v
         return v
@@ -430,6 +433,8 @@ final class MessageRowView: UIView {
     private func applyCheckbox(_ m: MessageRowModel, _ p: RowPlan) {
         guard let rect = p.checkbox else {
             // Leaving selection: the circle slides back out the way it came rather than vanishing.
+            // It stays in the hierarchy at alpha 0 — hiding it here would cut the animation off on
+            // its first frame — and `prepareForReuse` is what actually puts it away.
             if let box = checkbox, !box.isHidden {
                 box.alpha = 0
                 box.transform = CGAffineTransform(translationX: -MessageRowLayout.selectionShift, y: 0)
@@ -452,7 +457,8 @@ final class MessageRowView: UIView {
     private func applyBubble(_ b: BubblePlan, model m: MessageRowModel, dark: Bool, cid: String) {
         bubbleBox.frame = b.bubble
         let local = CGRect(origin: .zero, size: b.bubble.size)
-        let path = BubbleShape.path(b.bubble.size, b.radii)
+        let path = b.isCapsule ? BubbleShape.capsulePath(b.bubble.size)
+                               : BubbleShape.path(b.bubble.size, b.radii)
         fill.apply(b.fill, path: path, bounds: local)
 
         CATransaction.begin()
@@ -766,7 +772,18 @@ final class MessageRowView: UIView {
     }
 
     func prepareForReuse() {
+        // Anything the cell can be recycled MID-ANIMATION out of has to be put back by hand. A
+        // stranded transform slides the wrong row left; a stranded flash animation keeps pulsing on
+        // a message nobody jumped to; a checkbox left mid-fade arrives at the next row half there.
         bubbleBox.transform = .identity
+        bubbleBox.layer.removeAllAnimations()
+        highlight.shape.removeAllAnimations()
+        if let box = checkbox {
+            box.layer.removeAllAnimations()
+            box.transform = .identity
+            box.alpha = 1
+            box.isHidden = true
+        }
         quoteView?.isHidden = true
         avatarView?.isHidden = true
         model = nil
