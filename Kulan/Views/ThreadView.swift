@@ -3564,6 +3564,12 @@ struct ThreadView: View {
         let cutoff = Date().addingTimeInterval(-30 * 60)
         for m in repo.items where m.authorId == me && m.uploading && m.createdAt < cutoff {
             if let key = m.clientId, MediaSend.shared.isInFlight(key) { continue }
+            // ⛔ AND NEVER ONE THAT IS STILL OWED AN UPLOAD. A killed app leaves the transfer's
+            // address on disk and the next launch finishes it — deleting the message in the
+            // meantime would throw away the very thing that upload is for, and the bytes with it.
+            // The record is removed the moment the upload lands or is abandoned, so this only ever
+            // spares a message that genuinely still has something coming.
+            if PendingUploadStore.hasJob(messageId: m.id) { continue }
             let id = m.id
             Task { await ChatService.cancelAnnounced(cid: cid, messageId: id) }
         }

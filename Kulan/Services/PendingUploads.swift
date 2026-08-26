@@ -67,6 +67,14 @@ enum PendingUploadStore {
         }
     }
 
+    /// Is a message still owed an upload that a later launch will finish? The stuck-send sweep asks
+    /// before deleting anything: without this the two halves of tonight's work fight each other —
+    /// one gives up on a message after thirty minutes while the other is still holding the bytes and
+    /// the address that would complete it.
+    static func hasJob(messageId: String) -> Bool {
+        all().contains { $0.messageId == messageId }
+    }
+
     static func remove(_ id: String) {
         lock.withLock {
             var jobs = (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode([PendingUpload].self, from: $0) } ?? []
