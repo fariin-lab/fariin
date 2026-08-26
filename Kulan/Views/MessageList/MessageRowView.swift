@@ -445,7 +445,11 @@ final class MessageRowView: UIView {
             let v = SelectionCheckboxView(); addSubview(v); checkbox = v; return v
         }()
         v.isHidden = false
-        v.frame = rect
+        // Bounds and center, for the same reason the bubble box uses them: this runs INSIDE the
+        // selection animation, where the circle is carrying the translation it slides in from, and
+        // `frame` is undefined while a transform is applied.
+        v.bounds = CGRect(origin: .zero, size: rect.size)
+        v.center = CGPoint(x: rect.midX, y: rect.midY)
         v.setSelected(m.selected)
         // The arrival state. When this call is wrapped in the selection animation the from-state was
         // already seeded by `prepareSelectionEntry`, so writing the destination here is what makes
@@ -761,6 +765,7 @@ final class MessageRowView: UIView {
             let v = SelectionCheckboxView(); addSubview(v); checkbox = v; return v
         }()
         v.isHidden = false
+        v.transform = .identity          // seat it square before reading a frame off it
         v.frame = rect
         v.alpha = 0
         v.transform = CGAffineTransform(translationX: -MessageRowLayout.selectionShift, y: 0)
