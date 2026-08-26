@@ -2341,11 +2341,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         sendHoldUntil = Date().addingTimeInterval(0.45)
     }
 
+    /// SwiftUI's measurement of whatever IT draws at the bottom — the selection toolbar, the search
+    /// bar, the blocked / message-request / muted notices, the announcements bar. Not the composer:
+    /// that is this controller's own view and its container is the truth.
+    ///
+    /// ⛔ THE OLD `h > 30` GUARD IS GONE, AND IT HAD TURNED INTO A LATCH. It was written when the
+    /// composer was SwiftUI's, to reject a transient near-zero from the reader mid-transition. Since
+    /// the composer moved here, the slot the reader measures is a zero-height spacer, so every
+    /// honest report (1pt at rest, 14 with the keyboard up) was rejected and the value froze — at 0
+    /// for a whole session, or at the height of an @-mention popup that had once passed the test and
+    /// then closed. Anything reading it got a number belonging to another moment.
+    ///
+    /// The report is ignored while our own bar is on screen, and taken at face value when it is not,
+    /// which is exactly when it is the only source there is.
     func setComposerBarHeight(_ h: CGFloat) {
-        // Reject implausible reports: the composer bar is never under ~40pt â€” a transient near-zero from
-        // the SwiftUI reader mid-transition would zero the clearance and drop the last messages straight
-        // under the input field.
-        guard h > 30, abs(h - composerBarH) > 0.5 else { return }
+        if let bar = composerBar, !bar.isHidden { return }
+        guard abs(h - composerBarH) > 0.5 else { return }
         composerBarH = h
         updateInsets()
     }
