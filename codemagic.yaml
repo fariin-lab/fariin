@@ -3,20 +3,6 @@ workflows:
     name: Kulan iOS → TestFlight
     instance_type: mac_mini_m2
     max_build_duration: 60
-    # ⛔ TAGS ONLY, NEVER ON PUSH. There is no Mac on the owner's side, so a build is a 15 to 40
-    # minute round trip and it is the only way anything gets tested — but a session pushes half a
-    # dozen commits and only the last one is worth building. Triggering on push would have bought
-    # six builds today to test one state.
-    #
-    # So the trigger is a TAG, which is pushed deliberately by `tools/build-ios.sh` when he asks for
-    # a build. Commits flow to the branch freely and cost nothing; one tag starts one build of
-    # everything that has landed since the last.
-    triggering:
-      events:
-        - tag
-      tag_patterns:
-        - pattern: 'build-*'
-          include: true
     integrations:
       # Name this EXACTLY "KulanASC" when you add the App Store Connect API key
       # in Codemagic (Teams → Integrations → App Store Connect).
