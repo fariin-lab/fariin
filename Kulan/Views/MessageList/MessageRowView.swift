@@ -455,7 +455,13 @@ final class MessageRowView: UIView {
     }
 
     private func applyBubble(_ b: BubblePlan, model m: MessageRowModel, dark: Bool, cid: String) {
-        bubbleBox.frame = b.bubble
+        // ⚠️ BOUNDS AND CENTER, NOT FRAME. The reply swipe puts a translation transform on this
+        // view, and a view's `frame` is undefined while a transform is applied — writing it there
+        // distorts the box. A repaint (a read tick arriving) can land mid-swipe, so this write has
+        // to be safe against one; bounds and center stay meaningful and the translation keeps
+        // riding on top of them.
+        bubbleBox.bounds = CGRect(origin: .zero, size: b.bubble.size)
+        bubbleBox.center = CGPoint(x: b.bubble.midX, y: b.bubble.midY)
         let local = CGRect(origin: .zero, size: b.bubble.size)
         let path = b.isCapsule ? BubbleShape.capsulePath(b.bubble.size)
                                : BubbleShape.path(b.bubble.size, b.radii)

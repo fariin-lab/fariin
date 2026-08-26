@@ -89,7 +89,9 @@ enum BubbleText {
         }
         // Group @mentions by display name → bold, and accent-tinted on an incoming bubble. Applied
         // last so it overrides the generic username style above.
-        for token in t.mentionTokens where !token.isEmpty {
+        // `count > 1` because a mention token is "@" + the display name, and an unresolved name
+        // makes that a bare "@" — which would then bold and tint every at-sign in the message.
+        for token in t.mentionTokens where token.count > 1 {
             var from = 0
             while from < ns.length {
                 let r = ns.range(of: token, range: NSRange(location: from, length: ns.length - from))
