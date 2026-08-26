@@ -314,6 +314,7 @@ final class MessageRowView: UIView {
     private var contactView: ContactBubbleView?
     private var pollView: PollBubbleView?
     private var linkView: LinkPreviewBubbleView?
+    private var storyReplyView: StoryReplyCardView?
     private var quoteView: BubbleQuoteView?
     private var avatarView: RowAvatarView?
     private var senderLabel: UILabel?
@@ -514,6 +515,7 @@ final class MessageRowView: UIView {
         applyContact(b, model: m)
         applyPoll(b, model: m, cid: cid)
         applyLinkPreview(b, model: m, cid: cid)
+        applyStoryReply(b, model: m, cid: cid)
         applyTombstone(b)
         applyQuote(b, model: m, cid: cid)
         applySender(b, model: m)
@@ -656,6 +658,38 @@ final class MessageRowView: UIView {
         v.isHidden = false
         v.frame = CGRect(origin: .zero, size: b.bubble.size)
         v.configure(card, plan: plan, tint: b.textColor, cid: cid)
+    }
+
+    private func applyStoryReply(_ b: BubblePlan, model m: MessageRowModel, cid: String) {
+        guard let plan = b.storyReplyPlan,
+              case .bubble(let row) = m.content, let sr = row.storyReply else {
+            storyReplyView?.isHidden = true
+            storyReplyView?.prepareForReuse()
+            return
+        }
+        let v = storyReplyView ?? {
+            let v = StoryReplyCardView(); addSubview(v); storyReplyView = v; return v
+        }()
+        v.isHidden = false
+        v.frame = bounds
+        v.configure(sr, plan: plan, cid: cid)
+
+        // The card is a DOOR: register its rect so the story flies out of THIS thumbnail and lands
+        // back on it. Its own key, never the quote's — one message can carry both anchors, and when
+        // they shared a key whichever mounted last owned it and the story flew from the wrong one.
+        if sr.opens, let thumb = plan.thumb {
+            let inWindow = v.convert(thumb, to: nil)
+            if inWindow.width > 1 {
+                MediaOpenRects.capture("storyreply-\(m.id)", inWindow, cornerRadius: 14)
+            }
+        }
+    }
+
+    /// The story-reply card — tapping it opens the story.
+    func hitsStoryReply(_ point: CGPoint) -> Bool {
+        guard let p = plan, case .bubble(let b) = p.body, let sr = b.storyReplyPlan else { return false }
+        guard let thumb = sr.thumb else { return false }
+        return thumb.contains(point)
     }
 
     /// The OG card — tapping it opens the link (or the person, on a profile card's button).
@@ -1022,6 +1056,7 @@ final class MessageRowView: UIView {
         locationView?.prepareForReuse()
         pollView?.prepareForReuse()
         linkView?.prepareForReuse()
+        storyReplyView?.prepareForReuse()
         model = nil
         plan = nil
     }

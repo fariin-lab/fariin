@@ -208,6 +208,20 @@ enum BubbleBody: Equatable {
     }
 }
 
+/// A reply to somebody's STORY. It is not a quote inside the bubble — it is a caption line and a
+/// big card floating on the wallpaper ABOVE it, and it rides the reply swipe with the bubble.
+struct StoryReplyChrome: Equatable {
+    var storyId: String
+    var authorId: String
+    var caption: String              // "You replied to their story" / "<name> replied to your story"
+    var thumbUrl: String?
+    /// The story has expired or was deleted: the card says so instead of drawing an empty frame.
+    var unavailable: Bool
+    /// This card is a DOOR — tapping it flies the story open — so it registers a flight rect.
+    /// False for the bubbles that draw a quote but never open one.
+    var opens: Bool
+}
+
 /// A message bubble, fully resolved.
 struct BubbleRow: Equatable {
     var isMe: Bool
@@ -217,6 +231,7 @@ struct BubbleRow: Equatable {
     var meta: MetaChrome
     var sender: SenderChrome?          // groups, incoming only
     var quote: QuoteChrome?
+    var storyReply: StoryReplyChrome?
     var forwarded: Bool
     var reactions: [ReactionChip]
     var showsRetryRow: Bool            // "Not delivered. Tap to retry" under a failed send

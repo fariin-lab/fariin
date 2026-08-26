@@ -29,6 +29,9 @@ struct MessageRowContext {
     var nameFor: (String) -> String
     var avatarFor: (String) -> String?
     var resolveOriginal: (String) -> Message?
+    /// Is this story still live? A reply to one that has expired shows "Story unavailable" rather
+    /// than an empty frame, and the card stops being a door.
+    var storyIsLive: (_ storyId: String, _ author: String) -> Bool = { _, _ in true }
 }
 
 enum MessageRowModelBuilder {
@@ -60,7 +63,6 @@ enum MessageRowModelBuilder {
         if m.locationCard != nil || m.contactCard != nil { return true }
         if m.poll != nil { return true }
         if m.isFeatureMarker { return true }               // the "update the app" notice
-        if m.replyTo?.isStatus == true { return false }    // the big story card above the bubble is phase 3
         return !m.safeText.isEmpty
     }
 
@@ -192,6 +194,20 @@ enum MessageRowModelBuilder {
                 verified: VerificationIndex.of(msg.authorId)?.showsBadge == true)
         }
 
+        var storyReply: StoryReplyChrome?
+        if let reply = msg.replyTo, reply.isStatus, !msg.deleted {
+            let live = ctx.storyIsLive(reply.id, reply.authorId)
+            let mine = reply.authorId == ctx.me
+            storyReply = StoryReplyChrome(
+                storyId: reply.id, authorId: reply.authorId,
+                caption: isMe ? (mine ? "You replied to your story" : "You replied to their story")
+                              : (mine ? "\(ctx.nameFor(msg.authorId)) replied to your story"
+                                      : "\(ctx.nameFor(msg.authorId)) replied to their story"),
+                thumbUrl: reply.storyThumbUrl,
+                unavailable: !live,
+                opens: live)
+        }
+
         var quote: QuoteChrome?
         if let reply = msg.replyTo, !reply.isStatus, !msg.deleted {
             let original = ctx.resolveOriginal(reply.id)
@@ -219,6 +235,7 @@ enum MessageRowModelBuilder {
                              bornAt: msg.createdAt),
             sender: sender,
             quote: quote,
+            storyReply: storyReply,
             forwarded: msg.forwarded && !msg.deleted,
             reactions: reactions,
             showsRetryRow: isMe && msg.sendState == .failed,

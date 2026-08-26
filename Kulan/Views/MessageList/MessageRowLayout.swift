@@ -114,6 +114,16 @@ struct PollPlan {
     var total: CGRect                   // "N votes", written live
 }
 
+/// The story-reply card that floats above a bubble. ROW coordinates — it is not inside the bubble.
+struct StoryReplyPlan {
+    var caption: CGRect
+    var captionAttr: NSAttributedString
+    var bar: CGRect?                    // the 5x140 accent bar beside the card
+    var thumb: CGRect?                  // the 80x140 story picture
+    var unavailable: CGRect?
+    var unavailableAttr: NSAttributedString?
+}
+
 /// The OG card inside a text bubble. Rects are in BUBBLE coordinates.
 struct LinkPreviewPlan {
     var card: CGRect
@@ -159,6 +169,7 @@ struct BubblePlan {
     var contactPlan: ContactPlan?
     var pollPlan: PollPlan?
     var linkPlan: LinkPreviewPlan?
+    var storyReplyPlan: StoryReplyPlan?
 
     // Outside the bubble, row coordinates
     var avatar: CGRect?
@@ -347,6 +358,15 @@ enum MessageRowLayout {
             y += senderNameSize.height + BubbleMetrics.senderNameGap
         }
 
+        // The story-reply card is measured with the tags and placed with them — it sits above the
+        // bubble in the same column, and like them it pushes the bubble down.
+        // The card pushes the bubble down before anything else is laid out. Placed later, by
+        // `decorations`, once the bubble's own edges are known — the same two-step the sender name
+        // and the Forwarded tag take, and for the same reason.
+        if let sr = b.storyReply {
+            y += storyReplyCardSize(sr, maxWidth: columnW).height + BubbleMetrics.senderNameGap
+        }
+
         var forwardedSize: CGSize = .zero
         var forwardedIconW: CGFloat = 0
         if b.forwarded {
@@ -467,7 +487,7 @@ enum MessageRowLayout {
                 meta: .zero, metaOnOwnLine: false, quote: nil, quoteInner: nil,
                 bodyAttr: bodyAttr, links: [], textColor: textColor, metaColor: metaColor,
                 tombstoneIcon: CGRect(x: 14, y: (bubbleH - iconW) / 2, width: iconW, height: iconW),
-                mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil,
+                mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil,
                 avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
                 forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
                 retry: nil)
@@ -554,7 +574,7 @@ enum MessageRowLayout {
             text: textRect, meta: metaRect, metaOnOwnLine: metaOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: bodyAttr, links: links, textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: linkPlan,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: linkPlan, storyReplyPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -644,8 +664,16 @@ enum MessageRowLayout {
                                 width: BubbleMetrics.avatarSize, height: BubbleMetrics.avatarSize)
         }
 
-        // Now the bubble's edges are known, the two tags can take their real positions.
+        // Now the bubble's edges are known, the card and the two tags take their real positions.
         var tagY = topSpacing
+        // The card is re-measured here rather than passed in, so EVERY bubble kind places it the
+        // same way — a story reply can carry a photo or a voice note as easily as words, and a
+        // parameter would have meant six call sites each remembering to hand it over.
+        if let sr = b.storyReply {
+            plan.storyReplyPlan = storyReplyPlan(sr, isMe: b.isMe, bubbleRect: bubbleRect,
+                                                 columnW: columnW, top: tagY, maxWidth: columnW)
+            tagY += storyReplyCardSize(sr, maxWidth: columnW).height + BubbleMetrics.senderNameGap
+        }
         if senderNameAttr != nil {
             plan.senderName = CGRect(x: bubbleRect.minX + 12, y: tagY,
                                     width: senderNameSize.width, height: senderNameSize.height)
@@ -758,7 +786,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: plan, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil,
+            tombstoneIcon: nil, mediaPlan: plan, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -864,7 +892,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: plan, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: plan, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -949,7 +977,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: true,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: plan, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: plan, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -959,6 +987,64 @@ enum MessageRowLayout {
                                  forwardedSize: forwardedSize, forwardedIconW: forwardedIconW,
                                  y: bubbleRect.maxY)
         return BubbleResult(plan: out, totalHeight: bottom)
+    }
+
+    // ── The story-reply card ──
+
+    private static let storyCardHeight: CGFloat = 140
+    private static let storyCardWidth: CGFloat = 80
+
+    private static func storyReplyCaption(_ sr: StoryReplyChrome) -> NSAttributedString {
+        NSAttributedString(string: sr.caption, attributes: [
+            .font: UIFont.systemFont(ofSize: 12), .foregroundColor: UIColor.secondaryLabel])
+    }
+
+    private static func storyReplyCardSize(_ sr: StoryReplyChrome, maxWidth: CGFloat) -> CGSize {
+        let caption = lineSizeOf(storyReplyCaption(sr), cap: maxWidth)
+        guard !sr.unavailable, sr.thumbUrl?.isEmpty == false else {
+            let attr = NSAttributedString(string: "Story unavailable", attributes: [
+                .font: UIFont.systemFont(ofSize: 12), .foregroundColor: UIColor.tertiaryLabel])
+            let s = lineSizeOf(attr, cap: maxWidth)
+            return CGSize(width: max(caption.width, s.width), height: caption.height + 5 + s.height)
+        }
+        let bar: CGFloat = 5, gap: CGFloat = 9
+        return CGSize(width: max(caption.width, bar + gap + storyCardWidth),
+                      height: caption.height + 5 + storyCardHeight)
+    }
+
+    /// Placed once the bubble's edges are known, like the sender name and the Forwarded tag.
+    private static func storyReplyPlan(_ sr: StoryReplyChrome, isMe: Bool,
+                                       bubbleRect: CGRect, columnW: CGFloat,
+                                       top: CGFloat, maxWidth: CGFloat) -> StoryReplyPlan {
+        let captionAttr = storyReplyCaption(sr)
+        let captionSize = lineSizeOf(captionAttr, cap: maxWidth)
+        // The column aligns the caption and the card to the sender's own side.
+        let size = storyReplyCardSize(sr, maxWidth: maxWidth)
+        let originX = isMe ? (bubbleRect.maxX - size.width) : bubbleRect.minX
+        let captionX = isMe ? (bubbleRect.maxX - captionSize.width) : bubbleRect.minX
+        let caption = CGRect(x: captionX, y: top, width: captionSize.width, height: captionSize.height)
+
+        guard !sr.unavailable, sr.thumbUrl?.isEmpty == false else {
+            let attr = NSAttributedString(string: "Story unavailable", attributes: [
+                .font: UIFont.systemFont(ofSize: 12), .foregroundColor: UIColor.tertiaryLabel])
+            let s = lineSizeOf(attr, cap: maxWidth)
+            let x = isMe ? (bubbleRect.maxX - s.width) : bubbleRect.minX
+            return StoryReplyPlan(caption: caption, captionAttr: captionAttr,
+                                  bar: nil, thumb: nil,
+                                  unavailable: CGRect(x: x, y: caption.maxY + 5,
+                                                      width: s.width, height: s.height),
+                                  unavailableAttr: attr)
+        }
+        let bar: CGFloat = 5, gap: CGFloat = 9
+        let cardTop = caption.maxY + 5
+        // The accent bar sits on the OUTSIDE of the card — the side the bubble is on.
+        let barX = isMe ? (originX + size.width - bar) : originX
+        let thumbX = isMe ? originX : (originX + bar + gap)
+        return StoryReplyPlan(
+            caption: caption, captionAttr: captionAttr,
+            bar: CGRect(x: barX, y: cardTop, width: bar, height: storyCardHeight),
+            thumb: CGRect(x: thumbX, y: cardTop, width: storyCardWidth, height: storyCardHeight),
+            unavailable: nil, unavailableAttr: nil)
     }
 
     // ── The OG card inside a text bubble ──
@@ -1162,7 +1248,7 @@ enum MessageRowLayout {
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
-            locationPlan: nil, contactPlan: nil, pollPlan: plan, linkPlan: nil,
+            locationPlan: nil, contactPlan: nil, pollPlan: plan, linkPlan: nil, storyReplyPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -1235,7 +1321,7 @@ enum MessageRowLayout {
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
-            locationPlan: plan, contactPlan: nil, pollPlan: nil, linkPlan: nil,
+            locationPlan: plan, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -1314,7 +1400,7 @@ enum MessageRowLayout {
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
-            locationPlan: nil, contactPlan: plan, pollPlan: nil, linkPlan: nil,
+            locationPlan: nil, contactPlan: plan, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)

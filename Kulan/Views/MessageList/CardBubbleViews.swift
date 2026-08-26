@@ -174,6 +174,61 @@ final class LinkPreviewBubbleView: UIView {
     func prepareForReuse() { hero.reset() }
 }
 
+// ── A reply to somebody's story ──
+
+/// The caption line and the big card that float ABOVE a story-reply bubble. It rides the reply
+/// swipe with the bubble — swiping the card itself starts the reply too, which the SwiftUI version
+/// had to be told twice before it did.
+final class StoryReplyCardView: UIView {
+    private let caption = UILabel()
+    private let bar = UIView()
+    private let thumb = RowImageView(frame: .zero)
+    private let unavailable = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        caption.lineBreakMode = .byTruncatingTail
+        addSubview(caption)
+        bar.layer.cornerRadius = 2.5
+        addSubview(bar)
+        thumb.layer.cornerRadius = 14
+        thumb.layer.cornerCurve = .continuous
+        thumb.layer.borderWidth = 1
+        thumb.layer.borderColor = UIColor.label.withAlphaComponent(0.08).cgColor
+        addSubview(thumb)
+        unavailable.lineBreakMode = .byTruncatingTail
+        addSubview(unavailable)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(_ sr: StoryReplyChrome, plan: StoryReplyPlan, cid: String) {
+        caption.frame = plan.caption
+        caption.attributedText = plan.captionAttr
+
+        if let barRect = plan.bar, let thumbRect = plan.thumb {
+            bar.isHidden = false; thumb.isHidden = false
+            bar.frame = barRect
+            bar.backgroundColor = UIColor.label.withAlphaComponent(0.35)
+            thumb.frame = thumbRect
+            // A story thumbnail is NOT E2EE — it is baked plain into the reply so it shows in-window.
+            thumb.configure(url: sr.thumbUrl, enc: nil, cid: cid, cornerRadius: 14)
+        } else {
+            bar.isHidden = true; thumb.isHidden = true; thumb.reset()
+        }
+
+        if let rect = plan.unavailable, let attr = plan.unavailableAttr {
+            unavailable.isHidden = false
+            unavailable.frame = rect
+            unavailable.attributedText = attr
+        } else {
+            unavailable.isHidden = true
+        }
+    }
+
+    func prepareForReuse() { thumb.reset() }
+}
+
 // ── A poll ──
 
 /// ⛔ THE ONLY ROW IN THIS DIRECTORY THAT OWNS A SUBSCRIPTION, and it is careful about it.

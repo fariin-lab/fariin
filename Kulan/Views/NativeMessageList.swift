@@ -76,6 +76,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onTapMedia: (String) -> Void = { _ in }        // the picture opens the viewer
     var onTapAlbumTile: (_ rowId: String, _ index: Int) -> Void = { _, _ in }
     var onTapFile: (String) -> Void = { _ in }
+    var onTapStoryReplyCard: (String) -> Void = { _ in }
     var onTapLinkCard: (String) -> Void = { _ in }
     var onTapLinkProfile: (String) -> Void = { _ in }
     var onTapLocation: (String) -> Void = { _ in }
@@ -163,6 +164,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onTapMedia = onTapMedia
         vc.onTapAlbumTile = onTapAlbumTile
         vc.onTapFile = onTapFile
+        vc.onTapStoryReplyCard = onTapStoryReplyCard
         vc.onTapLinkCard = onTapLinkCard
         vc.onTapLinkProfile = onTapLinkProfile
         vc.onTapLocation = onTapLocation
@@ -445,6 +447,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onTapMedia: (String) -> Void = { _ in }
     var onTapAlbumTile: (_ rowId: String, _ index: Int) -> Void = { _, _ in }
     var onTapFile: (String) -> Void = { _ in }
+    var onTapStoryReplyCard: (String) -> Void = { _ in }
     var onTapLinkCard: (String) -> Void = { _ in }
     var onTapLinkProfile: (String) -> Void = { _ in }
     var onTapLocation: (String) -> Void = { _ in }
@@ -2890,6 +2893,11 @@ extension MessageListController: MessageRowCellDelegate {
     func rowCell(_ cell: MessageRowCell, didTapAlbumTile index: Int) {
         guard let id = cell.rowId else { return }
         onTapAlbumTile(id, index)
+    }
+
+    func rowCellDidTapStoryReply(_ cell: MessageRowCell) {
+        guard let id = cell.rowId else { return }
+        onTapStoryReplyCard(id)
     }
 
     func rowCellDidTapLinkCard(_ cell: MessageRowCell) {

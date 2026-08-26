@@ -18,6 +18,7 @@ protocol MessageRowCellDelegate: AnyObject {
     func rowCellDidTapMedia(_ cell: MessageRowCell)
     func rowCell(_ cell: MessageRowCell, didTapAlbumTile index: Int)
     func rowCellDidTapFile(_ cell: MessageRowCell)
+    func rowCellDidTapStoryReply(_ cell: MessageRowCell)
     func rowCellDidTapLinkCard(_ cell: MessageRowCell)
     func rowCellDidTapLinkProfile(_ cell: MessageRowCell)
     func rowCellDidTapLocation(_ cell: MessageRowCell)
@@ -210,6 +211,10 @@ final class MessageRowCell: UICollectionViewCell {
             }
             if let tile = rowView.albumTileIndex(at: p) {
                 delegate?.rowCell(self, didTapAlbumTile: tile)
+                return
+            }
+            if rowView.hitsStoryReply(p) {
+                delegate?.rowCellDidTapStoryReply(self)
                 return
             }
             // The card's BUTTON before the card, for the same reason the contact card's is.

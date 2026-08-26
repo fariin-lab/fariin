@@ -2344,7 +2344,12 @@ struct ThreadView: View {
             searchTerm: searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
             nameFor: { personName($0) },
             avatarFor: { conversation?.photos[$0] },
-            resolveOriginal: { id in repo.items.first { $0.id == id } })
+            resolveOriginal: { id in repo.items.first { $0.id == id } },
+            storyIsLive: { storyId, author in
+                // Unknown until the stories repo has loaded: assume live, so a reply does not flash
+                // "unavailable" on the way in and then correct itself.
+                !storiesRepo.didLoad || storiesRepo.hasLive(storyId: storyId, author: author)
+            })
 
         var out: [String: MessageRowModel] = [:]
         for (idx, m) in repo.items.enumerated() {
@@ -2734,6 +2739,11 @@ struct ThreadView: View {
                 AppRouter.shared.pendingChatName = card.name     // so a brand-new chat shows the name
                 AppRouter.shared.pendingChatPhoto = card.photo   // and photo, not the placeholder
                 AppRouter.shared.pendingChatId = ChatService.convId(me, card.uid)
+            },
+            onTapStoryReplyCard: { id in
+                guard let m = repo.items.first(where: { $0.rowId == id }), let r = m.replyTo else { return }
+                // The card's OWN anchor, never the quote's — one message can carry both.
+                openStory(r.id, r.authorId, anchorId: "storyreply-\(m.id)")
             },
             onTapLinkCard: { id in
                 guard let m = repo.items.first(where: { $0.rowId == id }),
