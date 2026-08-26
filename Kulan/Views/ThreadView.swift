@@ -2746,17 +2746,50 @@ struct ThreadView: View {
                 guard let m = repo.items.first(where: { $0.rowId == id }) else { return }
                 MediaPresentGate.present { viewerImage = m }
             },
+            // ⛔ THE GALLERY IS ONE SYNTHETIC MESSAGE PER TILE, NOT THE ALBUM MESSAGE. His report,
+            // 2026-08-26: a single photo opens fine, an album tile opens black with a spinner that
+            // never stops.
+            //
+            // `ImageViewerView` is handed `gallery.first { $0.id == startId } ?? gallery[0]`, and
+            // `startId` is "<messageId>-<index>". This used to pass `[m]`, the album message, whose
+            // own id never matches — so the viewer fell back to `gallery[0]`, the album itself, which
+            // has no `imageUrl` of its own (its pictures live in `m.album`). A viewer asked to show a
+            // message with no image shows black and waits.
+            //
+            // This is what the SwiftUI row's `openAlbumItem` did and the UIKit path never carried
+            // over: explode the album into per-item image Messages keyed `"<messageId>-<index>"`,
+            // which is exactly the key the tile's flight rect is registered under. The indices are
+            // the ORIGINAL ones (`enumerated()` before `filter`), so a video among the photos does
+            // not shift the ids away from the rects.
             onTapAlbumTile: { id, index in
                 guard let m = repo.items.first(where: { $0.rowId == id }) else { return }
                 guard m.sendState == nil else { return }
-                let gallery = [m]
+                guard m.album.indices.contains(index) else { return }
+                let it = m.album[index]
                 let startId = "\(m.id)-\(index)"
-                if m.album.indices.contains(index), m.album[index].isVideo {
-                    albumScreen = m
+                // A video tile plays full screen, from a synthetic video message keyed per item so
+                // the cache stores each album video separately — the SwiftUI path's rule.
+                if it.isVideo, let vurl = it.videoUrl, let venc = it.videoEnc {
+                    let d: [String: Any] = ["type": "video", "videoUrl": vurl, "enc": venc.asDict,
+                                            "thumbUrl": it.imageUrl, "thumbEnc": it.enc.asDict,
+                                            "authorId": m.authorId, "width": it.width,
+                                            "height": it.height, "duration": it.duration]
+                    let vmsg = Message(id: startId, data: d, cid: cid, crypto: Crypto.shared)
+                    MediaOpen.flyOrPresent(
+                        imageUrl: vmsg.thumbUrl, rectKey: MediaOpenRects.key(.chat, startId),
+                        clip: MediaOpenRects.clipRect,
+                        present: { MediaPresentGate.present { viewerVideo = vmsg } })
                     return
                 }
+                let gallery: [Message] = m.album.enumerated().filter { !$0.element.isVideo }
+                    .map { idx, im in
+                        let data: [String: Any] = ["type": "image", "imageUrl": im.imageUrl,
+                                                   "enc": im.enc.asDict, "authorId": m.authorId,
+                                                   "width": im.width, "height": im.height]
+                        return Message(id: "\(m.id)-\(idx)", data: data, cid: cid, crypto: Crypto.shared)
+                    }
                 MediaOpen.flyOrPresent(
-                    imageUrl: m.album.indices.contains(index) ? m.album[index].imageUrl : nil,
+                    imageUrl: it.imageUrl,
                     rectKey: MediaOpenRects.key(.chat, startId), clip: MediaOpenRects.clipRect,
                     present: {
                         MediaPresentGate.present {
