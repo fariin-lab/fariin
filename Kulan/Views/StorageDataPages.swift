@@ -53,9 +53,9 @@ struct StorageDataView: View {
             } header: {
                 Text("Media auto-download")
             } footer: {
-                // A THRESHOLD NOTHING CAN REACH. `Limits.fileUploadBytes` and `videoMessageBytes`
-                // are both 25 MB and match storage.rules, so no message in this app has ever been
-                // bigger than that — the 200 MB line describes a reference app's limits, not ours,
+                // A THRESHOLD NOTHING CAN REACH. `Limits.fileUploadBytes` is 25 MB and
+                // `videoMessageBytes` 64, both inside storage.rules, so no message in this app comes
+                // close — the 200 MB line describes a reference app's limits, not ours,
                 // and told people about a rule that could never fire. The real, useful sentence is
                 // what the setting above actually decides.
                 Text("Chooses when photos, videos and voice messages download by themselves. Anything not downloaded is fetched the moment you open it.")
