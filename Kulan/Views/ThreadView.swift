@@ -2896,14 +2896,14 @@ struct ThreadView: View {
             // the scroll callback. We only hand it a pure rowId → day-label mapping; no SwiftUI state is
             // written on scroll, so scrolling never re-runs the conversation tree.
             dayLabelFor: { id in repo.indexById[id].map { dayLabel(repo.items[$0].createdAt) } },
-            cid: cid,
             // The bar's STATE still comes from here — the text, the banners, every action. Only its
             // PLACEMENT moved into the list's controller, which is the whole keyboard fix.
             composerState: canShowComposer ? composerState : nil,
             composerActions: composerActions,
             composerRecorder: recorder,
             composerSideInset: composerSideInset,
-            composerBottomInset: composerBottomInset
+            composerBottomInset: composerBottomInset,
+            cid: cid
         )
         // ⛔ THE KEYBOARD MUST NOT REACH THE LIST THROUGH SWIFTUI'S SAFE AREA — owner, 2026-08-25,
         // build 681, GIF and "+" with the keyboard up: "the chat/message list jumps downward during
