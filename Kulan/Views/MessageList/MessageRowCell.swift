@@ -135,6 +135,11 @@ final class MessageRowCell: UICollectionViewCell {
         switch (a.content, b.content) {
         case (.bubble(let x), .bubble(let y)):
             return x.body == y.body && x.quote == y.quote && x.sender == y.sender
+                // ⚠️ The story card MUST be here. When a story expires the card collapses from a
+                // 140pt picture to a one-line "Story unavailable", and nothing else in this
+                // comparison changes — so without it the row repainted at its old frame and the
+                // rows below it were laid out over the gap.
+                && x.storyReply == y.storyReply
                 && x.forwarded == y.forwarded && x.reactions.count == y.reactions.count
                 && x.showsRetryRow == y.showsRetryRow
                 && x.meta.edited == y.meta.edited && x.meta.timeText == y.meta.timeText

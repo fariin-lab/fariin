@@ -91,13 +91,8 @@ final class VoiceBubbleView: UIView {
         speedPill.frame = plan.speedPill
         duration.frame = plan.duration
         duration.attributedText = plan.durationAttr
-        if let dot = plan.unreadDot {
-            unreadDot.isHidden = false
-            unreadDot.frame = dot
-            unreadDot.backgroundColor = BubblePalette.accent
-        } else {
-            unreadDot.isHidden = true
-        }
+        unreadDot.frame = plan.unreadDot
+        unreadDot.backgroundColor = BubblePalette.accent
         micGlyph.frame = plan.micGlyph
         micGlyph.image = UIImage(systemName: "mic.fill",
                                  withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
@@ -128,6 +123,10 @@ final class VoiceBubbleView: UIView {
         disc.showsPause = player.isPlaying(b.messageId)
         disc.isBusy = player.isLoading(b.messageId)
         wave.progress = player.progress(for: b.messageId)
+        // The dot is live, not planned: its slot is reserved either way, so hiding it the moment
+        // this note is heard costs no layout. Playing it at all counts as hearing it.
+        unreadDot.isHidden = !b.unplayed || player.isPlaying(b.messageId)
+            || player.progress(for: b.messageId) > 0
 
         let rate = player.rate(for: cid)
         speedPill.attributedText = NSAttributedString(

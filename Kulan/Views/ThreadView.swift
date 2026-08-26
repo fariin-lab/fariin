@@ -2331,6 +2331,13 @@ struct ThreadView: View {
             chatColorSpec?.stored ?? "-", firstUnreadId ?? "-",
             searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
             "\(isGroup)", "\(groupMembers.count)",
+            // ⚠️ THE FINAL PHASE'S OWN READS, added by the verification pass that went looking for
+            // them. The rule this file states four times: if a value is READ while building a row,
+            // it has to be in the key that decides whether that row is rebuilt.
+            //   storiesVersion / didLoad — `storyIsLive` decides whether a story reply draws its
+            //     card or says the story is gone, and that is a HEIGHT difference.
+            //   hiddenTick — `albumBody` drops tiles hidden "for me", which re-solves the mosaic.
+            "\(storiesRepo.storiesVersion)", "\(storiesRepo.didLoad)", "\(hiddenTick)",
         ].joined(separator: "|")
         if uikitModelCache.key == key { return uikitModelCache.models }
 

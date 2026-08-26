@@ -54,11 +54,15 @@ enum MessageRowModelBuilder {
         // ⚠️ VIEW-ONCE FIRST, before the kind tests below say yes to its photo. A view-once photo is
         // a PILL, not a picture — routing it to the media path would put the secret on screen.
         if m.viewOnce { return false }
-        // Phase 2: a photo, a video and a gif are drawn here now.
+        // ⛔ PENDING MEDIA BEFORE THE KIND TESTS, and this ordering is a real bug fixed rather than
+        // a tidy-up. `isImage` is true for a message that merely has `localImageData` — which is
+        // exactly what an optimistic, still-uploading photo has — so with the kind tests first a
+        // pending photo matched "photo" and was drawn as a finished media bubble instead of the
+        // pending placeholder. The old `content` chain tested pending first for the same reason.
+        if m.pendingMediaKind != nil || m.isPendingImage { return false }
         if m.isImage || m.isVideo || m.isGif { return true }
         if m.isAlbum || m.isFile { return true }
         if m.isAudio { return true }
-        if m.pendingMediaKind != nil || m.isPendingImage { return false }
         if m.locationCard != nil || m.contactCard != nil { return true }
         if m.poll != nil { return true }
         if m.isFeatureMarker { return true }               // the "update the app" notice
@@ -142,9 +146,15 @@ enum MessageRowModelBuilder {
                 // No button for my own card, and none for the person I am already talking to —
                 // there is no chat to open, and a button that does nothing is worse than none.
                 canMessage: card.uid != ctx.me && ChatService.convId(ctx.me, card.uid) != ctx.cid))
-        } else if text.jumbomojiCount > 0, msg.replyTo == nil {
-            // Borderless applies only to a TEXT-ONLY message: an emoji-only REPLY keeps its bubble,
-            // because the quote shares the box with it.
+        } else if text.jumbomojiCount > 0, msg.linkPreview == nil,
+                  msg.replyTo == nil || msg.replyTo?.isStatus == true {
+            // Borderless applies only to a message with nothing else in the box: an emoji-only
+            // REPLY keeps its bubble, because the quote shares that box with it, and so does one
+            // carrying a link card.
+            //
+            // ⚠️ EXCEPT A STORY REPLY, which is the owner's own ruling. Its card is drawn ABOVE the
+            // bubble, never inside it, so nothing shares the box and there is no reason to draw one
+            // — an emoji story reply looks like an emoji message with a card on top.
             body = .jumbomoji(text)
         } else {
             body = .text(BubbleBody.TextBody(

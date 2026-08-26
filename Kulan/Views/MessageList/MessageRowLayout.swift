@@ -122,7 +122,7 @@ struct VoicePlan {
     var speedPill: CGRect
     var duration: CGRect
     var durationAttr: NSAttributedString
-    var unreadDot: CGRect?
+    var unreadDot: CGRect               // always reserved; the DOT itself is shown or hidden live
     var micGlyph: CGRect
 }
 
@@ -1065,10 +1065,15 @@ enum MessageRowLayout {
                               width: speed, height: 22),
             duration: CGRect(x: columnStart, y: stackTop + waveH + 6, width: durW, height: durH),
             durationAttr: durationAttr,
-            unreadDot: v.unplayed ? CGRect(x: columnStart + durW + 8,
-                                           y: stackTop + waveH + 6 + (durH - 7) / 2,
-                                           width: 7, height: 7) : nil,
-            micGlyph: CGRect(x: columnStart + durW + (v.unplayed ? 19 : 8),
+            // ⛔ THE DOT'S SLOT IS ALWAYS RESERVED, whether or not the dot is drawn — and the mic
+            // never moves because of it. This is the rule the old bubble states about its own speed
+            // pill and mic: the row is pre-measured before playback state arrives, so anything that
+            // appears or disappears later would change a height that was already measured. The dot
+            // is SHOWN or HIDDEN live by the view; the geometry is a constant.
+            unreadDot: CGRect(x: columnStart + durW + 8,
+                              y: stackTop + waveH + 6 + (durH - 7) / 2,
+                              width: 7, height: 7),
+            micGlyph: CGRect(x: columnStart + durW + 19,
                              y: stackTop + waveH + 6 + (durH - 10) / 2, width: 10, height: 10))
         innerY += contentH
 

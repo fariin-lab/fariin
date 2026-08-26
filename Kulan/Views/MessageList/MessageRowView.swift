@@ -397,6 +397,7 @@ final class MessageRowView: UIView {
         case .notice(let n):
             bubbleBox.isHidden = true
             callView?.isHidden = true
+            hideBubbleChrome()
             let v = noticeView ?? {
                 let v = RowNoticePillView(); addSubview(v); noticeView = v; return v
             }()
@@ -406,6 +407,7 @@ final class MessageRowView: UIView {
         case .call(let c):
             bubbleBox.isHidden = true
             noticeView?.isHidden = true
+            hideBubbleChrome()
             let v = callView ?? {
                 let v = CallBubbleView(); addSubview(v); callView = v; return v
             }()
@@ -413,6 +415,24 @@ final class MessageRowView: UIView {
             v.frame = c.bubble
             v.configure(c, dark: dark)
         }
+    }
+
+    /// ⛔ HIDE THE CHROME THAT LIVES ON THE ROW, NOT IN THE BUBBLE.
+    ///
+    /// Hiding `bubbleBox` takes everything INSIDE it with it — the picture, the quote, the poll —
+    /// but the sender name, the avatar, the Forwarded tag, the retry line, the verified mark and
+    /// the story-reply card are the bubble's siblings, because they sit outside its box by design.
+    /// A notice or a call row never touches them, so a cell recycled from a group bubble onto a
+    /// system notice kept somebody's name and face floating over it.
+    private func hideBubbleChrome() {
+        avatarView?.isHidden = true
+        senderLabel?.isHidden = true
+        verifiedView?.isHidden = true
+        forwardedLabel?.isHidden = true
+        forwardedIcon?.isHidden = true
+        retryLabel?.isHidden = true
+        retryIcon?.isHidden = true
+        storyReplyView?.isHidden = true
     }
 
     private func applyHeader(_ p: RowPlan, dark: Bool) {
@@ -1073,7 +1093,7 @@ final class MessageRowView: UIView {
             box.isHidden = true
         }
         quoteView?.isHidden = true
-        avatarView?.isHidden = true
+        hideBubbleChrome()
         mediaView?.prepareForReuse()
         albumView?.prepareForReuse()
         fileView?.prepareForReuse()
