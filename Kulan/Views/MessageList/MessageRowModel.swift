@@ -284,7 +284,9 @@ struct BubbleRow: Equatable {
     var storyReply: StoryReplyChrome?
     var forwarded: Bool
     var reactions: [ReactionChip]
-    var showsRetryRow: Bool            // "Not delivered. Tap to retry" under a failed send
+    /// A failed send: the red (!) outside the bubble, which is also the retry button. There is no
+    /// text — his instruction, 2026-08-26. See `MessageRowLayout.decorations`.
+    var showsFailedBadge: Bool
     var rim: Bool                      // the hairline an incoming bubble wears on a wallpaper
     var canSwipeToReply: Bool
     var opensOnTap: Bool               // media opens something → no double-tap recogniser

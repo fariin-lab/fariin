@@ -6791,9 +6791,13 @@ struct MessageBubble: View, Equatable {
                     // with the next bubble, reserve more and there is a gap nothing draws into.
                     .padding(.bottom, reactionCounts.isEmpty ? 0 : 13)   // pop in/out
                 if isMe && message.sendState == .failed {
+                    // No text — his instruction, 2026-08-26. The same red (!) the list draws
+                    // outside the bubble; this copy only ever appears in the chat peek and the
+                    // pinned sheet, which build a `MessageBubble` of their own.
                     Button { onResend(message) } label: {
-                        Label("Not delivered. Tap to retry", systemImage: "arrow.clockwise")
-                            .font(.system(size: 11, weight: .medium)).foregroundStyle(.red)
+                        Image(systemName: "exclamationmark.circle")
+                            .font(.system(size: 21, weight: .regular))
+                            .foregroundStyle(Color(BubblePalette.failRed))
                     }
                     .buttonStyle(.plain)
                     .padding(.top, 1)

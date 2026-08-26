@@ -325,8 +325,7 @@ final class MessageRowView: UIView {
     private var forwardedLabel: UILabel?
     private var forwardedIcon: UIImageView?
     private var tombstoneIcon: UIImageView?
-    private var retryLabel: UILabel?
-    private var retryIcon: UIImageView?
+    private var failBadge: UIImageView?
     private var reactionViews: [ReactionChipView] = []
     private var headerPill: RowNoticePillView?
     private var dividerLeft: UIView?
@@ -432,8 +431,7 @@ final class MessageRowView: UIView {
         verifiedView?.isHidden = true
         forwardedLabel?.isHidden = true
         forwardedIcon?.isHidden = true
-        retryLabel?.isHidden = true
-        retryIcon?.isHidden = true
+        failBadge?.isHidden = true
         storyReplyView?.isHidden = true
     }
 
@@ -548,7 +546,7 @@ final class MessageRowView: UIView {
         applySender(b, model: m)
         applyForwarded(b)
         applyReactions(b)
-        applyRetry(b)
+        applyFailBadge(b)
     }
 
     private func applyMedia(_ b: BubblePlan, model m: MessageRowModel, cid: String) {
@@ -923,23 +921,20 @@ final class MessageRowView: UIView {
         }
     }
 
-    private func applyRetry(_ b: BubblePlan) {
-        guard let rect = b.retry else { retryLabel?.isHidden = true; retryIcon?.isHidden = true; return }
-        let label = retryLabel ?? {
-            let v = UILabel(); addSubview(v); retryLabel = v; return v
-        }()
-        let icon = retryIcon ?? {
-            let v = UIImageView(image: UIImage(systemName: "arrow.clockwise",
-                                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 11, weight: .medium)))
+    private func applyFailBadge(_ b: BubblePlan) {
+        guard let rect = b.failBadge else { failBadge?.isHidden = true; return }
+        let icon = failBadge ?? {
+            // Their `error-circle`: an outlined ring with an exclamation, drawn at the badge's full
+            // 24pt box. `contentMode = .center` keeps the glyph at its own size, as theirs does.
+            let v = UIImageView(image: UIImage(systemName: "exclamationmark.circle",
+                                              withConfiguration: UIImage.SymbolConfiguration(pointSize: 21, weight: .regular)))
             v.contentMode = .center
-            v.tintColor = .systemRed
-            addSubview(v); retryIcon = v; return v
+            v.tintColor = BubblePalette.failRed
+            v.isUserInteractionEnabled = false   // the cell hit-tests the plan; see MessageRowCell
+            addSubview(v); failBadge = v; return v
         }()
-        label.isHidden = false; icon.isHidden = false
-        icon.frame = CGRect(x: rect.minX, y: rect.minY, width: 14, height: rect.height)
-        label.attributedText = NSAttributedString(string: "Not delivered. Tap to retry", attributes: [
-            .font: UIFont.systemFont(ofSize: 11, weight: .medium), .foregroundColor: UIColor.systemRed])
-        label.frame = CGRect(x: rect.minX + 16, y: rect.minY, width: rect.width - 16, height: rect.height)
+        icon.isHidden = false
+        icon.frame = rect
     }
 
     // MARK: - Helpers
@@ -1074,8 +1069,9 @@ final class MessageRowView: UIView {
         return b.reactions.contains { $0.contains(point) }
     }
 
-    func hitsRetry(_ point: CGPoint) -> Bool {
-        guard let p = plan, case .bubble(let b) = p.body, let r = b.retry else { return false }
+    func hitsFailBadge(_ point: CGPoint) -> Bool {
+        guard let p = plan, case .bubble(let b) = p.body, let r = b.failBadge else { return false }
+        // The badge is 24pt; the target is 40, which is the smallest a finger should be asked for.
         return r.insetBy(dx: -8, dy: -8).contains(point)
     }
 

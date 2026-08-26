@@ -138,7 +138,7 @@ final class MessageRowCell: UICollectionViewCell {
                 // rows below it were laid out over the gap.
                 && x.storyReply == y.storyReply
                 && x.forwarded == y.forwarded && x.reactions.count == y.reactions.count
-                && x.showsRetryRow == y.showsRetryRow
+                && x.showsFailedBadge == y.showsFailedBadge
                 && x.meta.edited == y.meta.edited && x.meta.timeText == y.meta.timeText
         default:
             return false
@@ -188,7 +188,9 @@ final class MessageRowCell: UICollectionViewCell {
             }
             return
         case .bubble(let b):
-            if rowView.hitsRetry(p), b.showsRetryRow {
+            // The failed badge IS the retry button, and it is tested first: it sits outside the
+            // bubble, so it can never be confused with anything drawn inside one.
+            if b.showsFailedBadge, rowView.hitsFailBadge(p) {
                 delegate?.rowCellDidTapRetry(self)
                 return
             }

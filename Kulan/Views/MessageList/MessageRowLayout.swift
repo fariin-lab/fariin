@@ -205,7 +205,8 @@ struct BubblePlan {
     var reactions: [CGRect]             // one per chip, row coordinates
     var reactionAttrs: [NSAttributedString]
     var reactionMine: [Bool]
-    var retry: CGRect?
+    /// The red (!) outside a failed send's bubble, in row coordinates. See `decorations`.
+    var failBadge: CGRect?
 }
 
 struct NoticePlan {
@@ -357,7 +358,12 @@ enum MessageRowLayout {
 
         // 72% of the LIST's width, then clamped by whatever the column actually has. On a phone the
         // two are the same number; in Stage Manager they are not.
-        let maxBubble = min(BubbleMetrics.maxBubbleWidth(in: rowWidth), columnW)
+        //
+        // A failed send gives up the badge's width plus its gap, exactly as theirs does
+        // (`contentMaxWidth -= sendFailureBadgeSize + hOuterStackConfig.spacing`) — otherwise a
+        // full-width bubble and the badge would be drawn on top of each other.
+        let failBadgeColumn = b.showsFailedBadge ? BubbleMetrics.failBadge + BubbleMetrics.failBadgeGap : 0
+        let maxBubble = min(BubbleMetrics.maxBubbleWidth(in: rowWidth), columnW - failBadgeColumn)
         let hPad = BubbleMetrics.hPad, vPad = BubbleMetrics.vPad
         let maxContent = max(1, maxBubble - hPad * 2)
 
@@ -719,14 +725,27 @@ enum MessageRowLayout {
             y += BubbleMetrics.reactionOverhang
         }
 
-        if b.showsRetryRow {
-            let font = UIFont.systemFont(ofSize: 11, weight: .medium)
-            let attr = NSAttributedString(string: "Not delivered. Tap to retry", attributes: [.font: font])
-            let s = BubbleText.size(attr, width: columnW)
-            let w = s.width + 16                              // the leading arrow glyph
-            let x = b.isMe ? (columnX + columnW - w) : columnX
-            plan.retry = CGRect(x: x, y: y + 1 + BubbleMetrics.senderNameGap, width: w, height: s.height)
-            y = plan.retry!.maxY
+        // ⛔ THE FAILED BADGE SITS OUTSIDE THE BUBBLE, ON THE TRAILING EDGE — his order, 2026-08-26:
+        // "remove this text… make it like the reference's retry button", with a photograph of their
+        // failed message. Read from their `CVComponentMessage`: the badge is the LAST subview of the
+        // row's outer horizontal stack, so it lands past the bubble's trailing edge, and the bubble
+        // is narrowed by the badge plus the stack's spacing to make room for it.
+        //
+        // Their numbers, used verbatim: a 24pt box, 8pt from the bubble (`messageStackSpacing`),
+        // tinted `ows_accentRed` (0xF44336). Theirs also raises the badge off the row's bottom so
+        // its centre lands on the last text line's axis; our footer IS that line, so the badge is
+        // centred on the footer instead, which is the same intent expressed in our own geometry.
+        //
+        // ⚠️ NO TEXT — his instruction, twice ("no more text"). Theirs replaces the timestamp with
+        // "Send Failed"; ours keeps the time. The badge is the whole of the message.
+        if b.showsFailedBadge {
+            // `plan.meta` is bubble-local; the badge lives in row coordinates like the avatar.
+            let cy = plan.meta == .zero ? bubbleRect.maxY - BubbleMetrics.vPad - BubbleMetrics.failBadge / 2
+                                        : bubbleRect.minY + plan.meta.midY
+            plan.failBadge = CGRect(x: columnX + columnW - BubbleMetrics.failBadge,
+                                    y: cy - BubbleMetrics.failBadge / 2,
+                                    width: BubbleMetrics.failBadge, height: BubbleMetrics.failBadge)
+            y = max(y, plan.failBadge!.maxY)
         }
 
         if let s = b.sender, s.showsAvatar {

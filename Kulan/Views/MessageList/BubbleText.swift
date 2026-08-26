@@ -128,7 +128,10 @@ enum BubbleText {
         }
         s.append(NSAttributedString(string: m.timeText, attributes: [
             .font: BubbleMetrics.metaFont, .foregroundColor: color]))
-        guard isMe, m.tick != .none, let img = BubbleTicks.image(m.tick) else { return s }
+        // ⛔ A FAILED SEND HAS NO FOOTER GLYPH. Theirs: `case .failed: // No status indicator icon.`
+        // The red (!) outside the bubble says it, and drawing both put two exclamation marks on one
+        // message — which is what his 2026-08-26 screenshot shows.
+        guard isMe, m.tick != .none, m.tick != .failed, let img = BubbleTicks.image(m.tick) else { return s }
         let a = NSTextAttachment()
         // ⛔ WHILE SENDING THE SLOT IS RESERVED BUT EMPTY. The spinning clock is a separate view
         // laid over this slot (`MessageRowView.setSendingSpin`), because an attachment cannot

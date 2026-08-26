@@ -28,6 +28,10 @@ enum BubbleMetrics {
     static let avatarGap: CGFloat = 6
     static let senderNameGap: CGFloat = 3      // VStack spacing above the bubble
     static let reactionOverhang: CGFloat = 13  // how far the badge hangs below the bubble
+    /// The failed-send badge outside the bubble, and its gap from it. The reference app's own
+    /// numbers: a 24pt box and `messageStackSpacing` = 8.
+    static let failBadge: CGFloat = 24
+    static let failBadgeGap: CGFloat = 8
     static let hairline: CGFloat = 1 / UIScreen.main.scale
 
     static let bodyFont = UIFont.systemFont(ofSize: 17)
@@ -81,6 +85,9 @@ enum BubblePalette {
     /// moved to this path. `.primary` is `UIColor.label`, so that is what the SwiftUI rows were
     /// actually drawing and that is what these draw.
     static let accent = UIColor.label
+    /// The failed-send badge. The reference app's `ows_accentRed`, 0xF44336 — a warmer red than
+    /// `.systemRed`, and the one their (!) is drawn in.
+    static let failRed = UIColor(red: 0xF4 / 255, green: 0x43 / 255, blue: 0x36 / 255, alpha: 1)
 }
 
 /// What paints behind a bubble. Resolved by ThreadView (which owns the wallpaper and the chat

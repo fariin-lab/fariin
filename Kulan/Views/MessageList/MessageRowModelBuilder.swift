@@ -273,7 +273,7 @@ enum MessageRowModelBuilder {
             storyReply: storyReply,
             forwarded: msg.forwarded && !msg.deleted,
             reactions: reactions,
-            showsRetryRow: isMe && msg.sendState == .failed,
+            showsFailedBadge: isMe && msg.sendState == .failed,
             // Theirs only, and only on a wallpaper — the reference guards it `hasWallpaper,
             // isIncoming`, and an outgoing bubble never wears one.
             rim: !isMe && ctx.onWallpaper,
