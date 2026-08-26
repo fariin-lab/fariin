@@ -104,7 +104,7 @@ final class ChatComposerView: UIView {
         return UIVisualEffectView(effect: e)
     }()
     private let plusButton = ChatComposerView.glassButton(symbol: "plus", size: 20, weight: .regular, color: .label)
-    private let trashButton = ChatComposerView.glassButton(symbol: "trash.fill", size: 18, weight: .regular, color: .systemRed)
+    private let trashButton = ChatComposerView.glassButton(symbol: "trash.fill", size: 18, weight: .regular, color: .systemRed, bakeColor: true)
     private let sendButton = ChatComposerView.glassButton(symbol: "arrow.up", size: 19, weight: .bold, color: .white, prominent: true)
     // ⛔ NO PAUSE BUTTON HERE — it floats above the bar, and the hosting view never delivers touches
     // to a platform view outside the frame SwiftUI gave it (proven on device, build 682). It lives
@@ -301,13 +301,27 @@ final class ChatComposerView: UIView {
     /// A 40pt round Liquid Glass button — the "+", the bin and the send. `prominent` is the tinted
     /// glass the send button wears in the chat's own colour.
     private static func glassButton(symbol: String, size: CGFloat, weight: UIImage.SymbolWeight,
-                                    color: UIColor, prominent: Bool = false) -> UIButton {
+                                    color: UIColor, prominent: Bool = false,
+                                    bakeColor: Bool = false) -> UIButton {
         var cfg: UIButton.Configuration = prominent ? .prominentGlass() : .glass()
         cfg.cornerStyle = .capsule
         cfg.contentInsets = .zero
-        cfg.image = UIImage(systemName: symbol)
         cfg.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: size, weight: weight)
         cfg.baseForegroundColor = color
+        // ⛔ `bakeColor` TINTS THE GLYPH INTO THE IMAGE instead of leaving it to
+        // `baseForegroundColor` — owner, 2026-08-26: "Delete icon make it red", and it was already
+        // `.systemRed` here.
+        //
+        // A glass `UIButton.Configuration` resolves its own foreground style, and on the glass
+        // material it wins over the base colour we asked for: the trash came out the same near-black
+        // as the "+" beside it. An `.alwaysOriginal` image carries its colour in the bitmap, so
+        // there is nothing left for the style to override.
+        //
+        // ⚠️ OPT-IN, NOT THE DEFAULT. `sendButton.tintColor` is written every state update, and a
+        // baked bitmap would ignore it — the send arrow would freeze at whatever colour it was
+        // built with. Only a button whose colour never changes may bake it.
+        cfg.image = bakeColor ? UIImage(systemName: symbol)?.withTintColor(color, renderingMode: .alwaysOriginal)
+                              : UIImage(systemName: symbol)
         let b = UIButton(configuration: cfg)
         return b
     }
@@ -417,8 +431,13 @@ final class ChatComposerView: UIView {
         sendButton.configuration?.baseBackgroundColor = s.sendTint
         sendButton.tintColor = s.sendTint
 
+        // ⛔ 17, NOT 22 — owner, 2026-08-26: "play voice is too big". It was a 22pt glyph in a 26pt
+        // box, so it filled its control almost edge to edge and read as the loudest thing in a strip
+        // where it is the least important: the trash beside it is 18 and the waveform is the part
+        // you are meant to look at. 17 sits it just under its neighbour, which is where a secondary
+        // control belongs.
         playButton.icon.image = UIImage(systemName: s.previewPlaying ? "pause.fill" : "play.fill",
-                                        withConfiguration: UIImage.SymbolConfiguration(pointSize: 22))
+                                        withConfiguration: UIImage.SymbolConfiguration(pointSize: 17))
         playButton.icon.tintColor = accent
         waveform.decibels = s.previewDecibels
         waveform.progress = s.previewProgress

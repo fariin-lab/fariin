@@ -458,7 +458,11 @@ struct ThreadView: View {
             // Per-chat wallpaper behind the messages (extends under the bars). The anchor riding on
             // it is what the bubble slices measure themselves against — see WallpaperBlur.
             .background {
-                ChatWallpaperBackground(cid: cid)
+                // The picture solves against the WINDOW, not against this container — see the note
+                // in `ChatWallpaperBackground`. This is the one call site that is full-screen, and
+                // it is the one where the container's height changes underneath the photo (the
+                // keyboard leaving as the attach panel arrives).
+                ChatWallpaperBackground(cid: cid, pictureSize: WallpaperBlur.windowFrame.size)
                     .overlay { WallpaperAnchor(cid: cid) }
                     .ignoresSafeArea()
             }

@@ -444,6 +444,12 @@ struct ChatWallpaperBackground: View {
     /// darkening in the wash, so blurring our photo scrim in first would darken a bubble twice.
     /// On screen this is always true and nothing about the picture changes.
     var includesScrim: Bool = true
+    /// The box the photo solves its fill against, when it must not be the container's.
+    ///
+    /// nil keeps the old behaviour — fill whatever you are given — which is right for the places
+    /// that draw this at their own size: the colour picker's preview, the chat peek platter, the
+    /// announcements channel. Only the full-screen chat passes a size, and it passes the window's.
+    var pictureSize: CGSize? = nil
     @Environment(\.colorScheme) private var scheme
     private var store: WallpaperStore { .shared }
 
@@ -465,8 +471,35 @@ struct ChatWallpaperBackground: View {
                 // case) and the photo rides as a CLIPPED overlay. A bare scaledToFill Image re-flows
                 // when the container height changes (keyboard open/close), which nudged the composer;
                 // clipping the overlay keeps the fill from ever feeding layout back, so it's rock-stable.
+                //
+                // ⛔ AND THE PICTURE IS SOLVED AGAINST THE WINDOW, TOP-ANCHORED — owner, 2026-08-26:
+                // with the keyboard up, tapping "+" or the GIF button made the wallpaper jump.
+                //
+                // Clipping stopped the photo feeding layout back OUT, but it did not stop layout
+                // feeding IN. `scaledToFill` solves against the box it is offered, and that box was
+                // the container — so every time the container's height changed (the keyboard
+                // leaving while the attach panel arrives is two height changes in one transition)
+                // the fill re-solved and the visible crop slid. Nothing was animating it; it was a
+                // different crop of the same photo each pass.
+                //
+                // ⚠️ IT WAS ALSO A DISAGREEMENT WITH THE BUBBLES. `WallpaperBlur.renderWallpaper`
+                // makes the blurred picture at `windowFrame` size, and every incoming bubble shows a
+                // SLICE of that picture positioned in window coordinates. While the on-screen photo
+                // was cropped to a shorter container, the bubbles were cut from a crop that was not
+                // the one on screen. One constant box fixes both: the picture is the window's, so
+                // the slices and the wallpaper are the same picture again.
+                //
+                // Top-anchored because the container is pinned to the window's top edge and only its
+                // BOTTOM moves; centring would push the photo up by half of every height change.
                 Color.clear
-                    .overlay { Image(uiImage: img).resizable().scaledToFill() }
+                    .overlay(alignment: .top) {
+                        let picture = Image(uiImage: img).resizable().scaledToFill()
+                        if let pictureSize {
+                            picture.frame(width: pictureSize.width, height: pictureSize.height)
+                        } else {
+                            picture
+                        }
+                    }
                     .clipped()
                     // ⛔ THEIR NUMBERS, READ FROM THEIR SOURCE — his order 2026-08-24 after asking for
                     // the exact amounts rather than for an eyeball match.

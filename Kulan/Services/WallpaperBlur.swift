@@ -220,7 +220,11 @@ import UIKit
     /// undimmed content view and does the darkening in the wash below; blurring a scrim in first
     /// would darken twice.
     private static func renderWallpaper(cid: String, dark: Bool, size: CGSize) -> UIImage? {
-        let view = ChatWallpaperBackground(cid: cid, includesScrim: false)
+        // `pictureSize` is the size being rendered at, so this picture is cropped exactly the way
+        // the chat's own wallpaper is — the slices the bubbles show are cut from the picture that
+        // is actually on screen. Passing it explicitly rather than letting the container decide is
+        // what keeps the two in step if either size ever changes.
+        let view = ChatWallpaperBackground(cid: cid, includesScrim: false, pictureSize: size)
             .frame(width: size.width, height: size.height)
             .environment(\.colorScheme, dark ? .dark : .light)
         let renderer = ImageRenderer(content: view)
