@@ -99,6 +99,12 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // it so it isn't hidden behind the pin (the reference app behavior). 0 â†’ pill sits at its normal top position.
     var topOverlayHeight: CGFloat = 0
     var onTopInset: (CGFloat) -> Void = { _ in }   // reports the GEOMETRIC nav-bar overlap (UIKit safe area â€” reliable)
+    // Whether the floating jump-to-latest button should be on screen. Reported on its own instead of
+    // being derived from `isAtBottom`, because the two answer different questions: isAtBottom decides
+    // whether the reader gets MOVED (44pt, and half the conversation reads it), while the button is
+    // only an affordance and now waits far longer. See `shouldShowJumpButton`. Defaulted, so the
+    // announcements list, which has no such button, passes nothing.
+    var onJumpButtonVisibility: (Bool) -> Void = { _ in }
     @Binding var isAtBottom: Bool
     @Binding var scrollTarget: String?         // set to a rowId to scroll it into view (reply/search jump), then cleared
     // Day label for the floating date pill, resolved from a rowId. Called from scrollViewDidScroll and
@@ -1749,6 +1755,19 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // someone. Deliberately separate so the two can never be confused again.
     private var isNearNewest: Bool { collectionView.contentOffset.y >= maxContentOffsetY - 44 }
 
+    // The BUTTON's own test, and it has TWO distances, not one. Owner, 2026-08-25: one bubble of scroll
+    // is not the moment anyone reaches for that arrow. It now waits until the newest message is properly
+    // off screen (about five short bubbles) and hides again only back at the bottom. One number for both
+    // is what made it flash on and off while a thumb rested on the line.
+    private static let jumpButtonShowDistance: CGFloat = 225   // roughly five short bubbles
+    private static let jumpButtonHideDistance: CGFloat = 44
+    private var jumpButtonVisible = false
+    private var shouldShowJumpButton: Bool {
+        let distance = maxContentOffsetY - collectionView.contentOffset.y
+        return jumpButtonVisible ? distance > Self.jumpButtonHideDistance
+                                 : distance > Self.jumpButtonShowDistance
+    }
+
     // MARK: - Insets
 
     // ⛔ THE REFERENCE APP'S `updateContentInsets`, AND ITS WHOLE KEYBOARD MECHANISM — owner,
@@ -2569,6 +2588,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // The jump-to-latest button's affordance, coalesced to at most ten writes a second.
         let atBottom = isNearNewest
         if coordinator.parent.isAtBottom != atBottom { coordinator.parent.isAtBottom = atBottom }
+        let showJump = shouldShowJumpButton
+        if jumpButtonVisible != showJump {
+            jumpButtonVisible = showJump
+            coordinator.parent.onJumpButtonVisibility(showJump)
+        }
         if userScrolledSinceTimer { autoLoadMoreIfNeeded() }
         userScrolledSinceTimer = false
     }

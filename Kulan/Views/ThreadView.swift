@@ -188,6 +188,13 @@ struct ThreadView: View {
     // UIKit message list (opens at exact bottom, scroll-continuity on load-older, no jump).
     // Default ON now; the SwiftUI list stays as a fallback toggle in Settings ▸ Privacy while it settles.
     @State private var isAtBottom = true
+    // Reported by the list, NOT `!isAtBottom`: the arrow now waits until the reader is about five
+    // bubbles up, while isAtBottom stays at 44pt for everything that moves or marks read.
+    @State private var showJumpButton = false
+    /// clientIds already re-driven automatically. Cleared whenever the signal drops, so every
+    /// reconnection is worth one fresh attempt — see `autoRetryFailedMedia`.
+    @State private var autoRetried: Set<String> = []
+    @State private var sweptOnOpen = false   // the one open-the-chat retry sweep has run
     @State private var visibleRows = VisibleRowsBox()   // ids currently on screen → remember where I left
     @State private var tappedLink: URL?                 // link tapped in a bubble → ONE screen-level confirm
     @State private var tappedUserNotFound = false       // @username tapped but no such user (screen-level alert)
@@ -723,8 +730,13 @@ struct ThreadView: View {
         }
     }
 
+    // One exception to the list's distance test: anything that landed while the reader was away brings
+    // the arrow back at once, count and all, however small the scroll was. `newWhileAway` zeroes itself
+    // the moment the bottom is reached, so this never keeps the button up on its own.
+    private var showsJumpButton: Bool { showJumpButton || newWhileAway > 0 }
+
     @ViewBuilder private var jumpToBottomButton: some View {
-        if !isAtBottom && !recordingHeld && !recordLocked {   // hide the down-arrow while recording
+        if showsJumpButton && !recordingHeld && !recordLocked {   // hide the down-arrow while recording
             Button {
                 // Two-stage: if there are unread messages I haven't reached yet, jump
                 // to the FIRST unread; otherwise glide to the newest message.
@@ -777,7 +789,7 @@ struct ThreadView: View {
             }
             .padding(.trailing, floatingButtonInset)   // the composer's edge — see `floatingButtonInset`
             .transition(.scale.combined(with: .opacity))
-            .animation(.spring(response: 0.32, dampingFraction: 0.72), value: isAtBottom)
+            .animation(.spring(response: 0.32, dampingFraction: 0.72), value: showsJumpButton)
         }
     }
 
@@ -1360,6 +1372,21 @@ struct ThreadView: View {
         .onChange(of: ConversationsRepository.shared.conversations) { _, list in
             let resolved = list.first { $0.id == cid }   // O(n) ONCE per change, not per render
             if resolved != cachedConv { cachedConv = resolved }
+        }
+        // The signal came back. Everything that failed on the way down gets one more go, without
+        // anybody having to notice it failed. See `autoRetryFailedMedia`.
+        .onReceive(NotificationCenter.default.publisher(for: .networkCameBack)) { _ in
+            autoRetried.removeAll()
+            autoRetryFailedMedia()
+        }
+        // ⚠️ NOT IN `onAppear`. The pendings are restored by `repo.start()`, which is asynchronous —
+        // a sweep on the way in reads an empty list and finds nothing to retry. This waits for the
+        // conversation to actually have contents and then runs ONCE, which is what `sweptOnOpen`
+        // guards. The count changes constantly; the guard exits on the first word.
+        .onChange(of: repo.items.count) { _, _ in
+            guard !sweptOnOpen, !repo.items.isEmpty else { return }
+            sweptOnOpen = true
+            autoRetryFailedMedia()
         }
         .onAppear {
             cachedConv = ConversationsRepository.shared.conversations.first { $0.id == cid }
@@ -2690,6 +2717,7 @@ struct ThreadView: View {
             onVoiceControlTap: { if reviewingNote { resumeRecording() } else { beginPreview() } },
             menuActionTick: menuActionTick,         // SwiftUI menu action fired → hold reloads through its dismissal
             topOverlayHeight: searchActive ? 0 : pinBarHeight,   // floating date pill drops below the pin bar
+            onJumpButtonVisibility: { showJumpButton = $0 },
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,
             // The floating date pill is now rendered + updated in UIKit (NativeMessageList) directly from
@@ -3491,6 +3519,49 @@ struct ThreadView: View {
             return
         }
         repo.hideForMe(m.id)
+    }
+
+    /// ⛔ A FAILED MEDIA SEND NOW RETRIES ITSELF (owner, 2026-08-25: "every corner, even bad
+    /// network"). `resend` below has always known how to re-drive one; nothing ever called it except
+    /// a finger. On a connection that drops several times an hour that means most sends sit reading
+    /// "Not delivered" until somebody notices them, which is not a network problem, it is ours.
+    ///
+    /// Runs when the chat opens and again every time the signal comes back. ONE automatic attempt per
+    /// message per reconnection: the set below is cleared by the notification, so a send that keeps
+    /// failing cannot spin, and the retry button is still there for anyone who wants it sooner.
+    ///
+    /// Text is deliberately skipped — it has `drainSendQueue`, which is persisted and survives an app
+    /// kill, and re-driving the same text twice is how duplicates are made.
+    private func autoRetryFailedMedia() {
+        guard NetworkState.shared.isOnline else { return }
+        for m in repo.items where m.sendState == .failed {
+            guard m.type != "text", let key = m.clientId, !autoRetried.contains(key) else { continue }
+            autoRetried.insert(key)
+            resend(m)
+        }
+        clearStuckSends()
+    }
+
+    /// ⛔ A MESSAGE OF MINE THAT WILL NEVER GET ITS MEDIA, cleared instead of left spinning on
+    /// somebody else's phone for ever.
+    ///
+    /// Photos, and now videos, write the message BEFORE the upload so the recipient sees a real
+    /// bubble immediately. The cost of that trade is this case: if the app dies between the two
+    /// halves — swiped away, jetsammed, out of battery mid-transcode — nothing is left to attach the
+    /// media or to take the promise back, and the recipient keeps a bubble that spins for ever.
+    /// Nothing has ever cleaned those up.
+    ///
+    /// Only mine, only ones with no send running in this process (a slow upload is not a stuck one),
+    /// and only after thirty minutes, which is far past any send that is still going to land. The
+    /// sender's own retry, if there is one, writes a NEW message, so deleting the abandoned promise
+    /// cannot race it.
+    private func clearStuckSends() {
+        let cutoff = Date().addingTimeInterval(-30 * 60)
+        for m in repo.items where m.authorId == me && m.uploading && m.createdAt < cutoff {
+            if let key = m.clientId, MediaSend.shared.isInFlight(key) { continue }
+            let id = m.id
+            Task { await ChatService.cancelAnnounced(cid: cid, messageId: id) }
+        }
     }
 
     // Re-try a failed message — re-drives the SAME send path that produced it, with the SAME clientId.
@@ -4307,6 +4378,38 @@ struct ThreadView: View {
             repo.addPending(pending)
         }
 
+        // ⛔ AND THE OTHER PERSON'S BUBBLE COMES NEXT, STILL BEFORE THE TRANSCODE (owner, 2026-08-25).
+        //
+        // The note above fixed this for the SENDER only. Their bubble appeared instantly while the
+        // recipient had nothing at all for the whole compression — the message could not be written
+        // until `ChatService.sendVideo` was called, and that cannot be called until there is a clip.
+        // Which means the person being sent a video saw nothing for the 3.88 seconds he timed, and
+        // then nothing more until the upload finished on top of that.
+        //
+        // Everything their bubble needs is in `poster`: the frame, the duration, the real pixel size.
+        // So the message goes now and the clip is attached at the bottom of this function. If
+        // anything below fails, the announced message MUST be cancelled or they are left with a
+        // bubble that spins for ever — hence the `cancelAnnounced` on every exit path from here on.
+        // Declared without a value and assigned in the `do`: the `catch` returns, so by the line
+        // after it this is definitely a real id and never an optional to unwrap.
+        let announcedId: String
+        do {
+            announcedId = try await ChatService.announceVideo(
+                cid: cid, poster: poster.jpeg, duration: poster.duration,
+                width: poster.width, height: poster.height, caption: caption,
+                clientId: clientId, group: isGroup ? groupMembers : nil)
+        } catch {
+            // The announcement itself failing is a dead send: nothing was written, so there is
+            // nothing to clean up, and the transcode below would only be wasted work.
+            print("announceVideo failed:", error)
+            try? FileManager.default.removeItem(at: url)
+            await MainActor.run {
+                repo.markFailed(clientId: clientId)
+                sendError = "Couldn't send the video. \(error.localizedDescription)"
+            }
+            return
+        }
+
         // Per-send HD button OR the global Sent Media Quality "High" → 1080p.
         //
         // AND IF THAT COMES OUT TOO BIG, GO AGAIN AT STANDARD RATHER THAN REFUSING TO SEND.
@@ -4327,6 +4430,7 @@ struct ThreadView: View {
         }
         guard let prepared = exported else {
             try? FileManager.default.removeItem(at: url)
+            await ChatService.cancelAnnounced(cid: cid, messageId: announcedId)
             // The bubble is already on screen, so a failure has to be shown ON it. Before this the
             // function could return with only an alert, which would have been correct when nothing
             // had been drawn yet and is not correct now.
@@ -4335,6 +4439,7 @@ struct ThreadView: View {
         }
         try? FileManager.default.removeItem(at: url)
         guard prepared.data.count <= Limits.videoMessageBytes else {
+            await ChatService.cancelAnnounced(cid: cid, messageId: announcedId)
             await MainActor.run {
                 repo.markFailed(clientId: clientId)
                 // Says the actual size it reached, because "too long" was misleading: the owner's
@@ -4351,11 +4456,13 @@ struct ThreadView: View {
         try? prepared.data.write(to: retryURL)
         await MainActor.run { repo.attachRetryPayload(clientId: clientId, path: retryURL.path) }
         do {
-            try await ChatService.sendVideo(cid: cid, video: prepared.data, thumbnail: prepared.thumbnail,
-                                            duration: prepared.duration, width: prepared.width, height: prepared.height,
-                                            caption: caption, clientId: clientId, group: isGroup ? groupMembers : nil)
+            // Phase two. The bubble, its poster and its inline thumbnail have been on the other
+            // person's screen since before the compression started.
+            try await ChatService.attachVideo(cid: cid, messageId: announcedId, video: prepared.data,
+                                              clientId: clientId, group: isGroup ? groupMembers : nil)
             try? FileManager.default.removeItem(at: retryURL)   // delivered → retry payload no longer needed
         } catch {
+            await ChatService.cancelAnnounced(cid: cid, messageId: announcedId)
             // SAY WHY. This used to swallow the error and leave the bubble reading "Not delivered"
             // with no reason anywhere — which is a dead end for the person sending (they cannot tell
             // whether to retry, wait for signal, or give up) and a dead end for anyone trying to fix
@@ -6717,7 +6824,8 @@ struct MessageBubble: View, Equatable {
                     ZStack {
                         if let t = message.thumbUrl, !t.isEmpty {
                             SecureImageView(imageUrl: t, enc: message.thumbEnc, cid: cid,
-                                            placeholderHash: message.blurhash)
+                                            placeholderHash: message.blurhash,
+                                            placeholderImage: message.previewImage)
                         } else {
                             Theme.received(dark)
                         }
@@ -6801,12 +6909,16 @@ struct MessageBubble: View, Equatable {
             VStack(alignment: .leading, spacing: 4) {
                 replyQuote
                 ZStack {
-                    if let hash = message.blurhash, !hash.isEmpty,
-                       let img = BlurHash.decode(hash) {
-                        Image(uiImage: img).resizable().scaledToFill()
+                    // ⛔ `previewImage`, NOT the blurhash directly — owner, 2026-08-25: "I see nothing
+                    // until it downloads, only loading". This branch always meant to draw something
+                    // and was falling through to the fill whenever the hash was missing or would not
+                    // unseal. The inline thumbnail it prefers is a real picture and travels inside
+                    // the message, so there is no longer a fetch that can be too slow to help.
+                    if let preview = message.previewImage {
+                        Image(uiImage: preview).resizable().scaledToFill()
                     } else {
-                        // A view-once photo publishes no blurhash on purpose, so there is nothing to
-                        // sketch — a plain fill is the honest placeholder.
+                        // A view-once photo publishes no preview at all, on purpose, so there is
+                        // nothing to draw — a plain fill is the honest placeholder.
                         Theme.received(dark)
                     }
                     ProgressView().tint(.white)
@@ -6854,7 +6966,8 @@ struct MessageBubble: View, Equatable {
                             // a received video showed the grey shimmer even though the hash now
                             // travels with the message — see `sendVideo`.
                             SecureImageView(imageUrl: url, enc: message.thumbEnc, cid: cid,
-                                            placeholderHash: message.blurhash)
+                                            placeholderHash: message.blurhash,
+                                            placeholderImage: message.previewImage)
                         } else {
                             Rectangle().fill(Color.gray.opacity(0.18))
                         }
@@ -7072,7 +7185,9 @@ struct MessageBubble: View, Equatable {
                             Image(uiImage: ui).resizable().scaledToFill()          // optimistic local photo
                         } else if let url = message.imageUrl {
                             SecureImageView(imageUrl: url, enc: message.enc, cid: cid,
-                                            placeholderHash: message.blurhash,     // blurred preview while downloading
+                                            placeholderHash: message.blurhash,
+                                            // The inline thumbnail first, the blur behind it.
+                                            placeholderImage: message.previewImage,
                                             gated: true)   // photos auto-download policy can hold this until tapped
                         } else {
                             Rectangle().fill(Color.gray.opacity(0.18))
@@ -7376,7 +7491,8 @@ struct MessageBubble: View, Equatable {
             // can honestly use it. Giving every tile the first one's blur would show people a sketch
             // of the wrong photo, which is worse than a plain hold.
             SecureImageView(imageUrl: it.imageUrl, enc: it.enc, cid: cid,
-                            placeholderHash: i == 0 ? message.blurhash : nil)
+                            placeholderHash: i == 0 ? message.blurhash : nil,
+                            placeholderImage: i == 0 ? message.previewImage : nil)
         } else {
             Rectangle().fill(Color.gray.opacity(0.18))
         }
@@ -7473,7 +7589,8 @@ struct MessageBubble: View, Equatable {
                 let it = message.album[i]
                 // First tile only — see the note in `albumImage`.
                 SecureImageView(imageUrl: it.imageUrl, enc: it.enc, cid: cid,
-                                placeholderHash: i == 0 ? message.blurhash : nil)   // photo, or video poster
+                                placeholderHash: i == 0 ? message.blurhash : nil,
+                                placeholderImage: i == 0 ? message.previewImage : nil)   // photo, or video poster
             } else {
                 Rectangle().fill(Color.gray.opacity(0.18))
             }
