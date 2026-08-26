@@ -789,7 +789,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // handler is inert outside an armed menu-dismissal grace window.
         NotificationCenter.default.addObserver(self, selector: #selector(menuWindowDidHide(_:)),
                                                name: UIWindow.didBecomeHiddenNotification, object: nil)
-        // KEYBOARD, BY NOTIFICATION — see `notifiedKeyboardBand` for why the layout guide alone
+        // KEYBOARD, BY NOTIFICATION — see `keyboardReport` and `keyboardBand` for why the layout guide alone
         // could not be trusted inside this hosted controller.
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillChangeFrame(_:)),
                                                name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
@@ -1993,7 +1993,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// the reference app's own shipped mechanism from before the guide existed, and the one route
     /// that cannot depend on how a hosted view controller is plumbed. Where the guide does work, the
     /// two agree and every write is idempotent.
-    private var notifiedKeyboardBand: CGFloat?
+    /// What the keyboard's own notification last said. `nil` until the first notification of this
+    /// controller's life; `.rest` after a hide; `.up(band)` after a show. A hide is stored as an
+    /// explicit `.rest` rather than as nil so that the answer to "where is the keyboard" never falls
+    /// back to the guide behind a fresh notification — see `keyboardBand`.
+    private enum KeyboardReport { case up(CGFloat), rest }
+    private var keyboardReport: KeyboardReport?
 
     @objc private func keyboardWillChangeFrame(_ note: Notification) { rideKeyboard(note, hiding: false) }
     @objc private func keyboardWillHideNote(_ note: Notification) { rideKeyboard(note, hiding: true) }
@@ -2006,7 +2011,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // end frame is off the bottom, so its overlap never exceeds the resting safe area.
         let local = view.convert(end, from: nil)
         let overlap = max(0, view.bounds.maxY - local.minY)
-        notifiedKeyboardBand = (hiding || overlap <= view.safeAreaInsets.bottom + 0.5) ? nil : overlap
+        keyboardReport = (hiding || overlap <= view.safeAreaInsets.bottom + 0.5) ? .rest : .up(overlap)
         let d = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
         let curve = (info[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.uintValue ?? 7
         if d > 0 {
@@ -2050,31 +2055,48 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard frame.height > 0 || frame.minY > 0 else { return nil }
         return max(0, view.bounds.maxY - frame.minY)
     }
-    /// ⛔ THE GUIDE IS THE TRUTH ONCE IT HAS PROVED IT MOVES ON THIS DEVICE. Theirs has nothing
-    /// else: the bar is constrained to the guide, so it rides the keyboard's own animation and,
-    /// on an interactive dismiss, the finger. On his iOS 26 phone the guide never moved inside this
-    /// hosted controller (build 682), so it cannot be the only source — until it reports a keyboard
-    /// once, the notification band places the bar. Set by `followKeyboardGuide`, never cleared.
+    /// The guide has reported a keyboard at least once on this device. Set by `followKeyboardGuide`,
+    /// never cleared. It decides ONE thing: whether the guide may be read while a finger drags the
+    /// keyboard. It does not, any more, let the guide outrank a notification — see `keyboardBand`.
     private var guideIsLive = false
 
+    /// ⛔ THE NOTIFICATION OUTRANKS THE GUIDE. His report on the build that shipped the audit
+    /// (2026-08-26 evening, screenshot): "the keyboard opens but the composer stays where it was" —
+    /// the keys up, and neither the bar nor the list had moved, because both read this value and
+    /// this value was wrong.
+    ///
+    /// What happened: the audit made the guide the truth once it had reported a keyboard once
+    /// (`guideIsLive`), on the reference app's model, where the guide IS the only source. But on
+    /// his phone the guide is LATE inside this hosted controller — build 682 proved it never moved
+    /// during the animation — so the moment it caught up once it was declared live, and on the next
+    /// open the notification block read the guide, which still said "no keyboard", and moved
+    /// nothing. Sometimes it worked (the guide had not yet caught up once), which is exactly the
+    /// "sometimes" he described. The same stale read after a hide (the old nil-means-rest fell back
+    /// to the guide) could hold the bar up while the keys went down.
+    ///
+    /// The rule now: a notification is the newest fact about the keyboard and it wins, up or rest,
+    /// for as long as an animation is what moves the keys. The guide is read in exactly one
+    /// situation — a finger is dragging the keyboard (`.interactive` dismiss), which posts no
+    /// per-frame notification — and only on a device where the guide has proved it moves at all.
+    /// Where it does not, the drag ends with a notification and the bar lands there, as in 692.
     private var keyboardBand: CGFloat {
-        if guideIsLive, let g = guideBand { return g }
-        // A present keyboard is whatever the notification said — see `notifiedKeyboardBand`.
-        if let band = notifiedKeyboardBand { return band }
-        // Unresolved means "no keyboard": the band is the safe-area bottom, which is exactly what
-        // the guide itself answers once resolved at rest.
-        return guideBand ?? view.safeAreaInsets.bottom
+        if guideIsLive, collectionView.isTracking, let g = guideBand { return g }
+        switch keyboardReport {
+        case .up(let band): return band
+        case .rest: return view.safeAreaInsets.bottom
+        case nil: return view.safeAreaInsets.bottom   // no keyboard has ever moved in this chat
+        }
     }
 
-    /// Theirs, in effect. Their bar's bottom IS the guide's top, so it moves on every layout pass
-    /// the guide dirties: inside the keyboard's animation on open and close, and under the finger
-    /// on an interactive dismiss (the 2026-08-26 audit: ours only moved on notifications, so during
-    /// a drag the bar stayed put and jumped at the end). Ours writes the same constants from that
-    /// same pass. Every write is guarded on change, so a pass where nothing moved dirties nothing.
+    /// The finger-drag case of theirs: their bar's bottom IS the guide's top, so on an interactive
+    /// dismiss it moves under the finger on every layout pass the guide dirties. Ours writes the
+    /// same constants from that pass, but only while a finger owns the keyboard — `keyboardBand`
+    /// reads the guide in no other case. Every write is guarded on change, so a pass where nothing
+    /// moved dirties nothing.
     private func followKeyboardGuide() {
         guard composerBar != nil, let g = guideBand else { return }
         if !guideIsLive, g > view.safeAreaInsets.bottom + 0.5 { guideIsLive = true }
-        guard guideIsLive else { return }
+        guard guideIsLive, collectionView.isTracking else { return }
         positionBottomBar()
         syncBottomBarGeometry()
     }
