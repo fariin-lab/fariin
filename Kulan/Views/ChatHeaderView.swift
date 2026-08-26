@@ -122,7 +122,21 @@ final class ChatHeaderView: UIView {
         textRows.addArrangedSubview(subtitleLabel)
         textRows.axis = .vertical
         textRows.alignment = .leading
-        textRows.distribution = .fillProportionally
+        // ⛔ `.fill`, NOT `.fillProportionally` — owner, 2026-08-26: "name and subtitle has bug
+        // sometimes losing space".
+        //
+        // `.fillProportionally` divides the stack's height between its arranged views IN PROPORTION
+        // to their intrinsic heights, and it always consumes exactly the height it is given. So the
+        // name and the "last seen" line were not sized by their own text at all — they were sized by
+        // whatever height the navigation bar handed the title view at that moment, which is not a
+        // constant (it changes with the bar's state and between pushes). When that height came up
+        // short the two labels were squeezed together, and the title row's
+        // `heightAnchor >= lineHeight` floor meant the SUBTITLE gave up the space first: exactly the
+        // cramped pair in his screenshot, and exactly why it was intermittent.
+        //
+        // `.fill` gives each label its own intrinsic height and lets the stack be their sum, so the
+        // pair looks the same whatever the bar does.
+        textRows.distribution = .fill
 
         let rootStack = UIStackView(arrangedSubviews: [avatarView, textRows])
         rootStack.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0)

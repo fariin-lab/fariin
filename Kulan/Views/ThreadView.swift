@@ -152,6 +152,8 @@ struct ThreadView: View {
     /// The list's tap-to-dismiss-keyboard, held for one runloop turn so an inner tap that wants the
     /// keyboard kept (a reply quote jump) can cancel it — see listBody.
     @State private var pendingKeyboardDismiss = false
+    /// Bumped at the TOP of every send path, before the composer is cleared. See `noteSendTick`.
+    @State private var sendTick = 0
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     // Keyboard is native (safeAreaBar + .always). But because the list is full-bleed UNDER the composer, the
@@ -2759,6 +2761,7 @@ struct ThreadView: View {
             voiceControlInset: composerSideInset,
             onVoiceControlTap: { if reviewingNote { resumeRecording() } else { beginPreview() } },
             menuActionTick: menuActionTick,         // SwiftUI menu action fired → hold reloads through its dismissal
+            sendTick: sendTick,                     // Send tapped → the list holds its offset until the row lands
             topOverlayHeight: searchActive ? 0 : pinBarHeight,   // floating date pill drops below the pin bar
             onJumpButtonVisibility: { showJumpButton = $0 },
             isAtBottom: $isAtBottom,
@@ -3493,6 +3496,12 @@ struct ThreadView: View {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         impact(.light)   // tactile send (parity with voice release)
+        // ⛔ BEFORE THE COMPOSER IS TOUCHED. Everything below shrinks the bar — the input clears,
+        // the reply banner animates away — and the list is pinned to the bottom, so it follows the
+        // bar down and then the glide brings it back up: his "the messages move down under the
+        // composer first, then scroll back". The list holds its offset from this tick until the row
+        // lands. It must be raised here, above the first line that changes the bar's height.
+        sendTick &+= 1
         // Demo: echo locally, no encryption and no Firestore. Keyed on the conversation, so typing
         // in a real chat is completely untouched by this — without it, a message typed into a demo
         // chat would be encrypted and sent to a person who does not exist.

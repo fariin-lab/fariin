@@ -108,6 +108,9 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // context-menu callbacks cannot see SwiftUI-presented menus, so this is how the controller learns
     // "a menu is dismissing right now" and holds cell reloads until the animation is over.
     var menuActionTick: Int = 0
+    /// Bumped by ThreadView the instant Send is tapped — before it clears the input and the reply
+    /// banner. The list holds its offset until the row lands; see `noteSendTick`.
+    var sendTick: Int = 0
     // Height of the top overlay (pinned-message bar) the list runs UNDER. The floating date pill drops below
     // it so it isn't hidden behind the pin (the reference app behavior). 0 â†’ pill sits at its normal top position.
     var topOverlayHeight: CGFloat = 0
@@ -164,6 +167,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onVoiceControlTap = onVoiceControlTap
         vc.setVoiceControl(voiceControl, inset: voiceControlInset)
         vc.setTopOverlayHeight(topOverlayHeight)
+        vc.noteSendTick(sendTick)              // BEFORE apply: the hold must precede the composer's shrink
         vc.noteMenuActionTick(menuActionTick)   // BEFORE setSelecting/apply: arm the dismissal grace first
         vc.setSelecting(selecting)
         vc.initialScrollId = initialScrollId
@@ -321,6 +325,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// path cannot hand the layout two different answers. See `reportHeight`.
     private var renderedHeights: [String: CGFloat] = [:]
     private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
+    /// A send has begun and its row has not landed yet: hold the offset so the composer's own
+    /// shrink cannot walk the content down before the glide walks it back up. See `updateInsets`.
+    private var sendHoldUntil = Date.distantPast
+    private var lastSendTick = 0
     private var popGestureHooked = false                 // interactive-pop target attached once
     // The recognizer we attached to, so it can be released again. It belongs to the NAVIGATION
     // controller, which outlives every pushed thread, and a recognizer retains its targets — leaving
@@ -1527,6 +1535,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // never animates, only the scroll does.
         let glide = wasAtNewest && newlyNewest == 1 && scrollTarget == nil && !isUserScrolling
         if glide { sendAnimating = true }
+        // The row this send was waiting for has landed: the hold is over, and `sendAnimating` (or,
+        // for a row that does not glide, the ordinary path) owns the offset from here. Cleared for
+        // ANY new row, not only a glide — a send that arrived while the reader is up in history
+        // must not keep the hold either.
+        if newlyNewest > 0 { sendHoldUntil = .distantPast }
         if adjustment != 0 { layout.pendingContentOffsetAdjustment = adjustment }
 
         // THE GLIDE STARTS ON THE FRAME THE ROW LANDS. It used to start in the apply's completion,
@@ -1959,6 +1972,26 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // knows where it is going, and `scrollViewDidEndScrollingAnimation` lands it.
         guard didFirstLand, !collectionView.isDecelerating,
               !sendAnimating, !programmaticScrollAnimating else { return }
+        // ⛔ AND A SEND THAT HAS STARTED BUT NOT LANDED — owner, 2026-08-26: "when I tap Send the
+        // previous messages move down underneath the composer first, and only afterward does the
+        // message list scroll back up".
+        //
+        // `sendAnimating` covers the glide, but the glide is not the first thing that happens.
+        // `ThreadView.send()` clears the input and dismisses the reply banner FIRST, synchronously,
+        // over its own 0.2s animation — and only then does the optimistic row reach the repo. So for
+        // those 0.2s the composer is shrinking by the banner's ~54pt with no new row in sight: the
+        // clearance drops, the list is pinned to the bottom, and the content dutifully follows the
+        // composer DOWN. Then the row lands and the glide carries it back UP. Two moves where the
+        // reader should see one, and the first of them is backwards.
+        //
+        // So the list holds its offset from the moment a send begins until its row lands. The
+        // clearance and the insets still update on every pass above — only the offset write waits,
+        // and the glide then makes the single move to the new bottom.
+        //
+        // ⚠️ IT MUST TIME OUT. A send that fails validation, or is swallowed anywhere between the
+        // tap and the repo, would otherwise leave the offset frozen for the rest of the sitting.
+        // `sendHoldUntil` is a deadline, not a flag.
+        guard Date() >= sendHoldUntil else { return }
 
         // Step 4. Plain writes, outside the wrapper. Inside the keyboard's block they ride the keys;
         // anywhere else (composer growth, the pinned bar) they land at once, as theirs do.
@@ -1980,6 +2013,23 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 }
             }
         }
+    }
+
+    /// ThreadView bumps this the instant Send is tapped, BEFORE it clears the input and the reply
+    /// banner. That ordering is the whole point: the hold has to be in place before the composer
+    /// starts shrinking, which is the first thing a send does.
+    func noteSendTick(_ t: Int) {
+        guard t != lastSendTick else { return }
+        let firstObservation = lastSendTick == 0 && t != 0
+        lastSendTick = t
+        // Adopting a mid-flight tick on (re)attach is not a send — the same rule `noteMenuActionTick`
+        // follows, and for the same reason: a controller rebuilt while a chat is open would
+        // otherwise freeze its offset for no reason.
+        guard !firstObservation || t == 1 else { return }
+        // 0.45s: the banner's dismissal is 0.2s and the optimistic row normally lands well inside
+        // that. The rest is slack for a slow frame, and it is cleared early the moment the row
+        // arrives, so the deadline is only ever reached by a send that never landed at all.
+        sendHoldUntil = Date().addingTimeInterval(0.45)
     }
 
     func setComposerBarHeight(_ h: CGFloat) {
