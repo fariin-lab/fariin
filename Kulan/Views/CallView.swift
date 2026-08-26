@@ -898,10 +898,6 @@ struct FloatingCallWindow: View {
             .max(by: { $0.top < $1.top }) ?? .zero
     }
 
-    /// True while a finger is on the card. Everything that measures geometry per frame is switched
-    /// OFF for the duration — see the drag's `onChanged` and `morphAnchored`.
-    @State private var dragging = false
-
     var body: some View {
         GeometryReader { geo in
             if call.cardStashed {
@@ -946,13 +942,15 @@ struct FloatingCallWindow: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity,
                            alignment: stashedLeft ? .topLeading : .topTrailing)
             } else {
-                morphAnchored(zoomAnchored(window))
+                // ⛔ THE TRANSFORM SITS ON `window`, INSIDE THE GESTURE, which is where the smooth
+                // build had it. Hung on the outside it moves the very view the drag is measured on,
+                // so the finger's own reference frame travels with the card.
+                morphAnchored(zoomAnchored(window.offset(dragLive)))
                     // Plain gesture, not high-priority: the end button inside the window must still get
                     // its own taps.
                     .gesture(
                         DragGesture(minimumDistance: 8)
                             .onChanged { v in
-                                if !dragging { dragging = true }
                                 let (maxLeft, maxDown) = limits(geo.size)
                                 // Deliberately allowed PAST the edge by `overshoot`. The card sliding
                                 // partly off is the only warning that letting go will hide it — clamped
@@ -980,7 +978,6 @@ struct FloatingCallWindow: View {
                                                   height: target.height - base.height)
                             }
                             .onEnded { v in
-                                dragging = false
                                 let (maxLeft, maxDown) = limits(geo.size)
                                 // ⛔ ONLY THE SIDE SNAPS. Height stays exactly where the finger left
                                 // it (owner, 2026-08-23: "only i can drag top left or top right,
@@ -1055,7 +1052,7 @@ struct FloatingCallWindow: View {
                     // TOP-RIGHT is only the resting HOME (his 2026-08-23 rule: "most land top right,
                     // that's standard"), which is what zero offset means. The self-tile inside the
                     // call screen still lives bottom-right under his 2026-08-12 rule and has not moved.
-                    .offset(dragLive)                       // the finger: a transform, costs nothing
+                    // The finger's transform is on `window` above; only the settled position is here.
                     .padding(.top, insets.top + 8 + base.height)     // the settled position: real layout
                     .padding(.trailing, 12 - base.width)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
@@ -1119,36 +1116,33 @@ struct FloatingCallWindow: View {
         }
     }
 
-    /// ⛔ THE MORPH ANCHOR, AND IT IS WHY THE CARD SHOOK UNDER A FINGER.
+    /// ⛔ ALWAYS ATTACHED. IT IS NOT WHAT SHOOK THE CARD, AND SWITCHING IT OFF MID-DRAG IS WHAT
+    /// BROKE IT A THIRD TIME (owner, 2026-08-25: "it won't follow smoothly, something is fighting").
     ///
-    /// `matchedGeometryEffect` exists to move a view between two STATES. It re-resolves the match on
-    /// every layout pass and applies its own correcting offset to line the frames up — which is
-    /// exactly the wrong thing to have attached to a view whose position is already changing sixty
-    /// times a second. Its correction and the drag argue over the same pixels, one frame apart, and
-    /// that argument is the shake (owner reported it twice; my first fix moved the drag to a
-    /// transform, which was necessary and not sufficient).
+    /// The blame was reasonable and wrong. `matchedGeometryEffect` re-resolves on every LAYOUT pass,
+    /// so it can only argue with a drag that is moving LAYOUT — which this one did while the
+    /// position was padding, and has not since the finger was moved onto a transform. In the build
+    /// he called smooth this modifier was attached the whole time, over exactly the same stable
+    /// layout, and there was nothing to argue with.
     ///
-    /// So it is OFF while a finger is down. Nothing is lost: the only thing it does is carry the
-    /// card into the edge tab and back, and neither of those happens mid-drag — the stash is decided
-    /// on RELEASE, by which point this is attached again.
-    @ViewBuilder private func morphAnchored(_ content: some View) -> some View {
-        if dragging {
-            content
-        } else {
-            content.matchedGeometryEffect(id: Self.morphID, in: morph)
-        }
+    /// What replaced it cost far more than it saved: `if dragging` is a STRUCTURAL branch, so the
+    /// card's whole subtree is torn down and rebuilt at the moment the finger starts moving, and
+    /// again when it lifts. A live gesture whose view is replaced under it is the hitch he is
+    /// describing. Anything that needs switching off mid-drag has to be switched off WITHOUT
+    /// changing the shape of the tree.
+    private func morphAnchored(_ content: some View) -> some View {
+        content.matchedGeometryEffect(id: Self.morphID, in: morph)
     }
 
     /// Marks the card as the shape the call screen flies into and out of. Same shape as the call
     /// buttons' own modifier, and for the same reason: `matchedTransitionSource` needs a real
     /// namespace, and on a screen that does not host the cover's environment there is not one.
     ///
-    /// Also skipped mid-drag, for the same reason as the morph above: it records this view's
-    /// geometry every pass, and there is no transition to prepare for while a finger is down.
+    /// Its `dragging` branch is gone too, and for the reason written on the morph above: the branch
+    /// itself was the cost. The remaining one keys on the namespace, which cannot change while a
+    /// finger is down.
     @ViewBuilder private func zoomAnchored(_ content: some View) -> some View {
-        if dragging {
-            content
-        } else if let zoomNamespace {
+        if let zoomNamespace {
             content.matchedTransitionSource(id: CallZoomSource.card, in: zoomNamespace)
         } else {
             content
