@@ -89,7 +89,17 @@ final class ChatComposerView: UIView {
     var actions = ChatComposerActions()
     /// The bar's preferred height changed. The host re-lays out, on `animation` when there is one.
     var onHeightChange: ((Animation?) -> Void)?
+    /// The paddings around the bar, written by the controller that places it (`positionBottomBar`)
+    /// from the keyboard band — the pad above the pill, the side insets, the gap below. The
+    /// overlays (big mic, toasts) are placed against this padded box, where the old SwiftUI
+    /// `.overlay`s were aligned.
+    var outerInsets = UIEdgeInsets(top: 8, left: 20, bottom: 8, right: 20) {
+        didSet { if outerInsets != oldValue { setNeedsLayout() } }
+    }
     private(set) var shown = ChatComposerState()
+    /// A focus request that could not be honoured yet (no window, or UIKit refused mid-transition).
+    /// Retried on the next `apply` and when the view lands in a window. See `requestFocus`.
+    private var pendingFocus: Bool?
     private let recorder: AudioRecorder
     private var lastHeight: CGFloat = M.button
     private var lastMeasuredWidth: CGFloat = 0
@@ -358,7 +368,7 @@ final class ChatComposerView: UIView {
         shown = new
 
         // Content that never animates: text, focus, glyphs, tints, the review's data.
-        syncText(new)
+        syncText(new, wasFocused: old.focused)
         refreshStatic()
         syncBanners(from: old.banners, to: new.banners)
 
@@ -411,15 +421,40 @@ final class ChatComposerView: UIView {
         setLive(new.recordingActive)
     }
 
-    private func syncText(_ s: ChatComposerState) {
+    private func syncText(_ s: ChatComposerState, wasFocused: Bool) {
         if textView.text != s.text {
             textView.text = s.text
             textView.refreshPlaceholder()
         }
         textView.placeholder = s.placeholder
-        // The focus flag is a request; the delegate reports the outcome, so the two cannot drift.
-        if s.focused != textView.isFirstResponder, window != nil {
-            if s.focused { textView.becomeFirstResponder() } else { textView.resignFirstResponder() }
+        // ⛔ THE FOCUS FLAG IS A REQUEST, HONOURED WHEN IT CHANGES — NOT A TRUTH TO BE ENFORCED.
+        // Owner, builds 693-695: "tap the composer, the keyboard often does not open; several taps
+        // before it appears." The field took the tap and became first responder on its own; the
+        // delegate reports that a turn later (`textViewDidBeginEditing` → main.async, see there).
+        // Inside that same turn the keyboard's willChangeFrame changes `KeyboardWatcher.height`,
+        // ThreadView re-renders (the bar's `outerInsets` read it), and `apply` arrived here with
+        // the STALE `focused == false`. This used to read the stale flag as an order and resign the
+        // field it had just been handed — will-show and will-hide in one run-loop turn, so no
+        // keyboard at all. The same shape ran the other way: an interactive dismiss with a stale
+        // `true` put the keyboard straight back.
+        //
+        // So only a CHANGE in the request acts. A flag that merely lags UIKit's truth is left
+        // alone; the delegate's report brings the two together a turn later, as designed.
+        if s.focused != wasFocused { requestFocus(s.focused) }
+        else if let p = pendingFocus { requestFocus(p) }
+    }
+
+    /// Honours a focus request now, or keeps it for the next chance: the view has no window yet
+    /// (chat opening on a reply), or UIKit refused the responder mid-transition (context menu still
+    /// dismissing). A kept request is cleared by the next CHANGE of the flag, so a person who has
+    /// since put the keyboard away is never overruled by an old request.
+    private func requestFocus(_ on: Bool) {
+        pendingFocus = nil
+        guard window != nil else { pendingFocus = on; return }
+        if on {
+            if !textView.isFirstResponder, !textView.becomeFirstResponder() { pendingFocus = true }
+        } else if textView.isFirstResponder {
+            textView.resignFirstResponder()
         }
     }
 
@@ -816,7 +851,7 @@ final class ChatComposerView: UIView {
                                 height: 22)
 
         // The overlays are placed against the PADDED box, where the old `.overlay`s were aligned.
-        let ins = s.outerInsets
+        let ins = outerInsets
         let padded = CGRect(x: -ins.left, y: -ins.top, width: W + ins.left + ins.right, height: H + ins.top + ins.bottom)
         let discCenter = CGPoint(x: padded.maxX - M.overlayTrailing - M.halo / 2, y: padded.maxY - M.halo / 2)
         overlayGroup.bounds = CGRect(x: 0, y: 0, width: M.halo, height: M.halo)
@@ -875,7 +910,7 @@ final class ChatComposerView: UIView {
         if window == nil { setLive(false); stopPulse() }
         else if shown.recordingActive { setLive(true) }
         // Focus asked for before the view had a window is honoured now that it has one.
-        syncText(shown)
+        if window != nil, let p = pendingFocus { requestFocus(p) }
     }
 }
 
@@ -905,7 +940,8 @@ extension ChatComposerView: UITextViewDelegate {
 
     // Reported a turn later: the delegate fires inside UIKit's responder change, which can itself
     // be running inside a SwiftUI update, and a state write there is the "modifying state during
-    // view update" warning.
+    // view update" warning. ⚠️ Until this lands, ThreadView's flag LAGS the field — `syncText`
+    // therefore acts only on a change of the flag, never on the flag disagreeing with the field.
     func textViewDidBeginEditing(_ tv: UITextView) {
         DispatchQueue.main.async { [weak self] in self?.actions.focusChanged(true) }
     }

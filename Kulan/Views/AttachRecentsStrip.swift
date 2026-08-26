@@ -111,7 +111,7 @@ struct AttachRecentsStrip: View {
     @FocusState private var captionFocused: Bool
     /// The KEYBOARD's state, which is not the same thing as `captionFocused`. The composer moved off
     /// its focus flag for exactly this reason — focus flips a beat before the keys move, and on one
-    /// of his two phones it flipped without them moving at all. See `ThreadView.composerKeyboardUp`.
+    /// of his two phones it flipped without them moving at all.
     @StateObject private var keyboard = KeyboardWatcher()
 
     @State private var status: PHAuthorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)

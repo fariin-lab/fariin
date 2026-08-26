@@ -18,7 +18,9 @@ import UIKit
 //    safe areas — so it is the stable rest-geometry number even while typing.
 struct SystemChromeReader: UIViewRepresentable {
     @Binding var margin: CGFloat
-    @Binding var bottomInset: CGFloat
+    /// Optional: the chat's composer no longer needs the band (its controller reads the safe area
+    /// itself); the stand-in bars still do.
+    var bottomInset: Binding<CGFloat>? = nil
 
     func makeUIView(context: Context) -> ChromeProbeView {
         let v = ChromeProbeView()
@@ -28,7 +30,7 @@ struct SystemChromeReader: UIViewRepresentable {
             // Async so a report from inside a layout pass never mutates state mid-layout.
             DispatchQueue.main.async {
                 if margin != m { margin = m }
-                if bottomInset != b { bottomInset = b }
+                if let bottomInset, bottomInset.wrappedValue != b { bottomInset.wrappedValue = b }
             }
         }
         return v
@@ -114,7 +116,7 @@ struct SystemBarChrome: ViewModifier {
 ///
 /// `keyboardUp` is the composer's own branch — 8pt above the keys when they are up, and the dip into
 /// the indicator band only at rest. Pass the KEYBOARD'S state, not a focus flag: focus and keyboard
-/// geometry are not the same thing, which the composer learned the hard way (see `composerKeyboardUp`).
+/// geometry are not the same thing, which the composer learned the hard way.
 struct SystemBarBottomChrome: ViewModifier {
     var keyboardUp: Bool
 

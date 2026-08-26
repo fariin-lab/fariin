@@ -197,6 +197,9 @@ struct ThreadView: View {
     /// reported by the list's controller, which is what places it. The floating overlays clear the
     /// bar by this. The default is one bar's worth so the first frame is not wrong.
     @State private var composerLift: CGFloat = 48
+    /// The bar's side inset, reported with the lift by the same controller. The floating buttons
+    /// and the @-mention popup align to it.
+    @State private var composerSide: CGFloat = 20
     /// clientIds already re-driven automatically. Cleared whenever the signal drops, so every
     /// reconnection is worth one fresh attempt — see `autoRetryFailedMedia`.
     @State private var autoRetried: Set<String> = []
@@ -686,11 +689,10 @@ struct ThreadView: View {
                     .liquidGlass(Circle(), interactive: true)
             }
             .buttonStyle(.plain)
-            .padding(.trailing, floatingButtonInset)   // the composer's edge — see `floatingButtonInset`
-            // On the keyboard's own curve, as the composer's slot is: the bar's side inset animates
-            // inside the keyboard block in UIKit, and without this the button snapped 29 → 20
-            // while the bar slid (the 2026-08-26 audit).
-            .animation(keyboard.systemAnimation, value: composerKeyboardUp)
+            .padding(.trailing, composerSide)   // the composer's edge, reported by the controller that places it
+            // On the keyboard's own curve, as the bar is: its side inset changes inside the keyboard
+            // block in UIKit, and without this the button snapped 29 → 20 while the bar slid.
+            .animation(keyboard.systemAnimation, value: composerSide)
             .transition(.scale.combined(with: .opacity))
         }
     }
@@ -809,11 +811,10 @@ struct ThreadView: View {
                         }
                     }
             }
-            .padding(.trailing, floatingButtonInset)   // the composer's edge — see `floatingButtonInset`
-            // On the keyboard's own curve, as the composer's slot is: the bar's side inset animates
-            // inside the keyboard block in UIKit, and without this the button snapped 29 → 20
-            // while the bar slid (the 2026-08-26 audit).
-            .animation(keyboard.systemAnimation, value: composerKeyboardUp)
+            .padding(.trailing, composerSide)   // the composer's edge, reported by the controller that places it
+            // On the keyboard's own curve, as the bar is: its side inset changes inside the keyboard
+            // block in UIKit, and without this the button snapped 29 → 20 while the bar slid.
+            .animation(keyboard.systemAnimation, value: composerSide)
             .transition(.scale.combined(with: .opacity))
             .animation(.spring(response: 0.32, dampingFraction: 0.72), value: showsJumpButton)
         }
@@ -2937,15 +2938,14 @@ struct ThreadView: View {
             // The recording's floating pause / continue — drawn and hit-tested by the LIST, which
             // owns the screen above the bar (see `MessageListController.setVoiceControl`).
             voiceControl: recordLocked ? (reviewingNote ? 2 : 1) : 0,
-            voiceControlInset: composerSideInset,
             onVoiceControlTap: { if reviewingNote { resumeRecording() } else { beginPreview() } },
             menuActionTick: menuActionTick,         // SwiftUI menu action fired → hold reloads through its dismissal
             sendTick: sendTick,                     // Send tapped → the list holds its offset until the row lands
             topOverlayHeight: searchActive ? 0 : pinBarHeight,   // floating date pill drops below the pin bar
-            // How far the composer stands above the keyboard, measured where it is placed. The
-            // floating overlays sit on top of that instead of on the bottom safe area, which no
-            // longer contains the bar. See `onComposerLift` in the controller.
-            onComposerLift: { composerLift = $0 },
+            // How far the composer stands above the keyboard and its side inset, measured where it
+            // is placed. The floating overlays sit on those instead of on the bottom safe area,
+            // which no longer contains the bar. See `onComposerGeometry` in the controller.
+            onComposerGeometry: { lift, side in composerLift = lift; composerSide = side },
             onJumpButtonVisibility: { showJumpButton = $0 },
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,
@@ -5206,94 +5206,41 @@ struct ThreadView: View {
     }
 
     // ⛔ THE COMPOSER'S POSITION IS APPLE'S NOW, NOT OURS — owner, 2026-08-24: "go make it like
-    // iMessage, native Apple", closing four rounds of fixed insets (30/16 sides, safe-area + 8
-    // bottom) that behaved differently across his two phones and sat visibly higher than the
-    // system's own bars.
+    // iMessage, native Apple". The sides come from the LAYOUT-MARGIN system (16/20 per device),
+    // the bottom is EDGE-ATTACHED CHROME that dips into the home-indicator band, and the only
+    // numbers still ours are the two design gaps (8 above the keys, the 5pt rest dip).
     //
-    // What the native bottom search bar does, which is the model he pointed at:
-    //   sides  → the LAYOUT-MARGIN system: 16pt on narrow phones, 20pt on wider ones, chosen by
-    //            iOS per device. Constant whether the keyboard is up or down — measured off his
-    //            own iMessage screenshots, which show the same inset in both states.
-    //   bottom → the bar is EDGE-ATTACHED CHROME: its pill dips INTO the home-indicator band
-    //            (search bar ≈ 23-26pt above the physical edge, iMessage ≈ 29, both inside the
-    //            34pt band) instead of stacking on top of the safe area the way content does.
-    //            With the keyboard up, the same bar sits a small design gap above the keys.
-    //
-    // So the only numbers still ours are DESIGN GAPS, the same kind Apple holds:
-    //   `composerKeyboardGap`  8 — under the pill when the bar rides the keyboard. The reference
-    //                              app's own vMargin, 0.5 * (56 - 40); unchanged from before.
-    //   `composerRestDip`      5 — how far the pill sinks below the safe-area line at rest, which
-    //                              lands its bottom at inset − 5 (≈29pt on his phones), iMessage's
-    //                              own resting height. Home-button phones have no band to sink
-    //                              into, so they keep the 8 instead.
-    // Everything device-shaped comes from iOS at runtime through `SystemChromeReader`:
-    //   `chromeMargin`      the root controller's systemMinimumLayoutMargins (16/20 per device)
-    //   `chromeBottomInset` the window's bottom safe-area inset (34/0; never includes the keyboard)
-    //
-    // ⚠️ THE KEYBOARD STATE IS GEOMETRY, NOT FOCUS. The old side switch hung off `inputFocused`
-    // re-laying-out the bar, which worked on his iOS 27 phone and silently did not on the iOS 26
-    // one. `composerKeyboardUp` comes from the keyboard's OWN notification instead, which is the
-    // OS reporting its state rather than us inferring it from a layout — see that property for why
-    // reading the bar's position replaced this once and then had to be replaced in turn.
-    //
-    // ⚠️ CARRIED FORWARD, still open: on his 13 Pro (iOS 26) the bar was once seen sitting INSIDE
-    // the keyboard at rest gaps of both 8 and 16 — a shortfall bigger than either number, so the
-    // gap was never the mechanism. If that recurs it is the safeAreaBar keyboard edge itself
-    // under-reporting on that OS, and no padding value fixes it; measure the bar's frame against
-    // `KeyboardWatcher.topOnScreen` on the device before touching these constants.
-    private static let composerKeyboardGap: CGFloat = 8
+    // ⛔ ALL OF THAT IS DECIDED IN `MessageListController.positionBottomBar` NOW, from the keyboard
+    // band, inside the keyboard's own animation. This view computes none of it any more: it
+    // receives `composerLift` and `composerSide` from that controller and places its floating
+    // overlays on them. The dip is kept here only for the stand-in bars (blocked / request / muted)
+    // that SwiftUI still draws in the composer's slot.
     private static let composerRestDip: CGFloat = 5
 
     /// ⛔ THE FLOATING BUTTONS SIT ON THE COMPOSER'S OWN EDGE — owner, 2026-08-24: the down-arrow
     /// "is using old padding on the right side, use the padding the composer is using… both when
-    /// the keyboard is open and when it is closed".
-    ///
-    /// They were a hardcoded 16 while the composer had moved to deriving its inset from iOS, so the
-    /// arrow hung past the composer's right edge — his screenshot has it half off the screen. This
-    /// is the same expression the composer's `.padding(.horizontal)` uses, so the two edges are one
-    /// number by construction rather than by being kept in step: the system margin with the
-    /// keyboard up, and the margin-or-band expression at rest.
-    ///
-    /// ⚠️ IT MOVES WITH THE KEYBOARD FOR FREE. `composerKeyboardUp` is one value read by both, so
-    /// these buttons change inset on exactly the frame the composer does.
-    private var floatingButtonInset: CGFloat {
-        composerKeyboardUp ? chromeMargin : max(chromeMargin, chromeBottomInset - Self.composerRestDip)
-    }
-
-    /// iOS's numbers, reported by `SystemChromeReader`; the defaults only cover the first frame.
+    /// the keyboard is open and when it is closed". They read `composerSide`, the inset the
+    /// controller actually gave the bar, so the two edges are one number by construction.
+    /// iOS's layout margin, reported by `SystemChromeReader`; the default only covers the first frame.
     @State private var chromeMargin: CGFloat = 20
-    @State private var chromeBottomInset: CGFloat = 34
-    /// ⛔ THE KEYBOARD'S OWN NOTIFICATION, NOT THE BAR'S POSITION — owner, 2026-08-24: opening a chat
-    /// showed the composer "too early in the wrong position", correcting itself about a fifth of the
-    /// way through the push.
-    ///
-    /// ⚠️ READING THE BAR'S OWN FRAME IS WHAT CAUSED THAT, and it was my own doing. The state was
-    /// `screenHeight - bar.maxY > 120`, which is only meaningful once the bar is laid out where it
-    /// will finally sit. During a push the incoming view is measured before it is placed, so the bar
-    /// reports a maxY far up the screen, the test says "the keyboard must be up", and the composer
-    /// draws its keyboard-up padding until the layout settles and it snaps. The threshold was never
-    /// the problem — no threshold can tell a keyboard apart from a view that is not in place yet.
-    ///
-    /// The keyboard's own frame cannot be confused by any of that: `KeyboardWatcher` reads
-    /// `keyboardWillChangeFrame` / `willHide`, so this is the OS reporting its own state rather than
-    /// us inferring it from a layout. It also keeps the property that made me leave `inputFocused`
-    /// behind in the first place — notifications fire identically on iOS 26 and 27, where SwiftUI's
-    /// focus flag did not — and it lands at the START of the keyboard's animation, so the padding
-    /// moves with the keys instead of a frame behind them.
+    /// The keyboard's own notifications, for two things only: `onceHidden` (the "+" and GIF sheets
+    /// wait for the keys to be GONE, not told to go) and `systemAnimation` (the keys' own duration
+    /// and curve, for the floating overlays that follow `composerLift` / `composerSide`). No
+    /// geometry is derived from it here any more — that is the list controller's.
     @StateObject private var keyboard = KeyboardWatcher()
-    private var composerKeyboardUp: Bool { keyboard.height > 0 }
 
     private var composer: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 0) {
             // ⛔ ABOVE THE COMPOSER, NOT ON IT. This slot's own content is a zero-height spacer now
             // that the bar is UIKit's, so anything left in it lands exactly where the bar is drawn
-            // and the picker covered the pill. `composerLift` is the bar's real height plus its
-            // gaps, reported by the controller that places it; subtracting the pad and this slot's
-            // own bottom inset leaves precisely the bar's height, so the picker sits on the bar's
-            // top edge rather than a guessed distance above it.
+            // and the picker covered the pill. `composerLift` is the bar's height plus its pad
+            // and its gap, reported by the controller that places it; less the pad, it is the
+            // distance from this slot's bottom (the keyboard's top, or the safe-area line) to the
+            // bar's top edge, so the picker sits on that edge rather than a guessed distance above.
             if !mentionCandidates.isEmpty {
                 mentionPicker
-                    .padding(.bottom, max(0, composerLift - 8 - composerBottomInset))
+                    .padding(.horizontal, composerSide)
+                    .padding(.bottom, max(0, composerLift - 8))
             }
             // ⛔ THE BAR IS UIKIT — owner, 2026-08-25: "The Composer input text is currently
             // implemented in SwiftUI. Please completely convert it to UIKit." Everything drawn — the
@@ -5320,39 +5267,12 @@ struct ThreadView: View {
                     if !Task.isCancelled, previewURL == url { previewDecibels = db }
                 }
         }
-        // ⛔ AT REST THE SIDES MATCH THE BOTTOM — owner, 2026-08-24, from the preview of the pure
-        // system-margin version: "when keyboard off, left and right padding is small, use same size
-        // as bottom". The rest inset is therefore the SAME expression as the pill's resting height
-        // above the physical edge (inset − dip, ≈29 on his phones), which is exactly what makes the
-        // three gaps read as one; it stays device-derived because the inset is. The margin is the
-        // floor so a home-button phone (inset 0) keeps the system number instead of collapsing.
-        // With the keyboard up the flat edge takes over and the sides drop to the system margin,
-        // which is iMessage's own open-state number.
-        .padding(.horizontal, composerSideInset)
-        .padding(.top, 6)
-        // At rest the pill sinks `composerRestDip` below the safe-area line, into the indicator
-        // band, exactly as the system bars sit. Riding the keyboard it keeps the 8 above the keys.
-        // Home-button phones (inset 0) have no band, so rest matches the keyboard gap.
-        .padding(.bottom, composerBottomInset)
-        .background { SystemChromeReader(margin: $chromeMargin, bottomInset: $chromeBottomInset) }
-        // ⛔ THE KEYBOARD'S OWN CLOCK, NOT A CURVE OF OURS — owner, 2026-08-25, on the "+" transition
-        // "fighting/jittering". `KeyboardWatcher` already reads the duration and curve off the
-        // notification (see `systemAnimation`), and the composer was the one thing on screen not
-        // using them: it moved on a hand-written `easeOut(0.25)` while the keys moved on the
-        // system's curve 7. Same start, same end, different shape in between — so the bar ran ahead
-        // of the keyboard through the middle of every open and close and then waited for it. That
-        // mismatch IS the jitter; no duration tweak fixes a wrong curve.
-        .animation(keyboard.systemAnimation, value: composerKeyboardUp)
-    }
-
-    /// The bar's side inset: the system margin with the keyboard up, the margin-or-band expression
-    /// at rest. One expression, read by the bar, the floating buttons and the pause button.
-    private var composerSideInset: CGFloat {
-        composerKeyboardUp ? chromeMargin : max(chromeMargin, chromeBottomInset - Self.composerRestDip)
-    }
-
-    private var composerBottomInset: CGFloat {
-        composerKeyboardUp || chromeBottomInset <= 0 ? Self.composerKeyboardGap : -Self.composerRestDip
+        // ⛔ NO PADDING OF ITS OWN. This slot used to carry the bar's side and bottom insets, computed
+        // here from the keyboard notification — a second copy of the controller's arithmetic that
+        // arrived a pass later, and a 1pt/14pt sliver of safe area that moved the floating overlays
+        // by a different amount at rest and with the keyboard up. The controller owns all of that
+        // now; this slot is exactly zero tall when the popup is away.
+        .background { SystemChromeReader(margin: $chromeMargin) }
     }
 
     /// Everything the bar draws, from this view's state. Cheap to build; the bar diffs it.
@@ -5381,7 +5301,6 @@ struct ThreadView: View {
         s.sendTint = UIColor(chatColorSpec?.swatch ?? Theme.defaultBubble(dark))
         s.noticeSurface = Theme.receivedSurface(dark, onWallpaper: chatHasWallpaper, blur: wallpaperBlur)
         s.onWallpaper = chatHasWallpaper
-        s.outerInsets = UIEdgeInsets(top: 6, left: composerSideInset, bottom: composerBottomInset, right: composerSideInset)
         return s
     }
 

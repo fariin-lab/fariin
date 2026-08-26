@@ -113,7 +113,6 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // not folded for us. It goes into contentInset.bottom; see updateInsets().
     var composerBarHeight: CGFloat = 0
     var voiceControl: Int = 0                  // 0 none · 1 pause · 2 continue — the recording's floating control
-    var voiceControlInset: CGFloat = 20        // the composer's side inset (the send button's column)
     var onVoiceControlTap: () -> Void = {}
     // Bumped by ThreadView from inside a SWIFTUI context-menu action (e.g. Select). UIKit's
     // context-menu callbacks cannot see SwiftUI-presented menus, so this is how the controller learns
@@ -125,7 +124,10 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // Height of the top overlay (pinned-message bar) the list runs UNDER. The floating date pill drops below
     // it so it isn't hidden behind the pin (the reference app behavior). 0 â†’ pill sits at its normal top position.
     var topOverlayHeight: CGFloat = 0
-    var onComposerLift: (CGFloat) -> Void = { _ in }   // how far the composer stands above the keyboard
+    /// (lift, side): how far the composer stands above the keyboard, and its side inset — both
+    /// measured where the controller places the bar, so SwiftUI's floating overlays sit on the
+    /// bar's own edges without computing them a second time.
+    var onComposerGeometry: (CGFloat, CGFloat) -> Void = { _, _ in }
     var onTopInset: (CGFloat) -> Void = { _ in }   // reports the GEOMETRIC nav-bar overlap (UIKit safe area â€” reliable)
     // Whether the floating jump-to-latest button should be on screen. Reported on its own instead of
     // being derived from `isAtBottom`, because the two answer different questions: isAtBottom decides
@@ -215,7 +217,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onMenuRestoreKeyboard = onMenuRestoreKeyboard
         vc.setComposerBarHeight(composerBarHeight)
         vc.onVoiceControlTap = onVoiceControlTap
-        vc.setVoiceControl(voiceControl, inset: voiceControlInset)
+        vc.setVoiceControl(voiceControl)
         vc.setTopOverlayHeight(topOverlayHeight)
         // (`noteSendTick` is at the top of this method — it has to precede `applyComposer`.)
         vc.noteMenuActionTick(menuActionTick)   // BEFORE setSelecting/apply: arm the dismissal grace first
@@ -225,7 +227,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onSwipeReply = onSwipeReply
         vc.dayLabelFor = dayLabelFor
         vc.onTopInset = onTopInset
-        vc.onComposerLift = onComposerLift
+        vc.onComposerGeometry = onComposerGeometry
         vc.setLoadingOlder(loadingOlder)
         vc.rowSignatures = rowSignatures
         // The scroll target RIDES the apply (a jump is a scroll ACTION attached to the load, landed
@@ -436,11 +438,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var programmaticScrollAnimating = false
     private var scrollAnimationWatchdog: Timer?
     private var lastLoadOlderAt = Date.distantPast       // pagination throttle (2s window)
-    // DEAD FLAG, kept only so the two guards below keep compiling: it is never set anywhere (audit).
-    // The keyboard-synced offset animation these guards describe no longer exists — the inverted list
-    // moves the offset by the clearance delta instead. Do NOT trust the comments at those two sites;
-    // if a future keyboard fix needs a hold, wire this flag for real rather than assuming it works.
-    private let keyboardAnimating = false
     private var isDisappearing = false        // swipe-back / pop in progress â†’ freeze all content-offset work
     private var lastStableOffset: CGFloat = 0 // last user/our-intent offset â†’ screenshot-capture recovery
     // Selection-mode animation coordination: the land that CARRIES the checkbox change passes (even
@@ -627,8 +624,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// the SwiftUI slot is a zero-height spacer, so that padding started from the keyboard instead
     /// and the arrow came down on top of the mic button — his report, 2026-08-26, and the same shape
     /// of failure as the pause button in `positionVoiceControl`.
-    var onComposerLift: ((CGFloat) -> Void)?
+    ///
+    /// The second number is the bar's SIDE inset, so the overlays sit on the bar's own edge. It used
+    /// to be recomputed in ThreadView from the keyboard's notification — a second copy of
+    /// `positionBottomBar`'s arithmetic, a pass behind it.
+    var onComposerGeometry: ((CGFloat, CGFloat) -> Void)?
     private var lastReportedLift: CGFloat = -1
+    private var lastReportedSide: CGFloat = -1
     private var lastReportedTop: CGFloat = -1
 
     override func viewDidLoad() {
@@ -1316,7 +1318,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // contentOffsetAdjustment inside the batch update, which UIScrollView honours under a pan; the
     // reference app lands loads mid-drag the same way.
     private var canLandLoad: Bool {
-        if keyboardAnimating, selectionAnimationState != .willAnimate { return false }
         if selectionAnimationState == .animating { return false }
         // the reference app's `contextMenuVisible`, from UIKit's own callbacks. NO selection exception here: the land
         // that opens selection mode is exactly the one that must wait, because it reloads the cell the
@@ -1973,9 +1974,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// presentation animates, and this finds nothing beyond it. The old keyboard clock that used to
     /// gate this went with the rest of the notification machinery (see `updateInsets`).
     private func clampToNewestIfBeyond() {
+        // ⛔ AND NOT DURING THE SEND HOLD. The hold exists so the composer's own shrink (the reply
+        // banner leaving, the text clearing) cannot walk the content down before the row lands and
+        // the glide walks it back up. `updateInsets` honoured it; this did not, and it runs on the
+        // very layout pass that shrink causes — so the content was clamped down by the banner's
+        // height in the same instant, unanimated, and the hold protected nothing. His report, twice:
+        // "tap Reply, press Send, the message briefly moves underneath the composer and jumps back."
         guard didFirstLand, !isDisappearing,
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
-              !sendAnimating, !programmaticScrollAnimating else { return }
+              !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil else { return }
         let bound = maxContentOffsetY
         guard collectionView.contentOffset.y > bound + 0.5 else { return }
         UIView.performWithoutAnimation {
@@ -2005,7 +2012,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard didFirstLand, !isDisappearing, !readerHasScrolled,
               lastKnownDistanceFromBottom <= 5,
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
-              !sendAnimating, !programmaticScrollAnimating else { return }
+              !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil else { return }
         let bound = maxContentOffsetY
         guard abs(collectionView.contentOffset.y - bound) > 0.5 else { return }
         collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
@@ -2089,6 +2096,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// back to the guide behind a fresh notification — see `keyboardBand`.
     private enum KeyboardReport { case up(CGFloat), rest }
     private var keyboardReport: KeyboardReport?
+    /// Where the keys DOCKED: the band of the last ANIMATED notification (a finger-driven frame
+    /// reports no duration and never writes this). The cap for `draggedBand` — under a finger the
+    /// keys never rise above where they docked — and zero once they have gone.
+    private var dockedBand: CGFloat = 0
 
     @objc private func keyboardWillChangeFrame(_ note: Notification) { rideKeyboard(note, hiding: false) }
     @objc private func keyboardWillHideNote(_ note: Notification) { rideKeyboard(note, hiding: true) }
@@ -2101,8 +2112,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // end frame is off the bottom, so its overlap never exceeds the resting safe area.
         let local = view.convert(end, from: nil)
         let overlap = max(0, view.bounds.maxY - local.minY)
-        keyboardReport = (hiding || overlap <= view.safeAreaInsets.bottom + 0.5) ? .rest : .up(overlap)
+        let up = !(hiding || overlap <= view.safeAreaInsets.bottom + 0.5)
+        keyboardReport = up ? .up(overlap) : .rest
         let d = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
+        if d > 0 { dockedBand = up ? overlap : 0 }
         let curve = (info[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.uintValue ?? 7
         if d > 0 {
             // The keyboard's own duration and curve (7, its private one, handed to UIKit as
@@ -2165,17 +2178,66 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// to the guide) could hold the bar up while the keys went down.
     ///
     /// The rule now: a notification is the newest fact about the keyboard and it wins, up or rest,
-    /// for as long as an animation is what moves the keys. The guide is read in exactly one
-    /// situation — a finger is dragging the keyboard (`.interactive` dismiss), which posts no
-    /// per-frame notification — and only on a device where the guide has proved it moves at all.
-    /// Where it does not, the drag ends with a notification and the bar lands there, as in 692.
+    /// for as long as an animation is what moves the keys. While a FINGER moves the keys the band
+    /// comes from `draggedBand` below, on every device.
     private var keyboardBand: CGFloat {
-        if guideIsLive, collectionView.isTracking, let g = guideBand { return g }
+        if let dragged = draggedBand { return dragged }
         switch keyboardReport {
         case .up(let band): return band
         case .rest: return view.safeAreaInsets.bottom
         case nil: return view.safeAreaInsets.bottom   // no keyboard has ever moved in this chat
         }
+    }
+
+    /// ⛔ THE KEYBOARD UNDER A DRAGGING FINGER, ON EVERY DEVICE — his reports on builds 693-695:
+    /// "when I close the keyboard, some message bubbles move underneath/inside the composer", and
+    /// the mirror of it on the next open.
+    ///
+    /// What happened. `keyboardDismissMode = .interactive` makes the keys follow the finger down,
+    /// and the list scrolls under that same finger — so the content moves down by exactly what the
+    /// keys do. The reference app's bar follows too, because it hangs from the layout guide and
+    /// the guide moves under the finger; its inset shrinks in step and the last bubble stays glued
+    /// to the bar. Ours read the guide for that, and on his iOS 26 phone the guide is dead inside
+    /// this hosted controller (build 682) or late (the `f1e7e532` regression): the bar stayed at
+    /// its keyboard-up position while the content slid down INTO it, and the release notification
+    /// then shifted content and bar together in lockstep, preserving the overlap at rest. From
+    /// there every open carried the same overlap up under the keys.
+    ///
+    /// The finger is the one per-frame source that exists on every OS: UIKit's interactive dismiss
+    /// pins the keyboard's top edge to the touch once the touch has crossed it. So while a finger
+    /// drags with the keyboard up, the band is the least of the docked band (the keys never rise
+    /// above where they docked), the guide's band where the guide is live (it agrees where it
+    /// works, and is ignored where it is stale, because stale is never lower), and the finger's
+    /// (`view.bounds.maxY - touch.y`), floored at the resting safe area. `scrollViewDidScroll` is
+    /// the driver (see `followKeyboardUnderFinger`), so the bar and the inset move on the same
+    /// event that moves the content. The drag ends with a notification and the animated path lands
+    /// everything, with "was at the bottom" now true because nothing came apart during the drag.
+    private var draggedBand: CGFloat? {
+        let rest = view.safeAreaInsets.bottom
+        guard case .up = keyboardReport, dockedBand > rest + 0.5, collectionView.isDragging else { return nil }
+        let pan = collectionView.panGestureRecognizer
+        guard pan.state == .began || pan.state == .changed else { return nil }
+        var lowest = dockedBand
+        if guideIsLive, let g = guideBand { lowest = min(lowest, g) }
+        let fingerY = pan.location(in: view).y
+        if fingerY.isFinite { lowest = min(lowest, view.bounds.maxY - fingerY) }
+        return max(rest, lowest)
+    }
+
+    /// The per-frame driver for `draggedBand`: from `scrollViewDidScroll` while a finger drags with
+    /// the keyboard up. Guarded writes throughout, so a scroll that does not move the keys (the
+    /// finger is above them) costs a few comparisons. `updateInsets` stands down on the offset
+    /// while the finger owns it, as theirs does; only the bar and the inset follow.
+    private func followKeyboardUnderFinger() {
+        guard composerBar != nil, let dragged = draggedBand else { return }
+        // The finger's band becomes the newest fact about the keys, so a pass between the finger
+        // lifting and the release notification (a SwiftUI render re-placing the bar, say) cannot
+        // snap the bar back up to where the keys docked. The animated notification that follows
+        // overwrites it either way.
+        keyboardReport = dragged > view.safeAreaInsets.bottom + 0.5 ? .up(dragged) : .rest
+        positionBottomBar()
+        syncBottomBarGeometry()
+        updateInsets()
     }
 
     /// The finger-drag case of theirs: their bar's bottom IS the guide's top, so on an interactive
@@ -2565,13 +2627,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             lastReportedTop = top
             DispatchQueue.main.async { [weak self] in self?.onTopInset?(top) }
         }
-        // And how far the composer stands above the keyboard, for the floating overlays. Same async
-        // rule, same change guard: this runs on every layout pass.
+        // And how far the composer stands above the keyboard, plus its side inset, for the floating
+        // overlays. Same async rule, same change guard: this runs on every layout pass.
         if composerBar != nil {
             let lift = max(0, bottomBarContainer.frame.height - keyboardBand)
-            if abs(lift - lastReportedLift) > 0.5 {
+            let side = barLeading?.constant ?? composerMargin
+            if abs(lift - lastReportedLift) > 0.5 || abs(side - lastReportedSide) > 0.5 {
                 lastReportedLift = lift
-                DispatchQueue.main.async { [weak self] in self?.onComposerLift?(lift) }
+                lastReportedSide = side
+                DispatchQueue.main.async { [weak self] in self?.onComposerGeometry?(lift, side) }
             }
         }
         // SCROLL-LOCK BACKSTOP. handleSwipePan disables the scroll view's pan for the duration of a
@@ -3060,6 +3124,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // During the screenshot-capture freeze the SYSTEM owns the offset: write no SwiftUI state and fire
         // nothing.
         if Date() < captureFreezeUntil { return }
+        // A finger dragging the keyboard down moves the bar and the inset on this same event.
+        followKeyboardUnderFinger()
         if scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating {
             readerHasScrolled = true     // the first-open net stands down for good — see it for why
             lastStableOffset = scrollView.contentOffset.y
@@ -3177,6 +3243,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onVoiceControlTap: () -> Void = {}
     private var voiceControlButton: UIButton?
     private var voiceControlKind = 0          // 0 none · 1 pause · 2 continue (reviewing)
+    /// The bar's side inset, written by `positionBottomBar` — the one place that decides it.
     private var voiceControlInset: CGFloat = 20
 
     /// Build the bar on first sight, then hand it the state on every pass.
@@ -3315,6 +3382,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let c = barBottom, abs(c.constant - bottomTarget) > 0.01 { c.constant = bottomTarget }
         if let c = barLeading, abs(c.constant - side) > 0.01 { c.constant = side }
         if let c = barTrailing, abs(c.constant + side) > 0.01 { c.constant = -side }
+        // The same numbers reach the bar itself (it places its overlays against the padded box)
+        // and the floating pause button, from here — not from a SwiftUI copy of this arithmetic
+        // that arrived a pass later and could disagree with it.
+        voiceControlInset = side
+        if let bar = composerBar as? ChatComposerView {
+            let ins = UIEdgeInsets(top: Self.barTopPad, left: side, bottom: bottomInset, right: side)
+            if bar.outerInsets != ins { bar.outerInsets = ins }
+        }
     }
 
     /// The container's height without animating it — used inside a block that is already animating.
@@ -3330,8 +3405,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if abs(containerC.constant - container) > 0.01 { containerC.constant = container }
     }
 
-    func setVoiceControl(_ kind: Int, inset: CGFloat) {
-        voiceControlInset = inset
+    func setVoiceControl(_ kind: Int) {
         positionVoiceControl()
         guard kind != voiceControlKind else { return }
         voiceControlKind = kind

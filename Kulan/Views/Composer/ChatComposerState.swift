@@ -24,8 +24,10 @@ import SwiftUI
 struct ChatComposerState: Equatable {
     var text = ""
     var placeholder = "Message"
-    /// The keyboard's owner. In → the field takes or gives up first responder; out → the delegate
-    /// reports what actually happened, so the flag can never disagree with the keyboard.
+    /// The keyboard's owner. In → a CHANGE of this flag makes the field take or give up first
+    /// responder; out → the delegate reports what actually happened, a turn later. Between a tap
+    /// on the field and that report the flag lags the field, and the view knows not to act on the
+    /// lag (`ChatComposerView.syncText`).
     var focused = false
     /// The send button is a checkmark while an inline edit is open.
     var editing = false
@@ -57,9 +59,6 @@ struct ChatComposerState: Equatable {
     var sendTint: UIColor = .systemBlue
     var noticeSurface: Theme.ReceivedSurface = .material
     var onWallpaper = false
-    /// The SwiftUI paddings around the bar. The old `.overlay`s (hint, toast, big mic) were placed
-    /// against the PADDED box, so the view places them against the same box to keep the geometry.
-    var outerInsets = UIEdgeInsets(top: 6, left: 20, bottom: 8, right: 20)
 
     var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     /// A finger is on the mic right now (not yet locked). The big overlay and the hold row.
