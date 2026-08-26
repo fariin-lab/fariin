@@ -60,6 +60,41 @@ enum BubbleBody: Equatable {
     case text(TextBody)
     case jumbomoji(String)          // 1…5 emoji, drawn borderless at up to 3.5× the body size
     case tombstone(String)          // "You deleted this message" — a notice, not a message
+    /// A photo, a video or a gif: ONE media box that wears the bubble's own corners, with the
+    /// caption (when there is one) flush below it under the same background — never two bubbles.
+    case media(MediaBody)
+
+    /// Phase 2. Everything the media box needs, resolved — no message, no app state.
+    struct MediaBody: Equatable {
+        /// ⚠️ THE THREE KINDS DO NOT SHARE A SIZING RULE, and that is not an accident to tidy up.
+        /// A photo is measured by `MessageRowLayout.photoBox` (the 350 cap, the aspect clamp, the
+        /// comfort width that lets a 9:16 grow, the anti-upscale floor); a video and a gif are
+        /// measured by `displayBox` (240 × 340), and a video additionally takes the photo path's
+        /// caption floor. Each of those was tuned against a report; collapsing them would undo
+        /// several at once.
+        enum Kind: Equatable { case photo, video, gif }
+        var kind: Kind
+
+        var url: String?                 // the encrypted bytes (a gif's is a public Giphy url)
+        var enc: EncMeta?
+        var posterUrl: String?           // a video's thumbnail
+        var posterEnc: EncMeta?
+        /// The optimistic local bytes, shown before the upload lands.
+        var localData: Data?
+        var blurhash: String?
+        /// The inline thumbnail that travelled INSIDE the message — a real (tiny) photo, ready
+        /// before anything has been asked of the network. Beats the hash whenever there is one.
+        var inlineThumbBase64: String?
+        var thumbCacheId: String
+        var pixelWidth: Double?
+        var pixelHeight: Double?
+        var durationText: String?        // a video's badge, "0:42"
+        var caption: TextBody?           // nil when the media carries no words
+        var uploading: Bool
+        var clientId: String?
+        /// The photos auto-download policy may hold the fetch until tapped.
+        var gated: Bool
+    }
 
     struct TextBody: Equatable {
         var text: String

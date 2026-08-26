@@ -22,6 +22,28 @@ struct QuoteInnerPlan {
     var snippetAttr: NSAttributedString
 }
 
+/// Where a photo/video/gif bubble's parts go, in BUBBLE coordinates.
+///
+/// The media wears the bubble's own corners and sits flush against them — no inset — and the
+/// caption, when there is one, is flush below it under the SAME background and the same clip. One
+/// bubble, never two.
+struct MediaPlan {
+    var media: CGRect
+    /// The caption block, with its 12pt insets already applied to `captionText`.
+    var caption: CGRect?
+    var captionText: CGRect?
+    var captionAttr: NSAttributedString?
+    var captionMetaOnOwnLine: Bool
+    /// The footer. On a captioned bubble it lives in the caption row like any other meta; on a bare
+    /// photo it floats on the picture in its own dark capsule, which is why it has a background
+    /// rect of its own.
+    var metaCapsule: CGRect?
+    var duration: CGRect?               // a video's "0:42" badge
+    var playBadge: CGRect?              // a video's play glyph
+    var uploadRing: CGRect?
+    var kind: BubbleBody.MediaBody.Kind
+}
+
 struct BubblePlan {
     var bubble: CGRect                  // the bubble's own frame, row coordinates
     var radii: BubbleRadii
@@ -43,6 +65,7 @@ struct BubblePlan {
     var textColor: UIColor
     var metaColor: UIColor
     var tombstoneIcon: CGRect?          // the slashed circle on a deleted-message capsule
+    var mediaPlan: MediaPlan?           // set only for a photo/video/gif bubble
 
     // Outside the bubble, row coordinates
     var avatar: CGRect?
@@ -286,6 +309,15 @@ enum MessageRowLayout {
                 .foregroundColor: (b.isMe ? UIColor.white.withAlphaComponent(0.72)
                                           : UIColor.secondaryLabel.withAlphaComponent(0.85))])
             bodySize = BubbleText.size(bodyAttr, width: max(1, maxContent - 18))
+        case .media(let m):
+            // A media bubble is laid out entirely differently — the picture is flush to the
+            // bubble's edges rather than inset by hPad/vPad, and the footer either joins the
+            // caption row or floats on the picture. It gets its own function and returns here.
+            return media(m, row: b, originX: originX, columnX: columnX, columnW: columnW,
+                         maxBubble: maxBubble, textColor: textColor, metaColor: metaColor,
+                         accent: accent, topSpacing: topSpacing, y: y,
+                         senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                         forwardedSize: forwardedSize, forwardedIconW: forwardedIconW)
         }
 
         let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
@@ -306,6 +338,7 @@ enum MessageRowLayout {
                 meta: .zero, metaOnOwnLine: false, quote: nil, quoteInner: nil,
                 bodyAttr: bodyAttr, links: [], textColor: textColor, metaColor: metaColor,
                 tombstoneIcon: CGRect(x: 14, y: (bubbleH - iconW) / 2, width: iconW, height: iconW),
+                mediaPlan: nil,
                 avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
                 forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
                 retry: nil)
@@ -371,12 +404,47 @@ enum MessageRowLayout {
         let bubbleRect = CGRect(x: bubbleX, y: y, width: bubbleW, height: bubbleH)
         y = bubbleRect.maxY
 
+        var plan = BubblePlan(
+            bubble: bubbleRect,
+            radii: isJumbo ? .uniform(0) : b.radii,
+            isCapsule: false,
+            fill: isJumbo ? .clear : b.fill,                  // a jumbomoji bubble keeps its box and drops its fill
+            rim: isJumbo ? false : b.rim,
+            text: textRect, meta: metaRect, metaOnOwnLine: metaOwnLine,
+            quote: quoteRect, quoteInner: quoteInner,
+            bodyAttr: bodyAttr, links: links, textColor: textColor, metaColor: metaColor,
+            tombstoneIcon: nil, mediaPlan: nil,
+            avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
+            forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
+            retry: nil)
+
+        // Reactions, the retry line, the avatar and the two tags are the same for every bubble
+        // kind, so they are placed in ONE function. A media bubble that grew its own copy would be
+        // a second set of numbers to keep in step, and this row already has a history of two paths
+        // drifting apart.
+        y = decorations(b, plan: &plan, bubbleRect: bubbleRect, columnX: columnX, columnW: columnW,
+                        originX: originX, topSpacing: topSpacing, senderNameAttr: senderNameAttr,
+                        senderNameSize: senderNameSize, forwardedSize: forwardedSize,
+                        forwardedIconW: forwardedIconW, y: y)
+        return BubbleResult(plan: plan, totalHeight: y)
+    }
+
+
+    /// The parts every bubble kind shares, placed once: the reaction badges, the retry line, the
+    /// group avatar, the sender name and the Forwarded tag. Returns the column's new bottom edge.
+    ///
+    /// ⚠️ The two tags are positioned HERE, against the bubble's own edges, because only the caller
+    /// knows where the bubble ended up. `senderNameSize` and `forwardedSize` were measured before
+    /// the bubble was laid out (they push it down); this is where they are finally placed.
+    private static func decorations(_ b: BubbleRow, plan: inout BubblePlan, bubbleRect: CGRect,
+                                    columnX: CGFloat, columnW: CGFloat, originX: CGFloat,
+                                    topSpacing: CGFloat, senderNameAttr: NSAttributedString?,
+                                    senderNameSize: CGSize, forwardedSize: CGSize,
+                                    forwardedIconW: CGFloat, y startY: CGFloat) -> CGFloat {
+        var y = startY
         // Reactions hang OFF the bubble's edge, overlapping the corner they belong to — a badge
         // floating in the gap between two bubbles belongs to neither.
-        var reactionRects: [CGRect] = []
-        var reactionAttrs: [NSAttributedString] = []
-        var reactionMine: [Bool] = []
-        if !b.reactions.isEmpty {
+                if !b.reactions.isEmpty {
             let shown = Array(b.reactions.prefix(3))
             let extra = b.reactions.count - shown.count
             var chips: [(NSAttributedString, Bool)] = shown.map { chip in
@@ -406,9 +474,9 @@ enum MessageRowLayout {
             var cx = b.isMe ? (bubbleRect.maxX - 10 - total) : (bubbleRect.minX + 10)
             let cy = bubbleRect.maxY + BubbleMetrics.reactionOverhang - height
             for (i, w) in widths.enumerated() {
-                reactionRects.append(CGRect(x: cx, y: cy, width: w, height: height))
-                reactionAttrs.append(chips[i].0)
-                reactionMine.append(chips[i].1)
+                plan.reactions.append(CGRect(x: cx, y: cy, width: w, height: height))
+                plan.reactionAttrs.append(chips[i].0)
+                plan.reactionMine.append(chips[i].1)
                 cx += w + 4
             }
             // Reserve the overhang so the badge cannot collide with the next bubble. Reserve less
@@ -416,66 +484,257 @@ enum MessageRowLayout {
             y += BubbleMetrics.reactionOverhang
         }
 
-        var retryRect: CGRect?
         if b.showsRetryRow {
             let font = UIFont.systemFont(ofSize: 11, weight: .medium)
             let attr = NSAttributedString(string: "Not delivered. Tap to retry", attributes: [.font: font])
             let s = BubbleText.size(attr, width: columnW)
             let w = s.width + 16                              // the leading arrow glyph
             let x = b.isMe ? (columnX + columnW - w) : columnX
-            retryRect = CGRect(x: x, y: y + 1 + BubbleMetrics.senderNameGap, width: w, height: s.height)
-            y = retryRect!.maxY
+            plan.retry = CGRect(x: x, y: y + 1 + BubbleMetrics.senderNameGap, width: w, height: s.height)
+            y = plan.retry!.maxY
         }
 
-        var avatarRect: CGRect?
         if let s = b.sender, s.showsAvatar {
             // Bottom-aligned with the COLUMN, not with the bubble — the row is an
             // `HStack(alignment: .bottom)` and the column's bottom edge is `y`, which by now
             // includes the reaction overhang and the retry line. Aligning to the bubble instead
             // would float the face above the badges on any reacted message.
-            avatarRect = CGRect(x: originX, y: y - BubbleMetrics.avatarSize,
+            plan.avatar = CGRect(x: originX, y: y - BubbleMetrics.avatarSize,
                                 width: BubbleMetrics.avatarSize, height: BubbleMetrics.avatarSize)
         }
 
         // Now the bubble's edges are known, the two tags can take their real positions.
-        var senderNameRect: CGRect?
-        var verifiedRect: CGRect?
-        var forwardedRect: CGRect?
-        var forwardedIconRect: CGRect?
         var tagY = topSpacing
         if senderNameAttr != nil {
-            senderNameRect = CGRect(x: bubbleRect.minX + 12, y: tagY,
+            plan.senderName = CGRect(x: bubbleRect.minX + 12, y: tagY,
                                     width: senderNameSize.width, height: senderNameSize.height)
             if b.sender?.verified == true {
-                verifiedRect = CGRect(x: bubbleRect.minX + 12 + senderNameSize.width + 4,
+                plan.verifiedMark = CGRect(x: bubbleRect.minX + 12 + senderNameSize.width + 4,
                                       y: tagY + (senderNameSize.height - 11) / 2, width: 11, height: 11)
             }
             tagY += senderNameSize.height + BubbleMetrics.senderNameGap
         }
         if b.forwarded {
             let x = b.isMe ? (bubbleRect.maxX - 12 - forwardedSize.width) : (bubbleRect.minX + 12)
-            forwardedIconRect = CGRect(x: x, y: tagY + (forwardedSize.height - 9) / 2,
+            plan.forwardedIcon = CGRect(x: x, y: tagY + (forwardedSize.height - 9) / 2,
                                        width: forwardedIconW, height: 9)
-            forwardedRect = CGRect(x: x + forwardedIconW + 3, y: tagY,
+            plan.forwarded = CGRect(x: x + forwardedIconW + 3, y: tagY,
                                    width: forwardedSize.width - forwardedIconW - 3,
                                    height: forwardedSize.height)
         }
 
-        let plan = BubblePlan(
-            bubble: bubbleRect,
-            radii: isJumbo ? .uniform(0) : b.radii,
-            isCapsule: false,
-            fill: isJumbo ? .clear : b.fill,                  // a jumbomoji bubble keeps its box and drops its fill
-            rim: isJumbo ? false : b.rim,
-            text: textRect, meta: metaRect, metaOnOwnLine: metaOwnLine,
+        plan.senderNameAttr = senderNameAttr
+        return y
+    }
+
+    // ── A photo / video / gif bubble ──
+
+    /// ⚠️ THE CAPTION GETS THE WHOLE BUBBLE. Every media caption used to be
+    /// `HStack { Text; Spacer; meta }`, and an HStack reserves its siblings' width for the FULL
+    /// HEIGHT of the row — so the timestamp cut ~70pt off EVERY line of the caption, not just the
+    /// last one. On a long caption that reads as a bubble with a tall empty column down its right
+    /// side. It uses the same two branches the text bubble does, for the same reasons: the
+    /// invisible trailing reservation when the footer fits on the last line, and a real row of its
+    /// own when it does not.
+    private static func media(_ m: BubbleBody.MediaBody, row b: BubbleRow,
+                              originX: CGFloat, columnX: CGFloat, columnW: CGFloat,
+                              maxBubble: CGFloat, textColor: UIColor, metaColor: UIColor,
+                              accent: UIColor, topSpacing: CGFloat, y startY: CGFloat,
+                              senderNameAttr: NSAttributedString?, senderNameSize: CGSize,
+                              forwardedSize: CGSize, forwardedIconW: CGFloat) -> BubbleResult {
+        var y = startY
+        let box = mediaBox(m, maxBubbleWidth: maxBubble)
+        let bubbleW = min(maxBubble, box.width)
+
+        // The quote sits ABOVE the picture, inset like the text bubble's, in its own band.
+        var quoteRect: CGRect?
+        var quoteInner: QuoteInnerPlan?
+        var innerY: CGFloat = 0
+        if let q = b.quote {
+            let (size, inner) = quoteSize(q, textColor: textColor,
+                                          maxWidth: max(1, bubbleW - BubbleMetrics.hPad * 2))
+            quoteInner = inner
+            innerY = BubbleMetrics.vPad
+            quoteRect = CGRect(x: BubbleMetrics.hPad, y: innerY,
+                               width: bubbleW - BubbleMetrics.hPad * 2, height: size.height)
+            innerY += size.height + 4
+            _ = size
+        }
+
+        // The picture, flush to the bubble's own edges.
+        let mediaRect = CGRect(x: 0, y: innerY, width: bubbleW, height: box.height)
+        innerY = mediaRect.maxY
+
+        // The footer: in the caption row when there is a caption, floating on the picture when not.
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
+        var plan = MediaPlan(media: mediaRect, caption: nil, captionText: nil, captionAttr: nil,
+                             captionMetaOnOwnLine: false, metaCapsule: nil, duration: nil,
+                             playBadge: nil, uploadRing: nil, kind: m.kind)
+        var metaRect: CGRect
+
+        if let caption = m.caption, !caption.text.isEmpty {
+            let inset: CGFloat = 12
+            let avail = max(1, bubbleW - inset * 2)
+            let built = BubbleText.build(caption, meta: b.meta, isMe: b.isMe, textColor: textColor,
+                                         accent: accent, textAvail: avail)
+            let size = BubbleText.size(built.body, width: avail)
+            let metaSize = BubbleText.size(metaAttr, width: avail)
+            let top = innerY + 8
+            plan.captionAttr = built.body
+            plan.captionMetaOnOwnLine = built.metaOnOwnLine
+            plan.captionText = CGRect(x: inset, y: top, width: avail, height: size.height)
+            var bottom = top + size.height
+            if built.metaOnOwnLine {
+                bottom += 2
+                metaRect = CGRect(x: inset + avail - metaSize.width, y: bottom,
+                                  width: metaSize.width, height: metaSize.height)
+                bottom += metaSize.height
+            } else {
+                metaRect = CGRect(x: inset + avail - metaSize.width,
+                                  y: bottom - metaSize.height - 1,
+                                  width: metaSize.width, height: metaSize.height)
+            }
+            bottom += 10
+            plan.caption = CGRect(x: 0, y: innerY, width: bubbleW, height: bottom - innerY)
+            innerY = bottom
+        } else {
+            // The floating capsule: 7pt padding inside it, 7pt in from the picture's corner.
+            let metaSize = BubbleText.size(metaAttr, width: bubbleW)
+            let capsule = CGRect(x: mediaRect.maxX - 7 - (metaSize.width + 14),
+                                 y: mediaRect.maxY - 7 - (metaSize.height + 6),
+                                 width: metaSize.width + 14, height: metaSize.height + 6)
+            plan.metaCapsule = capsule
+            metaRect = CGRect(x: capsule.minX + 7, y: capsule.minY + 3,
+                              width: metaSize.width, height: metaSize.height)
+        }
+
+        if m.kind == .video {
+            let side: CGFloat = min(box.width, box.height) * 0.28
+            plan.playBadge = CGRect(x: mediaRect.midX - side / 2, y: mediaRect.midY - side / 2,
+                                    width: side, height: side)
+            if let d = m.durationText {
+                let attr = NSAttributedString(string: d, attributes: [
+                    .font: UIFont.systemFont(ofSize: 11, weight: .semibold),
+                    .foregroundColor: UIColor.white])
+                let s = BubbleText.size(attr, width: box.width)
+                plan.duration = CGRect(x: mediaRect.minX + 5, y: mediaRect.minY + 5,
+                                       width: s.width + 12, height: s.height + 4)
+            }
+        }
+        if m.uploading {
+            let side: CGFloat = 44
+            plan.uploadRing = CGRect(x: mediaRect.midX - side / 2, y: mediaRect.midY - side / 2,
+                                     width: side, height: side)
+        }
+
+        let bubbleH = innerY
+        let bubbleX = b.isMe ? (columnX + columnW - bubbleW) : columnX
+        let bubbleRect = CGRect(x: bubbleX, y: y, width: bubbleW, height: bubbleH)
+        y = bubbleRect.maxY
+
+        var out = BubblePlan(
+            bubble: bubbleRect, radii: b.radii, isCapsule: false, fill: b.fill, rim: b.rim,
+            text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
-            bodyAttr: bodyAttr, links: links, textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil,
-            avatar: avatarRect, senderName: senderNameRect, senderNameAttr: senderNameAttr,
-            verifiedMark: verifiedRect, forwarded: forwardedRect, forwardedIcon: forwardedIconRect,
-            reactions: reactionRects, reactionAttrs: reactionAttrs, reactionMine: reactionMine,
-            retry: retryRect)
-        return BubbleResult(plan: plan, totalHeight: y)
+            bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
+            tombstoneIcon: nil, mediaPlan: plan,
+            avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
+            forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
+            retry: nil)
+
+        let bottom = decorations(b, plan: &out, bubbleRect: bubbleRect, columnX: columnX,
+                                 columnW: columnW, originX: originX, topSpacing: topSpacing,
+                                 senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                                 forwardedSize: forwardedSize, forwardedIconW: forwardedIconW, y: y)
+        return BubbleResult(plan: out, totalHeight: bottom)
+    }
+
+    // ── Media boxes ──
+    //
+    // Three rules, kept apart on purpose. Every constant here was tuned against a report, and the
+    // comments say which — a "simplification" that merges them undoes several fixes at once.
+
+    /// A VIDEO's and a GIF's box: the natural aspect inside 240 × 340, never a forced square.
+    static func displayBox(width: Double?, height: Double?) -> CGSize {
+        let maxW: CGFloat = 240, maxH: CGFloat = 340
+        guard let w = width, let h = height, w > 0, h > 0 else {
+            return CGSize(width: 220, height: 220)
+        }
+        let aspect = CGFloat(w / h)
+        var dw = maxW, dh = dw / aspect
+        if dh > maxH { dh = maxH; dw = dh * aspect }
+        return CGSize(width: dw, height: dh)
+    }
+
+    /// A VIDEO's box: `displayBox` plus the photo path's caption min-width floor.
+    ///
+    /// ⚠️ Without the floor a portrait video (aspect ~0.46 → ~157pt wide) forced its caption to
+    /// 157pt, so a long caption wrapped at roughly one word per line and the bubble became absurdly
+    /// tall. The photo path always applied this floor; video never did.
+    static func videoBox(_ m: BubbleBody.MediaBody, maxBubbleWidth: CGFloat) -> CGSize {
+        var s = displayBox(width: m.pixelWidth, height: m.pixelHeight)
+        guard let caption = m.caption, !caption.text.isEmpty else { return s }
+        let boxMax = min(maxBubbleWidth, 350)
+        let textW = (caption.text as NSString)
+            .size(withAttributes: [.font: BubbleMetrics.bodyFont]).width + 24   // 2 × 12pt insets
+        s.width = min(boxMax, max(s.width, textW))
+        return s
+    }
+
+    /// A PHOTO's box. The aspect is clamped to [0.35, 2.857]; the caption reserves only a MIN-WIDTH
+    /// floor, so it never stretches or distorts the picture beyond that; tiny originals never
+    /// upscale; and the box caps at 350.
+    static func photoBox(_ m: BubbleBody.MediaBody, maxBubbleWidth: CGFloat) -> CGSize {
+        let boxMax = min(maxBubbleWidth, 350)
+        let aspect: CGFloat = {
+            guard let w = m.pixelWidth, let h = m.pixelHeight, w > 0, h > 0 else { return 1 }
+            return min(max(CGFloat(w / h), 0.35), 2.857)
+        }()
+        // The caption floor is MEASURED AT 17, the size the caption actually renders at. It used to
+        // measure at 15, so every floor came out ~12% short and a caption that would have fitted on
+        // one line wrapped early, leaving dead space at the end of the line.
+        let hasCaption = !(m.caption?.text.isEmpty ?? true)
+        let minW: CGFloat = hasCaption
+            ? min(boxMax, (m.caption!.text as NSString)
+                .size(withAttributes: [.font: BubbleMetrics.bodyFont]).width + 24)
+            : 0
+        // ⛔ A PORTRAIT PHOTO MAY RUN TALLER THAN THE BOX IS WIDE. `h = boxMax` pinned every image's
+        // height to the WIDTH cap, so the taller the picture the narrower the bubble: a phone
+        // screenshot at 9:19.5 came out about 140pt across — a stamp.
+        //
+        // ⚠️ AND THE EXTRA HEIGHT IS EARNED, NOT GIVEN TO EVERY PORTRAIT. The rule is WIDTH, not
+        // orientation: start at the height every image has always had, and only grow one that would
+        // otherwise be too NARROW to read. `comfortW` is the width a 9:16 has at the 1.3 cap, so
+        // 9:16 lands on exactly the approved size, anything taller is capped there, anything between
+        // ramps smoothly, and 3:4, square and every landscape ratio are left exactly as they were.
+        let maxH = boxMax * 1.3
+        let comfortW = maxH * (9.0 / 16.0)
+        var h = boxMax
+        var w = h * aspect
+        if w < comfortW {
+            h = min(maxH, comfortW / aspect)
+            w = h * aspect
+        }
+        w = max(w, minW)
+        if w > boxMax { w = boxMax; h = w / aspect }
+        // Anti-upscale: never enlarge a tiny original, but never drop below 150pt either.
+        if let sw = m.pixelWidth, let sh = m.pixelHeight {
+            let srcShort = CGFloat(min(sw, sh)), dispShort = min(w, h)
+            if dispShort > srcShort, dispShort > 150 {
+                let f = max(150, srcShort) / dispShort
+                w *= f; h *= f
+            }
+        }
+        return CGSize(width: w.rounded(), height: h.rounded())
+    }
+
+    /// The box for whichever kind this is.
+    static func mediaBox(_ m: BubbleBody.MediaBody, maxBubbleWidth: CGFloat) -> CGSize {
+        switch m.kind {
+        case .photo: return photoBox(m, maxBubbleWidth: maxBubbleWidth)
+        case .video: return videoBox(m, maxBubbleWidth: maxBubbleWidth)
+        case .gif:   return displayBox(width: m.pixelWidth, height: m.pixelHeight)
+        }
     }
 
     // ── The reply quote ──
