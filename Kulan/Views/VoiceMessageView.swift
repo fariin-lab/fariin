@@ -168,13 +168,28 @@ struct VoiceMessageView: View {
     @State private var loading = false
     @State private var progress: Double = 0
     @State private var rate: Float = 1
+    /// How long the tap's own answer outranks the engine's — see `sync`.
+    @State private var holdIconUntil: Date = .distantPast
 
     /// Mirror the engine facts this one bubble draws. `objectWillChange` fires BEFORE the values
     /// land (willSet), which is why the subscription below hops through the main queue once — by
     /// the time this runs, the engine's numbers are the new ones.
     private func sync() {
         let p = engine.isPlaying(message.id)
-        if playing != p { playing = p }
+        // ⛔ THE TAP'S ANSWER IS NOT OVERWRITTEN WHILE THE ENGINE IS STILL GETTING THERE — owner,
+        // 2026-08-25, who screen-recorded the disc and slowed it down: "it plays, stops, plays".
+        //
+        // `toggle` flips this icon on the finger, which is right. But `load` clears the old player,
+        // resets `hasNote` and moves `progress` BEFORE the note starts, and each of those publishes.
+        // The first one to arrive found `isPlaying` still false and put the icon back to play, then
+        // `start` landed and flipped it forward again. Two frames of pause, play, pause — under the
+        // threshold of reading and over the threshold of feeling, which is exactly what he described.
+        //
+        // So for half a second after a tap the engine may correct everything here EXCEPT this one
+        // flag. If the note really started, the engine agrees by then and nothing moves; if it never
+        // started (a live call owns the session, a decrypt failed), the window closes and the disc
+        // goes back on its own.
+        if playing != p, Date() >= holdIconUntil { playing = p }
         let l = engine.isLoading(message.id)
         if loading != l { loading = l }
         let pr = engine.progress(for: message.id)
@@ -454,7 +469,10 @@ struct VoiceMessageView: View {
     /// decrypt that fails) corrects the disc back within the same breath. Skipped while LOADING,
     /// where the disc is a spinner and there is no icon to flip.
     private func toggle() {
-        if !loading { playing.toggle() }
+        if !loading {
+            playing.toggle()
+            holdIconUntil = Date().addingTimeInterval(0.5)   // see `sync`: the settling publishes
+        }
         engine.toggle(message: message, cid: cid, isMe: isMe)
     }
 
