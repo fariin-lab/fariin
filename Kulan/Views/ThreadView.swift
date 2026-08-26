@@ -802,6 +802,21 @@ struct ThreadView: View {
     // The bottom bar (composer / selection / blocked etc.), extracted so scrollStack can apply it OUTSIDE
     // the full-bleed list (the list runs under it via .ignoresSafeArea(.bottom); its height is fed back as
     // the list's manual bottom inset). A native iOS 26 blur bar (safeAreaBar) that messages scroll under.
+    /// Is the COMPOSER the active bottom bar?
+    ///
+    /// ⚠️ It is the negation of `bottomBarContent`'s chain, written once and read by both, because
+    /// the two must never disagree: if this said yes while the chain drew a blocked bar, the phone
+    /// would show two bars stacked — the controller's composer and SwiftUI's panel.
+    ///
+    /// This mirrors the reference's `shouldAttachToKeyboardLayoutGuide`: only the real composer
+    /// hangs from the keyboard. Their blocking and error panels pin to the screen bottom, and ours
+    /// stay in SwiftUI for the same reason — there is no keyboard when you cannot type.
+    private var canShowComposer: Bool {
+        !selecting && !searchActive && !notAMember && !cannotSendAnnouncement && !iAmMuted
+            && !repo.iBlocked && requestStance != .incoming && requestStance != .awaitingReply
+            && !cannotMessageThem
+    }
+
     @ViewBuilder private var bottomBarContent: some View {
         Group {
             if selecting {
@@ -2881,7 +2896,14 @@ struct ThreadView: View {
             // the scroll callback. We only hand it a pure rowId → day-label mapping; no SwiftUI state is
             // written on scroll, so scrolling never re-runs the conversation tree.
             dayLabelFor: { id in repo.indexById[id].map { dayLabel(repo.items[$0].createdAt) } },
-            cid: cid
+            cid: cid,
+            // The bar's STATE still comes from here — the text, the banners, every action. Only its
+            // PLACEMENT moved into the list's controller, which is the whole keyboard fix.
+            composerState: canShowComposer ? composerState : nil,
+            composerActions: composerActions,
+            composerRecorder: recorder,
+            composerSideInset: composerSideInset,
+            composerBottomInset: composerBottomInset
         )
         // ⛔ THE KEYBOARD MUST NOT REACH THE LIST THROUGH SWIFTUI'S SAFE AREA — owner, 2026-08-25,
         // build 681, GIF and "+" with the keyboard up: "the chat/message list jumps downward during
@@ -5212,7 +5234,14 @@ struct ThreadView: View {
             // row, the locked recording bar, the big mic and the toasts — is `ChatComposerView`.
             // SwiftUI keeps this slot and the insets below, which are about WHERE the bar sits and
             // were settled on 2026-08-24/25. See the note at the top of `ChatComposerState.swift`.
-            ChatComposerHost(state: composerState, actions: composerActions, recorder: recorder)
+            // ⛔ THE BAR IS NOT DRAWN HERE ANY MORE — it is placed by `MessageListController`,
+            // pinned to the keyboard, so it and the list ride ONE animation. See that controller's
+            // `bottomBarContainer` and the reference's own `ConversationViewController+BottomBar`.
+            //
+            // A zero-height spacer keeps this slot's SHAPE: the mention popup above it still needs
+            // something to sit on, and the surrounding notice wrappers still measure a bar here.
+            // The real bar's height reaches the list directly from the controller.
+            Color.clear.frame(height: 0)
                 // The review strip's waveform is sampled from the paused FILE (the reference app's
                 // way — see `SampledWaveform`), re-sampled whenever the file changes: the first
                 // pause, and every later pause after a resume, when the stitch is a new file. This

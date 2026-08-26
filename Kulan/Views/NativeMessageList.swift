@@ -139,6 +139,16 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // per-tick `topVisibleId` binding write re-ran the whole ThreadView tree mid-scroll = the round-trip
     // that made scrolling feel unstable). Reading repo.items here is a pure read; it triggers no re-render.
     var dayLabelFor: (String) -> String?
+    // ⛔ THE COMPOSER IS PLACED BY THIS CONTROLLER NOW, not by SwiftUI's `safeAreaBar` — see
+    // `bottomBarContainer`. Its STATE still comes from ThreadView, which owns the text, the
+    // banners and every action; only the PLACEMENT moved, which is the whole fix.
+    var composerState: ChatComposerState? = nil
+    var composerActions: ChatComposerActions? = nil
+    var composerRecorder: AudioRecorder? = nil
+    /// The bar's side and bottom insets, which ThreadView works out from the keyboard and the
+    /// safe area. SwiftUI used to apply these as padding around the bar; the constraints do now.
+    var composerSideInset: CGFloat = 20
+    var composerBottomInset: CGFloat = 8
     /// The conversation id. The UIKit rows decrypt their own thumbnails, so they need the key's
     /// scope — the SwiftUI rows got it from the closure that built them.
     var cid: String = ""
@@ -156,6 +166,12 @@ struct NativeMessageList: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: MessageListController, context: Context) {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
+        // BEFORE apply: the bar's own height feeds the list's bottom clearance, and a clearance a
+        // pass late is a reader left short.
+        if let st = composerState, let acts = composerActions, let rec = composerRecorder {
+            vc.applyComposer(state: st, actions: acts, recorder: rec,
+                             sideInset: composerSideInset, bottomInset: composerBottomInset)
+        }
         vc.rowModels = rowModels   // BEFORE apply: measure + cell provider see the same frozen routing
         vc.cid = cid
         vc.uikitMenu = uikitMenu
@@ -367,6 +383,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     let bottomBarContainer = UIView()
     private var bottomBarBottom: NSLayoutConstraint?
     private var bottomBarHeight: NSLayoutConstraint?
+    private var barLeading: NSLayoutConstraint?
+    private var barTrailing: NSLayoutConstraint?
+    private var barBottom: NSLayoutConstraint?
     /// The composer, once ThreadView hands it over. Nil for the announcements list, which has none.
     private(set) weak var composerBar: UIView?
 
@@ -2860,27 +2879,51 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var voiceControlKind = 0          // 0 none · 1 pause · 2 continue (reviewing)
     private var voiceControlInset: CGFloat = 20
 
-    /// ThreadView hands the composer over once. It becomes a subview of `bottomBarContainer`,
-    /// pinned to its edges, and from then on the keyboard moves it.
-    func installComposer(_ bar: UIView) {
-        guard bar.superview !== bottomBarContainer else { return }
-        composerBar = bar
-        bar.translatesAutoresizingMaskIntoConstraints = false
-        bottomBarContainer.addSubview(bar)
-        NSLayoutConstraint.activate([
-            bar.topAnchor.constraint(equalTo: bottomBarContainer.topAnchor),
-            bar.leadingAnchor.constraint(equalTo: bottomBarContainer.leadingAnchor),
-            bar.trailingAnchor.constraint(equalTo: bottomBarContainer.trailingAnchor),
-            bar.bottomAnchor.constraint(equalTo: bottomBarContainer.bottomAnchor),
-        ])
-        positionBottomBar()
+    /// Build the bar on first sight, then hand it the state on every pass.
+    ///
+    /// ⚠️ NOT AUTO LAYOUT INSIDE THE BAR. `ChatComposerView` lays its contents out by frame from
+    /// its own bounds — that is its whole design — so the container gives it a size and it does the
+    /// rest. Only the OUTER insets are constraints, because those are what SwiftUI used to apply.
+    func applyComposer(state: ChatComposerState, actions: ChatComposerActions,
+                       recorder: AudioRecorder, sideInset: CGFloat, bottomInset: CGFloat) {
+        let bar: ChatComposerView
+        if let existing = composerBar as? ChatComposerView {
+            bar = existing
+        } else {
+            bar = ChatComposerView(recorder: recorder)
+            composerBar = bar
+            bar.translatesAutoresizingMaskIntoConstraints = false
+            bottomBarContainer.addSubview(bar)
+            let lead = bar.leadingAnchor.constraint(equalTo: bottomBarContainer.leadingAnchor)
+            let trail = bar.trailingAnchor.constraint(equalTo: bottomBarContainer.trailingAnchor)
+            let bottom = bar.bottomAnchor.constraint(equalTo: bottomBarContainer.bottomAnchor)
+            barLeading = lead; barTrailing = trail; barBottom = bottom
+            NSLayoutConstraint.activate([
+                bar.topAnchor.constraint(equalTo: bottomBarContainer.topAnchor, constant: 6),
+                lead, trail, bottom,
+            ])
+            // The bar asks for a new height when its contents change (a banner, a second line).
+            // It arrives on the bar's OWN animation clock, and the container follows on the same
+            // one — which is the same rule the keyboard block follows one level up.
+            bar.onHeightChange = { [weak self] _ in self?.resizeBottomBar() }
+        }
+        barLeading?.constant = sideInset
+        barTrailing?.constant = -sideInset
+        barBottom?.constant = -bottomInset
+        bar.actions = actions
+        bar.apply(state)
+        resizeBottomBar()
     }
 
-    /// The bar's height, reported by whoever owns its contents.
-    func setBottomBarHeight(_ h: CGFloat) {
-        guard let c = bottomBarHeight, abs(c.constant - h) > 0.5 else { return }
-        c.constant = h
-        setComposerBarHeight(h)
+    /// The container is the bar plus its outer insets. Its height feeds the list's clearance.
+    private func resizeBottomBar() {
+        guard let bar = composerBar as? ChatComposerView, let heightC = bottomBarHeight else { return }
+        let width = max(1, view.bounds.width - (barLeading?.constant ?? 0) * 2)
+        let barH = bar.preferredHeight(forWidth: width)
+        let total = 6 + barH - (barBottom?.constant ?? 0)
+        guard abs(heightC.constant - total) > 0.5 else { return }
+        heightC.constant = total
+        setComposerBarHeight(total)
     }
 
     /// Put the container's bottom edge exactly on top of the keyboard. Called from inside
