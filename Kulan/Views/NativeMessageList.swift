@@ -145,10 +145,10 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var composerState: ChatComposerState? = nil
     var composerActions: ChatComposerActions? = nil
     var composerRecorder: AudioRecorder? = nil
-    /// The bar's side and bottom insets, which ThreadView works out from the keyboard and the
-    /// safe area. SwiftUI used to apply these as padding around the bar; the constraints do now.
-    var composerSideInset: CGFloat = 20
-    var composerBottomInset: CGFloat = 8
+    /// The system layout margin (16/20 per device), read by ThreadView's `SystemChromeReader`. The
+    /// bar's side and bottom insets are DERIVED from it and the keyboard by the controller itself —
+    /// see `positionBottomBar` — so the rest/keyboard switch happens inside the keyboard's animation.
+    var composerMargin: CGFloat = 20
     /// The conversation id. The UIKit rows decrypt their own thumbnails, so they need the key's
     /// scope — the SwiftUI rows got it from the closure that built them.
     var cid: String = ""
@@ -169,8 +169,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         // BEFORE apply: the bar's own height feeds the list's bottom clearance, and a clearance a
         // pass late is a reader left short.
         if let st = composerState, let acts = composerActions, let rec = composerRecorder {
-            vc.applyComposer(state: st, actions: acts, recorder: rec,
-                             sideInset: composerSideInset, bottomInset: composerBottomInset)
+            vc.applyComposer(state: st, actions: acts, recorder: rec, margin: composerMargin)
         }
         vc.rowModels = rowModels   // BEFORE apply: measure + cell provider see the same frozen routing
         vc.cid = cid
@@ -387,8 +386,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var barBottom: NSLayoutConstraint?
     private var barHeightC: NSLayoutConstraint?
     private var barAnimator: UIViewPropertyAnimator?
-    /// The bar's own bottom inset, from ThreadView. Folded into `barBottom` by `positionBottomBar`.
-    private var composerBottomInset: CGFloat = 8
+    /// The system layout margin, from ThreadView. The bar's insets are derived from it in
+    /// `positionBottomBar`, which is the ONE writer of the bar's constraints.
+    private var composerMargin: CGFloat = 20
+    /// Under the pill when the bar rides the keyboard: the reference app's own vMargin,
+    /// 0.5 * (56 - 40). Unchanged from the SwiftUI placement (ThreadView's `composerKeyboardGap`).
+    private static let composerKeyboardGap: CGFloat = 8
+    /// How far the pill sinks below the safe-area line at rest, into the indicator band, the way
+    /// the system bars sit (owner's number, 2026-08-24; ThreadView's `composerRestDip`).
+    private static let composerRestDip: CGFloat = 5
     /// The composer, once ThreadView hands it over. Nil for the announcements list, which has none.
     private(set) weak var composerBar: UIView?
 
@@ -2294,6 +2300,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // insets a few times and incorrectly determining that it needs to scroll as a result." The
         // keyboard itself never comes through here any more; it comes through the layout pass the
         // guide dirties, which is synchronous. This path is for rotation and the bars.
+        //
+        // ⛔ THE BAR'S REST POSITION IS WRITTEN HERE TOO, at once. The composer is usually handed
+        // over BEFORE the view is in a window, when the safe area still reads 0, and the rest
+        // position depends on it (the pill sinks `composerRestDip` below the safe-area line). Until
+        // this ran, nothing re-placed the bar when the real inset arrived — his 2026-08-26 report:
+        // the composer sat ON the screen edge, inside the home-indicator band, until the first
+        // keyboard event happened to rewrite the constraint.
+        positionBottomBar()
+        syncBottomBarGeometry()
         safeAreaInsetsWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.updateInsets() }
         safeAreaInsetsWork = work
@@ -2974,7 +2989,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// its own bounds — that is its whole design — so the container gives it a size and it does the
     /// rest. Only the OUTER insets are constraints, because those are what SwiftUI used to apply.
     func applyComposer(state: ChatComposerState, actions: ChatComposerActions,
-                       recorder: AudioRecorder, sideInset: CGFloat, bottomInset: CGFloat) {
+                       recorder: AudioRecorder, margin: CGFloat) {
         let bar: ChatComposerView
         if let existing = composerBar as? ChatComposerView {
             bar = existing
@@ -3005,13 +3020,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // one — which is the same rule the keyboard block follows one level up.
             bar.onHeightChange = { [weak self] _ in self?.resizeBottomBar() }
         }
-        barLeading?.constant = sideInset
-        barTrailing?.constant = -sideInset
-        // ⛔ THE BOTTOM INSET IS STORED, NOT WRITTEN STRAIGHT ONTO THE CONSTRAINT. `positionBottomBar`
-        // owns `barBottom` and rewrites it on every keyboard event, so writing the inset here was a
-        // second author for one constraint and the keyboard always won — the composer lost its gap
-        // above the keys entirely, and at rest it stopped dipping into the indicator band.
-        composerBottomInset = bottomInset
+        // ⛔ NO INSET IS WRITTEN STRAIGHT ONTO A CONSTRAINT HERE. `positionBottomBar` is the one
+        // writer of all three (bottom and both sides) and it derives them from the keyboard band,
+        // so the rest/keyboard switch rides the keyboard's own animation block. Two things went
+        // wrong when ThreadView's values were written here instead: the keyboard handler and this
+        // method were two authors of one constraint, and the bottom one was NEVER written until the
+        // first keyboard event — the composer rested on the screen edge (his 2026-08-26 report).
+        composerMargin = margin
+        positionBottomBar()
         bar.actions = actions
         bar.apply(state)
         resizeBottomBar()
@@ -3068,13 +3084,28 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         animator.startAnimation()
     }
 
-    /// Put the container's bottom edge exactly on top of the keyboard. Called from inside
-    /// `rideKeyboard`'s animation block, so the bar travels on the keyboard's own curve.
-    /// The bar's bottom edge: above the keyboard, plus the bar's own bottom inset.
+    /// Place the bar against the keyboard band. Called from inside `rideKeyboard`'s animation
+    /// block, so the bar travels on the keyboard's own curve; also on first sight and whenever the
+    /// safe area changes, so the rest position exists before any keyboard has moved.
     ///
-    /// ⚠️ ONE CONSTRAINT, BOTH TERMS. They cannot be split across two writers — see `applyComposer`.
+    /// The SAME expressions ThreadView applied as SwiftUI padding, now decided HERE from the band
+    /// rather than from a SwiftUI state that arrives a pass later:
+    ///   · riding the keyboard: 8 above the keys, sides at the system margin;
+    ///   · at rest: the pill sinks `composerRestDip` below the safe-area line and the sides match
+    ///     that height (owner, 2026-08-24: "use same size as bottom"); a home-button phone has no
+    ///     band, so it keeps the 8 and the margin.
+    ///
+    /// ⚠️ ONE WRITER, ALL THREE CONSTRAINTS. Writing the sides from ThreadView's pass put the width
+    /// change OUTSIDE the keyboard's animation — a snap from 29 to 20 mid-open.
     private func positionBottomBar() {
-        barBottom?.constant = -(keyboardBand + composerBottomInset)
+        let band = keyboardBand
+        let safe = view.safeAreaInsets.bottom
+        let keyboardUp = band > safe + 0.5
+        let bottomInset = (keyboardUp || safe <= 0) ? Self.composerKeyboardGap : -Self.composerRestDip
+        let side = keyboardUp ? composerMargin : max(composerMargin, safe - Self.composerRestDip)
+        barBottom?.constant = -(band + bottomInset)
+        barLeading?.constant = side
+        barTrailing?.constant = -side
     }
 
     /// The container's height without animating it — used inside a block that is already animating.

@@ -2901,8 +2901,9 @@ struct ThreadView: View {
             composerState: canShowComposer ? composerState : nil,
             composerActions: composerActions,
             composerRecorder: recorder,
-            composerSideInset: composerSideInset,
-            composerBottomInset: composerBottomInset,
+            // Only the system margin crosses; the list's controller derives the bar's rest and
+            // keyboard insets from the keyboard band itself, inside the keyboard's animation.
+            composerMargin: chromeMargin,
             cid: cid
         )
         // ⛔ THE KEYBOARD MUST NOT REACH THE LIST THROUGH SWIFTUI'S SAFE AREA — owner, 2026-08-25,
