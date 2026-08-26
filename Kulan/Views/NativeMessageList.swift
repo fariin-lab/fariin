@@ -346,6 +346,30 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// this is that row's height everywhere — `measure()` returns it, so the apply path and the report
     /// path cannot hand the layout two different answers. See `reportHeight`.
     private var renderedHeights: [String: CGFloat] = [:]
+    // ⛔ THE BOTTOM BAR LIVES HERE NOW — the reference app's own arrangement, read from their
+    // `ConversationViewController+BottomBar.swift`: the bar is a subview of the CONVERSATION
+    // controller and its bottom is pinned to the keyboard, so UIKit moves it inside the keyboard's
+    // animation — the same animation this list's insets already ride. One clock, nothing to
+    // coordinate.
+    //
+    // ⚠️ THEIRS PINS TO `keyboardLayoutGuide.topAnchor`. OURS CANNOT, and that is a device-proven
+    // fact rather than a preference: the guide NEVER MOVED inside this hosted controller on his
+    // iOS 26 phone (build 682), which is why `keyboardBand` reads the notification instead. So the
+    // constraint is a plain bottom pin whose CONSTANT is driven from the same keyboard notification
+    // that drives the insets, written inside the same `UIView.animate` block. That is a stronger
+    // guarantee than the guide, not a weaker one: the bar and the list are literally in one
+    // animation, in one view hierarchy, on one layout pass.
+    //
+    // ⚠️ AND THEIRS DOES NOT ATTACH EVERY BAR. `ConversationBottomBar.shouldAttachToKeyboardLayoutGuide`
+    // is false for their blocking/error panels, which pin to the screen bottom instead — there is no
+    // keyboard when you cannot type. Ours keeps its blocked / request / muted bars in SwiftUI for
+    // the same reason.
+    let bottomBarContainer = UIView()
+    private var bottomBarBottom: NSLayoutConstraint?
+    private var bottomBarHeight: NSLayoutConstraint?
+    /// The composer, once ThreadView hands it over. Nil for the announcements list, which has none.
+    private(set) weak var composerBar: UIView?
+
     private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
     /// A send has begun and its row has not landed yet: hold the offset so the composer's own
     /// shrink cannot walk the content down before the glide walks it back up. See `updateInsets`.
@@ -608,6 +632,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             collectionView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
+
+        bottomBarContainer.translatesAutoresizingMaskIntoConstraints = false
+        bottomBarContainer.backgroundColor = .clear
+        // The container paints nothing and must not swallow touches meant for the list; its
+        // SUBVIEW (the composer) takes its own.
+        view.addSubview(bottomBarContainer)
+        let barBottom = bottomBarContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        let barHeight = bottomBarContainer.heightAnchor.constraint(equalToConstant: 0)
+        bottomBarBottom = barBottom
+        bottomBarHeight = barHeight
+        NSLayoutConstraint.activate([
+            bottomBarContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            bottomBarContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            barBottom, barHeight,
         ])
 
         // The keyboard's own layout guide, the way the reference app's bottom bar hangs from it. See
@@ -1934,9 +1973,19 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             UIView.animate(withDuration: d, delay: 0,
                            options: [UIView.AnimationOptions(rawValue: curve << 16),
                                      .beginFromCurrentState, .allowUserInteraction],
-                           animations: { self.updateInsets(); self.view.layoutIfNeeded() })
+                           animations: {
+                               // ⛔ THE BAR AND THE LIST MOVE IN THIS ONE BLOCK. That is the whole
+                               // fix: the bar used to be placed by SwiftUI's `safeAreaBar` and rode
+                               // SwiftUI's animation while the list rode this one, so the bar
+                               // arrived first and a bubble appeared to slide under it. Two curves,
+                               // one keyboard. Now there is one curve.
+                               self.positionBottomBar()
+                               self.updateInsets()
+                               self.view.layoutIfNeeded()
+                           })
         } else {
             // An interactive drag reports no duration: the finger owns the motion.
+            positionBottomBar()
             updateInsets()
         }
     }
@@ -2810,6 +2859,35 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var voiceControlButton: UIButton?
     private var voiceControlKind = 0          // 0 none · 1 pause · 2 continue (reviewing)
     private var voiceControlInset: CGFloat = 20
+
+    /// ThreadView hands the composer over once. It becomes a subview of `bottomBarContainer`,
+    /// pinned to its edges, and from then on the keyboard moves it.
+    func installComposer(_ bar: UIView) {
+        guard bar.superview !== bottomBarContainer else { return }
+        composerBar = bar
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bottomBarContainer.addSubview(bar)
+        NSLayoutConstraint.activate([
+            bar.topAnchor.constraint(equalTo: bottomBarContainer.topAnchor),
+            bar.leadingAnchor.constraint(equalTo: bottomBarContainer.leadingAnchor),
+            bar.trailingAnchor.constraint(equalTo: bottomBarContainer.trailingAnchor),
+            bar.bottomAnchor.constraint(equalTo: bottomBarContainer.bottomAnchor),
+        ])
+        positionBottomBar()
+    }
+
+    /// The bar's height, reported by whoever owns its contents.
+    func setBottomBarHeight(_ h: CGFloat) {
+        guard let c = bottomBarHeight, abs(c.constant - h) > 0.5 else { return }
+        c.constant = h
+        setComposerBarHeight(h)
+    }
+
+    /// Put the container's bottom edge exactly on top of the keyboard. Called from inside
+    /// `rideKeyboard`'s animation block, so the bar travels on the keyboard's own curve.
+    private func positionBottomBar() {
+        bottomBarBottom?.constant = -keyboardBand
+    }
 
     func setVoiceControl(_ kind: Int, inset: CGFloat) {
         voiceControlInset = inset
