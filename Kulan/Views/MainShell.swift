@@ -2013,6 +2013,9 @@ struct ArchivedChatsView: View {
     @State private var showDeleteSelected = false
     @State private var pendingDelete: Conversation?     // one chat, from the swipe or the row menu
     @State private var prefsTick = 0              // re-render after Unhide
+    /// Open Profile, from a story card's long press. The same sheet the chat list puts behind that
+    /// action, so one menu entry does not mean two different things on two screens.
+    @State private var profileGroup: StoryGroup?
     /// The strip floats over the list and travels with it — see the ZStack in `content`. Its own
     /// pair, not the chat list's: a different strip, a different height, a different List.
     /// The long press's ramp, read by the archive cards so a held one squeezes and dims. Shared, and
@@ -2306,6 +2309,20 @@ struct ArchivedChatsView: View {
         }
     }
 
+    /// The 1:1 conversation id for a person, built the way the chat list builds it: both uids
+    /// sorted, joined. A story card knows an author, not a chat.
+    private func storyCid(_ other: String) -> String {
+        [me, other].sorted().joined(separator: "_")
+    }
+
+    /// Send Message, from a story card's long press. Routed exactly like an archived chat ROW is:
+    /// handed up to the parent stack when this page is pushed, onto our own path when it is not.
+    /// Anything else would push a chat onto a stack that is not the one on screen.
+    private func openStoryChat(_ g: StoryGroup) {
+        let t = ChatTarget(id: storyCid(g.authorUid), name: g.name, photo: g.photoUrl)
+        if let onOpenChat { onOpenChat(t) } else { path.append(t) }
+    }
+
     private func archivedMenuTarget(at p: CGPoint) -> StoryMenuTarget? {
         for g in archivedStories {
             let key = MediaOpenRects.key(.storyRow, "arch-\(g.id)")
@@ -2328,7 +2345,16 @@ struct ArchivedChatsView: View {
             // mid-spring, where any fixed factor would only be right at one instant.
             let cardRect = CGRect(x: drawn.minX, y: drawn.minY, width: drawn.width,
                                   height: min(drawn.height, drawn.width * 1.46))
+            // ⛔ THE STORIES ROW'S OWN MENU, ONE SWAPPED LINE (owner 2026-08-25: "why is it
+            // different, use the long press like it does the regular time"). It held Unhide alone,
+            // so pressing a card here answered a different question than pressing the same person's
+            // card on the home row — and Send Message and Open Profile, the two that have nothing to
+            // do with hiding, were missing for no reason. Only the last entry differs, because a
+            // card that is already hidden has nothing to hide. Keep the order: the destructive-ish
+            // one stays at the bottom on both screens.
             return StoryMenuTarget(key: key, rect: cardRect, actions: [
+                CMAction(title: "Send Message", icon: "message") { openStoryChat(g) },
+                CMAction(title: "Open Profile", icon: "person.crop.circle") { profileGroup = g },
                 CMAction(title: "Unhide Story", icon: "tray.and.arrow.up") {
                     StoryPrefs.toggleHidden(g.authorUid)
                     prefsTick += 1
@@ -2415,6 +2441,14 @@ struct ArchivedChatsView: View {
                                             draft: Drafts.shared.text(conv.id),
                                             voiceDraftSecs: AudioRecorder.draftIndex[conv.id] ?? 0,
                                             voiceUnplayed: PlayedVoice.shared.lastVoiceUnplayed(conv, me: me))
+                                        // ⛔ THE OTHER TWO LINES FROM `chatListRowLabel`, AND THEY ARE WHAT
+                                        // MADE THIS ROW OPEN ONLY WHERE THE TEXT IS (owner 2026-08-25,
+                                        // screenshot: the empty band between the preview and the date was
+                                        // dead to a finger). A Button's target is its label's shape, and a
+                                        // bare ChatRow is only as wide as its content, so half the row was
+                                        // never in it. The chat list has carried both lines all along.
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .contentShape(Rectangle())   // whole row tappable (incl. empty space)
                                 }
                                 .buttonStyle(.plain)
                                 .allowsHitTesting(!selecting)
@@ -2610,6 +2644,14 @@ struct ArchivedChatsView: View {
                 Button("Cancel", role: .cancel) { pendingDelete = nil }
             } message: {
                 Text("This removes the chat from your list. It comes back if you get a new message.")
+            }
+            // Open Profile, from the story card's menu. `.story` source, same as the chat list's:
+            // there is no chat under this sheet, so Search and Wallpaper would be dead buttons.
+            .sheet(item: $profileGroup) { g in
+                NavigationStack {
+                    ContactInfoView(cid: storyCid(g.authorUid), name: g.name, photoUrl: g.photoUrl,
+                                    source: .story)
+                }
             }
             .onAppear { repo.start() }
     }
