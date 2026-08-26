@@ -1945,7 +1945,7 @@ extension BubblePlan {
         verifiedMark?.origin.y += dy
         forwarded?.origin.y += dy
         forwardedIcon?.origin.y += dy
-        retry?.origin.y += dy
+        failBadge?.origin.y += dy
         for i in reactions.indices { reactions[i].origin.y += dy }
     }
 }
