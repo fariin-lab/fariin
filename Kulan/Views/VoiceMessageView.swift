@@ -342,35 +342,17 @@ struct VoiceMessageView: View {
     /// the hosted cell a Button's press gesture claimed the touch"). A 42x42 Button on every voice
     /// bubble meant a drag starting on the play disc was swallowed and the chat would not scroll. A
     /// plain tap gesture reads identically and claims nothing.
+    /// ⛔ THE DISC IS UIKIT NOW — step one of his 2026-08-25 order to move this bubble across, and
+    /// the reason it went first is written on `VoicePlayDiscControl`: the touch, the press state and
+    /// the drawing all belonged to a control and were being done by a tap gesture on a shape.
+    ///
+    /// Everything AROUND it is untouched — the row, the waveform, the speed pill, the meta line, the
+    /// bubble's own reply swipe and context menu. `playing` and `loading` are still resolved up here
+    /// and passed down, so if the feel is wrong this reverts by putting the shape back and nothing
+    /// else moves. The waveform is step two.
     private var playButton: some View {
-        Group {
-            if loading {
-                ProgressView().tint(tint)
-                    .frame(width: Self.discSize, height: Self.discSize)
-                    .background(tint.opacity(0.22), in: Circle())
-            } else {
-                Circle().fill(tint)
-                    .frame(width: Self.discSize, height: Self.discSize)
-                    .overlay {
-                        Image(systemName: playing ? "pause.fill" : "play.fill")
-                            // Scaled with the disc: 14 was sized for a 32 circle and read as a
-                            // triangle lost inside the larger one. Same ratio as his image 2.
-                            .font(.system(size: 17))
-                            // Colour is irrelevant under destinationOut — only the alpha is read, and
-                            // this has to be fully opaque to cut a clean hole.
-                            .foregroundStyle(.black)
-                            // ⚠️ NO transition on the glyph swap. A symbol-effect bounce was tried here
-                            // (the icon travelled between play and pause) and he reported it as LAG:
-                            // the audio toggles instantly but the button looked like it answered late.
-                            // The reference app swaps the glyph with no motion at all. Keep it instant.
-                            .blendMode(.destinationOut)
-                    }
-                    .compositingGroup()
-            }
-        }
-        .frame(width: Self.discSize, height: Self.discSize)
-        .contentShape(Circle())
-        .onTapGesture { toggle() }
+        VoicePlayDisc(playing: playing, loading: loading, tint: tint, onTap: toggle)
+            .frame(width: Self.discSize, height: Self.discSize)
     }
 
     /// ONE LINE ALONG THE BOTTOM: duration and speed on the left, the chat's clock and ticks on the
