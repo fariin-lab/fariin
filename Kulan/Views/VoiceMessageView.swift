@@ -247,12 +247,7 @@ struct VoiceMessageView: View {
             // through `contentHeight`'s minHeight, which is a floor rather than a fixed size.
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: Self.discGap) {
-                    // ⛔ STEP TWO: THE WAVE IS ONE UIKIT VIEW. It was a `Canvas`, a UIKit gesture
-                    // sheet laid over it, and a third overlay for the playhead — three views on the
-                    // same 104×22 points, one of them re-running on every progress tick. See
-                    // `VoiceWaveformView`. Same drawing, same heights (`WaveformBars.display` is
-                    // still the one place that decides those), same axis-locked recogniser.
-                    VoiceWaveform(bars: displayBars, progress: progress, played: tint,
+                    WaveformBars(bars: displayBars, progress: progress, played: tint,
                              // 0.45, not 0.3. The unplayed half is most of the bar for most of a
                              // note's life, and at 30% of the tint on a saturated bubble it read as
                              // washed rather than as a waveform waiting to be played. Still clearly
@@ -347,17 +342,35 @@ struct VoiceMessageView: View {
     /// the hosted cell a Button's press gesture claimed the touch"). A 42x42 Button on every voice
     /// bubble meant a drag starting on the play disc was swallowed and the chat would not scroll. A
     /// plain tap gesture reads identically and claims nothing.
-    /// ⛔ THE DISC IS UIKIT NOW — step one of his 2026-08-25 order to move this bubble across, and
-    /// the reason it went first is written on `VoicePlayDiscControl`: the touch, the press state and
-    /// the drawing all belonged to a control and were being done by a tap gesture on a shape.
-    ///
-    /// Everything AROUND it is untouched — the row, the waveform, the speed pill, the meta line, the
-    /// bubble's own reply swipe and context menu. `playing` and `loading` are still resolved up here
-    /// and passed down, so if the feel is wrong this reverts by putting the shape back and nothing
-    /// else moves. The waveform is step two.
     private var playButton: some View {
-        VoicePlayDisc(playing: playing, loading: loading, tint: tint, onTap: toggle)
-            .frame(width: Self.discSize, height: Self.discSize)
+        Group {
+            if loading {
+                ProgressView().tint(tint)
+                    .frame(width: Self.discSize, height: Self.discSize)
+                    .background(tint.opacity(0.22), in: Circle())
+            } else {
+                Circle().fill(tint)
+                    .frame(width: Self.discSize, height: Self.discSize)
+                    .overlay {
+                        Image(systemName: playing ? "pause.fill" : "play.fill")
+                            // Scaled with the disc: 14 was sized for a 32 circle and read as a
+                            // triangle lost inside the larger one. Same ratio as his image 2.
+                            .font(.system(size: 17))
+                            // Colour is irrelevant under destinationOut — only the alpha is read, and
+                            // this has to be fully opaque to cut a clean hole.
+                            .foregroundStyle(.black)
+                            // ⚠️ NO transition on the glyph swap. A symbol-effect bounce was tried here
+                            // (the icon travelled between play and pause) and he reported it as LAG:
+                            // the audio toggles instantly but the button looked like it answered late.
+                            // The reference app swaps the glyph with no motion at all. Keep it instant.
+                            .blendMode(.destinationOut)
+                    }
+                    .compositingGroup()
+            }
+        }
+        .frame(width: Self.discSize, height: Self.discSize)
+        .contentShape(Circle())
+        .onTapGesture { toggle() }
     }
 
     /// ONE LINE ALONG THE BOTTOM: duration and speed on the left, the chat's clock and ticks on the
