@@ -67,6 +67,25 @@ enum BubbleBody: Equatable {
     case album(AlbumBody)
     /// A document: an icon or a page preview, the name, the size.
     case file(FileBody)
+    /// A shared place: the map picture flush to the top and sides, the label under it.
+    case location(LocationBody)
+    /// A shared contact: avatar, name, and a "message" button.
+    case contact(ContactBody)
+
+    struct LocationBody: Equatable {
+        var lat: Double
+        var lon: Double
+        var label: String
+    }
+
+    struct ContactBody: Equatable {
+        var uid: String
+        var name: String
+        var photo: String?
+        /// False for my own card and for the person I am already talking to — there is no chat to
+        /// open, and a button that does nothing is worse than no button.
+        var canMessage: Bool
+    }
 
     struct AlbumBody: Equatable {
         struct Tile: Equatable {

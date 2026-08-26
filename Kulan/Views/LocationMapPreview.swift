@@ -14,7 +14,7 @@ import UIKit
 // measurement grows into its neighbour.
 
 /// One rendered map, kept so scrolling past a location twice does not render it twice.
-@MainActor private enum MapSnapshotCache {
+@MainActor enum MapSnapshotCache {
     private static var images: [String: UIImage] = [:]
     /// In flight, so a cell that is configured twice in the same frame — which recycling does —
     /// starts one render rather than two.

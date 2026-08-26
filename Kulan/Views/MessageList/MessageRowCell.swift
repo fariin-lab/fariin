@@ -16,6 +16,11 @@ protocol MessageRowCellDelegate: AnyObject {
     func rowCell(_ cell: MessageRowCell, didTapQuoteJumpTo id: String)
     func rowCell(_ cell: MessageRowCell, didTapStoryQuote id: String)
     func rowCellDidTapMedia(_ cell: MessageRowCell)
+    func rowCell(_ cell: MessageRowCell, didTapAlbumTile index: Int)
+    func rowCellDidTapFile(_ cell: MessageRowCell)
+    func rowCellDidTapLocation(_ cell: MessageRowCell)
+    func rowCellDidTapContactCard(_ cell: MessageRowCell)
+    func rowCellDidTapContactMessage(_ cell: MessageRowCell)
     func rowCellDidTapReactions(_ cell: MessageRowCell)
     func rowCellDidTapRetry(_ cell: MessageRowCell)
     func rowCellDidToggleSelection(_ cell: MessageRowCell)
@@ -199,6 +204,28 @@ final class MessageRowCell: UICollectionViewCell {
             // sits above the picture and the two rects never overlap.
             if rowView.hitsMedia(p) {
                 delegate?.rowCellDidTapMedia(self)
+                return
+            }
+            if let tile = rowView.albumTileIndex(at: p) {
+                delegate?.rowCell(self, didTapAlbumTile: tile)
+                return
+            }
+            if rowView.hitsFile(p) {
+                delegate?.rowCellDidTapFile(self)
+                return
+            }
+            if rowView.hitsLocation(p) {
+                delegate?.rowCellDidTapLocation(self)
+                return
+            }
+            // The BUTTON before the card: it sits inside the card's own rect, so testing the card
+            // first would swallow every tap on it.
+            if rowView.hitsContactButton(p) {
+                delegate?.rowCellDidTapContactMessage(self)
+                return
+            }
+            if rowView.hitsContactCard(p) {
+                delegate?.rowCellDidTapContactCard(self)
                 return
             }
             if rowView.hitsQuote(p), let q = b.quote {

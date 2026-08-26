@@ -57,7 +57,8 @@ enum MessageRowModelBuilder {
         // Voice and the cards are the rest of the final phase.
         if m.isAudio { return false }
         if m.pendingMediaKind != nil || m.isPendingImage { return false }
-        if m.poll != nil || m.locationCard != nil || m.contactCard != nil { return false }
+        if m.locationCard != nil || m.contactCard != nil { return true }
+        if m.poll != nil { return false }
         if m.linkPreview != nil { return false }           // the OG card is phase 3
         if m.isFeatureMarker { return true }               // the "update the app" notice
         if m.replyTo?.isStatus == true { return false }    // the big story card above the bubble is phase 3
@@ -122,6 +123,19 @@ enum MessageRowModelBuilder {
             body = .album(albumBody(msg, ctx: ctx))
         } else if msg.isFile {
             body = .file(fileBody(msg))
+        } else if let loc = msg.locationCard {
+            body = .location(BubbleBody.LocationBody(
+                lat: loc.lat, lon: loc.lon,
+                // A share with no label says "Location", as it always did. The COORDINATES are
+                // deliberately not on the face of it: the map replaced them, and a coordinate is
+                // the one thing about a place that tells you nothing.
+                label: (loc.label?.isEmpty == false ? loc.label! : "Location")))
+        } else if let card = msg.contactCard {
+            body = .contact(BubbleBody.ContactBody(
+                uid: card.uid, name: card.name, photo: card.photo,
+                // No button for my own card, and none for the person I am already talking to —
+                // there is no chat to open, and a button that does nothing is worse than none.
+                canMessage: card.uid != ctx.me && ChatService.convId(ctx.me, card.uid) != ctx.cid))
         } else if text.jumbomojiCount > 0, msg.replyTo == nil {
             // Borderless applies only to a TEXT-ONLY message: an emoji-only REPLY keeps its bubble,
             // because the quote shares the box with it.

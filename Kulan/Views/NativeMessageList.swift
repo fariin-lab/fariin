@@ -74,6 +74,11 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onTapQuote: (String) -> Void = { _ in }              // jump to the quoted message
     var onTapStoryQuote: (_ rowId: String, _ replyId: String) -> Void = { _, _ in }
     var onTapMedia: (String) -> Void = { _ in }        // the picture opens the viewer
+    var onTapAlbumTile: (_ rowId: String, _ index: Int) -> Void = { _, _ in }
+    var onTapFile: (String) -> Void = { _ in }
+    var onTapLocation: (String) -> Void = { _ in }
+    var onTapContactCard: (String) -> Void = { _ in }
+    var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
     var onTapRetry: (String) -> Void = { _ in }
     var onToggleSelect: (String) -> Void = { _ in }
@@ -154,6 +159,11 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onTapQuote = onTapQuote
         vc.onTapStoryQuote = onTapStoryQuote
         vc.onTapMedia = onTapMedia
+        vc.onTapAlbumTile = onTapAlbumTile
+        vc.onTapFile = onTapFile
+        vc.onTapLocation = onTapLocation
+        vc.onTapContactCard = onTapContactCard
+        vc.onTapContactMessage = onTapContactMessage
         vc.onTapReactions = onTapReactions
         vc.onTapRetry = onTapRetry
         vc.onToggleSelect = onToggleSelect
@@ -429,6 +439,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onTapQuote: (String) -> Void = { _ in }
     var onTapStoryQuote: (_ rowId: String, _ replyId: String) -> Void = { _, _ in }
     var onTapMedia: (String) -> Void = { _ in }
+    var onTapAlbumTile: (_ rowId: String, _ index: Int) -> Void = { _, _ in }
+    var onTapFile: (String) -> Void = { _ in }
+    var onTapLocation: (String) -> Void = { _ in }
+    var onTapContactCard: (String) -> Void = { _ in }
+    var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
     var onTapRetry: (String) -> Void = { _ in }
     var onToggleSelect: (String) -> Void = { _ in }
@@ -2864,6 +2879,31 @@ extension MessageListController: MessageRowCellDelegate {
     func rowCellDidTapMedia(_ cell: MessageRowCell) {
         guard let id = cell.rowId else { return }
         onTapMedia(id)
+    }
+
+    func rowCell(_ cell: MessageRowCell, didTapAlbumTile index: Int) {
+        guard let id = cell.rowId else { return }
+        onTapAlbumTile(id, index)
+    }
+
+    func rowCellDidTapFile(_ cell: MessageRowCell) {
+        guard let id = cell.rowId else { return }
+        onTapFile(id)
+    }
+
+    func rowCellDidTapLocation(_ cell: MessageRowCell) {
+        guard let id = cell.rowId else { return }
+        onTapLocation(id)
+    }
+
+    func rowCellDidTapContactCard(_ cell: MessageRowCell) {
+        guard let id = cell.rowId else { return }
+        onTapContactCard(id)
+    }
+
+    func rowCellDidTapContactMessage(_ cell: MessageRowCell) {
+        guard let id = cell.rowId else { return }
+        onTapContactMessage(id)
     }
 
     func rowCellDidTapReactions(_ cell: MessageRowCell) {

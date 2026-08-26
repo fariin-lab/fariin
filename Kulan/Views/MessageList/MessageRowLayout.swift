@@ -75,6 +75,28 @@ struct FilePlan {
     var spinner: CGRect?
 }
 
+/// A shared place. The map sits where a photo's picture sits — flush to the top and the sides —
+/// with the words below it under the same background and the same clip. One bubble, not a card
+/// inside a card.
+struct LocationPlan {
+    var map: CGRect                     // bubble coordinates
+    var pin: CGRect
+    var label: CGRect
+    var labelAttr: NSAttributedString
+    var chevron: CGRect
+}
+
+/// A shared contact: the avatar row, then a full-width "message" button under it.
+struct ContactPlan {
+    var avatar: CGRect
+    var name: CGRect
+    var nameAttr: NSAttributedString
+    var chevron: CGRect
+    var button: CGRect?
+    var buttonLabel: CGRect?
+    var buttonAttr: NSAttributedString?
+}
+
 struct BubblePlan {
     var bubble: CGRect                  // the bubble's own frame, row coordinates
     var radii: BubbleRadii
@@ -99,6 +121,8 @@ struct BubblePlan {
     var mediaPlan: MediaPlan?           // set only for a photo/video/gif bubble
     var albumPlan: AlbumPlan?
     var filePlan: FilePlan?
+    var locationPlan: LocationPlan?
+    var contactPlan: ContactPlan?
 
     // Outside the bubble, row coordinates
     var avatar: CGRect?
@@ -363,6 +387,18 @@ enum MessageRowLayout {
                         topSpacing: topSpacing, y: y,
                         senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
                         forwardedSize: forwardedSize, forwardedIconW: forwardedIconW)
+        case .location(let l):
+            return location(l, row: b, originX: originX, columnX: columnX, columnW: columnW,
+                            maxBubble: maxBubble, textColor: textColor, metaColor: metaColor,
+                            topSpacing: topSpacing, y: y,
+                            senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                            forwardedSize: forwardedSize, forwardedIconW: forwardedIconW)
+        case .contact(let c):
+            return contact(c, row: b, originX: originX, columnX: columnX, columnW: columnW,
+                           maxBubble: maxBubble, textColor: textColor, metaColor: metaColor,
+                           topSpacing: topSpacing, y: y,
+                           senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                           forwardedSize: forwardedSize, forwardedIconW: forwardedIconW)
         }
 
         let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
@@ -383,7 +419,7 @@ enum MessageRowLayout {
                 meta: .zero, metaOnOwnLine: false, quote: nil, quoteInner: nil,
                 bodyAttr: bodyAttr, links: [], textColor: textColor, metaColor: metaColor,
                 tombstoneIcon: CGRect(x: 14, y: (bubbleH - iconW) / 2, width: iconW, height: iconW),
-                mediaPlan: nil, albumPlan: nil, filePlan: nil,
+                mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil,
                 avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
                 forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
                 retry: nil)
@@ -458,7 +494,7 @@ enum MessageRowLayout {
             text: textRect, meta: metaRect, metaOnOwnLine: metaOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: bodyAttr, links: links, textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -662,7 +698,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: plan, albumPlan: nil, filePlan: nil,
+            tombstoneIcon: nil, mediaPlan: plan, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -768,7 +804,7 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: plan, filePlan: nil,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: plan, filePlan: nil, locationPlan: nil, contactPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)
@@ -853,7 +889,159 @@ enum MessageRowLayout {
             text: .zero, meta: metaRect, metaOnOwnLine: true,
             quote: quoteRect, quoteInner: quoteInner,
             bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
-            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: plan,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: plan, locationPlan: nil, contactPlan: nil,
+            avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
+            forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
+            retry: nil)
+        let bottom = decorations(b, plan: &out, bubbleRect: bubbleRect, columnX: columnX,
+                                 columnW: columnW, originX: originX, topSpacing: topSpacing,
+                                 senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                                 forwardedSize: forwardedSize, forwardedIconW: forwardedIconW,
+                                 y: bubbleRect.maxY)
+        return BubbleResult(plan: out, totalHeight: bottom)
+    }
+
+    // ── A shared place ──
+
+    /// ⚠️ THE MAP'S HEIGHT IS STATED, NOT MEASURED. The row is planned before the snapshot exists,
+    /// and a height that arrives with the picture is the bloom every note in this file warns about.
+    static let locationMapHeight: CGFloat = 140
+
+    private static func location(_ l: BubbleBody.LocationBody, row b: BubbleRow,
+                                 originX: CGFloat, columnX: CGFloat, columnW: CGFloat,
+                                 maxBubble: CGFloat, textColor: UIColor, metaColor: UIColor,
+                                 topSpacing: CGFloat, y startY: CGFloat,
+                                 senderNameAttr: NSAttributedString?, senderNameSize: CGSize,
+                                 forwardedSize: CGSize, forwardedIconW: CGFloat) -> BubbleResult {
+        let y = startY
+        let bubbleW = min(columnW, maxBubble * 0.85)
+        var innerY: CGFloat = 0
+        var quoteRect: CGRect?
+        var quoteInner: QuoteInnerPlan?
+        if let q = b.quote {
+            let (size, inner) = quoteSize(q, textColor: textColor,
+                                          maxWidth: max(1, bubbleW - BubbleMetrics.hPad * 2))
+            quoteInner = inner
+            innerY = BubbleMetrics.vPad
+            quoteRect = CGRect(x: BubbleMetrics.hPad, y: innerY,
+                               width: bubbleW - BubbleMetrics.hPad * 2, height: size.height)
+            innerY += size.height + 4
+        }
+
+        let map = CGRect(x: 0, y: innerY, width: bubbleW, height: locationMapHeight)
+        innerY = map.maxY
+
+        let pad: CGFloat = 12, gap: CGFloat = 10
+        let labelAttr = NSAttributedString(string: l.label, attributes: [
+            .font: UIFont.systemFont(ofSize: 16, weight: .semibold), .foregroundColor: textColor])
+        let pinW: CGFloat = 22, chevW: CGFloat = 14
+        let labelH = lineSizeOf(labelAttr).height
+        let rowH = max(pinW, labelH)
+        let rowTop = innerY + pad
+        let labelW = max(1, bubbleW - pad * 2 - pinW - gap - 6 - chevW)
+        let plan = LocationPlan(
+            map: map,
+            pin: CGRect(x: pad, y: rowTop + (rowH - pinW) / 2, width: pinW, height: pinW),
+            label: CGRect(x: pad + pinW + gap, y: rowTop + (rowH - labelH) / 2,
+                          width: labelW, height: labelH),
+            labelAttr: labelAttr,
+            chevron: CGRect(x: bubbleW - pad - chevW, y: rowTop + (rowH - chevW) / 2,
+                            width: chevW, height: chevW))
+
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
+        let metaSize = BubbleText.lineSize(metaAttr)
+        let metaRect = CGRect(x: bubbleW - pad - metaSize.width, y: rowTop + rowH + 8,
+                              width: metaSize.width, height: metaSize.height)
+        innerY = metaRect.maxY + pad
+
+        let bubbleRect = CGRect(x: b.isMe ? (columnX + columnW - bubbleW) : columnX,
+                                y: y, width: bubbleW, height: innerY)
+        var out = BubblePlan(
+            bubble: bubbleRect, radii: b.radii, isCapsule: false, fill: b.fill, rim: b.rim,
+            text: .zero, meta: metaRect, metaOnOwnLine: true,
+            quote: quoteRect, quoteInner: quoteInner,
+            bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
+            locationPlan: plan, contactPlan: nil,
+            avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
+            forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
+            retry: nil)
+        let bottom = decorations(b, plan: &out, bubbleRect: bubbleRect, columnX: columnX,
+                                 columnW: columnW, originX: originX, topSpacing: topSpacing,
+                                 senderNameAttr: senderNameAttr, senderNameSize: senderNameSize,
+                                 forwardedSize: forwardedSize, forwardedIconW: forwardedIconW,
+                                 y: bubbleRect.maxY)
+        return BubbleResult(plan: out, totalHeight: bottom)
+    }
+
+    // ── A shared contact ──
+
+    private static func contact(_ c: BubbleBody.ContactBody, row b: BubbleRow,
+                                originX: CGFloat, columnX: CGFloat, columnW: CGFloat,
+                                maxBubble: CGFloat, textColor: UIColor, metaColor: UIColor,
+                                topSpacing: CGFloat, y startY: CGFloat,
+                                senderNameAttr: NSAttributedString?, senderNameSize: CGSize,
+                                forwardedSize: CGSize, forwardedIconW: CGFloat) -> BubbleResult {
+        let y = startY
+        let bubbleW = min(columnW, maxBubble)
+        let pad: CGFloat = 12, gap: CGFloat = 10, avatar: CGFloat = 44, chevW: CGFloat = 14
+        var innerY: CGFloat = 0
+        var quoteRect: CGRect?
+        var quoteInner: QuoteInnerPlan?
+        if let q = b.quote {
+            let (size, inner) = quoteSize(q, textColor: textColor, maxWidth: max(1, bubbleW - pad * 2))
+            quoteInner = inner
+            innerY = pad
+            quoteRect = CGRect(x: pad, y: innerY, width: bubbleW - pad * 2, height: size.height)
+            innerY += size.height + 10
+        } else {
+            innerY = pad
+        }
+
+        let nameAttr = NSAttributedString(string: c.name, attributes: [
+            .font: UIFont.systemFont(ofSize: 17, weight: .semibold), .foregroundColor: textColor])
+        let nameH = lineSizeOf(nameAttr).height
+        let rowH = max(avatar, nameH)
+        let nameW = max(1, bubbleW - pad * 2 - avatar - gap - 6 - chevW)
+        var plan = ContactPlan(
+            avatar: CGRect(x: pad, y: innerY + (rowH - avatar) / 2, width: avatar, height: avatar),
+            name: CGRect(x: pad + avatar + gap, y: innerY + (rowH - nameH) / 2,
+                         width: nameW, height: nameH),
+            nameAttr: nameAttr,
+            chevron: CGRect(x: bubbleW - pad - chevW, y: innerY + (rowH - chevW) / 2,
+                            width: chevW, height: chevW),
+            button: nil, buttonLabel: nil, buttonAttr: nil)
+        innerY += rowH + 10
+
+        let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor, showClock: true)
+        let metaSize = BubbleText.lineSize(metaAttr)
+        let metaRect = CGRect(x: bubbleW - pad - metaSize.width, y: innerY,
+                              width: metaSize.width, height: metaSize.height)
+        innerY = metaRect.maxY + 10
+
+        if c.canMessage {
+            let attr = NSAttributedString(string: "message", attributes: [
+                .font: UIFont.systemFont(ofSize: 16, weight: .medium), .foregroundColor: textColor])
+            let size = lineSizeOf(attr)
+            let button = CGRect(x: pad, y: innerY, width: bubbleW - pad * 2, height: 40)
+            plan.button = button
+            plan.buttonAttr = attr
+            plan.buttonLabel = CGRect(x: button.midX - size.width / 2,
+                                      y: button.midY - size.height / 2,
+                                      width: size.width, height: size.height)
+            innerY = button.maxY
+        }
+        innerY += pad
+
+        let bubbleRect = CGRect(x: b.isMe ? (columnX + columnW - bubbleW) : columnX,
+                                y: y, width: bubbleW, height: innerY)
+        var out = BubblePlan(
+            bubble: bubbleRect, radii: b.radii, isCapsule: false, fill: b.fill, rim: b.rim,
+            text: .zero, meta: metaRect, metaOnOwnLine: true,
+            quote: quoteRect, quoteInner: quoteInner,
+            bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
+            tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil,
+            locationPlan: nil, contactPlan: plan,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             retry: nil)

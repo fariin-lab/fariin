@@ -310,6 +310,8 @@ final class MessageRowView: UIView {
     private var mediaView: MediaBubbleView?
     private var albumView: AlbumBubbleView?
     private var fileView: FileBubbleView?
+    private var locationView: LocationBubbleView?
+    private var contactView: ContactBubbleView?
     private var quoteView: BubbleQuoteView?
     private var avatarView: RowAvatarView?
     private var senderLabel: UILabel?
@@ -506,6 +508,8 @@ final class MessageRowView: UIView {
         applyMedia(b, model: m, cid: cid)
         applyAlbum(b, model: m, cid: cid)
         applyFile(b, model: m, cid: cid)
+        applyLocation(b, model: m, dark: dark)
+        applyContact(b, model: m)
         applyTombstone(b)
         applyQuote(b, model: m, cid: cid)
         applySender(b, model: m)
@@ -578,6 +582,36 @@ final class MessageRowView: UIView {
         v.isHidden = false
         v.frame = CGRect(origin: .zero, size: b.bubble.size)
         v.configure(f, plan: plan, tint: b.textColor, cid: cid)
+    }
+
+    private func applyLocation(_ b: BubblePlan, model m: MessageRowModel, dark: Bool) {
+        guard let plan = b.locationPlan,
+              case .bubble(let row) = m.content, case .location(let l) = row.body else {
+            locationView?.isHidden = true
+            locationView?.prepareForReuse()
+            return
+        }
+        let v = locationView ?? {
+            let v = LocationBubbleView(); bubbleBox.insertSubview(v, aboveSubview: fill); locationView = v; return v
+        }()
+        v.isHidden = false
+        v.frame = CGRect(origin: .zero, size: b.bubble.size)
+        v.layer.mask = bubbleMask(b)      // the map is flush to the corners, so it wears them
+        v.configure(l, plan: plan, tint: b.textColor, dark: dark)
+    }
+
+    private func applyContact(_ b: BubblePlan, model m: MessageRowModel) {
+        guard let plan = b.contactPlan,
+              case .bubble(let row) = m.content, case .contact(let c) = row.body else {
+            contactView?.isHidden = true
+            return
+        }
+        let v = contactView ?? {
+            let v = ContactBubbleView(); bubbleBox.insertSubview(v, aboveSubview: fill); contactView = v; return v
+        }()
+        v.isHidden = false
+        v.frame = CGRect(origin: .zero, size: b.bubble.size)
+        v.configure(c, plan: plan, tint: b.textColor)
     }
 
     /// The bubble's own outline as a mask. These bubbles carry four different radii (a cluster
@@ -796,6 +830,38 @@ final class MessageRowView: UIView {
         return media.media.offsetBy(dx: b.bubble.minX, dy: b.bubble.minY).contains(point)
     }
 
+    /// The map or its label — the whole card opens Maps.
+    func hitsLocation(_ point: CGPoint) -> Bool {
+        guard let p = plan, case .bubble(let b) = p.body, b.locationPlan != nil else { return false }
+        return b.bubble.contains(point)
+    }
+
+    /// The contact card's "message" button, specifically. Tapping the card ELSEWHERE opens the
+    /// person's profile, so the two targets have to be told apart.
+    func hitsContactButton(_ point: CGPoint) -> Bool {
+        guard let p = plan, case .bubble(let b) = p.body,
+              let c = b.contactPlan, let button = c.button else { return false }
+        return button.offsetBy(dx: b.bubble.minX, dy: b.bubble.minY).contains(point)
+    }
+
+    func hitsContactCard(_ point: CGPoint) -> Bool {
+        guard let p = plan, case .bubble(let b) = p.body, b.contactPlan != nil else { return false }
+        return b.bubble.contains(point)
+    }
+
+    /// Which album tile is under this point, if any.
+    func albumTileIndex(at point: CGPoint) -> Int? {
+        guard let p = plan, case .bubble(let b) = p.body, let a = b.albumPlan else { return nil }
+        let local = CGPoint(x: point.x - b.bubble.minX, y: point.y - b.bubble.minY)
+        return albumView?.tileIndex(at: local, plan: a)
+    }
+
+    /// The file row — tapping it opens the document.
+    func hitsFile(_ point: CGPoint) -> Bool {
+        guard let p = plan, case .bubble(let b) = p.body, b.filePlan != nil else { return false }
+        return b.bubble.contains(point)
+    }
+
     func hitsReactions(_ point: CGPoint) -> Bool {
         guard let p = plan, case .bubble(let b) = p.body else { return false }
         return b.reactions.contains { $0.contains(point) }
@@ -896,6 +962,7 @@ final class MessageRowView: UIView {
         mediaView?.prepareForReuse()
         albumView?.prepareForReuse()
         fileView?.prepareForReuse()
+        locationView?.prepareForReuse()
         model = nil
         plan = nil
     }

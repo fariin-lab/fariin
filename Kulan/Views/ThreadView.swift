@@ -2690,6 +2690,51 @@ struct ThreadView: View {
                         present: { MediaPresentGate.present { viewerImage = m } })
                 }
             },
+            // ALBUM TILES FLY TOO. A tile's rect is registered under "<messageId>-<index>", which is
+            // exactly the `startId` the pager is handed — so the geometry was already there.
+            onTapAlbumTile: { id, index in
+                guard let m = repo.items.first(where: { $0.rowId == id }) else { return }
+                guard m.sendState == nil else { return }
+                let gallery = [m]
+                let startId = "\(m.id)-\(index)"
+                if m.album.indices.contains(index), m.album[index].isVideo {
+                    albumScreen = m
+                    return
+                }
+                MediaOpen.flyOrPresent(
+                    imageUrl: m.album.indices.contains(index) ? m.album[index].imageUrl : nil,
+                    rectKey: MediaOpenRects.key(.chat, startId), clip: MediaOpenRects.clipRect,
+                    present: {
+                        MediaPresentGate.present {
+                            albumViewer = AlbumViewerWrap(gallery: gallery, startId: startId)
+                        }
+                    })
+            },
+            onTapFile: { id in
+                if let m = repo.items.first(where: { $0.rowId == id }), m.sendState == nil { openFile(m) }
+            },
+            onTapLocation: { id in
+                guard let m = repo.items.first(where: { $0.rowId == id }), let loc = m.locationCard else { return }
+                let q = (loc.label ?? "Shared Location")
+                    .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "Location"
+                // WebLink deliberately does NOT sheet maps.apple.com: a shared location has to land
+                // in the Maps app with the pin on it, not on a web page.
+                if let u = URL(string: "http://maps.apple.com/?ll=\(loc.lat),\(loc.lon)&q=\(q)") {
+                    WebLink.open(u)
+                }
+            },
+            onTapContactCard: { id in
+                guard let m = repo.items.first(where: { $0.rowId == id }), let card = m.contactCard else { return }
+                tappedMember = GroupInfoView.MemberAction(
+                    id: card.uid, name: card.name, isAdmin: false)
+            },
+            onTapContactMessage: { id in
+                guard let m = repo.items.first(where: { $0.rowId == id }), let card = m.contactCard else { return }
+                guard card.uid != me, ChatService.convId(me, card.uid) != cid else { return }
+                AppRouter.shared.pendingChatName = card.name     // so a brand-new chat shows the name
+                AppRouter.shared.pendingChatPhoto = card.photo   // and photo, not the placeholder
+                AppRouter.shared.pendingChatId = ChatService.convId(me, card.uid)
+            },
             onTapReactions: { id in
                 if let m = repo.items.first(where: { $0.rowId == id }) { reactorsTarget = m }
             },
