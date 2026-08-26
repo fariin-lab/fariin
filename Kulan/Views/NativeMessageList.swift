@@ -386,6 +386,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var barTrailing: NSLayoutConstraint?
     private var barBottom: NSLayoutConstraint?
     private var barHeightC: NSLayoutConstraint?
+    private var barAnimator: UIViewPropertyAnimator?
     /// The composer, once ThreadView hands it over. Nil for the announcements list, which has none.
     private(set) weak var composerBar: UIView?
 
@@ -535,6 +536,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var swipingId: String?
     private var swipeArrow: UIImageView?
     private var swipeTriggered = false         // crossed the reply threshold this drag (haptic + fire on release)
+    /// Their `swipeActionOffsetThreshold`, verbatim. Ours was 50.
+    private static let swipeThreshold: CGFloat = 55
 
     // Floating date pill (the sticky day header), rendered in UIKit and updated directly from
     // scrollViewDidScroll â€” NOT via a SwiftUI binding. Shows the topmost visible row's day while scrolling,
@@ -2123,7 +2126,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
         // Step 4. Plain writes, outside the wrapper. Inside the keyboard's block they ride the keys;
         // anywhere else (composer growth, the pinned bar) they land at once, as theirs do.
-        if wasScrolledToBottom {
+        // ⛔ A CONTEXT MENU IS UP: CHANGE THE INSETS, MOVE NOTHING. Theirs, verbatim, in this
+        // exact position in `updateContentInsets`:
+        //
+        //     } else if isPresentingContextMenu {
+        //         // Do nothing
+        //     }
+        //
+        // His report: keyboard open, long-press a message, and the chat scrolls. It is not the menu
+        // that scrolls it — it is the KEYBOARD WE DISMISS to make room for the menu. That posts a
+        // hide notification, the clearance drops by the keyboard's height, and the lockstep shift
+        // walks the list. Meanwhile the menu's lifted snapshot is anchored to the frame the bubble
+        // had BEFORE any of that, so the preview sits still while the conversation slides out from
+        // under it.
+        //
+        // ⚠️ The flag has to be armed BEFORE the keyboard is asked to leave, or this guard is not
+        // in place when the notification arrives — see `presentCustomMenu`.
+        if contextMenuVisible {
+            // Nothing.
+        } else if wasScrolledToBottom {
             // Theirs, verbatim: "If we were scrolled to the bottom, don't do any fancy math. Just
             // stay at the bottom."
             let bound = maxContentOffsetY
@@ -2468,20 +2489,35 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         case .changed:
             guard let cell = swipingCell else { return }
             if VoiceScrubState.active { resetSwipe(animated: false); return }   // waveform took over mid-drag
-            // 1:1 with the finger to the threshold, then RUBBER-BAND (drag past -70 moves at quarter speed,
-            // capped) â€” attached to the finger up close, physical resistance past the commit point.
-            let t = min(0, g.translation(in: collectionView).x)
-            let tx = t > -70 ? t : -70 + max(-30, (t + 70) * 0.25)
+            // ⛔ THEIR NUMBERS, read from `CVComponentMessage`. 1:1 with the finger up to the
+            // threshold, then the overflow moves at a QUARTER speed — resistance past the commit
+            // point, with no cap on how far it can go:
+            //
+            //     } else if alpha > swipeActionOffsetThreshold {
+            //         let overflow = alpha - swipeActionOffsetThreshold
+            //         alpha = swipeActionOffsetThreshold + overflow / 4
+            //
+            // Ours started resisting at 70 and capped the overflow at 30, which is a different feel
+            // in both directions. Mirrored here because our reply swipe goes left where theirs goes
+            // right.
+            let raw = -min(0, g.translation(in: collectionView).x)          // magnitude, always >= 0
+            let eased = raw > Self.swipeThreshold
+                ? Self.swipeThreshold + (raw - Self.swipeThreshold) / 4
+                : raw
+            let tx = -eased
             // Move the BUBBLE VIEW inside the cell, NOT the cell: the cell's frame never changes, so the
             // collection view has nothing to react to and the neighbours stay frozen.
             (cell as? MessageRowCell)?.previewBubble.transform = CGAffineTransform(translationX: tx, y: 0)
-            let progress = min(1, abs(tx) / 50)
+            let progress = min(1, eased / Self.swipeThreshold)
             swipeArrow?.alpha = progress
             swipeArrow?.transform = CGAffineTransform(scaleX: 0.6 + 0.4 * progress, y: 0.6 + 0.4 * progress)
-            if abs(tx) >= 50, !swipeTriggered {
+            // ⚠️ ARMED ON THE RAW TRANSLATION, not the eased one — theirs tests the unmodified
+            // offset against the threshold, and the haptic fires the INSTANT it is crossed (and
+            // again on any re-crossing), never on release.
+            if raw >= Self.swipeThreshold, !swipeTriggered {
                 swipeTriggered = true
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            } else if abs(tx) < 50 {
+            } else if raw < Self.swipeThreshold {
                 swipeTriggered = false
             }
         case .ended, .cancelled, .failed:
@@ -2526,13 +2562,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let bubble = (cell as? MessageRowCell)?.previewBubble
         let reset = { bubble?.transform = .identity; arrow?.alpha = 0 }
         if animated {
-            // Seed the spring with the release velocity so a fast flick snaps back livelier than a slow let-go.
-            let distance = abs(bubble?.transform.tx ?? 0)
-            let v = distance > 0 ? min(3, abs(velocity) / max(1, distance)) : 0.4
-            // 0.28/0.72 matches the SwiftUI bubbles' spring exactly, so a text message and a voice/media
-            // message return with the same weight instead of two different feels.
-            UIView.animate(withDuration: 0.28, delay: 0, usingSpringWithDamping: 0.72, initialSpringVelocity: v,
-                           options: [.allowUserInteraction], animations: reset) { _ in arrow?.removeFromSuperview() }
+            // ⛔ A PLAIN 0.2s EASE, NO SPRING AND NO VELOCITY HAND-OFF. Theirs is exactly:
+            //
+            //     UIView.animate(withDuration: 0.2, animations: animations)
+            //
+            // Ours seeded a spring from the release velocity, which is livelier than theirs and is
+            // the reason the snap-back felt different. Their gesture reads velocity only for the
+            // LEFT swipe's message-detail transition, never for the reply snap-back.
+            UIView.animate(withDuration: 0.2, delay: 0, options: [.allowUserInteraction],
+                           animations: reset) { _ in arrow?.removeFromSuperview() }
         } else {
             reset(); arrow?.removeFromSuperview()
         }
@@ -2675,6 +2713,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // My messages hug the right edge; alignment follows the bubble's own side.
         let alignRight = src.frame.midX > window.bounds.midX
 
+        // ⚠️ ARMED FIRST, BEFORE THE KEYBOARD IS TOUCHED. `onMenuCloseKeyboard` resigns the first
+        // responder synchronously, which posts the hide notification on this same turn — so if the
+        // flag were set after it (as it was), `updateInsets` would already have walked the list by
+        // the time the guard existed.
+        contextMenuVisible = true
         let keyboardWasUp = onMenuCloseKeyboard()
         let overlay = CMOverlay(previewView: container, sourceFrame: src.frame,
                                 alignRight: alignRight, actions: actions, react: react) { [weak self] in
@@ -2706,10 +2749,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         activeMenuCell?.isUserInteractionEnabled = true
         activeMenuCell = nil
         collectionView.panGestureRecognizer.isEnabled = true
-        if menu.keyboardWasUp { onMenuRestoreKeyboard() }
+        // ⛔ CLEAR THE FLAG BEFORE THE KEYBOARD COMES BACK. Theirs is asymmetric on purpose, and
+        // their own sequencing proves it: the menu controller is niled as the out-animation
+        // completes, and only then does `popKeyBoard()` run — so the keyboard-show layout passes
+        // land with `isPresentingContextMenu == false` and ARE compensated.
+        //
+        // Dismissing the keyboard for the menu is uncompensated (the list must not move); restoring
+        // it afterwards is compensated (the list must come back). Restoring while the flag was still
+        // up would suppress the return shift and leave the conversation a keyboard's height short.
         activeMenu = nil
         contextMenuVisible = false
         contextMenuSourceId = nil
+        if menu.keyboardWasUp { onMenuRestoreKeyboard() }
         interactionHoldUntil = Date()
         settleFlush()   // land everything the menu held back
     }
@@ -2968,7 +3019,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let width = max(1, view.bounds.width - (barLeading?.constant ?? 0) * 2)
         let barH = bar.preferredHeight(forWidth: width)
         let container = 6 + barH + (-(barBottom?.constant ?? 0))
-        guard abs(heightC.constant - barH) > 0.5 || abs(containerC.constant - container) > 0.5 else { return }
+        // ⚠️ THEIR THRESHOLD IS 1pt, NOT A HAIR. Their toolbar's `bounds` observer reads
+        // `abs(old.height - new.height) > 1` before telling anyone, so sub-point noise from a
+        // layout pass never starts an animation or moves the reader.
+        guard abs(heightC.constant - barH) > 1 || abs(containerC.constant - container) > 1 else { return }
+
+        // ⛔ KILL THE IN-FLIGHT ANIMATION BEFORE STARTING ANOTHER. Theirs does this first thing in
+        // `quotedReplyDraft.didSet` — `layer.removeAllAnimations()` — so cancelling a reply while
+        // the preview is still opening REPLACES that animation instead of stacking a second one on
+        // the same constraint. Two animators fighting over one height is drift you cannot arithmetic
+        // your way out of.
+        barAnimator?.stopAnimation(true)
+        barAnimator = nil
 
         let apply = { [weak self] in
             guard let self else { return }
@@ -2982,6 +3044,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             return
         }
         let animator = UIViewPropertyAnimator(duration: 0.25, dampingRatio: 0.9) { apply() }
+        animator.addCompletion { [weak self] _ in self?.barAnimator = nil }
+        barAnimator = animator
         animator.startAnimation()
     }
 
