@@ -70,6 +70,16 @@ enum BackgroundUploadError: LocalizedError {
 final class BackgroundUploader: NSObject {
     static let shared = BackgroundUploader()
 
+    /// What a caller must say for an upload to survive the app being killed: which message the
+    /// finished URL belongs to, and under which field. Without it the upload still works, it just
+    /// cannot be picked up by a later launch — see `PendingUpload`.
+    struct Attach {
+        let cid: String
+        let messageId: String
+        let urlField: String
+        let enc: EncMeta?
+    }
+
     /// ⚠️ THE IDENTIFIER IS PART OF THE CONTRACT WITH iOS, not a name. Recreating a session with the
     /// same string is how a relaunched app is handed back the transfers the system was carrying for
     /// it. Change it and every upload in flight at that moment is orphaned.
@@ -130,7 +140,8 @@ final class BackgroundUploader: NSObject {
 
     /// Uploads `file` to `path` in the app's Storage bucket and returns a download URL of the same
     /// shape `StorageReference.downloadURL()` returns, so callers cannot tell the difference.
-    func upload(file: URL, to path: String, contentType: String, progressId: String?) async throws -> String {
+    func upload(file: URL, to path: String, contentType: String, progressId: String?,
+                attach: Attach? = nil) async throws -> String {
         guard let bucket = FirebaseApp.app()?.options.storageBucket, !bucket.isEmpty else {
             throw BackgroundUploadError.noBucket
         }
@@ -140,6 +151,19 @@ final class BackgroundUploader: NSObject {
 
         let uploadURL = try await startSession(bucket: bucket, path: path, contentType: contentType,
                                                size: size, token: token)
+        // ⛔ THE ADDRESS IS WRITTEN DOWN BEFORE A SINGLE BYTE GOES. If this process dies in the next
+        // second, the next launch still knows where the transfer lives, what was being sent and
+        // where the answer belongs. Written here rather than after the upload for exactly that
+        // reason: the window this protects starts now.
+        let jobId = UUID().uuidString
+        if let attach {
+            PendingUploadStore.add(PendingUpload(id: jobId, uploadURL: uploadURL, bucket: bucket,
+                                                 storagePath: path, filePath: file.path,
+                                                 cid: attach.cid, messageId: attach.messageId,
+                                                 urlField: attach.urlField, enc: attach.enc,
+                                                 startedAt: Date()))
+        }
+        defer { if attach != nil { PendingUploadStore.remove(jobId) } }
         var reply: Data
         do {
             reply = try await send(file: file, from: 0, to: uploadURL, size: size,
@@ -161,6 +185,22 @@ final class BackgroundUploader: NSObject {
                                    token: token, progressId: progressId)
         }
         return try downloadURL(bucket: bucket, path: path, reply: reply)
+    }
+
+    /// Finish a job this process did not start — the whole point of `PendingUpload`.
+    ///
+    /// Asks the address how much it kept and sends only what is missing. An upload interrupted at
+    /// 90% costs the last 10%; one that had already arrived costs a single finalize. Returns the
+    /// download URL, which the caller hangs on the message.
+    func finish(_ job: PendingUpload) async throws -> String {
+        guard let user = Auth.auth().currentUser else { throw BackgroundUploadError.notSignedIn }
+        let token = try await user.getIDToken()
+        let file = URL(fileURLWithPath: job.filePath)
+        let size = fileSize(file)
+        let received = try await receivedOffset(job.uploadURL, token: token)
+        let reply = try await send(file: file, from: min(received, size), to: job.uploadURL,
+                                   size: size, token: token, progressId: nil)
+        return try downloadURL(bucket: job.bucket, path: job.storagePath, reply: reply)
     }
 
     // MARK: - The three commands

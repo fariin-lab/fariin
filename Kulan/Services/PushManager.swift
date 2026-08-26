@@ -55,7 +55,14 @@ final class AppDelegate: NSObject, UIApplicationDelegate, MessagingDelegate, UNU
         // Transfers the SYSTEM was still carrying for a process that no longer exists. Nobody is
         // waiting on them and nothing will attach their result to a message, so they are cancelled
         // rather than left to finish into storage we pay for. See `BackgroundUploader.adopt`.
-        if UploadEngine.backgroundEnabled { BackgroundUploader.shared.adopt() }
+        if UploadEngine.backgroundEnabled {
+            BackgroundUploader.shared.adopt()
+            // ⚠️ AND `adopt` CANCELLING THOSE TASKS LOSES NOTHING, which is only true because of the
+            // line below. The SERVER still holds every byte it received; the resume asks it how many
+            // and sends the rest. Cancelling the orphaned task just stops us paying to finish a
+            // transfer whose result nobody in this process is waiting for.
+            Task { await ChatService.resumePendingUploads() }
+        }
 
         // REAL on-disk offline persistence (the win the JS SDK couldn't do in Hermes).
         let settings = FirestoreSettings()

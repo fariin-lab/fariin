@@ -168,7 +168,8 @@ enum ChatService {
     /// FILLS instead of a spinner that only says "busy".
     static func uploadEncrypted(_ bytes: Data, to path: String,
                                 contentType: String = "application/octet-stream",
-                                progressId: String? = nil) async throws -> String {
+                                progressId: String? = nil,
+                                attach: BackgroundUploader.Attach? = nil) async throws -> String {
         let ref = Storage.storage().reference().child(path)
         let meta = StorageMetadata(); meta.contentType = contentType
 
@@ -197,7 +198,8 @@ enum ChatService {
                     if UploadEngine.backgroundEnabled {
                         return try await BackgroundUploader.shared.upload(file: tmp, to: path,
                                                                           contentType: contentType,
-                                                                          progressId: progressId)
+                                                                          progressId: progressId,
+                                                                          attach: attach)
                     }
                     try await putFileReportingProgress(ref, from: tmp, metadata: meta, progressId: progressId)
                     return try await ref.downloadURL().absoluteString
@@ -261,6 +263,37 @@ enum ChatService {
         try bytes.write(to: tmp, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         defer { try? FileManager.default.removeItem(at: tmp) }
         return try await body(tmp)
+    }
+
+    /// ⛔ FINISH WHAT A DEAD PROCESS STARTED. Called once at launch.
+    ///
+    /// `BackgroundUploader` keeps the transfer alive when the app is merely backgrounded; this is
+    /// for when the app was KILLED. Each job carries the private upload address, the staged
+    /// ciphertext, and which field on which message the finished URL belongs in. Ask what landed,
+    /// send the rest, attach it.
+    ///
+    /// Silent by design: a job that cannot be finished is LEFT for the next launch rather than
+    /// deleted, unless its staged file is gone, in which case there is nothing left to send and the
+    /// message takes the ordinary failed-and-retry path it would have taken anyway.
+    static func resumePendingUploads() async {
+        for job in PendingUploadStore.all() {
+            guard FileManager.default.fileExists(atPath: job.filePath) else {
+                PendingUploadStore.remove(job.id)
+                continue
+            }
+            do {
+                let url = try await BackgroundUploader.shared.finish(job)
+                var fields: [String: Any] = [job.urlField: url]
+                if let enc = job.enc { fields["enc"] = enc.asDict }
+                let msgRef = db.collection("conversations").document(job.cid)
+                    .collection("messages").document(job.messageId)
+                try await attachMedia(fields, to: msgRef)
+                PendingUploadStore.remove(job.id)
+                try? FileManager.default.removeItem(atPath: job.filePath)
+            } catch {
+                print("resumePendingUploads: \(job.storagePath) not finished yet:", error)
+            }
+        }
     }
 
     /// A refusal is not a network problem. Retrying an unauthorized or over-quota upload only burns
@@ -867,7 +900,12 @@ enum ChatService {
         // and not the upload plus the paperwork.
         async let uploadedURL = uploadEncrypted(cipher,
                                                 to: "chat/\(cid)/\(msgRef.documentID).enc",
-                                                progressId: clientId)
+                                                progressId: clientId,
+                                                // Where this URL belongs if the app dies before it
+                                                // lands — see `PendingUpload`. The photo's own seal
+                                                // is already in the message write below, so no enc.
+                                                attach: .init(cid: cid, messageId: msgRef.documentID,
+                                                              urlField: "imageUrl", enc: nil))
 
         // Caption travels INSIDE the image message (the caption is the message body) — sealed
         // exactly like a text message.
@@ -1419,7 +1457,9 @@ enum ChatService {
         // the recipient can be shown a REAL voice bubble immediately, with the true waveform and the
         // true length, because both are computed on the recorder before a byte is uploaded.
         async let uploadedURL = uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).m4a.enc",
-                                                progressId: clientId)
+                                                progressId: clientId,
+                                                attach: .init(cid: cid, messageId: msgRef.documentID,
+                                                              urlField: "audioUrl", enc: nil))
 
         // Encrypt the reply snippet the same way as the conversation (group vs 1:1).
         var replyEnc: [String: Any]?
@@ -1591,7 +1631,14 @@ enum ChatService {
         } else {
             (cipher, meta) = try await Crypto.shared.encryptBytes(cid, video)
         }
-        let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(messageId).mp4.enc", progressId: clientId)
+        let url = try await uploadEncrypted(cipher, to: "chat/\(cid)/\(messageId).mp4.enc",
+                                            progressId: clientId,
+                                            // ⚠️ `enc` RIDES ALONG HERE and nowhere else: a video's
+                                            // clip is sealed separately from its poster, so phase
+                                            // one had nothing to write. A resume must carry both or
+                                            // the clip arrives undecryptable.
+                                            attach: .init(cid: cid, messageId: messageId,
+                                                          urlField: "videoUrl", enc: meta))
         // The clip has landed — the ring comes off here rather than when the message commits, the
         // same reasoning the photo path spells out.
         if let clientId { await MediaSend.shared.markItemDone(clientId) }
@@ -1769,7 +1816,9 @@ enum ChatService {
         // byte moves, so the recipient gets the finished-looking file row immediately and only the
         // tap-to-open has to wait.
         async let uploadedURL = uploadEncrypted(cipher, to: "chat/\(cid)/\(msgRef.documentID).file.enc",
-                                                progressId: clientId)
+                                                progressId: clientId,
+                                                attach: .init(cid: cid, messageId: msgRef.documentID,
+                                                              urlField: "fileUrl", enc: nil))
         // The preview tile is small and is what makes the row look real, so it IS awaited here
         // rather than attached later — it costs a fraction of the document itself.
         let thumbFields: [String: Any] = await thumbTask
