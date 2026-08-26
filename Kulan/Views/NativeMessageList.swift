@@ -166,6 +166,14 @@ struct NativeMessageList: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: MessageListController, context: Context) {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
+        // ⛔ THE SEND HOLD IS ARMED BEFORE THE COMPOSER IS APPLIED. Since the bar moved into the
+        // controller, `applyComposer` is where the reply banner's collapse actually happens (the
+        // bar re-lays out, reports its new height, and the container shrinks on the spot). The tick
+        // used to be noted thirty lines further down — AFTER that shrink — so the hold was not in
+        // place when the clearance dropped, the bottom-pinned offset followed the bar down, and the
+        // glide then carried it back up. His report, 2026-08-26, keyboard open: "tap Reply, press
+        // Send, the message briefly moves underneath the composer and then jumps back into place."
+        vc.noteSendTick(sendTick)
         // BEFORE apply: the bar's own height feeds the list's bottom clearance, and a clearance a
         // pass late is a reader left short.
         if let st = composerState, let acts = composerActions, let rec = composerRecorder {
@@ -204,7 +212,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onVoiceControlTap = onVoiceControlTap
         vc.setVoiceControl(voiceControl, inset: voiceControlInset)
         vc.setTopOverlayHeight(topOverlayHeight)
-        vc.noteSendTick(sendTick)              // BEFORE apply: the hold must precede the composer's shrink
+        // (`noteSendTick` is at the top of this method — it has to precede `applyComposer`.)
         vc.noteMenuActionTick(menuActionTick)   // BEFORE setSelecting/apply: arm the dismissal grace first
         vc.setSelecting(selecting)
         vc.initialScrollId = initialScrollId
