@@ -2632,7 +2632,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // presentation animation." The safe area lands inside the push, and a bare constraint
         // write there rides the push's transaction — the bar visibly slides into place.
         KeyboardDiag.log("SAFE v=\(Int(view.safeAreaInsets.bottom)) w=\(Int(view.window?.safeAreaInsets.bottom ?? -1))")
-        if #available(iOS 26, *) {
+        // ⛔ STAND DOWN WHILE THE KEYS PRESENT — his diag logs, builds `ec0230d6` and `ca3b4640`:
+        // SwiftUI flaps the hosted safe area around the focus instant (34 → 0 → 34, once 83), and
+        // in EVERY attempt the keyboard's cancel (`NOTE chg band=0 d=0.00` + hide) landed ONE
+        // MILLISECOND after the settle — with the dismiss mode parked, so the drag-misread theory
+        // is dead. The one thing of ours that runs inside that settle is this handler's immediate
+        // re-place + full `layoutIfNeeded`, mid-presentation. It is not needed then: `rideKeyboard`
+        // has already placed the bar for the keys, and every number it wrote is window-stable, so
+        // the churn cannot have moved anything. The work is deferred to the end of the park window
+        // instead. If the cancel still lands with this gone, nothing of ours runs near it any more
+        // and the SwiftUI shell itself is convicted — the owner's pre-approved rewrite begins.
+        let presenting = Date() < dismissParkUntil
+        if presenting {
+            KeyboardDiag.log("SAFE skip (presenting)")
+        } else if #available(iOS 26, *) {
             UIView.performWithoutAnimation {
                 positionBottomBar()
                 syncBottomBarGeometry()
@@ -2645,7 +2658,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         safeAreaInsetsWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.updateInsets() }
         safeAreaInsetsWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01, execute: work)
+        let delay = presenting ? max(0.01, dismissParkUntil.timeIntervalSinceNow + 0.02) : 0.01
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     override func viewWillLayoutSubviews() {
