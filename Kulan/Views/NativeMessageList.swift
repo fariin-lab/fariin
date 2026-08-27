@@ -3960,6 +3960,24 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard didFirstLand, !isDisappearing,
               !collectionView.isDragging, !collectionView.isTracking,
               !collectionView.isDecelerating else { return }
+        // ⛔ WITH THE KEYS DOWN, DO WHAT THEY DO: NOTHING. Searched their whole repo — the
+        // conversation view has NO `userDidTakeScreenshotNotification` observer at all, and their
+        // `keyboardDismissMode` is set to `.interactive` once in `viewDidLoad` and never touched
+        // again. A screenshot is simply not an event their chat reacts to.
+        //
+        // ⚠️ AND THE KEYBOARD-UP CASE IS THE ONE PLACE WE CANNOT COPY THEM, because he reported the
+        // bug this whole block exists for: build 682, "when I open keyboard then I take screenshot,
+        // keyboard start disappearing". iOS 26's full-page capture scrolls this list, and with
+        // `.interactive` a system-driven downward scroll reads as a dismiss drag. Deleting the guard
+        // to match them exactly would hand that back to him, so it stays for exactly the state it
+        // was written for.
+        //
+        // What it stops doing is firing when there is no keyboard to protect. The freeze is not
+        // free: `captureFreezeUntil` also stands down the land-when-safe path, `restoreReaderPosition`
+        // and the lockstep offset shift, so every screenshot taken with the keys down used to leave
+        // the conversation unable to land an arriving message or settle for a second and a half.
+        // That second and a half is now theirs: nothing happens.
+        guard keyboardIsUp else { return }
         captureFreezeUntil = Date().addingTimeInterval(1.5)
         // ⛔ THE SCREENSHOT WAS CLOSING THE KEYBOARD — owner, 2026-08-25, build 682: "when I open
         // keyboard then I take screenshot, keyboard start disappearing". The full-page capture
