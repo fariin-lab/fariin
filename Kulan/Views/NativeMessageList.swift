@@ -829,6 +829,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                                name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHideNote(_:)),
                                                name: UIResponder.keyboardWillHideNotification, object: nil)
+        KeyboardDiag.attach(to: view)   // ⚠️ temporary — the keyboard-open investigation
         // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
         NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
                                                name: UIApplication.userDidTakeScreenshotNotification, object: nil)
@@ -1982,9 +1983,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // "tap Reply, press Send, the message briefly moves underneath the composer and jumps back."
         guard didFirstLand, !isDisappearing,
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
-              !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil else { return }
+              !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil,
+              // Never on a spiked safe area: the bound is garbage for exactly that frame.
+              collectionView.safeAreaInsets.bottom <= restSafeBottom + 0.5 else { return }
         let bound = maxContentOffsetY
         guard collectionView.contentOffset.y > bound + 0.5 else { return }
+        KeyboardDiag.log("CLAMP y=\(Int(collectionView.contentOffset.y))->\(Int(bound))")
         UIView.performWithoutAnimation {
             collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
         }
@@ -2012,7 +2016,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard didFirstLand, !isDisappearing, !readerHasScrolled,
               lastKnownDistanceFromBottom <= 5,
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
-              !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil else { return }
+              !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil,
+              collectionView.safeAreaInsets.bottom <= restSafeBottom + 0.5 else { return }
         let bound = maxContentOffsetY
         guard abs(collectionView.contentOffset.y - bound) > 0.5 else { return }
         collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
@@ -2112,10 +2117,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // end frame is off the bottom, so its overlap never exceeds the resting safe area.
         let local = view.convert(end, from: nil)
         let overlap = max(0, view.bounds.maxY - local.minY)
-        let up = !(hiding || overlap <= view.safeAreaInsets.bottom + 0.5)
+        let up = !(hiding || overlap <= restSafeBottom + 0.5)
         keyboardReport = up ? .up(overlap) : .rest
         let d = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
         if d > 0 { dockedBand = up ? overlap : 0 }
+        KeyboardDiag.log("NOTE \(hiding ? "hide" : "chg") band=\(Int(overlap)) d=\(String(format: "%.2f", d))")
         let curve = (info[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.uintValue ?? 7
         if d > 0 {
             // The keyboard's own duration and curve (7, its private one, handed to UIKit as
@@ -2184,9 +2190,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let dragged = draggedBand { return dragged }
         switch keyboardReport {
         case .up(let band): return band
-        case .rest: return view.safeAreaInsets.bottom
-        case nil: return view.safeAreaInsets.bottom   // no keyboard has ever moved in this chat
+        case .rest: return restSafeBottom
+        case nil: return restSafeBottom   // no keyboard has ever moved in this chat
         }
+    }
+
+    /// ⛔ THE BOTTOM SAFE AREA WITHOUT THE KEYBOARD, EVER — his frames on builds 696 and 697
+    /// (2026-08-27): the instant the field takes focus, the bar VANISHES and the content drops,
+    /// before the keys have moved; the keys then rise bare and the bar reappears at the end. Both
+    /// keyboard-transport rebuilds behaved identically, because neither was the problem: at that
+    /// instant iOS can hand this hosted view a safe area that momentarily CONTAINS THE KEYBOARD,
+    /// and every rest-position number derived from it goes wild for a beat — the side inset becomes
+    /// hundreds of points (a bar squeezed to nothing), the rest bottom lands mid-screen, the
+    /// clearance math collapses. The WINDOW's safe area never includes the keyboard — UIKit's own
+    /// rule, already recorded in SystemChrome.swift — so every keyboard/bar computation clamps to
+    /// it. When the view's safe area is sane the two agree and this changes nothing.
+    private var restSafeBottom: CGFloat {
+        let own = view.safeAreaInsets.bottom
+        guard let w = view.window else { return own }
+        return min(own, w.safeAreaInsets.bottom)
     }
 
     /// ⛔ THE KEYBOARD UNDER A DRAGGING FINGER, ON EVERY DEVICE — his reports on builds 693-695:
@@ -2213,7 +2235,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// event that moves the content. The drag ends with a notification and the animated path lands
     /// everything, with "was at the bottom" now true because nothing came apart during the drag.
     private var draggedBand: CGFloat? {
-        let rest = view.safeAreaInsets.bottom
+        let rest = restSafeBottom
         guard case .up = keyboardReport, dockedBand > rest + 0.5, collectionView.isDragging else { return nil }
         let pan = collectionView.panGestureRecognizer
         guard pan.state == .began || pan.state == .changed else { return nil }
@@ -2263,9 +2285,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // lives in the keyboard's own window.
         let f = host.convert(host.bounds, to: view)
         let band = max(0, view.bounds.maxY - f.minY)
-        let up = band > view.safeAreaInsets.bottom + 0.5
+        let up = band > restSafeBottom + 0.5
         keyboardReport = up ? .up(band) : .rest
         if up { dockedBand = max(dockedBand, band) }
+        KeyboardDiag.log("HOST band=\(Int(band))")
         positionBottomBar()
         syncBottomBarGeometry()
         updateInsets()
@@ -2284,7 +2307,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // lifting and the release notification (a SwiftUI render re-placing the bar, say) cannot
         // snap the bar back up to where the keys docked. The animated notification that follows
         // overwrites it either way.
-        keyboardReport = dragged > view.safeAreaInsets.bottom + 0.5 ? .up(dragged) : .rest
+        keyboardReport = dragged > restSafeBottom + 0.5 ? .up(dragged) : .rest
         positionBottomBar()
         syncBottomBarGeometry()
         updateInsets()
@@ -2297,7 +2320,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// moved dirties nothing.
     private func followKeyboardGuide() {
         guard composerBar != nil, let g = guideBand else { return }
-        if !guideIsLive, g > view.safeAreaInsets.bottom + 0.5 { guideIsLive = true }
+        if !guideIsLive, g > restSafeBottom + 0.5 { guideIsLive = true }
         guard guideIsLive, collectionView.isTracking else { return }
         positionBottomBar()
         syncBottomBarGeometry()
@@ -2337,8 +2360,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let safe = collectionView.safeAreaInsets
         let oldInsets = collectionView.contentInset
         var newInsets = oldInsets
-        // Theirs, verbatim: `container.frame.height - collectionView.safeAreaInsets.bottom`.
-        newInsets.bottom = bottom - safe.bottom
+        // Theirs, verbatim: `container.frame.height - collectionView.safeAreaInsets.bottom` — but
+        // clamped to the WINDOW's inset, so an iOS 26 safe-area spike carrying the keyboard cannot
+        // collapse the clearance for the frame it lasts (see `restSafeBottom`).
+        newInsets.bottom = bottom - min(safe.bottom, restSafeBottom)
         newInsets.top = top
 
         // Step 1: pre-change geometry. Theirs, verbatim: `isScrolledToBottom` against the LIVE
@@ -2597,6 +2622,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // "Workaround for iOS 26 animating bottom bar getting in its final position during view
         // presentation animation." The safe area lands inside the push, and a bare constraint
         // write there rides the push's transaction — the bar visibly slides into place.
+        KeyboardDiag.log("SAFE v=\(Int(view.safeAreaInsets.bottom)) w=\(Int(view.window?.safeAreaInsets.bottom ?? -1))")
         if #available(iOS 26, *) {
             UIView.performWithoutAnimation {
                 positionBottomBar()
@@ -3369,6 +3395,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// list has always run in.
     func hideComposer() {
         guard let bar = composerBar, !bar.isHidden else { return }
+        KeyboardDiag.log("HIDECOMPOSER")
         bar.isHidden = true
         barTopPin?.isActive = false
         bottomBarHeight?.constant = 0
@@ -3427,13 +3454,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// change OUTSIDE the keyboard's animation — a snap from 29 to 20 mid-open.
     private func positionBottomBar() {
         let band = keyboardBand
-        let safe = view.safeAreaInsets.bottom
+        let safe = restSafeBottom   // never the keyboard-polluted view value — see `restSafeBottom`
         let keyboardUp = band > safe + 0.5
         let bottomInset = (keyboardUp || safe <= 0) ? Self.composerKeyboardGap : -Self.composerRestDip
         let side = keyboardUp ? composerMargin : max(composerMargin, safe - Self.composerRestDip)
         // Guarded writes — see `syncBottomBarGeometry`: this runs on layout passes too.
         let bottomTarget = -(band + bottomInset)
-        if let c = barBottom, abs(c.constant - bottomTarget) > 0.01 { c.constant = bottomTarget }
+        if let c = barBottom, abs(c.constant - bottomTarget) > 0.01 {
+            c.constant = bottomTarget
+            KeyboardDiag.log("BAR bot=\(Int(bottomTarget)) side=\(Int(side)) safe=\(Int(safe))/\(Int(view.safeAreaInsets.bottom))")
+        }
         if let c = barLeading, abs(c.constant - side) > 0.01 { c.constant = side }
         if let c = barTrailing, abs(c.constant + side) > 0.01 { c.constant = -side }
         // The same numbers reach the bar itself (it places its overlays against the padded box)
