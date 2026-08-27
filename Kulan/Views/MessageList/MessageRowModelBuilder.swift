@@ -342,6 +342,7 @@ enum MessageRowModelBuilder {
             caption: caption,
             uploading: m.sendState == .sending || m.uploading,
             clientId: m.clientId,
+            cancellable: m.authorId == ctx.me && m.sendState == .sending,
             // A gif is a public url with nothing to hold back; a photo goes through the
             // auto-download policy, which may keep it behind a tap.
             gated: kind == .photo)
@@ -395,7 +396,9 @@ enum MessageRowModelBuilder {
             mentionTokens: m.mentions.map { "@\(ctx.nameFor($0))" })
         return BubbleBody.AlbumBody(
             tiles: tiles, extra: n - shown, caption: caption,
-            uploading: m.sendState == .sending, blurhash: m.blurhash,
+            uploading: m.sendState == .sending,
+            cancellable: m.authorId == ctx.me && m.sendState == .sending,
+            blurhash: m.blurhash,
             inlineThumbBase64: m.thumb, thumbCacheId: m.rowId)
     }
 

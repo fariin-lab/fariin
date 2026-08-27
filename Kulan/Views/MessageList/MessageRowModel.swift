@@ -167,6 +167,8 @@ enum BubbleBody: Equatable {
         var extra: Int                   // "+N" on the last tile, past the 10-item ceiling
         var caption: TextBody?
         var uploading: Bool
+        /// The per-tile X — mine only, for the reason `MediaBody.cancellable` states.
+        var cancellable: Bool
         var blurhash: String?
         var inlineThumbBase64: String?
         var thumbCacheId: String
@@ -219,6 +221,10 @@ enum BubbleBody: Equatable {
         var caption: TextBody?           // nil when the media carries no words
         var uploading: Bool
         var clientId: String?
+        /// Does the indicator carry an X? ⚠️ `uploading` is true on the RECEIVER too — a message
+        /// exists before its bytes do, by design — and their upload is not ours to cancel. Only my
+        /// own send offers the X.
+        var cancellable: Bool
         /// The photos auto-download policy may hold the fetch until tapped.
         var gated: Bool
     }

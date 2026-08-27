@@ -1059,6 +1059,24 @@ final class MessageRowView: UIView {
         return b.bubble.contains(point)
     }
 
+    /// Is this point on a single photo's/video's upload indicator? The X in its centre cancels the
+    /// send, so this is asked BEFORE `hitsMedia` — the indicator is drawn on top of the picture.
+    func hitsUploadRing(_ point: CGPoint) -> Bool {
+        guard let p = plan, case .bubble(let b) = p.body,
+              let ring = b.mediaPlan?.uploadRing else { return false }
+        return ring.offsetBy(dx: b.bubble.minX, dy: b.bubble.minY).contains(point)
+    }
+
+    /// Which album tile's upload indicator is under this point. Per TILE, because each X cancels
+    /// only its own item and the album ships without it.
+    func uploadRingTileIndex(at point: CGPoint) -> Int? {
+        guard let p = plan, case .bubble(let b) = p.body, let a = b.albumPlan else { return nil }
+        let local = CGPoint(x: point.x - b.bubble.minX, y: point.y - b.bubble.minY)
+        return a.tiles.firstIndex {
+            $0.ring?.offsetBy(dx: a.grid.minX, dy: a.grid.minY).contains(local) == true
+        }
+    }
+
     /// Which album tile is under this point, if any.
     func albumTileIndex(at point: CGPoint) -> Int? {
         guard let p = plan, case .bubble(let b) = p.body, let a = b.albumPlan else { return nil }

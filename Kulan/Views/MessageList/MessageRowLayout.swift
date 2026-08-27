@@ -891,9 +891,16 @@ enum MessageRowLayout {
         }
 
         if m.kind == .video {
-            let side: CGFloat = min(box.width, box.height) * 0.28
-            plan.playBadge = CGRect(x: mediaRect.midX - side / 2, y: mediaRect.midY - side / 2,
-                                    width: side, height: side)
+            // ⚠️ NO PLAY BADGE WHILE IT UPLOADS. A play badge means "this is ready, tap it", which
+            // is not true mid-send, and the badge and the ring are drawn at the centre of the same
+            // rect — the album path has said so since it was written and this one did not, so a
+            // sending video wore a ring on top of a play triangle.
+            if !m.uploading {
+                let side: CGFloat = min(box.width, box.height) * 0.28
+                plan.playBadge = CGRect(x: mediaRect.midX - side / 2, y: mediaRect.midY - side / 2,
+                                        width: side, height: side)
+            }
+            // The duration stays either way: it is true while it uploads and it sits in the corner.
             if let d = m.durationText {
                 let attr = NSAttributedString(string: d, attributes: [
                     .font: UIFont.systemFont(ofSize: 11, weight: .semibold),
@@ -904,7 +911,10 @@ enum MessageRowLayout {
             }
         }
         if m.uploading {
-            let side: CGFloat = 44
+            // 52, his number off the side-by-side (2026-08-27): 44 with an 8pt inset drew a 28pt
+            // thread in the middle of a 250pt photo and he could barely see it. The disc is the
+            // tap target as well as the indicator — see UploadRingView.
+            let side: CGFloat = 52
             plan.uploadRing = CGRect(x: mediaRect.midX - side / 2, y: mediaRect.midY - side / 2,
                                      width: side, height: side)
         }
@@ -991,7 +1001,9 @@ enum MessageRowLayout {
                 }
             }
             if a.uploading, a.extra == 0 || !isLast {
-                let side = min(36, min(t.rect.width, t.rect.height) * 0.5)
+                // Same 52 as a single photo. A tile only goes smaller when the tile itself is
+                // small, which is the case the halving rule is here for.
+                let side = min(52, min(t.rect.width, t.rect.height) * 0.5)
                 tile.ring = CGRect(x: t.rect.midX - side / 2, y: t.rect.midY - side / 2,
                                    width: side, height: side)
             }

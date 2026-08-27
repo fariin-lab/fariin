@@ -1,4 +1,5 @@
 import UIKit
+import Combine
 
 // ===== The photo / video / gif bubble, drawn =====
 //
@@ -170,6 +171,7 @@ final class MediaBubbleView: UIView {
             v.isHidden = false
             v.frame = r
             v.clientId = m.clientId
+            v.showsCancel = m.cancellable
             v.start()
         } else {
             ring?.stop()
@@ -219,7 +221,7 @@ final class AlbumBubbleView: UIView {
                         placeholder: i == 0 ? (InlineThumbCache.image(id: a.thumbCacheId,
                                                                       base64: a.inlineThumbBase64)
                                                ?? a.blurhash.flatMap { BlurHash.decode($0) }) : nil,
-                        cid: cid)
+                        cid: cid, cancellable: a.cancellable)
         }
 
         if let capsule = plan.metaCapsule {
@@ -280,7 +282,7 @@ final class AlbumTileView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(_ model: BubbleBody.AlbumBody.Tile?, tile: AlbumPlan.Tile,
-                   placeholder: UIImage?, cid: String) {
+                   placeholder: UIImage?, cid: String, cancellable: Bool) {
         let local = CGRect(origin: .zero, size: tile.rect.size)
         picture.frame = local
         if let data = model?.localData, let ui = UIImage(data: data) {
@@ -326,14 +328,19 @@ final class AlbumTileView: UIView {
             v.isHidden = false
             v.frame = r.offsetBy(dx: -tile.rect.minX, dy: -tile.rect.minY)
             v.clientId = model?.uploadKey
+            v.showsCancel = cancellable
+            // The X drops THIS item and the album ships without it — so the tile has to say so.
+            v.onCancelled = { [weak self] c in self?.picture.alpha = c ? 0.4 : 1 }
             v.start()
         } else {
+            picture.alpha = 1
             ring?.stop(); ring?.isHidden = true
         }
     }
 
     func reset() {
         picture.reset()
+        picture.alpha = 1
         ring?.stop()
     }
 }
@@ -411,35 +418,125 @@ final class FileBubbleView: UIView {
     }
 }
 
-/// The upload indicator: a thin white arc on a dark disc.
+/// The upload indicator: a soft dark disc, a white ring that FILLS with the real bytes, and a bold
+/// X in its centre that cancels this transfer.
 ///
-/// ⚠️ INDETERMINATE ON PURPOSE. Firebase's `putFileAsync` reports no byte progress, so a filling
-/// ring would be a lie about something that cannot be measured. Two phases, as the reference draws
-/// it: the stroke opens from nothing to a half circle over the first second while turning, then
-/// that half circle spins at one turn a second. The opening is the part that says "this has just
-/// started" rather than "something is busy".
+/// Owner 2026-08-27, off his side-by-side against another messenger: ours was a 20pt thread on a
+/// 36pt disc and read as a speck on a full-width photo. Theirs is 52 across with a 3pt ring, and
+/// the cancel lives IN the indicator rather than behind a long press.
+///
+/// ⚠️ THE FILL IS REAL, AND THE NOTE THAT USED TO SIT HERE SAID IT COULD NOT BE. It claimed
+/// Firebase reports no byte progress so the ring had to be indeterminate. It reports them:
+/// `ChatService` observes `.progress` on the upload task and writes every event into
+/// `UploadProgress` — which is exactly what the SwiftUI bubble this view replaced read. The port
+/// dropped the fill and kept the spinner, so every upload looked identical from first byte to last.
+///
+/// The spinner is only what runs BEFORE the first byte lands ("not started" is not "zero"), and its
+/// two phases are still the reference's: the stroke opens from nothing to a half circle over the
+/// first second while turning, then that half circle spins at one turn a second.
 final class UploadRingView: UIView {
     private let disc = UIView()
     private let arc = CAShapeLayer()
+    private let cross = UIImageView()
+    private var bag = Set<AnyCancellable>()
+    private var spinning = false
+
+    /// Where this ring's bytes are filed: a single photo's `clientId`, an album tile's
+    /// "clientId#index". The cell reads it back to know what the X cancels.
     var clientId: String?
+
+    /// False on a photo somebody ELSE is still uploading: same ring, no X. See
+    /// `MediaBody.cancellable`.
+    var showsCancel = true {
+        didSet { cross.isHidden = !showsCancel }
+    }
+
+    /// Told when THIS item is cancelled, so an album tile can dim the picture it just dropped. A
+    /// cancel with no visible answer reads as a dead button.
+    var onCancelled: ((Bool) -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        isUserInteractionEnabled = false
-        disc.backgroundColor = UIColor.black.withAlphaComponent(0.28)
+        isUserInteractionEnabled = false     // the cell hit-tests the plan and routes every tap
+        disc.backgroundColor = UIColor.black.withAlphaComponent(0.35)
         addSubview(disc)
         arc.fillColor = UIColor.clear.cgColor
         arc.strokeColor = UIColor.white.cgColor
-        arc.lineWidth = 2
         arc.lineCap = .round
         arc.strokeStart = 0
         arc.strokeEnd = 0
         layer.addSublayer(arc)
+        // Added AFTER the arc layer on purpose: a bare CAShapeLayer sits under every subview added
+        // after it, which is where the X belongs.
+        cross.contentMode = .center
+        cross.tintColor = .white
+        addSubview(cross)
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Called on every configure. `clientId` must already be set.
     func start() {
-        guard arc.animation(forKey: "spin") == nil else { return }
+        subscribe()
+        paint()
+    }
+
+    func stop() {
+        bag.removeAll()
+        spinning = false
+        arc.removeAllAnimations()
+        arc.strokeEnd = 0
+        alpha = 1                            // a recycled cell must not inherit a hidden ring
+        onCancelled = nil
+    }
+
+    /// One subscription, rebuilt on every configure so a recycled cell never keeps the previous
+    /// upload's.
+    ///
+    /// ⚠️ `receive(on:)` IS LOAD-BEARING, the same reason `VoiceBubbleView` states it:
+    /// `objectWillChange` fires BEFORE the value changes, so painting synchronously would read the
+    /// state we are being told is about to be replaced.
+    private func subscribe() {
+        bag.removeAll()
+        Publishers.Merge(UploadProgress.shared.objectWillChange,
+                         MediaSend.shared.objectWillChange)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.paint() }
+            .store(in: &bag)
+    }
+
+    /// Bytes → the ring. No geometry: the plan owns every rect, and this runs many times a second.
+    private func paint() {
+        // No key: a photo somebody else is still uploading, whose sender's id never reached us.
+        // There is nothing to fill and nothing to cancel, so it spins — which is exactly what this
+        // view did for every case before it learned to read the bytes.
+        guard let key = clientId else { startSpinning(); return }
+        // This transfer has landed or been X'd. The MESSAGE may still be committing — `sendState`
+        // is per-message and an album tile finishes long before its siblings — so the per-ITEM
+        // truth is the only one that can take an indicator off a finished photo.
+        let cancelled = MediaSend.shared.isItemCancelled(key)
+        onCancelled?(cancelled)
+        let settled = cancelled || MediaSend.shared.isItemDone(key)
+        alpha = settled ? 0 : 1
+        guard !settled else { stopSpinning(); return }
+
+        guard let fraction = UploadProgress.shared.fraction(key) else { startSpinning(); return }
+        stopSpinning()
+        // A hair of ring at zero, so the first determinate frame is still an indicator and not an
+        // empty circle.
+        let end = max(0.03, CGFloat(fraction))
+        guard abs(arc.strokeEnd - end) > 0.001 else { return }
+        let fill = CABasicAnimation(keyPath: "strokeEnd")
+        fill.fromValue = arc.strokeEnd
+        fill.toValue = end
+        fill.duration = 0.2                  // the reference's determinate step
+        fill.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        arc.strokeEnd = end
+        arc.add(fill, forKey: "fill")
+    }
+
+    private func startSpinning() {
+        guard !spinning else { return }
+        spinning = true
         let open = CABasicAnimation(keyPath: "strokeEnd")
         open.fromValue = 0
         open.toValue = 0.5
@@ -457,19 +554,35 @@ final class UploadRingView: UIView {
         arc.add(spin, forKey: "spin")
     }
 
-    func stop() {
-        arc.removeAllAnimations()
+    /// ⚠️ The opening animation is `isRemovedOnCompletion = false`, so the arc DRAWS half a circle
+    /// while the model still says zero. Removing it is what lets the real fraction take over
+    /// instead of being masked by a presentation value that outlived its animation.
+    private func stopSpinning() {
+        guard spinning else { return }
+        spinning = false
+        arc.removeAnimation(forKey: "open")
+        arc.removeAnimation(forKey: "spin")
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        let side = min(bounds.width, bounds.height)
         disc.frame = bounds
         disc.layer.cornerRadius = bounds.height / 2
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         arc.frame = bounds
-        let inset: CGFloat = 8
-        arc.path = UIBezierPath(ovalIn: bounds.insetBy(dx: inset, dy: inset)).cgPath
+        arc.lineWidth = max(2, round(side * 0.058))       // 3 at the standard 52
+        // ⚠️ THE PATH STARTS AT TWELVE O'CLOCK so `strokeEnd` fills clockwise from the top with no
+        // rotation on the layer. A rotation would be fighting the spin animation, which drives that
+        // same property.
+        arc.path = UIBezierPath(arcCenter: CGPoint(x: bounds.midX, y: bounds.midY),
+                                radius: side * 0.4225,    // a 44 ring inside a 52 disc
+                                startAngle: -.pi / 2, endAngle: .pi * 1.5,
+                                clockwise: true).cgPath
         CATransaction.commit()
+        cross.frame = bounds
+        cross.image = UIImage(systemName: "xmark", withConfiguration:
+            UIImage.SymbolConfiguration(pointSize: round(side * 0.34), weight: .semibold))
     }
 }

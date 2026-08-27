@@ -215,6 +215,26 @@ final class MessageRowCell: UICollectionViewCell {
                 }
                 return
             }
+            // THE X IN THE UPLOAD INDICATOR CANCELS THE TRANSFER, and it is asked before the
+            // picture and before the tiles because it is drawn on top of both. A settled item
+            // falls through to them on purpose: the indicator is gone by then and the tap is
+            // somebody opening a photo that happens to have just finished.
+            //
+            // Straight to the service, the way the poll option votes: cancelling is a fact about
+            // the in-flight upload, and nothing upstream holds a fresher copy of it. The bubble
+            // itself is removed by `runRegisteredSend`, which already tells a cancel from a
+            // failure.
+            if rowView.hitsUploadRing(p), case .media(let media) = b.body, media.cancellable,
+               let key = media.clientId, !MediaSend.shared.isItemDone(key) {
+                MediaSend.shared.cancel(key)
+                return
+            }
+            if let i = rowView.uploadRingTileIndex(at: p), case .album(let a) = b.body, a.cancellable,
+               a.tiles.indices.contains(i), let key = a.tiles[i].uploadKey,
+               !MediaSend.shared.isItemDone(key), !MediaSend.shared.isItemCancelled(key) {
+                MediaSend.shared.cancelItem(key)
+                return
+            }
             if rowView.hitsMedia(p) {
                 // Re-publish the rect from where the picture is RIGHT NOW. The one written when
                 // this cell was configured is stale the moment the list scrolls, and a flight from
