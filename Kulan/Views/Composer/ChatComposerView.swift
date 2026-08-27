@@ -967,6 +967,12 @@ extension ChatComposerView: UITextViewDelegate {
         textView.resignGuardUntil = Date().addingTimeInterval(seconds)
     }
 
+    /// Whether the field itself holds the first responder. `UIView.isFirstResponder` on the bar
+    /// answers for the BAR, which never is one, so a caller outside this file cannot ask the
+    /// question without this. Read by the list controller when the app comes back from the
+    /// background and it has to decide whether the keys are still up.
+    var isEditingText: Bool { textView.isFirstResponder }
+
     func textViewDidBeginEditing(_ tv: UITextView) {
         // Arm the resign guard for the presentation — see `ComposerTextView.resignFirstResponder`.
         textView.resignGuardUntil = Date().addingTimeInterval(0.7)

@@ -350,16 +350,27 @@ enum MessageRowLayout {
         // bubble of a run actually draws a face into it.
         let avatarColumn: CGFloat = b.sender != nil ? BubbleMetrics.avatarSize + BubbleMetrics.avatarGap : 0
         let columnX = originX + (b.isMe ? 0 : avatarColumn)
-        let columnW = max(1, availableWidth - avatarColumn)
+
+        // ⛔ THE FAILED BADGE'S LANE COMES OFF THE COLUMN, NOT OFF THE CAP — his screenshot,
+        // 2026-08-27: the red (!) drawn on top of the bubble's trailing edge, over the timestamp.
+        //
+        // It used to come off `maxBubble` only (`columnW - failBadgeColumn`), which is the reference's
+        // line `contentMaxWidth -= sendFailureBadgeSize + spacing` copied to the wrong place. Theirs is
+        // a STACK: the badge is the last arranged subview, so the bubble's box genuinely ends where the
+        // badge begins and every bubble in it is short by that much, whatever its content. Ours places
+        // the bubble by right-aligning it to `columnX + columnW`, so a cap the bubble never reaches
+        // changes nothing at all — and a two-word message like his never reaches it. Both ended up
+        // right-aligned to the same edge and drew on top of each other.
+        //
+        // Taking it off the column instead reproduces the stack: every bubble kind below places itself
+        // against `columnW`, so all of them step aside by exactly one badge plus its gap, and the cap
+        // needs no separate subtraction because the column it clamps against is already short.
+        let failBadgeColumn = b.showsFailedBadge ? BubbleMetrics.failBadge + BubbleMetrics.failBadgeGap : 0
+        let columnW = max(1, availableWidth - avatarColumn - failBadgeColumn)
 
         // 72% of the LIST's width, then clamped by whatever the column actually has. On a phone the
         // two are the same number; in Stage Manager they are not.
-        //
-        // A failed send gives up the badge's width plus its gap, exactly as theirs does
-        // (`contentMaxWidth -= sendFailureBadgeSize + hOuterStackConfig.spacing`) — otherwise a
-        // full-width bubble and the badge would be drawn on top of each other.
-        let failBadgeColumn = b.showsFailedBadge ? BubbleMetrics.failBadge + BubbleMetrics.failBadgeGap : 0
-        let maxBubble = min(BubbleMetrics.maxBubbleWidth(in: rowWidth), columnW - failBadgeColumn)
+        let maxBubble = min(BubbleMetrics.maxBubbleWidth(in: rowWidth), columnW)
         let hPad = BubbleMetrics.hPad, vPad = BubbleMetrics.vPad
         let maxContent = max(1, maxBubble - hPad * 2)
 
@@ -766,7 +777,12 @@ enum MessageRowLayout {
             // `plan.meta` is bubble-local; the badge lives in row coordinates like the avatar.
             let cy = plan.meta == .zero ? bubbleRect.maxY - BubbleMetrics.vPad - BubbleMetrics.failBadge / 2
                                         : bubbleRect.minY + plan.meta.midY
-            plan.failBadge = CGRect(x: columnX + columnW - BubbleMetrics.failBadge,
+            // ⚠️ `columnW` STOPS AT THE BUBBLE'S TRAILING EDGE — the badge's own lane was taken out of
+            // it up in `bubble(_:)`, which is what stops the two overlapping. So the badge is placed
+            // FORWARD of that edge by the stack's spacing, and its far side lands back on the row's
+            // real trailing margin. Reading `columnX + columnW - failBadge` here, as this line used
+            // to, would now park it inside the bubble a second time.
+            plan.failBadge = CGRect(x: columnX + columnW + BubbleMetrics.failBadgeGap,
                                     y: cy - BubbleMetrics.failBadge / 2,
                                     width: BubbleMetrics.failBadge, height: BubbleMetrics.failBadge)
             y = max(y, plan.failBadge!.maxY)

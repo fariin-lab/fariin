@@ -925,6 +925,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                                name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHideNote(_:)),
                                                name: UIResponder.keyboardWillHideNotification, object: nil)
+        // Returning with the keys up — see `appWillEnterForeground`. Both, deliberately: the first is
+        // before the snapshot is replaced, the second catches a restore that lands after it.
+        NotificationCenter.default.addObserver(self, selector: #selector(appWillEnterForeground),
+                                               name: UIApplication.willEnterForegroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive),
+                                               name: UIApplication.didBecomeActiveNotification, object: nil)
         // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
         NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
                                                name: UIApplication.userDidTakeScreenshotNotification, object: nil)
@@ -2560,6 +2566,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let local = view.convert(end, from: nil)
         let overlap = max(0, view.bounds.maxY - local.minY)
         let up = !(hiding || overlap <= restSafeBottom + 0.5)
+        // ⛔ A KEYBOARD THAT LEAVES BECAUSE THE APP IS LEAVING IS NOT A KEYBOARD BEING DISMISSED —
+        // his report, 2026-08-27: switch to another app with the keys up, come back, and the bar is
+        // at the bottom of the screen behind them for a second or two before it corrects itself.
+        //
+        // Backgrounding takes the keys off screen and iOS says so, with the same notification a real
+        // dismissal sends. We believed it, wrote the resting strip into the guide and zeroed
+        // `dockedBand`. Coming back, iOS puts the keyboard STRAIGHT BACK — the field never stopped
+        // being first responder, so from the system's side nothing happened and there is no matching
+        // show to undo our write. The bar therefore stayed at rest under a keyboard that was already
+        // there, until some later pass raised it: exactly the delay he timed.
+        //
+        // The state at the moment of the event is what separates the two, and it is the same question
+        // the reference app asks before it lets a keyboard event move anything. Refusing to LOWER
+        // (rather than refusing the hide flag) also covers the change-frame variant, which carries an
+        // off-screen end frame and no flag at all.
+        if !up, UIApplication.shared.applicationState != .active { return }
         let announced = up ? overlap : restSafeBottom
         let d = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
         if d > 0 {
@@ -2588,6 +2610,57 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             view.layoutIfNeeded()
             updateInsets()
         }
+    }
+
+    /// COMING BACK FROM THE BACKGROUND, with the keys still up. The other half of the block above.
+    ///
+    /// That block stops the guide being lowered on the way out, which is enough on its own for the
+    /// ordinary switch-away-and-back. This is the return leg, and it exists because the way out is
+    /// not the only way the two can end up disagreeing: a call, a lock, a share sheet or another
+    /// app's keyboard can all put the keys somewhere else while we are not on screen to hear about
+    /// it, and the notification that would have told us was posted to an app that was not running.
+    ///
+    /// ⚠️ IT RUNS AT `willEnterForeground`, BEFORE THE FIRST LIVE FRAME. `didBecomeActive` is late:
+    /// the snapshot has been replaced by then, so a correction made there is one the eye can catch —
+    /// which is precisely the jump he asked to be rid of, moved earlier rather than removed. It is
+    /// wired to both, because the second is free and a first-responder restore that lands between
+    /// the two would otherwise wait for a layout pass.
+    ///
+    /// The system guide is asked first and the docked band is only the fallback, in that order for
+    /// the usual reason: the guide is measured and the band is remembered. Both are raise-only here —
+    /// nothing in this method can push the bar DOWN, so a keyboard that genuinely went away while we
+    /// were gone is left to the real notification rather than guessed at from stale state.
+    @objc private func appWillEnterForeground() { syncKeyboardOnReturn(mayLower: false) }
+    @objc private func appDidBecomeActive() { syncKeyboardOnReturn(mayLower: true) }
+
+    /// ⛔ `mayLower` IS THE WHOLE REASON THESE ARE TWO ENTRY POINTS, and refusing to lower on the way
+    /// out is what makes the second half necessary. The block above turns down a hide that arrives
+    /// while the app is not active, on the grounds that the keyboard is not going anywhere — the app
+    /// is. That is true of an app switch and NOT true of everything: a system alert makes the app
+    /// inactive too, and a keyboard that goes down under one is genuinely gone. Left alone, the bar
+    /// would float above a keyboard that is not there, which is the same bug wearing the other face.
+    ///
+    /// So the truth is re-read once the app is active again, and it is read from the FIELD: no first
+    /// responder, no keyboard. Only `didBecomeActive` is allowed to act on it. At
+    /// `willEnterForeground` the responder restore may not have happened yet, and lowering on a field
+    /// that is about to be handed back its focus would put the jump back exactly where he found it.
+    private func syncKeyboardOnReturn(mayLower: Bool) {
+        guard isViewLoaded, view.window != nil, !isDisappearing else { return }
+        // The block window was armed by an animation the transition interrupted; it would otherwise
+        // stand the system feeder down for its whole duration on the way back in.
+        keyboardBlockUntil = .distantPast
+        let editing = (composerBar as? ChatComposerView)?.isEditingText == true
+        if mayLower, !editing, keyboardIsUp {
+            dockedBand = 0
+            setKeyboardGuideHeight(restSafeBottom)
+        } else {
+            adoptSystemKeyboardGuide()   // measured, and raise-only, so it is asked first
+            guard !keyboardIsUp, editing, dockedBand > restSafeBottom + 0.5 else { return }
+            setKeyboardGuideHeight(dockedBand)   // remembered: the fallback where nothing measures
+        }
+        positionBottomBar()
+        view.layoutIfNeeded()
+        updateInsets()
     }
 
     /// FEEDER 3 — A DRAGGING FINGER, for an interactive dismiss on a phone whose system guide does
