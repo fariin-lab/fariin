@@ -997,12 +997,6 @@ final class MessageRowView: UIView {
         v.layer.add(a, forKey: "spin")
     }
 
-    func refreshMeta() {
-        guard let m = model, let p = plan, case .bubble(let b) = p.body else { return }
-        metaLabel.attributedText = BubbleText.meta(b: b, m: m)
-        metaLabel.frame = b.meta
-    }
-
     /// Hit-test a tapped link inside the body, in this view's coordinates.
     func link(at point: CGPoint) -> URL? {
         guard let p = plan, case .bubble(let b) = p.body, !b.links.isEmpty else { return nil }

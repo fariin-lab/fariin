@@ -3011,8 +3011,9 @@ struct ThreadView: View {
         //
         // The reference app's list never has the keyboard in its safe area at all; its bar hangs
         // from `keyboardLayoutGuide` and the inset is written by hand inside the keyboard's block.
-        // Ignoring the keyboard region here gives the list the same footing: `keyboardTracker` and
-        // the guide are then the ONLY way the keyboard changes its geometry, and that way is animated.
+        // Ignoring the keyboard region here gives the list the same footing as theirs: the composer's
+        // constraint to `view.keyboardLayoutGuide` is then the ONLY way the keyboard reaches this
+        // list's geometry, and that way is animated by UIKit itself.
         // The container region was already ignored (full-bleed under both bars); the overlays on the
         // outer layer (jump arrow, recording bubble) keep their keyboard-aware placement because
         // this is applied to the list alone.

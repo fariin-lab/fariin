@@ -140,27 +140,3 @@ extension VoicePlayDiscControl: UIGestureRecognizerDelegate {
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 }
 
-/// The seam. Kept deliberately thin: the bubble's layout, its bubble chrome, its context menu and its
-/// reply swipe all stay exactly where they are, and only the disc inside them changes hands.
-struct VoicePlayDisc: UIViewRepresentable {
-    let playing: Bool
-    let loading: Bool
-    let tint: Color
-    let onTap: () -> Void
-
-    func makeUIView(context: Context) -> VoicePlayDiscControl {
-        let v = VoicePlayDiscControl()
-        v.setContentHuggingPriority(.required, for: .horizontal)
-        v.setContentHuggingPriority(.required, for: .vertical)
-        return v
-    }
-
-    func updateUIView(_ v: VoicePlayDiscControl, context: Context) {
-        v.discTint = UIColor(tint)
-        v.showsPause = playing
-        v.isBusy = loading
-        // Re-set every pass on purpose: the closure captures the current view's state, and a stale
-        // one would toggle the wrong note after a cell is recycled.
-        v.onTap = onTap
-    }
-}

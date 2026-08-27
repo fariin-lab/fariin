@@ -385,13 +385,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // animation — the same animation this list's insets already ride. One clock, nothing to
     // coordinate.
     //
-    // ⚠️ THEIRS PINS TO `keyboardLayoutGuide.topAnchor`. OURS CANNOT, and that is a device-proven
-    // fact rather than a preference: the guide NEVER MOVED inside this hosted controller on his
-    // iOS 26 phone (build 682), which is why `keyboardBand` reads the notification instead. So the
-    // constraint is a plain bottom pin whose CONSTANT is driven from the same keyboard notification
-    // that drives the insets, written inside the same `UIView.animate` block. That is a stronger
-    // guarantee than the guide, not a weaker one: the bar and the list are literally in one
-    // animation, in one view hierarchy, on one layout pass.
+    // ⚠️ AND IT PINS TO `keyboardLayoutGuide.topAnchor`, EXACTLY AS THEIRS DOES. An earlier note
+    // here said we could not, on the strength of build 682, where the guide never moved inside this
+    // hosted controller — but that measurement predates the priming in `viewDidLoad`
+    // (`_ = view.keyboardLayoutGuide`), which is the reference's own documented workaround for the
+    // iOS 26 regression where a guide first read late reports the home-indicator height. Everything
+    // that stood in for the guide — the notification observers, the band, the report, the finger
+    // feeder — is deleted. See `keyboardOverlap`.
     //
     // ⚠️ AND THEIRS DOES NOT ATTACH EVERY BAR. `ConversationBottomBar.shouldAttachToKeyboardLayoutGuide`
     // is false for their blocking/error panels, which pin to the screen bottom instead — there is no
@@ -693,7 +693,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // The nav bar lands in adjustedContentInset.top and the home indicator in .bottom. NOT the
         // keyboard: the SwiftUI side ignores the keyboard region for this list (see `nativeList` in
         // ThreadView for the clamp-jump that came with it), so the keyboard reaches this view only
-        // through `keyboardTracker` and the layout guide, inside the keyboard's own animation block.
+        // through `view.keyboardLayoutGuide`, inside the keyboard's own animation block.
         // updateInsets() adds the rest: the keyboard band, the pinned bar and the composer.
         collectionView.contentInsetAdjustmentBehavior = .always
         // THE SYSTEM'S SCROLL EDGE EFFECTS ARE ON, UNTOUCHED (owner, 2026-08-25). This is the iOS 26
@@ -2376,7 +2376,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // constraints on a layout pass, behind a `guideIsLive` latch that let a LATE guide outrank a
     // notification — the `f1e7e532` regression, "the keyboard opens but the composer stays where it
     // was". The bar hangs off our own guide by a constraint now, and the system guide is one of that
-    // guide's three feeders rather than a second author of the bar. See `adoptSystemKeyboardGuide`.)
+    // guide moves the bar directly through the constraint now, so there is nothing to copy.)
     /// ⛔ THEIR ONE EXPRESSION, verbatim in intent:
     ///
     ///     newInsets.bottom = bottomBarContainer.frame.height - collectionView.safeAreaInsets.bottom
@@ -3520,13 +3520,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             bottomBarContainer.addSubview(bar)
             let lead = bar.leadingAnchor.constraint(equalTo: bottomBarContainer.leadingAnchor)
             let trail = bar.trailingAnchor.constraint(equalTo: bottomBarContainer.trailingAnchor)
-            // ⛔ THEIRS, NOW LITERALLY: `bottomView.bottomAnchor.constraint(equalTo:
+            // ⛔ THEIRS, LITERALLY: `bottomView.bottomAnchor.constraint(equalTo:
             // keyboardLayoutGuide.topAnchor)`. It used to hang off the VIEW's bottom with the whole
-            // keyboard band written into its constant, because the SYSTEM guide is dead in this
-            // hosted controller (build 682). It hangs off OUR guide instead — the same shape they
-            // use on iOS 15, fed by whichever source this device actually has. The constant is now
-            // only the product rule (8pt above the keys, or sunk `composerRestDip` below the safe
-            // line at rest), never the keyboard.
+            // keyboard band written into its constant. The constant is now only the product rule
+            // (8pt above the keys, or sunk `composerRestDip` below the safe line at rest), never the
+            // keyboard — that is the guide's job, and UIKit's.
             let bottom = bar.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor)
             let height = bar.heightAnchor.constraint(equalToConstant: 40)
             barLeading = lead; barTrailing = trail; barBottom = bottom; barHeightC = height
@@ -3621,7 +3619,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     /// The composer's PRODUCT rule, and nothing else. The keyboard is not in here any more: the bar's
-    /// bottom is constrained to `keyboardGuide.topAnchor`, so where the keys are is Auto Layout's
+    /// bottom is constrained to `view.keyboardLayoutGuide.topAnchor`, so where the keys are is Auto Layout's
     /// business and this only decides how the pill sits relative to them:
     ///   · riding the keyboard: 8 above the keys, sides at the system margin;
     ///   · at rest: the pill sinks `composerRestDip` BELOW the safe-area line and the sides match that
@@ -3661,16 +3659,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // ⛔ NOT WHILE THE COMPOSER IS HIDDEN. `hideComposer` collapses the container by taking the
         // top pin out and setting this constant to 0, and with the pin gone that low-priority
         // constant is the ONLY thing left answering for the container's height. This method rewrites
-        // it from the hidden bar's own dimensions, and its caller `followKeyboardGuide` runs on
-        // `collectionView.isTracking` — so a scroll in selection, search or a blocked chat silently
-        // re-inflated a container that is supposed to be gone, and the geometry reported up to
-        // SwiftUI (`onComposerGeometry`) jumped by a composer's height.
+        // it from the hidden bar's own dimensions, and it used to run on every tracked scroll — so a
+        // scroll in selection, search or a blocked chat silently re-inflated a container that is
+        // supposed to be gone, and the geometry reported up to SwiftUI (`onComposerGeometry`) jumped
+        // by a composer's height.
         guard let bar = composerBar as? ChatComposerView, !bar.isHidden,
               let heightC = barHeightC, let containerC = bottomBarHeight else { return }
         let width = max(1, view.bounds.width - (barLeading?.constant ?? 0) * 2)
         let barH = bar.preferredHeight(forWidth: width)
         let container = Self.barTopPad + barH + (-(barBottom?.constant ?? 0)) + keyboardOverlap
-        // Guarded writes: this runs from `viewDidLayoutSubviews` via `followKeyboardGuide`, and a
+        // Guarded writes: this runs from the safe-area handler on every change, and a
         // constant rewritten to its own value would dirty layout again for nothing.
         if abs(heightC.constant - barH) > 0.01 { heightC.constant = barH }
         if abs(containerC.constant - container) > 0.01 { containerC.constant = container }

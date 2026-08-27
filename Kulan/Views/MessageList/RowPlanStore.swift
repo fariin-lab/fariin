@@ -42,7 +42,6 @@ final class RowPlanStore {
 
     /// The cached plan without computing one — for the paths that only want to know where a bubble
     /// already is (the menu's lift rect, the swipe's arrow anchor) and must not do layout work.
-    func cachedPlan(id: String) -> RowPlan? { entries[id]?.plan }
 
     func invalidate(id: String) {
         entries.removeValue(forKey: id)

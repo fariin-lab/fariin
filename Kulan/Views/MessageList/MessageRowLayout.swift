@@ -258,15 +258,6 @@ struct RowPlan {
     var body: RowBodyPlan
     var checkbox: CGRect?
 
-    /// The bubble's own outline in row coordinates — the context-menu lift and the swipe both need
-    /// to know where the bubble actually is, not where the row is.
-    var liftRect: CGRect {
-        switch body {
-        case .bubble(let b): return b.bubble
-        case .notice(let n): return n.capsule
-        case .call(let c): return c.bubble
-        }
-    }
 }
 
 enum MessageRowLayout {

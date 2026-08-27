@@ -18,8 +18,6 @@ enum BubbleMetrics {
     static let rowMargin: CGFloat = 12
     static let hPad: CGFloat = 15          // bubble text inset, horizontal
     static let vPad: CGFloat = 10          // bubble text inset, vertical
-    static let clusterGapFirst: CGFloat = 14   // space above the first bubble of a sender's run
-    static let clusterGap: CGFloat = 2         // space above a continuing bubble
     static let bigCorner: CGFloat = 18
     static let smallCorner: CGFloat = 6        // the interior corner of a fused cluster
     static let metaGap: CGFloat = 8            // gap between the last word and the timestamp
@@ -350,10 +348,4 @@ final class BubbleFillView: UIView {
         }
     }
 
-    /// Re-resolve dynamic colours after a light↔dark flip. `apply` writes STATIC CGColors, so
-    /// without this every visible bubble stayed in the old palette until its cell recycled.
-    func refreshForTraitChange() {
-        guard let current else { return }
-        apply(current, path: path, bounds: frame)
-    }
 }

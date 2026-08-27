@@ -126,25 +126,3 @@ extension VoiceWaveformView: UIGestureRecognizerDelegate {
                            shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
 }
 
-/// The seam, kept as thin as the disc's. Everything around the wave — the row, the pill, the meta
-/// line, the bubble — is untouched.
-struct VoiceWaveform: UIViewRepresentable {
-    let bars: [Int]
-    let progress: Double
-    let played: Color
-    let unplayed: Color
-    let onSeek: (Double) -> Void
-    let onScrub: (Bool) -> Void
-
-    func makeUIView(context: Context) -> VoiceWaveformView { VoiceWaveformView() }
-
-    func updateUIView(_ v: VoiceWaveformView, context: Context) {
-        v.bars = bars
-        v.progress = progress
-        v.playedColor = UIColor(played)
-        v.unplayedColor = UIColor(unplayed)
-        // Re-set every pass: a recycled cell must never seek the note it used to hold.
-        v.onSeek = onSeek
-        v.onScrub = onScrub
-    }
-}
