@@ -964,7 +964,25 @@ final class ChatComposerView: UIView {
     /// resolves, so the stamp is always fresher than the dismissal it must cancel.
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         let v = super.hitTest(point, with: event)
-        if v != nil { actions.barTouched() }
+        // ⛔ THE WHOLE BAR IS THE COMPOSER, NOT JUST ITS CONTROLS — his screenshot, 2026-08-27:
+        // tapping the empty band beside the "+" or the Send button closes the keyboard.
+        //
+        // The stamp used to be `v != nil`, i.e. only when some control actually claimed the touch.
+        // A point inside this bar that lands on no subview returns nil from `super.hitTest`, so the
+        // gap around the round buttons never stamped, and the conversation's deferred dismissal —
+        // which hears the whole screen — went ahead and closed the keyboard.
+        //
+        // ⚠️ THE REFERENCE HAS NO SUCH GAP TO GET WRONG, and that is the behaviour being copied.
+        // Their tap-to-dismiss is not on the screen at all, it is on the LIST:
+        //
+        //     collectionView.addGestureRecognizer(collectionViewTapGestureRecognizer)
+        //
+        // so their input toolbar is simply outside the recogniser's view and no part of it can ever
+        // dismiss anything. Ours cannot move the gesture there — that was tried and he rejected the
+        // FEEL of it on an A/B (builds 408-411, see `listBody`) — so the same boundary is drawn the
+        // other way round: anything inside this bar's bounds is the composer being touched, control
+        // or bare padding, and the conversation was not tapped.
+        if bounds.contains(point) { actions.barTouched() }
         return v
     }
 
