@@ -84,7 +84,11 @@ struct VoiceMessageView: View {
     /// in his reference the bubble does not get wider to make room for it: the wave gives up the
     /// space instead. 40 + 8 + 104 + 8 + 42 = 202, against the 210 the old disc-plus-wave came to,
     /// so the bubble keeps the width he already signed off.
-    static func waveWidth(for message: Message) -> CGFloat { 104 }
+    /// ⚠️ 98, DOWN FROM 104, PURELY TO PAY FOR THE BIGGER DISC. The bubble's width is the sum of its
+    /// parts, so growing the disc from 38 to 44 would widen every voice note by 6pt — and that width
+    /// is a number he settled with three screenshots earlier today. The waveform gives the 6 back, so
+    /// 44 + 8 + 98 + 8 + 40 still comes to 198 and the bubble stays at the 224 he chose.
+    static func waveWidth(for message: Message) -> CGFloat { 98 }
     /// COMPACT, 2026-08-13, on his side-by-side ("make it like the second one… ours is bigger and
     /// wider"). Three things were making it bigger and all three come down here:
     ///
@@ -114,7 +118,12 @@ struct VoiceMessageView: View {
     /// ⛔ SLIMMED 2026-08-27 ON HIS SIDE-BY-SIDE — he put ours next to the reference app's compact
     /// voice row and said theirs beats ours; "yes please" to matching. That supersedes the 42/44
     /// history above. 38 keeps the disc a near-44pt target with the row padding around it.
-    static let discSize: CGFloat = 38
+    /// ⛔ 44 — his number, given outright on 2026-08-27: "the one inside bubble voice, that one make
+    /// it 44pt". This is the WHITE PLAY CIRCLE IN A MESSAGE, and it is a different control from the
+    /// small play glyph in the composer's review strip. He has been asking for that one to get
+    /// smaller and this one to get bigger, which is why the two have moved in opposite directions
+    /// today, and why confusing them has already cost a round.
+    static let discSize: CGFloat = 44
     static let waveHeight: CGFloat = 20
     static let discGap: CGFloat = 8
     /// The speed pill's slot on the waveform's line, gap included — see `speedPill`. A STATED width
