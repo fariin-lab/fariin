@@ -892,7 +892,22 @@ final class ChatComposerView: UIView {
         // The overlays are placed against the PADDED box, where the old `.overlay`s were aligned.
         let ins = outerInsets
         let padded = CGRect(x: -ins.left, y: -ins.top, width: W + ins.left + ins.right, height: H + ins.top + ins.bottom)
-        let discCenter = CGPoint(x: padded.maxX - M.overlayTrailing - M.halo / 2, y: padded.maxY - M.halo / 2)
+        // ⛔ THE PUCK GROWS OUT OF THE MIC, SO IT IS CENTRED ON THE MIC — his screenshot, 2026-08-27:
+        // hold to record and the big black disc floats above the composer, overlapping the message
+        // above it, instead of sitting on the bar.
+        //
+        // It used to hang off the PADDED BOX'S BOTTOM EDGE: `padded.maxY - halo/2`. The halo is 78
+        // and the mic's slot is a 40pt button, so that puts the disc's centre 39pt above the bottom
+        // where the mic's is only 20 — and the resting box reaches 5pt BELOW the bar (the composer's
+        // rest dip is a negative inset), which buys another 5. About 24pt too high at rest, less with
+        // the keyboard up, which is why it looked wrong by a different amount in different states.
+        //
+        // The mic's own centre is the honest anchor: the disc is that button growing under a finger,
+        // so wherever the button is, that is where it belongs. Converted rather than assumed, because
+        // the mic is a child of the glass container and this group is a child of the bar.
+        let fallbackCenter = CGPoint(x: padded.maxX - M.overlayTrailing - M.halo / 2,
+                                     y: padded.maxY - M.halo / 2)
+        let discCenter = micButton.superview.map { convert(micButton.center, from: $0) } ?? fallbackCenter
         overlayGroup.bounds = CGRect(x: 0, y: 0, width: M.halo, height: M.halo)
         overlayGroup.center = discCenter
         discGroup.bounds = overlayGroup.bounds
