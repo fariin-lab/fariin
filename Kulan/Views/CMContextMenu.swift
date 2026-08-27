@@ -482,11 +482,25 @@ final class CMOverlay: UIView {
     /// bar (exterior top, gap 12) · preview · menu (exterior bottom, gap 12), all aligned to the
     /// bubble's own horizontal edge. Overflow bottom → shift up; overflow top → shift down; still
     /// too tall → scale the preview down (anchored to its aligned edge) and recompute.
+    /// ⛔ HOW MUCH OF THE BOTTOM THE KEYBOARD IS EATING, when the menu opens with the keys up.
+    ///
+    /// The overlay is a subview of the app's window and the keyboard lives in a window of its own at
+    /// a higher level, so the keys are drawn OVER anything we put beneath them — no z-order we can
+    /// set here changes that. His screenshot: long-press with the keyboard open and the Reply card
+    /// sits behind the keys.
+    ///
+    /// We used to dodge this by dismissing the keyboard on long-press — which is what moved the
+    /// conversation out from under the frozen preview, and is why it was taken out (the reference
+    /// never dismisses for a message menu). So the menu is LAID OUT in the space that is actually
+    /// visible instead: the window, less the keyboard.
+    var keyboardInset: CGFloat = 0
+
     private func computeFrames(in bounds: CGRect) -> (preview: CGRect, bar: CGRect?, menu: CGRect) {
         let pad: CGFloat = 8
         let content = bounds.inset(by: UIEdgeInsets(
             top: max(safeAreaInsets.top, pad), left: max(safeAreaInsets.left, pad),
-            bottom: max(safeAreaInsets.bottom, pad), right: max(safeAreaInsets.right, pad)))
+            bottom: max(max(safeAreaInsets.bottom, pad), keyboardInset + pad),
+            right: max(safeAreaInsets.right, pad)))
 
         let menuSize = card.sizeThatFits(CGSize(width: 250, height: content.height))
         let barSize = bar?.naturalSize ?? .zero

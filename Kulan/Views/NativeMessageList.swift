@@ -928,6 +928,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
         NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
                                                name: UIApplication.userDidTakeScreenshotNotification, object: nil)
+        // A tap on a voice note is about to touch the audio stack, which can take the first
+        // responder away and close a keyboard nobody asked to close — see `voiceNoteInteraction`.
+        NotificationCenter.default.addObserver(self, selector: #selector(voiceNoteInteraction),
+                                               name: .voiceNoteInteraction, object: nil)
         // THE DOWN ARROW'S DIRECT LINE (owner 2026-08-13, third report, still dead on build 570 with
         // all three earlier fixes in it).
         //
@@ -2638,11 +2642,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// rule, already recorded in SystemChrome.swift — so every keyboard/bar computation clamps to
     /// it. When the view's safe area is sane the two agree and this changes nothing.
     private var restSafeBottom: CGFloat {
-        // ⛔ THE WINDOW'S VALUE, NOT A MIN — his diag screenshots, build `10fe54b6`: at the focus
-        // instant the view's safe area COLLAPSES to zero (`SAFE v=0 w=34`), it does not spike up,
-        // so min() picked the garbage side and the bar dropped and narrowed at the tap. The window
-        // is stable in both directions.
-        view.window?.safeAreaInsets.bottom ?? view.safeAreaInsets.bottom
+        if let w = view.window { return w.safeAreaInsets.bottom }
+        // ⛔ AND A WINDOW EVEN BEFORE THIS VIEW IS IN ONE — his screenshot: open a chat for the first
+        // time from the list and the composer sits at the very bottom edge, in the home-indicator
+        // band; open the keyboard once and close it and it snaps to where it belongs, for the rest
+        // of the session.
+        //
+        // The composer is handed over BEFORE this view is in a window (the file says so at
+        // `viewSafeAreaInsetsDidChange`), so `view.window` is nil, and the fallback below is the
+        // HOSTED view's own bottom inset — the value SwiftUI collapses to zero, which is the whole
+        // reason this property reads the window in the first place. Zero in, zero out: the guide is
+        // floored at nothing and the bar rests on the screen edge. Nothing corrects it afterwards
+        // because `viewSafeAreaInsetsDidChange` fires on the VIEW's safe area, and the view's never
+        // changed — only the window arriving did.
+        //
+        // The scene's own window has the honest number before we are attached to it, and it is the
+        // same window we will be attached to. Only the first frames of a chat ever reach this line.
+        if let w = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap({ $0.windows })
+            .first(where: { $0.isKeyWindow }) {
+            return w.safeAreaInsets.bottom
+        }
+        return view.safeAreaInsets.bottom
     }
 
     // (`followKeyboardGuide` is gone. It existed to copy the system guide's position into the bar's
@@ -3583,6 +3605,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // The scroll stays LOCKED while the menu is up (exclusivity already prevents the pressing
         // finger's pan; this also blocks a second finger from scrolling the chat behind the blur).
         collectionView.panGestureRecognizer.isEnabled = false
+        // The keys stay up (theirs never dismisses for a message menu), so the menu has to be laid
+        // out above them — the keyboard's window draws over ours whatever we do here.
+        overlay.keyboardInset = keyboardIsUp ? keyboardOverlap : 0
         overlay.present(in: window, startAtSqueeze: true)
     }
 
@@ -3769,6 +3794,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // iOS 26 full-page screenshots scroll the view PROGRAMMATICALLY (no drag flags) right after the
     // notification, to capture every page. Freeze all landings for the capture window and snap back to the
     // last stable offset once it has finished.
+    /// Hold the composer's keyboard through the audio stack's session work. Cheap and inert when
+    /// nothing is focused.
+    @objc private func voiceNoteInteraction() {
+        (composerBar as? ChatComposerView)?.armResignGuard()
+    }
+
     @objc func screenshotTaken() {
         guard didFirstLand, !isDisappearing,
               !collectionView.isDragging, !collectionView.isTracking,

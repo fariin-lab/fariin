@@ -954,6 +954,19 @@ extension ChatComposerView: UITextViewDelegate {
     // be running inside a SwiftUI update, and a state write there is the "modifying state during
     // view update" warning. ⚠️ Until this lands, ThreadView's flag LAGS the field — `syncText`
     // therefore acts only on a change of the flag, never on the flag disagreeing with the field.
+    /// ⛔ HOLD THE KEYBOARD THROUGH SOMETHING THAT IS NOT A DISMISSAL. Armed when a voice note is
+    /// tapped: the audio stack changes category and activates a session on that path, and one of
+    /// those makes the system take the first responder away, which closes a keyboard nobody asked to
+    /// close. The guard below already knows how to refuse a resign that did not announce itself —
+    /// every deliberate close in the app routes through `requestFocus(false)` — so this just re-arms
+    /// the same window. A second is long enough to cover the session renegotiation and far too short
+    /// to block a person actually dismissing the keyboard.
+    func armResignGuard(seconds: TimeInterval = 1.0) {
+        guard textView.isFirstResponder else { return }
+        textView.resignRequested = false
+        textView.resignGuardUntil = Date().addingTimeInterval(seconds)
+    }
+
     func textViewDidBeginEditing(_ tv: UITextView) {
         // Arm the resign guard for the presentation — see `ComposerTextView.resignFirstResponder`.
         textView.resignGuardUntil = Date().addingTimeInterval(0.7)
