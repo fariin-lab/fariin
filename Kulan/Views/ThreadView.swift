@@ -209,8 +209,10 @@ struct ThreadView: View {
     /// How far the composer bar stands above the keyboard (or above the safe-area line at rest),
     /// reported by the list's controller, which is what places it. The floating overlays clear the
     /// bar by this. The default is one bar's worth so the first frame is not wrong.
+    @State private var composerLift: CGFloat = 48
     /// The bar's side inset, reported with the lift by the same controller. The floating buttons
     /// and the @-mention popup align to it.
+    @State private var composerSide: CGFloat = 20
     /// clientIds already re-driven automatically. Cleared whenever the signal drops, so every
     /// reconnection is worth one fresh attempt — see `autoRetryFailedMedia`.
     @State private var autoRetried: Set<String> = []
@@ -422,14 +424,29 @@ struct ThreadView: View {
             // there changed the bar height → changed the inset → the bottom gap "grew in stages" as you
             // scrolled (the reported bug). As an overlay it respects the bottom safe area (floats just above
             // the composer, rides the keyboard) and is fully tappable (padding, not offset).
-            // (The jump arrow and the reaction badge are no longer placed here. They are handed to
-            // the list controller as `dockOverlayTrailing` and pinned by Auto Layout above the
-            // composer, so they ride the keyboard's own animation with the bar instead of arriving a
-            // runloop later on a spring of their own. Same views, same numbers, different clock.)
+            .overlay(alignment: .bottomTrailing) {
+                VStack(spacing: 10) {
+                    reactionJumpButton   // sits ABOVE the arrow, like the reference
+                    jumpToBottomButton
+                }
+                // ⛔ ABOVE THE COMPOSER, MEASURED WHERE THE COMPOSER IS PUT. This was a bare 10,
+                // which worked only while the bar was SwiftUI's `safeAreaBar` and grew the bottom
+                // safe area. The bar is UIKit's now, so the padding started at the keyboard and the
+                // arrow landed on the mic button (his screenshot, 2026-08-26).
+                .padding(.bottom, composerLift + 10)
+                .animation(keyboard.systemAnimation, value: composerLift)
+            }
             // "Recording a voice note" indicator (their side): floats OVER the list at bottom-leading.
             // Deliberately NOT a list row — inserting transient rows touches the inverted-list scroll
             // machine (do-not-touch rules); an overlay moves nothing and costs nothing when absent.
-            // (The recording bubble moved to the dock too, as `dockOverlayLeading`.)
+            .overlay(alignment: .bottomLeading) {
+                if repo.otherRecording, typingPref, !repo.iBlocked {
+                    RecordingBubble(dark: dark)
+                        // Same rule as the jump arrow above: clear the composer, not the keyboard.
+                        .padding(.leading, 12).padding(.bottom, composerLift + 10)
+                        .transition(.scale(scale: 0.5, anchor: .bottomLeading).combined(with: .opacity))
+                }
+            }
             .animation(.spring(response: 0.32, dampingFraction: 0.75), value: repo.otherRecording)
             // Composer floats OVER the full-bleed list as a native iOS 26 blur bar (safeAreaBar); messages
             // scroll under it. The bar grows the bottom safe area; .always folds it into the content inset.
@@ -685,9 +702,10 @@ struct ThreadView: View {
                     .liquidGlass(Circle(), interactive: true)
             }
             .buttonStyle(.plain)
-            // (No trailing padding and no side animation here any more. The host this view sits in is
-            // pinned by the controller at exactly `composerSide` from the edge, written on the
-            // keyboard's own layout pass, so the inset arrives with the bar instead of chasing it.)
+            .padding(.trailing, composerSide)   // the composer's edge, reported by the controller that places it
+            // On the keyboard's own curve, as the bar is: its side inset changes inside the keyboard
+            // block in UIKit, and without this the button snapped 29 → 20 while the bar slid.
+            .animation(keyboard.systemAnimation, value: composerSide)
             .transition(.scale.combined(with: .opacity))
         }
     }
@@ -806,9 +824,10 @@ struct ThreadView: View {
                         }
                     }
             }
-            // (No trailing padding and no side animation here any more. The host this view sits in is
-            // pinned by the controller at exactly `composerSide` from the edge, written on the
-            // keyboard's own layout pass, so the inset arrives with the bar instead of chasing it.)
+            .padding(.trailing, composerSide)   // the composer's edge, reported by the controller that places it
+            // On the keyboard's own curve, as the bar is: its side inset changes inside the keyboard
+            // block in UIKit, and without this the button snapped 29 → 20 while the bar slid.
+            .animation(keyboard.systemAnimation, value: composerSide)
             .transition(.scale.combined(with: .opacity))
             .animation(.spring(response: 0.32, dampingFraction: 0.72), value: showsJumpButton)
         }
@@ -2018,7 +2037,7 @@ struct ThreadView: View {
             // screen, and the persisted "where I left off" became a row nobody was looking at. See
             // `RowVisibilityReporter`.
             .modifier(RowVisibilityReporter(
-                onVisible: { visibleRows.ids.insert(msg.id) },
+                onVisible: { visibleRows.ids.insert(msg.id); schedulePersistScrollPosition() },
                 onHidden: { visibleRows.ids.remove(msg.id) }))
             .transition(.identity)
             .modifier(SelectableRow(selecting: selecting, selected: selectedIds.contains(msg.id),
@@ -2933,7 +2952,7 @@ struct ThreadView: View {
                 }
                 if unreadOnOpen > 0 {
                     let msgs = repo.messages
-                    // Same rule as anchorUnread: with more unread than we hold, don't pretend the
+                    // Same rule as anchorUnread: with more unread than we hold, do not pretend the
                     // oldest loaded row is the boundary (audit).
                     if unreadOnOpen <= msgs.count {
                         let idx = msgs.count - unreadOnOpen
@@ -2943,21 +2962,20 @@ struct ThreadView: View {
                         }
                     }
                 }
-                // ⛔ THIRD, WHERE THIS READER LEFT OFF — theirs, and the tier we did not have. Their
-                // open priority is focus message, then the unread indicator, then the last visible
-                // interaction restored to its own on-screen position; ours had the first two and then
-                // went to the newest, so every re-entry to a long chat lost your place. Only if that
-                // row is still in the loaded window: anything further back is a paging problem, not a
-                // landing one, and going to the newest is the honest answer for it.
+                // ⛔ THIRD, WHERE THIS READER LEFT OFF — theirs, and the tier we did not have.
+                // Their open priority is focus message, then the unread indicator, then the last
+                // visible interaction restored to its own on-screen position. Only if that row is
+                // still in the loaded window: anything further back is a paging problem, not a
+                // landing one, and the newest is the honest answer for it.
                 if let saved = ChatScrollStore.shared.position(for: cid),
                    repo.items.contains(where: { $0.rowId == saved.rowId }) {
                     return saved.rowId
                 }
                 return nil
             }(),
-            initialScrollOffset: ChatScrollStore.shared.position(for: cid).map(\.offsetFromTop),
-            // Written from the list's own settle points, which is the only place that knows which row
-            // is at the top of the viewport and by how much it is clipped.
+            initialScrollOffset: ChatScrollStore.shared.position(for: cid).map { $0.offsetFromTop },
+            // Written from the list's own settle points, the only place that knows which row is at
+            // the top of the viewport and by how much it is clipped.
             onReadingPosition: { position in
                 if let position { ChatScrollStore.shared.save(cid, position) }
                 else { ChatScrollStore.shared.clear(cid) }
@@ -2977,28 +2995,11 @@ struct ThreadView: View {
             menuActionTick: menuActionTick,         // SwiftUI menu action fired → hold reloads through its dismissal
             sendTick: sendTick,                     // Send tapped → the list holds its offset until the row lands
             topOverlayHeight: searchActive ? 0 : pinBarHeight,   // floating date pill drops below the pin bar
+            // How far the composer stands above the keyboard and its side inset, measured where it
+            // is placed. The floating overlays sit on those instead of on the bottom safe area,
+            // which no longer contains the bar. See `onComposerGeometry` in the controller.
+            onComposerGeometry: { lift, side in composerLift = lift; composerSide = side },
             onJumpButtonVisibility: { showJumpButton = $0 },
-            // The dock overlays: the same views that used to be `.overlay`s on this stack, handed to
-            // the controller so Auto Layout places them above the composer and they move with the
-            // keyboard on its own curve. Their appearance and their transitions are untouched.
-            dockOverlayTrailing: AnyView(
-                VStack(spacing: 10) {
-                    reactionJumpButton   // sits ABOVE the arrow, like the reference
-                    jumpToBottomButton
-                }
-            ),
-            dockOverlayComposerTop: AnyView(
-                Group { if !mentionCandidates.isEmpty { mentionPicker } }
-            ),
-            dockOverlayLeading: AnyView(
-                Group {
-                    if repo.otherRecording, typingPref, !repo.iBlocked {
-                        RecordingBubble(dark: dark)
-                            .transition(.scale(scale: 0.5, anchor: .bottomLeading).combined(with: .opacity))
-                    }
-                }
-                .animation(.spring(response: 0.32, dampingFraction: 0.75), value: repo.otherRecording)
-            ),
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,
             // The floating date pill is now rendered + updated in UIKit (NativeMessageList) directly from
@@ -4461,17 +4462,30 @@ struct ThreadView: View {
         .padding(.vertical, 8)
     }
 
-    // ⚠️ THE LANDING IS THE LIST CONTROLLER'S NOW, and this is the vestige of the proxy path that
-    // preceded it. It answers "the newest" unconditionally, because the saved reading position is
-    // applied through `initialScrollId` / `initialScrollOffset` in UIKit, where the exact on-screen
-    // offset can actually be honoured. A `ScrollViewProxy.scrollTo` cannot reach the hosted list at
-    // all, so every use of this is inert; it stays only because `revealed` is still sequenced off it.
+    // Where the chat should land when it opens: the saved in-session spot if that message is still
+    // loaded, otherwise the newest. Cold start / first open this session → no saved anchor → newest.
+    // ⚠️ THE LANDING IS THE LIST CONTROLLER'S NOW. This answers "the newest"
+    // unconditionally: the saved reading position is applied through `initialScrollId` /
+    // `initialScrollOffset` in UIKit, where the exact on-screen offset can be honoured. A
+    // `ScrollViewProxy.scrollTo` cannot reach the hosted list at all, so every use of this is
+    // inert; it stays only because `revealed` is sequenced off it.
     private var openAnchor: (id: String, edge: UnitPoint) { ("BOTTOM", .bottom) }
 
+    // Remember (in RAM) where we're looking so reopening this chat lands here. Only after the open
+    // has SETTLED — during the load we're programmatically pinning, and saving then would feed the
+    // pin back into itself. Called from row/BOTTOM onAppear only (teardown-safe).
+    // Trailing-debounced save (0.5s after the last row appearance): per-appearance saves ran an O(n)
+    // scan + a store write on every scroll tick — pure churn during scrolling (anti-the reference app pattern).
+    private func schedulePersistScrollPosition() {
+        visibleRows.persistWork?.cancel()
+        let work = DispatchWorkItem { persistScrollPosition() }
+        visibleRows.persistWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
     // (The reading position is written by the list controller now, from its own settle points —
-    // `onReadingPosition` above. It knows which row is at the top of the viewport and by how many
-    // points it is clipped; a set of row-appearance callbacks could only ever guess at the first and
-    // never knew the second, which is why the restored position used to be approximate.)
+    // `onReadingPosition` at the call site above.)
+    private func persistScrollPosition() {}
 
     // Reveal the chat exactly at the open anchor with NO jump. LazyVStack row heights aren't final on
     // the first scrollTo (offscreen rows are unmeasured), so it lands approximately; a second pass on
@@ -5273,9 +5287,11 @@ struct ThreadView: View {
             // and its gap, reported by the controller that places it; less the pad, it is the
             // distance from this slot's bottom (the keyboard's top, or the safe-area line) to the
             // bar's top edge, so the picker sits on that edge rather than a guessed distance above.
-            // (The picker moved to the dock as `dockOverlayComposerTop`. In this slot it rode
-            // SwiftUI's own keyboard avoidance — a third clock on one screen — and it is pinned to
-            // the bar's top edge in UIKit now, which is the line it was always describing.)
+            if !mentionCandidates.isEmpty {
+                mentionPicker
+                    .padding(.horizontal, composerSide)
+                    .padding(.bottom, max(0, composerLift - 8))
+            }
             // ⛔ THE BAR IS UIKIT — owner, 2026-08-25: "The Composer input text is currently
             // implemented in SwiftUI. Please completely convert it to UIKit." Everything drawn — the
             // "+", the pill and its field, the reply / edit / link cards, GIF, mic, send, the hold
