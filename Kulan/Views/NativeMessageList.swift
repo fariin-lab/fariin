@@ -138,7 +138,6 @@ struct NativeMessageList: UIViewControllerRepresentable {
     /// measured where the controller places the bar, so SwiftUI's floating overlays sit on the
     /// bar's own edges without computing them a second time.
     var onTopInset: (CGFloat) -> Void = { _ in }   // reports the GEOMETRIC nav-bar overlap (UIKit safe area â€” reliable)
-    var onComposerGeometry: ((CGFloat, CGFloat) -> Void)?
     // Whether the floating jump-to-latest button should be on screen. Reported on its own instead of
     // being derived from `isAtBottom`, because the two answer different questions: isAtBottom decides
     // whether the reader gets MOVED (44pt, and half the conversation reads it), while the button is
@@ -653,9 +652,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private func recordDistanceFromBottom() {
         guard didFirstLand else { return }
         lastKnownDistanceFromBottom = max(0, maxContentOffsetY - collectionView.contentOffset.y)
-        reportReadingPosition()
     }
 
+    /// ⚠️ AT REST ONLY, NEVER PER FRAME. This encodes a value and writes `UserDefaults`, and it
+    /// used to hang off `recordDistanceFromBottom`, which runs on EVERY scroll tick — sixty to a
+    /// hundred and twenty main-thread writes a second, in exactly the frames that need headroom,
+    /// with the equality dedupe useless because the offset changes every frame. Theirs saves from a
+    /// 0.1s timer gated on `!isUserScrolling, !isWaitingForDeceleration`, and writes asynchronously.
+    /// Ours is called from the two settle points instead. `recordDistanceFromBottom` stays per-tick,
+    /// because it is one subtraction.
+    ///
     /// ⛔ THE READING POSITION, FOR REOPENING THE CHAT. Theirs saves the last visible interaction and
     /// how much of it was on screen, then restores to that exact place on the next open. Ours is the
     /// same pair — the top-most visible row and how far its top sits below the viewport's top edge —
@@ -681,6 +687,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var dateFadeWork: DispatchWorkItem?
     private var lastDateId: String?
     var onTopInset: ((CGFloat) -> Void)?      // ThreadView positions the date pill / pinned bar with this
+    var onComposerGeometry: ((CGFloat, CGFloat) -> Void)?   // (lift, side) for SwiftUI's overlays
     /// ⛔ HOW FAR THE COMPOSER RISES ABOVE THE KEYBOARD (or above the safe-area line at rest): the
     /// container's height less the keyboard band. SwiftUI's floating overlays — the jump-to-latest
     /// arrow, the reaction jump, the other side's recording bubble — sit above the bar by this.
@@ -3651,7 +3658,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard !ignoringScrollEvents else { return }
         // The finger has left. If the keyboard shrank the inset out from under a reader who was at the
         // newest message (interactive dismissal), this is the first honest moment to put them back.
-        if !decelerate { restoreReaderPosition(); recordDistanceFromBottom(); settleFlush() }
+        if !decelerate { restoreReaderPosition(); recordDistanceFromBottom(); reportReadingPosition(); settleFlush() }
         // The lift is the moment a jump asked for mid-drag becomes allowed. It runs whether the list
         // is about to coast or not: perform() kills the coast on its way past.
         if let animated = pendingNewestJump {
@@ -3661,7 +3668,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         guard !ignoringScrollEvents else { return }   // our own stop, not the reader's — see stopScrolling
-        restoreReaderPosition(); recordDistanceFromBottom(); settleFlush()
+        restoreReaderPosition(); recordDistanceFromBottom(); reportReadingPosition(); settleFlush()
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {

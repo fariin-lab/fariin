@@ -777,7 +777,19 @@ struct ThreadView: View {
             Button {
                 // Two-stage: if there are unread messages I haven't reached yet, jump
                 // to the FIRST unread; otherwise glide to the newest message.
-                if let unread = firstUnreadId, let row = repo.items.first(where: { $0.id == unread }) {
+                // ⛔ AND ONLY IF THE DIVIDER IS ABOVE ME. Theirs walks the visible rows and takes the
+                // unread tier only `if isScrolledAboveUnreadIndicator` — no visible row sits below the
+                // indicator. Without that test a reader already BELOW the divider who taps a
+                // down-arrow is scrolled UP, which reads as the button being broken rather than as a
+                // feature. The lander's own guard ("don't move if the target is entirely on screen")
+                // does not catch it, because an upward move to an off-screen row is a legal jump.
+                if let unread = firstUnreadId,
+                   let row = repo.items.first(where: { $0.id == unread }),
+                   let unreadIdx = repo.indexById[unread],
+                   !visibleRows.ids.isEmpty,
+                   !repo.items.enumerated().contains(where: { i, m in
+                       i > unreadIdx && visibleRows.ids.contains(m.id)
+                   }) {
                     // rowId, not doc id — the native list keys rows by clientId ?? id, and every
                     // modern message has a clientId, so the untranslated id failed the lookup
                     // silently and the first tap did nothing (audit finding).
@@ -2973,7 +2985,17 @@ struct ThreadView: View {
                 }
                 return nil
             }(),
-            initialScrollOffset: ChatScrollStore.shared.position(for: cid).map { $0.offsetFromTop },
+            // ⛔ ONLY WHEN THE SAVED BRANCH WON. Theirs gives each tier its own alignment: focus and
+            // the unread indicator go in at `.top`, and only `scrollToLastVisibleInteraction` passes
+            // the stored on-screen position. Read unconditionally, this landed the UNREAD DIVIDER at
+            // whatever depth the saved row happened to hold — 300pt down the screen if that is where
+            // the reader had been. A chat has to have both an unread divider and a saved position for
+            // it to bite, which is an ordinary Tuesday.
+            initialScrollOffset: {
+                if AppRouter.shared.pendingMessageId != nil { return nil }
+                if unreadOnOpen > 0 { return nil }
+                return ChatScrollStore.shared.position(for: cid)?.offsetFromTop
+            }(),
             // Written from the list's own settle points, the only place that knows which row is at
             // the top of the viewport and by how much it is clipped.
             onReadingPosition: { position in
