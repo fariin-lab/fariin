@@ -2228,7 +2228,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     //
     // ⛔ THE PRIMARY SOURCE ON HIS iOS 26 PHONE, where the notification-driven animation ran late
     // (build 696, four photos: the bar stayed at rest through the whole open, was covered by the
-    // rising keys, and climbed out at the end — while Signal's bar rode every frame). The composer's
+    // rising keys, and climbed out at the end — while the reference app's bar rode every frame). The
     // field carries a zero-height `inputAccessoryView` (`ChatComposerView.keyboardGhost`); UIKit
     // re-parents it into the keyboard's own host view and moves that host WITH the keys. Observing
     // the host's frame fires SYNCHRONOUSLY inside whatever change UIKit makes — an animated show or

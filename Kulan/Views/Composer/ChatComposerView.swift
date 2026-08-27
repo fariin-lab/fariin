@@ -182,7 +182,7 @@ final class ChatComposerView: UIView {
     // MARK: - Init
 
     /// ⛔ THE KEYBOARD'S OWN TRANSPORT, NOT A NOTIFICATION — his iOS 26 phone, build 696, four
-    /// photos, 2026-08-26 night: Signal's bar rides the keys in every frame; ours stayed at rest
+    /// photos, 2026-08-26 night: the reference app's bar rides the keys in every frame; ours stayed at rest
     /// through the whole open, was covered by the rising keys, and climbed out only at the end.
     /// The notification-driven animation does not run in time on that phone, and the layout guide
     /// is dead in this hosted controller (build 682).
