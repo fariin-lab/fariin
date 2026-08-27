@@ -1216,6 +1216,34 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             needsRefreshOnSettle = true
             return
         }
+        // ⛔ A READER AT THE NEWEST FOLLOWS THE NEW BOTTOM — his report, 2026-08-27: send or receive
+        // a photo or video and the list ends up off the bottom, jump arrow showing.
+        //
+        // Everything below this preserves an ANCHOR: the row the reader is looking at is held
+        // visually still while the content changes around it. That is right for someone reading
+        // history and wrong for someone sitting at the newest message, because "hold the anchor
+        // still" while a media row below it grows taller means the bottom moves away from them by
+        // exactly the growth — the newest message slides under the fold and the arrow appears.
+        //
+        // ⚠️ THE REFERENCE ALREADY SAYS THIS, and `updateInsets` already carries their line for the
+        // inset case: "If we were scrolled to the bottom, don't do any fancy math. Just stay at the
+        // bottom." This is the same rule at the other site that moves content — a row adopting its
+        // real rendered height, which for a photo or video is the normal course of events.
+        //
+        // Asked BEFORE the height lands, for the same reason the anchors are: afterwards the bound
+        // has already moved and a reader who was at it no longer looks like one.
+        if isAtNewest {
+            heights[id] = h
+            layout.generation += 1
+            layout.invalidateLayout()
+            collectionView.layoutIfNeeded()
+            let bound = maxContentOffsetY
+            if abs(collectionView.contentOffset.y - bound) > 0.5 {
+                collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
+            }
+            recordDistanceFromBottom()
+            return
+        }
         // Captured BEFORE the height lands, so the anchors describe the layout the reader is
         // looking at rather than the one being built (their token is taken before the update too).
         //
@@ -1590,6 +1618,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // what gets recorded as where the reader now is.
         restoreReaderPosition()
         recordDistanceFromBottom()   // a glide or jump has landed; this is where the reader now is
+        // ⛔ AND THE SAVED READING POSITION, WHICH THIS LINE NOT BEING HERE WAS A REAL BUG — his
+        // report, 2026-08-27: "when I open a chat it sometimes shows older messages instead of the
+        // latest, and it does not happen every time."
+        //
+        // `reportReadingPosition` is what CLEARS the store when the reader is at the newest, and it
+        // was wired only to the two drag settle points. Every programmatic landing came through here
+        // instead — the jump arrow, a send glide, a jump to a quoted message, the auto-scroll when a
+        // message arrives — so returning to the bottom by any of those left the middle-of-the-chat
+        // row that had been saved on the way up still sitting on disk. The store is disk-backed, so
+        // one such exit poisoned every future open of that conversation until the reader happened to
+        // DRAG to the bottom. That is precisely the "not every time".
+        reportReadingPosition()
         settleFlush()
         autoLoadMoreIfNeeded()
     }
@@ -3059,6 +3099,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        // ⛔ BEFORE `isDisappearing` GOES UP, because `reportReadingPosition` refuses to run once it
+        // is. Leaving the chat is the last honest moment to record where this reader is, and it was
+        // the other half of the stale-position bug: a reader who scrolled up and then walked straight
+        // out never settled, so the store kept whatever mid-scroll row was written on the way.
+        reportReadingPosition()
         isDisappearing = true
         isViewCompletelyAppeared = false   // theirs, same method
     }
