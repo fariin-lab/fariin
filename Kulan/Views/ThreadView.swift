@@ -5540,12 +5540,27 @@ struct ThreadView: View {
         holdStarted = true
         holdBeganAt = Date()
         holdRevealed = false
-        // The reveal clock: at 0.5s of continuous press this is a HOLD and the UI appears (the
-        // timer already shows the true elapsed, because the recording ran from touch-down). The
-        // captured timestamp is the staleness guard — a timer from a previous press finds a
-        // different `holdBeganAt` and does nothing.
+        // ⛔ 0.2, THEIRS EXACTLY — his report, 2026-08-27: "when I long press to record, it is late;
+        // the reference is fast". Read from their `checkPermissionsAndStartRecordingVoiceMessage`,
+        // which does the identical thing for the identical reason:
+        //
+        //     // Delay showing the voice memo UI for N ms to avoid a jarring transition
+        //     // when you just tap and don't hold.
+        //     DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { … showVoiceMemoUI() }
+        //
+        // Ours waited 0.5, two and a half times as long, and that wait IS the lateness he feels: the
+        // capture itself already runs from touch-down, so nothing about the audio changes here — only
+        // how long the screen says nothing while it does.
+        //
+        // ⚠️ THIS IS NOT THE TAP-VERSUS-HOLD THRESHOLD, and that one is untouched at 0.5s. They are
+        // two different clocks that happened to share a number: this one decides when the UI APPEARS,
+        // and the one in `endHoldRecording` decides whether a release SENDS. His 2026-08-23 order
+        // ("make the holder bit late so when i tap hands-free the recorder will not think it's hold
+        // to record") is about the second, and lowering the first cannot make a quick tap send a
+        // note. The reference keeps them apart the same way — their reveal is 0.2 and their minimum
+        // voice message is a full second.
         let began = holdBeganAt
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             guard holdBeganAt == began, holdStarted, !recordLocked else { return }
             withAnimation(.easeOut(duration: 0.15)) { holdRevealed = true }
         }
