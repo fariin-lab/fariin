@@ -420,6 +420,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private(set) weak var composerBar: UIView?
 
     private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
+    /// The dismiss-mode parking's floor (see `rideKeyboard`): his `ec0230d6` diag log shows iOS 26
+    /// posting `keyboardDidShow` at 18ms of a 380ms presentation — a lie — and the cancel arriving
+    /// 1ms after the early un-park. The park therefore holds for the keys' own announced duration
+    /// plus a margin, whatever didShow claims.
+    private var dismissParkUntil = Date.distantPast
     /// A send has begun and its row has not landed yet: hold the offset so the composer's own
     /// shrink cannot walk the content down before the glide walks it back up. See `updateInsets`.
     private var sendHoldUntil = Date.distantPast
@@ -2115,10 +2120,19 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     /// The keys are fully up: give the finger its dismiss drag back — see the parking note in
     /// `rideKeyboard`. Never inside the screenshot-capture window, which parks for its own reason
-    /// and restores itself.
+    /// and restores itself. ⚠️ And never before `dismissParkUntil`: iOS 26 posts didShow at 18ms
+    /// of a 380ms presentation (his diag log), and un-parking there let the misread cancel land
+    /// 1ms later. An early didShow re-arms itself for the floor instead.
     @objc private func keyboardDidShowNote() {
         guard isViewLoaded, Date() >= captureFreezeUntil,
               collectionView.keyboardDismissMode == .none else { return }
+        let remaining = dismissParkUntil.timeIntervalSinceNow
+        guard remaining <= 0 else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + remaining + 0.02) { [weak self] in
+                self?.keyboardDidShowNote()
+            }
+            return
+        }
         collectionView.keyboardDismissMode = .interactive
         KeyboardDiag.log("UNPARK shown")
     }
@@ -2146,6 +2160,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // `.none` for the presentation and restored the moment the keys report fully shown
         // (`keyboardDidShow`) — or here, when a hide ends the transition instead.
         if up, d > 0 {
+            dismissParkUntil = Date().addingTimeInterval(max(0.25, d) + 0.15)
             if collectionView.keyboardDismissMode != .none {
                 collectionView.keyboardDismissMode = .none
                 KeyboardDiag.log("PARK dismiss")
