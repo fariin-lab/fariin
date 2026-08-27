@@ -92,6 +92,11 @@ final class VoiceBubbleView: UIView {
         wave.bars = v.bars
         wave.playedColor = tint
         wave.unplayedColor = tint.withAlphaComponent(0.35)
+        // ⚠️ THE TRANSFORM COMES OFF BEFORE THE FRAME GOES ON. `flashSpeedPill` scales this label, and
+        // setting a frame on a view with a live transform is undefined — a reconfigure landing mid
+        // press (a scroll, a playback tick) would bake the squeeze into the geometry. Clearing it
+        // first cancels the flash instead, which is the harmless half of the trade.
+        speedPill.transform = .identity
         speedPill.frame = plan.speedPill
         duration.frame = plan.duration
         duration.attributedText = plan.durationAttr
@@ -145,6 +150,36 @@ final class VoiceBubbleView: UIView {
     @objc private func tappedSpeed() {
         VoiceNotePlayer.shared.cycleRate(cid: cid)
         paint()
+        flashSpeedPill()
+    }
+
+    /// ⛔ THE PILL HAS TO ANSWER THE FINGER — his screenshot, 2026-08-27: "when I click 1x there's no
+    /// animation, the user never feels the touch."
+    ///
+    /// It is a `UILabel` with a tap recogniser, not a control, so it inherits none of the press
+    /// feedback a button would give for free. The text changing from 1x to 1.5x is the only thing
+    /// that happens, and on a pill this small that reads as nothing happening at all — especially on
+    /// the second tap, where 1.5x and 2.0x are the same width and the glyphs barely move.
+    ///
+    /// A press-in / spring-out on the pill itself, which is what a system button does: down fast so
+    /// it lands under the finger that is still on screen, back on a spring so it feels sprung rather
+    /// than snapped. The background lifts for the same beat, because scale alone is easy to miss on
+    /// something 40pt wide. `beginFromCurrentState` so a quick second tap re-launches from wherever
+    /// the first one had got to instead of jumping back to full size first.
+    private func flashSpeedPill() {
+        let lifted = speedPill.backgroundColor
+        UIView.animate(withDuration: 0.09, delay: 0,
+                       options: [.curveEaseOut, .beginFromCurrentState, .allowUserInteraction]) {
+            self.speedPill.transform = CGAffineTransform(scaleX: 0.88, y: 0.88)
+            self.speedPill.backgroundColor = lifted?.withAlphaComponent(0.30)
+        } completion: { _ in
+            UIView.animate(withDuration: 0.28, delay: 0,
+                           usingSpringWithDamping: 0.55, initialSpringVelocity: 0.6,
+                           options: [.beginFromCurrentState, .allowUserInteraction]) {
+                self.speedPill.transform = .identity
+                self.speedPill.backgroundColor = lifted
+            }
+        }
     }
 
     /// ⛔ WHEN ONE OF THESE THREE LAST TOOK A TOUCH — his report: keyboard up, tap Play (or the 1×

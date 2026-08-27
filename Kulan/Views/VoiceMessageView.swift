@@ -142,7 +142,11 @@ struct VoiceMessageView: View {
     /// ⚠️ Decoupling is safe here ONLY because this is a FLOOR. If the disc is ever made taller than
     /// 55 the bubble simply grows to the disc — nothing is clipped. It would not be safe if this were
     /// a fixed height, and it must not be turned into one.
-    static let contentHeight: CGFloat = 44   // slimmed from 55 with the disc, 2026-08-27 (his side-by-side); still a FLOOR
+    /// ⛔ BACK TO 55 — his order, 2026-08-27, after seeing 44 on the device. It had been slimmed from
+    /// 55 that same day off a side-by-side; he has now judged the result and wants the height back.
+    /// Still a FLOOR, which is what makes it safe to state outright: the bubble grows to whatever the
+    /// disc and the stacked wave/caption actually need, and this only stops it going under.
+    static let contentHeight: CGFloat = 55
 
     /// Everything to the right of the disc: the wave, the pill, and the caption line under them.
     static func columnWidth(for message: Message) -> CGFloat {

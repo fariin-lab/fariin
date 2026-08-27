@@ -1139,7 +1139,21 @@ enum MessageRowLayout {
                               forwardedSize: CGSize, forwardedIconW: CGFloat) -> BubbleResult {
         let y = startY
         let hPad: CGFloat = 13, vPad: CGFloat = 7   // vPad 8 → 7 in the 2026-08-27 slimming
-        let contentW = min(max(1, maxBubble - hPad * 2), CGFloat(v.contentWidth))
+        // ⛔ A VOICE NOTE TAKES THE FULL BUBBLE WIDTH — his order, 2026-08-27: "make it wide, use
+        // what the reference uses". Read out of their `AudioMessageView.measure`, which is explicit
+        // about it:
+        //
+        //     let waveformSize = CGSize(width: 0, height: Constants.waveformHeight)
+        //     topInnerSubviewInfos.append(waveformSize.asManualSubviewInfo(hasFixedHeight: true))
+        //
+        // A width of ZERO with only the HEIGHT declared fixed is their way of saying the waveform
+        // stretches to whatever is left, so their note is as wide as any other bubble at that max
+        // width. Ours pinned the waveform to a fixed 104 and added the parts up, which is why every
+        // note came out at exactly 224 regardless of how much room the row had.
+        //
+        // `v.contentWidth` is still what the SwiftUI copy of this bubble measures itself at, so it is
+        // deliberately not consulted here rather than deleted.
+        let contentW = max(1, maxBubble - hPad * 2)
         var innerY = vPad
 
         var quoteRect: CGRect?

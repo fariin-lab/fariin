@@ -149,13 +149,28 @@ enum MessageRowModelBuilder {
         // "Voice message" — his screenshot, 2026-08-26: "when it is loading don't change the whole
         // voice bubble". A photo has nothing to draw before its bytes arrive; a voice note has
         // everything except the URL, which is needed only to press play.
-        } else if let pending = msg.pendingMediaKind, pending != "audio" {
+        // ⛔ AND A PHOTO IS NEVER A PLACEHOLDER PILL EITHER — his screenshot, 2026-08-27: sending or
+        // forwarding a picture draws a bubble with a spinner and the word "Photo" where the picture
+        // should be. The SwiftUI copy of this row has always excluded it (`pendingKind != "image"`)
+        // and this builder never got that exclusion, so the two halves of the app disagreed and the
+        // UIKit list is the one on screen.
+        //
+        // ⚠️ A FORWARD IS WHY IT SHOWS UP AT ALL. `pendingMediaKind` is nil whenever local bytes are
+        // present, which keeps an ordinary send out of it — the sender's own copy is the better
+        // picture. A forward has no local bytes: nothing was picked from the library, it is a
+        // re-send of something already on the server. So the sender lands here too, and unlike a
+        // video or a document a photo HAS something to draw meanwhile — the blurhash and thumbnail
+        // carried over from the original, at the real aspect ratio, which is exactly what
+        // `isPendingImage` was written for.
+        } else if let pending = msg.pendingMediaKind, pending != "audio", pending != "image" {
             // Still being prepared: a spinner and a word. The real bubble arrives when the write
             // lands, carrying the poster and the dimensions the placeholder cannot know.
             body = .pill(BubbleBody.PillBody(
                 symbol: "arrow.up.circle", label: pendingLabel(pending),
                 spent: false, opens: false, busy: true))
-        } else if msg.isImage || msg.isVideo || msg.isGif {
+        // `isImage` needs a URL or local bytes, so a pending photo is not `isImage` yet and has to be
+        // named here as well — the same footnote the voice branch below carries, for the same reason.
+        } else if msg.isImage || msg.isVideo || msg.isGif || msg.isPendingImage {
             body = .media(mediaBody(msg, ctx: ctx))
         } else if msg.isAlbum {
             body = .album(albumBody(msg, ctx: ctx))
