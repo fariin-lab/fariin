@@ -2586,6 +2586,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard isViewLoaded, view.window != nil, !isDisappearing,
               let info = note.userInfo,
               let end = (info[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+        probeSettled()   // ⚠️ DIAGNOSTIC ONLY — remove before shipping.
         // Their expression, character for character: the end frame is in screen coordinates and its
         // overlap with THIS view is the height. A hide's end frame is off the bottom, so its overlap
         // never exceeds the resting strip.
@@ -3223,6 +3224,28 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// and where the collection view actually stopped its content. Both are printed here beside the
     /// bar's real frame, so the overlap can be read off directly instead of derived: if `barTop` is
     /// above `contentStops`, the message is under the bar by the difference.
+    /// ⚠️ The per-pass line above can be a MID-FLIGHT reading: `updateInsets` runs a full layout of
+    /// its own, that layout re-enters `viewDidLayoutSubviews`, and the probe there prints before the
+    /// outer call has written anything. So the question "what did the inset actually end up at" needs
+    /// a line taken after everything has settled, and that is what this is: one print, well clear of
+    /// the keyboard's animation, tagged so it cannot be confused with the noisy ones.
+    private func probeSettled() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            guard let self else { return }
+            let bar = self.composerBar?.frame ?? .zero
+            let containerTop = self.view.bounds.height - self.bottomBarContainer.frame.height
+            print("[KSETTLED]",
+                  "guide=\(Int(self.keyboardOverlap))",
+                  "clearance=\(Int(self.bottomBarContainer.frame.height))",
+                  "cvAdjBottom=\(Int(self.collectionView.adjustedContentInset.bottom))",
+                  "cvRawBottom=\(Int(self.collectionView.contentInset.bottom))",
+                  "cvSafeBottom=\(Int(self.collectionView.safeAreaInsets.bottom))",
+                  "barTopInView=\(Int(containerTop + bar.minY))",
+                  "offsetY=\(Int(self.collectionView.contentOffset.y))",
+                  "maxOffsetY=\(Int(self.maxContentOffsetY))")
+        }
+    }
+
     private var probeCount = 0
     private func probeClearance() {
         guard probeCount < 40 else { return }
