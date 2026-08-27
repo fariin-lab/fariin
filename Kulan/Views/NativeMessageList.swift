@@ -454,6 +454,26 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// composer re-measured, and offsets were written from geometry that had not settled. The leaving
     /// half stays `isDisappearing`, which must freeze more than the lockstep; this is the arriving half.
     private var isViewCompletelyAppeared = false
+    /// ⛔ THE CLEARANCE THE READER LAST ACTUALLY HAD, and the honest input to the lockstep shift.
+    ///
+    /// Reading the delta off the content inset — raw OR adjusted, they are the same number — measures
+    /// the wrong thing, and this is the real remainder of his 2026-08-27 report. `oldInsets.bottom`
+    /// was written against the safe area of an EARLIER pass, while `safe.bottom` is read now, so when
+    /// SwiftUI flaps the hosted safe area at the focus instant the difference contains the flap:
+    /// `Δclearance − Δsafe` rather than `Δclearance`. The list did not move — the clearance is
+    /// identical — and a scrolled reader was shifted by the flap anyway.
+    ///
+    /// The clearance is the number the reader actually experiences (the container's height: keyboard
+    /// plus composer plus gap), it is immune to which safe area any particular pass happened to see,
+    /// and after the plain subtraction it is exactly what the adjusted inset equals.
+    ///
+    /// ⚠️ IT IS ONLY ADVANCED WHEN THE SHIFT WAS ACTUALLY MADE, OR WAS GENUINELY NOT OWED. Every
+    /// stand-down in `updateInsets` writes the insets and then returns — a send hold, a context menu,
+    /// a view that has not finished appearing — and because that method is edge-triggered
+    /// (`guard didChangeInsets`) the very next pass sees nothing to do and the shift is lost for good.
+    /// Leaving this value behind on those paths turns the debt into something the next pass can still
+    /// see and pay.
+    private var lastAppliedClearance: CGFloat?
     private var lastStableOffset: CGFloat = 0 // last user/our-intent offset â†’ screenshot-capture recovery
     // Selection-mode animation coordination: the land that CARRIES the checkbox change passes (even
     // mid-motion), then further lands defer until the slide animation window closes â€” a reconfigure
@@ -1036,6 +1056,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard let landed = continuityDelta(anchors, before: before, after: after),
               abs(landed.delta) > 0.5 else { return }
         collectionView.layoutIfNeeded()
+        // ⛔ NEVER INSIDE ANOTHER WRITER'S PASS. This is the one offset write in the file that had no
+        // stand-down at all, and it is reachable from `apply`'s same-ids path — which an inset update
+        // can be running underneath. Writing here then hands the rest of that update an offset it did
+        // not measure. (A finger is deliberately NOT excluded: unlike `verifyAnchor`, this correction
+        // is the only thing keeping the reader still when an OFF-SCREEN row above them changes
+        // height, and skipping it would move them rather than merely fail to hold them.)
+        guard !isUpdatingInsets else { return }
         let y = clampOffset(collectionView.contentOffset.y + landed.delta)
         guard abs(collectionView.contentOffset.y - y) > 0.5 else { return }
         UIView.performWithoutAnimation {
@@ -1371,8 +1398,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             glideSeq &+= 1
             let seq = glideSeq
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                // ⛔ THE SAME STAND-DOWNS EVERY OTHER OFFSET WRITER HONOURS. This checked only for a
+                // finger, so: tap jump-to-latest, flick the list within half a second, and at t=0.5
+                // the reader is coasting with no finger down and no NEW scroll issued — so `glideSeq`
+                // still matches and this hard-writes the old target, killing the fling. Deceleration
+                // is a reader in motion. A context menu is up means nothing may move (the menu's
+                // snapshot is anchored to a frame from before). A screenshot capture owns the offset.
+                // And a controller on its way out should write nothing at all.
                 guard let self, seq == self.glideSeq,
                       !self.collectionView.isDragging, !self.collectionView.isTracking,
+                      !self.collectionView.isDecelerating,
+                      !self.contextMenuVisible, !self.isDisappearing,
+                      Date() >= self.captureFreezeUntil,
                       abs(self.collectionView.contentOffset.y - target) > 2 else { return }
                 self.collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
                 self.lastStableOffset = target
@@ -1877,8 +1914,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             glideStarted = true
             self.collectionView.layoutIfNeeded()
             self.perform(.newest(animated: true))
+            // ⛔ THIS BACKSTOP NEEDS THE SEQUENCE NUMBER ITS SIBLING HAS. `scrollToOffset`'s 0.5s
+            // arrival check refuses when a newer move has superseded it; this one only asked whether
+            // `sendAnimating` was set — and it is set again by the NEXT send. Two sends 0.3s apart and
+            // the first backstop fires in the middle of the second glide, clears the flag, opens
+            // `canLandLoad`, and lets a parked land through mid-flight: literally the failure the
+            // sibling's own comment describes, arriving by the door that was left open.
+            let backstopSeq = self.glideSeq
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-                guard let self, self.sendAnimating else { return }
+                guard let self, self.sendAnimating, backstopSeq == self.glideSeq else { return }
                 self.sendAnimating = false
                 self.settleFlush()
             }
@@ -2001,6 +2045,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // The landing offset depends on contentSize and both insets, so the insets must be current and
         // the layout settled BEFORE we land; the composer height and safe area can arrive after the
         // first apply.
+        //
+        // ⛔ AND THE CALL BELOW HAS TO ACTUALLY RUN. `updateInsets` now refuses a nested call so that
+        // the outermost caller owns the pass — but this method is not an inset update, it is a
+        // CONSUMER of one, and it is reached from `viewDidLayoutSubviews`, which is exactly the pass
+        // `updateInsets` forces from its own first line. Landing there means landing against the
+        // insets as they were BEFORE the update wrote them: short by the whole composer clearance.
+        // The no-unread path happens to heal (the outer update re-pins a reader it still sees at the
+        // newest); a first-unread landing does not, and neither does a landing that arrives before
+        // `isViewCompletelyAppeared`. So the land waits one turn for the pass to finish rather than
+        // reading half of it. Idempotent by the guard above, and the main queue guarantees the retry.
+        if isUpdatingInsets {
+            DispatchQueue.main.async { [weak self] in self?.performFirstLandIfReady() }
+            return
+        }
         updateInsets()
         measureMissing(currentIds, width: collectionView.bounds.width)
         layout.generation += 1
@@ -2088,7 +2146,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// AT THE NEWEST MESSAGE: within this of the bottom of the content. The reference app's number,
     /// and theirs is one constant used by one predicate — so this is the only place it is written.
     /// `updateInsets` asks the same question of the LIVE offset with the same tolerance.
-    static let atNewestTolerance: CGFloat = 5
+    private static let atNewestTolerance: CGFloat = 5
     // This reads contentSize, so it is only asked with the layout settled; see the file comment.
     private var isAtNewest: Bool { collectionView.contentOffset.y >= maxContentOffsetY - Self.atNewestTolerance }
 
@@ -2185,6 +2243,32 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         lastStableOffset = want
     }
+    /// ⛔ THE REFERENCE APP'S `contentOffset(forLastKnownDistanceFromBottom:)`, and the only thing in
+    /// this file that speaks for a reader who is NEITHER at the newest message nor beyond it.
+    ///
+    /// Theirs: `contentOffsetYBottom - max(0, distanceFromBottom)`, floored at the minimum. It is how
+    /// they put a reader back after the ground moved under them, and it is the piece we had recorded
+    /// and never used — `lastKnownDistanceFromBottom` was written on every scroll tick and read by
+    /// nothing that could act on it.
+    ///
+    /// Called at the ONE moment we know we stood down while the geometry changed: coming back from a
+    /// pushed screen, where the lockstep is gated shut by `isViewCompletelyAppeared` and
+    /// `updateInsets` is edge-triggered, so the change is written once and never offered again.
+    private func restoreRecordedDistance() {
+        guard didFirstLand, !isDisappearing, !isUpdatingInsets, !contextMenuVisible,
+              Date() >= captureFreezeUntil,
+              !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
+              !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil,
+              collectionView.safeAreaInsets.bottom <= restSafeBottom + 0.5,
+              let distance = lastKnownDistanceFromBottom else { return }
+        let want = clampOffset(maxContentOffsetY - max(0, distance))
+        guard abs(collectionView.contentOffset.y - want) > 0.5 else { return }
+        UIView.performWithoutAnimation {
+            collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
+        }
+        lastStableOffset = want
+    }
+
     // The looser test, for the jump-to-latest BUTTON only: an affordance, not a decision about moving
     // someone. Deliberately separate so the two can never be confused again.
     private var isNearNewest: Bool { collectionView.contentOffset.y >= maxContentOffsetY - 44 }
@@ -2508,7 +2592,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// while the finger owns it, as theirs does; only the bar and the inset follow. (The ghost
     /// above usually gets there first; this stays for a keyboard whose accessory is absent.)
     private func followKeyboardUnderFinger() {
-        guard composerBar != nil, let dragged = draggedBand else { return }
+        // ⛔ THE SAME GUARD ITS SIBLING CARRIES. `followKeyboardGuide` refuses to run inside an inset
+        // update because rewriting the bar's constraints halfway through one hands the rest of that
+        // update a bar in a different place than the one it measured. This writes the same two
+        // constraints and had no such guard — and it is reachable from inside the update, not merely
+        // in theory: `updateInsets` writes `contentInset`, UIScrollView fires `scrollViewDidScroll`
+        // synchronously from that write, and this is the first thing that handler calls.
+        guard !isUpdatingInsets, composerBar != nil, let dragged = draggedBand else { return }
         // The finger's band is the newest fact about the keys, so a pass between the finger lifting
         // and the release notification (a SwiftUI render re-placing the bar, say) cannot snap the bar
         // back up to where the keys docked. It is kept in its OWN store, never in `keyboardReport`,
@@ -2617,15 +2707,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let oldYOffset = collectionView.contentOffset.y
         let wasScrolledToBottom = oldYOffset >= maxContentOffsetY - Self.atNewestTolerance
 
-        // ⛔ THE GATE HAS TO SEE WHAT THE SHIFT SEES. This tested the RAW insets while the lockstep
-        // below reads the ADJUSTED bottom — two different predicates, and the same confusion that
-        // caused the phantom kick one level down. The raw value can hold still while the adjusted one
-        // moves (it needs the clearance and the safe area to change by the same amount in one pass,
-        // which is reachable because the bar's own rest position is derived from a safe-area number),
-        // and the early return then left the list's real bottom moved with nothing done about it.
-        // The new adjusted bottom is the clearance itself: `(bottom - safe.bottom) + safe.bottom`.
-        let didChangeRawInsets = abs(oldInsets.top - newInsets.top) > 0.5 || abs(oldInsets.bottom - newInsets.bottom) > 0.5
-        let didChangeInsets = didChangeRawInsets || abs(bottom - oldAdjustedBottom) > 0.5
+        // ⚠️ THE RAW TEST IS THE ADJUSTED TEST, and a previous attempt to "fix" that added a second
+        // term that could never fire. `oldAdjustedBottom` is read from the LIVE safe area, so it is
+        // `oldInsets.bottom + safe.bottom`; the new adjusted bottom is `bottom` by construction. Their
+        // difference is therefore `(bottom - safe.bottom) - oldInsets.bottom`, which is exactly the
+        // raw bottom delta below, character for character. There is no pass where the adjusted bottom
+        // moves and the raw one does not. Do not add that term back.
+        let didChangeInsets = abs(oldInsets.top - newInsets.top) > 0.5 || abs(oldInsets.bottom - newInsets.bottom) > 0.5
         // Step 2: the insets, with UIScrollView's implicit offset shift cancelled.
         UIView.performWithoutAnimation {
             if didChangeInsets {
@@ -2642,8 +2730,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Theirs: `guard didChangeInsets else { return }`.
         guard didChangeInsets else { return }
 
-        // Step 3. Theirs: the finger owns the offset while it drags the keyboard down.
-        guard !collectionView.isDragging else { return }
+        // Step 3. Theirs: the finger owns the offset while it drags the keyboard down. UIKit moves the
+        // content itself there, so nothing is owed and the clearance is banked.
+        guard !collectionView.isDragging else { lastAppliedClearance = bottom; return }
         // Ours additionally: a send glide or a jump is a programmatic animated scroll that already
         // knows where it is going, and `scrollViewDidEndScrollingAnimation` lands it. Theirs has no
         // glide (a sent row appears and the list is simply at the bottom), so it has nothing to
@@ -2691,7 +2780,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // ⚠️ The flag has to be armed BEFORE the keyboard is asked to leave, or this guard is not
         // in place when the notification arrives — see `presentCustomMenu`.
         if contextMenuVisible {
-            // Nothing.
+            // Nothing — and the clearance is deliberately NOT banked, so the change is still owed when
+            // the menu closes and the keyboard comes back. In practice the two net out.
         } else if wasScrolledToBottom {
             // Theirs, verbatim: "If we were scrolled to the bottom, don't do any fancy math. Just
             // stay at the bottom."
@@ -2699,6 +2789,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             if abs(collectionView.contentOffset.y - bound) > 0.5 {
                 collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
             }
+            lastAppliedClearance = bottom
         } else if isViewCompletelyAppeared {
             // ⛔ THEIR `isViewCompletelyAppeared` GATE, on the lockstep branch only, exactly where
             // theirs sits. During a push, a pop, or the return from a pushed screen the geometry is
@@ -2708,25 +2799,33 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // content bounds." Their delta is the bottom inset's, and for them the two are the same
             // number.
             //
-            // ⛔ OURS MUST BE THE ADJUSTED ONE, AND THIS IS THE BUG THE SCROLLED-UP READER WAS
-            // FEELING. `contentInsetAdjustmentBehavior = .always` means the list ends at
-            // `contentInset.bottom + safeAreaInsets.bottom`; only that sum moves the bound, and only
-            // that sum should move the reader. SwiftUI flaps the hosted safe area at the focus
-            // instant of every open (34 → 0 → 34), and the raw inset moves by exactly as much as the
-            // safe area flapped, in the opposite direction, so the SUM never changes — the list did
-            // not move, and there was nothing to compensate. Reading the raw delta turned that
-            // non-event into a full-size shift and back, once per open and once per close.
+            // ⛔ OURS IS THE CHANGE IN CLEARANCE, AND THIS IS THE BUG THE SCROLLED-UP READER WAS
+            // FEELING. An inset delta — raw or adjusted, they are the same number — measures the
+            // wrong thing here: `oldInsets.bottom` was written against the safe area of an EARLIER
+            // pass while `safe.bottom` is read now, so when SwiftUI flaps the hosted safe area at the
+            // focus instant of every open (34 → 0 → 34) the difference comes out as
+            // `Δclearance − Δsafe`. The clearance did not change, the list did not move, and a
+            // scrolled reader was shifted by the flap anyway — once per open and once per close.
             //
-            // A reader at the newest message never saw it: they take the branch above, which re-pins
-            // to a bound that did not move. It is only ever visible to a reader who has scrolled
-            // away from the bottom, which is why the chat looks correct the moment it is opened.
-            let insetChange = collectionView.adjustedContentInset.bottom - oldAdjustedBottom
-            if abs(insetChange) > 0.5 {
-                let want = clampOffset(oldYOffset + insetChange)
+            // The clearance is what the reader actually has under the last bubble, it is the same
+            // number in every pass whatever the safe area is doing, and after the plain subtraction
+            // it is exactly what the adjusted inset equals. `lastAppliedClearance` also carries a
+            // debt forward when an earlier pass stood down, so a shift swallowed by the send hold or
+            // a context menu is still owed rather than lost to the edge-triggered gate above.
+            //
+            // A reader at the newest message never saw any of this: they take the branch above, which
+            // re-pins to a bound that did not move. It is only ever visible to a reader who has
+            // scrolled away from the bottom — which is why the chat looks correct the moment it is
+            // opened, and why it did not stay correct once he had scrolled.
+            let previous = lastAppliedClearance ?? oldAdjustedBottom
+            let clearanceChange = bottom - previous
+            if abs(clearanceChange) > 0.5 {
+                let want = clampOffset(oldYOffset + clearanceChange)
                 if abs(collectionView.contentOffset.y - want) > 0.5 {
                     collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
                 }
             }
+            lastAppliedClearance = bottom
         }
     }
 
@@ -2817,6 +2916,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         isViewCompletelyAppeared = true   // theirs, same method — the lockstep may run from here on
         collectionView.isPrefetchingEnabled = true     // re-enable after the jank-sensitive first presentation
         updateInsets()
+        // ⛔ AND CATCH UP ON WHATEVER MOVED WHILE THE GATE WAS SHUT. `updateInsets` is EDGE-TRIGGERED
+        // (`guard didChangeInsets`), so a bottom change that landed during the return transition —
+        // the keyboard restoring, the composer container getting its real frame — wrote the insets and
+        // then found the lockstep branch closed by `isViewCompletelyAppeared`. The call above cannot
+        // recover it: by now the insets already equal what they should be, nothing "changed", and it
+        // returns at once. A scrolled-up reader would be left behind the keyboard with nothing in the
+        // app able to notice, because the two other correctors only speak for a reader at or beyond
+        // the newest message. So the one moment we know we stood down while the ground moved is the
+        // moment to put the reader back where they were.
+        restoreRecordedDistance()
         // Swiping back with the KEYBOARD UP: dismiss the keyboard the moment the pop gesture begins, so the
         // transition runs against a settled layout instead of fighting a live keyboard teardown.
         if !popGestureHooked, let pop = navigationController?.interactivePopGestureRecognizer {
@@ -2928,7 +3037,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             syncBottomBarGeometry()
         }
         safeAreaInsetsWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.updateInsets() }
+        // ⛔ THE DEFERRED WORK HAS TO BE THE WORK THAT WAS SKIPPED. While the keys are moving the
+        // branch above stands down from re-placing the bar — but this item carried only
+        // `updateInsets`, so nothing ever re-placed the bar once the window closed, and a genuine
+        // safe-area change arriving with a keyboard (a rotation with the keys up, an accessory bar)
+        // reached the insets and never the bar's rest position, which then stayed wrong until some
+        // later keyboard notification happened to rewrite it.
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            if presenting {
+                self.positionBottomBar()
+                self.syncBottomBarGeometry()
+            }
+            self.updateInsets()
+        }
         safeAreaInsetsWork = work
         // Deferred past whichever window is still open, so the work lands once, after the keys have
         // stopped, rather than in the middle of the animation that owns the bar.
@@ -3619,9 +3741,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         DispatchQueue.main.async(execute: snapBack)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.55) { [weak self] in
+            guard let self else { return }
             snapBack()
-            self?.collectionView.keyboardDismissMode = .interactive
-            self?.settleFlush()
+            // ⛔ ONLY IF NOBODY ELSE IS PARKING IT. `rideKeyboard` parks the same property at `.none`
+            // for the length of a presentation, because iOS 26 reads our own in-block scroll as a
+            // dismiss drag and cancels the keyboard it is presenting. Take a screenshot, tap the
+            // composer within about 1.4s, and this stale timer cleared that park mid-presentation —
+            // re-arming the exact bug the park exists for, and making `draggedBand` live during an
+            // animated open on top of it.
+            if Date() >= self.dismissParkUntil {
+                self.collectionView.keyboardDismissMode = .interactive
+            }
+            self.settleFlush()
         }
     }
 
