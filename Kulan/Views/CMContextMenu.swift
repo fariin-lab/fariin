@@ -260,33 +260,9 @@ final class CMOverlay: UIView {
     /// The app's window, kept so the overlay can step back down into it — see `returnToAppWindow`.
     private weak var presentingWindow: UIWindow?
 
-    /// ⚠️ DIAGNOSTIC ONLY — OUT BEFORE THIS SHIPS. "Long-press with the keyboard open and the menu
-    /// comes up behind the keys."
-    ///
-    /// The level this window is published at is computed by scanning what is on screen, and build 707
-    /// proved that scan finds nothing useful — the menu landed at about two thousand, under a keyboard
-    /// somewhere near ten million. The obvious repair is to write ten million down as a floor, and
-    /// that is a number out of my head rather than off this device. So before repairing it, print
-    /// every window the app can actually see, with its class and its level, at the instant the menu
-    /// is presented. Whatever the keyboard's window turns out to be — enumerable or not, and at what
-    /// level — the fix follows from the print rather than from a constant I remember.
-    private static func probeWindowLevels(_ tag: String) {
-        for s in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
-            for w in s.windows {
-                print("[MPROBE \(tag)]",
-                      "class=\(type(of: w))",
-                      "level=\(w.windowLevel.rawValue)",
-                      "hidden=\(w.isHidden)",
-                      "key=\(w.isKeyWindow)",
-                      "h=\(Int(w.bounds.height))")
-            }
-        }
-    }
-
     func present(in window: UIWindow, startAtSqueeze: Bool) {
         CMOverlay.current = self
         presentingWindow = window
-        CMOverlay.probeWindowLevels("present aboveKeyboard=\(presentsAboveKeyboard)")
         let host: UIView
         if presentsAboveKeyboard, let own = CMOverlay.makeWindowAboveKeyboard(over: window) {
             hostWindow = own
@@ -610,8 +586,6 @@ final class CMOverlay: UIView {
         own.rootViewController = CMOverlayHost()
         own.windowLevel = UIWindow.Level(rawValue: top + 1)
         own.isHidden = false   // ⛔ NOT `makeKeyAndVisible` — see `presentsAboveKeyboard`
-        print("[MPROBE chose] scanTop=\(top) ourLevel=\(own.windowLevel.rawValue)")   // ⚠️ DIAGNOSTIC ONLY
-        CMOverlay.probeWindowLevels("after")
         return own
     }
 

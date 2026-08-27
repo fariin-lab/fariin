@@ -3215,38 +3215,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
-    /// ⚠️ DIAGNOSTIC ONLY — OUT BEFORE THIS SHIPS. Round two, for "messages go under the composer
-    /// when the keyboard opens". It logs the two candidate keyboard heights side by side (the view's
-    /// own coordinates against the window's) so the 34pt disagreement between them is visible rather
-    /// than inferred, and it logs what the LIST actually ended up with — the collection view's
-    /// adjusted bottom inset and the composer's real frame — instead of leaving that to arithmetic.
-    /// The cap is high enough to reach the settled state after the keyboard's animation, which is
-    /// what round one kept stopping short of.
-    private var probeCount = 0
-    private func probeComposerGeometry() {
-        guard probeCount < 40 else { return }
-        probeCount += 1
-        let win = view.window
-        let viewBottomInWindow = view.convert(view.bounds, to: nil).maxY
-        let f = view.keyboardLayoutGuide.layoutFrame
-        let adoptView = max(0, view.bounds.maxY - f.minY)
-        let adoptWin = max(0, (win?.bounds.maxY ?? 0) - view.convert(f, to: nil).minY)
-        let bar = composerBar?.frame ?? .zero
-        print("[KPROBE #\(probeCount)]",
-              "viewH=\(Int(view.bounds.height))",
-              "viewBottomInWindow=\(Int(viewBottomInWindow))",
-              "windowH=\(Int(win?.bounds.height ?? -1))",
-              "viewSafeBottom=\(Int(view.safeAreaInsets.bottom))",
-              "adoptView=\(Int(adoptView))",
-              "adoptWin=\(Int(adoptWin))",
-              "guide=\(Int(keyboardOverlap))",
-              "barTop=\(Int(bar.minY))",
-              "barBottom=\(Int(bar.maxY))",
-              "containerH=\(Int(bottomBarHeight?.constant ?? -1))",
-              "cvAdjBottom=\(Int(collectionView.adjustedContentInset.bottom))",
-              "cvH=\(Int(collectionView.bounds.height))")
-    }
-
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         // ⛔ THE KEYBOARD'S ONE WRITER, THE REFERENCE APP'S WAY. Their `viewDidLayoutSubviews` calls
@@ -3272,7 +3240,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         adoptSystemKeyboardGuide()   // where the system guide moves, it is the better transport
         positionBottomBar()
         updateInsets()
-        probeComposerGeometry()   // ⚠️ DIAGNOSTIC ONLY — remove before shipping.
         // The invariant net, independent of any keyboard bookkeeping: at rest, never beyond the newest
         // bound. Catches the tail of an interactive keyboard dismissal, where `updateInsets` correctly
         // stands down because a finger owns the list while the clearance shrinks.
@@ -3706,18 +3673,27 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // flag were set after it (as it was), `updateInsets` would already have walked the list by
         // the time the guard existed.
         contextMenuVisible = true
-        // ⛔ THE KEYBOARD STAYS UP, AS THEIRS DOES — owner, on a screenshot: "when i open keyboard then
-        // message i hold longpress, copy from signal". Read from their delegate: every long-press path
-        // calls `presentContextMenu` and NONE of them calls `dismissKeyBoard()`. They dismiss it for a
-        // media tap, for opening a member sheet, for a handful of other navigations — never for the
-        // message menu. The menu is presented over the keyboard and their inset update simply does
-        // nothing while it is up (`isPresentingContextMenu`), which is the branch we already ported.
+        // ⛔ THE KEYBOARD GOES DOWN FOR THE MENU AND COMES BACK AFTERWARDS, AND THE LIST DOES NOT
+        // MOVE EITHER WAY. The owner's own words, 2026-08-27, ruling on this directly:
         //
-        // Ours closed it, and closing it is what moved the conversation out from under the menu's
-        // frozen snapshot in the first place — the report that `contextMenuVisible` was added for.
-        // With the keyboard left alone there is no clearance change to absorb, so the whole class of
-        // problem stops arising rather than being guarded against.
-        let keyboardWasUp = false
+        //   "The keyboard may be hidden as part of the long-press interaction, but the message list
+        //    must remain completely stable… When the user closes the context menu, the keyboard
+        //    should come back automatically, without changing the message list's scroll position."
+        //
+        // ⚠️ AND THAT REVERSES WHAT THIS BLOCK USED TO SAY. It read the reference's delegate as never
+        // dismissing for a message menu and hard-wired this to `false`, which is what left the menu
+        // to be drawn under a keyboard that was still up. His ruling is the authority on which
+        // behaviour we want, and it is also the model the surrounding code was BUILT for: the two
+        // callbacks, the `keyboardWasUp` field on `activeMenu`, and the deliberate flag ordering in
+        // `customMenuDidEnd` all exist for exactly this and were doing nothing.
+        //
+        // THE LIST STAYING STILL IS `contextMenuVisible`, ARMED ON THE LINE ABOVE THIS ONE — before
+        // the keyboard is touched, because the resign posts its hide notification synchronously on
+        // this same turn. With the flag already up, `updateInsets` stands down and the clearance
+        // change is absorbed without walking the conversation. Coming back is the mirror image and is
+        // deliberately NOT symmetric: see the note in `customMenuDidEnd` for why the flag is dropped
+        // BEFORE the keyboard is restored.
+        let keyboardWasUp = onMenuCloseKeyboard()
         let overlay = CMOverlay(previewView: container, sourceFrame: src.frame,
                                 alignRight: alignRight, actions: actions, react: react) { [weak self] in
             self?.customMenuDidEnd()
@@ -3737,11 +3713,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // The scroll stays LOCKED while the menu is up (exclusivity already prevents the pressing
         // finger's pan; this also blocks a second finger from scrolling the chat behind the blur).
         collectionView.panGestureRecognizer.isEnabled = false
-        // The keys stay up (theirs never dismisses for a message menu), so the menu needs to be able
-        // to DRAW OVER them — which is a window question, not a layout one. Asking for a window of
-        // our own only while the keys are actually up keeps the ordinary keys-down menu on the exact
-        // path it has today. See `presentsAboveKeyboard`.
-        overlay.presentsAboveKeyboard = keyboardIsUp
+        // ⛔ NO WINDOW OF ITS OWN ANY MORE, AND THE LINE ABOVE IS WHY. That machinery exists to let
+        // the menu out-draw a keyboard that is still on screen; the keyboard is now on its way down
+        // before this line runs, so there is nothing to out-draw. Leaving it on would publish the
+        // menu into a second window for no reason, and a window above the app's is something every
+        // sheet presented later has to be reasoned about — the more-emoji picker already needed a
+        // special case for exactly that. `keyboardIsUp` would still read true here, because the guide
+        // travels with the keys' animation, so this is set flatly rather than asked.
+        overlay.presentsAboveKeyboard = false
         overlay.present(in: window, startAtSqueeze: true)
     }
 
