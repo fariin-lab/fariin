@@ -1960,13 +1960,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let safe = collectionView.safeAreaInsets
         let room = collectionView.bounds.height - (safe.top + topOverlayHeight) - bottomClearance
         guard room > 0 else { return 0 }
-        return max(0, room - collectionView.contentSize.height)
+        // The layout's height, not the scroll view's — see `safeContentHeight`. This one is read on
+        // the first land, before the scroll view has adopted anything, where the difference is a
+        // whole conversation's worth of rows.
+        return max(0, room - safeContentHeight)
     }
 
+    /// ⛔ THE LAYOUT'S CONTENT HEIGHT, NEVER THE SCROLL VIEW'S. The reference app carries this as its
+    /// own property and its comment says exactly why: *"Don't use collectionView.contentSize.height
+    /// as the collection view's content size might not be set yet."* This list invalidates the layout
+    /// constantly — a row adopting its rendered height, a route repair, a page of history, the
+    /// composer resizing — and each of those bumps `layout.generation` and re-stacks the frames. For
+    /// the window between the invalidation and the scroll view adopting the new size,
+    /// `collectionView.contentSize` is the PREVIOUS answer while the layout already holds the current
+    /// one, so every bound computed from it belongs to a moment that has passed. That is a bound the
+    /// keyboard's own pass can land on: "was I at the bottom" takes the wrong branch, and the
+    /// lockstep clamp measures against a limit that can be a screenful out.
+    private var safeContentHeight: CGFloat {
+        collectionView.collectionViewLayout.collectionViewContentSize.height
+    }
     private var minContentOffsetY: CGFloat { -collectionView.adjustedContentInset.top }
     private var maxContentOffsetY: CGFloat {
         max(minContentOffsetY,
-            collectionView.contentSize.height + collectionView.adjustedContentInset.bottom - collectionView.bounds.height)
+            safeContentHeight + collectionView.adjustedContentInset.bottom - collectionView.bounds.height)
     }
     private func clampOffset(_ y: CGFloat) -> CGFloat { min(max(minContentOffsetY, y), maxContentOffsetY) }
 
@@ -1993,6 +2009,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // height in the same instant, unanimated, and the hold protected nothing. His report, twice:
         // "tap Reply, press Send, the message briefly moves underneath the composer and jumps back."
         guard didFirstLand, !isDisappearing,
+              // ⛔ NOT INSIDE AN INSET UPDATE. This runs from `viewDidLayoutSubviews`, and that pass
+              // is often the one `updateInsets` forces from its own first line — so this used to get
+              // a shot at the offset in the MIDDLE of the update, against half-written geometry, and
+              // (when the update was the keyboard's) with the keys' curve stripped off by the
+              // `performWithoutAnimation` below. It is a net for a list at rest; an update in flight
+              // is the opposite of rest.
+              !isUpdatingInsets,
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
               !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil,
               // Never on a spiked safe area: the bound is garbage for exactly that frame.
@@ -2025,6 +2048,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private func keepNewestUntilFirstScroll() {
         guard didFirstLand, !isDisappearing, !readerHasScrolled,
               lastKnownDistanceFromBottom <= 5,
+              !isUpdatingInsets,   // mid-update is not rest — see `clampToNewestIfBeyond`
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
               !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil,
               collectionView.safeAreaInsets.bottom <= restSafeBottom + 0.5 else { return }
@@ -2115,6 +2139,30 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// reports no duration and never writes this). The cap for `draggedBand` — under a finger the
     /// keys never rise above where they docked — and zero once they have gone.
     private var dockedBand: CGFloat = 0
+    /// ⛔ THE FINGER'S BAND LIVES HERE, NOT IN `keyboardReport`. `followKeyboardUnderFinger` used to
+    /// write the finger's answer back into `keyboardReport`, and `draggedBand` — the thing that
+    /// produced that answer — opens with `guard case .up = keyboardReport`. So the first frame in
+    /// which a finger reached the rest floor wrote `.rest`, which closed the guard that reads the
+    /// finger, which froze the band at rest for the remainder of the gesture: drag the keys halfway
+    /// down, change your mind and drag back up, and the keys return while the bar stays parked at the
+    /// bottom with the last bubbles behind them. A value must never be stored where its own input is
+    /// read from. This holds the last finger-driven band instead, and it survives only until the next
+    /// notification — which is all it was ever needed for (a layout pass between the finger lifting
+    /// and the release notification must not snap the bar back up to where the keys docked).
+    private var fingerBand: CGFloat?
+    /// While the keyboard's own animation block owns the bar and the insets, nothing else may
+    /// re-place them. Set for BOTH directions by `rideKeyboard`; read by `viewSafeAreaInsetsDidChange`
+    /// — see the stand-down there.
+    private var keyboardBlockUntil = Date.distantPast
+    /// ⛔ ONE WRITER PER LAYOUT PASS. `updateInsets` opens with `view.layoutIfNeeded()` (the reference
+    /// app's own first line), and eight of its ten call sites are OUTSIDE a layout pass — so that
+    /// line runs `viewDidLayoutSubviews`, which calls `updateInsets` again. The nested call did the
+    /// whole job: it wrote the insets, it wrote the offset, and then the two clamps beneath it got a
+    /// shot at the offset as well; the outer call then read `oldInsets` AFTER the inner had already
+    /// changed them, found nothing to do, and returned. Three offset writers with three different
+    /// guard sets, on one keyboard frame, in an order that differs by OS — which is the shape of
+    /// every two-phone split in this file's history. The outermost caller owns the pass now.
+    private var isUpdatingInsets = false
 
     @objc private func keyboardWillChangeFrame(_ note: Notification) { rideKeyboard(note, hiding: false) }
     @objc private func keyboardWillHideNote(_ note: Notification) { rideKeyboard(note, hiding: true) }
@@ -2147,8 +2195,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let overlap = max(0, view.bounds.maxY - local.minY)
         let up = !(hiding || overlap <= restSafeBottom + 0.5)
         keyboardReport = up ? .up(overlap) : .rest
+        // A notification is the newest fact about the keys, so the finger's last answer retires here
+        // — in both directions, and whether or not the drag that produced it ended in a dismissal.
+        fingerBand = nil
         let d = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
         if d > 0 { dockedBand = up ? overlap : 0 }
+        // The keys are moving under an announced animation: this block owns the bar until it ends.
+        if d > 0 { keyboardBlockUntil = Date().addingTimeInterval(d) }
         // ⛔ iOS 26 READS OUR OWN IN-BLOCK SCROLL AS A DISMISS DRAG, AND CANCELS THE KEYBOARD IT IS
         // PRESENTING — his diag log on `6001960e`, with the ghost already gone: a perfect open
         // order (`NOTE chg band=274 d=0.38`), then 12ms later `NOTE chg band=0 d=0.00` + `hide`,
@@ -2231,7 +2284,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// for as long as an animation is what moves the keys. While a FINGER moves the keys the band
     /// comes from `draggedBand` below, on every device.
     private var keyboardBand: CGFloat {
-        if let dragged = draggedBand { return dragged }
+        // The live finger first, then the last band a finger left behind (until a notification
+        // retires it — see `fingerBand`), then the announcement.
+        if let dragged = draggedBand ?? fingerBand { return dragged }
         switch keyboardReport {
         case .up(let band): return band
         case .rest: return restSafeBottom
@@ -2282,6 +2337,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// everything, with "was at the bottom" now true because nothing came apart during the drag.
     private var draggedBand: CGFloat? {
         let rest = restSafeBottom
+        // ⛔ ONLY WHILE UIKIT ACTUALLY HANDS THE KEYS TO THE FINGER. The whole mechanism below rests
+        // on `keyboardDismissMode == .interactive` pinning the keyboard's top edge to the touch. The
+        // mode is parked at `.none` twice in this controller — for the length of a presentation (see
+        // the park in `rideKeyboard`) and for the screenshot-capture window — and while it is parked
+        // the keys ignore the finger completely. Following it there drags the bar down BEHIND keys
+        // that never moved, shortens the clearance by as much as the whole keyboard, and leaves it
+        // that way: the keys did not move, so no notification comes to correct it.
+        guard collectionView.keyboardDismissMode == .interactive else { return nil }
         guard case .up = keyboardReport, dockedBand > rest + 0.5, collectionView.isDragging else { return nil }
         let pan = collectionView.panGestureRecognizer
         guard pan.state == .began || pan.state == .changed else { return nil }
@@ -2309,11 +2372,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// above usually gets there first; this stays for a keyboard whose accessory is absent.)
     private func followKeyboardUnderFinger() {
         guard composerBar != nil, let dragged = draggedBand else { return }
-        // The finger's band becomes the newest fact about the keys, so a pass between the finger
-        // lifting and the release notification (a SwiftUI render re-placing the bar, say) cannot
-        // snap the bar back up to where the keys docked. The animated notification that follows
-        // overwrites it either way.
-        keyboardReport = dragged > restSafeBottom + 0.5 ? .up(dragged) : .rest
+        // The finger's band is the newest fact about the keys, so a pass between the finger lifting
+        // and the release notification (a SwiftUI render re-placing the bar, say) cannot snap the bar
+        // back up to where the keys docked. It is kept in its OWN store, never in `keyboardReport`,
+        // because `draggedBand` reads `keyboardReport` to decide whether a finger may speak at all —
+        // see `fingerBand`. The animated notification that follows retires it either way.
+        fingerBand = dragged
         positionBottomBar()
         syncBottomBarGeometry()
         updateInsets()
@@ -2327,6 +2391,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private func followKeyboardGuide() {
         guard composerBar != nil, let g = guideBand else { return }
         if !guideIsLive, g > restSafeBottom + 0.5 { guideIsLive = true }
+        // Not while an inset update is running: the pass this is called from may be the one
+        // `updateInsets` forced, and rewriting the bar's constraints halfway through it hands the
+        // rest of that update a bar in a different place than the one it measured.
+        guard !isUpdatingInsets else { return }
         guard guideIsLive, collectionView.isTracking else { return }
         positionBottomBar()
         syncBottomBarGeometry()
@@ -2346,8 +2414,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // A HIDDEN bar is not a bar: while SwiftUI owns the bottom (selection, search, blocked) the
         // container is collapsed and the clearance comes from the fallback, exactly as it does for
         // the announcements list. See `hideComposer`.
-        guard let bar = composerBar, !bar.isHidden, bottomBarContainer.frame.height > 1 else {
+        guard let bar = composerBar, !bar.isHidden else {
             return keyboardBand + composerBarH + 12
+        }
+        guard bottomBarContainer.frame.height > 1 else {
+            // ⛔ OUR BAR IS THERE BUT ITS CONTAINER HAS NOT BEEN LAID OUT YET (the first open, a
+            // re-attach, the pass before the composer is handed over). The old fallback used
+            // `composerBarH` here, and `composerBarH` CANNOT BE WRITTEN while our bar is visible —
+            // `setComposerBarHeight` refuses every report in exactly that state, on purpose, because
+            // the SwiftUI slot it comes from is a zero-height spacer. So this branch was reading a
+            // variable frozen at its initial 0 and returning a clearance short by the whole composer:
+            // the newest message lands under the bar and heals only when something scrolls. The
+            // container's own height expression is the honest answer until its frame exists.
+            let width = max(1, view.bounds.width - (barLeading?.constant ?? 0) * 2)
+            let barH = (bar as? ChatComposerView)?.preferredHeight(forWidth: width) ?? composerBarH
+            return Self.barTopPad + barH + (-(barBottom?.constant ?? 0))
         }
         return bottomBarContainer.frame.height
     }
@@ -2359,17 +2440,36 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if let pop = navigationController?.interactivePopGestureRecognizer {
             switch pop.state { case .possible, .failed: break; default: return }
         }
+        // The outermost caller owns this pass — see `isUpdatingInsets`. The line below runs a full
+        // layout, which calls `viewDidLayoutSubviews`, which calls this again; that nested call used
+        // to do the work and leave the real caller with nothing to write.
+        guard !isUpdatingInsets else { return }
+        isUpdatingInsets = true
+        defer { isUpdatingInsets = false }
         view.layoutIfNeeded()   // theirs: the guide's frame is current before it is read
 
         let bottom = bottomClearance
         let top = topOverlayHeight + bottomAlignShortfall(bottomClearance: bottom)
         let safe = collectionView.safeAreaInsets
         let oldInsets = collectionView.contentInset
+        // ⛔ THE ADJUSTED BOTTOM, CAPTURED BEFORE ANYTHING MOVES. This — not `contentInset.bottom` —
+        // is the number that decides where the list actually ends, and the only honest input to the
+        // lockstep shift below. See the note at the shift for what reading the raw inset cost.
+        let oldAdjustedBottom = collectionView.adjustedContentInset.bottom
         var newInsets = oldInsets
-        // Theirs, verbatim: `container.frame.height - collectionView.safeAreaInsets.bottom` — but
-        // clamped to the WINDOW's inset, so an iOS 26 safe-area spike carrying the keyboard cannot
-        // collapse the clearance for the frame it lasts (see `restSafeBottom`).
-        newInsets.bottom = bottom - min(safe.bottom, restSafeBottom)
+        // ⛔ THEIRS, VERBATIM, AND THE `min()` THAT USED TO BE HERE IS GONE. The subtraction exists
+        // for exactly one reason: `contentInsetAdjustmentBehavior = .always` (see `viewDidLoad`) adds
+        // `collectionView.safeAreaInsets.bottom` back, so subtracting the SAME number leaves the
+        // adjusted inset equal to the clearance — whatever the safe area happens to say this frame,
+        // and whichever way it is wrong. Clamping the subtrahend to the window's value broke that
+        // cancellation in both directions: where the hosted safe area COLLAPSES (his diag log,
+        // `SAFE v=0 w=34`) the clamp picks the same 0 and changes nothing, and where it SPIKES —
+        // 34 → 0 → 34, once 83, recorded in this file from the same logs, and by a full bar height
+        // whenever SwiftUI owns the bottom — the clamp leaves the excess in the list as phantom
+        // clearance. It defended a direction that never needed defending and injected error in the
+        // one that did. The bar's own numbers still clamp to the window (`restSafeBottom`), because
+        // a bar is placed at an absolute position; an inset is a difference, and differences cancel.
+        newInsets.bottom = bottom - safe.bottom
         newInsets.top = top
 
         // Step 1: pre-change geometry. Theirs, verbatim: `isScrolledToBottom` against the LIVE
@@ -2456,8 +2556,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             }
         } else {
             // Theirs: "shift the content in lockstep with the keyboard, up to the limits of the
-            // content bounds." Their delta, verbatim: the bottom inset's.
-            let insetChange = newInsets.bottom - oldInsets.bottom
+            // content bounds." Their delta is the bottom inset's, and for them the two are the same
+            // number.
+            //
+            // ⛔ OURS MUST BE THE ADJUSTED ONE, AND THIS IS THE BUG THE SCROLLED-UP READER WAS
+            // FEELING. `contentInsetAdjustmentBehavior = .always` means the list ends at
+            // `contentInset.bottom + safeAreaInsets.bottom`; only that sum moves the bound, and only
+            // that sum should move the reader. SwiftUI flaps the hosted safe area at the focus
+            // instant of every open (34 → 0 → 34), and the raw inset moves by exactly as much as the
+            // safe area flapped, in the opposite direction, so the SUM never changes — the list did
+            // not move, and there was nothing to compensate. Reading the raw delta turned that
+            // non-event into a full-size shift and back, once per open and once per close.
+            //
+            // A reader at the newest message never saw it: they take the branch above, which re-pins
+            // to a bound that did not move. It is only ever visible to a reader who has scrolled
+            // away from the bottom, which is why the chat looks correct the moment it is opened.
+            let insetChange = collectionView.adjustedContentInset.bottom - oldAdjustedBottom
             if abs(insetChange) > 0.5 {
                 let want = clampOffset(oldYOffset + insetChange)
                 if abs(collectionView.contentOffset.y - want) > 0.5 {
@@ -2638,7 +2752,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // the churn cannot have moved anything. The work is deferred to the end of the park window
         // instead. If the cancel still lands with this gone, nothing of ours runs near it any more
         // and the SwiftUI shell itself is convicted — the owner's pre-approved rewrite begins.
-        let presenting = Date() < dismissParkUntil
+        // ⛔ AND THE SAME STAND-DOWN FOR THE CLOSE. `dismissParkUntil` is armed only when the keys are
+        // coming UP, so a safe-area change arriving with a HIDE — and one does, the bottom safe area
+        // is exactly what SwiftUI rewrites as the keyboard leaves — re-placed the bar to its rest
+        // position from here, unanimated, while `rideKeyboard`'s block was in the middle of walking
+        // that same bar down on the keys' curve. The bar jumped to rest and the keys caught up with
+        // it. While an announced keyboard animation is running, that block owns the bar.
+        let presenting = Date() < dismissParkUntil || Date() < keyboardBlockUntil
         if presenting {
         } else if #available(iOS 26, *) {
             UIView.performWithoutAnimation {
@@ -2653,7 +2773,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         safeAreaInsetsWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.updateInsets() }
         safeAreaInsetsWork = work
-        let delay = presenting ? max(0.01, dismissParkUntil.timeIntervalSinceNow + 0.02) : 0.01
+        // Deferred past whichever window is still open, so the work lands once, after the keys have
+        // stopped, rather than in the middle of the animation that owns the bar.
+        let until = max(dismissParkUntil, keyboardBlockUntil)
+        let delay = presenting ? max(0.01, until.timeIntervalSinceNow + 0.02) : 0.01
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
@@ -3449,7 +3572,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// the constants, the inset, and the one layout pass. Called outside any block — first sight —
     /// it lands at once, which is right for a bar that was not there a frame ago.
     private func resizeBottomBar() {
-        guard let bar = composerBar as? ChatComposerView,
+        // Hidden means hidden — the same rule as `syncBottomBarGeometry`, and for the same reason:
+        // the collapsed container must stay collapsed until `applyComposer` puts the bar back.
+        guard let bar = composerBar as? ChatComposerView, !bar.isHidden,
               let heightC = barHeightC, let containerC = bottomBarHeight else { return }
         let width = max(1, view.bounds.width - (barLeading?.constant ?? 0) * 2)
         let barH = bar.preferredHeight(forWidth: width)
@@ -3506,7 +3631,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     /// The container's height without animating it — used inside a block that is already animating.
     private func syncBottomBarGeometry() {
-        guard let bar = composerBar as? ChatComposerView,
+        // ⛔ NOT WHILE THE COMPOSER IS HIDDEN. `hideComposer` collapses the container by taking the
+        // top pin out and setting this constant to 0, and with the pin gone that low-priority
+        // constant is the ONLY thing left answering for the container's height. This method rewrites
+        // it from the hidden bar's own dimensions, and its caller `followKeyboardGuide` runs on
+        // `collectionView.isTracking` — so a scroll in selection, search or a blocked chat silently
+        // re-inflated a container that is supposed to be gone, and the geometry reported up to
+        // SwiftUI (`onComposerGeometry`) jumped by a composer's height.
+        guard let bar = composerBar as? ChatComposerView, !bar.isHidden,
               let heightC = barHeightC, let containerC = bottomBarHeight else { return }
         let width = max(1, view.bounds.width - (barLeading?.constant ?? 0) * 2)
         let barH = bar.preferredHeight(forWidth: width)
