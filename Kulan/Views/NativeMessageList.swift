@@ -2206,9 +2206,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// rule, already recorded in SystemChrome.swift — so every keyboard/bar computation clamps to
     /// it. When the view's safe area is sane the two agree and this changes nothing.
     private var restSafeBottom: CGFloat {
-        let own = view.safeAreaInsets.bottom
-        guard let w = view.window else { return own }
-        return min(own, w.safeAreaInsets.bottom)
+        // ⛔ THE WINDOW'S VALUE, NOT A MIN — his diag screenshots, build `10fe54b6`: at the focus
+        // instant the view's safe area COLLAPSES to zero (`SAFE v=0 w=34`), it does not spike up,
+        // so min() picked the garbage side and the bar dropped and narrowed at the tap. The window
+        // is stable in both directions.
+        view.window?.safeAreaInsets.bottom ?? view.safeAreaInsets.bottom
     }
 
     /// ⛔ THE KEYBOARD UNDER A DRAGGING FINGER, ON EVERY DEVICE — his reports on builds 693-695:
@@ -2246,55 +2248,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         return max(rest, lowest)
     }
 
-    // MARK: - The keyboard's own transport (the ghost accessory)
-    //
-    // ⛔ THE PRIMARY SOURCE ON HIS iOS 26 PHONE, where the notification-driven animation ran late
-    // (build 696, four photos: the bar stayed at rest through the whole open, was covered by the
-    // rising keys, and climbed out at the end — while the reference app's bar rode every frame). The
-    // field carries a zero-height `inputAccessoryView` (`ChatComposerView.keyboardGhost`); UIKit
-    // re-parents it into the keyboard's own host view and moves that host WITH the keys. Observing
-    // the host's frame fires SYNCHRONOUSLY inside whatever change UIKit makes — an animated show or
-    // hide, or a finger-driven frame — so the constraint and inset writes made here ride the keys'
-    // own animation exactly the way `keyboardLayoutGuide` writes would, on a phone where that guide
-    // is dead in this hosted controller. The story Aa editor's toolbar rides this same transport
-    // perfectly on the same phone, which is the proof it moves in time. The notification path stays
-    // as the belt (its writes are guarded and idempotent, so whichever fires first, the other
-    // no-ops), and it remains the only source for a keyboard raised by something other than our
-    // field.
-    private var keyboardHostObservations: [NSKeyValueObservation] = []
-    private weak var observedKeyboardHost: UIView?
-
-    /// Wired in `applyComposer`; called by the ghost when UIKit installs it into (or removes it
-    /// from) the keyboard's host view.
-    func bindKeyboardHost(_ host: UIView?) {
-        guard host !== observedKeyboardHost else { return }
-        keyboardHostObservations = []
-        observedKeyboardHost = host
-        guard let host else { return }
-        keyboardHostObservations = [
-            host.observe(\.frame) { [weak self] _, _ in self?.keyboardHostMoved() },
-            host.observe(\.center) { [weak self] _, _ in self?.keyboardHostMoved() },
-        ]
-        keyboardHostMoved()
-    }
-
-    private func keyboardHostMoved() {
-        guard isViewLoaded, view.window != nil, !isDisappearing,
-              let host = observedKeyboardHost, host.window != nil else { return }
-        // Cross-window convert goes through the screen, which is exactly what is wanted: the host
-        // lives in the keyboard's own window.
-        let f = host.convert(host.bounds, to: view)
-        let band = max(0, view.bounds.maxY - f.minY)
-        let up = band > restSafeBottom + 0.5
-        keyboardReport = up ? .up(band) : .rest
-        if up { dockedBand = max(dockedBand, band) }
-        KeyboardDiag.log("HOST band=\(Int(band))")
-        positionBottomBar()
-        syncBottomBarGeometry()
-        updateInsets()
-        // Inside an animated change this pass rides UIKit's block; outside one it lands at once.
-        view.layoutIfNeeded()
-    }
+    // ⛔ THE GHOST ACCESSORY IS GONE, AND HIS DIAG SCREENSHOTS ARE WHY (build `10fe54b6`,
+    // 2026-08-27). A zero-height `inputAccessoryView` rode the keyboard's host view here for one
+    // build, on the theory that the notification was late on his iOS 26 phone. The on-screen log
+    // proved the OPPOSITE: `NOTE chg band=274 d=0.38` lands at t=7ms — on time, correct — while the
+    // ghost's host frame FLAPS 0 → 274 → 0 during UIKit's install dance, and believing the zero
+    // yanked the bar back to rest right after the good order (`11 HOST band=0` → `BAR bot=-8`).
+    // The notification is the truth on every OS we have measured; nothing else may outrank it
+    // while the keys animate. Do not bring a keyboard-host observer back without a diag log
+    // showing the notification actually failing.
 
     /// The per-frame driver for `draggedBand`: from `scrollViewDidScroll` while a finger drags with
     /// the keyboard up. Guarded writes throughout, so a scroll that does not move the keys (the
@@ -3359,10 +3321,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // It arrives on the bar's OWN animation clock, and the container follows on the same
             // one — which is the same rule the keyboard block follows one level up.
             bar.onHeightChange = { [weak self] _ in self?.resizeBottomBar() }
-            // The keyboard's own transport: the field's ghost accessory hands over the keys' host
-            // view, and this controller follows its frame — see `bindKeyboardHost`.
-            bar.keyboardGhost.onHostChange = { [weak self] host in self?.bindKeyboardHost(host) }
-            if let host = bar.keyboardGhost.superview { bindKeyboardHost(host) }
         }
         // ⛔ NO INSET IS WRITTEN STRAIGHT ONTO A CONSTRAINT HERE. `positionBottomBar` is the one
         // writer of all three (bottom and both sides) and it derives them from the keyboard band,

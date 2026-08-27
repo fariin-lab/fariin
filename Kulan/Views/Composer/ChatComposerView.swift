@@ -181,22 +181,6 @@ final class ChatComposerView: UIView {
 
     // MARK: - Init
 
-    /// ⛔ THE KEYBOARD'S OWN TRANSPORT, NOT A NOTIFICATION — his iOS 26 phone, build 696, four
-    /// photos, 2026-08-26 night: the reference app's bar rides the keys in every frame; ours stayed at rest
-    /// through the whole open, was covered by the rising keys, and climbed out only at the end.
-    /// The notification-driven animation does not run in time on that phone, and the layout guide
-    /// is dead in this hosted controller (build 682).
-    ///
-    /// This zero-height view is installed as the field's `inputAccessoryView`. UIKit re-parents it
-    /// into the keyboard's own host view and moves that host WITH the keys — through the show and
-    /// hide animations and under a dragging finger alike. The story Aa editor's toolbar is carried
-    /// by this exact transport and rides perfectly on the same phone. The ghost draws nothing and
-    /// takes no touches; its one job is to hand the list's controller a view whose superview's
-    /// frame IS the keys' live position. `onHostChange` fires when UIKit installs or removes it;
-    /// the controller then observes that host's frame and moves the bar and the insets from inside
-    /// UIKit's own change — see `MessageListController.bindKeyboardHost`.
-    let keyboardGhost = KeyboardGhostView()
-
     init(recorder: AudioRecorder) {
         self.recorder = recorder
         super.init(frame: .zero)
@@ -228,13 +212,6 @@ final class ChatComposerView: UIView {
         pill.contentView.addSubview(fieldRow)
         fieldRow.addSubview(textView)
         fieldRow.addSubview(gifButton)
-        // Installed BEFORE the field can ever take the keyboard — the story editor's lesson: an
-        // accessory attached to a field that is already up does not appear until the keyboard is
-        // dismissed and raised again.
-        keyboardGhost.frame = .zero
-        keyboardGhost.isUserInteractionEnabled = false
-        keyboardGhost.autoresizingMask = [.flexibleWidth]
-        textView.inputAccessoryView = keyboardGhost
         container.contentView.addSubview(micButton)
         textView.delegate = self
         // ⛔ DIMMER THAN THE MIC, AND ONLY THIS ONE (owner 2026-08-22: "GIF icon make it low
@@ -985,16 +962,6 @@ extension ChatComposerView: UIGestureRecognizerDelegate {
     weak var target: ChatComposerView?
     init(_ t: ChatComposerView) { target = t }
     @objc func tick() { target?.tick() }
-}
-
-/// The composer's invisible rider on the keyboard — see `ChatComposerView.keyboardGhost`.
-final class KeyboardGhostView: UIView {
-    /// The keyboard's host view this ghost now lives in, or nil when the keyboard is gone.
-    var onHostChange: ((UIView?) -> Void)?
-    override func didMoveToSuperview() {
-        super.didMoveToSuperview()
-        onHostChange?(superview)
-    }
 }
 
 // MARK: - The text view
