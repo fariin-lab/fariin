@@ -194,6 +194,11 @@ struct BubblePlan {
     var storyReplyPlan: StoryReplyPlan?
     var voicePlan: VoicePlan?
     var pillPlan: PillPlan?
+    /// A collapsed long text: how many lines the body label may draw (0 = unlimited), and the
+    /// "Read more" line under it. Defaults keep every existing constructor call unchanged.
+    var bodyLines: Int = 0
+    var readMore: CGRect? = nil         // bubble coordinates
+    var readMoreAttr: NSAttributedString? = nil
 
     // Outside the bubble, row coordinates
     var avatar: CGRect?
@@ -622,9 +627,34 @@ enum MessageRowLayout {
         // Re-measure the body at the FINAL content width. With a quote driving the bubble wider the
         // text has more room than it was measured with, and a stale height would leave a gap under
         // the last line.
-        let finalBodySize = BubbleText.size(bodyAttr, width: contentW)
+        var finalBodySize = BubbleText.size(bodyAttr, width: contentW)
+        // ⛔ A VERY LONG MESSAGE COLLAPSES — his side-by-side, 2026-08-27: the reference app caps a
+        // wall of text and offers "Read more"; ours filled the screen. Collapse only when it hides
+        // at least three lines (a button that reveals one line is noise), never on an expanded row,
+        // and never on a tombstone or jumbomoji. The footer moves to its own line under the
+        // "Read more", because the reservation baked into the body's last line is now clipped away.
+        var bodyLines = 0
+        var readMoreRect: CGRect?
+        var readMoreAttr: NSAttributedString?
+        if case .text = b.body, !b.textExpanded, !isTombstone, !isJumbo {
+            let capped = cappedHeight(bodyAttr, width: contentW, lines: collapseLines)
+            if finalBodySize.height > capped + lineSizeOf(bodyAttr).height * 3 {
+                finalBodySize.height = capped
+                bodyLines = collapseLines
+                metaOwnLine = true
+            }
+        }
         let textRect = CGRect(x: hPad, y: innerY, width: contentW, height: finalBodySize.height)
         innerY += finalBodySize.height
+        if bodyLines > 0 {
+            let attr = NSAttributedString(string: "Read more", attributes: [
+                .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
+                .foregroundColor: accent])
+            let s = lineSizeOf(attr)
+            readMoreRect = CGRect(x: hPad, y: innerY + 5, width: s.width, height: s.height)
+            readMoreAttr = attr
+            innerY += 5 + s.height
+        }
 
         var metaRect: CGRect
         if metaOwnLine {
@@ -658,6 +688,9 @@ enum MessageRowLayout {
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             failBadge: nil)
+        plan.bodyLines = bodyLines
+        plan.readMore = readMoreRect
+        plan.readMoreAttr = readMoreAttr
 
         // Reactions, the retry line, the avatar and the two tags are the same for every bubble
         // kind, so they are placed in ONE function. A media bubble that grew its own copy would be
@@ -1098,7 +1131,7 @@ enum MessageRowLayout {
                               senderNameAttr: NSAttributedString?, senderNameSize: CGSize,
                               forwardedSize: CGSize, forwardedIconW: CGFloat) -> BubbleResult {
         let y = startY
-        let hPad: CGFloat = 13, vPad: CGFloat = 8
+        let hPad: CGFloat = 13, vPad: CGFloat = 7   // vPad 8 → 7 in the 2026-08-27 slimming
         let contentW = min(max(1, maxBubble - hPad * 2), CGFloat(v.contentWidth))
         var innerY = vPad
 
@@ -1369,6 +1402,10 @@ enum MessageRowLayout {
     /// The height of an attributed string clamped to `lines` — the card's title and description are
     /// both `lineLimit(2)`, and a plan that measured them unclamped would reserve room for a
     /// paragraph the label will never draw.
+    /// The long-text collapse: past this many lines a bubble shows "Read more" instead of the wall
+    /// (his side-by-side, 2026-08-27 — the reference app collapses, ours filled the screen).
+    static let collapseLines = 20
+
     private static func cappedHeight(_ s: NSAttributedString, width: CGFloat, lines: Int) -> CGFloat {
         let full = BubbleText.size(s, width: width).height
         let one = lineSizeOf(s, cap: width).height
@@ -1796,25 +1833,32 @@ enum MessageRowLayout {
         // no wide body to stretch to.
         let textW = min(textAvail, max(quoteMinTextWidth, max(nameW, snippetW)))
 
-        let outer = CGSize(width: min(maxWidth, ceil(fixed + textW)), height: quoteBoxHeight + vPad * 2)
+        // ⛔ THE SNIPPET RUNS TO TWO LINES NOW — his side-by-side, 2026-08-27: the reference app
+        // shows two lines of the quoted message where ours cut it to one. A short quote keeps the
+        // 38pt box exactly as before; only a snippet that actually wraps grows it by one line.
+        let nameH = ceil(BubbleMetrics.quoteNameFont.lineHeight)
+        let snippetLineH = ceil(BubbleMetrics.quoteTextFont.lineHeight)
+        let snippetH = min(max(snippetLineH, BubbleText.size(snippetAttr, width: textW).height),
+                           snippetLineH * 2)
+        let stackH = nameH + 1 + snippetH
+        let boxH = max(quoteBoxHeight, stackH)
+
+        let outer = CGSize(width: min(maxWidth, ceil(fixed + textW)), height: boxH + vPad * 2)
 
         // Inner rects, in the quote box's own coordinates. Laid out against the FILLED width by the
         // caller; the text column takes whatever is left, which is how a filled quote keeps its
         // accent line, name and snippet put while only the box grows.
         var x = hPad
-        let accent = CGRect(x: x, y: vPad, width: accentW, height: quoteBoxHeight)
+        let accent = CGRect(x: x, y: vPad, width: accentW, height: boxH)
         x += accentW + gap
         var thumb: CGRect?
         if thumbSize.width > 0 {
-            thumb = CGRect(x: x, y: vPad + (quoteBoxHeight - thumbSize.height) / 2,
+            thumb = CGRect(x: x, y: vPad + (boxH - thumbSize.height) / 2,
                            width: thumbSize.width, height: thumbSize.height)
             x += thumbSize.width + gap
         }
-        let nameH = ceil(BubbleMetrics.quoteNameFont.lineHeight)
-        let snippetH = ceil(BubbleMetrics.quoteTextFont.lineHeight)
-        // The two lines are centred as a pair inside the fixed 38, with the VStack's 1pt spacing.
-        let stackH = nameH + 1 + snippetH
-        let top = vPad + (quoteBoxHeight - stackH) / 2
+        // The pair is centred inside the box, with the VStack's 1pt spacing.
+        let top = vPad + (boxH - stackH) / 2
         let name = CGRect(x: x, y: top, width: max(1, outer.width - hPad - x), height: nameH)
         let snippet = CGRect(x: x, y: top + nameH + 1, width: name.width, height: snippetH)
 

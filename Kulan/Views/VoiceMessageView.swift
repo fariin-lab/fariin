@@ -111,15 +111,18 @@ struct VoiceMessageView: View {
     /// disc, so nothing else moves, and BOTH `contentWidth` AND `contentHeight` pick the change up on
     /// their own because both are stated in terms of this constant — which is the whole reason this
     /// is a one-line change and not a re-measure of the bubble.
-    static let discSize: CGFloat = 42
-    static let waveHeight: CGFloat = 22
+    /// ⛔ SLIMMED 2026-08-27 ON HIS SIDE-BY-SIDE — he put ours next to the reference app's compact
+    /// voice row and said theirs beats ours; "yes please" to matching. That supersedes the 42/44
+    /// history above. 38 keeps the disc a near-44pt target with the row padding around it.
+    static let discSize: CGFloat = 38
+    static let waveHeight: CGFloat = 20
     static let discGap: CGFloat = 8
     /// The speed pill's slot on the waveform's line, gap included — see `speedPill`. A STATED width
     /// rather than a measured one, for the reason every number in this block is stated: the
     /// collection view pre-measures the cell through `contentWidth`, and a size that resolves later
     /// than the measurement is exactly the bloom the comments in `bottomLine` describe. "1.5×" is
     /// the widest label at 11pt bold and fits inside this with its capsule padding.
-    static let speedSlot: CGFloat = 42
+    static let speedSlot: CGFloat = 40   // slimmed with the disc, 2026-08-27 — "1.5×" still fits
     /// ⛔ THE HEIGHT THE BUBBLE HAD BEFORE THE DISC WAS CENTRED — owner, 2026-08-24: "only adjust
     /// the height, use the previous height value, change nothing else".
     ///
@@ -139,7 +142,7 @@ struct VoiceMessageView: View {
     /// ⚠️ Decoupling is safe here ONLY because this is a FLOOR. If the disc is ever made taller than
     /// 55 the bubble simply grows to the disc — nothing is clipped. It would not be safe if this were
     /// a fixed height, and it must not be turned into one.
-    static let contentHeight: CGFloat = 55
+    static let contentHeight: CGFloat = 44   // slimmed from 55 with the disc, 2026-08-27 (his side-by-side); still a FLOOR
 
     /// Everything to the right of the disc: the wave, the pill, and the caption line under them.
     static func columnWidth(for message: Message) -> CGFloat {

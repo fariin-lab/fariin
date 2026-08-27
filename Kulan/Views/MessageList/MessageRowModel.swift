@@ -296,6 +296,9 @@ struct BubbleRow: Equatable {
     var canSwipeToReply: Bool
     var opensOnTap: Bool               // media opens something → no double-tap recogniser
     var canDoubleTapReact: Bool
+    /// The reader tapped "Read more" on this row: the 20-line collapse is lifted. Defaulted so
+    /// only the text route ever states it. See the layout's collapse block.
+    var textExpanded: Bool = false
 }
 
 /// A centred capsule notice: the day separator, a system event, a pin notice.
