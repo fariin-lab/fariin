@@ -402,9 +402,9 @@ enum ServerClock {
 /// story frame is not an arbitrary file — it is a canvas this app drew, at the size it should be
 /// posted at.
 ///
-/// The shape here is Signal's, because it is the right shape for a client that encodes its own
-/// media: a fixed quality, and RESOLUTION gives way when a frame does not fit the budget. Their
-/// `PushMediaConstraints` steps 4096 → 3072 → 2048 → 1600 → 1024 → 768 → 512 against 1.5 MB at
+/// The shape here is the reference app's, because it is the right shape for a client that encodes
+/// its own media: a fixed quality, and RESOLUTION gives way when a frame does not fit the budget.
+/// Their media constraints step 4096 → 3072 → 2048 → 1600 → 1024 → 768 → 512 against 1.5 MB at
 /// quality 75. Ours starts at the story canvas instead of a camera's full resolution, so the ladder
 /// is shorter and the first rung is nearly always the answer.
 enum StoryPhoto {

@@ -3,7 +3,7 @@ import Foundation
 /// WHICH KEY WE HAVE SEEN FOR A PERSON, and whether it has changed since.
 ///
 /// THE HOLE THIS CLOSES (owner asked for it 2026-08-14, after asking what we are missing against
-/// Signal's protocol): the app has a safety number you can compare by hand, and nothing that ever
+/// the reference protocol): the app has a safety number you can compare by hand, and nothing that ever
 /// looks at it for you. `Crypto.fetchKey` takes whatever public key the server hands over and
 /// overwrites the cached one in silence, so a key that changes — a new phone, a reinstall, or
 /// someone swapping it — arrives without a word. That silence is the whole attack: a server that
@@ -17,7 +17,7 @@ import Foundation
 ///
 /// ⚠️ A CHANGE IS NOT A VERDICT. Reinstalling the app is a key change too, and it is by far the
 /// commonest one. The notice says what happened and offers the safety number; it never claims
-/// anybody is being attacked, and nothing is blocked. Signal's own wording is the same shape.
+/// anybody is being attacked, and nothing is blocked. The reference app's own wording is the same shape.
 enum SafetyKeyLog {
     private static let seenDefaultsKey = "crypto.seenPeerKeys.v1"
     /// The PENDING notice — cleared the moment the user has seen it.
