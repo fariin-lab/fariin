@@ -1139,21 +1139,24 @@ enum MessageRowLayout {
                               forwardedSize: CGSize, forwardedIconW: CGFloat) -> BubbleResult {
         let y = startY
         let hPad: CGFloat = 13, vPad: CGFloat = 7   // vPad 8 → 7 in the 2026-08-27 slimming
-        // ⛔ A VOICE NOTE TAKES THE FULL BUBBLE WIDTH — his order, 2026-08-27: "make it wide, use
-        // what the reference uses". Read out of their `AudioMessageView.measure`, which is explicit
-        // about it:
+        // ⛔ BACK TO THE INTRINSIC WIDTH, AND THIS REVERSES THE CHANGE MADE EARLIER THE SAME DAY.
         //
-        //     let waveformSize = CGSize(width: 0, height: Constants.waveformHeight)
-        //     topInnerSubviewInfos.append(waveformSize.asManualSubviewInfo(hasFixedHeight: true))
+        // He asked for "wide, like the reference" that morning, and the reference genuinely is
+        // flexible — their `AudioMessageView.measure` declares the waveform `CGSize(width: 0, …)`
+        // with only the height fixed, so it stretches into whatever the bubble has. That is what was
+        // built, and it made every note a full max-width bubble.
         //
-        // A width of ZERO with only the HEIGHT declared fixed is their way of saying the waveform
-        // stretches to whatever is left, so their note is as wide as any other bubble at that max
-        // width. Ours pinned the waveform to a fixed 104 and added the parts up, which is why every
-        // note came out at exactly 224 regardless of how much room the row had.
+        // ⚠️ HE THEN SAW IT AND SENT THREE SHOTS: the new one, the one he wants, and the two stacked
+        // to show the gap. Both bubbles in that last shot are right-aligned, so only their left edges
+        // differ, and the one he wants measures about 0.81 of the one he has. Against a max bubble of
+        // 72% of the row, 0.81 of it lands within a couple of points of 224 — which is precisely the
+        // fixed sum this used to produce (disc 38 + gap 8 + wave 104 + gap 8 + pill 40, plus 13 each
+        // side). The picture he is asking for is the build he had before that change.
         //
-        // `v.contentWidth` is still what the SwiftUI copy of this bubble measures itself at, so it is
-        // deliberately not consulted here rather than deleted.
-        let contentW = max(1, maxBubble - hPad * 2)
+        // So the flexible width is out and `v.contentWidth` decides again. The reference is not being
+        // followed here, deliberately: he has now seen both and chosen, and what he can see beats
+        // what their source says.
+        let contentW = min(max(1, maxBubble - hPad * 2), CGFloat(v.contentWidth))
         var innerY = vPad
 
         var quoteRect: CGRect?
