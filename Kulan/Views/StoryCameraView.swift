@@ -992,8 +992,8 @@ struct StoryCameraView: View {
                 // this one changes the card's WIDTH by 12pt while that one moves its contents.
                 // Two clocks over one subtree started by one event, so for a fifth of a second the
                 // card's edges and everything centred inside them were moving to different tunes —
-                // and a `TextField` whose content changes on every keystroke re-enters both. Signal
-                // has one animation here, taking the keyboard's duration and curve, and its
+                // and a `TextField` whose content changes on every keystroke re-enters both. The
+                // reference app has one animation here, taking the keyboard's duration and curve, and its
                 // composer's frame does not change at all.
                 .animation(.easeOut(duration: 0.22), value: typing)
                 // SWIPE BETWEEN THE TWO, which is the half that was missing — tapping worked, so the

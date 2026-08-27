@@ -989,7 +989,7 @@ struct FloatingCallWindow: View {
                                 // because a card floating in open space is just in the way; the
                                 // height is yours because only you know what is underneath it.
                                 // ⛔ WHERE THE THROW WAS GOING, not where the finger stopped. Read
-                                // out of Signal's own `animateDecelerationToVerticalEdge`: they take
+                                // out of the reference implementation's own edge-deceleration: they take
                                 // the pan velocity, ignore anything under a threshold so a slow
                                 // release is not a throw at all, project where that speed would
                                 // carry the view, and land it on the nearest side at whatever height

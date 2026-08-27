@@ -412,8 +412,8 @@ enum StoryPhoto {
     /// 1080×1920 — the size a story is posted at everywhere. On a short phone the card is squatter
     /// than 9:16 and the file follows it, which is the same trade `flatten` has always made.
     static let canvasWidth: CGFloat = 1080
-    /// Signal's standard-quality budget, and for the same reason: a predictable upload on a phone
-    /// that may be on one bar.
+    /// The reference app's standard-quality budget, and for the same reason: a predictable upload
+    /// on a phone that may be on one bar.
     static let budget = 1_500_000
     /// Fixed, like theirs. When a frame will not fit, pixels give way rather than quality — a
     /// smaller sharp picture beats a full-size mushy one.

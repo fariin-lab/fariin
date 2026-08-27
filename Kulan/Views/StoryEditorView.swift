@@ -29,7 +29,7 @@ final class KeyboardWatcher: ObservableObject {
     /// its contents 122pt further than the keyboard ever came, which is the owner's Aa row floating
     /// far above the keys with a gap nobody asked for.
     ///
-    /// Signal does not do this arithmetic at all. `PhotoCaptureViewController.handleKeyboardNotification`
+    /// The reference app does not do this arithmetic at all. Its capture controller's keyboard handler
     /// converts the end frame into the composer's OWN space
     /// (`textStoryComposerView.convert(endFrame, from: nil)`) and insets by the difference against
     /// its own bounds, so the amount it moves cannot depend on what is underneath it.
@@ -3246,7 +3246,7 @@ struct StoryEditorView: View {
     /// This was a 64pt radius around the bin, tested against the TEXT'S OWN CENTRE, and the two
     /// together made the whole bottom of the picture a delete zone: park a caption near the bottom
     /// edge, which is where captions go, and its centre lands inside the circle without the finger
-    /// ever being near the bin. Signal deletes on the drag POINT being inside the control, which is
+    /// ever being near the bin. The reference app deletes on the drag POINT being inside the control, which is
     /// what "drag it onto the bin" means and what the caller now passes.
     ///
     /// A little larger than the glyph so a thumb that covers it still counts, and no larger.

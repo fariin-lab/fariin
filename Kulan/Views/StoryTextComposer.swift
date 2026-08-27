@@ -359,7 +359,7 @@ struct StoryTextCard: View {
     /// the same reason: a card that is told how wide it is cannot disagree with the one on screen.
     @State private var cardWidth: CGFloat = 0
 
-    /// HOW MUCH OF THIS CARD THE KEYBOARD ACTUALLY COVERS — Signal's number, not ours.
+    /// HOW MUCH OF THIS CARD THE KEYBOARD ACTUALLY COVERS — the reference app's number, not ours.
     ///
     /// ⚠️ IT WAS `keyboard.height`, MEASURED FROM THE BOTTOM OF THE SCREEN, AND THIS CARD IS NOT AT
     /// THE BOTTOM OF THE SCREEN.
@@ -372,8 +372,8 @@ struct StoryTextCard: View {
     /// floating a long way above the keys, and the words lifting about 44pt too far, because the
     /// same wrong number is halved and spent again as an offset.
     ///
-    /// Signal does not compute this from the screen at all.
-    /// `PhotoCaptureViewController.handleKeyboardNotification` converts the keyboard's end frame
+    /// The reference app does not compute this from the screen at all. Its capture controller's
+    /// keyboard handler converts the keyboard's end frame
     /// into the composer's own coordinate space and insets by the difference against its own
     /// bounds, so what the composer moves by cannot depend on what is laid out beneath it. This is
     /// that: our own bottom edge, minus where the keyboard's top edge really is.
@@ -408,8 +408,8 @@ struct StoryTextCard: View {
                 .contentShape(Rectangle())
                 // ⚠️ A TAP ON THE CARD TOGGLES EDITING. IT USED TO ONLY EVER RAISE THE KEYBOARD.
                 //
-                // Signal's text-story composer has exactly one gesture on the whole card, and it is
-                // the same one both ways round (`PhotoCaptureViewController`, `placeholderTapped`):
+                // The reference text-story composer has exactly one gesture on the whole card, and it is
+                // the same one both ways round (its capture controller's placeholder tap):
                 //
                 //     if textView.isFirstResponder {
                 //         textView.acceptAutocorrectSuggestion()
@@ -615,8 +615,8 @@ struct StoryTextCard: View {
         // `keyboard.height`, while the host carried a THIRD on `typing` for the 12pt of side margin
         // it drops when the keyboard arrives. Three implicit animations over one subtree, on two
         // durations and two curves, all started by the same event: every keystroke that changes the
-        // layout re-enters them and they disagree about where things are on the way. Signal moves
-        // ONE constraint inside a single `UIView.animate` taking the keyboard's own duration and
+        // layout re-enters them and they disagree about where things are on the way. The reference
+        // app moves ONE constraint inside a single `UIView.animate` taking the keyboard's own duration and
         // curve, and its composer's frame never changes at all.
         .animation(.easeOut(duration: 0.22), value: keyboardOverlap)
         // NO KEYBOARD ON ARRIVAL (owner 2026-08-03: "dont open keyboard in story when i click text
@@ -743,7 +743,7 @@ struct StoryTextEditor: UIViewRepresentable {
         /// ⚠️ THIS VIEW ONLY CLAIMS THE BAND ITS WORDS ARE ON, AND THAT IS WHAT GIVES THE CARD AN
         /// "OUTSIDE THE TEXT" TO TAP.
         ///
-        /// Signal's composer does not need this because its text view IS the size of the text: it is
+        /// The reference composer does not need this because its text view IS the size of the text: it is
         /// laid out at the content width and at the height the words fit in, with a 48pt floor, and
         /// centred in the card. Everything above and below it is bare card, so a tap there reaches
         /// their one gesture and ends editing.
@@ -821,8 +821,8 @@ struct StoryTextEditor: UIViewRepresentable {
         v.textAlignment = .center
         if focused, !v.isFirstResponder { v.becomeFirstResponder() }
         if !focused, v.isFirstResponder {
-            // ⚠️ WHAT THE KEYBOARD IS STILL HOLDING IS COMMITTED FIRST — Signal's
-            // `acceptAutocorrectSuggestion`, which it calls on both of its ways out of editing (the
+            // ⚠️ WHAT THE KEYBOARD IS STILL HOLDING IS COMMITTED FIRST — the reference app's
+            // accept-autocorrect step, which it calls on both of its ways out of editing (the
             // card tap and the Done button) and never on the way in.
             //
             // A suggestion the person has not accepted, and marked text in a two-stage input, live
