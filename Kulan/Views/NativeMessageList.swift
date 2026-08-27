@@ -2818,6 +2818,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard !isUpdatingInsets else { return }
         isUpdatingInsets = true
         defer { isUpdatingInsets = false }
+
+        // ⛔ "WAS THE READER AT THE BOTTOM" IS ASKED BEFORE THE LAYOUT, NOT AFTER IT. His report:
+        // with the keyboard open the last message is clipped behind the composer. Measured on device,
+        // settled, not inferred:
+        //
+        //     guide=311 clearance=367 cvAdjBottom=367 offsetY=2886 maxOffsetY=2920
+        //
+        // The inset is RIGHT — 367, exactly the clearance. The list simply ends up 34pt short of its
+        // own bottom, and 34 is the height this view loses when the keyboard opens (874 → 840).
+        //
+        // The test used to sit below `view.layoutIfNeeded()`, which is the line that applies the new
+        // view height. So by the time it ran, the bound it compares against had ALREADY moved: the
+        // reader was still at the old bottom, the bound was 34 further down, and a reader who really
+        // was at the bottom failed the test by exactly that. Failing it drops the pass into the
+        // lockstep branch, which shifts by the change in CLEARANCE (290) and knows nothing about the
+        // 34 the viewport lost — 2596 + 290 = 2886 against a true bound of 2920. That is the whole
+        // defect, and it reproduces the two logged numbers to the point.
+        //
+        // The comment below still calls this "pre-change geometry", which is exactly what it was
+        // meant to be; it had simply stopped being asked before the change.
+        let oldYOffset = collectionView.contentOffset.y
+        let wasScrolledToBottom = oldYOffset >= maxContentOffsetY - Self.atNewestTolerance
+
         view.layoutIfNeeded()   // theirs: the guide's frame is current before it is read
 
         let bottom = bottomClearance
@@ -2844,13 +2867,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         newInsets.bottom = bottom - safe.bottom
         newInsets.top = top
 
-        // Step 1: pre-change geometry. Theirs, verbatim: `isScrolledToBottom` against the LIVE
-        // bound, 5pt tolerance. This used to be asked against a stored clearance because SwiftUI's
-        // safe area could move the live bound before the guide did; the list ignores the keyboard
-        // safe area now (`.ignoresSafeArea(.keyboard)` in ThreadView), so nothing but this method
-        // moves the bound and the stored copy was one more thing to keep in step.
-        let oldYOffset = collectionView.contentOffset.y
-        let wasScrolledToBottom = oldYOffset >= maxContentOffsetY - Self.atNewestTolerance
+        // Step 1: pre-change geometry — captured above, before `view.layoutIfNeeded()`. Theirs,
+        // verbatim: `isScrolledToBottom` against the LIVE bound, 5pt tolerance. This used to be asked
+        // against a stored clearance because SwiftUI's safe area could move the live bound before the
+        // guide did; the list ignores the keyboard safe area now (`.ignoresSafeArea(.keyboard)` in
+        // ThreadView), so nothing but this method moves the bound and the stored copy was one more
+        // thing to keep in step. What it does still have to be asked before is the LAYOUT — see the
+        // note where it is now taken.
 
         // ⚠️ THE RAW TEST IS THE ADJUSTED TEST, and a previous attempt to "fix" that added a second
         // term that could never fire. `oldAdjustedBottom` is read from the LIVE safe area, so it is
