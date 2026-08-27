@@ -452,8 +452,11 @@ final class ChatComposerView: UIView {
         pendingFocus = nil
         guard window != nil else { pendingFocus = on; return }
         if on {
+            textView.resignRequested = false
             if !textView.isFirstResponder, !textView.becomeFirstResponder() { pendingFocus = true }
         } else if textView.isFirstResponder {
+            // OUR resign announces itself, so the guard lets it through — see ComposerTextView.
+            textView.resignRequested = true
             textView.resignFirstResponder()
         }
     }
@@ -944,6 +947,9 @@ extension ChatComposerView: UITextViewDelegate {
     // therefore acts only on a change of the flag, never on the flag disagreeing with the field.
     func textViewDidBeginEditing(_ tv: UITextView) {
         KeyboardDiag.log("FOCUS begin")   // ⚠️ temporary — does the field keep focus through the cancel?
+        // Arm the resign guard for the presentation — see `ComposerTextView.resignFirstResponder`.
+        textView.resignGuardUntil = Date().addingTimeInterval(0.7)
+        textView.resignRequested = false
         DispatchQueue.main.async { [weak self] in self?.actions.focusChanged(true) }
     }
 
@@ -971,6 +977,24 @@ extension ChatComposerView: UIGestureRecognizerDelegate {
 /// The field: 17pt, a placeholder, grows to six lines then scrolls. Insets are the old
 /// `.padding(.leading, 14).padding(.vertical, 9)`, which put a single line at 40.
 final class ComposerTextView: UITextView {
+    /// ⛔ AN UNREQUESTED RESIGN IS REFUSED WHILE THE KEYS PRESENT — the probe build's verdict
+    /// (`f000402c`, his diag screenshots): 3ms after a SwiftUI render pass, with every piece of our
+    /// keyboard code proven stood-down, SOMETHING resigns this field with animations disabled —
+    /// `NOTE chg band=0 d=0.00` → `FOCUS end` → `FOCUS begin` 10ms later. That unrequested resign
+    /// is the whole "keyboard opens on the second try". Every resign of OURS announces itself
+    /// first (`resignRequested`, set in `requestFocus`); an anonymous one inside the guard window
+    /// is turned away. The window is short — armed at `textViewDidBeginEditing`, expired 0.7s
+    /// later — so a real dismissal is never blocked for longer than the presentation itself.
+    var resignGuardUntil = Date.distantPast
+    var resignRequested = false
+    override func resignFirstResponder() -> Bool {
+        if !resignRequested, Date() < resignGuardUntil {
+            KeyboardDiag.log("RESIGN refused")
+            return false
+        }
+        return super.resignFirstResponder()
+    }
+
     private let placeholderLabel = UILabel()
     var placeholder: String = "" {
         didSet { placeholderLabel.text = placeholder }
