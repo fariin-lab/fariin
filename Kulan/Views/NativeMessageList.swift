@@ -624,19 +624,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// "never asked" indistinguishable from "at the newest message" for every reader of this value.
     /// It is nil only before the first land, and the first land positions the reader itself.
     private var lastKnownDistanceFromBottom: CGFloat?
-    /// ⛔ THE KEYBOARD REACHES THIS LIST THROUGH UIKIT'S OWN LAYOUT GUIDE — the reference app's
-    /// mechanism, ported on the owner's order 2026-08-25 ("copy their approach for both directions…
-    /// 100%, not an approximation"). See the note above `updateInsets`.
-    ///
-    /// An invisible, zero-height view whose bottom is pinned to `view.keyboardLayoutGuide.topAnchor`.
-    /// It draws nothing and is never read; its one job is theirs (their bottom bar is constrained to
-    /// the guide): when the keyboard moves, UIKit changes the guide INSIDE its own keyboard animation
-    /// block, this constraint dirties the view's layout, and `viewDidLayoutSubviews` therefore runs
-    /// inside that block — which is what lets an unanimated offset write ride the keys.
-    /// The clearance under the last bubble / over the first one that `updateInsets` last established,
-    /// in ADJUSTED terms (what the reader actually had), so a change is noticed whichever of our
-    /// inset and SwiftUI's safe area carried it, and so "was I at the bottom" can be asked against
-    /// pre-change geometry.
     /// Theirs: safe-area changes are debounced (0.01s, last only) because an interactive dismiss
     /// updates the safe area "rapidly in quick succession". The layout path is never debounced.
     private var safeAreaInsetsWork: DispatchWorkItem?
@@ -856,10 +843,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // handler is inert outside an armed menu-dismissal grace window.
         NotificationCenter.default.addObserver(self, selector: #selector(menuWindowDidHide(_:)),
                                                name: UIWindow.didBecomeHiddenNotification, object: nil)
-        // KEYBOARD, BY NOTIFICATION — see `keyboardReport` and `keyboardBand` for why the layout guide alone
-        // could not be trusted inside this hosted controller.
-        // (No keyboard observers. Theirs has none on iOS 16+, and neither do we: the composer is
-        // constrained to `view.keyboardLayoutGuide` and UIKit does the rest.)
+        // NO KEYBOARD OBSERVERS. Theirs has none on iOS 16+, and neither do we: the composer's bottom
+        // is constrained to `view.keyboardLayoutGuide` and UIKit does the rest. See `keyboardOverlap`.
         // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
         NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
                                                name: UIApplication.userDidTakeScreenshotNotification, object: nil)
@@ -2336,7 +2321,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Unresolved guides report a zero rect; a resolved one on a home-button phone reports a
         // zero-HEIGHT rect whose minY is the view's bottom. Only the first is meaningless.
         guard frame.height > 0 || frame.minY > 0 else { return restSafeBottom }
-        return max(0, view.bounds.maxY - frame.minY)
+        // ⛔ THE FLOOR IS THEIRS, AND IT IS NOT DECORATION. Their guide's height is
+        // `max(view.safeAreaInsets.bottom, view.bounds.maxY - frame.minY)`, and dropping the first
+        // term here cost the resting strip: with the keys down the guide's top sits ON the view's
+        // safe-area bottom, and SwiftUI collapses that value to zero at the focus instant (his diag
+        // log, `SAFE v=0 w=34`). For those frames this returned 0 and every clearance derived from it
+        // came out a home-indicator short. The floor reads the WINDOW for the same reason
+        // `restSafeBottom` does — the window's inset never collapses.
+        return max(restSafeBottom, view.bounds.maxY - frame.minY)
     }
     /// True while the keys are up. Used only for the composer's product rule (8pt above the keys while
     /// typing, sunk `composerRestDip` below the safe line at rest) and for the swipe-back dismissal.
@@ -2756,27 +2748,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // "Workaround for iOS 26 animating bottom bar getting in its final position during view
         // presentation animation." The safe area lands inside the push, and a bare constraint
         // write there rides the push's transaction — the bar visibly slides into place.
-        // ⛔ STAND DOWN WHILE THE KEYS PRESENT — his diag logs, builds `ec0230d6` and `ca3b4640`:
-        // SwiftUI flaps the hosted safe area around the focus instant (34 → 0 → 34, once 83), and
-        // in EVERY attempt the keyboard's cancel (`NOTE chg band=0 d=0.00` + hide) landed ONE
-        // MILLISECOND after the settle — with the dismiss mode parked, so the drag-misread theory
-        // is dead. The one thing of ours that runs inside that settle is this handler's immediate
-        // re-place + full `layoutIfNeeded`, mid-presentation. It is not needed then: `rideKeyboard`
-        // has already placed the bar for the keys, and every number it wrote is window-stable, so
-        // the churn cannot have moved anything. The work is deferred to the end of the park window
-        // instead. If the cancel still lands with this gone, nothing of ours runs near it any more
-        // and the SwiftUI shell itself is convicted — the owner's pre-approved rewrite begins.
-        // ⛔ AND THE SAME STAND-DOWN FOR THE CLOSE. `dismissParkUntil` is armed only when the keys are
-        // coming UP, so a safe-area change arriving with a HIDE — and one does, the bottom safe area
-        // is exactly what SwiftUI rewrites as the keyboard leaves — re-placed the bar to its rest
-        // position from here, unanimated, while `rideKeyboard`'s block was in the middle of walking
-        // that same bar down on the keys' curve. The bar jumped to rest and the keys caught up with
-        // it. While an announced keyboard animation is running, that block owns the bar.
-        // Nothing parks the bar any more: there is no announced keyboard animation to stand down
-        // for, because we no longer drive one. Theirs debounces this path and nothing else.
-        let presenting = false
-        if presenting {
-        } else if #available(iOS 26, *) {
+        // ⚠️ THE STAND-DOWN THAT USED TO BE HERE IS GONE WITH THE MACHINERY IT PROTECTED. It skipped
+        // this re-place while an announced keyboard animation was running, because our own block was
+        // walking the bar at the same time and the two disagreed. There is no announced animation any
+        // more — UIKit owns the guide and the bar is constrained to it — so there is nothing to stand
+        // down for, and the flag that expressed it (`let presenting = false`) has been deleted rather
+        // than left hard-wired with a dead branch behind it.
+        if #available(iOS 26, *) {
             UIView.performWithoutAnimation {
                 positionBottomBar()
                 syncBottomBarGeometry()
@@ -2787,23 +2765,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             syncBottomBarGeometry()
         }
         safeAreaInsetsWork?.cancel()
-        // ⛔ THE DEFERRED WORK HAS TO BE THE WORK THAT WAS SKIPPED. While the keys are moving the
-        // branch above stands down from re-placing the bar — but this item carried only
-        // `updateInsets`, so nothing ever re-placed the bar once the window closed, and a genuine
-        // safe-area change arriving with a keyboard (a rotation with the keys up, an accessory bar)
-        // reached the insets and never the bar's rest position, which then stayed wrong until some
-        // later keyboard notification happened to rewrite it.
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            if presenting {
-                self.positionBottomBar()
-                self.syncBottomBarGeometry()
-            }
-            self.updateInsets()
-        }
+        // Theirs: safe-area changes go through a last-only 0.01s debounce, because "when performing an
+        // interactive dismiss, safe area updates rapidly in quick succession, which causes this method
+        // to go haywire". The bar has already been re-placed synchronously above; this is only the
+        // inset half, debounced exactly as theirs is.
+        let work = DispatchWorkItem { [weak self] in self?.updateInsets() }
         safeAreaInsetsWork = work
-        // Deferred past whichever window is still open, so the work lands once, after the keys have
-        // stopped, rather than in the middle of the animation that owns the bar.
         let delay = 0.01   // theirs: a 0.01s last-only debounce, nothing more
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
@@ -2842,13 +2809,25 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         // ⛔ THE KEYBOARD'S ONE WRITER, THE REFERENCE APP'S WAY. Their `viewDidLayoutSubviews` calls
-        // `updateContentInsets()` synchronously and that is their entire keyboard handling: when the
-        // keyboard moves, UIKit changes `keyboardLayoutGuide` inside its own animation block, the
-        // constraint on `keyboardTracker` dirties this view's layout, and this pass therefore runs
-        // INSIDE that block — so the one unanimated offset write in `updateInsets` inherits the keys'
-        // real duration and curve. Not forced, not clocked, never deferred: a deferred write lands
-        // outside the block and hard-jumps, which is why theirs debounces the safe-area path and not
-        // this one. Cheap otherwise: it returns as soon as nothing has moved.
+        // `inputToolbar.ensureTextViewHeight()` and then `updateContentInsets()` synchronously, and
+        // that is their entire keyboard handling: when the keyboard moves, UIKit changes
+        // `view.keyboardLayoutGuide` inside its own animation block, the composer's constraint to that
+        // guide dirties this view's layout, and this pass therefore runs INSIDE that block — so the
+        // one unanimated offset write in `updateInsets` inherits the keys' real duration and curve.
+        // Not forced, not clocked, never deferred: a deferred write lands outside the block and
+        // hard-jumps, which is why theirs debounces the safe-area path and not this one.
+        //
+        // ⛔ THE BAR'S PRODUCT RULE HAS TO RUN HERE TOO, and leaving it out was a real bug for the
+        // length of one commit. The guide moves the bar on its own now — that is the point of the
+        // constraint — but WHICH constant the bar sits at is still a decision: 8pt above the keys
+        // while typing, sunk `composerRestDip` BELOW the safe line at rest, sides 20 against the keys
+        // and 29 at rest. With every keyboard notification deleted, nothing else was left to make that
+        // decision, so the bar would have followed the keys up while still holding its resting
+        // constant — sitting 5pt INTO the top of the keyboard, at the wrong width. It is the
+        // counterpart of their `ensureTextViewHeight()` on this line: the one thing about the bar that
+        // a layout pass has to settle before the insets are read. Guarded writes, so a pass where the
+        // keyboard state has not flipped costs three comparisons and dirties nothing.
+        positionBottomBar()
         updateInsets()
         // The invariant net, independent of any keyboard bookkeeping: at rest, never beyond the newest
         // bound. Catches the tail of an interactive keyboard dismissal, where `updateInsets` correctly
