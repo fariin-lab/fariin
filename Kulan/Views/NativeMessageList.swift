@@ -2438,19 +2438,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // "WAS AT THE BOTTOM" IS ASKED AGAINST THE LIVE BOUND, as theirs is. It used to be asked against
     // a stored clearance because SwiftUI's safe area could move the live bound before the guide did;
     // the list ignores the keyboard safe area now, so only this method moves the bound.
-    /// ⛔ WHERE THE KEYBOARD IS: `view.keyboardLayoutGuide`, read and never stored. This controller
-    /// keeps NO keyboard state at all — no band, no report, no docked height, no animation window, no
-    /// notification observers. That is the reference app's entire keyboard handling on iOS 16 and up,
-    /// and the whole of it is one constraint: the composer's bottom is pinned to this guide's top, so
-    /// UIKit moves the bar inside the keyboard's own animation, the container's height follows through
-    /// the same constraint chain, and the list's bottom clearance follows from the container. Nothing
-    /// is computed, so nothing can be stale, late, or in disagreement with anything else.
+    /// ⛔ WHERE THE KEYBOARD IS. This block used to say the controller keeps no keyboard state at
+    /// all, because for one build it did: the composer pinned straight to `view.keyboardLayoutGuide`
+    /// and every notification observer deleted, which is their iOS 16+ arrangement exactly.
     ///
-    /// ⚠️ EVERY PIECE OF THE OLD MACHINERY IS GONE ON PURPOSE, at the owner's explicit instruction to
-    /// use their approach rather than a workaround: `keyboardBand`, the `KeyboardReport` enum,
-    /// `fingerBand`, `dockedBand`, `guideBand`, `guideIsLive`, `keyboardBlockUntil`, `dismissParkUntil`,
-    /// the custom `UILayoutGuide` with its three feeders, `rideKeyboard`, `followKeyboardUnderFinger`,
-    /// `followKeyboardGuide`, `keyboardTracker`, and all three notification observers.
+    /// ⚠️ THAT HELD ON iOS 26 AND FAILED ON iOS 27 — owner, after build 705: "the bugs are iOS 27
+    /// only; on iOS 26 everything works". The system guide tracks the keys inside this hosted
+    /// controller on 26 and does not move on 27, so the bar was pinned to a guide parked at the
+    /// home-indicator strip and sat at the bottom of the screen BEHIND the keyboard. The container
+    /// height and the arrow's lift are both derived from where the bar is, so the list stopped
+    /// reserving the composer's space and the arrow landed on the pill — three symptoms, one fact.
+    ///
+    /// So the thing everything hangs off is OUR guide, which is what the reference does for exactly
+    /// this case (`OWSViewController.keyboardLayoutGuide`: the system guide where it can be trusted,
+    /// a hand-built one where it cannot). Two feeders write it — the system guide, RAISE-ONLY, and
+    /// the keyboard's own notification — plus the finger during an interactive dismiss on a phone
+    /// whose guide will not follow it. See `setKeyboardGuideHeight`, the one writer.
     ///
     /// ⚠️ THE ONE THING THIS RESTS ON: that `view.keyboardLayoutGuide` actually tracks the keys inside
     /// this SwiftUI-hosted controller. Build 682 said it did not — but that predates the priming in
@@ -3165,10 +3168,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 // height and the arrow's lift collapsed to zero, so the arrow sat on the pill.
                 // Do not re-attempt without a way to watch that container's frame on a phone.
                 DispatchQueue.main.async { [weak self] in self?.onComposerGeometry?(lift, side) }
-                // Nothing is reported to SwiftUI any more. All three overlays are hosted here and
-                // placed by the two constants above, so the last async geometry hand-off on this
-                // screen is gone — which is the state the reference app is in: it tells its own view
-                // layer nothing about the keyboard, because Auto Layout has already said it.
             }
         }
         // SCROLL-LOCK BACKSTOP. handleSwipePan disables the scroll view's pan for the duration of a
