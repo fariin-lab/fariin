@@ -169,6 +169,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: MessageListController, context: Context) {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
+        vc.noteSwiftUIPass()   // ⚠️ temporary diag — does the render pass land on the keyboard's cancel?
         // ⛔ THE SEND HOLD IS ARMED BEFORE THE COMPOSER IS APPLIED. Since the bar moved into the
         // controller, `applyComposer` is where the reply banner's collapse actually happens (the
         // bar re-lays out, reports its new height, and the container shrinks on the spot). The tick
@@ -2117,6 +2118,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     @objc private func keyboardWillChangeFrame(_ note: Notification) { rideKeyboard(note, hiding: false) }
     @objc private func keyboardWillHideNote(_ note: Notification) { rideKeyboard(note, hiding: true) }
+
+    /// ⚠️ Temporary diag: timestamps SwiftUI's body passes into the keyboard log, only around a
+    /// keyboard transition, so a screenshot shows whether a render pass lands on the cancel.
+    func noteSwiftUIPass() {
+        guard Date() < dismissParkUntil.addingTimeInterval(1) else { return }
+        KeyboardDiag.log("SWUI pass")
+    }
 
     /// The keys are fully up: give the finger its dismiss drag back — see the parking note in
     /// `rideKeyboard`. Never inside the screenshot-capture window, which parks for its own reason

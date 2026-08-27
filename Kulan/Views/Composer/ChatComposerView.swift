@@ -943,10 +943,12 @@ extension ChatComposerView: UITextViewDelegate {
     // view update" warning. ⚠️ Until this lands, ThreadView's flag LAGS the field — `syncText`
     // therefore acts only on a change of the flag, never on the flag disagreeing with the field.
     func textViewDidBeginEditing(_ tv: UITextView) {
+        KeyboardDiag.log("FOCUS begin")   // ⚠️ temporary — does the field keep focus through the cancel?
         DispatchQueue.main.async { [weak self] in self?.actions.focusChanged(true) }
     }
 
     func textViewDidEndEditing(_ tv: UITextView) {
+        KeyboardDiag.log("FOCUS end")   // ⚠️ temporary — a resign here means the cancel took the focus too
         DispatchQueue.main.async { [weak self] in self?.actions.focusChanged(false) }
     }
 }
