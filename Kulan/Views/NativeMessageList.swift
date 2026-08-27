@@ -829,6 +829,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                                name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHideNote(_:)),
                                                name: UIResponder.keyboardWillHideNotification, object: nil)
+        // The un-park signal for the dismiss-mode parking in `rideKeyboard`: the keys are fully
+        // shown, so a drag may own them again.
+        NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidShowNote),
+                                               name: UIResponder.keyboardDidShowNotification, object: nil)
         KeyboardDiag.attach(to: view)   // ⚠️ temporary — the keyboard-open investigation
         // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
         NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
@@ -2109,6 +2113,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     @objc private func keyboardWillChangeFrame(_ note: Notification) { rideKeyboard(note, hiding: false) }
     @objc private func keyboardWillHideNote(_ note: Notification) { rideKeyboard(note, hiding: true) }
 
+    /// The keys are fully up: give the finger its dismiss drag back — see the parking note in
+    /// `rideKeyboard`. Never inside the screenshot-capture window, which parks for its own reason
+    /// and restores itself.
+    @objc private func keyboardDidShowNote() {
+        guard isViewLoaded, Date() >= captureFreezeUntil,
+              collectionView.keyboardDismissMode == .none else { return }
+        collectionView.keyboardDismissMode = .interactive
+        KeyboardDiag.log("UNPARK shown")
+    }
+
     private func rideKeyboard(_ note: Notification, hiding: Bool) {
         guard isViewLoaded, view.window != nil, !isDisappearing,
               let info = note.userInfo,
@@ -2122,6 +2136,24 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let d = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
         if d > 0 { dockedBand = up ? overlap : 0 }
         KeyboardDiag.log("NOTE \(hiding ? "hide" : "chg") band=\(Int(overlap)) d=\(String(format: "%.2f", d))")
+        // ⛔ iOS 26 READS OUR OWN IN-BLOCK SCROLL AS A DISMISS DRAG, AND CANCELS THE KEYBOARD IT IS
+        // PRESENTING — his diag log on `6001960e`, with the ghost already gone: a perfect open
+        // order (`NOTE chg band=274 d=0.38`), then 12ms later `NOTE chg band=0 d=0.00` + `hide`,
+        // then a retry that succeeds — one tap, three moves. The scroll the OS misreads is the
+        // offset write THIS handler makes to keep the reader at the bottom, and the repo already
+        // holds the same diagnosis for the full-page screenshot ("a system-driven downward scroll
+        // reads as a dismiss drag", `screenshotTaken`). Same cure: the dismiss mode is parked at
+        // `.none` for the presentation and restored the moment the keys report fully shown
+        // (`keyboardDidShow`) — or here, when a hide ends the transition instead.
+        if up, d > 0 {
+            if collectionView.keyboardDismissMode != .none {
+                collectionView.keyboardDismissMode = .none
+                KeyboardDiag.log("PARK dismiss")
+            }
+        } else if !up, Date() >= captureFreezeUntil, collectionView.keyboardDismissMode == .none {
+            collectionView.keyboardDismissMode = .interactive
+            KeyboardDiag.log("UNPARK hide")
+        }
         let curve = (info[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.uintValue ?? 7
         if d > 0 {
             // The keyboard's own duration and curve (7, its private one, handed to UIKit as
