@@ -87,6 +87,23 @@ enum AutoDownloadPrefs {
 // instantly. Files over 200 MB never auto-download (reference rule).
 enum MediaAutoDownloader {
     private static let maxAutoBytes = 200 * 1024 * 1024
+
+    /// ⛔ THE CEILING FOR AUTO-DOWNLOADING A PHOTO, his instruction 2026-08-27: "between 1 and 10 MB".
+    ///
+    /// The reference has no per-photo ceiling at all — their photo preference defaults to
+    /// `wifiAndCellular` and the only cap is `neverLimit = 200 MB`, which no photo reaches. The other
+    /// app he compares against caps photos at 1 MB in every preset, but it also re-encodes what it
+    /// sends, so 1 MB there is a whole photo and here it is barely half of one: a phone camera JPEG
+    /// is routinely 2–5 MB, and a 1 MB ceiling would put a Download button on almost every picture
+    /// he receives, which is the opposite of what he is asking for.
+    ///
+    /// 8 MB is the top of the range he gave, minus room to be sure: every ordinary camera photo
+    /// lands well under it and arrives on its own, while something pathological — a screenshot burst
+    /// stitched into one frame, an exported panorama — waits for a tap. Moving it is this one line.
+    ///
+    /// ⚠️ MEASURED ON THE CIPHERTEXT, because that is what the response reports and what actually
+    /// crosses the network. The padding over plaintext is small and always in the safe direction.
+    static let photoAutoBytes: Int64 = 8 * 1024 * 1024
     private static var inFlight = Set<String>()
     private static let lock = NSLock()
 
