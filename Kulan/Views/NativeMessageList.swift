@@ -3230,6 +3230,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         refreshKeyboardGuideFloor()  // a resting guide is the safe-area strip, never zero
         adoptSystemKeyboardGuide()   // where the system guide moves, it is the better transport
         positionBottomBar()
+        // ⛔ AND THE BAR'S SIZE, NOT ONLY ITS PLACE. The note above calls `positionBottomBar` the
+        // counterpart of their `ensureTextViewHeight()`, and that was only half true: theirs settles
+        // the toolbar's HEIGHT on this line, and ours settled where the pill sits and left the height
+        // to two writers that a first open never fires again. The bar was therefore laid out at
+        // whatever `applyComposer` had measured before this view had a width — see `resizeBottomBar`.
+        //
+        // ⚠️ THE GEOMETRY TWIN, NOT THE RESIZER. `resizeBottomBar` ends in `updateInsets` and
+        // `layoutIfNeeded`, and calling that from inside a layout pass is the re-entrancy this file
+        // has already paid for once. This writes the same two constants and stops, which is what it
+        // was built for, and the `updateInsets` on the next line picks them up. Guarded writes, so a
+        // pass where nothing moved costs two comparisons.
+        syncBottomBarGeometry()
         updateInsets()
         // The invariant net, independent of any keyboard bookkeeping: at rest, never beyond the newest
         // bound. Catches the tail of an interactive keyboard dismissal, where `updateInsets` correctly
@@ -4025,6 +4037,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // the collapsed container must stay collapsed until `applyComposer` puts the bar back.
         guard let bar = composerBar as? ChatComposerView, !bar.isHidden,
               let heightC = barHeightC, let containerC = bottomBarHeight else { return }
+        // ⛔ NOT AT A WIDTH THE BAR COULD NEVER BE. `applyComposer` ends here, and it runs the first
+        // time BEFORE this view has ever been laid out — the same fact the safe-area handler's note
+        // is about — so `view.bounds.width` is 0 and the `max(1,…)` below turns that into ONE POINT.
+        // Asking the bar how tall it is at one point wide is asking it to wrap every word onto its
+        // own line, and the answer went straight into two constraints as if it were the truth.
+        //
+        // ⚠️ AND NOTHING RECOMPUTED IT. The height has only ever had two writers — this, from
+        // `applyComposer` and from the bar's own height changes, and `syncBottomBarGeometry` from the
+        // safe-area handler. A first open fires none of them again, so the wrong height stayed until
+        // the keyboard opened, changed the bar's contents and finally triggered a real measurement.
+        // That is his report exactly: wrong on first open, right for good after one open and close.
+        //
+        // Refusing to measure is the right half of the answer; the other half is `viewDidLayoutSubviews`
+        // now doing the geometry as well as the position, so a real width always gets its turn.
+        guard view.bounds.width > 1 else { return }
         let width = max(1, view.bounds.width - (barLeading?.constant ?? 0) * 2)
         let barH = bar.preferredHeight(forWidth: width)
         // The pad above the pill + the bar + everything below it (the keyboard and the bar's
@@ -4089,6 +4116,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // by a composer's height.
         guard let bar = composerBar as? ChatComposerView, !bar.isHidden,
               let heightC = barHeightC, let containerC = bottomBarHeight else { return }
+        // Same refusal as `resizeBottomBar`, and for the same reason — see the note there.
+        guard view.bounds.width > 1 else { return }
         let width = max(1, view.bounds.width - (barLeading?.constant ?? 0) * 2)
         let barH = bar.preferredHeight(forWidth: width)
         let container = Self.barTopPad + barH + (-(barBottom?.constant ?? 0)) + keyboardOverlap
