@@ -914,12 +914,22 @@ final class ChatComposerView: UIView {
         // rest dip is a negative inset), which buys another 5. About 24pt too high at rest, less with
         // the keyboard up, which is why it looked wrong by a different amount in different states.
         //
-        // The mic's own centre is the honest anchor: the disc is that button growing under a finger,
-        // so wherever the button is, that is where it belongs. Converted rather than assumed, because
-        // the mic is a child of the glass container and this group is a child of the bar.
-        let fallbackCenter = CGPoint(x: padded.maxX - M.overlayTrailing - M.halo / 2,
-                                     y: padded.maxY - M.halo / 2)
-        let discCenter = micButton.superview.map { convert(micButton.center, from: $0) } ?? fallbackCenter
+        // ⛔ THE MIC'S RESTING SLOT, WRITTEN OUT — NOT `micButton.center`. Reading the live button was
+        // the first attempt at this and it made the puck JUMP on lock, which he photographed straight
+        // away: `pillSpan` pulls the pill's right edge in by a whole button-and-gap the moment
+        // `recordLocked` goes true (the send arrow appears outside it), so the mic slot slides ~48pt
+        // left and the puck, anchored to it, went with it — mid-recording, under the finger.
+        //
+        // The slot is the same arithmetic with the moving parts removed. Unlocked and with no text,
+        // `pillSpan.right` is the full width, so the mic lands at `W - micTrailing - button` and its
+        // centre is `W - micTrailing - button/2`. Stating it that way makes the anchor independent of
+        // the lock state, of whether there is text, and of the outer insets — none of which should
+        // move a puck that is already under a finger.
+        //
+        // The Y is still the mic's line rather than the padded box's bottom, which is the part that
+        // was actually wrong: the halo is 78 against a 40pt button, so hanging it off the box floated
+        // it ~24pt high over the message above.
+        let discCenter = CGPoint(x: W - M.micTrailing - M.button / 2, y: H - M.button / 2)
         overlayGroup.bounds = CGRect(x: 0, y: 0, width: M.halo, height: M.halo)
         overlayGroup.center = discCenter
         discGroup.bounds = overlayGroup.bounds
