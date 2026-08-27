@@ -2540,15 +2540,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let frame = view.keyboardLayoutGuide.layoutFrame
         guard frame.height > 0 || frame.minY > 0 else { return }
         guard abs(frame.width - view.bounds.width) <= 1 else { return }   // a stale frame from a rotation
-        // ⛔ MEASURED IN THE WINDOW, NOT IN THIS VIEW'S BOUNDS — and the reason is a logged number,
-        // not a theory. On the first open of a chat this printed `viewBottomInWindow=990` inside an
-        // 874pt window: for a pass or two during the push, this view's bounds hang below the screen.
-        // `view.bounds.maxY - frame.minY` is only a keyboard height while the view's bottom edge and
-        // the window's are the same edge; through that transient it is arithmetic on two different
-        // coordinate spaces, and it produced 116. The window's bottom is the real bottom of the
-        // screen at every instant of a transition, so measuring against it cannot drift.
-        let topInWindow = view.convert(frame, to: nil).minY
-        let reported = max(0, win.bounds.maxY - topInWindow)
+        // ⛔ THE TRANSIENT IS REJECTED, NOT MEASURED AROUND. The pass that made 116 on a first open
+        // printed `viewBottomInWindow=990` inside an 874pt window: for a beat during the push this
+        // view's bounds hang below the bottom of the screen, and the guide's frame within them means
+        // nothing. A view cannot really extend past the bottom of the screen, so a bottom edge that
+        // claims to IS the signal that the layout is mid-flight — no arithmetic needed.
+        //
+        // ⚠️ AND THE HEIGHT ITSELF STAYS IN THE VIEW'S OWN COORDINATES. Measuring it against the
+        // WINDOW's bottom was the first attempt at that transient, and it broke the keyboard: with
+        // the keys up this view is 34pt shorter than the window (874 → 840, logged), the guide is
+        // pinned to the VIEW's bottom, and a height measured from one edge and applied to the other
+        // is wrong by exactly that difference. It showed as adopt reporting 345 where the keyboard's
+        // own notification reported 311 — and since this feeder only ever raises, the wrong one won.
+        let viewBottomInWindow = view.convert(view.bounds, to: nil).maxY
+        guard viewBottomInWindow <= win.bounds.maxY + 1 else { return }
+        let reported = max(0, view.bounds.maxY - frame.minY)
         // ⛔ WITH NO KEYBOARD ON SCREEN, THIS GUIDE *IS* THE BOTTOM SAFE-AREA STRIP. That is UIKit's
         // documented resting behaviour, and it is why this feeder cannot simply be believed.
         //
@@ -3209,6 +3215,38 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
+    /// ⚠️ DIAGNOSTIC ONLY — OUT BEFORE THIS SHIPS. Round two, for "messages go under the composer
+    /// when the keyboard opens". It logs the two candidate keyboard heights side by side (the view's
+    /// own coordinates against the window's) so the 34pt disagreement between them is visible rather
+    /// than inferred, and it logs what the LIST actually ended up with — the collection view's
+    /// adjusted bottom inset and the composer's real frame — instead of leaving that to arithmetic.
+    /// The cap is high enough to reach the settled state after the keyboard's animation, which is
+    /// what round one kept stopping short of.
+    private var probeCount = 0
+    private func probeComposerGeometry() {
+        guard probeCount < 40 else { return }
+        probeCount += 1
+        let win = view.window
+        let viewBottomInWindow = view.convert(view.bounds, to: nil).maxY
+        let f = view.keyboardLayoutGuide.layoutFrame
+        let adoptView = max(0, view.bounds.maxY - f.minY)
+        let adoptWin = max(0, (win?.bounds.maxY ?? 0) - view.convert(f, to: nil).minY)
+        let bar = composerBar?.frame ?? .zero
+        print("[KPROBE #\(probeCount)]",
+              "viewH=\(Int(view.bounds.height))",
+              "viewBottomInWindow=\(Int(viewBottomInWindow))",
+              "windowH=\(Int(win?.bounds.height ?? -1))",
+              "viewSafeBottom=\(Int(view.safeAreaInsets.bottom))",
+              "adoptView=\(Int(adoptView))",
+              "adoptWin=\(Int(adoptWin))",
+              "guide=\(Int(keyboardOverlap))",
+              "barTop=\(Int(bar.minY))",
+              "barBottom=\(Int(bar.maxY))",
+              "containerH=\(Int(bottomBarHeight?.constant ?? -1))",
+              "cvAdjBottom=\(Int(collectionView.adjustedContentInset.bottom))",
+              "cvH=\(Int(collectionView.bounds.height))")
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         // ⛔ THE KEYBOARD'S ONE WRITER, THE REFERENCE APP'S WAY. Their `viewDidLayoutSubviews` calls
@@ -3234,6 +3272,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         adoptSystemKeyboardGuide()   // where the system guide moves, it is the better transport
         positionBottomBar()
         updateInsets()
+        probeComposerGeometry()   // ⚠️ DIAGNOSTIC ONLY — remove before shipping.
         // The invariant net, independent of any keyboard bookkeeping: at rest, never beyond the newest
         // bound. Catches the tail of an interactive keyboard dismissal, where `updateInsets` correctly
         // stands down because a finger owns the list while the clearance shrinks.
