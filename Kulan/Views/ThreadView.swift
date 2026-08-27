@@ -1321,6 +1321,17 @@ struct ThreadView: View {
         // cancelled inside the sleep and one sweep runs 1.2s after the last one lands. The sweep itself
         // is already idempotent: it skips anything cached and anything in flight.
         .task(id: "\(cid)-\(repo.items.count)") {
+            // ⛔ VOICE NOTES DO NOT WAIT FOR THE DEBOUNCE — his report, 2026-08-27, and the reference
+            // app's own trigger: their file node calls `fetch(false)` as the bubble lays out, with no
+            // delay and no viewport test. A note arriving while he watched used to sit here for 1.2
+            // seconds before its download even started, and it cannot play until the bytes are all
+            // in, because they do not stream voice either. See `sweepVoiceNotes`.
+            //
+            // ⚠️ BEFORE THE SLEEP AND BEFORE THE CANCELLATION CHECK, deliberately. This `.task(id:)`
+            // restarts on every arrival, so anything after the sleep is skipped for all but the last
+            // message of a burst — which is exactly the case where several notes arrive together and
+            // all of them should already be downloading.
+            MediaAutoDownloader.sweepVoiceNotes(repo.items, cid: cid)
             try? await Task.sleep(nanoseconds: 1_200_000_000)   // let the open settle first
             guard !Task.isCancelled else { return }
             MediaAutoDownloader.sweep(repo.items, cid: cid)

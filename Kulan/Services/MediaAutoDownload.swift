@@ -107,6 +107,47 @@ enum MediaAutoDownloader {
     private static var inFlight = Set<String>()
     private static let lock = NSLock()
 
+    /// ⛔ VOICE NOTES FETCH AT ONCE, AHEAD OF EVERYTHING ELSE — his report, 2026-08-27: a received
+    /// voice message takes too long to become playable, and the reference app he named is instant.
+    ///
+    /// Read from their `ChatMessageInteractiveFileNode`, which is where the answer turned out to be:
+    ///
+    ///     if let updatedFetchControls = updatedFetchControls {
+    ///         let _ = strongSelf.fetchControls.swap(updatedFetchControls)
+    ///         if arguments.automaticDownload {
+    ///             updatedFetchControls.fetch(false)      // false = not user-initiated
+    ///         }
+    ///     }
+    ///
+    /// That runs as the bubble LAYS OUT. There is no delay, no viewport test and no batching: the
+    /// row existing is the trigger. Ours waited on a 1.2s debounce shared with every other kind of
+    /// media, so a note arriving while he watched sat untouched for over a second before its
+    /// download even began — and then had to finish before it could play, because (see below) it is
+    /// never streamed.
+    ///
+    /// ⚠️ AND THEY DO NOT STREAM VOICE, which is worth stating because it is the opposite of what
+    /// one would guess. In the same file, the button state for a file that is not local yet:
+    ///
+    ///     case .Remote, .Paused:
+    ///         if isAudio && !isVoice { state = .play }     // music plays while still remote
+    ///         else                   { state = .download } // a voice note must be local first
+    ///
+    /// Music streams and carries a little cache ring; a voice note shows Download until the bytes
+    /// are all here. Their speed is not clever streaming, it is that the fetch started the instant
+    /// the message existed. So this is the whole of the fix, and no partial-playback machinery is
+    /// needed to match them.
+    ///
+    /// Kept separate from `sweep` rather than merged into it: the full pass walks videos, documents
+    /// and the save-to-photos hook, and it wants its debounce. This one is voice only, so it is
+    /// cheap enough to run on every arrival.
+    static func sweepVoiceNotes(_ items: [Message], cid: String) {
+        guard AutoDownloadPrefs.allowedNow(.audio) else { return }
+        for m in items where m.isAudio {
+            guard AudioCache.url(for: m.id) == nil, let u = m.audioUrl, !u.isEmpty else { continue }
+            fetch(id: m.id, url: u, meta: m.enc, cid: cid) { AudioCache.store($0, for: m.id) }
+        }
+    }
+
     static func sweep(_ items: [Message], cid: String) {
         for m in items {
             // "Save to Photos" (Settings > Chats) rides this pass: it is already the one place that
