@@ -86,7 +86,22 @@ struct CMReactConfig {
 
 // MARK: - Overlay
 
-/// One presentation = one overlay instance, added directly to the window (the reference app adds their
+/// The root of the menu's own window. It exists because a `UIWindow` needs a root view controller to
+/// lay out and to be handed a safe area, and for no other reason: it draws nothing, it presents
+/// nothing, and the overlay covers it edge to edge.
+///
+/// ⚠️ IT DELIBERATELY DOES NOT OVERRIDE THE STATUS BAR OR THE HOME INDICATOR. UIKit takes both from
+/// the KEY window's root controller, this window is never key, and answering those questions here
+/// would be a way to accidentally change the chrome of a screen that is otherwise untouched.
+final class CMOverlayHost: UIViewController {
+    override func loadView() {
+        let v = UIView()
+        v.backgroundColor = .clear
+        view = v
+    }
+}
+
+/// One presentation = one overlay instance, added directly to a window (the reference app adds their
 /// controller's view the same way). Owns blur, dismiss catcher, preview snapshot, bar and card.
 final class CMOverlay: UIView {
 
@@ -198,6 +213,12 @@ final class CMOverlay: UIView {
             // direct emoji pick dismisses here; for .more the sheet's resolution (pick or cancel)
             // dismisses the overlay through `current`.
             if case .more = selection {
+                // ⛔ GIVE THE LEVEL BACK BEFORE THE SHEET ARRIVES. The picker is presented by the
+                // SwiftUI shell, which means it comes up inside the APP's window — so a menu sitting
+                // in a window above the keyboard's would sit above the sheet too, and the picker
+                // would open behind the blur it is supposed to open over. Stepping back into the app
+                // window restores the exact stacking this hand-off has always had.
+                self.returnToAppWindow()
                 react.onPick(selection)
             } else {
                 self.dismiss(animated: true) { react.onPick(selection) }
@@ -212,11 +233,48 @@ final class CMOverlay: UIView {
 
     // MARK: Present
 
+    /// ⛔ ASK FOR A WINDOW OF OUR OWN, ABOVE THE KEYBOARD'S. Set by the chat before `present` when the
+    /// keys are up. Off by default, so every caller that opens a menu with no keyboard — the story
+    /// row — keeps the exact path it has today.
+    ///
+    /// THE PROBLEM IT SOLVES. The keyboard is not drawn by us and it is not in our view hierarchy: it
+    /// is a window of its own, at a level far above the app's, and the system composites it over
+    /// everything in ours. An overlay added as a subview of the app's window is therefore UNDERNEATH
+    /// the keys no matter what we do to its z-position, its layer, or its order among siblings — his
+    /// screenshot, with the menu card behind the keys.
+    ///
+    /// WHAT THE REFERENCE DOES, and it is the same answer in both apps he has pointed at: the menu is
+    /// not a view in the conversation at all, it is its own presentation in its own window, and the
+    /// window sits above the keyboard's. That is why their keyboard stays up, stays visible, and ends
+    /// up UNDER the menu's blur rather than over the menu.
+    ///
+    /// ⚠️ AND IT IS NEVER MADE KEY. That is the whole reason this works without touching the
+    /// keyboard: `makeKeyAndVisible` would move key status away from the app's window, the field
+    /// there would lose the first responder, and the keys would go down — which is the very thing
+    /// being fixed. A window only needs `isHidden = false` to be shown and to receive touches; key
+    /// status governs where keyboard INPUT is routed, and we want that left exactly where it is.
+    var presentsAboveKeyboard = false
+
+    /// The window we made, if we made one. Held until teardown; see `removeFromSuperview`.
+    private var hostWindow: UIWindow?
+    /// The app's window, kept so the overlay can step back down into it — see `returnToAppWindow`.
+    private weak var presentingWindow: UIWindow?
+
     func present(in window: UIWindow, startAtSqueeze: Bool) {
         CMOverlay.current = self
-        frame = window.bounds
+        presentingWindow = window
+        let host: UIView
+        if presentsAboveKeyboard, let own = CMOverlay.makeWindowAboveKeyboard(over: window) {
+            hostWindow = own
+            host = own.rootViewController?.view ?? own
+        } else {
+            host = window
+        }
+        // The source rectangle was measured in the app window, and our window is laid over it edge
+        // to edge, so the two coordinate spaces are the same one. Nothing needs converting.
+        frame = host.bounds
         autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        window.addSubview(self)
+        host.addSubview(self)
 
         blurView.frame = bounds
         dismissCatcher.frame = bounds
@@ -477,29 +535,77 @@ final class CMOverlay: UIView {
 
     @objc private func dismissTapped() { dismiss(animated: true) }
 
+    /// ⛔ THE WINDOW GOES WHEN THE VIEW GOES. Three separate animation completions call
+    /// `removeFromSuperview`, so the teardown hangs off the one thing all three do rather than being
+    /// copied into each of them and eventually missed by a fourth. A window left behind at this level
+    /// would sit invisibly over the keyboard and swallow every touch meant for the keys.
+    override func removeFromSuperview() {
+        super.removeFromSuperview()
+        guard let own = hostWindow else { return }
+        hostWindow = nil          // break the cycle first: the root view held us, we held the window
+        own.isHidden = true
+        own.rootViewController = nil
+        own.windowScene = nil
+    }
+
+    /// Move back into the app's window, unchanged and mid-presentation, and give up the window we
+    /// took. The overlay keeps its frame because the two windows are laid over each other edge to
+    /// edge, so nothing about the menu on screen moves.
+    ///
+    /// ⚠️ `hostWindow` IS CLEARED FIRST, and that ordering is load-bearing: re-parenting a view runs
+    /// `removeFromSuperview`, whose override tears the window down, and it must find nothing left to
+    /// do rather than pull the window out from under the move.
+    private func returnToAppWindow() {
+        guard let own = hostWindow, let app = presentingWindow else { return }
+        hostWindow = nil
+        frame = app.bounds
+        app.addSubview(self)
+        own.isHidden = true
+        own.rootViewController = nil
+        own.windowScene = nil
+    }
+
+    /// A window one level above the highest one currently on screen — which, while the keys are up,
+    /// is the keyboard's.
+    ///
+    /// ⚠️ THE LEVEL IS MEASURED, NOT WRITTEN DOWN. The keyboard's own level is an implementation
+    /// detail of UIKit that has moved between releases, and this app has already spent one whole
+    /// build on an iOS 26/27 difference in keyboard plumbing. Reading what is actually on screen and
+    /// going one above it needs no such constant and cannot go stale. The floor keeps us above the
+    /// alert level even in the odd case where the scene reports nothing useful.
+    private static func makeWindowAboveKeyboard(over host: UIWindow) -> UIWindow? {
+        guard let scene = host.windowScene else { return nil }
+        var top = max(host.windowLevel.rawValue, UIWindow.Level.alert.rawValue)
+        for s in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+            for w in s.windows where !w.isHidden { top = max(top, w.windowLevel.rawValue) }
+        }
+        let own = UIWindow(windowScene: scene)
+        own.frame = host.frame
+        own.backgroundColor = .clear
+        own.isOpaque = false
+        own.rootViewController = CMOverlayHost()
+        own.windowLevel = UIWindow.Level(rawValue: top + 1)
+        own.isHidden = false   // ⛔ NOT `makeKeyAndVisible` — see `presentsAboveKeyboard`
+        return own
+    }
+
     // MARK: The layout math (the reference app's targetPreviewFrame, simplified to our vertical stack)
 
     /// bar (exterior top, gap 12) · preview · menu (exterior bottom, gap 12), all aligned to the
     /// bubble's own horizontal edge. Overflow bottom → shift up; overflow top → shift down; still
     /// too tall → scale the preview down (anchored to its aligned edge) and recompute.
-    /// ⛔ HOW MUCH OF THE BOTTOM THE KEYBOARD IS EATING, when the menu opens with the keys up.
-    ///
-    /// The overlay is a subview of the app's window and the keyboard lives in a window of its own at
-    /// a higher level, so the keys are drawn OVER anything we put beneath them — no z-order we can
-    /// set here changes that. His screenshot: long-press with the keyboard open and the Reply card
-    /// sits behind the keys.
-    ///
-    /// We used to dodge this by dismissing the keyboard on long-press — which is what moved the
-    /// conversation out from under the frozen preview, and is why it was taken out (the reference
-    /// never dismisses for a message menu). So the menu is LAID OUT in the space that is actually
-    /// visible instead: the window, less the keyboard.
-    var keyboardInset: CGFloat = 0
-
+    /// ⛔ THE MENU USES THE WHOLE SCREEN, KEYBOARD OR NO KEYBOARD. This used to take a
+    /// `keyboardInset` and squeeze the whole stack into the strip above the keys, and the owner
+    /// turned that down by name: the menu is an OVERLAY, the keys stay up and stay visible
+    /// underneath it, and the blur goes over them. Squeezing produced a menu that opened in a
+    /// different place depending on whether the keyboard happened to be up, which is exactly the
+    /// behaviour difference he was pointing at. Where the menu actually gets the pixels to draw over
+    /// the keys is `presentsAboveKeyboard` — a window problem, solved in a window, not here.
     private func computeFrames(in bounds: CGRect) -> (preview: CGRect, bar: CGRect?, menu: CGRect) {
         let pad: CGFloat = 8
         let content = bounds.inset(by: UIEdgeInsets(
             top: max(safeAreaInsets.top, pad), left: max(safeAreaInsets.left, pad),
-            bottom: max(max(safeAreaInsets.bottom, pad), keyboardInset + pad),
+            bottom: max(safeAreaInsets.bottom, pad),
             right: max(safeAreaInsets.right, pad)))
 
         let menuSize = card.sizeThatFits(CGSize(width: 250, height: content.height))

@@ -38,18 +38,17 @@ private final class PreparedPlayer: @unchecked Sendable {
     init(_ player: AVAudioPlayer?) { self.player = player }
 }
 
-extension Notification.Name {
-    /// ⛔ A TAP ON A VOICE NOTE IS ABOUT TO TOUCH THE AUDIO STACK. Posted immediately before, so a
-    /// screen with an open keyboard can defend it — see `MessageListController.armComposerResignGuard`.
-    ///
-    /// His report, twice: with the keyboard open, pressing play or the speed pill closes it. Gating
-    /// proximity monitoring was not enough, so the resign is coming from somewhere else in the audio
-    /// stack — a category change and a session activation both happen on this path, and either can
-    /// make the system take the first responder away. Rather than guess at which call for a third
-    /// time, the composer simply refuses an unannounced resign for a moment after the tap: every
-    /// deliberate dismissal in the app announces itself first, so nothing legitimate is blocked.
-    static let voiceNoteInteraction = Notification.Name("kulan.voiceNoteInteraction")
-}
+// ⛔ THE `voiceNoteInteraction` NOTIFICATION IS GONE, AND SO IS THE GUARD IT ARMED. It existed for
+// one report — keyboard open, press play or the speed pill, keyboard closes — on the theory that
+// something in the audio stack was taking the first responder, and it defended the composer for a
+// second after every tap rather than name the call. The owner declined to keep it: "I want the
+// underlying cause fixed, not just the symptom temporarily blocked."
+//
+// The cause was never in this file. `cycleRate` opens no session, changes no category and touches no
+// proximity monitoring, and it closed the keyboard exactly as readily as `toggle` did — which rules
+// the audio stack out on its own. Both are taps on the conversation, and the conversation carries a
+// tap-to-dismiss gesture that hears every touch on it and cannot tell a control from wallpaper. It
+// is fixed where it happens: see `VoiceBubbleView.controlTouch`.
 
 @MainActor
 final class VoiceNotePlayer: NSObject, ObservableObject {
@@ -303,7 +302,6 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     func rate(for cid: String) -> Float { rateByCid[cid] ?? 1 }
 
     func cycleRate(cid: String) {
-        NotificationCenter.default.post(name: .voiceNoteInteraction, object: nil)
         let next: Float = rate(for: cid) == 1 ? 1.5 : (rate(for: cid) == 1.5 ? 2 : 1)
         rateByCid[cid] = next
         if playing { player?.rate = next; updateNowPlaying() }   // the lock screen clock runs at 2× too
@@ -337,7 +335,6 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     // MARK: - Play / pause
 
     func toggle(message: Message, cid: String, isMe: Bool) {
-        NotificationCenter.default.post(name: .voiceNoteInteraction, object: nil)
         // A DELIBERATE TAP ENDS THE OLD RUN. This is the only entry a person drives, so a run handed
         // over earlier is stale the moment they pick something themselves. The chain below calls `load`
         // directly and so passes straight over this — which is the point, otherwise the run would clear

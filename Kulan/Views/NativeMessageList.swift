@@ -934,10 +934,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
         NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
                                                name: UIApplication.userDidTakeScreenshotNotification, object: nil)
-        // A tap on a voice note is about to touch the audio stack, which can take the first
-        // responder away and close a keyboard nobody asked to close — see `voiceNoteInteraction`.
-        NotificationCenter.default.addObserver(self, selector: #selector(voiceNoteInteraction),
-                                               name: .voiceNoteInteraction, object: nil)
         // THE DOWN ARROW'S DIRECT LINE (owner 2026-08-13, third report, still dead on build 570 with
         // all three earlier fixes in it).
         //
@@ -3678,9 +3674,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // The scroll stays LOCKED while the menu is up (exclusivity already prevents the pressing
         // finger's pan; this also blocks a second finger from scrolling the chat behind the blur).
         collectionView.panGestureRecognizer.isEnabled = false
-        // The keys stay up (theirs never dismisses for a message menu), so the menu has to be laid
-        // out above them — the keyboard's window draws over ours whatever we do here.
-        overlay.keyboardInset = keyboardIsUp ? keyboardOverlap : 0
+        // The keys stay up (theirs never dismisses for a message menu), so the menu needs to be able
+        // to DRAW OVER them — which is a window question, not a layout one. Asking for a window of
+        // our own only while the keys are actually up keeps the ordinary keys-down menu on the exact
+        // path it has today. See `presentsAboveKeyboard`.
+        overlay.presentsAboveKeyboard = keyboardIsUp
         overlay.present(in: window, startAtSqueeze: true)
     }
 
@@ -3867,12 +3865,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // iOS 26 full-page screenshots scroll the view PROGRAMMATICALLY (no drag flags) right after the
     // notification, to capture every page. Freeze all landings for the capture window and snap back to the
     // last stable offset once it has finished.
-    /// Hold the composer's keyboard through the audio stack's session work. Cheap and inert when
-    /// nothing is focused.
-    @objc private func voiceNoteInteraction() {
-        (composerBar as? ChatComposerView)?.armResignGuard()
-    }
-
     @objc func screenshotTaken() {
         guard didFirstLand, !isDisappearing,
               !collectionView.isDragging, !collectionView.isTracking,

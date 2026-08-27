@@ -147,12 +147,38 @@ final class VoiceBubbleView: UIView {
         paint()
     }
 
+    /// ⛔ WHEN ONE OF THESE THREE LAST TOOK A TOUCH — his report: keyboard up, tap Play (or the 1×
+    /// pill), and the keyboard closes.
+    ///
+    /// THE CAUSE IS NOT THE AUDIO STACK, which is where the two previous attempts looked. The proof
+    /// is the speed pill: `cycleRate` sets a number and repaints, it never opens a session, never
+    /// changes the category and never touches proximity monitoring — and it closes the keyboard just
+    /// the same. What Play and 1× actually have in common is that they are both TAPS ON THE
+    /// CONVERSATION, and the conversation has a tap-to-dismiss gesture across the whole of it.
+    ///
+    /// That gesture is simultaneous, so it fires for a tap that was meant for something inside a
+    /// bubble as readily as for one on the wallpaper, and it cannot see what the tap was for. The
+    /// composer bar hit the identical problem when the UIKit bar replaced the SwiftUI one — tapping
+    /// the field for Paste closed the keyboard — and the answer there is the one used here: the view
+    /// that RECEIVES the touch leaves a timestamp, and the deferred dismissal declines when it finds
+    /// a fresh one.
+    ///
+    /// ⚠️ STAMPED IN `hitTest` RATHER THAN IN THE TAP HANDLER, and that is what makes it sound. A
+    /// hit test happens while the touch is being delivered, which is strictly before any gesture on
+    /// any view can recognise it, so the stamp is always there to be read. A handler fires from
+    /// gesture recognition, and two recognisers on one touch have no guaranteed order between them.
+    static let controlTouch = TouchClock()
+
     /// The disc and the waveform own their touches; everything else lets them through so the
     /// bubble's own long press and reply swipe still work over the rest of the note.
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         for v in [disc, wave, speedPill] where !v.isHidden {
             let local = convert(point, to: v)
-            if v.bounds.contains(local) { return v.hitTest(local, with: event) ?? v }
+            if v.bounds.contains(local) {
+                // A nil event is a layout-time query, not a finger; only a real touch is stamped.
+                if event != nil { VoiceBubbleView.controlTouch.last = Date() }
+                return v.hitTest(local, with: event) ?? v
+            }
         }
         return nil
     }

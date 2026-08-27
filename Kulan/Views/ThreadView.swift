@@ -2100,6 +2100,12 @@ struct ThreadView: View {
                         // fresh stamp here means the tap was the bar's, and the conversation was
                         // never tapped at all.
                         guard Date().timeIntervalSince(composerTouch.last) > 0.4 else { return }
+                        // ⛔ AND A TAP ON A VOICE NOTE'S CONTROLS IS NOT A TAP ON THE CONVERSATION
+                        // EITHER — his report: keyboard up, tap Play or the 1× pill, keyboard closes.
+                        // Same shape as the composer above, same remedy, and see the note on
+                        // `VoiceBubbleView.controlTouch` for why it is neither the audio session nor
+                        // the player that was closing it.
+                        guard Date().timeIntervalSince(VoiceBubbleView.controlTouch.last) > 0.4 else { return }
                         inputFocused = false
                         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                                         to: nil, from: nil, for: nil)
