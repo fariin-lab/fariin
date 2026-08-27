@@ -2536,10 +2536,34 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// good at. Coming down belongs to the notification, and to the finger during a drag.
     private func adoptSystemKeyboardGuide() {
         guard Date() >= keyboardBlockUntil else { return }
+        guard let win = view.window else { return }
         let frame = view.keyboardLayoutGuide.layoutFrame
         guard frame.height > 0 || frame.minY > 0 else { return }
         guard abs(frame.width - view.bounds.width) <= 1 else { return }   // a stale frame from a rotation
-        let reported = max(0, view.bounds.maxY - frame.minY)
+        // ⛔ MEASURED IN THE WINDOW, NOT IN THIS VIEW'S BOUNDS — and the reason is a logged number,
+        // not a theory. On the first open of a chat this printed `viewBottomInWindow=990` inside an
+        // 874pt window: for a pass or two during the push, this view's bounds hang below the screen.
+        // `view.bounds.maxY - frame.minY` is only a keyboard height while the view's bottom edge and
+        // the window's are the same edge; through that transient it is arithmetic on two different
+        // coordinate spaces, and it produced 116. The window's bottom is the real bottom of the
+        // screen at every instant of a transition, so measuring against it cannot drift.
+        let topInWindow = view.convert(frame, to: nil).minY
+        let reported = max(0, win.bounds.maxY - topInWindow)
+        // ⛔ WITH NO KEYBOARD ON SCREEN, THIS GUIDE *IS* THE BOTTOM SAFE-AREA STRIP. That is UIKit's
+        // documented resting behaviour, and it is why this feeder cannot simply be believed.
+        //
+        // His report, and the log that finally explained it: open a chat for the first time and the
+        // composer sits ~94pt too high with an empty band under it, and one keyboard open-and-close
+        // fixes it for good. This view's strip is 83 at that moment — the tab bar has not finished
+        // going away — so a keyboard height of 83 was adopted from a screen with no keyboard on it.
+        // The feeder is RAISE-ONLY and `refreshKeyboardGuideFloor` stands down once the guide says
+        // the keys are up, so the two of them latched it there. Only a real hide notification could
+        // undo it, which is exactly why opening and closing the keyboard was the cure.
+        //
+        // ⚠️ COMPARED AGAINST THE VIEW'S OWN STRIP, NOT `restSafeBottom`. `restSafeBottom` is the
+        // WINDOW's 34 and would have let 83 straight through; the number to beat is whatever this
+        // view's safe area currently is, because that is what the guide reports when it is resting.
+        guard reported > view.safeAreaInsets.bottom + 0.5 else { return }
         guard reported > keyboardOverlap + 0.5 else { return }
         if setKeyboardGuideHeight(reported) { view.setNeedsLayout() }
     }
