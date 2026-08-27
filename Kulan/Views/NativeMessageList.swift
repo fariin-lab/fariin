@@ -446,6 +446,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var scrollAnimationWatchdog: Timer?
     private var lastLoadOlderAt = Date.distantPast       // pagination throttle (2s window)
     private var isDisappearing = false        // swipe-back / pop in progress â†’ freeze all content-offset work
+    /// ⛔ THEIR `isViewCompletelyAppeared`, AND `isDisappearing` WAS ONLY HALF OF IT. Theirs is set in
+    /// `viewDidAppear` and cleared in `viewWillDisappear`, and it gates the lockstep shift alone
+    /// (`} else if isViewCompletelyAppeared {`). Ours cleared its flag on the way out but raised it
+    /// again in `viewWillAppear` — so coming BACK from a pushed screen the lockstep ran for the whole
+    /// return transition, which is exactly the window where the keyboard is being restored and the
+    /// composer re-measured, and offsets were written from geometry that had not settled. The leaving
+    /// half stays `isDisappearing`, which must freeze more than the lockstep; this is the arriving half.
+    private var isViewCompletelyAppeared = false
     private var lastStableOffset: CGFloat = 0 // last user/our-intent offset â†’ screenshot-capture recovery
     // Selection-mode animation coordination: the land that CARRIES the checkbox change passes (even
     // mid-motion), then further lands defer until the slide animation window closes â€” a reconfigure
@@ -1149,8 +1157,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if delta != 0 { verifyAnchor(landed?.anchor) }
     }
 
-    // The row the reader's position is measured against: the visible row CLOSEST TO THE ORIGIN, i.e. the
-    // topmost one on screen. A change above it is what can move the reader; the delta is measured there.
+    // The row the reader's position is measured against. WHICH visible row that is depends on the
+    // caller's bias — see `continuityAnchors(relativeToTop:)`. Top-biased (a page of older history, a
+    // rotation-free mid-drag refresh) it is the row closest to the origin, and a change above it is
+    // what moves the reader. Bottom-biased, the default everywhere else and the reference app's rule
+    // for every load but `.loadOlder`, it is the last row on screen, so a change anywhere above it is
+    // compensated and the bottom of the viewport is what stays still.
     //
     // A cascade rather than a single pick, so a row that is deleted or trimmed in the same update falls
     // through to the next candidate instead of giving up.
@@ -1172,10 +1184,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     ///
     /// Both directions still fall back through the same cascade in `continuityDelta`: the bias only
     /// decides which end of the viewport is asked first.
+    ///
+    /// ⚠️ EVERY VISIBLE ROW IS A CANDIDATE, not the first six. Theirs walks the whole visible list in
+    /// bias order and then falls through to any row present in both load windows; ours capped at six,
+    /// and when all six leave in one update — deleting a screenful of selected messages does exactly
+    /// that — `continuityDelta` finds nothing, returns a delta of zero, and the reader jumps by
+    /// whatever moved above them. A viewport holds a dozen or so rows, so the cap bought nothing.
+    /// (Their third tier, any row in the window, is still not implemented here.)
     private func continuityAnchors(relativeToTop: Bool) -> [Anchor] {
         let visible = viewportIndexPaths()
-        let ordered = relativeToTop ? Array(visible.prefix(6))
-                                    : Array(visible.suffix(6).reversed())
+        let ordered: [IndexPath] = relativeToTop ? visible : Array(visible.reversed())
         return ordered.compactMap { ip -> Anchor? in
             guard let id = dataSource.itemIdentifier(for: ip),
                   let attr = collectionView.layoutAttributesForItem(at: ip) else { return nil }
@@ -1311,6 +1329,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let target = clampOffset(y)
         guard abs(collectionView.contentOffset.y - target) > 0.5 else { return }
         lastStableOffset = target
+        // ⛔ THE DESTINATION IS RECORDED HERE, BEFORE THE MOVE, AND IT HAS TO BE. `recordDistanceFromBottom`
+        // only ever ran on the UNANIMATED branch below and on finger-driven scrolls — during an
+        // animated glide none of `isDragging` / `isTracking` / `isDecelerating` is set, so
+        // `scrollViewDidScroll` skips its record for every frame of it. The recorded place therefore
+        // still described where the reader was BEFORE the jump, and `restoreReaderPosition` reads
+        // exactly that value to decide whether they belong at the newest message: jump from the
+        // newest to a quoted message a screen up, and the stale zero said "this reader is at the
+        // bottom", so the landing was snapped straight back down. A jump states where the reader
+        // asked to be; that is what the record must hold from the moment it is issued.
+        //
+        // It also fixes the send glide honestly rather than by accident: a glide aimed at the bound
+        // records zero, so if the composer shrinks mid-flight and the landing comes up short, the
+        // net still knows this reader belongs at the newest message and closes the gap.
+        lastKnownDistanceFromBottom = max(0, maxContentOffsetY - target)
         if animated {
             // KILL THE COAST FIRST. An animated setContentOffset issued while the list is still
             // decelerating is swallowed: UIScrollView keeps driving the offset from its own fling and our
@@ -1560,8 +1592,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Before-map first: any of these measurements may change a height, and the correction has to be
         // computed against the frames as they stand right now.
         let beforeY = frameMinY(for: currentIds)
-        // Re-measuring rows in place: bottom-biased, as above.
-        let anchors = continuityAnchors(relativeToTop: false)
+        // ⛔ TOP-BIASED, AND THIS SITE ALONE KEEPS IT. Every other in-place re-measure is bottom-biased
+        // to match the reference, but this one runs WHILE A FINGER IS ON THE GLASS and the rule above
+        // is what makes that safe: it touches only rows inside the viewport, so with a top anchor the
+        // changed row is always at or below the anchor and the delta is structurally zero. Bottom-
+        // biasing it would make a reaction landing, a tick flipping or a preview resolving on any
+        // visible row above the last one produce a real delta — written into
+        // `pendingContentOffsetAdjustment`, which UIScrollView honours under a pan — and the
+        // conversation would shift under the reader's thumb. The shortfall this leaves for a reader at
+        // the newest message is exactly what `restoreReaderPosition`'s second invariant now closes, so
+        // nothing is lost by keeping the guarantee that costs nothing.
+        let anchors = continuityAnchors(relativeToTop: true)
         var heightChanged = false
         if width > 0 {
             for id in target {
@@ -1733,7 +1774,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // `.loadOlder`, bottom-biased for a load in place, a newer page and the newest page. Our
         // equivalent signal is whether the OLDEST loaded row changed, which is exactly what a page of
         // history does (and what the date-separator join below already tests for).
-        let pagedOlder = currentIds.first != ids.first && !currentIds.isEmpty
+        // ⚠️ "THE OLDEST ROW CHANGED" IS NOT THE SAME QUESTION, and asking it that way was wrong in
+        // three ways: a front-trim, a deletion of the oldest row, and a jump into history all change
+        // it, and the reference treats every one of those as bottom-biased. A page of older history
+        // is specifically a PREPEND — the row that used to be oldest is still here and is no longer
+        // first. If it left, this was a trim or a delete, not a page.
+        let pagedOlder: Bool = {
+            guard let wasOldest = currentIds.first else { return false }   // first apply: no anchors anyway
+            guard let idx = ids.firstIndex(of: wasOldest) else { return false }
+            return idx > 0
+        }()
         let anchors = continuityAnchors(relativeToTop: pagedOlder)
 
         measureMissing(ids, width: width)   // exact heights BEFORE the layout prepares (no self-size correction)
@@ -1763,9 +1813,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if selectionAnimationState == .willAnimate { beginSelectionAnimationWindow() }
 
         // THE CONTINUITY DELTA. One formula for every kind of change: how far did the reader's anchor
-        // row move? The anchor is the topmost visible row, so the delta sums exactly the rows that
-        // landed, grew, shrank or left ABOVE the reader. A page of history is the common case now, and
-        // it is compensated inside the same update transaction (see MessageLayout.targetContentOffset).
+        // row move? For a page of older history (`pagedOlder` above) the anchor is the topmost visible
+        // row, so the delta sums exactly the rows that landed above the reader. For everything else it
+        // is the BOTTOM-most visible row, so anything that grew, shrank or left anywhere above it is
+        // compensated and the bottom of the viewport holds still — the reference app's split, and the
+        // reason a row re-measuring below the fold no longer walks the newest message out of reach.
+        // Either way it is compensated inside the same update transaction (see
+        // MessageLayout.targetContentOffset).
         var adjustment: CGFloat = 0
         var landedAnchor: Anchor?
         // Computed for EVERY reader, including one at the newest message: a page of history landing
@@ -1937,7 +1991,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // old file landed at the bottom, re-landed a runloop later as a "belt-and-suspenders guard", held a
     // pendingBottomOnOpen window that suppressed half the file's other logic, and re-pinned on every layout
     // pass until it closed â€” all because the bottom was a number derived from the total height of
-    // everything, so it moved whenever a measurement landed. The newest message is at the origin, so there
+    // everything, so it moved whenever a measurement landed. (The list is top-down: the newest message
+    // sits at `maxContentOffsetY`, not at the origin — an inverted-list leftover corrected here.) There
     // is one landing and it is exact.
     private func performFirstLandIfReady() {
         guard !didFirstLand,
@@ -2066,11 +2121,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// content changes around them is the anchor system's job (`continuityAnchors`), and this method
     /// deliberately has no opinion about them.
     ///
-    /// ⚠️ NOT WRAPPED IN `performWithoutAnimation`. The old pair disagreed about this — one wrapped,
-    /// one bare — and the wrapper was actively wrong: this runs from `viewDidLayoutSubviews`, which
-    /// is a pass the keyboard's own animation block can be running, and stripping the animation there
-    /// is what makes a bubble snap while the bar glides. Bare, it inherits whatever block it is in
-    /// and animates at rest not at all, which is right in both cases.
+    /// ⚠️ THE WRAPPER IS CONDITIONAL, and both of the old pair's positions were wrong. This runs from
+    /// `viewDidLayoutSubviews`, which runs inside WHATEVER animation happens to be on the stack. Inside
+    /// the keyboard's block the write should be bare, so it rides the keys instead of snapping while
+    /// the bar glides — that is what the always-wrapped one got wrong. But the stack also holds the
+    /// reply banner's dismissal, a composer growing a line, the selection toolbar and cell
+    /// reconfigures, and a bare write inside any of those animates the offset on a curve that has
+    /// nothing to do with the reader — which is what the always-bare one got wrong. `keyboardBlockUntil`
+    /// is precisely the window in which the keys are moving, so it decides.
     private func restoreReaderPosition() {
         // ⛔ NOT DURING THE SEND HOLD. The hold exists so the composer's own shrink (the reply banner
         // leaving, the text clearing) cannot walk the content down before the row lands and the glide
@@ -2081,7 +2139,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // often the one `updateInsets` forces from its own first line — so it would get a shot at the
         // offset in the MIDDLE of the update, against half-written geometry. This is a net for a list
         // at rest; an update in flight is the opposite of rest.
-        guard didFirstLand, !isDisappearing, !isUpdatingInsets,
+        // ⛔ AND NOT WHILE A CONTEXT MENU IS UP. `updateInsets` carries this guard already and says
+        // why: it is not the menu that scrolls the chat, it is the KEYBOARD WE DISMISS to make room
+        // for it — the clearance drops and the list follows, while the menu's lifted snapshot stays
+        // anchored to the frame the bubble had before any of it. That method therefore changes the
+        // insets and moves nothing. This one ran straight afterwards on the same layout pass, saw a
+        // reader now beyond a shrunken bound, and moved them anyway — putting back the exact report
+        // the guard next door exists to prevent.
+        // ⛔ AND NOT DURING A SYSTEM SCREENSHOT CAPTURE, which owns the offset for its window and puts
+        // it back itself — `scrollViewDidScroll`, `positionBottomBar` and the date pill all stand down
+        // on the same clock and this did not.
+        guard didFirstLand, !isDisappearing, !isUpdatingInsets, !contextMenuVisible,
+              Date() >= captureFreezeUntil,
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
               !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil,
               // Never on a spiked safe area: the bound is garbage for exactly that frame.
@@ -2101,7 +2170,19 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         } else {
             return
         }
-        collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
+        // ⛔ BARE ONLY INSIDE THE KEYBOARD'S OWN BLOCK. Unwrapping this unconditionally was too broad:
+        // it runs from `viewDidLayoutSubviews`, which runs inside WHATEVER animation is on the stack —
+        // the reply banner's 0.2s dismissal, the composer growing a line, the selection toolbar, a
+        // cell reconfigure — and a bare write inside any of those animates the content offset on that
+        // block's curve, so bubbles slide where they should simply already be right. Only the keys
+        // earn the ride, and `keyboardBlockUntil` is exactly the window in which they are moving.
+        if Date() < keyboardBlockUntil {
+            collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
+        } else {
+            UIView.performWithoutAnimation {
+                collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
+            }
+        }
         lastStableOffset = want
     }
     // The looser test, for the jump-to-latest BUTTON only: an affordance, not a decision about moving
@@ -2392,7 +2473,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // that never moved, shortens the clearance by as much as the whole keyboard, and leaves it
         // that way: the keys did not move, so no notification comes to correct it.
         guard collectionView.keyboardDismissMode == .interactive else { return nil }
-        guard case .up = keyboardReport, dockedBand > rest + 0.5, collectionView.isDragging else { return nil }
+        // ⛔ `dockedBand` IS THE GATE, NOT `keyboardReport` — the same lesson as `fingerBand`, entering
+        // through a different door. This used to open with `case .up = keyboardReport`, and a finger
+        // that drags the keys ALL THE WAY DOWN and then reverses without lifting closes that gate on
+        // itself: at the bottom the OS posts a zero-duration frame at band 0, `rideKeyboard` writes
+        // `.rest`, and the guard then refuses for the remainder of the gesture — so the bar sits at
+        // rest while the finger carries the keys back up, exactly the failure the finger store was
+        // split out to end. `dockedBand` is the honest gate because only an ANIMATED notification
+        // writes it (`d > 0`), so it says "the keys docked up and have not animated away", survives
+        // every finger-driven frame, and goes to zero the moment a real hide completes.
+        guard dockedBand > rest + 0.5, collectionView.isDragging else { return nil }
         let pan = collectionView.panGestureRecognizer
         guard pan.state == .began || pan.state == .changed else { return nil }
         var lowest = dockedBand
@@ -2527,7 +2617,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let oldYOffset = collectionView.contentOffset.y
         let wasScrolledToBottom = oldYOffset >= maxContentOffsetY - Self.atNewestTolerance
 
-        let didChangeInsets = abs(oldInsets.top - newInsets.top) > 0.5 || abs(oldInsets.bottom - newInsets.bottom) > 0.5
+        // ⛔ THE GATE HAS TO SEE WHAT THE SHIFT SEES. This tested the RAW insets while the lockstep
+        // below reads the ADJUSTED bottom — two different predicates, and the same confusion that
+        // caused the phantom kick one level down. The raw value can hold still while the adjusted one
+        // moves (it needs the clearance and the safe area to change by the same amount in one pass,
+        // which is reachable because the bar's own rest position is derived from a safe-area number),
+        // and the early return then left the list's real bottom moved with nothing done about it.
+        // The new adjusted bottom is the clearance itself: `(bottom - safe.bottom) + safe.bottom`.
+        let didChangeRawInsets = abs(oldInsets.top - newInsets.top) > 0.5 || abs(oldInsets.bottom - newInsets.bottom) > 0.5
+        let didChangeInsets = didChangeRawInsets || abs(bottom - oldAdjustedBottom) > 0.5
         // Step 2: the insets, with UIScrollView's implicit offset shift cancelled.
         UIView.performWithoutAnimation {
             if didChangeInsets {
@@ -2601,7 +2699,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             if abs(collectionView.contentOffset.y - bound) > 0.5 {
                 collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
             }
-        } else {
+        } else if isViewCompletelyAppeared {
+            // ⛔ THEIR `isViewCompletelyAppeared` GATE, on the lockstep branch only, exactly where
+            // theirs sits. During a push, a pop, or the return from a pushed screen the geometry is
+            // still settling and an offset written from it is written from nothing.
+            //
             // Theirs: "shift the content in lockstep with the keyboard, up to the limits of the
             // content bounds." Their delta is the bottom inset's, and for them the two are the same
             // number.
@@ -2694,6 +2796,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         isDisappearing = true
+        isViewCompletelyAppeared = false   // theirs, same method
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -2711,6 +2814,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         isDisappearing = false
+        isViewCompletelyAppeared = true   // theirs, same method — the lockstep may run from here on
         collectionView.isPrefetchingEnabled = true     // re-enable after the jank-sensitive first presentation
         updateInsets()
         // Swiping back with the KEYBOARD UP: dismiss the keyboard the moment the pop gesture begins, so the
@@ -2761,11 +2865,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         super.viewWillTransition(to: size, with: coordinator)
         guard didFirstLand else { return }
         let wasAtNewest = isAtNewest
-        // A rotation is the one case the reference app does NOT route through the continuity bias at
-        // all — it has its own size-transition path. Ours keeps the top-most anchor here on purpose:
-        // the viewport itself is changing size, and holding the row the reader is looking at against
-        // the top is the conventional behaviour for that. Every other caller is bottom-biased.
-        let anchors = wasAtNewest ? [] : continuityAnchors(relativeToTop: true)
+        // ⛔ BOTTOM-BIASED, and an earlier comment here claimed the opposite. The reference app does
+        // route a size transition through its own path rather than the load-type bias — but that path
+        // is not bias-neutral, it is explicitly bottom-aligned: `setScrollActionForSizeTransition`
+        // re-pins the LAST visible interaction with `alignment: .bottom` (and short-circuits to the
+        // bottom of the load window when the recorded distance is under 50). Anchoring the top-most
+        // row here was the opposite end of the viewport from theirs.
+        let anchors = wasAtNewest ? [] : continuityAnchors(relativeToTop: false)
         coordinator.animate(alongsideTransition: nil) { [weak self] _ in
             guard let self else { return }
             self.collectionView.layoutIfNeeded()   // the width-change re-measure ran in viewWillLayoutSubviews
