@@ -2176,8 +2176,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // reader now beyond a shrunken bound, and moved them anyway — putting back the exact report
         // the guard next door exists to prevent.
         // ⛔ AND NOT DURING A SYSTEM SCREENSHOT CAPTURE, which owns the offset for its window and puts
-        // it back itself — `scrollViewDidScroll`, `positionBottomBar` and the date pill all stand down
-        // on the same clock and this did not.
+        // it back itself — `scrollViewDidScroll`, `updateInsets` and the date pill all stand down on
+        // the same clock.
         guard didFirstLand, !isDisappearing, !isUpdatingInsets, !contextMenuVisible,
               Date() >= captureFreezeUntil,
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
@@ -2199,14 +2199,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         } else {
             return
         }
-        // ⛔ BARE, AS THEIRS IS. Their one offset write in `updateContentInsets` sits OUTSIDE the
-        // `performWithoutAnimation` wrapper on purpose, with their own comment saying why: "This
-        // offset change will be animated by UIKit's UIView animation block which updateContentInsets()
-        // is called within." A layout pass caused by the keyboard guide moving IS that block, so a
-        // bare write rides the keys. We no longer have a keyboard clock to consult, and inventing one
-        // to decide when to strip the animation would be exactly the kind of bookkeeping this rewrite
-        // removed.
-        collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
+        // ⛔ WRAPPED, BECAUSE THIS CORRECTOR IS OURS AND NOT THEIRS. Their bare offset write is in
+        // `updateContentInsets`, and it is bare so it can ride the keyboard's block; ours does the
+        // same, one method over. But `restoreReaderPosition` has no counterpart in their app at all —
+        // it exists because our cells self-size and theirs do not — and it runs from EVERY layout
+        // pass, which means every animation block on the stack: the reply banner's 0.2s dismissal, the
+        // composer's 0.25s spring, a nav push or pop, a rotation, a SwiftUI `withAnimation`. Bare, it
+        // animates the reader on whichever of those curves happens to be running, which is a bug this
+        // file has already recorded once. On the keyboard's own pass `updateInsets` has normally
+        // corrected the reader already, so there is nothing here to strip.
+        UIView.performWithoutAnimation {
+            collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
+        }
         lastStableOffset = want
     }
     /// ⛔ THE REFERENCE APP'S `contentOffset(forLastKnownDistanceFromBottom:)`, and the only thing in
@@ -2321,6 +2325,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Unresolved guides report a zero rect; a resolved one on a home-button phone reports a
         // zero-HEIGHT rect whose minY is the view's bottom. Only the first is meaningless.
         guard frame.height > 0 || frame.minY > 0 else { return restSafeBottom }
+        // ⛔ AND THE FRAME MUST BELONG TO THIS LAYOUT GENERATION. The guide always sits at the BOTTOM
+        // of the view, so its maxY is the view's maxY — always, keys up or down. On a rotation the two
+        // sides of the subtraction below can come from different generations: `view.bounds` is already
+        // the new size while `layoutFrame` still describes the old one, and landscape-to-portrait then
+        // reports a 493pt keyboard that is not on screen, which puts the composer into its typing
+        // position at rest. If the guide's bottom is not the view's bottom, the frame is stale.
+        guard abs(frame.maxY - view.bounds.maxY) <= 1 else { return restSafeBottom }
         // ⛔ THE FLOOR IS THEIRS, AND IT IS NOT DECORATION. Their guide's height is
         // `max(view.safeAreaInsets.bottom, view.bounds.maxY - frame.minY)`, and dropping the first
         // term here cost the resting strip: with the keys down the guide's top sits ON the view's
@@ -2473,6 +2484,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Step 3. Theirs: the finger owns the offset while it drags the keyboard down. UIKit moves the
         // content itself there, so nothing is owed and the clearance is banked.
         guard !collectionView.isDragging else { lastAppliedClearance = bottom; return }
+        // ⛔ AND THE SYSTEM OWNS IT DURING A FULL-PAGE SCREENSHOT CAPTURE. Every other offset writer in
+        // this file stands down on that clock and this one did not, so the capture's own scroll could
+        // be walked by the lockstep below while it was in progress.
+        guard Date() >= captureFreezeUntil else { return }
         // Ours additionally: a send glide or a jump is a programmatic animated scroll that already
         // knows where it is going, and `scrollViewDidEndScrollingAnimation` lands it. Theirs has no
         // glide (a sent row appears and the list is simply at the bottom), so it has nothing to
