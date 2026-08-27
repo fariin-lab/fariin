@@ -2018,7 +2018,7 @@ struct ThreadView: View {
             // screen, and the persisted "where I left off" became a row nobody was looking at. See
             // `RowVisibilityReporter`.
             .modifier(RowVisibilityReporter(
-                onVisible: { visibleRows.ids.insert(msg.id); schedulePersistScrollPosition() },
+                onVisible: { visibleRows.ids.insert(msg.id) },
                 onHidden: { visibleRows.ids.remove(msg.id) }))
             .transition(.identity)
             .modifier(SelectableRow(selecting: selecting, selected: selectedIds.contains(msg.id),
@@ -2931,15 +2931,37 @@ struct ThreadView: View {
                    let row = repo.items.first(where: { $0.id == target })?.rowId {
                     return row
                 }
-                guard unreadOnOpen > 0 else { return nil }
-                let msgs = repo.messages
-                // Same rule as anchorUnread: with more unread than we hold, don't pretend the oldest
-                // loaded row is the boundary (audit).
-                guard unreadOnOpen <= msgs.count else { return nil }
-                let idx = msgs.count - unreadOnOpen
-                guard idx < msgs.count else { return nil }
-                return repo.items.first { $0.id == msgs[idx].id }?.rowId
+                if unreadOnOpen > 0 {
+                    let msgs = repo.messages
+                    // Same rule as anchorUnread: with more unread than we hold, don't pretend the
+                    // oldest loaded row is the boundary (audit).
+                    if unreadOnOpen <= msgs.count {
+                        let idx = msgs.count - unreadOnOpen
+                        if idx < msgs.count,
+                           let row = repo.items.first(where: { $0.id == msgs[idx].id })?.rowId {
+                            return row
+                        }
+                    }
+                }
+                // ⛔ THIRD, WHERE THIS READER LEFT OFF — theirs, and the tier we did not have. Their
+                // open priority is focus message, then the unread indicator, then the last visible
+                // interaction restored to its own on-screen position; ours had the first two and then
+                // went to the newest, so every re-entry to a long chat lost your place. Only if that
+                // row is still in the loaded window: anything further back is a paging problem, not a
+                // landing one, and going to the newest is the honest answer for it.
+                if let saved = ChatScrollStore.shared.position(for: cid),
+                   repo.items.contains(where: { $0.rowId == saved.rowId }) {
+                    return saved.rowId
+                }
+                return nil
             }(),
+            initialScrollOffset: ChatScrollStore.shared.position(for: cid).map(\.offsetFromTop),
+            // Written from the list's own settle points, which is the only place that knows which row
+            // is at the top of the viewport and by how much it is clipped.
+            onReadingPosition: { position in
+                if let position { ChatScrollStore.shared.save(cid, position) }
+                else { ChatScrollStore.shared.clear(cid) }
+            },
             canSwipeReply: { id in
                 repo.indexById[id].map { repo.items[$0].sendState == nil } ?? false
             },
@@ -4439,36 +4461,17 @@ struct ThreadView: View {
         .padding(.vertical, 8)
     }
 
-    // Where the chat should land when it opens: the saved in-session spot if that message is still
-    // loaded, otherwise the newest. Cold start / first open this session → no saved anchor → newest.
-    private var openAnchor: (id: String, edge: UnitPoint) {
-        if case .message(let id)? = ChatScrollStore.shared.anchor(for: cid),
-           repo.items.contains(where: { $0.id == id }) {
-            return (id, .top)
-        }
-        return ("BOTTOM", .bottom)
-    }
+    // ⚠️ THE LANDING IS THE LIST CONTROLLER'S NOW, and this is the vestige of the proxy path that
+    // preceded it. It answers "the newest" unconditionally, because the saved reading position is
+    // applied through `initialScrollId` / `initialScrollOffset` in UIKit, where the exact on-screen
+    // offset can actually be honoured. A `ScrollViewProxy.scrollTo` cannot reach the hosted list at
+    // all, so every use of this is inert; it stays only because `revealed` is still sequenced off it.
+    private var openAnchor: (id: String, edge: UnitPoint) { ("BOTTOM", .bottom) }
 
-    // Remember (in RAM) where we're looking so reopening this chat lands here. Only after the open
-    // has SETTLED — during the load we're programmatically pinning, and saving then would feed the
-    // pin back into itself. Called from row/BOTTOM onAppear only (teardown-safe).
-    // Trailing-debounced save (0.5s after the last row appearance): per-appearance saves ran an O(n)
-    // scan + a store write on every scroll tick — pure churn during scrolling (anti-the reference app pattern).
-    private func schedulePersistScrollPosition() {
-        visibleRows.persistWork?.cancel()
-        let work = DispatchWorkItem { persistScrollPosition() }
-        visibleRows.persistWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
-    }
-
-    private func persistScrollPosition() {
-        guard revealed, settled else { return }
-        if isAtBottom {
-            ChatScrollStore.shared.save(cid, .bottom)
-        } else if let topId = repo.items.first(where: { visibleRows.ids.contains($0.id) })?.id {
-            ChatScrollStore.shared.save(cid, .message(topId))
-        }
-    }
+    // (The reading position is written by the list controller now, from its own settle points —
+    // `onReadingPosition` above. It knows which row is at the top of the viewport and by how many
+    // points it is clipped; a set of row-appearance callbacks could only ever guess at the first and
+    // never knew the second, which is why the restored position used to be approximate.)
 
     // Reveal the chat exactly at the open anchor with NO jump. LazyVStack row heights aren't final on
     // the first scrollTo (offscreen rows are unmeasured), so it lands approximately; a second pass on

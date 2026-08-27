@@ -137,6 +137,15 @@ struct NativeMessageList: UIViewControllerRepresentable {
     /// keyboard avoidance, a THIRD clock on one screen. Pinned to the bar's top here, it rides the
     /// same one the bar does.
     var dockOverlayComposerTop: AnyView = AnyView(EmptyView())
+    /// ⛔ WHERE THE READER IS, FOR REOPENING THE CHAT — the reference app's `lastVisibleInteraction`
+    /// plus its on-screen position. Reported from the list's own settle points, because this
+    /// controller is the only thing that knows which row is at the top of the viewport and by how
+    /// much it is clipped. `nil` means "at the newest message", which is the absence of a position
+    /// rather than a kind of one — see `ChatScrollStore.clear`.
+    var onReadingPosition: (ChatReadingPosition?) -> Void = { _ in }
+    /// How far below the viewport's top the restored row should sit, in points. Applied only to the
+    /// `initialScrollId` landing, and only when that id came from a saved reading position.
+    var initialScrollOffset: CGFloat? = nil
     // Bumped by ThreadView from inside a SWIFTUI context-menu action (e.g. Select). UIKit's
     // context-menu callbacks cannot see SwiftUI-presented menus, so this is how the controller learns
     // "a menu is dismissing right now" and holds cell reloads until the animation is over.
@@ -243,6 +252,8 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.setVoiceControl(voiceControl)
         vc.setDockOverlays(trailing: dockOverlayTrailing, leading: dockOverlayLeading,
                            composerTop: dockOverlayComposerTop)
+        vc.onReadingPosition = onReadingPosition
+        vc.initialScrollOffset = initialScrollOffset
         vc.setTopOverlayHeight(topOverlayHeight)
         // (`noteSendTick` is at the top of this method — it has to precede `applyComposer`.)
         vc.noteMenuActionTick(menuActionTick)   // BEFORE setSelecting/apply: arm the dismissal grace first
@@ -393,6 +404,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var needsRefreshOnSettle = false  // a refresh blocked by an ANIMATION â†’ coalesced, lands when it ends
     private var pendingSettleHeights: Set<String> = []   // rows whose height changed while an animation blocked us
     var initialScrollId: String?              // first-unread rowId â†’ the FIRST open lands here
+    var initialScrollOffset: CGFloat?         // and where in the viewport it should sit, if restored
+    var onReadingPosition: (ChatReadingPosition?) -> Void = { _ in }
     var lastRepaintedModelsVersion = -1       // -1 so the first update always repaints
 
     // Rows whose rendered height the SIZER can never reproduce (async content, e.g. link-preview cards).
@@ -729,6 +742,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private func recordDistanceFromBottom() {
         guard didFirstLand else { return }
         lastKnownDistanceFromBottom = max(0, maxContentOffsetY - collectionView.contentOffset.y)
+        reportReadingPosition()
+    }
+
+    /// ⛔ THE READING POSITION, FOR REOPENING THE CHAT. Theirs saves the last visible interaction and
+    /// how much of it was on screen, then restores to that exact place on the next open. Ours is the
+    /// same pair — the top-most visible row and how far its top sits below the viewport's top edge —
+    /// reported from here because `recordDistanceFromBottom` already runs at every moment the list
+    /// has come to rest, which is exactly when the answer is worth writing down.
+    ///
+    /// ⚠️ AT THE NEWEST MESSAGE IT REPORTS NIL, and nil is not "unknown", it is "the bottom". A chat
+    /// left at the newest should open at the newest, which is what no stored position already means;
+    /// storing a sentinel for it would be a second way to say the same thing and the two could
+    /// disagree. Theirs takes the same view — a reader within a screenful of the end short-circuits
+    /// to the bottom of the load window rather than restoring a row.
+    private func reportReadingPosition() {
+        guard didFirstLand, !isDisappearing else { return }
+        if isAtNewest { onReadingPosition(nil); return }
+        guard let ip = viewportIndexPaths().first,
+              let id = dataSource.itemIdentifier(for: ip),
+              let attr = collectionView.layoutAttributesForItem(at: ip) else { return }
+        let viewportTop = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
+        onReadingPosition(ChatReadingPosition(rowId: id,
+                                              offsetFromTop: attr.frame.minY - viewportTop))
     }
     private let dateLabel = UILabel()
     private var dateFadeWork: DispatchWorkItem?
@@ -1438,8 +1474,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 lastStableOffset = maxContentOffsetY
                 return
             }
-            // First unread near the top, with 12pt of breathing room under the nav bar.
-            let y = clampOffset(attr.frame.minY - collectionView.adjustedContentInset.top - 12)
+            // ⛔ TWO KINDS OF LANDING, AND THE OFFSET SAYS WHICH. A first-unread row lands near the
+            // top with 12pt of breathing room under the nav bar — a placement chosen for reading
+            // forward. A RESTORED reading position lands at exactly the offset it was left at, which
+            // is the whole point of having remembered it: theirs restores the last visible
+            // interaction to its own on-screen position, not to a fresh one.
+            // Both are "how far below the viewport's top edge this row should sit", which is exactly
+            // what `reportReadingPosition` measured, so the two are the same quantity and the
+            // arithmetic is one line for both.
+            let belowTop = initialScrollOffset ?? 12
+            let y = clampOffset(attr.frame.minY - collectionView.adjustedContentInset.top - belowTop)
             collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
             lastStableOffset = y
         }
