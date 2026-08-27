@@ -3586,11 +3586,37 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     ///
     /// Cropping happens at the SOURCE rect, so the snapshot is simply a shorter view — the
     /// container, the overlay's fit maths and the return animation all keep working unchanged.
-    private func liftCap(_ frame: CGRect) -> CGRect {
+    private func liftCap(_ frame: CGRect, id: String) -> CGRect {
+        // ⛔ A PICTURE IS NEVER CROPPED — his screenshot, 2026-08-27: long-press a tall photo and the
+        // lifted copy is sliced across the middle, trees cut in half, with the menu card starting
+        // just under the cut.
+        //
+        // This cap TRUNCATES: it keeps the top of the frame and throws the rest away. For a wall of
+        // text that is the intent and reads correctly — a long message lifts as its first lines. A
+        // photo has no "first lines"; cutting one is just damage, and the part it removes is usually
+        // the part being talked about.
+        //
+        // ⚠️ AND THE OVERLAY ALREADY HANDLES TALL CONTENT PROPERLY. `computeFrames` shrinks the
+        // preview when the stack will not fit, uniformly and down to a tenth of its size, which is
+        // what the reference does for exactly this case. A photo therefore needs no cap at all: left
+        // alone it arrives whole and is scaled to fit. Cropping first threw away pixels that the
+        // scaler would have kept.
+        guard !isPictureRow(id) else { return frame }
         let screen = view.window?.bounds.height ?? view.bounds.height
         let cap = (screen * 0.34).rounded()          // ~13 lines on his phone
         guard frame.height > cap else { return frame }
         return CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: cap)
+    }
+
+    /// Whether the lifted row is a picture — one photo/video/gif, or an album of them. Asked of the
+    /// frozen routing snapshot rather than the cell, because the cell is mid-press and the model is
+    /// what every other decision in this file is made against.
+    private func isPictureRow(_ id: String) -> Bool {
+        guard case .bubble(let b)? = rowModels[id]?.content else { return false }
+        switch b.body {
+        case .media, .album: return true
+        default: return false
+        }
     }
 
     private func bubbleSource(at indexPath: IndexPath, id: String)
@@ -3601,7 +3627,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // corner, and a snapshot of the bubble's own bounds slices them in half. `liftFrameInWindow`
             // is the bubble unioned with its badges, which is what the SwiftUI path expressed as
             // `bottomOverhang: 13` on its published rect.
-            let frame = liftCap(native.liftFrameInWindow)
+            let frame = liftCap(native.liftFrameInWindow, id: id)
             let inBubble = native.previewBubble.convert(frame, from: nil)
             guard let snap = native.previewBubble.resizableSnapshotView(from: inBubble,
                                                                        afterScreenUpdates: false,
@@ -3611,7 +3637,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Hosted (SwiftUI) row: crop the row snapshot to the published bubble rect. The bubble draws
         // its own rounded corners over a clear row background, so the crop needs no masking. When no
         // rect was published yet, fall back to the whole row content.
-        if let rect = CMBubbleRects.rect(id).map(liftCap) {
+        if let rect = CMBubbleRects.rect(id).map({ liftCap($0, id: id) }) {
             let inContent = cell.contentView.convert(rect, from: nil)
             guard let snap = cell.contentView.resizableSnapshotView(from: inContent,
                                                                     afterScreenUpdates: false,

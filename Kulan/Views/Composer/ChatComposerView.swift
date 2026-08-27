@@ -113,7 +113,12 @@ final class ChatComposerView: UIView {
         e.spacing = M.gap
         return UIVisualEffectView(effect: e)
     }()
-    private let plusButton = ChatComposerView.glassButton(symbol: "plus", size: 20, weight: .regular, color: .label)
+    /// ⛔ 17, NOT 20 — his screenshot, 2026-08-27, with the "+" circled. A plus is a wide thin cross
+    /// that reaches its full point size in both directions, so 20 inside a 40pt button crossed half
+    /// the circle and read as the heaviest thing at that end of the bar. 17 leaves it room to sit in.
+    /// Same correction as the review bar's play glyph, and for the same reason: what a symbol weighs
+    /// is not the number you set, it is how much of the box the shape actually reaches.
+    private let plusButton = ChatComposerView.glassButton(symbol: "plus", size: 17, weight: .regular, color: .label)
     private let trashButton = ChatComposerView.glassButton(symbol: "trash.fill", size: 18, weight: .regular, color: .systemRed, bakeColor: true)
     private let sendButton = ChatComposerView.glassButton(symbol: "arrow.up", size: 19, weight: .bold, color: .white, prominent: true)
     // ⛔ NO PAUSE BUTTON HERE — it floats above the bar, and the hosting view never delivers touches
@@ -212,6 +217,18 @@ final class ChatComposerView: UIView {
         pill.contentView.addSubview(fieldRow)
         fieldRow.addSubview(textView)
         fieldRow.addSubview(gifButton)
+        // ⛔ THE GLYPH IS IN THE GLASS, THE TOUCH IS NOT — his screenshot, 2026-08-27: "the recording
+        // icon is not part of the composer, but the GIF icon is." He is reading it exactly right. The
+        // mic was a bare sibling drawn OVER the pill, so it never sat on the pill's material: the
+        // chat behind showed through around it while the GIF icon a few points away rode the glass.
+        //
+        // ⚠️ IT CANNOT SIMPLY MOVE BACK IN — that is the bug the note above records, and it was his
+        // too ("the blur is following me", build 681). So the two halves are split. The GLYPH goes
+        // into the pill's content view, where it picks up the material and reads as part of the
+        // composer. The BUTTON stays a sibling: an empty, invisible view over the same slot that owns
+        // the hold gesture, so the touch still never belongs to the glass and the pill still cannot
+        // chase the finger. Nothing about the gesture changes; only where the picture is drawn.
+        pill.contentView.addSubview(micGlyph)
         container.contentView.addSubview(micButton)
         textView.delegate = self
         // ⛔ DIMMER THAN THE MIC, AND ONLY THIS ONE (owner 2026-08-22: "GIF icon make it low
@@ -221,7 +238,9 @@ final class ChatComposerView: UIView {
         gifButton.addAction(UIAction { [weak self] _ in self?.actions.gif() }, for: .touchUpInside)
         micGlyph.contentMode = .scaleAspectFit
         micGlyph.tintColor = .label
-        micButton.addSubview(micGlyph)
+        // The glyph draws only — every touch on this slot is the sibling button's. Without this the
+        // image view would swallow the hit test before the invisible button above it ever saw it.
+        micGlyph.isUserInteractionEnabled = false
         // Instant UIKit hold gesture (minimumPressDuration 0) — fires on touch-down. The view it is
         // on is never hidden or removed while a hold runs, only its glyph fades, so it keeps
         // tracking the drag for the whole gesture.
@@ -539,8 +558,14 @@ final class ChatComposerView: UIView {
         // The mic sits ABOVE the pill now, so it must go when the locked strip takes the pill (the "1"
         // lives in its slot then). While a finger holds it only the glyph fades — the view stays, so
         // the gesture keeps tracking; a lock ends the gesture, and then the whole button can leave.
+        // ⚠️ THE HIDE HAS TO REACH THE GLYPH ITSELF. It used to be a child of the button, so fading
+        // the button took the picture with it; it is the pill's child now and would have stayed on
+        // screen with text typed or a recording locked. The button keeps its own alpha because that
+        // is also what takes it out of the hit test, and the glyph carries both reasons to be gone:
+        // the slot is not offered (text / locked), or the hold is running and the red bubble has
+        // taken over.
         micButton.alpha = (s.hasText || s.recordLocked) ? 0 : 1
-        micGlyph.alpha = s.recordingHeld ? 0 : 1
+        micGlyph.alpha = (s.hasText || s.recordLocked || s.recordingHeld) ? 0 : 1
         for (_, v) in bannerViews { v.alpha = s.recordingActive ? 0 : 1 }
     }
 
@@ -816,7 +841,14 @@ final class ChatComposerView: UIView {
         // over the pill's last slot, bottom-aligned with the row.
         let micX = pw - M.micTrailing - M.button
         micButton.frame = CGRect(x: span.left + micX, y: H - M.button, width: M.button, height: M.button)
-        micGlyph.frame = CGRect(x: (M.button - 22) / 2, y: (M.button - 24) / 2, width: 22, height: 24)
+        // ⚠️ THE GLYPH IS IN THE PILL'S SPACE NOW, NOT THE BUTTON'S — it moved into the glass so it
+        // would sit on the composer's surface (see `build`). Its slot is the same one, expressed
+        // against the pill's origin instead of the button's: the button starts at `span.left + micX`
+        // in the container, and the pill starts at `span.left`, so the same point inside the pill is
+        // simply `micX`. Centred in that slot exactly as it was centred in the button.
+        micGlyph.frame = CGRect(x: micX + (M.button - 22) / 2,
+                                y: H - M.button + (M.button - 24) / 2,
+                                width: 22, height: 24)
         gifButton.frame = CGRect(x: micX - M.inPillSpacing - M.button, y: fh - M.button,
                                  width: M.button, height: M.button)
         textView.frame = CGRect(x: 0, y: 0, width: max(0, tw), height: fh)
