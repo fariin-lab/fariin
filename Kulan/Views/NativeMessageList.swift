@@ -771,11 +771,43 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             containerHeight,
         ])
 
-        // The keyboard's own layout guide, the way the reference app's bottom bar hangs from it. See
-        // `keyboardTracker`. Touched once here first: theirs notes that on iOS 26 a guide first read
-        // late reports the home-indicator height (34) instead of the keyboard's, and that reading it
-        // early is what fixes that.
+        // Touched once here first: theirs notes that on iOS 26 a guide first read late reports the
+        // home-indicator height (34) instead of the keyboard's, and that reading it early fixes it.
         _ = view.keyboardLayoutGuide
+
+        // ⛔ THE KEYBOARD IS ONE LAYOUT GUIDE, AND EVERYTHING HANGS OFF IT. This is the reference
+        // app's own arrangement — and specifically their iOS 15 one, which is the part that fits a
+        // hosted controller. `OWSViewController.keyboardLayoutGuide` returns `view.keyboardLayoutGuide`
+        // where the system guide can be trusted and a HAND-BUILT `UILayoutGuide` where it cannot:
+        //
+        //     let layoutGuide = UILayoutGuide()
+        //     let heightConstraint = layoutGuide.heightAnchor.constraint(
+        //         equalToConstant: view.safeAreaInsets.bottom)
+        //     … leading, trailing, bottom to the view …
+        //
+        // fed by `keyboardHeight = max(view.safeAreaInsets.bottom, view.bounds.maxY - frame.minY)`.
+        // Either way every consumer constrains to a guide and nobody does band arithmetic.
+        //
+        // Ours is that guide, with the feeders swapped for the ones this app can trust: the system
+        // guide when it demonstrably moves (adopted through `keyboardTracker` on a layout pass), the
+        // keyboard's own notification otherwise, and a dragging finger while one owns the keys. All
+        // three go through ONE writer, `setKeyboardGuideHeight`, so there is a single source of truth
+        // for where the keyboard is — replacing `keyboardBand`, `keyboardReport`, `fingerBand`,
+        // `guideBand` and `guideIsLive`, which were five answers to one question.
+        view.addLayoutGuide(keyboardGuide)
+        let guideHeight = keyboardGuide.heightAnchor.constraint(equalToConstant: 0)
+        keyboardGuideHeight = guideHeight
+        NSLayoutConstraint.activate([
+            keyboardGuide.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            keyboardGuide.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            keyboardGuide.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            guideHeight,
+        ])
+
+        // The system guide's live position, observed rather than trusted: a zero-height view pinned to
+        // it, whose frame a layout pass can read. If it moves on this device the guide is the truth
+        // and `adoptSystemKeyboardGuide` hands it to the writer above; if it never moves — his iOS 26
+        // phone, build 682 — nothing here reports anything and the notification feeder owns the guide.
         keyboardTracker.isUserInteractionEnabled = false
         keyboardTracker.isHidden = true
         keyboardTracker.translatesAutoresizingMaskIntoConstraints = false
@@ -2328,40 +2360,31 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // "WAS AT THE BOTTOM" IS ASKED AGAINST THE LIVE BOUND, as theirs is. It used to be asked against
     // a stored clearance because SwiftUI's safe area could move the live bound before the guide did;
     // the list ignores the keyboard safe area now, so only this method moves the bound.
-    /// The keyboard band the NOTIFICATION most recently announced; nil at rest.
+    /// ⛔ WHERE THE KEYBOARD IS. One guide, one constant, three feeders, and nothing else in this file
+    /// keeps a copy. It replaces `keyboardBand`, the `KeyboardReport` enum, `fingerBand`, `guideBand`
+    /// and `guideIsLive` — five stores that were five answers to one question, and whose disagreements
+    /// produced the two latch bugs recorded in this file's history (a value gating the very input it
+    /// was computed from, twice).
     ///
-    /// ⛔ THE GUIDE ALONE WAS NOT ENOUGH ON HIS PHONE — owner, 2026-08-25, build 682, iOS 26: typing
-    /// left the bubbles BEHIND the keys, and the open "feels small… bubbles under keyboard". The
-    /// layout guide never moved inside this hosted controller on that device, and with the
-    /// safe-area route deliberately severed (see `nativeList` in ThreadView) the keyboard had no way
-    /// into the list at all; the rest fallback in `keyboardBand` masked it whenever the keyboard was
-    /// down, which is why everything at rest looked fixed. At-rest truth still comes from the guide
-    /// or the safe area; a MOVING keyboard announces itself here, and the announcement carries its
-    /// own duration and curve, so `rideKeyboard` wraps the inset work in exactly that animation —
-    /// the reference app's own shipped mechanism from before the guide existed, and the one route
-    /// that cannot depend on how a hosted view controller is plumbed. Where the guide does work, the
-    /// two agree and every write is idempotent.
-    /// What the keyboard's own notification last said. `nil` until the first notification of this
-    /// controller's life; `.rest` after a hide; `.up(band)` after a show. A hide is stored as an
-    /// explicit `.rest` rather than as nil so that the answer to "where is the keyboard" never falls
-    /// back to the guide behind a fresh notification — see `keyboardBand`.
-    private enum KeyboardReport { case up(CGFloat), rest }
-    private var keyboardReport: KeyboardReport?
-    /// Where the keys DOCKED: the band of the last ANIMATED notification (a finger-driven frame
-    /// reports no duration and never writes this). The cap for `draggedBand` — under a finger the
+    /// Its height is the keyboard's overlap with this view, floored at the resting safe area — the
+    /// reference app's own expression from their hand-built guide:
+    ///
+    ///     keyboardHeight = max(view.safeAreaInsets.bottom,
+    ///                          view.bounds.maxY - lastKnownKeyboardFrame.minY)
+    ///
+    /// with the floor read from the WINDOW rather than the view, because SwiftUI flaps the hosted
+    /// view's bottom inset at the focus instant and the window's never moves (see `restSafeBottom`).
+    ///
+    /// The composer's bottom is CONSTRAINED to its top, so the bar follows the keyboard through Auto
+    /// Layout instead of through arithmetic, and the container's height — which is the list's whole
+    /// bottom clearance — falls out of the same constraint chain. That is the reference's shape
+    /// exactly: move the guide and everything downstream is already correct.
+    private let keyboardGuide = UILayoutGuide()
+    private var keyboardGuideHeight: NSLayoutConstraint!
+    /// Where the keys DOCKED: the height of the last ANIMATED notification (a finger-driven frame
+    /// reports no duration and never writes this). The cap for the finger feeder — under a finger the
     /// keys never rise above where they docked — and zero once they have gone.
     private var dockedBand: CGFloat = 0
-    /// ⛔ THE FINGER'S BAND LIVES HERE, NOT IN `keyboardReport`. `followKeyboardUnderFinger` used to
-    /// write the finger's answer back into `keyboardReport`, and `draggedBand` — the thing that
-    /// produced that answer — opens with `guard case .up = keyboardReport`. So the first frame in
-    /// which a finger reached the rest floor wrote `.rest`, which closed the guard that reads the
-    /// finger, which froze the band at rest for the remainder of the gesture: drag the keys halfway
-    /// down, change your mind and drag back up, and the keys return while the bar stays parked at the
-    /// bottom with the last bubbles behind them. A value must never be stored where its own input is
-    /// read from. This holds the last finger-driven band instead, and it survives only until the next
-    /// notification — which is all it was ever needed for (a layout pass between the finger lifting
-    /// and the release notification must not snap the bar back up to where the keys docked).
-    private var fingerBand: CGFloat?
     /// While the keyboard's own animation block owns the bar and the insets, nothing else may
     /// re-place them. Set for BOTH directions by `rideKeyboard`; read by `viewSafeAreaInsetsDidChange`
     /// — see the stand-down there.
@@ -2406,10 +2429,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let local = view.convert(end, from: nil)
         let overlap = max(0, view.bounds.maxY - local.minY)
         let up = !(hiding || overlap <= restSafeBottom + 0.5)
-        keyboardReport = up ? .up(overlap) : .rest
-        // A notification is the newest fact about the keys, so the finger's last answer retires here
-        // — in both directions, and whether or not the drag that produced it ended in a dismissal.
-        fingerBand = nil
+        // FEEDER 2 — THE KEYBOARD'S OWN NOTIFICATION, and the one route that cannot depend on how a
+        // hosted view controller is plumbed. It writes the same guide the other two feeders write, so
+        // it cannot disagree with them: there is nothing left to disagree with.
+        let announced = up ? overlap : restSafeBottom
         let d = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
         if d > 0 { dockedBand = up ? overlap : 0 }
         // The keys are moving under an announced animation: this block owns the bar until it ends.
@@ -2440,71 +2463,94 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                            options: [UIView.AnimationOptions(rawValue: curve << 16),
                                      .beginFromCurrentState, .allowUserInteraction],
                            animations: {
-                               // ⛔ THE BAR AND THE LIST MOVE IN THIS ONE BLOCK. That is the whole
-                               // fix: the bar used to be placed by SwiftUI's `safeAreaBar` and rode
-                               // SwiftUI's animation while the list rode this one, so the bar
-                               // arrived first and a bubble appeared to slide under it. Two curves,
-                               // one keyboard. Now there is one curve.
+                               // ⛔ THE GUIDE MOVES, AND EVERYTHING DOWNSTREAM IS ALREADY CORRECT.
+                               // The bar's bottom is constrained to the guide's top and the
+                               // container's height falls out of the same chain, so one constant
+                               // carries the keyboard to the composer, to the container, and through
+                               // `bottomClearance` to the list — inside this one block, on the keys'
+                               // own duration and curve. The bar used to be placed by SwiftUI's
+                               // `safeAreaBar` on a second clock, which is why a bubble appeared to
+                               // slide under it. There is one clock and now also one number.
+                               self.setKeyboardGuideHeight(announced)
                                self.positionBottomBar()
-                               self.syncBottomBarGeometry()
                                self.updateInsets()
                                self.view.layoutIfNeeded()
                            })
         } else {
-            // An interactive drag reports no duration: the finger owns the motion.
-            //
-            // ⚠️ THE CONTAINER'S HEIGHT MOVES WITH THE BAR HERE TOO. Its height is pinned twice on
-            // purpose — a constant, and its top following the bar's — and the two only agree while
-            // `syncBottomBarGeometry` rewrites the constant every time the bar's bottom changes.
-            // This branch moved the bar without it, so a finger-driven frame left Auto Layout with
-            // two answers for one height and free to drop either.
+            // A finger-driven frame reports no duration: the finger owns the motion, and feeder 3
+            // is already driving the guide from `scrollViewDidScroll`. Write it here too so a frame
+            // that arrives between scroll ticks is not missed, then let the layout follow.
+            setKeyboardGuideHeight(announced)
             positionBottomBar()
-            syncBottomBarGeometry()
+            view.layoutIfNeeded()
             updateInsets()
         }
     }
 
-    /// The band the keyboard guide reports, or nil until UIKit has resolved it.
+    /// FEEDER 1 — THE SYSTEM GUIDE, observed rather than trusted. `keyboardTracker` hangs from
+    /// `view.keyboardLayoutGuide.topAnchor`, so its resolved frame is where UIKit thinks the keyboard
+    /// is. Where the system guide works this is the reference app's whole mechanism and it arrives
+    /// inside UIKit's own keyboard animation, which is the best transport there is. Where it does not
+    /// move — his iOS 26 phone, build 682 — the tracker simply never reports anything new and the
+    /// notification feeder owns the guide, with no flag to get stale.
     ///
-    /// The guide's frame is a zero RECT until UIKit first resolves it (distinct from the resolved
-    /// zero-HEIGHT frame a home-button phone reports at rest, whose minY is the view's bottom).
-    private var guideBand: CGFloat? {
-        let frame = view.keyboardLayoutGuide.layoutFrame
-        guard frame.height > 0 || frame.minY > 0 else { return nil }
-        return max(0, view.bounds.maxY - frame.minY)
+    /// ⚠️ IT MAY ONLY SPEAK WHEN IT IS AHEAD OF WHAT WE ALREADY BELIEVE, and never during an
+    /// announced animation. That is the whole lesson of the `f1e7e532` regression: the guide was
+    /// allowed to outrank a notification once it had ever worked, and on his phone it is LATE, so a
+    /// stale read said "no keyboard" while the keys were up and nothing moved. A late guide can only
+    /// ever repeat what the notification already said, so requiring it to differ costs nothing where
+    /// it works and silences it where it lags.
+    private func adoptSystemKeyboardGuide() {
+        guard Date() >= keyboardBlockUntil else { return }   // an announced animation owns the guide
+        let frame = keyboardTracker.frame
+        guard frame.maxY > 0 else { return }                // not resolved yet
+        let reported = max(0, view.bounds.maxY - frame.maxY)
+        // ⛔ IT MAY ONLY RAISE, NEVER LOWER, AND THAT ASYMMETRY IS THE WHOLE SAFETY OF THIS FEEDER.
+        // A guide that is LATE — his phone — reports the resting strip while the keys are up, and
+        // letting that number through is precisely the `f1e7e532` regression: the composer stayed at
+        // rest with the keyboard open. A late guide can only ever UNDERSTATE where the keys are, so
+        // refusing to lower makes it harmless everywhere and still lets it do the one thing it is
+        // uniquely good at: reporting a keyboard that has come up, inside UIKit's own animation,
+        // before any notification arrives. Coming DOWN is owned by the notification, which is proven
+        // reliable on both of his phones, and by the finger during an interactive dismiss.
+        guard reported > keyboardHeight + 0.5 else { return }
+        if setKeyboardGuideHeight(reported) { view.setNeedsLayout() }
     }
-    /// The guide has reported a keyboard at least once on this device. Set by `followKeyboardGuide`,
-    /// never cleared. It decides ONE thing: whether the guide may be read while a finger drags the
-    /// keyboard. It does not, any more, let the guide outrank a notification — see `keyboardBand`.
-    private var guideIsLive = false
 
-    /// ⛔ THE NOTIFICATION OUTRANKS THE GUIDE. His report on the build that shipped the audit
-    /// (2026-08-26 evening, screenshot): "the keyboard opens but the composer stays where it was" —
-    /// the keys up, and neither the bar nor the list had moved, because both read this value and
-    /// this value was wrong.
+    /// ⛔ THE ONE WRITER OF KEYBOARD GEOMETRY. Every feeder — the notification, the system guide, a
+    /// dragging finger — arrives here and nowhere else, and the constant it writes is the only record
+    /// this controller keeps of where the keyboard is. Read it back with `keyboardHeight`.
     ///
-    /// What happened: the audit made the guide the truth once it had reported a keyboard once
-    /// (`guideIsLive`), on the reference app's model, where the guide IS the only source. But on
-    /// his phone the guide is LATE inside this hosted controller — build 682 proved it never moved
-    /// during the animation — so the moment it caught up once it was declared live, and on the next
-    /// open the notification block read the guide, which still said "no keyboard", and moved
-    /// nothing. Sometimes it worked (the guide had not yet caught up once), which is exactly the
-    /// "sometimes" he described. The same stale read after a hide (the old nil-means-rest fell back
-    /// to the guide) could hold the bar up while the keys went down.
-    ///
-    /// The rule now: a notification is the newest fact about the keyboard and it wins, up or rest,
-    /// for as long as an animation is what moves the keys. While a FINGER moves the keys the band
-    /// comes from `draggedBand` below, on every device.
-    private var keyboardBand: CGFloat {
-        // The live finger first, then the last band a finger left behind (until a notification
-        // retires it — see `fingerBand`), then the announcement.
-        if let dragged = draggedBand ?? fingerBand { return dragged }
-        switch keyboardReport {
-        case .up(let band): return band
-        case .rest: return restSafeBottom
-        case nil: return restSafeBottom   // no keyboard has ever moved in this chat
-        }
+    /// The floor is theirs: `max(safeArea, overlap)`, so a keyboard that is down leaves the guide
+    /// exactly as tall as the home-indicator strip and every consumer can stop asking "is it up".
+    @discardableResult
+    private func setKeyboardGuideHeight(_ h: CGFloat) -> Bool {
+        guard let c = keyboardGuideHeight else { return false }
+        let want = max(restSafeBottom, h)
+        guard abs(c.constant - want) > 0.01 else { return false }
+        c.constant = want
+        return true
     }
+
+    /// Where the keyboard's top edge is, as a height above the view's bottom. The guide IS the answer.
+    private var keyboardHeight: CGFloat { keyboardGuideHeight?.constant ?? restSafeBottom }
+
+    /// ⛔ THE RESTING HEIGHT, AND WITHOUT IT THE COMPOSER SITS ON THE SCREEN EDGE. The guide is built
+    /// at zero because `viewDidLoad` has no window yet and therefore no honest safe area, and with
+    /// the keys down nothing else would ever write it — the bar would hang off a guide of zero height
+    /// and rest in the home-indicator band. That is his 2026-08-26 report, and the reason their own
+    /// hand-built guide is created with `equalToConstant: view.safeAreaInsets.bottom` and re-floored
+    /// on every update. Called wherever the safe area can have arrived or changed; it stands down the
+    /// moment the keys are up, so it can never fight a keyboard.
+    private func refreshKeyboardGuideFloor() {
+        guard !keyboardIsUp else { return }
+        setKeyboardGuideHeight(restSafeBottom)
+    }
+
+    /// True while the keys are up — one derived boolean from one source, used only for the composer's
+    /// product rule (8pt above the keys when typing, sunk `composerRestDip` below the safe line at
+    /// rest) and never for deciding geometry.
+    private var keyboardIsUp: Bool { keyboardHeight > restSafeBottom + 0.5 }
 
     /// ⛔ THE BOTTOM SAFE AREA WITHOUT THE KEYBOARD, EVER — his frames on builds 696 and 697
     /// (2026-08-27): the instant the field takes focus, the bar VANISHES and the content drops,
@@ -2547,7 +2593,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// the driver (see `followKeyboardUnderFinger`), so the bar and the inset move on the same
     /// event that moves the content. The drag ends with a notification and the animated path lands
     /// everything, with "was at the bottom" now true because nothing came apart during the drag.
-    private var draggedBand: CGFloat? {
+    /// FEEDER 3 — A DRAGGING FINGER. Returns the height the keys are being held at, or nil when no
+    /// finger owns them.
+    private var fingerDrivenHeight: CGFloat? {
         let rest = restSafeBottom
         // ⛔ ONLY WHILE UIKIT ACTUALLY HANDS THE KEYS TO THE FINGER. The whole mechanism below rests
         // on `keyboardDismissMode == .interactive` pinning the keyboard's top edge to the touch. The
@@ -2557,20 +2605,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // that never moved, shortens the clearance by as much as the whole keyboard, and leaves it
         // that way: the keys did not move, so no notification comes to correct it.
         guard collectionView.keyboardDismissMode == .interactive else { return nil }
-        // ⛔ `dockedBand` IS THE GATE, NOT `keyboardReport` — the same lesson as `fingerBand`, entering
-        // through a different door. This used to open with `case .up = keyboardReport`, and a finger
-        // that drags the keys ALL THE WAY DOWN and then reverses without lifting closes that gate on
-        // itself: at the bottom the OS posts a zero-duration frame at band 0, `rideKeyboard` writes
-        // `.rest`, and the guard then refuses for the remainder of the gesture — so the bar sits at
-        // rest while the finger carries the keys back up, exactly the failure the finger store was
-        // split out to end. `dockedBand` is the honest gate because only an ANIMATED notification
-        // writes it (`d > 0`), so it says "the keys docked up and have not animated away", survives
-        // every finger-driven frame, and goes to zero the moment a real hide completes.
+        // ⛔ `dockedBand` IS THE GATE, and it is the only piece of keyboard state left besides the
+        // guide itself. It is written ONLY by an animated notification (`d > 0`), so it says "the keys
+        // docked up and have not animated away", survives every finger-driven frame, and goes to zero
+        // the moment a real hide completes. Gating on anything the finger itself writes is the latch
+        // this file has now recorded twice: a value must never guard the input it was computed from.
         guard dockedBand > rest + 0.5, collectionView.isDragging else { return nil }
         let pan = collectionView.panGestureRecognizer
         guard pan.state == .began || pan.state == .changed else { return nil }
         var lowest = dockedBand
-        if guideIsLive, let g = guideBand { lowest = min(lowest, g) }
         let fingerY = pan.location(in: view).y
         if fingerY.isFinite { lowest = min(lowest, view.bounds.maxY - fingerY) }
         return max(rest, lowest)
@@ -2586,46 +2629,28 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // while the keys animate. Do not bring a keyboard-host observer back without a diag log
     // showing the notification actually failing.
 
-    /// The per-frame driver for `draggedBand`: from `scrollViewDidScroll` while a finger drags with
-    /// the keyboard up. Guarded writes throughout, so a scroll that does not move the keys (the
-    /// finger is above them) costs a few comparisons. `updateInsets` stands down on the offset
-    /// while the finger owns it, as theirs does; only the bar and the inset follow. (The ghost
-    /// above usually gets there first; this stays for a keyboard whose accessory is absent.)
+    /// The per-frame driver for feeder 3, from `scrollViewDidScroll` while a finger drags the keys.
+    /// It writes the guide and lets Auto Layout move the bar; only the insets need asking, because
+    /// the list's clearance is a frame that a layout pass has to resolve. `updateInsets` stands down
+    /// on the OFFSET while a finger owns it, as theirs does.
+    ///
+    /// ⛔ NOT INSIDE AN INSET UPDATE — reachable in practice, not merely in theory: `updateInsets`
+    /// writes `contentInset`, UIScrollView fires `scrollViewDidScroll` synchronously from that write,
+    /// and this is the first thing that handler calls. Moving the keyboard guide halfway through a
+    /// pass hands the rest of it a bar in a different place than the one it measured.
     private func followKeyboardUnderFinger() {
-        // ⛔ THE SAME GUARD ITS SIBLING CARRIES. `followKeyboardGuide` refuses to run inside an inset
-        // update because rewriting the bar's constraints halfway through one hands the rest of that
-        // update a bar in a different place than the one it measured. This writes the same two
-        // constraints and had no such guard — and it is reachable from inside the update, not merely
-        // in theory: `updateInsets` writes `contentInset`, UIScrollView fires `scrollViewDidScroll`
-        // synchronously from that write, and this is the first thing that handler calls.
-        guard !isUpdatingInsets, composerBar != nil, let dragged = draggedBand else { return }
-        // The finger's band is the newest fact about the keys, so a pass between the finger lifting
-        // and the release notification (a SwiftUI render re-placing the bar, say) cannot snap the bar
-        // back up to where the keys docked. It is kept in its OWN store, never in `keyboardReport`,
-        // because `draggedBand` reads `keyboardReport` to decide whether a finger may speak at all —
-        // see `fingerBand`. The animated notification that follows retires it either way.
-        fingerBand = dragged
-        positionBottomBar()
-        syncBottomBarGeometry()
+        guard !isUpdatingInsets, composerBar != nil, let held = fingerDrivenHeight else { return }
+        guard setKeyboardGuideHeight(held) else { return }
+        positionBottomBar()          // only the 8-vs-dip rule and the side insets; the band is the guide's
+        view.layoutIfNeeded()        // resolve the bar and the container against the new guide
         updateInsets()
     }
 
-    /// The finger-drag case of theirs: their bar's bottom IS the guide's top, so on an interactive
-    /// dismiss it moves under the finger on every layout pass the guide dirties. Ours writes the
-    /// same constants from that pass, but only while a finger owns the keyboard — `keyboardBand`
-    /// reads the guide in no other case. Every write is guarded on change, so a pass where nothing
-    /// moved dirties nothing.
-    private func followKeyboardGuide() {
-        guard composerBar != nil, let g = guideBand else { return }
-        if !guideIsLive, g > restSafeBottom + 0.5 { guideIsLive = true }
-        // Not while an inset update is running: the pass this is called from may be the one
-        // `updateInsets` forced, and rewriting the bar's constraints halfway through it hands the
-        // rest of that update a bar in a different place than the one it measured.
-        guard !isUpdatingInsets else { return }
-        guard guideIsLive, collectionView.isTracking else { return }
-        positionBottomBar()
-        syncBottomBarGeometry()
-    }
+    // (`followKeyboardGuide` is gone. It existed to copy the system guide's position into the bar's
+    // constraints on a layout pass, behind a `guideIsLive` latch that let a LATE guide outrank a
+    // notification — the `f1e7e532` regression, "the keyboard opens but the composer stays where it
+    // was". The bar hangs off our own guide by a constraint now, and the system guide is one of that
+    // guide's three feeders rather than a second author of the bar. See `adoptSystemKeyboardGuide`.)
     /// ⛔ THEIR ONE EXPRESSION, verbatim in intent:
     ///
     ///     newInsets.bottom = bottomBarContainer.frame.height - collectionView.safeAreaInsets.bottom
@@ -2642,7 +2667,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // container is collapsed and the clearance comes from the fallback, exactly as it does for
         // the announcements list. See `hideComposer`.
         guard let bar = composerBar, !bar.isHidden else {
-            return keyboardBand + composerBarH + 12
+            return keyboardHeight + composerBarH + 12
         }
         guard bottomBarContainer.frame.height > 1 else {
             // ⛔ OUR BAR IS THERE BUT ITS CONTAINER HAS NOT BEEN LAID OUT YET (the first open, a
@@ -2655,7 +2680,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // container's own height expression is the honest answer until its frame exists.
             let width = max(1, view.bounds.width - (barLeading?.constant ?? 0) * 2)
             let barH = (bar as? ChatComposerView)?.preferredHeight(forWidth: width) ?? composerBarH
-            return Self.barTopPad + barH + (-(barBottom?.constant ?? 0))
+            return Self.barTopPad + barH + (-(barBottom?.constant ?? 0)) + keyboardHeight
         }
         return bottomBarContainer.frame.height
     }
@@ -2953,7 +2978,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // "Is the keyboard up" is the band, not the safe area: the list ignores the keyboard's
             // safe area (ThreadView's `.ignoresSafeArea(.keyboard)`), so the old `safeAreaInsets
             // .bottom > 100` test could never be true and the keyboard stayed up through the pop.
-            if keyboardBand > view.safeAreaInsets.bottom + 0.5 { view.window?.endEditing(true) }
+            if keyboardIsUp { view.window?.endEditing(true) }
         case .ended, .cancelled, .failed:
             // ⛔ ONE RUNLOOP LATER, OR IT DOES NOTHING. `updateInsets` refuses to run while the pop
             // recogniser is in any state but `.possible` or `.failed` — the reference's own rule —
@@ -3028,11 +3053,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if presenting {
         } else if #available(iOS 26, *) {
             UIView.performWithoutAnimation {
+                refreshKeyboardGuideFloor()   // the real safe area has just arrived
                 positionBottomBar()
                 syncBottomBarGeometry()
                 view.layoutIfNeeded()
             }
         } else {
+            refreshKeyboardGuideFloor()
             positionBottomBar()
             syncBottomBarGeometry()
         }
@@ -3046,6 +3073,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             if presenting {
+                self.refreshKeyboardGuideFloor()
                 self.positionBottomBar()
                 self.syncBottomBarGeometry()
             }
@@ -3100,7 +3128,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // real duration and curve. Not forced, not clocked, never deferred: a deferred write lands
         // outside the block and hard-jumps, which is why theirs debounces the safe-area path and not
         // this one. Cheap otherwise: it returns as soon as nothing has moved.
-        followKeyboardGuide()   // the bar first, so the inset below reads a container that has moved
+        refreshKeyboardGuideFloor()  // a resting guide is the safe-area strip, never zero
+        adoptSystemKeyboardGuide()   // the guide first, so the inset below reads a container that has moved
         updateInsets()
         // The invariant net, independent of any keyboard bookkeeping: at rest, never beyond the newest
         // bound. Catches the tail of an interactive keyboard dismissal, where `updateInsets` correctly
@@ -3125,7 +3154,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // And how far the composer stands above the keyboard, plus its side inset, for the floating
         // overlays. Same async rule, same change guard: this runs on every layout pass.
         if composerBar != nil {
-            let lift = max(0, bottomBarContainer.frame.height - keyboardBand)
+            let lift = max(0, bottomBarContainer.frame.height - keyboardHeight)
             let side = barLeading?.constant ?? composerMargin
             if abs(lift - lastReportedLift) > 0.5 || abs(side - lastReportedSide) > 0.5 {
                 lastReportedLift = lift
@@ -3787,11 +3816,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             bottomBarContainer.addSubview(bar)
             let lead = bar.leadingAnchor.constraint(equalTo: bottomBarContainer.leadingAnchor)
             let trail = bar.trailingAnchor.constraint(equalTo: bottomBarContainer.trailingAnchor)
-            // Their `bottomView.bottomAnchor.constraint(equalTo: keyboardLayoutGuide.topAnchor)`,
-            // expressed against the view's bottom because the guide is dead in this hosted
-            // controller (build 682). The constant is the keyboard, from the same notification the
-            // insets read, so bar and list move in one animation.
-            let bottom = bar.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+            // ⛔ THEIRS, NOW LITERALLY: `bottomView.bottomAnchor.constraint(equalTo:
+            // keyboardLayoutGuide.topAnchor)`. It used to hang off the VIEW's bottom with the whole
+            // keyboard band written into its constant, because the SYSTEM guide is dead in this
+            // hosted controller (build 682). It hangs off OUR guide instead — the same shape they
+            // use on iOS 15, fed by whichever source this device actually has. The constant is now
+            // only the product rule (8pt above the keys, or sunk `composerRestDip` below the safe
+            // line at rest), never the keyboard.
+            let bottom = bar.bottomAnchor.constraint(equalTo: keyboardGuide.topAnchor)
             let height = bar.heightAnchor.constraint(equalToConstant: 40)
             barLeading = lead; barTrailing = trail; barBottom = bottom; barHeightC = height
             NSLayoutConstraint.activate([lead, trail, bottom, height])
@@ -3873,7 +3905,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // bottom inset, both carried by `barBottom`). That total IS the content inset, which is why
         // it has to be complete — a term missing here is a term of clearance the newest message
         // loses, and it lands under the composer.
-        let container = Self.barTopPad + barH + (-(barBottom?.constant ?? 0))
+        let container = Self.barTopPad + barH + (-(barBottom?.constant ?? 0)) + keyboardHeight
         // ⚠️ THEIR THRESHOLD IS 1pt, NOT A HAIR. Their toolbar's `bounds` observer reads
         // `abs(old.height - new.height) > 1` before telling anyone, so sub-point noise from a
         // layout pass never starts an animation or moves the reader.
@@ -3884,27 +3916,27 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         view.layoutIfNeeded()
     }
 
-    /// Place the bar against the keyboard band. Called from inside `rideKeyboard`'s animation
-    /// block, so the bar travels on the keyboard's own curve; also on first sight and whenever the
-    /// safe area changes, so the rest position exists before any keyboard has moved.
-    ///
-    /// The SAME expressions ThreadView applied as SwiftUI padding, now decided HERE from the band
-    /// rather than from a SwiftUI state that arrives a pass later:
+    /// The composer's PRODUCT rule, and nothing else. The keyboard is not in here any more: the bar's
+    /// bottom is constrained to `keyboardGuide.topAnchor`, so where the keys are is Auto Layout's
+    /// business and this only decides how the pill sits relative to them:
     ///   · riding the keyboard: 8 above the keys, sides at the system margin;
-    ///   · at rest: the pill sinks `composerRestDip` below the safe-area line and the sides match
-    ///     that height (owner, 2026-08-24: "use same size as bottom"); a home-button phone has no
-    ///     band, so it keeps the 8 and the margin.
+    ///   · at rest: the pill sinks `composerRestDip` BELOW the safe-area line and the sides match that
+    ///     height (owner, 2026-08-24: "use same size as bottom"); a home-button phone has no strip, so
+    ///     it keeps the 8 and the margin.
     ///
     /// ⚠️ ONE WRITER, ALL THREE CONSTRAINTS. Writing the sides from ThreadView's pass put the width
     /// change OUTSIDE the keyboard's animation — a snap from 29 to 20 mid-open.
+    ///
+    /// ⚠️ A POSITIVE CONSTANT SINKS THE BAR BELOW THE GUIDE'S TOP, which is what the rest dip is: the
+    /// guide is exactly the home-indicator strip tall when the keys are down, and the pill sits 5pt
+    /// into it. Against the keys the constant is negative — 8pt of clearance above them.
     private func positionBottomBar() {
-        let band = keyboardBand
         let safe = restSafeBottom   // never the keyboard-polluted view value — see `restSafeBottom`
-        let keyboardUp = band > safe + 0.5
+        let keyboardUp = keyboardIsUp
         let bottomInset = (keyboardUp || safe <= 0) ? Self.composerKeyboardGap : -Self.composerRestDip
         let side = keyboardUp ? composerMargin : max(composerMargin, safe - Self.composerRestDip)
         // Guarded writes — see `syncBottomBarGeometry`: this runs on layout passes too.
-        let bottomTarget = -(band + bottomInset)
+        let bottomTarget = -bottomInset
         if let c = barBottom, abs(c.constant - bottomTarget) > 0.01 {
             c.constant = bottomTarget
         }
@@ -3933,7 +3965,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
               let heightC = barHeightC, let containerC = bottomBarHeight else { return }
         let width = max(1, view.bounds.width - (barLeading?.constant ?? 0) * 2)
         let barH = bar.preferredHeight(forWidth: width)
-        let container = Self.barTopPad + barH + (-(barBottom?.constant ?? 0))
+        let container = Self.barTopPad + barH + (-(barBottom?.constant ?? 0)) + keyboardHeight
         // Guarded writes: this runs from `viewDidLayoutSubviews` via `followKeyboardGuide`, and a
         // constant rewritten to its own value would dirty layout again for nothing.
         if abs(heightC.constant - barH) > 0.01 { heightC.constant = barH }
