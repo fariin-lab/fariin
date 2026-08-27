@@ -1209,12 +1209,38 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// there is then nothing to measure, the delta comes out ZERO, and the offset is left alone
     /// while the content above the reader has moved: a jump, arriving from the one path that exists
     /// to prevent jumps. The cascade was already written and only the load path used it.
+    ///
+    /// ⛔ THREE TIERS, AS THEIRS HAS. `applyContentOffsetAdjustmentIfNecessary` tries the preferred
+    /// anchor, then every visible row in bias order, and then — the tier we were missing — ANY row
+    /// present in both the before and after windows, again in bias order, with their own comment:
+    /// *"Fail over to trying to use any interaction in the before & after load windows."*
+    ///
+    /// Ours stopped after the visible rows, and when every one of them leaves in a single update the
+    /// delta came out zero and the reader jumped by whatever had moved above them. Deleting a
+    /// screenful of selected messages does exactly that, and so does a trim that takes the whole
+    /// viewport. The third tier costs one dictionary walk on a path that has already given up.
+    ///
+    /// ⚠️ THE THIRD TIER CANNOT PRODUCE AN `Anchor`, and that is not a defect. An `Anchor` carries
+    /// `distanceFromOrigin`, which only means something for a row that was ON SCREEN when the anchors
+    /// were captured; a row from the far end of the window has no such distance. So the delta is
+    /// returned with a nil anchor: the correction is applied, and `verifyAnchor` — which re-pins
+    /// against a remembered on-screen position — correctly does nothing afterwards.
     private func continuityDelta(_ anchors: [Anchor],
                                  before: [String: CGFloat],
-                                 after: [String: CGFloat]) -> (delta: CGFloat, anchor: Anchor)? {
+                                 after: [String: CGFloat]) -> (delta: CGFloat, anchor: Anchor?)? {
         for a in anchors {
             guard let b = before[a.id], let f = after[a.id] else { continue }
             return (f - b, a)
+        }
+        // Tier three: any row that survived the update, walked in document order (oldest first).
+        // ⚠️ Theirs walks this tier in BIAS order and ours does not — the bias lives with the anchor
+        // list, which by definition has already failed by the time we are here. For a delta it makes
+        // no difference which surviving row is measured, because every one of them moved by the same
+        // amount unless content changed BETWEEN them, and a tier-three fallback is already the case
+        // where the viewport's own rows are gone.
+        for (id, b) in before.sorted(by: { $0.value < $1.value }) {
+            guard let f = after[id] else { continue }
+            return (f - b, nil)
         }
         return nil
     }
@@ -1793,6 +1819,14 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             return idx > 0
         }()
         let anchors = continuityAnchors(relativeToTop: pagedOlder)
+        // ⛔ RE-RECORD THE READER'S DISTANCE BEFORE THE LOAD LANDS. Theirs does exactly this and says
+        // why: *"CVC will often use this state to ensure scroll continuity when landing loads, so
+        // ensure the value is updated before landing loads."* Ours recorded only on scroll ticks and
+        // at settles, so by the time a load landed the value could be several changes old — which is
+        // what made it unsafe to use as a continuity fallback, and why it had ended up with a single
+        // reader. Fresh at land time, it becomes the honest answer to "where was this reader" for the
+        // one case the anchor cascade cannot answer at all.
+        recordDistanceFromBottom()
 
         measureMissing(ids, width: width)   // exact heights BEFORE the layout prepares (no self-size correction)
         // Every row whose content changed, on screen or not — this whole block is already bracketed
@@ -1834,9 +1868,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // above them moves their rows too, and the delta is what holds them still. (In the inverted
         // list this was skipped at the newest message because an append could not move anyone; an
         // append still cannot, the anchor row does not move, so the delta comes out zero on its own.)
+        // Whether the cascade could answer AT ALL, which is a different question from whether the
+        // answer was zero — see the fallback in the completion below.
+        var anchorsResolved = false
         if let landed = continuityDelta(anchors, before: beforeY, after: afterY) {
             adjustment = landed.delta
             landedAnchor = landed.anchor
+            anchorsResolved = true
         }
 
         var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
@@ -1912,6 +1950,20 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                 // still; this is the one net that checks it actually happened.
                 self.collectionView.layoutIfNeeded()
                 self.verifyAnchor(landedAnchor)
+            } else if !anchorsResolved {
+                // ⛔ THEIR LAST TIER, AND OURS HAD NO EQUIVALENT. When the anchor cascade cannot answer
+                // at all — not one row of the before window survived the update — theirs falls through
+                // `targetContentOffset(forProposedContentOffset:)` to
+                // `contentOffset(forLastKnownDistanceFromBottom:)` and puts the reader back at the
+                // distance they were last known to hold. Ours simply left the offset where it was and
+                // the reader jumped by whatever the update moved.
+                //
+                // ⚠️ ONLY WHEN THE CASCADE FOUND NOTHING, never merely because the delta was zero. A
+                // zero delta from a resolved anchor is a POSITIVE result — it means nothing above the
+                // reader moved — and re-pinning them from a recorded distance there would fight every
+                // ordinary message arrival with whatever rounding the record carries.
+                self.collectionView.layoutIfNeeded()
+                self.restoreRecordedDistance()
             }
             // Post-land auto-load re-check, async so it is never re-entrant inside the land: a short page
             // can leave the reader still within the load threshold.
