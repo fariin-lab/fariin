@@ -3185,6 +3185,37 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
+    /// ⚠️ DIAGNOSTIC ONLY, AND IT MUST COME OUT BEFORE THIS BRANCH SHIPS.
+    ///
+    /// The composer sits about 94pt too high on a first open and drops into place after one keyboard
+    /// open and close — measured in the simulator, not guessed. 94pt is not the home-indicator strip;
+    /// it is the size of a floating tab bar and its strip. But the chat already declares
+    /// `.ignoresSafeArea(.container, edges: [.top, .bottom])`, so on paper this view is full height
+    /// and none of that should reach it. Four wrong explanations have come out of reasoning past a
+    /// contradiction like that, so this prints the actual numbers instead: how tall this view is,
+    /// where its bottom edge lands in the window, what safe area it and the window report, and what
+    /// the guide and the bar's constant were set to.
+    ///
+    /// The first dozen passes are enough — the answer is in the first open — and the cap keeps a
+    /// scrolling chat from filling the log.
+    private var probeCount = 0
+    private func probeComposerGeometry() {
+        guard probeCount < 12 else { return }
+        probeCount += 1
+        let win = view.window
+        let inWindow = view.convert(view.bounds, to: nil)
+        print("[KPROBE #\(probeCount)]",
+              "viewH=\(Int(view.bounds.height))",
+              "viewBottomInWindow=\(Int(inWindow.maxY))",
+              "windowH=\(Int(win?.bounds.height ?? -1))",
+              "viewSafeBottom=\(Int(view.safeAreaInsets.bottom))",
+              "windowSafeBottom=\(Int(win?.safeAreaInsets.bottom ?? -1))",
+              "restSafeBottom=\(Int(restSafeBottom))",
+              "guide=\(Int(keyboardGuideHeight?.constant ?? -1))",
+              "barBottomConst=\(Int(barBottom?.constant ?? -1))",
+              "containerH=\(Int(bottomBarHeight?.constant ?? -1))")
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         // ⛔ THE KEYBOARD'S ONE WRITER, THE REFERENCE APP'S WAY. Their `viewDidLayoutSubviews` calls
@@ -3210,6 +3241,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         adoptSystemKeyboardGuide()   // where the system guide moves, it is the better transport
         positionBottomBar()
         updateInsets()
+        probeComposerGeometry()   // ⚠️ DIAGNOSTIC ONLY — remove before shipping. See the note on it.
         // The invariant net, independent of any keyboard bookkeeping: at rest, never beyond the newest
         // bound. Catches the tail of an interactive keyboard dismissal, where `updateInsets` correctly
         // stands down because a finger owns the list while the clearance shrinks.
