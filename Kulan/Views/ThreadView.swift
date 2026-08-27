@@ -136,6 +136,14 @@ struct ThreadView: View {
     @State private var recordDrag: CGSize = .zero   // live finger translation while holding
     @State private var recordCancelArmed = false    // dragged left past the cancel threshold
     @State private var holdStarted = false          // guards a single start per hold
+    /// ⛔ THE HOLD UI WAKES ONLY FOR A REAL HOLD — owner, 2026-08-27: "the hold to record system
+    /// make only woke when user hold, not flick even when tap". The RECORDING starts at touch-down
+    /// (audio must not lose the first word, and tap→hands-free depends on it), but the hold row,
+    /// timer and big mic used to appear at touch-down too — so every quick tap flashed the hold UI
+    /// for the tap's length before the locked bar took over. This flag is what the BAR is shown:
+    /// false until the press proves itself a hold (0.5s — the same threshold the release decision
+    /// uses — or the finger sliding toward cancel/lock), so a tap draws nothing it then takes back.
+    @State private var holdRevealed = false
     @State private var holdBeganAt: Date = .distantPast   // touch-down time: a sub-0.3s release is a TAP, not a hold
     @State private var micDenied = false            // mic permission denied → "open Settings" alert
     @State private var recordingBlockedByCall = false   // tried to record while a call owns the mic
@@ -5173,7 +5181,9 @@ struct ThreadView: View {
     // True while the finger is held down recording (not yet locked).
     // Driven by holdStarted (set on touch-down) NOT recorder.isRecording, so the recording
     // UI appears the instant you press — no waiting for the audio session to warm up.
-    private var recordingHeld: Bool { holdStarted && !recordLocked }
+    /// The REVEALED hold — see `holdRevealed`. Everything that hides or appears for a held
+    /// recording keys off this, so a quick tap (which is never shown as a hold) moves nothing.
+    private var recordingHeld: Bool { holdStarted && holdRevealed && !recordLocked }
 
     /// ⛔ THE INPUT ROW'S SHAPE MUST NOT CHANGE AT THE MOMENT OF LOCKING — owner, 2026-08-25:
     /// recording with the keyboard up works, but locking made "the keyboard jump down immediately and
@@ -5284,7 +5294,8 @@ struct ThreadView: View {
         s.editing = editingMessage != nil
         s.attachBusy = sendingPhoto
         s.banners = composerBanners
-        s.holdStarted = holdStarted
+        // The bar is shown the REVEALED hold, not the raw touch-down — see `holdRevealed`.
+        s.holdStarted = holdStarted && holdRevealed
         s.recordLocked = recordLocked
         s.recordDrag = recordDrag
         s.cancelArmed = recordCancelArmed
@@ -5307,7 +5318,9 @@ struct ThreadView: View {
     /// The cards above the field, in the order the old SwiftUI pill stacked them. None while a
     /// recording is running — the pill is one row then.
     private var composerBanners: [ChatComposerBanner] {
-        guard !recordingActive else { return [] }
+        // The REVEALED state, not raw touch-down: banners vanishing for the length of a tap was
+        // the same flicker as the hold row appearing for it.
+        guard !((holdStarted && holdRevealed) || recordLocked) else { return [] }
         var out: [ChatComposerBanner] = []
         if let r = replyingTo {
             out.append(ChatComposerBanner(id: "reply:\(r.id)", style: .reply,
@@ -5457,12 +5470,25 @@ struct ThreadView: View {
         }
         holdStarted = true
         holdBeganAt = Date()
+        holdRevealed = false
+        // The reveal clock: at 0.5s of continuous press this is a HOLD and the UI appears (the
+        // timer already shows the true elapsed, because the recording ran from touch-down). The
+        // captured timestamp is the staleness guard — a timer from a previous press finds a
+        // different `holdBeganAt` and does nothing.
+        let began = holdBeganAt
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            guard holdBeganAt == began, holdStarted, !recordLocked else { return }
+            withAnimation(.easeOut(duration: 0.15)) { holdRevealed = true }
+        }
         recorder.requestAndStart()
         impact(.medium)
     }
 
     private func updateHoldRecording(_ t: CGSize) {
         guard holdStarted, !recordLocked else { return }
+        // A finger that SLIDES is holding, whatever the clock says — reveal at once so the
+        // cancel/lock affordances exist where the drag is going.
+        if !holdRevealed, abs(t.width) > 10 || abs(t.height) > 10 { holdRevealed = true }
         recordDrag = t
         let armed = clampedDrag.width < -Self.cancelThreshold
         if armed != recordCancelArmed { recordCancelArmed = armed; impact(.soft) }
