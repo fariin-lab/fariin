@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# ⛔ NO BRAND NAMES IN THE PUBLIC REPO — the owner's standing order (2026-08-12, repeated
+# 2026-08-13 and 2026-08-26). This repo is public; comments naming the apps we studied are a
+# roadmap of what was ported. Write "the reference app" and keep the real provenance in the
+# private memory notes.
+#
+# This hook makes the rule mechanical: a commit is refused while any staged Swift source names
+# one of the apps, whoever (or whatever) is typing. Installed via:
+#     git config core.hooksPath tools/githooks
+# It greps the STAGED BLOBS directly (git grep --cached), so there is no diff parsing to get
+# wrong. The word "signal" in lowercase (radio signal, a signalling channel) passes on purpose;
+# reword a sentence the check fires on, never weaken the pattern.
+
+set -u
+
+pattern='(^|[^A-Za-z])(Signal|Telegram|WhatsApp|Viber|WeChat)([^A-Za-z]|$)'
+
+if hits=$(git grep --cached -nE "$pattern" -- '*.swift'); then
+  echo "✗ Commit refused: a staged Swift file names another messenger by brand."
+  echo "  The repo is public. Say \"the reference app\" instead; provenance goes in the"
+  echo "  private memory notes, never in code."
+  echo
+  echo "$hits" | head -10
+  exit 1
+fi
+exit 0

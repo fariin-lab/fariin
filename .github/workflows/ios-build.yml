@@ -13,6 +13,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The owner's standing order, enforced by the machine: this repo is public, and no code or
+      # workflow file names another messenger by brand ("the reference app" instead; provenance
+      # lives in private notes). The same check runs as a pre-commit hook locally
+      # (tools/githooks); this is the net for a clone that never installed it.
+      - name: No brand names in the public repo
+        run: |
+          if grep -rnE '\b(Signal|Telegram|WhatsApp|Viber|WeChat)\b' --include='*.swift' Kulan; then
+            echo "::error::An app source comment names another messenger by brand. Say 'the reference app'."
+            exit 1
+          fi
+          echo "clean"
+
       - name: Select latest Xcode (need iOS 26 SDK for .glassEffect etc.)
         run: |
           LATEST=$(ls -d /Applications/Xcode_*.app | sort -V | tail -n1)
