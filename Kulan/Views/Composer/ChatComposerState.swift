@@ -67,6 +67,13 @@ struct ChatComposerState: Equatable {
     var recordingActive: Bool { holdStarted || recordLocked }
 }
 
+/// A mutable timestamp with NO SwiftUI invalidation: written from `hitTest` on every composer
+/// touch (a @State write there would re-run the whole conversation tree per keystroke), read by
+/// the tap-to-dismiss guard. Held in a @State box so the instance survives re-renders.
+final class TouchClock {
+    var last = Date.distantPast
+}
+
 /// One card above the field: what you are replying to, what you are editing, or the link preview.
 struct ChatComposerBanner: Equatable {
     enum Style: Equatable { case reply, edit, link }
@@ -99,6 +106,13 @@ struct ChatComposerBanner: Equatable {
 struct ChatComposerActions {
     var textChanged: (String) -> Void = { _ in }
     var focusChanged: (Bool) -> Void = { _ in }
+    /// A touch landed anywhere on the bar. The chat's tap-to-dismiss gesture hears taps through
+    /// the whole screen — the bar included — and dismisses one runloop turn later so tap-handlers
+    /// can cancel it. The SwiftUI bar used to be such a canceller by construction; the UIKit bar
+    /// lost that in the move (his report, 2026-08-27: tapping the field for Paste closed the
+    /// keyboard). This is the cancel wire back: `hitTest` stamps `TouchClock`, no SwiftUI state
+    /// write, and the dismissal checks the stamp.
+    var barTouched: () -> Void = {}
     var attach: () -> Void = {}
     var gif: () -> Void = {}
     var send: () -> Void = {}

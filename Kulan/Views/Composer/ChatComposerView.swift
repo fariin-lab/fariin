@@ -908,6 +908,15 @@ final class ChatComposerView: UIView {
         }
     }
 
+    /// Every touch that lands on the bar stamps the clock the tap-to-dismiss guard reads — see
+    /// `ChatComposerActions.barTouched`. `hitTest` fires at routing time, before any gesture
+    /// resolves, so the stamp is always fresher than the dismissal it must cancel.
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let v = super.hitTest(point, with: event)
+        if v != nil { actions.barTouched() }
+        return v
+    }
+
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window == nil { setLive(false); stopPulse() }

@@ -160,6 +160,8 @@ struct ThreadView: View {
     /// The list's tap-to-dismiss-keyboard, held for one runloop turn so an inner tap that wants the
     /// keyboard kept (a reply quote jump) can cancel it — see listBody.
     @State private var pendingKeyboardDismiss = false
+    /// When the composer was last touched — the tap-to-dismiss canceller. See `TouchClock`.
+    @State private var composerTouch = TouchClock()
     /// Bumped at the TOP of every send path, before the composer is cleared. See `noteSendTick`.
     @State private var sendTick = 0
     @State private var infoTarget: Message?        // group message → "read by" info sheet
@@ -2075,6 +2077,14 @@ struct ThreadView: View {
                     DispatchQueue.main.async {
                         guard pendingKeyboardDismiss else { return }
                         pendingKeyboardDismiss = false
+                        // ⛔ A TAP ON THE COMPOSER IS NOT A TAP ON THE CONVERSATION — his report,
+                        // 2026-08-27: tapping the field to get Paste closed the keyboard. This
+                        // gesture hears the whole screen, bar included; the SwiftUI bar used to eat
+                        // its own taps before this fired, and the UIKit bar does not. The bar
+                        // stamps `composerTouch` from `hitTest` on every touch it receives, so a
+                        // fresh stamp here means the tap was the bar's, and the conversation was
+                        // never tapped at all.
+                        guard Date().timeIntervalSince(composerTouch.last) > 0.4 else { return }
                         inputFocused = false
                         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                                         to: nil, from: nil, for: nil)
@@ -5344,6 +5354,7 @@ struct ThreadView: View {
         var a = ChatComposerActions()
         a.textChanged = { input = $0 }
         a.focusChanged = { inputFocused = $0 }
+        a.barTouched = { composerTouch.last = Date() }
         a.attach = {
             // ⛔ ONE DISMISSAL, THEN WAIT FOR THE SYSTEM TO SAY IT IS DOWN — owner, 2026-08-25:
             // tapping "+" with the keyboard up made the keyboard and the composer "fight", and the
