@@ -2517,13 +2517,24 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Unresolved guides report a zero rect; a resolved one on a home-button phone reports a
         // zero-HEIGHT rect whose minY is the view's bottom. Only the first is meaningless.
         guard frame.height > 0 || frame.minY > 0 else { return restSafeBottom }
-        // ⛔ AND THE FRAME MUST BELONG TO THIS LAYOUT GENERATION. The guide always sits at the BOTTOM
-        // of the view, so its maxY is the view's maxY — always, keys up or down. On a rotation the two
-        // sides of the subtraction below can come from different generations: `view.bounds` is already
-        // the new size while `layoutFrame` still describes the old one, and landscape-to-portrait then
-        // reports a 493pt keyboard that is not on screen, which puts the composer into its typing
-        // position at rest. If the guide's bottom is not the view's bottom, the frame is stale.
-        guard abs(frame.maxY - view.bounds.maxY) <= 1 else { return restSafeBottom }
+        // ⛔ THE STALENESS TEST IS THE WIDTH, AND TESTING THE BOTTOM EDGE WAS A REAL BUG. His
+        // screenshot, keyboard up: the composer glued to the keys with no gap and still at its
+        // resting side insets. The bar was in the RIGHT PLACE — its constraint to the guide put it
+        // there — but at the wrong CONSTANT, sitting at `guide.top + composerRestDip` instead of
+        // `guide.top - composerKeyboardGap`, which is precisely the missing space. Everything that
+        // reads `keyboardIsUp` was told the keys were down, and the jump arrow flew up for the same
+        // reason: its lift is the container's height less this value.
+        //
+        // The cause was a guard I added defensively: "the guide sits at the bottom of the view, so
+        // its maxY is the view's maxY." That is not reliably true for a hosted controller — the
+        // guide's frame is the KEYBOARD's rect, and the keyboard does not stop where this view's
+        // bounds do. Requiring equality threw away every good frame.
+        //
+        // What a stale frame from a rotation actually looks like is a frame the wrong WAY ROUND: the
+        // view's bounds are already the new size while the guide still describes the old one, so the
+        // widths disagree by hundreds of points. That is the honest test, it catches the case the old
+        // guard was written for, and it cannot fire in ordinary use.
+        guard abs(frame.width - view.bounds.width) <= 1 else { return restSafeBottom }
         // ⛔ THE FLOOR IS THEIRS, AND IT IS NOT DECORATION. Their guide's height is
         // `max(view.safeAreaInsets.bottom, view.bounds.maxY - frame.minY)`, and dropping the first
         // term here cost the resting strip: with the keys down the guide's top sits ON the view's
@@ -3468,7 +3479,18 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // flag were set after it (as it was), `updateInsets` would already have walked the list by
         // the time the guard existed.
         contextMenuVisible = true
-        let keyboardWasUp = onMenuCloseKeyboard()
+        // ⛔ THE KEYBOARD STAYS UP, AS THEIRS DOES — owner, on a screenshot: "when i open keyboard then
+        // message i hold longpress, copy from signal". Read from their delegate: every long-press path
+        // calls `presentContextMenu` and NONE of them calls `dismissKeyBoard()`. They dismiss it for a
+        // media tap, for opening a member sheet, for a handful of other navigations — never for the
+        // message menu. The menu is presented over the keyboard and their inset update simply does
+        // nothing while it is up (`isPresentingContextMenu`), which is the branch we already ported.
+        //
+        // Ours closed it, and closing it is what moved the conversation out from under the menu's
+        // frozen snapshot in the first place — the report that `contextMenuVisible` was added for.
+        // With the keyboard left alone there is no clearance change to absorb, so the whole class of
+        // problem stops arising rather than being guarded against.
+        let keyboardWasUp = false
         let overlay = CMOverlay(previewView: container, sourceFrame: src.frame,
                                 alignRight: alignRight, actions: actions, react: react) { [weak self] in
             self?.customMenuDidEnd()

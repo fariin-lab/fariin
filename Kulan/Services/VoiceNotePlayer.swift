@@ -40,6 +40,17 @@ private final class PreparedPlayer: @unchecked Sendable {
 
 @MainActor
 final class VoiceNotePlayer: NSObject, ObservableObject {
+    /// Is a text field or text view currently the first responder anywhere on screen? Used only to
+    /// decide whether arming proximity monitoring is safe — see the note where it is armed. Walks the
+    /// key window's responder chain, which is the only way UIKit exposes the question.
+    static var isEditingText: Bool {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .flatMap({ $0.windows })
+            .first(where: { $0.isKeyWindow }) else { return false }
+        return window.findFirstResponderIsTextInput()
+    }
+
     static let shared = VoiceNotePlayer()
 
     /// The note being played right now. Empty means nothing is loaded.
@@ -499,7 +510,19 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             ChatService.markVoicePlayedThrottled(c, createdAtMillis: at.timeIntervalSince1970 * 1000)
         }
         SleepBlocker.shared.add("voice-play")
-        UIDevice.current.isProximityMonitoringEnabled = true
+        // ⛔ NOT WHILE SOMEONE IS TYPING — owner, on a screenshot: "when i open keyboard then i play
+        // voice or i click play or i click 1x, keyboard starts to close".
+        //
+        // Turning proximity monitoring on tells iOS to prepare to blank the screen when the phone is
+        // raised to the ear, and the system resigns the first responder as part of that. Nothing in
+        // the chat asked for the keyboard to go; pressing play did, through here.
+        //
+        // Monitoring only exists to catch the raise-to-ear so the note can move to the earpiece (see
+        // the proximity observer above). Someone with the keyboard open and a thumb on the screen is
+        // not raising the phone to their ear, so there is nothing to catch and nothing is lost by
+        // waiting: the keyboard closing is itself the moment this becomes worth arming, and the next
+        // note played without a keyboard arms it normally.
+        if !Self.isEditingText { UIDevice.current.isProximityMonitoringEnabled = true }
         enable(true)
         updateNowPlaying()
         timer?.invalidate()
@@ -767,5 +790,14 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
     private func clearNowPlaying() {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         enable(false)
+    }
+}
+
+private extension UIView {
+    /// True when this view, or any view under it, is the first responder AND takes text.
+    func findFirstResponderIsTextInput() -> Bool {
+        if isFirstResponder { return self is UITextInput }
+        for sub in subviews where sub.findFirstResponderIsTextInput() { return true }
+        return false
     }
 }
