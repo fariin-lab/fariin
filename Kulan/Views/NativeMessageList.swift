@@ -115,6 +115,28 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var composerBarHeight: CGFloat = 0
     var voiceControl: Int = 0                  // 0 none · 1 pause · 2 continue — the recording's floating control
     var onVoiceControlTap: () -> Void = {}
+    /// ⛔ THE FLOATING OVERLAYS LIVE ON THE DOCK NOW — the reference app's arrangement. Theirs are
+    /// UIKit subviews pinned to the bottom bar's container
+    /// (`autoPinEdge(.bottom, to: .top, of: bottomBarContainer, withOffset: -24)`), so when the
+    /// keyboard moves they travel inside UIKit's own animation with the bar, for free and on the same
+    /// curve. Ours were SwiftUI overlays positioned from `composerLift` / `composerSide`, two numbers
+    /// this controller reports back ASYNCHRONOUSLY from a layout pass — so the arrow arrived a runloop
+    /// turn after the bar and then ran its own spring beside the keyboard's. That is the same "two
+    /// curves, one keyboard" shape that made a bubble appear to slide under the composer, just moved
+    /// to the arrow.
+    ///
+    /// ⚠️ THE CONTENT IS STILL SWIFTUI, UNCHANGED, AND THAT IS DELIBERATE. Only the POSITIONING moves
+    /// to UIKit. Re-drawing a Liquid Glass disc, its unread capsule and its transitions in UIKit would
+    /// have been a rewrite of the owner's UI, and he asked for the architecture to change and the UI
+    /// not to. Hosted here, the same view draws the same pixels while Auto Layout — not an async state
+    /// write — decides where it sits.
+    var dockOverlayTrailing: AnyView = AnyView(EmptyView())
+    var dockOverlayLeading: AnyView = AnyView(EmptyView())
+    /// The @-mention picker, which sits ON the composer's top edge rather than floating above it. It
+    /// used to live in the SwiftUI composer slot, which is a `safeAreaBar` — so it rode SwiftUI's own
+    /// keyboard avoidance, a THIRD clock on one screen. Pinned to the bar's top here, it rides the
+    /// same one the bar does.
+    var dockOverlayComposerTop: AnyView = AnyView(EmptyView())
     // Bumped by ThreadView from inside a SWIFTUI context-menu action (e.g. Select). UIKit's
     // context-menu callbacks cannot see SwiftUI-presented menus, so this is how the controller learns
     // "a menu is dismissing right now" and holds cell reloads until the animation is over.
@@ -128,7 +150,6 @@ struct NativeMessageList: UIViewControllerRepresentable {
     /// (lift, side): how far the composer stands above the keyboard, and its side inset — both
     /// measured where the controller places the bar, so SwiftUI's floating overlays sit on the
     /// bar's own edges without computing them a second time.
-    var onComposerGeometry: (CGFloat, CGFloat) -> Void = { _, _ in }
     var onTopInset: (CGFloat) -> Void = { _ in }   // reports the GEOMETRIC nav-bar overlap (UIKit safe area â€” reliable)
     // Whether the floating jump-to-latest button should be on screen. Reported on its own instead of
     // being derived from `isAtBottom`, because the two answer different questions: isAtBottom decides
@@ -220,6 +241,8 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.setComposerBarHeight(composerBarHeight)
         vc.onVoiceControlTap = onVoiceControlTap
         vc.setVoiceControl(voiceControl)
+        vc.setDockOverlays(trailing: dockOverlayTrailing, leading: dockOverlayLeading,
+                           composerTop: dockOverlayComposerTop)
         vc.setTopOverlayHeight(topOverlayHeight)
         // (`noteSendTick` is at the top of this method — it has to precede `applyComposer`.)
         vc.noteMenuActionTick(menuActionTick)   // BEFORE setSelecting/apply: arm the dismissal grace first
@@ -229,7 +252,6 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onSwipeReply = onSwipeReply
         vc.dayLabelFor = dayLabelFor
         vc.onTopInset = onTopInset
-        vc.onComposerGeometry = onComposerGeometry
         vc.setLoadingOlder(loadingOlder)
         vc.rowSignatures = rowSignatures
         // The scroll target RIDES the apply (a jump is a scroll ACTION attached to the load, landed
@@ -420,6 +442,81 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private static let composerRestDip: CGFloat = 5
     /// The composer, once ThreadView hands it over. Nil for the announcements list, which has none.
     private(set) weak var composerBar: UIView?
+
+    /// ⛔ THE DOCK OVERLAYS — the reference app's scroll buttons, in our shape. Two hosted SwiftUI
+    /// views (the reaction-jump badge stacked over the jump-to-latest arrow on the trailing side, the
+    /// other side's recording bubble on the leading one), positioned by Auto Layout from this
+    /// controller so they ride the keyboard's animation with the bar instead of arriving a runloop
+    /// later on a spring of SwiftUI's own. The CONTENT is ThreadView's, untouched.
+    ///
+    /// ⚠️ 10, not their 24. Theirs pins `-24` from the container's top; ours keeps the number the
+    /// SwiftUI overlay was already using, because the instruction was to change the architecture and
+    /// leave the appearance alone.
+    private static let dockOverlayGap: CGFloat = 10
+    private var dockOverlayTrailingHost: UIHostingController<AnyView>?
+    private var dockOverlayLeadingHost: UIHostingController<AnyView>?
+    private var dockOverlayComposerTopHost: UIHostingController<AnyView>?
+    private var dockOverlayBottom: NSLayoutConstraint?
+    private var dockOverlayTrailingC: NSLayoutConstraint?
+    private var dockOverlayLeadingBottom: NSLayoutConstraint?
+    private var dockOverlayTopLeadingC: NSLayoutConstraint?
+    private var dockOverlayTopTrailingC: NSLayoutConstraint?
+
+    /// Hand the overlays their content. Called on every SwiftUI update; assigning `rootView` is how a
+    /// hosting controller takes a new body, and SwiftUI diffs it exactly as it would in place.
+    func setDockOverlays(trailing: AnyView, leading: AnyView, composerTop: AnyView) {
+        if dockOverlayTrailingHost == nil { buildDockOverlays() }
+        dockOverlayTrailingHost?.rootView = trailing
+        dockOverlayLeadingHost?.rootView = leading
+        dockOverlayComposerTopHost?.rootView = composerTop
+    }
+
+    private func buildDockOverlays() {
+        guard isViewLoaded else { return }
+        func makeHost() -> UIHostingController<AnyView> {
+            let host = UIHostingController(rootView: AnyView(EmptyView()))
+            host.view.backgroundColor = .clear
+            // The host is a transparent lid over the list: it must never take a touch that was meant
+            // for a bubble, and its own SwiftUI content still takes its own.
+            host.view.isUserInteractionEnabled = true
+            host.view.translatesAutoresizingMaskIntoConstraints = false
+            addChild(host)
+            view.addSubview(host.view)
+            host.didMove(toParent: self)
+            return host
+        }
+        let trailingHost = makeHost()
+        let leadingHost = makeHost()
+        let topHost = makeHost()
+        dockOverlayTrailingHost = trailingHost
+        dockOverlayLeadingHost = leadingHost
+        dockOverlayComposerTopHost = topHost
+
+        let tBottom = trailingHost.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        let tTrail = trailingHost.view.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        let lBottom = leadingHost.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        dockOverlayBottom = tBottom
+        dockOverlayTrailingC = tTrail
+        dockOverlayLeadingBottom = lBottom
+        // The picker's bottom edge is the BAR's top edge. In the slot it came from that worked out
+        // as `composerLift - 8` above the keyboard's top, and the container's top is `barTopPad`
+        // above the bar's — so the same line, expressed against the thing it was always describing.
+        let topLead = topHost.view.leadingAnchor.constraint(equalTo: view.leadingAnchor)
+        let topTrail = topHost.view.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        dockOverlayTopLeadingC = topLead
+        dockOverlayTopTrailingC = topTrail
+        NSLayoutConstraint.activate([
+            tBottom, tTrail,
+            lBottom,
+            // The recording bubble's own inset, the same 12 the SwiftUI overlay used.
+            leadingHost.view.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+            topLead, topTrail,
+            topHost.view.bottomAnchor.constraint(equalTo: bottomBarContainer.topAnchor,
+                                                 constant: Self.barTopPad),
+        ])
+        // Above the composer, never under it.
+        view.bringSubviewToFront(bottomBarContainer)
+    }
 
     private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
     /// A send has begun and its row has not landed yet: hold the offset so the composer's own
@@ -650,7 +747,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// The second number is the bar's SIDE inset, so the overlays sit on the bar's own edge. It used
     /// to be recomputed in ThreadView from the keyboard's notification — a second copy of
     /// `positionBottomBar`'s arithmetic, a pass behind it.
-    var onComposerGeometry: ((CGFloat, CGFloat) -> Void)?
     private var lastReportedLift: CGFloat = -1
     private var lastReportedSide: CGFloat = -1
     private var lastReportedTop: CGFloat = -1
@@ -2916,15 +3012,34 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             lastReportedTop = top
             DispatchQueue.main.async { [weak self] in self?.onTopInset?(top) }
         }
-        // And how far the composer stands above the keyboard, plus its side inset, for the floating
-        // overlays. Same async rule, same change guard: this runs on every layout pass.
+        // ⛔ THE FLOATING OVERLAYS ARE PLACED HERE, SYNCHRONOUSLY, AND THAT IS THE WHOLE POINT. These
+        // two numbers used to be handed to SwiftUI on a `DispatchQueue.main.async` — forced, because a
+        // state write inside a layout pass is the "modifying state during view update" warning — and
+        // SwiftUI then animated the arrow to its new place on a spring of its own. So the bar moved on
+        // the keyboard's curve and the arrow followed a runloop turn later on a different one.
+        //
+        // Written as constraint constants on this pass instead, the overlays are inside the keyboard's
+        // animation block exactly as the bar is, because this pass IS that block. That is what the
+        // reference gets for free by pinning its scroll buttons to `bottomBarContainer`.
+        //
+        // The arithmetic is deliberately unchanged from what SwiftUI was applying — `lift + 10` above
+        // the screen bottom, `side` in from the edge, 12 in from the leading edge — so not a pixel
+        // moves. Only the clock does.
         if composerBar != nil {
             let lift = max(0, bottomBarContainer.frame.height - keyboardOverlap)
             let side = barLeading?.constant ?? composerMargin
             if abs(lift - lastReportedLift) > 0.5 || abs(side - lastReportedSide) > 0.5 {
                 lastReportedLift = lift
                 lastReportedSide = side
-                DispatchQueue.main.async { [weak self] in self?.onComposerGeometry?(lift, side) }
+                dockOverlayBottom?.constant = -(lift + Self.dockOverlayGap)
+                dockOverlayTrailingC?.constant = -side
+                dockOverlayLeadingBottom?.constant = -(lift + Self.dockOverlayGap)
+                dockOverlayTopLeadingC?.constant = side
+                dockOverlayTopTrailingC?.constant = -side
+                // Nothing is reported to SwiftUI any more. All three overlays are hosted here and
+                // placed by the two constants above, so the last async geometry hand-off on this
+                // screen is gone — which is the state the reference app is in: it tells its own view
+                // layer nothing about the keyboard, because Auto Layout has already said it.
             }
         }
         // SCROLL-LOCK BACKSTOP. handleSwipePan disables the scroll view's pan for the duration of a
@@ -3713,7 +3828,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // constant is the ONLY thing left answering for the container's height. This method rewrites
         // it from the hidden bar's own dimensions, and it used to run on every tracked scroll — so a
         // scroll in selection, search or a blocked chat silently re-inflated a container that is
-        // supposed to be gone, and the geometry reported up to SwiftUI (`onComposerGeometry`) jumped
+        // supposed to be gone, and the dock overlays pinned to it jumped
         // by a composer's height.
         guard let bar = composerBar as? ChatComposerView, !bar.isHidden,
               let heightC = barHeightC, let containerC = bottomBarHeight else { return }

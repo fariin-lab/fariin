@@ -209,10 +209,8 @@ struct ThreadView: View {
     /// How far the composer bar stands above the keyboard (or above the safe-area line at rest),
     /// reported by the list's controller, which is what places it. The floating overlays clear the
     /// bar by this. The default is one bar's worth so the first frame is not wrong.
-    @State private var composerLift: CGFloat = 48
     /// The bar's side inset, reported with the lift by the same controller. The floating buttons
     /// and the @-mention popup align to it.
-    @State private var composerSide: CGFloat = 20
     /// clientIds already re-driven automatically. Cleared whenever the signal drops, so every
     /// reconnection is worth one fresh attempt — see `autoRetryFailedMedia`.
     @State private var autoRetried: Set<String> = []
@@ -424,29 +422,14 @@ struct ThreadView: View {
             // there changed the bar height → changed the inset → the bottom gap "grew in stages" as you
             // scrolled (the reported bug). As an overlay it respects the bottom safe area (floats just above
             // the composer, rides the keyboard) and is fully tappable (padding, not offset).
-            .overlay(alignment: .bottomTrailing) {
-                VStack(spacing: 10) {
-                    reactionJumpButton   // sits ABOVE the arrow, like the reference
-                    jumpToBottomButton
-                }
-                // ⛔ ABOVE THE COMPOSER, MEASURED WHERE THE COMPOSER IS PUT. This was a bare 10,
-                // which worked only while the bar was SwiftUI's `safeAreaBar` and grew the bottom
-                // safe area. The bar is UIKit's now, so the padding started at the keyboard and the
-                // arrow landed on the mic button (his screenshot, 2026-08-26).
-                .padding(.bottom, composerLift + 10)
-                .animation(keyboard.systemAnimation, value: composerLift)
-            }
+            // (The jump arrow and the reaction badge are no longer placed here. They are handed to
+            // the list controller as `dockOverlayTrailing` and pinned by Auto Layout above the
+            // composer, so they ride the keyboard's own animation with the bar instead of arriving a
+            // runloop later on a spring of their own. Same views, same numbers, different clock.)
             // "Recording a voice note" indicator (their side): floats OVER the list at bottom-leading.
             // Deliberately NOT a list row — inserting transient rows touches the inverted-list scroll
             // machine (do-not-touch rules); an overlay moves nothing and costs nothing when absent.
-            .overlay(alignment: .bottomLeading) {
-                if repo.otherRecording, typingPref, !repo.iBlocked {
-                    RecordingBubble(dark: dark)
-                        // Same rule as the jump arrow above: clear the composer, not the keyboard.
-                        .padding(.leading, 12).padding(.bottom, composerLift + 10)
-                        .transition(.scale(scale: 0.5, anchor: .bottomLeading).combined(with: .opacity))
-                }
-            }
+            // (The recording bubble moved to the dock too, as `dockOverlayLeading`.)
             .animation(.spring(response: 0.32, dampingFraction: 0.75), value: repo.otherRecording)
             // Composer floats OVER the full-bleed list as a native iOS 26 blur bar (safeAreaBar); messages
             // scroll under it. The bar grows the bottom safe area; .always folds it into the content inset.
@@ -702,10 +685,9 @@ struct ThreadView: View {
                     .liquidGlass(Circle(), interactive: true)
             }
             .buttonStyle(.plain)
-            .padding(.trailing, composerSide)   // the composer's edge, reported by the controller that places it
-            // On the keyboard's own curve, as the bar is: its side inset changes inside the keyboard
-            // block in UIKit, and without this the button snapped 29 → 20 while the bar slid.
-            .animation(keyboard.systemAnimation, value: composerSide)
+            // (No trailing padding and no side animation here any more. The host this view sits in is
+            // pinned by the controller at exactly `composerSide` from the edge, written on the
+            // keyboard's own layout pass, so the inset arrives with the bar instead of chasing it.)
             .transition(.scale.combined(with: .opacity))
         }
     }
@@ -824,10 +806,9 @@ struct ThreadView: View {
                         }
                     }
             }
-            .padding(.trailing, composerSide)   // the composer's edge, reported by the controller that places it
-            // On the keyboard's own curve, as the bar is: its side inset changes inside the keyboard
-            // block in UIKit, and without this the button snapped 29 → 20 while the bar slid.
-            .animation(keyboard.systemAnimation, value: composerSide)
+            // (No trailing padding and no side animation here any more. The host this view sits in is
+            // pinned by the controller at exactly `composerSide` from the edge, written on the
+            // keyboard's own layout pass, so the inset arrives with the bar instead of chasing it.)
             .transition(.scale.combined(with: .opacity))
             .animation(.spring(response: 0.32, dampingFraction: 0.72), value: showsJumpButton)
         }
@@ -2974,11 +2955,28 @@ struct ThreadView: View {
             menuActionTick: menuActionTick,         // SwiftUI menu action fired → hold reloads through its dismissal
             sendTick: sendTick,                     // Send tapped → the list holds its offset until the row lands
             topOverlayHeight: searchActive ? 0 : pinBarHeight,   // floating date pill drops below the pin bar
-            // How far the composer stands above the keyboard and its side inset, measured where it
-            // is placed. The floating overlays sit on those instead of on the bottom safe area,
-            // which no longer contains the bar. See `onComposerGeometry` in the controller.
-            onComposerGeometry: { lift, side in composerLift = lift; composerSide = side },
             onJumpButtonVisibility: { showJumpButton = $0 },
+            // The dock overlays: the same views that used to be `.overlay`s on this stack, handed to
+            // the controller so Auto Layout places them above the composer and they move with the
+            // keyboard on its own curve. Their appearance and their transitions are untouched.
+            dockOverlayTrailing: AnyView(
+                VStack(spacing: 10) {
+                    reactionJumpButton   // sits ABOVE the arrow, like the reference
+                    jumpToBottomButton
+                }
+            ),
+            dockOverlayComposerTop: AnyView(
+                Group { if !mentionCandidates.isEmpty { mentionPicker } }
+            ),
+            dockOverlayLeading: AnyView(
+                Group {
+                    if repo.otherRecording, typingPref, !repo.iBlocked {
+                        RecordingBubble(dark: dark)
+                            .transition(.scale(scale: 0.5, anchor: .bottomLeading).combined(with: .opacity))
+                    }
+                }
+                .animation(.spring(response: 0.32, dampingFraction: 0.75), value: repo.otherRecording)
+            ),
             isAtBottom: $isAtBottom,
             scrollTarget: $nativeScrollTarget,
             // The floating date pill is now rendered + updated in UIKit (NativeMessageList) directly from
@@ -5272,11 +5270,9 @@ struct ThreadView: View {
             // and its gap, reported by the controller that places it; less the pad, it is the
             // distance from this slot's bottom (the keyboard's top, or the safe-area line) to the
             // bar's top edge, so the picker sits on that edge rather than a guessed distance above.
-            if !mentionCandidates.isEmpty {
-                mentionPicker
-                    .padding(.horizontal, composerSide)
-                    .padding(.bottom, max(0, composerLift - 8))
-            }
+            // (The picker moved to the dock as `dockOverlayComposerTop`. In this slot it rode
+            // SwiftUI's own keyboard avoidance — a third clock on one screen — and it is pinned to
+            // the bar's top edge in UIKit now, which is the line it was always describing.)
             // ⛔ THE BAR IS UIKIT — owner, 2026-08-25: "The Composer input text is currently
             // implemented in SwiftUI. Please completely convert it to UIKit." Everything drawn — the
             // "+", the pill and its field, the reply / edit / link cards, GIF, mic, send, the hold
