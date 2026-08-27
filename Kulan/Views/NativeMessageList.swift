@@ -595,7 +595,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// offset stayed, and the content sat under the keys. Reading the live "am I at the newest?" at that
     /// moment is no good either, because the bound has already moved. A distance recorded BEFORE the
     /// change is the only honest answer, which is exactly why theirs keeps one.
-    private var lastKnownDistanceFromBottom: CGFloat = 0
+    ///
+    /// ⚠️ OPTIONAL, as theirs is. `nil` is "nothing has been recorded yet", which is a different fact
+    /// from "recorded as zero" and must not be spelled the same way: a non-optional zero default made
+    /// "never asked" indistinguishable from "at the newest message" for every reader of this value.
+    /// It is nil only before the first land, and the first land positions the reader itself.
+    private var lastKnownDistanceFromBottom: CGFloat?
     /// ⛔ THE KEYBOARD REACHES THIS LIST THROUGH UIKIT'S OWN LAYOUT GUIDE — the reference app's
     /// mechanism, ported on the owner's order 2026-08-25 ("copy their approach for both directions…
     /// 100%, not an approximation"). See the note above `updateInsets`.
@@ -1006,7 +1011,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let offscreen = changed.filter { !visible.contains($0) }
         guard !offscreen.isEmpty else { return }
         collectionView.layoutIfNeeded()
-        let anchors = continuityAnchors()
+        // A row changing height in place, which is their `.loadSameLocation`: bottom-biased.
+        let anchors = continuityAnchors(relativeToTop: false)
         let before = frameMinY(for: currentIds)
         var moved = false
         for id in offscreen {
@@ -1124,7 +1130,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
         // Captured BEFORE the height lands, so the anchors describe the layout the reader is
         // looking at rather than the one being built (their token is taken before the update too).
-        let anchors = continuityAnchors()
+        //
+        // ⛔ BOTTOM-BIASED, AND THIS IS THE SITE THE 2026-08-27 BUG RAN THROUGH. A row adopting its
+        // real rendered height is a change in place; the rows that do it while the reader comes back
+        // down a conversation sit BELOW the top of the viewport, so a top-biased anchor could not see
+        // them move and returned a zero correction while the content grew taller.
+        let anchors = continuityAnchors(relativeToTop: false)
         let beforeY = frameMinY(for: currentIds)
         heights[id] = h
         let afterY = frameMinY(for: currentIds)
@@ -1143,8 +1154,29 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     //
     // A cascade rather than a single pick, so a row that is deleted or trimmed in the same update falls
     // through to the next candidate instead of giving up.
-    private func continuityAnchors() -> [Anchor] {
-        viewportIndexPaths().prefix(6).compactMap { ip -> Anchor? in
+    /// ⛔ THE BIAS FLIPS WITH THE KIND OF CHANGE — the reference app's rule, and ours had only half of
+    /// it. Their `ScrollContinuity` carries an `isRelativeToTop` flag, and their own comment explains
+    /// both settings: relative to the top means "the top-most visible interaction should remain the
+    /// same distance from the top of the chat history", relative to the bottom means "the bottom-most
+    /// visible interaction should remain the same distance from the top of the keyboard". They pick
+    /// the first ONLY for a page of older history and the second for everything else — a new message,
+    /// a row re-measuring, a load in place. Their search order is the same list either way, reversed
+    /// for the bottom bias: *"Honor the scroll continuity bias. If we prefer continuity with regard
+    /// to the bottom of the viewport, start with the last items."*
+    ///
+    /// Ours took the top-most rows in every case, and that is the shortfall injector behind the
+    /// owner's 2026-08-27 report. Coming back down a conversation, the rows that render for the first
+    /// time and adopt a corrected height are the ones BELOW the top-most anchor — an anchor which
+    /// therefore does not move, so the delta is zero, so the offset is held while the content grows
+    /// taller under the reader and the newest message drifts out of reach.
+    ///
+    /// Both directions still fall back through the same cascade in `continuityDelta`: the bias only
+    /// decides which end of the viewport is asked first.
+    private func continuityAnchors(relativeToTop: Bool) -> [Anchor] {
+        let visible = viewportIndexPaths()
+        let ordered = relativeToTop ? Array(visible.prefix(6))
+                                    : Array(visible.suffix(6).reversed())
+        return ordered.compactMap { ip -> Anchor? in
             guard let id = dataSource.itemIdentifier(for: ip),
                   let attr = collectionView.layoutAttributesForItem(at: ip) else { return nil }
             return Anchor(id: id, distanceFromOrigin: attr.frame.minY - collectionView.contentOffset.y)
@@ -1361,7 +1393,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// only this one.
     ///
     /// Ours needed it for the same reason and did not have it: the callback the stop fires runs
-    /// `clampToNewestIfBeyond()` and `settleFlush()`, either of which can move the reader, and both
+    /// `restoreReaderPosition()` and `settleFlush()`, either of which can move the reader, and both
     /// were running INSIDE the stop that was supposed to be clearing the way for a jump.
     private var ignoringScrollEvents = false
 
@@ -1397,9 +1429,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // the empty space he photographed. The clamp is already the app's stated invariant for this —
         // at rest the reader is never beyond the newest — so the landing simply has to consult it.
         //
-        // ⚠️ AFTER the flags are cleared, never before: `clampToNewestIfBeyond` stands down while
+        // ⚠️ AFTER the flags are cleared, never before: `restoreReaderPosition` stands down while
         // either animation flag is set, so calling it any earlier is a no-op.
-        clampToNewestIfBeyond()
+        //
+        // ⚠️ AND BEFORE `recordDistanceFromBottom` on the next line, which is why the order here is
+        // not arbitrary: the glide's landing place is corrected first, and the corrected place is
+        // what gets recorded as where the reader now is.
+        restoreReaderPosition()
         recordDistanceFromBottom()   // a glide or jump has landed; this is where the reader now is
         settleFlush()
         autoLoadMoreIfNeeded()
@@ -1524,7 +1560,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Before-map first: any of these measurements may change a height, and the correction has to be
         // computed against the frames as they stand right now.
         let beforeY = frameMinY(for: currentIds)
-        let anchors = continuityAnchors()
+        // Re-measuring rows in place: bottom-biased, as above.
+        let anchors = continuityAnchors(relativeToTop: false)
         var heightChanged = false
         if width > 0 {
             for id in target {
@@ -1691,7 +1728,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // dirty layout preparing after the mutation would mix old counts with new heights.
         collectionView.layoutIfNeeded()
         let beforeY = frameMinY(for: currentIds)
-        let anchors = continuityAnchors()
+        // ⛔ THE ONE SITE WHERE THE BIAS IS A RUNTIME QUESTION, because this method lands every kind
+        // of change. The reference app picks the bias from the load type: top-biased ONLY for
+        // `.loadOlder`, bottom-biased for a load in place, a newer page and the newest page. Our
+        // equivalent signal is whether the OLDEST loaded row changed, which is exactly what a page of
+        // history does (and what the date-separator join below already tests for).
+        let pagedOlder = currentIds.first != ids.first && !currentIds.isEmpty
+        let anchors = continuityAnchors(relativeToTop: pagedOlder)
 
         measureMissing(ids, width: width)   // exact heights BEFORE the layout prepares (no self-size correction)
         // Every row whose content changed, on screen or not — this whole block is already bracketed
@@ -1857,7 +1900,8 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // final wrap already (the hostWidth pin makes the first wrap the final wrap), so reconfiguring it
         // here just re-rendered the new bubble alone one beat after it appeared.
         let beforeY = frameMinY(for: currentIds)
-        let anchors = continuityAnchors()
+        // Rows just inserted at the newest end — their `.loadNewer` / `.loadNewest`: bottom-biased.
+        let anchors = continuityAnchors(relativeToTop: false)
         var changed: [String] = []
         for id in present {
             let h = measure(id, width: collectionView.bounds.width)
@@ -1986,76 +2030,79 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
     private func clampOffset(_ y: CGFloat) -> CGFloat { min(max(minContentOffsetY, y), maxContentOffsetY) }
 
-    // AT THE NEWEST MESSAGE: within 5pt of the bottom of the content (the reference app's tolerance).
+    /// AT THE NEWEST MESSAGE: within this of the bottom of the content. The reference app's number,
+    /// and theirs is one constant used by one predicate — so this is the only place it is written.
+    /// `updateInsets` asks the same question of the LIVE offset with the same tolerance.
+    static let atNewestTolerance: CGFloat = 5
     // This reads contentSize, so it is only asked with the layout settled; see the file comment.
-    private var isAtNewest: Bool { collectionView.contentOffset.y >= maxContentOffsetY - 5 }
+    private var isAtNewest: Bool { collectionView.contentOffset.y >= maxContentOffsetY - Self.atNewestTolerance }
 
-    /// AT REST, THE READER CAN NEVER BE BEYOND THE NEWEST MESSAGE. The keyboard leaving shrinks the
-    /// bottom inset, which shrinks `maxContentOffsetY`; a reader parked at the old maximum is then in the
-    /// bottom bounce region with the last bubble under the composer, and nothing pulls them back on its
-    /// own because no finger is there to end a drag. Being beyond the bound at rest is never legitimate,
-    /// so it is enforced wherever the list comes to rest rather than patched per timing.
+    /// ⛔ ONE BOTTOM MODEL, FOR THE WHOLE LIFE OF THE CHAT VIEW. This replaces the two nets that used
+    /// to sit here — `clampToNewestIfBeyond` and `keepNewestUntilFirstScroll` — and the owner's
+    /// 2026-08-27 report is exactly what having two of them cost.
     ///
-    /// ⚠️ HARMLESS WHILE THE KEYBOARD MOVES, by construction rather than by a flag. The guide changes
-    /// the bound ONCE, inside the keyboard's animation block, and `updateInsets` writes the final
-    /// offset in that same pass; the model offset is therefore already at the bound while the
-    /// presentation animates, and this finds nothing beyond it. The old keyboard clock that used to
-    /// gate this went with the rest of the notification machinery (see `updateInsets`).
-    private func clampToNewestIfBeyond() {
-        // ⛔ AND NOT DURING THE SEND HOLD. The hold exists so the composer's own shrink (the reply
-        // banner leaving, the text clearing) cannot walk the content down before the row lands and
-        // the glide walks it back up. `updateInsets` honoured it; this did not, and it runs on the
-        // very layout pass that shrink causes — so the content was clamped down by the banner's
-        // height in the same instant, unanimated, and the hold protected nothing. His report, twice:
-        // "tap Reply, press Send, the message briefly moves underneath the composer and jumps back."
-        guard didFirstLand, !isDisappearing,
-              // ⛔ NOT INSIDE AN INSET UPDATE. This runs from `viewDidLayoutSubviews`, and that pass
-              // is often the one `updateInsets` forces from its own first line — so this used to get
-              // a shot at the offset in the MIDDLE of the update, against half-written geometry, and
-              // (when the update was the keyboard's) with the keys' curve stripped off by the
-              // `performWithoutAnimation` below. It is a net for a list at rest; an update in flight
-              // is the opposite of rest.
-              !isUpdatingInsets,
+    /// WHAT WAS WRONG. The pair divided the job by TIME rather than by MEANING:
+    ///   · `keepNewestUntilFirstScroll` corrected BOTH directions (over and short) but switched
+    ///     itself off permanently at the reader's first finger drag (`readerHasScrolled`, set once
+    ///     and reset nowhere).
+    ///   · `clampToNewestIfBeyond` never expired but was ONE-SIDED: it tested `offset > bound` only,
+    ///     so it pulled back an overshoot and did nothing at all for a shortfall.
+    /// So a freshly opened chat was held exactly at the newest message on every layout pass — which
+    /// is why "open, keyboard up, keyboard down" was always correct — and a chat that had been
+    /// scrolled had no defence left against being left SHORT of the bound. Scrolling is precisely
+    /// what produces a shortfall: a row rendering for the first time adopts a height its prediction
+    /// missed, and the correction for that is measured against an anchor row that did not move, so
+    /// the delta is zero while the content grows taller underneath. From there `updateInsets` reads
+    /// "was I at the bottom" as FALSE, takes the lockstep branch, and carries the gap faithfully
+    /// through every keyboard open and close — the bubbles behind the composer he photographed.
+    ///
+    /// THE MODEL NOW, which is the reference app's. There is no "fresh chat" case and no first-drag
+    /// cliff. Two invariants, both true for the entire lifetime of the view:
+    ///   1. NO READER IS EVER BEYOND THE NEWEST MESSAGE. Past the bound is the bounce region; at
+    ///      rest it is never legitimate for anybody, so it is corrected for everybody.
+    ///   2. A READER WHO IS AT THE NEWEST MESSAGE IS AT IT, not near it. If their recorded place is
+    ///      the newest, the bound is where they belong however the geometry moved to get here.
+    /// A reader who has chosen a place further up is not touched by either: holding them still while
+    /// content changes around them is the anchor system's job (`continuityAnchors`), and this method
+    /// deliberately has no opinion about them.
+    ///
+    /// ⚠️ NOT WRAPPED IN `performWithoutAnimation`. The old pair disagreed about this — one wrapped,
+    /// one bare — and the wrapper was actively wrong: this runs from `viewDidLayoutSubviews`, which
+    /// is a pass the keyboard's own animation block can be running, and stripping the animation there
+    /// is what makes a bubble snap while the bar glides. Bare, it inherits whatever block it is in
+    /// and animates at rest not at all, which is right in both cases.
+    private func restoreReaderPosition() {
+        // ⛔ NOT DURING THE SEND HOLD. The hold exists so the composer's own shrink (the reply banner
+        // leaving, the text clearing) cannot walk the content down before the row lands and the glide
+        // walks it back up. His report, twice: "tap Reply, press Send, the message briefly moves
+        // underneath the composer and jumps back."
+        //
+        // ⛔ AND NOT INSIDE AN INSET UPDATE. This runs from `viewDidLayoutSubviews`, and that pass is
+        // often the one `updateInsets` forces from its own first line — so it would get a shot at the
+        // offset in the MIDDLE of the update, against half-written geometry. This is a net for a list
+        // at rest; an update in flight is the opposite of rest.
+        guard didFirstLand, !isDisappearing, !isUpdatingInsets,
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
               !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil,
               // Never on a spiked safe area: the bound is garbage for exactly that frame.
               collectionView.safeAreaInsets.bottom <= restSafeBottom + 0.5 else { return }
         let bound = maxContentOffsetY
-        guard collectionView.contentOffset.y > bound + 0.5 else { return }
-        UIView.performWithoutAnimation {
-            collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
+        let y = collectionView.contentOffset.y
+        // The RECORDED place, deliberately, not the live offset: a first-unread landing records its
+        // real distance and every programmatic jump records where it put the reader, so none of them
+        // are dragged to the bottom by this. `nil` means nothing has been recorded yet, which only
+        // happens before the first land — and the first land pins the reader itself.
+        let readerIsAtNewest = (lastKnownDistanceFromBottom ?? 0) <= Self.atNewestTolerance
+        let want: CGFloat
+        if y > bound + 0.5 {
+            want = bound                                   // invariant 1, for every reader
+        } else if readerIsAtNewest, y < bound - 0.5 {
+            want = bound                                   // invariant 2, for a reader at the newest
+        } else {
+            return
         }
-    }
-
-    /// Set the moment a finger first moves the list; never reset while the chat is open.
-    private var readerHasScrolled = false
-
-    /// ⛔ THE FIRST-OPEN NET — owner, 2026-08-25, build 681, twice ("when open first time chat,
-    /// messages is entering under composer… need scroll", then again opening from the chat list).
-    ///
-    /// The clearance under the last bubble is assembled from parts that arrive a beat apart on a
-    /// cold open: the composer's height is measured by SwiftUI and reported a pass later, the
-    /// keyboard guide resolves on its own first layout, image rows re-measure. A reader pinned to
-    /// the newest bound BEFORE a late part lands is left exactly that part short — visibly under the
-    /// bar, healing only when a scroll recomputes everything. WHICH pass completes the clearance
-    /// cannot be named in advance (his two OSes have already disagreed over exactly such orderings),
-    /// so the net is positional rather than causal: until the reader scrolls for the first time, a
-    /// reader whose RECORDED place is the newest message is kept at the newest bound on every layout
-    /// pass. One comparison when nothing changed; dies at the first real scroll.
-    ///
-    /// The RECORDED distance, deliberately: a first-unread landing records its real distance, and
-    /// every programmatic jump records where it put the reader, so none of them are touched.
-    private func keepNewestUntilFirstScroll() {
-        guard didFirstLand, !isDisappearing, !readerHasScrolled,
-              lastKnownDistanceFromBottom <= 5,
-              !isUpdatingInsets,   // mid-update is not rest — see `clampToNewestIfBeyond`
-              !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
-              !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil,
-              collectionView.safeAreaInsets.bottom <= restSafeBottom + 0.5 else { return }
-        let bound = maxContentOffsetY
-        guard abs(collectionView.contentOffset.y - bound) > 0.5 else { return }
-        collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
-        lastStableOffset = bound
+        collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
+        lastStableOffset = want
     }
     // The looser test, for the jump-to-latest BUTTON only: an affordance, not a decision about moving
     // someone. Deliberately separate so the two can never be confused again.
@@ -2478,7 +2525,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // safe area now (`.ignoresSafeArea(.keyboard)` in ThreadView), so nothing but this method
         // moves the bound and the stored copy was one more thing to keep in step.
         let oldYOffset = collectionView.contentOffset.y
-        let wasScrolledToBottom = oldYOffset >= maxContentOffsetY - 5
+        let wasScrolledToBottom = oldYOffset >= maxContentOffsetY - Self.atNewestTolerance
 
         let didChangeInsets = abs(oldInsets.top - newInsets.top) > 0.5 || abs(oldInsets.bottom - newInsets.bottom) > 0.5
         // Step 2: the insets, with UIScrollView's implicit offset shift cancelled.
@@ -2714,7 +2761,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         super.viewWillTransition(to: size, with: coordinator)
         guard didFirstLand else { return }
         let wasAtNewest = isAtNewest
-        let anchors = wasAtNewest ? [] : continuityAnchors()
+        // A rotation is the one case the reference app does NOT route through the continuity bias at
+        // all — it has its own size-transition path. Ours keeps the top-most anchor here on purpose:
+        // the viewport itself is changing size, and holding the row the reader is looking at against
+        // the top is the conventional behaviour for that. Every other caller is bottom-biased.
+        let anchors = wasAtNewest ? [] : continuityAnchors(relativeToTop: true)
         coordinator.animate(alongsideTransition: nil) { [weak self] _ in
             guard let self else { return }
             self.collectionView.layoutIfNeeded()   // the width-change re-measure ran in viewWillLayoutSubviews
@@ -2826,8 +2877,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // The invariant net, independent of any keyboard bookkeeping: at rest, never beyond the newest
         // bound. Catches the tail of an interactive keyboard dismissal, where `updateInsets` correctly
         // stands down because a finger owns the list while the clearance shrinks.
-        clampToNewestIfBeyond()
-        keepNewestUntilFirstScroll()
+        restoreReaderPosition()
         positionVoiceControl()
         // The visible message viewport in window coordinates, for the media transitions' clipping view
         // (the reference app passes `collectionView.adjustedContentInset` as `clippingAreaInsets`; this
@@ -3331,7 +3381,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard !ignoringScrollEvents else { return }
         // The finger has left. If the keyboard shrank the inset out from under a reader who was at the
         // newest message (interactive dismissal), this is the first honest moment to put them back.
-        if !decelerate { clampToNewestIfBeyond(); recordDistanceFromBottom(); settleFlush() }
+        if !decelerate { restoreReaderPosition(); recordDistanceFromBottom(); settleFlush() }
         // The lift is the moment a jump asked for mid-drag becomes allowed. It runs whether the list
         // is about to coast or not: perform() kills the coast on its way past.
         if let animated = pendingNewestJump {
@@ -3341,7 +3391,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
         guard !ignoringScrollEvents else { return }   // our own stop, not the reader's — see stopScrolling
-        clampToNewestIfBeyond(); recordDistanceFromBottom(); settleFlush()
+        restoreReaderPosition(); recordDistanceFromBottom(); settleFlush()
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -3360,7 +3410,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // A finger dragging the keyboard down moves the bar and the inset on this same event.
         followKeyboardUnderFinger()
         if scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating {
-            readerHasScrolled = true     // the first-open net stands down for good — see it for why
+            // ⛔ NOTHING IS LATCHED HERE ANY MORE. A `readerHasScrolled` flag used to be raised on
+            // this line and never lowered, and it permanently disabled the only two-directional
+            // bottom correction in the file — so the chat behaved one way before the reader's first
+            // drag and another way for the rest of its life. The reader's place is a live fact,
+            // recorded on the next line and re-read whenever it is needed; see `restoreReaderPosition`.
             lastStableOffset = scrollView.contentOffset.y
             recordDistanceFromBottom()   // the reader is choosing a position; remember it
             userScrolledSinceTimer = true
