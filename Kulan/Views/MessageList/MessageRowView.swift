@@ -1064,6 +1064,14 @@ final class MessageRowView: UIView {
         return b.bubble.contains(point)
     }
 
+    /// The call bubble itself — NOT the row. His report, 2026-08-27: tapping the empty wallpaper
+    /// beside a call bubble offered to call again; the cell's `.call` case fired for a tap
+    /// anywhere in the row because nothing asked WHERE. The wallpaper is nobody's button.
+    func hitsCallBubble(_ point: CGPoint) -> Bool {
+        guard let p = plan, case .call(let c) = p.body else { return false }
+        return c.bubble.contains(point)
+    }
+
     func hitsReactions(_ point: CGPoint) -> Bool {
         guard let p = plan, case .bubble(let b) = p.body else { return false }
         return b.reactions.contains { $0.contains(point) }

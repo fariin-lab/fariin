@@ -180,7 +180,9 @@ final class MessageRowCell: UICollectionViewCell {
         }
         switch m.content {
         case .call:
-            delegate?.rowCellDidTapCallRow(self)
+            // Only the bubble asks to call again; the empty row beside it is wallpaper (his
+            // report, 2026-08-27) — see `hitsCallBubble`.
+            if rowView.hitsCallBubble(p) { delegate?.rowCellDidTapCallRow(self) }
             return
         case .notice(let n):
             if let target = n.tapTargetId, n.style == .pill {
