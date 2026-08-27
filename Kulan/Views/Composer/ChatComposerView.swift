@@ -474,13 +474,17 @@ final class ChatComposerView: UIView {
         sendButton.configuration?.baseBackgroundColor = s.sendTint
         sendButton.tintColor = s.sendTint
 
-        // ⛔ 17, NOT 22 — owner, 2026-08-26: "play voice is too big". It was a 22pt glyph in a 26pt
-        // box, so it filled its control almost edge to edge and read as the loudest thing in a strip
-        // where it is the least important: the trash beside it is 18 and the waveform is the part
-        // you are meant to look at. 17 sits it just under its neighbour, which is where a secondary
-        // control belongs.
+        // ⛔ 14. THE TRAIL IS 22 → 17 → 14, AND HE HAS ASKED TWICE. 22 filled a 26pt box almost edge
+        // to edge; 17 was the first cut and he circled it again on 2026-08-27 — still too big.
+        //
+        // ⚠️ POINT SIZE IS NOT OPTICAL SIZE, WHICH IS WHY 17 STILL READ LARGE. Its neighbours in this
+        // strip are the trash at 18, the one-time circle at 20 and the time label at 15 — but every
+        // one of those is an OUTLINE or text, and `play.fill` is a solid triangle. A filled glyph
+        // carries far more ink at the same point size, so matching the numbers was never going to
+        // match the weight. 14 puts it under the text beside it, which is where the eye stops
+        // reading it as the loudest thing in a strip whose subject is the waveform.
         playButton.icon.image = UIImage(systemName: s.previewPlaying ? "pause.fill" : "play.fill",
-                                        withConfiguration: UIImage.SymbolConfiguration(pointSize: 17))
+                                        withConfiguration: UIImage.SymbolConfiguration(pointSize: 14))
         playButton.icon.tintColor = accent
         waveform.decibels = s.previewDecibels
         waveform.progress = s.previewProgress
