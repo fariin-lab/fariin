@@ -2224,10 +2224,60 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         return max(rest, lowest)
     }
 
+    // MARK: - The keyboard's own transport (the ghost accessory)
+    //
+    // ⛔ THE PRIMARY SOURCE ON HIS iOS 26 PHONE, where the notification-driven animation ran late
+    // (build 696, four photos: the bar stayed at rest through the whole open, was covered by the
+    // rising keys, and climbed out at the end — while Signal's bar rode every frame). The composer's
+    // field carries a zero-height `inputAccessoryView` (`ChatComposerView.keyboardGhost`); UIKit
+    // re-parents it into the keyboard's own host view and moves that host WITH the keys. Observing
+    // the host's frame fires SYNCHRONOUSLY inside whatever change UIKit makes — an animated show or
+    // hide, or a finger-driven frame — so the constraint and inset writes made here ride the keys'
+    // own animation exactly the way `keyboardLayoutGuide` writes would, on a phone where that guide
+    // is dead in this hosted controller. The story Aa editor's toolbar rides this same transport
+    // perfectly on the same phone, which is the proof it moves in time. The notification path stays
+    // as the belt (its writes are guarded and idempotent, so whichever fires first, the other
+    // no-ops), and it remains the only source for a keyboard raised by something other than our
+    // field.
+    private var keyboardHostObservations: [NSKeyValueObservation] = []
+    private weak var observedKeyboardHost: UIView?
+
+    /// Wired in `applyComposer`; called by the ghost when UIKit installs it into (or removes it
+    /// from) the keyboard's host view.
+    func bindKeyboardHost(_ host: UIView?) {
+        guard host !== observedKeyboardHost else { return }
+        keyboardHostObservations = []
+        observedKeyboardHost = host
+        guard let host else { return }
+        keyboardHostObservations = [
+            host.observe(\.frame) { [weak self] _, _ in self?.keyboardHostMoved() },
+            host.observe(\.center) { [weak self] _, _ in self?.keyboardHostMoved() },
+        ]
+        keyboardHostMoved()
+    }
+
+    private func keyboardHostMoved() {
+        guard isViewLoaded, view.window != nil, !isDisappearing,
+              let host = observedKeyboardHost, host.window != nil else { return }
+        // Cross-window convert goes through the screen, which is exactly what is wanted: the host
+        // lives in the keyboard's own window.
+        let f = host.convert(host.bounds, to: view)
+        let band = max(0, view.bounds.maxY - f.minY)
+        let up = band > view.safeAreaInsets.bottom + 0.5
+        keyboardReport = up ? .up(band) : .rest
+        if up { dockedBand = max(dockedBand, band) }
+        positionBottomBar()
+        syncBottomBarGeometry()
+        updateInsets()
+        // Inside an animated change this pass rides UIKit's block; outside one it lands at once.
+        view.layoutIfNeeded()
+    }
+
     /// The per-frame driver for `draggedBand`: from `scrollViewDidScroll` while a finger drags with
     /// the keyboard up. Guarded writes throughout, so a scroll that does not move the keys (the
     /// finger is above them) costs a few comparisons. `updateInsets` stands down on the offset
-    /// while the finger owns it, as theirs does; only the bar and the inset follow.
+    /// while the finger owns it, as theirs does; only the bar and the inset follow. (The ghost
+    /// above usually gets there first; this stays for a keyboard whose accessory is absent.)
     private func followKeyboardUnderFinger() {
         guard composerBar != nil, let dragged = draggedBand else { return }
         // The finger's band becomes the newest fact about the keys, so a pass between the finger
@@ -3283,6 +3333,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // It arrives on the bar's OWN animation clock, and the container follows on the same
             // one — which is the same rule the keyboard block follows one level up.
             bar.onHeightChange = { [weak self] _ in self?.resizeBottomBar() }
+            // The keyboard's own transport: the field's ghost accessory hands over the keys' host
+            // view, and this controller follows its frame — see `bindKeyboardHost`.
+            bar.keyboardGhost.onHostChange = { [weak self] host in self?.bindKeyboardHost(host) }
+            if let host = bar.keyboardGhost.superview { bindKeyboardHost(host) }
         }
         // ⛔ NO INSET IS WRITTEN STRAIGHT ONTO A CONSTRAINT HERE. `positionBottomBar` is the one
         // writer of all three (bottom and both sides) and it derives them from the keyboard band,
