@@ -75,6 +75,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onTapStoryQuote: (_ rowId: String, _ replyId: String) -> Void = { _, _ in }
     var onTapMedia: (String) -> Void = { _ in }        // the picture opens the viewer
     var onTapPill: (String) -> Void = { _ in }         // a view-once photo or voice note
+    var onTapReadMore: (String) -> Void = { _ in }     // expand a collapsed long text
     var onTapAlbumTile: (_ rowId: String, _ index: Int) -> Void = { _, _ in }
     var onTapFile: (String) -> Void = { _ in }
     var onToggleVoice: (String) -> Void = { _ in }
@@ -196,6 +197,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onTapStoryQuote = onTapStoryQuote
         vc.onTapMedia = onTapMedia
         vc.onTapPill = onTapPill
+        vc.onTapReadMore = onTapReadMore
         vc.onTapAlbumTile = onTapAlbumTile
         vc.onTapFile = onTapFile
         vc.onToggleVoice = onToggleVoice
@@ -524,6 +526,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onTapStoryQuote: (_ rowId: String, _ replyId: String) -> Void = { _, _ in }
     var onTapMedia: (String) -> Void = { _ in }
     var onTapPill: (String) -> Void = { _ in }
+    var onTapReadMore: (String) -> Void = { _ in }
     var onTapAlbumTile: (_ rowId: String, _ index: Int) -> Void = { _, _ in }
     var onTapFile: (String) -> Void = { _ in }
     var onToggleVoice: (String) -> Void = { _ in }
@@ -3008,6 +3011,22 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     /// The real bubble to hide/squeeze, an already-taken snapshot of it, and its window frame.
     /// Snapshot BEFORE the squeeze runs, so the preview is the unsqueezed truth.
+    /// ⛔ A WALL OF TEXT IS LIFTED FROM ITS TOP, NOT SHRUNK TO NOTHING — his screenshot,
+    /// 2026-08-27: expand a very long message with "Read more", long-press it, and the menu came up
+    /// with an EMPTY space where the message should be. The overlay scales a tall preview down to
+    /// fit and stops at 0.35; a message several screens tall is illegible long before that and, past
+    /// the fit maths, effectively invisible. His own words for the fix: on a long press it should
+    /// "become read more again", because the whole thing cannot be shown.
+    ///
+    /// Cropping happens at the SOURCE rect, so the snapshot is simply a shorter view — the
+    /// container, the overlay's fit maths and the return animation all keep working unchanged.
+    private func liftCap(_ frame: CGRect) -> CGRect {
+        let screen = view.window?.bounds.height ?? view.bounds.height
+        let cap = (screen * 0.34).rounded()          // ~13 lines on his phone
+        guard frame.height > cap else { return frame }
+        return CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: cap)
+    }
+
     private func bubbleSource(at indexPath: IndexPath, id: String)
         -> (source: UIView, snapshot: UIView, frame: CGRect)? {
         guard let cell = collectionView.cellForItem(at: indexPath) else { return nil }
@@ -3016,7 +3035,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // corner, and a snapshot of the bubble's own bounds slices them in half. `liftFrameInWindow`
             // is the bubble unioned with its badges, which is what the SwiftUI path expressed as
             // `bottomOverhang: 13` on its published rect.
-            let frame = native.liftFrameInWindow
+            let frame = liftCap(native.liftFrameInWindow)
             let inBubble = native.previewBubble.convert(frame, from: nil)
             guard let snap = native.previewBubble.resizableSnapshotView(from: inBubble,
                                                                        afterScreenUpdates: false,
@@ -3026,7 +3045,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Hosted (SwiftUI) row: crop the row snapshot to the published bubble rect. The bubble draws
         // its own rounded corners over a clear row background, so the crop needs no masking. When no
         // rect was published yet, fall back to the whole row content.
-        if let rect = CMBubbleRects.rect(id) {
+        if let rect = CMBubbleRects.rect(id).map(liftCap) {
             let inContent = cell.contentView.convert(rect, from: nil)
             guard let snap = cell.contentView.resizableSnapshotView(from: inContent,
                                                                     afterScreenUpdates: false,
@@ -3610,6 +3629,11 @@ extension MessageListController: MessageRowCellDelegate {
     func rowCellDidTapPill(_ cell: MessageRowCell) {
         guard let id = cell.rowId else { return }
         onTapPill(id)
+    }
+
+    func rowCellDidTapReadMore(_ cell: MessageRowCell) {
+        guard let id = cell.rowId else { return }
+        onTapReadMore(id)
     }
 
     func rowCellDidTapMedia(_ cell: MessageRowCell) {
