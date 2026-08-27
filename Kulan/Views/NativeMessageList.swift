@@ -106,6 +106,15 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // the first-unread row (its unread divider) near the top â€” not at the newest. Consumed exactly once at
     // first open; nil (or an id outside the loaded window) falls back to the newest message.
     var initialScrollId: String? = nil
+    /// How far below the viewport's top the restored row should sit, in points. Applied only to the
+    /// `initialScrollId` landing, and only when that id came from a saved reading position.
+    var initialScrollOffset: CGFloat? = nil
+    /// ⛔ WHERE THE READER IS, FOR REOPENING THE CHAT — the reference app's `lastVisibleInteraction`
+    /// plus its on-screen position. Reported from the list's own settle points, because this
+    /// controller is the only thing that knows which row is at the top of the viewport and by how
+    /// much it is clipped. `nil` means "at the newest message", which is the absence of a position
+    /// rather than a kind of one — see `ChatScrollStore.clear`.
+    var onReadingPosition: (ChatReadingPosition?) -> Void = { _ in }
     var canSwipeReply: (String) -> Bool = { _ in false }   // is this rowId reply-eligible (on the server)?
     var onSwipeReply: (String) -> Void = { _ in }          // swipe past threshold released â†’ reply to this rowId
     var loadingOlder: Bool = false             // show the top spinner while older messages page in
@@ -115,37 +124,6 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var composerBarHeight: CGFloat = 0
     var voiceControl: Int = 0                  // 0 none · 1 pause · 2 continue — the recording's floating control
     var onVoiceControlTap: () -> Void = {}
-    /// ⛔ THE FLOATING OVERLAYS LIVE ON THE DOCK NOW — the reference app's arrangement. Theirs are
-    /// UIKit subviews pinned to the bottom bar's container
-    /// (`autoPinEdge(.bottom, to: .top, of: bottomBarContainer, withOffset: -24)`), so when the
-    /// keyboard moves they travel inside UIKit's own animation with the bar, for free and on the same
-    /// curve. Ours were SwiftUI overlays positioned from `composerLift` / `composerSide`, two numbers
-    /// this controller reports back ASYNCHRONOUSLY from a layout pass — so the arrow arrived a runloop
-    /// turn after the bar and then ran its own spring beside the keyboard's. That is the same "two
-    /// curves, one keyboard" shape that made a bubble appear to slide under the composer, just moved
-    /// to the arrow.
-    ///
-    /// ⚠️ THE CONTENT IS STILL SWIFTUI, UNCHANGED, AND THAT IS DELIBERATE. Only the POSITIONING moves
-    /// to UIKit. Re-drawing a Liquid Glass disc, its unread capsule and its transitions in UIKit would
-    /// have been a rewrite of the owner's UI, and he asked for the architecture to change and the UI
-    /// not to. Hosted here, the same view draws the same pixels while Auto Layout — not an async state
-    /// write — decides where it sits.
-    var dockOverlayTrailing: AnyView = AnyView(EmptyView())
-    var dockOverlayLeading: AnyView = AnyView(EmptyView())
-    /// The @-mention picker, which sits ON the composer's top edge rather than floating above it. It
-    /// used to live in the SwiftUI composer slot, which is a `safeAreaBar` — so it rode SwiftUI's own
-    /// keyboard avoidance, a THIRD clock on one screen. Pinned to the bar's top here, it rides the
-    /// same one the bar does.
-    var dockOverlayComposerTop: AnyView = AnyView(EmptyView())
-    /// ⛔ WHERE THE READER IS, FOR REOPENING THE CHAT — the reference app's `lastVisibleInteraction`
-    /// plus its on-screen position. Reported from the list's own settle points, because this
-    /// controller is the only thing that knows which row is at the top of the viewport and by how
-    /// much it is clipped. `nil` means "at the newest message", which is the absence of a position
-    /// rather than a kind of one — see `ChatScrollStore.clear`.
-    var onReadingPosition: (ChatReadingPosition?) -> Void = { _ in }
-    /// How far below the viewport's top the restored row should sit, in points. Applied only to the
-    /// `initialScrollId` landing, and only when that id came from a saved reading position.
-    var initialScrollOffset: CGFloat? = nil
     // Bumped by ThreadView from inside a SWIFTUI context-menu action (e.g. Select). UIKit's
     // context-menu callbacks cannot see SwiftUI-presented menus, so this is how the controller learns
     // "a menu is dismissing right now" and holds cell reloads until the animation is over.
@@ -166,6 +144,28 @@ struct NativeMessageList: UIViewControllerRepresentable {
     // only an affordance and now waits far longer. See `shouldShowJumpButton`. Defaulted, so the
     // announcements list, which has no such button, passes nothing.
     var onJumpButtonVisibility: (Bool) -> Void = { _ in }
+    /// ⛔ THE FLOATING OVERLAYS LIVE ON THE DOCK NOW — the reference app's arrangement. Theirs are
+    /// UIKit subviews pinned to the bottom bar's container
+    /// (`autoPinEdge(.bottom, to: .top, of: bottomBarContainer, withOffset: -24)`), so when the
+    /// keyboard moves they travel inside UIKit's own animation with the bar, for free and on the same
+    /// curve. Ours were SwiftUI overlays positioned from `composerLift` / `composerSide`, two numbers
+    /// this controller reports back ASYNCHRONOUSLY from a layout pass — so the arrow arrived a runloop
+    /// turn after the bar and then ran its own spring beside the keyboard's. That is the same "two
+    /// curves, one keyboard" shape that made a bubble appear to slide under the composer, just moved
+    /// to the arrow.
+    ///
+    /// ⚠️ THE CONTENT IS STILL SWIFTUI, UNCHANGED, AND THAT IS DELIBERATE. Only the POSITIONING moves
+    /// to UIKit. Re-drawing a Liquid Glass disc, its unread capsule and its transitions in UIKit would
+    /// have been a rewrite of the owner's UI, and he asked for the architecture to change and the UI
+    /// not to. Hosted here, the same view draws the same pixels while Auto Layout — not an async state
+    /// write — decides where it sits.
+    var dockOverlayTrailing: AnyView = AnyView(EmptyView())
+    /// The @-mention picker, which sits ON the composer's top edge rather than floating above it. It
+    /// used to live in the SwiftUI composer slot, which is a `safeAreaBar` — so it rode SwiftUI's own
+    /// keyboard avoidance, a THIRD clock on one screen. Pinned to the bar's top here, it rides the
+    /// same one the bar does.
+    var dockOverlayComposerTop: AnyView = AnyView(EmptyView())
+    var dockOverlayLeading: AnyView = AnyView(EmptyView())
     @Binding var isAtBottom: Bool
     @Binding var scrollTarget: String?         // set to a rowId to scroll it into view (reply/search jump), then cleared
     // Day label for the floating date pill, resolved from a rowId. Called from scrollViewDidScroll and
