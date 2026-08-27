@@ -194,12 +194,6 @@ struct BubblePlan {
     var storyReplyPlan: StoryReplyPlan?
     var voicePlan: VoicePlan?
     var pillPlan: PillPlan?
-    /// A collapsed long text: how many lines the body label may draw (0 = unlimited), and the
-    /// "Read more" line under it. Defaults keep every existing constructor call unchanged.
-    var bodyLines: Int = 0
-    var readMore: CGRect? = nil         // bubble coordinates
-    var readMoreAttr: NSAttributedString? = nil
-
     // Outside the bubble, row coordinates
     var avatar: CGRect?
     var senderName: CGRect?
@@ -629,34 +623,12 @@ enum MessageRowLayout {
         // Re-measure the body at the FINAL content width. With a quote driving the bubble wider the
         // text has more room than it was measured with, and a stale height would leave a gap under
         // the last line.
-        var finalBodySize = BubbleText.size(bodyAttr, width: contentW)
-        // ⛔ A VERY LONG MESSAGE COLLAPSES — his side-by-side, 2026-08-27: the reference app caps a
-        // wall of text and offers "Read more"; ours filled the screen. Collapse only when it hides
-        // at least three lines (a button that reveals one line is noise), never on an expanded row,
-        // and never on a tombstone or jumbomoji. The footer moves to its own line under the
-        // "Read more", because the reservation baked into the body's last line is now clipped away.
-        var bodyLines = 0
-        var readMoreRect: CGRect?
-        var readMoreAttr: NSAttributedString?
-        if case .text = b.body, !b.textExpanded, !isTombstone, !isJumbo {
-            let capped = cappedHeight(bodyAttr, width: contentW, lines: collapseLines)
-            if finalBodySize.height > capped + lineSizeOf(bodyAttr).height * 3 {
-                finalBodySize.height = capped
-                bodyLines = collapseLines
-                metaOwnLine = true
-            }
-        }
+        // ⛔ A LONG MESSAGE IS DRAWN IN FULL. The 20-line "Read more" collapse tried here on
+        // 2026-08-27 is REMOVED on his order the next day: it cut his messages in the middle and
+        // the cut followed them into the long-press preview. A bubble is as tall as its words.
+        let finalBodySize = BubbleText.size(bodyAttr, width: contentW)
         let textRect = CGRect(x: hPad, y: innerY, width: contentW, height: finalBodySize.height)
         innerY += finalBodySize.height
-        if bodyLines > 0 {
-            let attr = NSAttributedString(string: "Read more", attributes: [
-                .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
-                .foregroundColor: accent])
-            let s = lineSizeOf(attr)
-            readMoreRect = CGRect(x: hPad, y: innerY + 5, width: s.width, height: s.height)
-            readMoreAttr = attr
-            innerY += 5 + s.height
-        }
 
         var metaRect: CGRect
         if metaOwnLine {
@@ -690,9 +662,6 @@ enum MessageRowLayout {
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
             failBadge: nil)
-        plan.bodyLines = bodyLines
-        plan.readMore = readMoreRect
-        plan.readMoreAttr = readMoreAttr
 
         // Reactions, the retry line, the avatar and the two tags are the same for every bubble
         // kind, so they are placed in ONE function. A media bubble that grew its own copy would be
@@ -1438,10 +1407,6 @@ enum MessageRowLayout {
     /// The height of an attributed string clamped to `lines` — the card's title and description are
     /// both `lineLimit(2)`, and a plan that measured them unclamped would reserve room for a
     /// paragraph the label will never draw.
-    /// The long-text collapse: past this many lines a bubble shows "Read more" instead of the wall
-    /// (his side-by-side, 2026-08-27 — the reference app collapses, ours filled the screen).
-    static let collapseLines = 20
-
     private static func cappedHeight(_ s: NSAttributedString, width: CGFloat, lines: Int) -> CGFloat {
         let full = BubbleText.size(s, width: width).height
         let one = lineSizeOf(s, cap: width).height

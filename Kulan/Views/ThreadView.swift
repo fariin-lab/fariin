@@ -162,9 +162,6 @@ struct ThreadView: View {
     @State private var pendingKeyboardDismiss = false
     /// When the composer was last touched — the tap-to-dismiss canceller. See `TouchClock`.
     @State private var composerTouch = TouchClock()
-    /// Rows whose long text the reader expanded past the 20-line collapse ("Read more").
-    /// ⚠️ Read while building rows → keyed into `uikitModels`' cache AND both signature keys.
-    @State private var expandedTexts: Set<String> = []
     /// Bumped at the TOP of every send path, before the composer is cleared. See `noteSendTick`.
     @State private var sendTick = 0
     @State private var infoTarget: Message?        // group message → "read by" info sheet
@@ -2262,7 +2259,7 @@ struct ThreadView: View {
         // CONTENT AND HEIGHT (140pt card → one line of text), and height only updates through the
         // signature path. Reading it here also makes the body observe story changes at all.
         let storiesRepo = StoriesRepository.shared
-        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)|\(expandedTexts.hashValue)"
+        let key = "\(repo.itemsVersion)|\(readCutoff)|\(pins.joined(separator: ","))|\(viewedOnceTick)|\(hiddenTick)|\(term)|\(colorTok)|\(wallTok)|\(dark)|\(firstUnreadId ?? "-")|\(repo.iBlocked)|\(storiesRepo.storiesVersion)"
         if sigCache.key != key {
             var out: [String: String] = [:]
             out.reserveCapacity(repo.items.count)
@@ -2331,11 +2328,7 @@ struct ThreadView: View {
                 // recompute at all; this token is what makes the right row differ.)
                 let hiddenTiles = m.album.isEmpty ? "-"
                     : (0..<m.album.count).filter { HiddenMessages.isHidden("\(m.id)-\($0)") }.map(String.init).joined(separator: ",")
-                // Long-text expansion: key-vs-value again (the file's own rule) — the set in the
-                // KEY recomputes this dictionary; this token is what makes the tapped row differ,
-                // so IT is what reconfigures and re-measures the 20-line collapse open.
-                let expanded = expandedTexts.contains(m.rowId) ? "E1" : "E0"
-                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)|\(expanded)"
+                out[m.rowId] = "\(m.text.hashValue)|\(m.edited)|\(m.deleted)|\(String(describing: m.sendState))|\(read)|\(pins.contains(m.id))|\(reactions)|\(m.album.count)|\(hiddenTiles)|\(once)|\(match)|\(colorTok)|\(wallTok)|\(dark)|\(cluster)|\(story)|\(unread)|\(call)|\(m.uploading)|\(m.audioUrl?.isEmpty == false)"
             }
             sigCache.key = key
             sigCache.base = out
@@ -2429,9 +2422,6 @@ struct ThreadView: View {
             //     card or says the story is gone, and that is a HEIGHT difference.
             //   hiddenTick — `albumBody` drops tiles hidden "for me", which re-solves the mosaic.
             "\(storiesRepo.storiesVersion)", "\(storiesRepo.didLoad)", "\(hiddenTick)",
-            // The long-text expansion set: read while building rows (the collapse), so it keys the
-            // cache — the sixth time this file has had to learn the same rule.
-            "\(expandedTexts.count):\(expandedTexts.hashValue)",
         ].joined(separator: "|")
         if uikitModelCache.key == key { return uikitModelCache.models }
 
@@ -2443,7 +2433,6 @@ struct ThreadView: View {
             onWallpaper: chatHasWallpaper, wallpaperBlur: wallpaperBlur,
             otherLastReadMillis: repo.otherLastReadMillis, iBlocked: repo.iBlocked,
             searchTerm: searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
-            expandedTexts: expandedTexts,
             nameFor: { personName($0) },
             avatarFor: { conversation?.photos[$0] },
             resolveOriginal: { id in repo.items.first { $0.id == id } },
@@ -2805,9 +2794,6 @@ struct ThreadView: View {
                 guard let m = repo.items.first(where: { $0.rowId == id }) else { return }
                 MediaPresentGate.present { viewerImage = m }
             },
-            // Expanding a collapsed long text is a MODEL change: the set keys the model cache and
-            // both signature keys, so the row reconfigures and re-measures through the normal path.
-            onTapReadMore: { id in expandedTexts.insert(id) },
             // ⛔ THE GALLERY IS ONE SYNTHETIC MESSAGE PER TILE, NOT THE ALBUM MESSAGE. His report,
             // 2026-08-26: a single photo opens fine, an album tile opens black with a spinner that
             // never stops.

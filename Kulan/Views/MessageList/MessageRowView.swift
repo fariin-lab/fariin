@@ -306,7 +306,6 @@ final class MessageRowView: UIView {
     private let rim = BubbleShapeView()
     private let highlight = BubbleShapeView()
     private let bodyLabel = UILabel()
-    private let readMoreLabel = UILabel()   // the long-text collapse's expand line
     private let metaLabel = UILabel()
 
     private var mediaView: MediaBubbleView?
@@ -355,8 +354,6 @@ final class MessageRowView: UIView {
         // this whole directory exists to prevent.
         bodyLabel.lineBreakMode = .byWordWrapping
         bubbleBox.addSubview(bodyLabel)
-        readMoreLabel.isUserInteractionEnabled = false   // the cell hit-tests and routes the expand
-        bubbleBox.addSubview(readMoreLabel)
         // ⛔ NEVER TRUNCATE THE FOOTER — owner, 2026-08-26: his bubbles read "2:44 PM…" with the
         // ticks replaced by an ellipsis. A UILabel defaults to `.byTruncatingTail`, and the meta's
         // frame is its own measured width, so a fraction of a point of disagreement between
@@ -528,16 +525,6 @@ final class MessageRowView: UIView {
 
         bodyLabel.attributedText = b.bodyAttr
         bodyLabel.frame = b.text
-        // The collapse: the plan sized the rect for this many lines; the label clips to the same
-        // count so measurement and drawing cannot disagree. 0 = unlimited, the default.
-        bodyLabel.numberOfLines = b.bodyLines
-        if let r = b.readMore, let attr = b.readMoreAttr {
-            readMoreLabel.attributedText = attr
-            readMoreLabel.frame = r
-            readMoreLabel.isHidden = false
-        } else {
-            readMoreLabel.isHidden = true
-        }
         metaLabel.attributedText = BubbleText.meta(metaChrome(m), isMe: isMe(m), color: b.metaColor)
         // Theirs SPINS while a message is in flight (`isAnimated: true` on the sending indicator,
         // a full turn a second, repeating). A still clock reads as a stuck message.
@@ -1088,12 +1075,6 @@ final class MessageRowView: UIView {
     func hitsFile(_ point: CGPoint) -> Bool {
         guard let p = plan, case .bubble(let b) = p.body, b.filePlan != nil else { return false }
         return b.bubble.contains(point)
-    }
-
-    /// The "Read more" line under a collapsed long text — with a generous target around it.
-    func hitsReadMore(_ point: CGPoint) -> Bool {
-        guard let p = plan, case .bubble(let b) = p.body, let r = b.readMore else { return false }
-        return r.offsetBy(dx: b.bubble.minX, dy: b.bubble.minY).insetBy(dx: -12, dy: -8).contains(point)
     }
 
     /// The call bubble itself — NOT the row. His report, 2026-08-27: tapping the empty wallpaper

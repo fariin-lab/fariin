@@ -31,7 +31,6 @@ protocol MessageRowCellDelegate: AnyObject {
     func rowCellDidToggleSelection(_ cell: MessageRowCell)
     func rowCell(_ cell: MessageRowCell, didTapSender uid: String)
     func rowCellDidTapCallRow(_ cell: MessageRowCell)
-    func rowCellDidTapReadMore(_ cell: MessageRowCell)
     func rowCellDidTapPinNotice(_ cell: MessageRowCell, jumpTo id: String)
 }
 
@@ -199,10 +198,6 @@ final class MessageRowCell: UICollectionViewCell {
             }
             if rowView.hitsReactions(p) {
                 delegate?.rowCellDidTapReactions(self)
-                return
-            }
-            if rowView.hitsReadMore(p) {
-                delegate?.rowCellDidTapReadMore(self)
                 return
             }
             // The picture opens the viewer. Before the quote test, because a media bubble's quote

@@ -26,10 +26,6 @@ struct MessageRowContext {
     var otherLastReadMillis: Double
     var iBlocked: Bool
     var searchTerm: String
-    /// Rows whose long text the reader expanded past the 20-line collapse — see the layout's
-    /// "Read more". ⚠️ Read while building a row, so it must key every cache that decides whether
-    /// a row is rebuilt (the rule this file's callers state five times).
-    var expandedTexts: Set<String> = []
     var nameFor: (String) -> String
     var avatarFor: (String) -> String?
     var resolveOriginal: (String) -> Message?
@@ -310,8 +306,7 @@ enum MessageRowModelBuilder {
             // sits and opens nothing, so there is no tap for the recogniser to hold up — which is
             // why it keeps the double-tap shortcut and the others give it away.
             opensOnTap: msg.isImage || msg.isVideo || msg.isAlbum || msg.isFile,
-            canDoubleTapReact: msg.sendState == nil && !msg.deleted,
-            textExpanded: ctx.expandedTexts.contains(msg.rowId))
+            canDoubleTapReact: msg.sendState == nil && !msg.deleted)
     }
 
     private static func mediaBody(_ m: Message, ctx: MessageRowContext) -> BubbleBody.MediaBody {
