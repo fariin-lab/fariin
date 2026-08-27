@@ -832,7 +832,29 @@ final class ThreadRepository {
     // optimistic message still .sending after 2 minutes flips to .failed ("Tap to retry"). If its
     // upload later succeeds anyway, the server echo removes the pending — the state self-corrects.
     private func sweepStuckSends() {
-        let cutoff = Date().addingTimeInterval(-120)
+        // ⛔ OFFLINE, A SEND IS NOT "IN FLIGHT" AND DOES NOT GET TWO MINUTES — his screenshot,
+        // 2026-08-27: the retry badges never appear while he is sending, then arrive one at a time
+        // once he leaves and comes back into the chat.
+        //
+        // Both halves of that are this cutoff. Nothing marks these failed promptly: the explicit
+        // `markFailed` sites only fire when a send THROWS, and an offline write does not throw —
+        // Firestore queues it and returns happily — so the only thing that ever flips them is this
+        // sweep, at 120 seconds. And because each message is measured against its OWN `createdAt`,
+        // they cross that line in the order they were sent: badges appearing one by one, which is
+        // exactly what he described. By the time he had left the chat and come back, two minutes had
+        // passed and they all showed at once, which is why it looked like re-entering was what
+        // summoned them.
+        //
+        // The two minutes are there for a real case — a slow but genuine send should not be called
+        // failed — and that case requires a network. With no path at all there is nothing to be slow
+        // about, so five seconds is generous. The timer runs every 15s, so a badge now appears within
+        // about that, against a floor of two minutes before.
+        //
+        // ⚠️ A FALSE POSITIVE IS ALREADY HARMLESS HERE, which is what makes the shorter grace safe:
+        // as the note above says, if the upload lands anyway the server echo removes the pending and
+        // the state corrects itself.
+        let grace: TimeInterval = NetworkState.shared.isOnline ? 120 : 5
+        let cutoff = Date().addingTimeInterval(-grace)
         var changed = false
         for i in pending.indices where pending[i].sendState == .sending && pending[i].createdAt < cutoff {
             pending[i].sendState = .failed
