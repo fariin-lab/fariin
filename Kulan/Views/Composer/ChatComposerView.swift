@@ -118,9 +118,21 @@ final class ChatComposerView: UIView {
     /// the circle and read as the heaviest thing at that end of the bar. 17 leaves it room to sit in.
     /// Same correction as the review bar's play glyph, and for the same reason: what a symbol weighs
     /// is not the number you set, it is how much of the box the shape actually reaches.
+    // ⛔ ONE GLYPH SIZE FOR EVERY ROUND BUTTON: 17. His screenshot, 2026-08-27, listing send, record
+    // again, pause, delete and play as all wrong — the strip was carrying 17, 18, 19 and 20 side by
+    // side, and mismatched by a point or two is exactly what reads as "not quite right" without being
+    // nameable.
+    //
+    // ⚠️ 17 IS THEIR RATIO, NOT THEIR NUMBER, AND THE DIFFERENCE IS DELIBERATE. Their controls are
+    // 24pt glyphs in a 40pt box (`animationSize = CGSize(square: 24)` for the voice draft's
+    // play/pause, `LayoutMetrics.initialTextBoxHeight = 40` for the button) — a ratio of 0.6. Our box
+    // is 40 too, so the literal copy is 24. But theirs are drawn OUTLINE assets and ours are FILLED
+    // SF Symbols, which carry far more ink at the same point size: he rejected this bar's play glyph
+    // at 22 and again at 17 for being too big, and 24 would be heavier than either. 17 is where a
+    // filled symbol sits at the weight their 24pt outline does.
     private let plusButton = ChatComposerView.glassButton(symbol: "plus", size: 17, weight: .regular, color: .label)
-    private let trashButton = ChatComposerView.glassButton(symbol: "trash.fill", size: 18, weight: .regular, color: .systemRed, bakeColor: true)
-    private let sendButton = ChatComposerView.glassButton(symbol: "arrow.up", size: 19, weight: .bold, color: .white, prominent: true)
+    private let trashButton = ChatComposerView.glassButton(symbol: "trash.fill", size: 17, weight: .regular, color: .systemRed, bakeColor: true)
+    private let sendButton = ChatComposerView.glassButton(symbol: "arrow.up", size: 17, weight: .bold, color: .white, prominent: true)
     // ⛔ NO PAUSE BUTTON HERE — it floats above the bar, and the hosting view never delivers touches
     // to a platform view outside the frame SwiftUI gave it (proven on device, build 682). It lives
     // in `MessageListController.setVoiceControl`, whose view owns that region of the screen.
