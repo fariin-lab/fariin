@@ -3215,6 +3215,33 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         }
     }
 
+    /// ⚠️ DIAGNOSTIC ONLY — OUT BEFORE THIS SHIPS. "With the keyboard open the last message is
+    /// clipped behind the composer", still true on the build that carried the coordinate fix.
+    ///
+    /// The clearance the list reserves is `bottomBarContainer.frame.height` — the container's LAID
+    /// OUT frame, not the constraint constant — so the two numbers that decide this are that frame
+    /// and where the collection view actually stopped its content. Both are printed here beside the
+    /// bar's real frame, so the overlap can be read off directly instead of derived: if `barTop` is
+    /// above `contentStops`, the message is under the bar by the difference.
+    private var probeCount = 0
+    private func probeClearance() {
+        guard probeCount < 40 else { return }
+        probeCount += 1
+        let bar = composerBar?.frame ?? .zero
+        let adj = collectionView.adjustedContentInset.bottom
+        print("[KPROBE #\(probeCount)]",
+              "viewH=\(Int(view.bounds.height))",
+              "viewSafeBottom=\(Int(view.safeAreaInsets.bottom))",
+              "guide=\(Int(keyboardOverlap))",
+              "barTop=\(Int(bar.minY))",
+              "barBottom=\(Int(bar.maxY))",
+              "containerFrameH=\(Int(bottomBarContainer.frame.height))",
+              "containerConstH=\(Int(bottomBarHeight?.constant ?? -1))",
+              "cvH=\(Int(collectionView.bounds.height))",
+              "cvAdjBottom=\(Int(adj))",
+              "contentStops=\(Int(collectionView.bounds.height - adj))")
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         // ⛔ THE KEYBOARD'S ONE WRITER, THE REFERENCE APP'S WAY. Their `viewDidLayoutSubviews` calls
@@ -3240,6 +3267,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         adoptSystemKeyboardGuide()   // where the system guide moves, it is the better transport
         positionBottomBar()
         updateInsets()
+        probeClearance()   // ⚠️ DIAGNOSTIC ONLY — remove before shipping.
         // The invariant net, independent of any keyboard bookkeeping: at rest, never beyond the newest
         // bound. Catches the tail of an interactive keyboard dismissal, where `updateInsets` correctly
         // stands down because a finger owns the list while the clearance shrinks.
