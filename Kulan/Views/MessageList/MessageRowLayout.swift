@@ -1794,7 +1794,14 @@ enum MessageRowLayout {
         // otherwise be too NARROW to read. `comfortW` is the width a 9:16 has at the 1.3 cap, so
         // 9:16 lands on exactly the approved size, anything taller is capped there, anything between
         // ramps smoothly, and 3:4, square and every landscape ratio are left exactly as they were.
-        let maxH = boxMax * 1.3
+        // ⚠️ 1.2, DOWN FROM 1.3 — his screenshot, 2026-08-27: a 9:16 photo fills most of the screen,
+        // "make it zoom out but not too much, only slightly". This multiplier is the whole knob, and
+        // because the comfort rule below ties the width to the height, moving it scales a tall photo
+        // in both directions at once. At a 272pt max bubble it takes a 9:16 from 199 × 354 to
+        // 184 × 326 — about 8% off, which is the "small number" he asked for rather than a resize.
+        // Anything that does not reach `comfortW` (3:4, square, every landscape) is untouched either
+        // way, so this moves the tall case only.
+        let maxH = boxMax * 1.2
         let comfortW = maxH * (9.0 / 16.0)
         var h = boxMax
         var w = h * aspect
