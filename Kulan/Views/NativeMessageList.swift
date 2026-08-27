@@ -441,7 +441,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private(set) weak var composerBar: UIView?
 
 
-    private var captureFreezeUntil = Date.distantPast    // system screenshot capture owns the scroll until then
     /// A send has begun and its row has not landed yet: hold the offset so the composer's own
     /// shrink cannot walk the content down before the glide walks it back up. See `updateInsets`.
     private var sendHoldUntil = Date.distantPast
@@ -931,9 +930,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                                name: UIApplication.willEnterForegroundNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive),
                                                name: UIApplication.didBecomeActiveNotification, object: nil)
-        // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
-        NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
-                                               name: UIApplication.userDidTakeScreenshotNotification, object: nil)
         // THE DOWN ARROW'S DIRECT LINE (owner 2026-08-13, third report, still dead on build 570 with
         // all three earlier fixes in it).
         //
@@ -1500,7 +1496,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                       !self.collectionView.isDragging, !self.collectionView.isTracking,
                       !self.collectionView.isDecelerating,
                       !self.contextMenuVisible, !self.isDisappearing,
-                      Date() >= self.captureFreezeUntil,
                       abs(self.collectionView.contentOffset.y - target) > 2 else { return }
                 self.collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
                 self.lastStableOffset = target
@@ -1536,8 +1531,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if sendAnimating || programmaticScrollAnimating { return false }
         // A reply swipe owns its cell's transform; a relayout under it moves the thing being dragged.
         if swipingCell != nil { return false }
-        // The system's full-page screenshot capture scrolls the list programmatically with no drag flags.
-        if Date() < captureFreezeUntil { return false }
         return true
     }
 
@@ -2325,7 +2318,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // it back itself — `scrollViewDidScroll`, `updateInsets` and the date pill all stand down on
         // the same clock.
         guard didFirstLand, !isDisappearing, !isUpdatingInsets, !contextMenuVisible,
-              Date() >= captureFreezeUntil,
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
               !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil,
               // Never on a spiked safe area: the bound is garbage for exactly that frame.
@@ -2372,7 +2364,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// `updateInsets` is edge-triggered, so the change is written once and never offered again.
     private func restoreRecordedDistance() {
         guard didFirstLand, !isDisappearing, !isUpdatingInsets, !contextMenuVisible,
-              Date() >= captureFreezeUntil,
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
               !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil,
               collectionView.safeAreaInsets.bottom <= restSafeBottom + 0.5,
@@ -2693,8 +2684,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// not follow it. Returns the height the keys are being held at, or nil when no finger owns them.
     private var fingerDrivenHeight: CGFloat? {
         let rest = restSafeBottom
-        // Only while UIKit actually hands the keys to the finger. The mode is parked at `.none` for
-        // the screenshot-capture window, and there the keys ignore the finger completely.
+        // Only while UIKit actually hands the keys to the finger. ⚠️ Nothing sets this mode to
+        // anything else any more — it is written once in `viewDidLoad` and never touched again, as
+        // theirs is. It used to be parked at `.none` for the screenshot-capture window, and that
+        // window is gone. Kept as a statement of the precondition rather than a live switch: this
+        // feeder is only meaningful while UIKit is handing the keys to a drag.
         guard collectionView.keyboardDismissMode == .interactive else { return nil }
         // `dockedBand` is the gate because only an ANIMATED notification writes it: it says "the keys
         // docked up and have not animated away", survives every finger-driven frame, and goes to zero
@@ -2904,7 +2898,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // ⛔ AND THE SYSTEM OWNS IT DURING A FULL-PAGE SCREENSHOT CAPTURE. Every other offset writer in
         // this file stands down on that clock and this one did not, so the capture's own scroll could
         // be walked by the lockstep below while it was in progress.
-        guard Date() >= captureFreezeUntil else { return }
         // Ours additionally: a send glide or a jump is a programmatic animated scroll that already
         // knows where it is going, and `scrollViewDidEndScrollingAnimation` lands it. Theirs has no
         // glide (a sent row appears and the list is simply at the bottom), so it has nothing to
@@ -3867,9 +3860,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // still move the bubbles across the picture.
         WallpaperBlurSliceView.repositionAll()
         guard !ignoringScrollEvents else { return }   // ditto: a stop is not a scroll
-        // During the screenshot-capture freeze the SYSTEM owns the offset: write no SwiftUI state and fire
-        // nothing.
-        if Date() < captureFreezeUntil { return }
         // A finger dragging the keyboard down moves the guide, and the bar with it, on this event.
         followKeyboardUnderFinger()
         if scrollView.isDragging || scrollView.isTracking || scrollView.isDecelerating {
@@ -3901,7 +3891,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private func scrollWorkTimerDidFire() {
         scrollWorkTimer?.invalidate()
         scrollWorkTimer = nil
-        guard isViewLoaded, Date() >= captureFreezeUntil else { return }
+        guard isViewLoaded else { return }
         // The jump-to-latest button's affordance, coalesced to at most ten writes a second.
         let atBottom = isNearNewest
         if coordinator.parent.isAtBottom != atBottom { coordinator.parent.isAtBottom = atBottom }
@@ -3918,7 +3908,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // content. Throttled; there is no zone-entry debounce, a short page leaves the reader inside the zone
     // and the time throttle alone lets the chain continue until content outruns the threshold.
     private func autoLoadMoreIfNeeded() {
-        guard didReveal, Date() >= captureFreezeUntil else { return }
+        guard didReveal else { return }
         let threshold = max(72, collectionView.bounds.height * 3)
         guard collectionView.contentOffset.y - minContentOffsetY <= threshold,
               // ⚠️ THIS WAS 2 SECONDS AND IT WAS THE WALL. Three screens of lead is generous, but a
@@ -3956,51 +3946,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // iOS 26 full-page screenshots scroll the view PROGRAMMATICALLY (no drag flags) right after the
     // notification, to capture every page. Freeze all landings for the capture window and snap back to the
     // last stable offset once it has finished.
-    @objc func screenshotTaken() {
-        guard didFirstLand, !isDisappearing,
-              !collectionView.isDragging, !collectionView.isTracking,
-              !collectionView.isDecelerating else { return }
-        // ⛔ WITH THE KEYS DOWN, DO WHAT THEY DO: NOTHING. Searched their whole repo — the
-        // conversation view has NO `userDidTakeScreenshotNotification` observer at all, and their
-        // `keyboardDismissMode` is set to `.interactive` once in `viewDidLoad` and never touched
-        // again. A screenshot is simply not an event their chat reacts to.
-        //
-        // ⚠️ AND THE KEYBOARD-UP CASE IS THE ONE PLACE WE CANNOT COPY THEM, because he reported the
-        // bug this whole block exists for: build 682, "when I open keyboard then I take screenshot,
-        // keyboard start disappearing". iOS 26's full-page capture scrolls this list, and with
-        // `.interactive` a system-driven downward scroll reads as a dismiss drag. Deleting the guard
-        // to match them exactly would hand that back to him, so it stays for exactly the state it
-        // was written for.
-        //
-        // What it stops doing is firing when there is no keyboard to protect. The freeze is not
-        // free: `captureFreezeUntil` also stands down the land-when-safe path, `restoreReaderPosition`
-        // and the lockstep offset shift, so every screenshot taken with the keys down used to leave
-        // the conversation unable to land an arriving message or settle for a second and a half.
-        // That second and a half is now theirs: nothing happens.
-        guard keyboardIsUp else { return }
-        captureFreezeUntil = Date().addingTimeInterval(1.5)
-        // ⛔ THE SCREENSHOT WAS CLOSING THE KEYBOARD — owner, 2026-08-25, build 682: "when I open
-        // keyboard then I take screenshot, keyboard start disappearing". The full-page capture
-        // scrolls this list, and with `keyboardDismissMode = .interactive` a system-driven downward
-        // scroll reads as a dismiss drag. The mode is parked at `.none` for the capture window and
-        // restored with the snap-back.
-        collectionView.keyboardDismissMode = .none
-        let snapBack: () -> Void = { [weak self] in
-            guard let self else { return }
-            let target = self.clampOffset(self.lastStableOffset)
-            if abs(self.collectionView.contentOffset.y - target) > 4 {
-                self.collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
-            }
-        }
-        DispatchQueue.main.async(execute: snapBack)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.55) { [weak self] in
-            guard let self else { return }
-            snapBack()
-            self.collectionView.keyboardDismissMode = .interactive
-            self.settleFlush()
-        }
-    }
-
     // MARK: - Voice pause / continue (the recording's floating control)
 
     /// ⛔ THIRD HOME, AND THE ONE WHERE TOUCHES PROVABLY LAND — owner, 2026-08-25, build 682: "still
