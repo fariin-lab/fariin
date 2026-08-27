@@ -568,14 +568,28 @@ final class CMOverlay: UIView {
     /// A window one level above the highest one currently on screen — which, while the keys are up,
     /// is the keyboard's.
     ///
-    /// ⚠️ THE LEVEL IS MEASURED, NOT WRITTEN DOWN. The keyboard's own level is an implementation
-    /// detail of UIKit that has moved between releases, and this app has already spent one whole
-    /// build on an iOS 26/27 difference in keyboard plumbing. Reading what is actually on screen and
-    /// going one above it needs no such constant and cannot go stale. The floor keeps us above the
-    /// alert level even in the odd case where the scene reports nothing useful.
+    /// ⛔ MEASURING ALONE WAS NOT ENOUGH, AND BUILD 707 IS THE PROOF. This asked every scene for its
+    /// windows, took the highest level it found and went one above — on the reasoning that reading
+    /// what is on screen beats writing a UIKit constant down. He tested it and the menu was still
+    /// behind the keys.
+    ///
+    /// The reason is that the keyboard's window IS NOT IN THAT LIST. `UIWindowScene.windows` reports
+    /// the windows the APP owns; the keyboard is hosted for us by another process and UIKit does not
+    /// hand it over through public API. So the scan found only our own window at level 0, the floor
+    /// took it to the alert level, and the menu was published at about two thousand — under a
+    /// keyboard sitting near ten million. It measured honestly and measured the wrong thing.
+    ///
+    /// ⚠️ SO THE FLOOR IS THE KEYBOARD'S OWN LEVEL, and it has to be a written-down number because
+    /// there is nothing to read it from. Ten million is where UIKit has kept its keyboard and text
+    /// effects windows across every release this app supports; the reference app's window manager
+    /// carries the same constant, written down for the same reason. The scan is KEPT on top of it,
+    /// because it still does something the constant cannot: if anything the app itself puts up is
+    /// higher, the menu goes above that too.
+    private static let keyboardWindowLevel: CGFloat = 10_000_000
+
     private static func makeWindowAboveKeyboard(over host: UIWindow) -> UIWindow? {
         guard let scene = host.windowScene else { return nil }
-        var top = max(host.windowLevel.rawValue, UIWindow.Level.alert.rawValue)
+        var top = max(host.windowLevel.rawValue, keyboardWindowLevel)
         for s in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
             for w in s.windows where !w.isHidden { top = max(top, w.windowLevel.rawValue) }
         }

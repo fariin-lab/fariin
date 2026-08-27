@@ -925,8 +925,12 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
                                                name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardWillHideNote(_:)),
                                                name: UIResponder.keyboardWillHideNotification, object: nil)
-        // Returning with the keys up — see `appWillEnterForeground`. Both, deliberately: the first is
-        // before the snapshot is replaced, the second catches a restore that lands after it.
+        // Leaving with the keys up, and coming back with them — see `appIsLeaving`. The first must be
+        // registered because it is the ONLY notice that arrives before the keyboard is taken away.
+        NotificationCenter.default.addObserver(self, selector: #selector(appWillResignActive),
+                                               name: UIApplication.willResignActiveNotification, object: nil)
+        // Both of the return notifications, deliberately: the first is before the snapshot is
+        // replaced, the second catches a restore that lands after it.
         NotificationCenter.default.addObserver(self, selector: #selector(appWillEnterForeground),
                                                name: UIApplication.willEnterForegroundNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive),
@@ -2573,11 +2577,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // show to undo our write. The bar therefore stayed at rest under a keyboard that was already
         // there, until some later pass raised it: exactly the delay he timed.
         //
-        // The state at the moment of the event is what separates the two, and it is the same question
-        // the reference app asks before it lets a keyboard event move anything. Refusing to LOWER
-        // (rather than refusing the hide flag) also covers the change-frame variant, which carries an
-        // off-screen end frame and no flag at all.
-        if !up, UIApplication.shared.applicationState != .active { return }
+        // ⚠️ AND `applicationState` ALONE DOES NOT SEPARATE THEM — build 707 shipped exactly that and
+        // he reported the bug unchanged. The state is still `.active` while the app is being told it
+        // is about to stop being active: UIKit posts `willResignActive` FIRST and only then moves the
+        // property, and the keyboard goes with the same breath. So the test read `.active`, let the
+        // hide through, and the guard did nothing at all.
+        //
+        // Watching for the announcement instead puts the flag up before any of it happens, and the
+        // property is kept as the second half of the test because a launch straight into the
+        // background never announces anything. Refusing to LOWER, rather than refusing the hide flag,
+        // also covers the change-frame variant: that one carries an off-screen end frame and no flag.
+        if !up, appIsLeaving || UIApplication.shared.applicationState != .active { return }
         let announced = up ? overlap : restSafeBottom
         let d = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
         if d > 0 {
@@ -2626,8 +2636,19 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// the usual reason: the guide is measured and the band is remembered. Both are raise-only here —
     /// nothing in this method can push the bar DOWN, so a keyboard that genuinely went away while we
     /// were gone is left to the real notification rather than guessed at from stale state.
+    /// The app has been TOLD it is about to stop being active, which is the only warning that arrives
+    /// before the keyboard is taken away with it. Raised at `willResignActive` and dropped when the
+    /// app is active again — never in between, because everything in between is the window this
+    /// exists to cover. See the note in `rideKeyboard` for why the application's own state property
+    /// could not answer this on its own.
+    private var appIsLeaving = false
+
+    @objc private func appWillResignActive() { appIsLeaving = true }
     @objc private func appWillEnterForeground() { syncKeyboardOnReturn(mayLower: false) }
-    @objc private func appDidBecomeActive() { syncKeyboardOnReturn(mayLower: true) }
+    @objc private func appDidBecomeActive() {
+        appIsLeaving = false
+        syncKeyboardOnReturn(mayLower: true)
+    }
 
     /// ⛔ `mayLower` IS THE WHOLE REASON THESE ARE TWO ENTRY POINTS, and refusing to lower on the way
     /// out is what makes the second half necessary. The block above turns down a hide that arrives
