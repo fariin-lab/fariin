@@ -170,7 +170,6 @@ struct NativeMessageList: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: MessageListController, context: Context) {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
-        vc.noteSwiftUIPass()   // ⚠️ temporary diag — does the render pass land on the keyboard's cancel?
         // ⛔ THE SEND HOLD IS ARMED BEFORE THE COMPOSER IS APPLIED. Since the bar moved into the
         // controller, `applyComposer` is where the reply banner's collapse actually happens (the
         // bar re-lays out, reports its new height, and the container shrinks on the spot). The tick
@@ -842,7 +841,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // shown, so a drag may own them again.
         NotificationCenter.default.addObserver(self, selector: #selector(keyboardDidShowNote),
                                                name: UIResponder.keyboardDidShowNotification, object: nil)
-        KeyboardDiag.attach(to: view)   // ⚠️ temporary — the keyboard-open investigation
         // Screenshot recovery: iOS 26's full-page capture scrolls the list; snap back afterwards.
         NotificationCenter.default.addObserver(self, selector: #selector(screenshotTaken),
                                                name: UIApplication.userDidTakeScreenshotNotification, object: nil)
@@ -2001,7 +1999,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
               collectionView.safeAreaInsets.bottom <= restSafeBottom + 0.5 else { return }
         let bound = maxContentOffsetY
         guard collectionView.contentOffset.y > bound + 0.5 else { return }
-        KeyboardDiag.log("CLAMP y=\(Int(collectionView.contentOffset.y))->\(Int(bound))")
         UIView.performWithoutAnimation {
             collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
         }
@@ -2122,13 +2119,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     @objc private func keyboardWillChangeFrame(_ note: Notification) { rideKeyboard(note, hiding: false) }
     @objc private func keyboardWillHideNote(_ note: Notification) { rideKeyboard(note, hiding: true) }
 
-    /// ⚠️ Temporary diag: timestamps SwiftUI's body passes into the keyboard log, only around a
-    /// keyboard transition, so a screenshot shows whether a render pass lands on the cancel.
-    func noteSwiftUIPass() {
-        guard Date() < dismissParkUntil.addingTimeInterval(1) else { return }
-        KeyboardDiag.log("SWUI pass")
-    }
-
     /// The keys are fully up: give the finger its dismiss drag back — see the parking note in
     /// `rideKeyboard`. Never inside the screenshot-capture window, which parks for its own reason
     /// and restores itself. ⚠️ And never before `dismissParkUntil`: iOS 26 posts didShow at 18ms
@@ -2145,7 +2135,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             return
         }
         collectionView.keyboardDismissMode = .interactive
-        KeyboardDiag.log("UNPARK shown")
     }
 
     private func rideKeyboard(_ note: Notification, hiding: Bool) {
@@ -2160,7 +2149,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         keyboardReport = up ? .up(overlap) : .rest
         let d = (info[UIResponder.keyboardAnimationDurationUserInfoKey] as? NSNumber)?.doubleValue ?? 0
         if d > 0 { dockedBand = up ? overlap : 0 }
-        KeyboardDiag.log("NOTE \(hiding ? "hide" : "chg") band=\(Int(overlap)) d=\(String(format: "%.2f", d))")
         // ⛔ iOS 26 READS OUR OWN IN-BLOCK SCROLL AS A DISMISS DRAG, AND CANCELS THE KEYBOARD IT IS
         // PRESENTING — his diag log on `6001960e`, with the ghost already gone: a perfect open
         // order (`NOTE chg band=274 d=0.38`), then 12ms later `NOTE chg band=0 d=0.00` + `hide`,
@@ -2174,11 +2162,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             dismissParkUntil = Date().addingTimeInterval(max(0.25, d) + 0.15)
             if collectionView.keyboardDismissMode != .none {
                 collectionView.keyboardDismissMode = .none
-                KeyboardDiag.log("PARK dismiss")
             }
         } else if !up, Date() >= captureFreezeUntil, collectionView.keyboardDismissMode == .none {
             collectionView.keyboardDismissMode = .interactive
-            KeyboardDiag.log("UNPARK hide")
         }
         let curve = (info[UIResponder.keyboardAnimationCurveUserInfoKey] as? NSNumber)?.uintValue ?? 7
         if d > 0 {
@@ -2642,7 +2628,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // "Workaround for iOS 26 animating bottom bar getting in its final position during view
         // presentation animation." The safe area lands inside the push, and a bare constraint
         // write there rides the push's transaction — the bar visibly slides into place.
-        KeyboardDiag.log("SAFE v=\(Int(view.safeAreaInsets.bottom)) w=\(Int(view.window?.safeAreaInsets.bottom ?? -1))")
         // ⛔ STAND DOWN WHILE THE KEYS PRESENT — his diag logs, builds `ec0230d6` and `ca3b4640`:
         // SwiftUI flaps the hosted safe area around the focus instant (34 → 0 → 34, once 83), and
         // in EVERY attempt the keyboard's cancel (`NOTE chg band=0 d=0.00` + hide) landed ONE
@@ -2655,7 +2640,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // and the SwiftUI shell itself is convicted — the owner's pre-approved rewrite begins.
         let presenting = Date() < dismissParkUntil
         if presenting {
-            KeyboardDiag.log("SAFE skip (presenting)")
         } else if #available(iOS 26, *) {
             UIView.performWithoutAnimation {
                 positionBottomBar()
@@ -3441,7 +3425,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// list has always run in.
     func hideComposer() {
         guard let bar = composerBar, !bar.isHidden else { return }
-        KeyboardDiag.log("HIDECOMPOSER")
         bar.isHidden = true
         barTopPin?.isActive = false
         bottomBarHeight?.constant = 0
@@ -3508,7 +3491,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let bottomTarget = -(band + bottomInset)
         if let c = barBottom, abs(c.constant - bottomTarget) > 0.01 {
             c.constant = bottomTarget
-            KeyboardDiag.log("BAR bot=\(Int(bottomTarget)) side=\(Int(side)) safe=\(Int(safe))/\(Int(view.safeAreaInsets.bottom))")
         }
         if let c = barLeading, abs(c.constant - side) > 0.01 { c.constant = side }
         if let c = barTrailing, abs(c.constant + side) > 0.01 { c.constant = -side }

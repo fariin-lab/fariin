@@ -955,7 +955,6 @@ extension ChatComposerView: UITextViewDelegate {
     // view update" warning. ⚠️ Until this lands, ThreadView's flag LAGS the field — `syncText`
     // therefore acts only on a change of the flag, never on the flag disagreeing with the field.
     func textViewDidBeginEditing(_ tv: UITextView) {
-        KeyboardDiag.log("FOCUS begin")   // ⚠️ temporary — does the field keep focus through the cancel?
         // Arm the resign guard for the presentation — see `ComposerTextView.resignFirstResponder`.
         textView.resignGuardUntil = Date().addingTimeInterval(0.7)
         textView.resignRequested = false
@@ -963,7 +962,6 @@ extension ChatComposerView: UITextViewDelegate {
     }
 
     func textViewDidEndEditing(_ tv: UITextView) {
-        KeyboardDiag.log("FOCUS end")   // ⚠️ temporary — a resign here means the cancel took the focus too
         DispatchQueue.main.async { [weak self] in self?.actions.focusChanged(false) }
     }
 }
@@ -998,7 +996,6 @@ final class ComposerTextView: UITextView {
     var resignRequested = false
     override func resignFirstResponder() -> Bool {
         if !resignRequested, Date() < resignGuardUntil {
-            KeyboardDiag.log("RESIGN refused")
             return false
         }
         return super.resignFirstResponder()
