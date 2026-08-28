@@ -391,7 +391,13 @@ enum MessageRowModelBuilder {
             mentionTokens: m.mentions.map { "@\(ctx.nameFor($0))" })
         return BubbleBody.AlbumBody(
             tiles: tiles, extra: n - shown, caption: caption,
-            uploading: m.sendState == .sending,
+            // ⚠️ `|| m.uploading` — the RECEIVER's half, and it was missing while the single-photo
+            // path two hundred lines up has always had it. `sendState` exists only on my own
+            // optimistic message, so an album still being uploaded by the other person drew blurred
+            // tiles with no indicator at all: the wire carries `uploading: true` for exactly this
+            // and nothing read it. See [[kulan-media-send-order]] — a message exists before its
+            // bytes do, on purpose, and the ring is what says so.
+            uploading: m.sendState == .sending || m.uploading,
             cancellable: m.authorId == ctx.me && m.sendState == .sending,
             blurhash: m.blurhash,
             inlineThumbBase64: m.thumb, thumbCacheId: m.rowId)
