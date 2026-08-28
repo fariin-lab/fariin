@@ -2725,11 +2725,34 @@ struct ThreadView: View {
         }
         // Both forward paths now ask `canForward` and nothing else — see the note on it. This one
         // used to spell the rule out inline, which is how the two copies drifted apart.
+        // ⛔ THE HANDLER RE-READS THE MESSAGE. `canForward(m)` is evaluated at PRESS time and the
+        // closure captures a value copy, while the menu deliberately delays its handler until after
+        // the dismissal spring and for as long as the person reads the card. So a delete-for-everyone
+        // landing in that window left the copy still holding the url and the key — and storage
+        // objects are never removed by a client, so the fetch succeeds and the retracted photo lands
+        // in a third chat. Copy had the same shape with pre-edit text.
+        //
+        // Theirs rebuilds every item from the database inside a transaction at send time and raises
+        // an error when the interaction is gone; this is the same rule with the data we have.
         if canForward(m) {
-            out.append(CMAction(title: "Forward", icon: "arrowshape.turn.up.right") { forwardTarget = m })
+            out.append(CMAction(title: "Forward", icon: "arrowshape.turn.up.right") {
+                guard let live = repo.items.first(where: { $0.id == m.id }), canForward(live) else {
+                    showJumpToast("That message is no longer available")
+                    return
+                }
+                forwardTarget = live
+            })
         }
         if !m.text.isEmpty && !m.isFeatureMarker && !m.viewOnce {
-            out.append(CMAction(title: "Copy", icon: "doc.on.doc") { UIPasteboard.general.string = m.text })
+            out.append(CMAction(title: "Copy", icon: "doc.on.doc") {
+                // The words as they are NOW: an edit or a delete arriving while the menu is open
+                // must not be copied around it.
+                guard let live = repo.items.first(where: { $0.id == m.id }), !live.deleted else {
+                    showJumpToast("That message is no longer available")
+                    return
+                }
+                UIPasteboard.general.string = live.text
+            })
         }
         // Edit follows the TEXT, not the type: a photo/album/video caption is sealed in the same
         // `text` field editMessage rewrites, so any of my messages WITH a body is editable within
@@ -2784,14 +2807,25 @@ struct ThreadView: View {
         // No bar on a tombstone either: the deleted placeholder renders no badges (reactionCounts
         // is empty for it by construction), so a picked emoji would write server-side and show to
         // nobody — the same invisible-reaction trap the call/system exclusion above closed.
-        guard m.sendState == nil, !iAmMuted, !m.isCall, !m.isSystem, !m.deleted,
-              m.pinNotice == nil, !m.isUnsupportedFeature else { return nil }
+        // The list above is `canReact` — one predicate, asked here before the bar is offered and
+        // again in `handleCustomReact` before anything is written. Two copies is how they drifted.
+        guard canReact(m) else { return nil }
         return (Array(QuickReaction.choices.prefix(6)), m.reactions[me])
     }
 
     private func handleCustomReact(_ rowId: String, _ selection: CMReactionSelection) {
         guard let idx = repo.indexById[rowId], idx < repo.items.count else { return }
         let m = repo.items[idx]
+        // ⛔ RE-ASK EVERY QUESTION THE BAR ASKED BEFORE IT APPEARED. `customReactInfo` refuses to
+        // show the bar at all for a sending, muted, call, system, deleted, pin or unsupported row —
+        // and this handler re-looked-up the row and re-checked none of it.
+        //
+        // The gap is the menu's own lifetime. The list is frozen while it is up but the repository
+        // is not, so a delete-for-everyone arriving between the press and the lift wrote the reaction
+        // onto a tombstone, where `reactionCounts` refuses to draw it — invisible on BOTH devices.
+        // That is precisely the trap the comment above `customReactInfo` says was closed; it was
+        // closed for the bar's appearance, not for the pick's execution.
+        guard canReact(m) else { return }
         switch selection {
         case .more:
             morePickerTarget = m
@@ -2801,6 +2835,14 @@ struct ThreadView: View {
                                               toAuthor: m.authorId, group: isGroup ? groupMembers : nil)
             }
         }
+    }
+
+    /// THE one answer to "can this message be reacted to", asked by the bar before it appears AND by
+    /// the handler before it writes. Two places asking the same question separately is how the two
+    /// drifted, and the drift only shows in the window where they can disagree.
+    private func canReact(_ m: Message) -> Bool {
+        m.sendState == nil && !iAmMuted && !m.isCall && !m.isSystem
+            && !m.deleted && m.pinNotice == nil && !m.isUnsupportedFeature
     }
 
     // Double-tap quick heart on a UIKit-routed row — mirrors the SwiftUI bubble's double-tap gesture.
