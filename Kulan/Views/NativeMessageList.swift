@@ -86,6 +86,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
     var onTapRetry: (String) -> Void = { _ in }
+    var onCancelUpload: (String) -> Void = { _ in }
     var onToggleSelect: (String) -> Void = { _ in }
     var onTapSender: (String) -> Void = { _ in }
     var onTapCallRow: (String) -> Void = { _ in }
@@ -220,6 +221,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onTapContactMessage = onTapContactMessage
         vc.onTapReactions = onTapReactions
         vc.onTapRetry = onTapRetry
+        vc.onCancelUpload = onCancelUpload
         vc.onToggleSelect = onToggleSelect
         vc.onTapSender = onTapSender
         vc.onTapCallRow = onTapCallRow
@@ -636,6 +638,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
     var onTapRetry: (String) -> Void = { _ in }
+    var onCancelUpload: (String) -> Void = { _ in }
     var onToggleSelect: (String) -> Void = { _ in }
     var onTapSender: (String) -> Void = { _ in }
     var onTapCallRow: (String) -> Void = { _ in }
@@ -2377,9 +2380,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             return
         }
         updateInsets()
-        jlog("FIRSTLAND begin rows=\(currentIds.count) seeded=\(renderedHeights.count) " +
-             "initialId=\(initialScrollId?.suffix(6).map(String.init) ?? "nil") " +
-             "initialBelowTop=\(initialScrollOffset.map { String(format: "%.1f", $0) } ?? "nil")")
+        var initId = "nil"
+        if let s = initialScrollId { initId = String(s.suffix(6)) }
+        var initTop = "nil"
+        if let o = initialScrollOffset { initTop = String(format: "%.1f", o) }
+        let rowCount = currentIds.count
+        let seeded = renderedHeights.count
+        jlog("FIRSTLAND begin rows=\(rowCount) seeded=\(seeded) id=\(initId) belowTop=\(initTop)")
         measureMissing(currentIds, width: collectionView.bounds.width)
         layout.generation += 1
         layout.invalidateLayout()
@@ -4602,6 +4609,11 @@ extension MessageListController: MessageRowCellDelegate {
     func rowCellDidTapRetry(_ cell: MessageRowCell) {
         guard let id = cell.rowId else { return }
         onTapRetry(id)
+    }
+
+    func rowCellDidTapCancelUpload(_ cell: MessageRowCell) {
+        guard let id = cell.rowId else { return }
+        onCancelUpload(id)
     }
 
     func rowCellDidToggleSelection(_ cell: MessageRowCell) {
