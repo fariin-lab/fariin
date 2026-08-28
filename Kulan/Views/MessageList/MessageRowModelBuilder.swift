@@ -293,7 +293,18 @@ enum MessageRowModelBuilder {
             body: body,
             fill: fill,
             radii: .cluster(isMe: isMe, first: first, last: last),
-            meta: MetaChrome(timeText: msg.createdAt.formatted(date: .omitted, time: .shortened),
+            // ⛔ CLAMPED TO NOW. A pending message carries THIS phone's clock while everything it is
+            // compared against carries the server's, and the repository maintains a whole clock-offset
+            // median because the two disagree. Ordering already corrects for it; display did not.
+            //
+            // Clock eight minutes fast at 23:55: your own bubble read "12:03 AM", a "Today" separator
+            // was inserted above it for tomorrow, and a second later the server echo dropped the time
+            // back to "11:55 PM" and the separator vanished. Away from midnight it was still an
+            // eight-minute jump on every send.
+            //
+            // Theirs applies `clampBeforeNow` on every display path for exactly this — a timestamp in
+            // the future is never a fact about a message, it is a fact about the clock.
+            meta: MetaChrome(timeText: min(msg.createdAt, Date()).formatted(date: .omitted, time: .shortened),
                              edited: msg.edited && !msg.deleted,
                              tick: tick,
                              bornAt: msg.createdAt,

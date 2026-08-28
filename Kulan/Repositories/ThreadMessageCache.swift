@@ -108,7 +108,13 @@ final class ThreadMessageCache {
         // ⚠️ AND THE DISK COPY. This used to be memory only, so signing out was enough on its own;
         // it is not any more, and a folder of decrypted conversations left behind would be the worst
         // thing in this file.
-        io.async { try? FileManager.default.removeItem(at: Self.directory) }
+        // ⛔ SYNCHRONOUS, LIKE EVERY OTHER DECRYPTED STORE'S WIPE. `AudioCache.removeAll()` and
+        // `VideoCache.removeAll()` delete on the calling thread; this one queued the delete at
+        // utility priority, so terminating between sign-out and the block running — the user closing
+        // the app on the sign-out screen, or iOS reclaiming it — left the folder behind. Nothing
+        // re-runs the wipe and nothing reconciles it at launch, so it simply stayed. One
+        // `removeItem` on a directory is not worth the window it was leaving open.
+        try? FileManager.default.removeItem(at: Self.directory)
     }
 
     // MARK: - The disk half
@@ -129,7 +135,21 @@ final class ThreadMessageCache {
         let base = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                                  appropriateFor: nil, create: true))
             ?? URL(fileURLWithPath: NSTemporaryDirectory())
-        return base.appendingPathComponent("threads-v1", isDirectory: true)
+        var dir = base.appendingPathComponent("threads-v1", isDirectory: true)
+        // ⛔ NEVER INTO A BACKUP. This folder holds the last sixty FULLY DECRYPTED messages of every
+        // conversation, and it was the one decrypted store in the app without this line — the audio
+        // cache, the video cache, the image cache and the gif cache all set it.
+        //
+        // That made it the single path by which chat plaintext leaves the phone. The identity key is
+        // written `…ThisDeviceOnly`, so it never enters a backup and cannot be restored elsewhere;
+        // the text it had already decrypted went anyway, and an unencrypted local backup is readable
+        // by anyone holding it.
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
+                                                 attributes: [.protectionKey: protection])
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? dir.setResourceValues(values)
+        return dir
     }()
 
     /// Two screens, not the 200 held in memory. The first frame needs what the first frame shows;

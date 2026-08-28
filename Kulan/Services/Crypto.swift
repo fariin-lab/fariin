@@ -229,6 +229,14 @@ final class Crypto {
             readyTask = nil
             didWarm = false
         }
+        // ⛔ AND THE DECRYPTED PREVIEWS. `previewCache` holds up to 500 plaintext message texts in a
+        // process-lifetime singleton, and nothing cleared it — so after sign-out the previous
+        // account's messages stayed readable in memory for the life of the process.
+        //
+        // Its group key is also built only from values every member shares (conversation, author,
+        // ciphertext), so a second account on the same phone could take a cache hit for a message its
+        // own keys cannot open. Emptying it with the identity closes both.
+        previewCache.removeAllObjects()
         UserDefaults.standard.removeObject(forKey: Self.pubKeysDefaultsKey)   // cache of others' PUBLIC keys
     }
 

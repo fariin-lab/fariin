@@ -1692,7 +1692,19 @@ struct ThreadView: View {
 
     // Resolving Calendar.current re-reads the user's locale/calendar each call; these helpers run
     // ~4-5x per row per render, so cache one instance.
-    private static let cal = Calendar.current
+    /// ⛔ `autoupdatingCurrent`, NOT `current`. `Calendar.current` is a VALUE-TYPE SNAPSHOT of the
+    /// locale, calendar and time zone at the moment it is read — and as a `static let` it was read
+    /// once, at the first chat open, and never again.
+    ///
+    /// Every date decision on this page reads it: the day separator, both cluster tests and the day
+    /// label. So flying from New York to Nairobi left the separators splitting at New York midnight
+    /// until the app was force-killed, with this morning's messages filed under "Yesterday". Same for
+    /// a DST boundary and any region or calendar change in Settings.
+    ///
+    /// `autoupdatingCurrent` tracks the device instead of snapshotting it, so the cache stays (the
+    /// reason it exists — these run per row) and the answers follow the phone. Theirs sidesteps it by
+    /// re-reading `Calendar.current` inside every function.
+    private static let cal = Calendar.autoupdatingCurrent
 
     private func shouldShowDate(at index: Int) -> Bool {
         let items = repo.items
@@ -1728,11 +1740,40 @@ struct ThreadView: View {
         return next.createdAt.timeIntervalSince(cur.createdAt) > Self.clusterGap
     }
 
+    /// ⛔ TWO FIXES HERE, AND THEY PULL IN OPPOSITE DIRECTIONS, so both are stated.
+    ///
+    /// "Today" and "Yesterday" were HARDCODED ENGLISH inside a label whose fallback was locale
+    /// formatted — a French or Somali reader got a stack reading "Today", "Yesterday", then
+    /// "mer. 3 mars". `doesRelativeDateFormatting` is the one flag that makes the OS supply both the
+    /// localized relative words and the localized date underneath them, from a single formatter. It
+    /// is what theirs uses for exactly this.
+    ///
+    /// And a separator carried NO YEAR, so a message from 2019 read "Sun, Mar 3" — the same shape as
+    /// one from six weeks ago, with nothing anywhere on the page naming a year. Theirs branches on
+    /// age and switches to a year-bearing format past six months; the two formatters below are that
+    /// rule, and the cutoff is the same six months.
+    ///
+    /// ⚠️ Both formatters are cached. `DateFormatter` construction is one of the genuinely expensive
+    /// things on this page and this runs per row — the same reason the calendar above is cached.
+    private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = cal
+        f.doesRelativeDateFormatting = true     // localized "Today" / "Yesterday", localized fallback
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f
+    }()
+    private static let oldDayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = cal
+        f.dateStyle = .long                     // carries the year
+        f.timeStyle = .none
+        return f
+    }()
+
     private func dayLabel(_ d: Date) -> String {
-        let cal = Self.cal
-        if cal.isDateInToday(d) { return "Today" }
-        if cal.isDateInYesterday(d) { return "Yesterday" }
-        return d.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
+        let months = Self.cal.dateComponents([.month], from: d, to: Date()).month ?? 0
+        return months >= 6 ? Self.oldDayFormatter.string(from: d) : Self.dayFormatter.string(from: d)
     }
 
     /// Pins minus the ones I deleted "for me".

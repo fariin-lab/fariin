@@ -51,6 +51,17 @@ enum PendingUploadStore {
         return dir.appendingPathComponent("pending-uploads.json")
     }
 
+    /// ⛔ SIGN-OUT AND ACCOUNT DELETION. These jobs carry the previous account's STAGED CIPHERTEXT
+    /// and its private upload addresses, and the resume-at-launch path would hand them to whoever
+    /// signs in next, under their credentials. Storage rules refuse, and by this store's own policy a
+    /// job that cannot be finished is kept for the next launch — so it retries forever.
+    ///
+    /// It sits beside the send queue and the two outboxes, all three of which the wipe already
+    /// clears; this one was simply missed.
+    static func removeAll() {
+        lock.withLock { try? FileManager.default.removeItem(at: url) }
+    }
+
     static func all() -> [PendingUpload] {
         lock.withLock {
             guard let data = try? Data(contentsOf: url) else { return [] }

@@ -59,6 +59,19 @@ enum SessionWipe {
         //     readable in memory for the life of the process.
         AudioRecorder.wipeAllDrafts()
         MessageSearch.invalidateAll()
+        // ⛔ THE PHOTOS. This list named the decrypted audio and video caches and never the image one,
+        // so every decrypted chat photo — up to a 250 MB budget — survived sign-out and the next
+        // account's whole session. The new account cannot reach them through the UI, because files
+        // are named by a hash of a URL it never learns, but the bytes are there and readable by
+        // anything with file access. `wipeEverything` rather than `clear`, because the owned tier is
+        // deliberately spared by every cache-management path — and an account leaving the device is
+        // not cache management.
+        DiskImageCache.shared.wipeEverything()
+        // ⛔ AND THE STAGED UPLOADS. `PendingUploadStore` sits beside the three outboxes above and was
+        // missed: it holds the previous account's staged ciphertext and its private upload addresses,
+        // and the resume-at-launch path would hand them to whoever signs in next, under their
+        // credentials, retrying forever because a job that cannot finish is kept for the next launch.
+        PendingUploadStore.removeAll()
         AppRouter.shared.pendingChatId = nil
         AppRouter.shared.pendingChatName = nil
         AppRouter.shared.pendingChatPhoto = nil

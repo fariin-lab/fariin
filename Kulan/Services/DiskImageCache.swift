@@ -294,6 +294,27 @@ final class DiskImageCache {
         }
     }
 
+    /// ⛔ EVERYTHING, OWNED FILES INCLUDED — for sign-out and account deletion only.
+    ///
+    /// `clear()` below deliberately spares `.own` files, and so do the trim and the sweep, because an
+    /// owned chat photo is the only copy left once the mailman model has removed the server object.
+    /// That rule is right for making room and wrong for an account leaving the device: these are
+    /// decrypted pictures from someone else's conversations, and the next person to sign in has no
+    /// business having them on their phone.
+    ///
+    /// Synchronous, like the audio and video wipes it sits beside in `SessionWipe` — a queued delete
+    /// can be lost if the app is terminated on the sign-out screen.
+    func wipeEverything() {
+        mem.removeAllObjects()
+        let fm = FileManager.default
+        if let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+            for u in items {
+                try? fm.removeItem(at: u)
+                indexRemove(u.deletingPathExtension().lastPathComponent)
+            }
+        }
+    }
+
     /// Wipe both tiers (Settings → Clear Cache).
     func clear() {
         mem.removeAllObjects()
