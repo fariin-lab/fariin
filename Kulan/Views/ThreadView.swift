@@ -2773,19 +2773,7 @@ struct ThreadView: View {
             row: { id in
                 guard let idx = repo.indexById[id], idx < repo.items.count else { return AnyView(EmptyView()) }
                 return AnyView(rowView(at: idx, repo.items[idx], jumpTo: { jid in
-                    // This tap was FOR the quote — keep the keyboard (the reference app keeps it too). Cancels
-                    // the list's deferred tap-to-dismiss before it can run.
-                    pendingKeyboardDismiss = false
-                    Task {
-                        await repo.ensureLoaded(jid)
-                        await MainActor.run {
-                            // Reply-to-deleted (tombstone): if the original is gone, say so
-                            // instead of silently doing nothing. The quote itself still shows its saved
-                            // snapshot, so the reply is never blank.
-                            if repo.items.contains(where: { $0.id == jid }) { flashAndScroll(jid) }
-                            else { showJumpToast("Original message was deleted") }
-                        }
-                    }
+                    jumpToQuotedOriginal(jid)
                 }).padding(.horizontal, 12))
             },
             // UIKit bubble migration: plain 1:1 delivered text renders as a native UIKit cell. The models
@@ -2795,21 +2783,7 @@ struct ThreadView: View {
             // reading `uikitModels` above is what refreshes the cache this version comes from.
             uikitModelsVersion: uikitModelCache.version,
             onTapLink: { url in routeThreadURL(url) },
-            onTapQuote: { id in
-                // This tap was FOR the quote — keep the keyboard (the reference app keeps it too).
-                // Cancels the list's deferred tap-to-dismiss before it can run.
-                pendingKeyboardDismiss = false
-                Task {
-                    await repo.ensureLoaded(id)
-                    await MainActor.run {
-                        // Reply-to-deleted: if the original is gone, say so instead of silently
-                        // doing nothing. The quote still shows its saved snapshot, so the reply is
-                        // never blank.
-                        if repo.items.contains(where: { $0.id == id }) { flashAndScroll(id) }
-                        else { showJumpToast("Original message was deleted") }
-                    }
-                }
-            },
+            onTapQuote: { id in jumpToQuotedOriginal(id) },
             onTapStoryQuote: { rowId, replyId in
                 guard let m = repo.items.first(where: { $0.rowId == rowId }), let r = m.replyTo else { return }
                 openStory(replyId, r.authorId, anchorId: "replyquote-\(m.id)")
@@ -2974,7 +2948,7 @@ struct ThreadView: View {
                     await repo.ensureLoaded(id)
                     await MainActor.run {
                         if repo.items.contains(where: { $0.id == id }) { flashAndScroll(id) }
-                        else { showJumpToast("Original message was deleted") }
+                        else { showJumpToast("That message isn't available") }
                     }
                 }
             },
@@ -3061,7 +3035,10 @@ struct ThreadView: View {
             onSwipeReply: { id in
                 if let idx = repo.indexById[id], idx < repo.items.count { beginReply(to: repo.items[idx]) }
             },
-            loadingOlder: repo.loadingOlder,
+            // Not while a quote jump is hunting for its original: that pages older history too, but
+            // the person is looking at a bubble in the middle of the chat, not at the top of it. See
+            // `ThreadRepository.jumpPagingInFlight`.
+            loadingOlder: repo.loadingOlder && !repo.jumpPagingInFlight,
             composerBarHeight: composerBarHeight,   // extra bottom clearance so the newest msg clears the bar
             // The recording's floating pause / continue — drawn and hit-tested by the LIST, which
             // owns the screen above the bar (see `MessageListController.setVoiceControl`).
@@ -3234,6 +3211,41 @@ struct ThreadView: View {
     }
 
     private func exitSelection() { setUIMode(.normal) }
+
+    /// ⛔ TAPPING A REPLY'S QUOTE, AND IT USED TO DO TWO CONTRADICTORY THINGS AT ONCE — his report,
+    /// 2026-08-28: "quote reply is going loading… same time liar saying Original message was deleted".
+    ///
+    /// He is right on both counts, and they were two separate faults in the same eight lines:
+    ///
+    ///  1. IT SAID DELETED WHEN IT MEANT NOT FOUND. `ensureLoaded` walks back a page at a time and
+    ///     gives up after twelve. Falling out of that loop means "I did not reach it in 480 messages",
+    ///     which is the ordinary outcome for an old conversation — and it was reported as though the
+    ///     message had been destroyed. A message that really was deleted is not missing at all: it is
+    ///     still a row, carrying its own tombstone, and this now jumps to it so the app says so in the
+    ///     one place that can prove it. The toast is kept only for the case it is true of.
+    ///
+    ///  2. IT SPUN THE WRONG SPINNER. See `loadingOlder` at the call site.
+    ///
+    /// Theirs resolves a quoted reply against a local database, so the tap is instant and the only
+    /// outcomes are "go there" and a toast; the reason ours can take a moment is that we have no such
+    /// database, which is a reason to be quiet about it, not to describe it wrongly.
+    ///
+    /// This was three copies before, one per tap path, and they had already drifted — the same way
+    /// `canForward` had.
+    private func jumpToQuotedOriginal(_ id: String) {
+        // This tap was FOR the quote — keep the keyboard (theirs keeps it too). Cancels the list's
+        // deferred tap-to-dismiss before it can run.
+        pendingKeyboardDismiss = false
+        // Already in the window: nothing to load, and nothing to narrate.
+        if repo.items.contains(where: { $0.id == id }) { flashAndScroll(id); return }
+        Task {
+            await repo.ensureLoaded(id)
+            await MainActor.run {
+                if repo.items.contains(where: { $0.id == id }) { flashAndScroll(id) }
+                else { showJumpToast("Original message isn't loaded") }
+            }
+        }
+    }
 
     // Begin a reply (from the context menu OR the swipe-to-reply pan). Cancels any in-progress edit — they
     // can't both be active, or send would commit the edit and silently drop the reply.
@@ -7055,6 +7067,10 @@ struct MessageBubble: View, Equatable {
                     .highPriorityGesture(
                         TapGesture(count: 2).onEnded {
                             guard message.sendState == nil, !restricted, !message.deleted else { return }   // not until on server; muted can't react
+                            // Play, Pause, the scrubber and the speed pill are controls, not the
+                            // message. Same guard the UIKit row uses, kept on both paths so the
+                            // answer cannot depend on which renderer drew the bubble.
+                            guard !VoiceBubbleView.controlTookTouchRecently() else { return }
                             Haptics.impact(.light)
                             let quick = QuickReaction.current
                             onReact(myReaction == quick ? nil : quick)

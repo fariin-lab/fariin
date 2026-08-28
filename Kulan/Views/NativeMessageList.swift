@@ -461,6 +461,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private var scrollAnimationWatchdog: Timer?
     private var lastLoadOlderAt = Date.distantPast       // pagination throttle (2s window)
     private var isDisappearing = false        // swipe-back / pop in progress â†’ freeze all content-offset work
+    /// Where the reader was when this screen was covered by a pushed one (the profile, the gallery).
+    /// `nil` means they were at the newest message, where the bound is the honest answer instead.
+    private var anchorOnDisappear: ChatReadingPosition?
     /// ⛔ THEIR `isViewCompletelyAppeared`, AND `isDisappearing` WAS ONLY HALF OF IT. Theirs is set in
     /// `viewDidAppear` and cleared in `viewWillDisappear`, and it gates the lockstep shift alone
     /// (`} else if isViewCompletelyAppeared {`). Ours cleared its flag on the way out but raised it
@@ -1076,8 +1079,53 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // Ensure every id in `ids` has a cached height (measured at the current width). No-op once cached.
     private func measureMissing(_ ids: [String], width: CGFloat) {
         guard width > 0 else { return }
+        seedRenderedHeights(width: width)
         for id in ids where heights[id] == nil { heights[id] = measure(id, width: width) }
         measuredWidth = width
+    }
+
+    /// ⛔ START FROM WHAT THIS CHAT ALREADY PROVED, instead of re-learning it with a visible jump.
+    ///
+    /// `sizerRefused` and `renderedHeights` die with this controller, so before this every re-entry
+    /// measured the same rows with the same sizer, got the same wrong numbers, landed on them, and
+    /// then corrected — and a correction is only invisible for a reader at the newest message. A
+    /// reader restored mid-history saw it as the jitter he reported. See `RenderedHeightStore`.
+    ///
+    /// Seeded once per width. A width change clears the flag along with the caches it invalidates.
+    private var seededRenderedHeights = false
+    private func seedRenderedHeights(width: CGFloat) {
+        guard !seededRenderedHeights, !cid.isEmpty, width > 0 else { return }
+        seededRenderedHeights = true
+        let known = RenderedHeightStore.shared.heights(cid: cid, width: width)
+        guard !known.isEmpty else { return }
+        // Only for rows this list still holds — a store entry for a message that has since been
+        // deleted is dead weight, and `measure()` would never ask for it anyway.
+        for (id, h) in known {
+            renderedHeights[id] = h
+            sizerRefused.insert(id)
+        }
+    }
+
+    /// Remember a proven height so the next open of this chat does not have to discover it again.
+    private func rememberRenderedHeight(_ h: CGFloat, for id: String) {
+        RenderedHeightStore.shared.record(cid: cid, width: collectionView.bounds.width, id: id, height: h)
+    }
+
+    /// ⛔ A RENDERED HEIGHT DESCRIBES CONTENT, AND DIES WITH IT.
+    ///
+    /// `measure()` returns `renderedHeights[id]` for a refused row without asking the sizer anything,
+    /// which is exactly right while the row still holds what it rendered — and exactly wrong the
+    /// moment it does not. A reaction landing, an edit, a photo resolving, a tombstone replacing a
+    /// message: all of them change the height, and none of them could get past a cached number.
+    ///
+    /// Called only from the two paths that re-measure BECAUSE the content signature changed, never
+    /// from a plain refresh — a selection flip re-renders every visible row without changing any of
+    /// their content, and clearing there would throw away the truth and re-measure with the sizer
+    /// that was already proven wrong about it.
+    private func invalidateRenderedHeight(_ id: String) {
+        guard renderedHeights.removeValue(forKey: id) != nil else { return }
+        sizerRefused.remove(id)
+        RenderedHeightStore.shared.forget(cid: cid, id: id)
     }
 
     // Frame minY per row for an id order, exactly what MessageLayout will produce (y-accumulated heights
@@ -1110,6 +1158,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let before = frameMinY(for: currentIds)
         var moved = false
         for id in offscreen {
+            invalidateRenderedHeight(id)   // reached only for rows whose content signature changed
             let h = measure(id, width: width)
             guard abs((heights[id] ?? h) - h) > 0.5 else { continue }
             heights[id] = h
@@ -1156,7 +1205,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             heights[id] = hh
             return
         }
-        guard didReveal else { return }   // never re-lay-out during the open — the pre-measure owns it
+        // ⛔ BEFORE THE REVEAL, RECORD IT — DO NOT THROW IT AWAY.
+        //
+        // This used to be a bare `guard didReveal else { return }`, and the comment on it ("never
+        // re-lay-out during the open — the pre-measure owns it") was right about the LAYOUT and wrong
+        // about the KNOWLEDGE. A row disagreeing with the sizer during the open is the single most
+        // useful thing this list can learn, and dropping it meant the same disagreement was
+        // rediscovered a moment later, after the reveal, where the correction is something the reader
+        // can see. Nothing here touches the layout: the numbers are recorded, and the reveal-time and
+        // scroll-time paths use them from then on — including the next time this chat is opened.
+        guard didReveal else {
+            sizerRefused.insert(id)
+            renderedHeights[id] = hh
+            rememberRenderedHeight(hh, for: id)
+            return
+        }
         // ⛔ AND NEVER SYNCHRONOUSLY, BECAUSE THIS IS A RENDER PASS. `reportHeight` is called from a
         // SwiftUI `onPreferenceChange` inside the cell's own update, and the tail of this method
         // invalidates the layout and calls `layoutIfNeeded()`. Doing that from inside a layout/render
@@ -1199,6 +1262,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // once adopted, the next report matches the cache and returns at the guard above.
         if sizerRefused.contains(id) {
             renderedHeights[id] = hh
+            rememberRenderedHeight(hh, for: id)
             adoptHeight(hh, for: id)
             return
         }
@@ -1206,6 +1270,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if abs(sized - hh) > 2 {
             sizerRefused.insert(id)
             renderedHeights[id] = hh
+            rememberRenderedHeight(hh, for: id)
             adoptHeight(hh, for: id)   // the render is the truth for this row from here on
             return
         }
@@ -2002,7 +2067,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         measureMissing(ids, width: width)   // exact heights BEFORE the layout prepares (no self-size correction)
         // Every row whose content changed, on screen or not — this whole block is already bracketed
         // by `beforeY` / `afterY`, so a row above the reader growing is compensated like any other.
-        for id in sigChanged { heights[id] = measure(id, width: width) }
+        for id in sigChanged {
+            invalidateRenderedHeight(id)   // its CONTENT changed; what it rendered at before is stale
+            heights[id] = measure(id, width: width)
+        }
         // THE DATE-SEPARATOR JOIN. Date pills and cluster spacing are baked into the message row and
         // computed from the chronological index, so the oldest loaded row always carries a date pill and
         // paging history takes it away from the row that used to be oldest. That row's height changes,
@@ -2463,14 +2531,44 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard didFirstLand, !isDisappearing, !isUpdatingInsets, !contextMenuVisible,
               !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
               !sendAnimating, !programmaticScrollAnimating, Date() >= sendHoldUntil,
-              collectionView.safeAreaInsets.bottom <= restSafeBottom + 0.5,
-              let distance = lastKnownDistanceFromBottom else { return }
+              collectionView.safeAreaInsets.bottom <= restSafeBottom + 0.5 else { return }
+        // ⛔ AN ANCHOR ROW FIRST, AND THE DISTANCE ONLY AS A FALLBACK — his report, 2026-08-28: react
+        // to a message, open the person's profile, come back, and the conversation jumps.
+        //
+        // THE DISTANCE FROM THE BOTTOM IS NOT A PLACE IN THE CONVERSATION. It only means one while
+        // nothing above the reader changes height, and a reaction is exactly a row changing height:
+        // the chip lands, `maxContentOffsetY` moves by the chip's height, and restoring
+        // `maxContentOffsetY - distance` puts the reader that far off from where they were looking.
+        // Adding a reaction and removing one both do it, which is what he reported, and the profile
+        // is only involved because leaving and returning is what makes the restore run at all.
+        //
+        // Theirs restores `lastVisibleInteraction` to its own on-screen position; their
+        // `lastKnownDistanceFromBottom` decides whether a reader IS at the bottom and is never used
+        // as the coordinate to put them back at. That is the split written here: a reader at the
+        // newest is restored to the bound (where they belong however the content changed), and
+        // everyone else is restored to the row they were reading.
+        if let anchor = anchorOnDisappear,
+           let ip = dataSource.indexPath(for: anchor.rowId),
+           let attr = collectionView.layoutAttributesForItem(at: ip) {
+            let want = clampOffset(attr.frame.minY - collectionView.adjustedContentInset.top - anchor.offsetFromTop)
+            applyRestoredOffset(want)
+            return
+        }
+        guard let distance = lastKnownDistanceFromBottom else { return }
         let want = clampOffset(maxContentOffsetY - max(0, distance))
+        applyRestoredOffset(want)
+    }
+
+    /// The write both branches above share. Never animated: he asked for the return from a pushed
+    /// screen to be invisible, and an offset written during the pop transition otherwise rides
+    /// whatever curve that transition is running.
+    private func applyRestoredOffset(_ want: CGFloat) {
         guard abs(collectionView.contentOffset.y - want) > 0.5 else { return }
         UIView.performWithoutAnimation {
             collectionView.setContentOffset(CGPoint(x: 0, y: want), animated: false)
         }
         lastStableOffset = want
+        recordDistanceFromBottom()   // the restore IS where this reader now is
     }
 
     // The looser test, for the jump-to-latest BUTTON only: an affordance, not a decision about moving
@@ -3161,8 +3259,24 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // the other half of the stale-position bug: a reader who scrolled up and then walked straight
         // out never settled, so the store kept whatever mid-scroll row was written on the way.
         reportReadingPosition()
+        // THE ROW THIS READER IS LOOKING AT, for the return trip. `reportReadingPosition` writes the
+        // same measurement to the on-disk store, but only for a reader who is NOT at the newest —
+        // that store answers "where should this chat open next time", which is a different question
+        // from "put this screen back exactly as it was". This one is kept for any reader, in memory,
+        // and is what `restoreRecordedDistance` reaches for first.
+        anchorOnDisappear = isAtNewest ? nil : viewportAnchor()
         isDisappearing = true
         isViewCompletelyAppeared = false   // theirs, same method
+    }
+
+    /// The topmost row of the viewport and how far its top sits below the viewport's top edge — the
+    /// same pair `reportReadingPosition` measures, and the same pair `.initialPosition` lands.
+    private func viewportAnchor() -> ChatReadingPosition? {
+        guard let ip = viewportIndexPaths().first,
+              let id = dataSource.itemIdentifier(for: ip),
+              let attr = collectionView.layoutAttributesForItem(at: ip) else { return nil }
+        let viewportTop = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
+        return ChatReadingPosition(rowId: id, offsetFromTop: attr.frame.minY - viewportTop)
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -3314,6 +3428,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             heights.removeAll(keepingCapacity: true)
             sizerRefused.removeAll()
             renderedHeights.removeAll()   // a rendered height is only true at the width it rendered at
+            seededRenderedHeights = false  // ...so the store is re-read for the NEW width
             // A plan is only true at the width it was planned at, for the same reason.
             planStore.invalidateAll()
             for id in currentIds { heights[id] = measure(id, width: w) }
@@ -3660,6 +3775,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         let loc = g.location(in: collectionView)
         guard let ip = collectionView.indexPathForItem(at: loc),
               let id = dataSource.itemIdentifier(for: ip), rowModels[id] != nil else { return }
+        // A tap meant for Play, Pause, the scrubber or the speed pill is not a reaction. See
+        // `VoiceBubbleView.controlTookTouchRecently` — the control stamps itself in `hitTest`, which
+        // happens while the touch is being delivered and therefore strictly before this recogniser
+        // can fire on it.
+        guard !VoiceBubbleView.controlTookTouchRecently() else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         onUikitDoubleTap(id)
     }

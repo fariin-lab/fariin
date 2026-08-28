@@ -872,7 +872,16 @@ final class ThreadRepository {
     // scroll hasn't happened yet, so readerAwayFromBottom is still false), and a live commit mid-loop
     // used to trim away the very pages the jump just loaded — the loop re-paged, the trim re-dropped,
     // and the jump silently failed after burning its page budget (audit M7).
-    private var jumpPagingInFlight = false
+    /// ⛔ READ BY THE VIEW, so the top spinner can tell the two kinds of paging apart — his report,
+    /// 2026-08-28: tap a reply's quote and the chat "goes loading".
+    ///
+    /// The spinner at the top of the list means one thing: you scrolled to the oldest message you
+    /// have and more is on its way. A quote jump also pages older history, but it is not that — the
+    /// person tapped a quote, they are not looking at the top of the list, and a spinner up there
+    /// reads as the conversation itself failing to load. Theirs never shows one for this because a
+    /// quoted reply resolves out of a local database; ours has to walk back a page at a time, so the
+    /// least it can do is not narrate it in the wrong place.
+    private(set) var jumpPagingInFlight = false
 
     // LRU-drop the OLDEST messages once the window blows past the high-water mark (the standard 500-cap).
     // Runs only on live commits — never right after loadOlder, so paging isn't undone under the reader.
