@@ -1865,6 +1865,15 @@ struct ThreadView: View {
         }
     }
 
+    /// Is the header's subtitle currently showing a live "typing…" — the ONE condition its accent
+    /// tint is allowed to mean. Deliberately the same set of tests `presenceSubtitle` uses to decide
+    /// whether to say the words, so the colour can never disclose what the words withhold.
+    private var showsLiveTyping: Bool {
+        guard typingPref, repo.otherTyping else { return false }
+        if isGroup { return !repo.typingNames.isEmpty }
+        return !repo.iBlocked
+    }
+
     private var presenceSubtitle: String? {
         if isGroup {
             // Show who's typing in the group; otherwise the member count.
@@ -3891,7 +3900,18 @@ struct ThreadView: View {
     private var headerModel: ChatHeaderModel {
         var m = ChatHeaderModel(name: liveTitle, photoUrl: photoUrl)
         m.subtitle = presenceSubtitle
-        m.subtitleIsLive = repo.otherTyping
+        // ⛔ THE COLOUR IS AS MUCH A DISCLOSURE AS THE WORDS ARE.
+        //
+        // `presenceSubtitle` withholds "typing…" behind `typingPref`, `iBlocked` and, in a group, a
+        // non-empty name list. This line was the raw flag, and it drives the subtitle's tint — so
+        // with typing indicators turned OFF, "last seen 5m ago" flipped to accent blue exactly while
+        // the other person typed and back to grey when they stopped. The setting hid the sentence
+        // and published the same fact in colour instead.
+        //
+        // It now answers the narrower question the tint is actually for: is the subtitle currently
+        // SAYING something live? Nothing can be inferred from a colour that the words do not already
+        // state outright.
+        m.subtitleIsLive = showsLiveTyping
         // Who you are actually talking to. The header is the surface that matters most for this
         // mark: it is on screen for the whole conversation, and it is the last thing somebody sees
         // before they answer a stranger.

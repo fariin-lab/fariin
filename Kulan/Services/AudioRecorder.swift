@@ -466,6 +466,24 @@ final class AudioRecorder {
         }
     }
 
+    /// ⛔ EVERY PARKED RECORDING, FOR SIGN-OUT AND ACCOUNT DELETION.
+    ///
+    /// `discardDraft` takes one conversation and `sweepInFlight` only drops what is old, so neither
+    /// answers "this account is leaving the phone". `SessionWipe` cleared the decrypted media caches
+    /// and missed these two roots entirely — and the asymmetry is worth stating, because it is the
+    /// opposite of what you would guess: those caches hold audio that was DECRYPTED from the server,
+    /// while these hold audio that was never encrypted at all. Record a note, leave the chat so it
+    /// parks, sign out, and the next person to use the phone had it.
+    ///
+    /// Whole directories rather than per-conversation, because at wipe time there is no list of
+    /// conversations left to walk.
+    static func wipeAllDrafts() {
+        let fm = FileManager.default
+        let root = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        try? fm.removeItem(at: root.appendingPathComponent("VoiceDrafts", isDirectory: true))
+        try? fm.removeItem(at: inFlightDir())
+    }
+
     private static func draftDir(_ cid: String) -> URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("VoiceDrafts", isDirectory: true)

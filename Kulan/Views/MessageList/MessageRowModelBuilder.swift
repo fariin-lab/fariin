@@ -527,6 +527,16 @@ enum MessageRowModelBuilder {
         // Never for a deleted original: its thumbnail is gone from Storage, so this would draw an
         // empty box next to the words saying it was deleted.
         guard let o, !o.deleted else { return .none }
+        // ⛔ AND NEVER FOR A VIEW-ONCE ORIGINAL. This is the one path that could walk around the
+        // rule the rest of the row system enforces.
+        //
+        // A view-once photo is deliberately routed to a PILL by `canRender`/`bubble`, so its picture
+        // is never drawn in the list at all. This function does not go through that gate: it reads
+        // the original `Message` and pulls `imageUrl` + `enc` straight into a 34pt image view. So
+        // anyone replying to a view-once photo caused it to be rendered — permanently, in BOTH
+        // threads, and still there after the single view had been spent. The one guarantee the
+        // feature makes is the one it could not keep.
+        guard !o.viewOnce else { return .none }
         if o.isImage, let url = o.imageUrl { return .media(url: url, enc: o.enc, play: false) }
         if o.isAlbum, let first = o.album.first { return .media(url: first.imageUrl, enc: first.enc, play: false) }
         if o.isGif, let url = o.imageUrl { return .gif(url: url) }
@@ -540,6 +550,9 @@ enum MessageRowModelBuilder {
         // words readable inside every reply to it. We cannot rewrite someone else's message, but we
         // can refuse to render the stale copy once we can see the original is gone.
         if o?.deleted == true { return "This message was deleted" }
+        // The words follow the same rule as the picture: a view-once original is named by what it
+        // WAS, never by its caption, which is content the sender meant to be seen once.
+        if o?.viewOnce == true { return "Photo" }
         if let o, o.isImage || o.isGif || o.isVideo || o.isAlbum {
             if !o.text.isEmpty { return quoteSafeLabel(o.text) }   // the caption wins
             if o.isAlbum { return "Photos" }

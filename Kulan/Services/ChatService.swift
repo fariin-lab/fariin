@@ -2384,6 +2384,20 @@ enum ChatService {
             for u in blobs {
                 try? await Storage.storage().reference(forURL: u).delete()
             }
+            // ⛔ AND THE DECRYPTED COPIES ON THIS PHONE. The comment at the top of this method says
+            // the ciphertext must not outlive the message — and until now that promise was kept on
+            // the SERVER and broken on the DEVICE.
+            //
+            // The plaintext lives in three local stores, and `AudioCache.remove` / `VideoCache.remove`
+            // had no callers anywhere in the app: the only removals were the wholesale `removeAll()`
+            // at sign-out and in Settings. So a voice note, video or photo that was deleted for
+            // everyone — or that expired on the disappearing timer, which routes here too — stayed
+            // on both phones as a readable file, indefinitely. The one thing "delete for everyone"
+            // exists to guarantee was the one thing it did not do.
+            //
+            // Best-effort and after the doc is gone, for the same reason the Storage loop above is:
+            // a local file we cannot remove must not turn a successful delete into a reported one.
+            await purgeLocalCopies(messageId: messageId, blobs: blobs, cid: cid)
             // Clean up what a bare doc delete leaves behind (audit):
             // • a PIN pointing at it — pinnedMessageIds is shared state and nothing else ever
             //   removes the id, so both people kept a dead "Tap to view" pin forever;
@@ -2404,6 +2418,36 @@ enum ChatService {
     /// Every Storage object a message doc owns: photo, video + its poster, voice note, file, each
     /// album item (and each album video's own poster), and a sealed link-preview image. Reads the RAW
     /// doc so it covers types the client model may not expose.
+    /// ⛔ THE OTHER HALF OF A DELETE: the decrypted copies this phone kept.
+    ///
+    /// `deleteMessage` removes the document and every Storage object it named. Until this existed
+    /// that was the whole story, and it left the plaintext behind in three places:
+    ///
+    ///   · `AudioCache` — the decrypted voice note, keyed by message id.
+    ///   · `VideoCache` — the decrypted video, keyed by message id.
+    ///   · `DiskImageCache` — photos and thumbnails, keyed by their Storage URL, and written with
+    ///     `owned: true`, which every other removal path in that file deliberately spares.
+    ///
+    /// Both per-message removals had no callers at all before this; the only thing that ever emptied
+    /// those stores was the wholesale wipe at sign-out. So "delete for everyone" and the
+    /// disappearing timer both destroyed the server's ciphertext and left a readable file on both
+    /// devices for good.
+    ///
+    /// ⚠️ Also drops the chat's search corpus, which is a THIRD copy of the same content — decrypted
+    /// message text in a process-lifetime static with a two-minute TTL. Without this the deleted
+    /// words stayed findable, in the clear, after the app had reported them destroyed.
+    ///
+    /// Every step is best-effort and none of them can fail the delete: the message is already gone
+    /// by the time this runs, and a file we could not remove is not a reason to tell the user the
+    /// delete failed.
+    @MainActor
+    private static func purgeLocalCopies(messageId: String, blobs: [String], cid: String) {
+        AudioCache.remove(messageId)
+        VideoCache.remove(messageId)
+        for u in blobs { DiskImageCache.shared.remove(url: u) }
+        MessageSearch.invalidateChat(cid)
+    }
+
     private static func mediaStorageURLs(in data: [String: Any]?) -> [String] {
         guard let d = data else { return [] }
         var out: [String] = []

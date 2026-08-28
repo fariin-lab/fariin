@@ -271,6 +271,29 @@ final class DiskImageCache {
         }
     }
 
+    /// ⛔ REMOVE ONE PICTURE OUTRIGHT, OWNED COPY INCLUDED — for a message that has been destroyed.
+    ///
+    /// Every other removal in this file is a CACHE decision: the trim, the sweep and `clear()` all
+    /// deliberately spare `.own` files, because an owned chat photo is the only copy left once the
+    /// mailman model has deleted the server object. That rule is right for making room and wrong for
+    /// a delete: when the message is gone, its picture is not a copy worth keeping, it is content
+    /// the app has told both people no longer exists.
+    ///
+    /// So this is the one path that takes the owned file too, and it exists only for
+    /// `ChatService.purgeLocalCopies`. Both tiers, because the in-memory image would otherwise still
+    /// be handed out for the rest of the session.
+    func remove(url: String) {
+        mem.removeObject(forKey: url as NSString)
+        io.async { [weak self] in
+            guard let self else { return }
+            let fm = FileManager.default
+            for u in [self.fileURL(url, owned: true), self.fileURL(url)] {
+                try? fm.removeItem(at: u)
+                self.indexRemove(u.deletingPathExtension().lastPathComponent)
+            }
+        }
+    }
+
     /// Wipe both tiers (Settings → Clear Cache).
     func clear() {
         mem.removeAllObjects()

@@ -346,7 +346,25 @@ extension MessageSearch {
     // The reference approach indexes messages incrementally instead of re-scanning on every search. Fariin's version:
     // cache the decrypted corpus per chat for a short TTL, so reopening search moments later doesn't
     // re-fetch + re-decrypt up to 1000 messages again.
+    /// ⛔ DECRYPTED MESSAGE TEXT, HELD IN A STATIC. Everything about this cache is a deliberate
+    /// trade, so the rules it has to keep are written here rather than left to be rediscovered.
+    ///
+    /// It is the only place in the app that holds a conversation's plaintext outside the repository
+    /// that owns it, and it outlives the screen that built it. Two things follow, and neither used
+    /// to be true:
+    ///
+    ///   1. IT MUST BE EMPTIED WHEN THE ACCOUNT GOES. `SessionWipe` clears every other decrypted
+    ///      store; this one it could not see, so a signed-out phone kept the last-searched chats'
+    ///      plaintext in memory for the life of the process.
+    ///   2. IT MUST BE EMPTIED WHEN A MESSAGE IS DESTROYED. "Delete for everyone" genuinely removes
+    ///      the ciphertext from the server, and the app tells the user the content is gone. This
+    ///      cache could still answer with it, in the clear, for up to two minutes afterwards.
     private static var corpusCache: [String: (at: Date, corpus: [InChatMessage])] = [:]
+
+    /// Drop one chat's cached plaintext — a delete, an edit, or an expiry in that conversation.
+    static func invalidateChat(_ cid: String) { corpusCache.removeValue(forKey: cid) }
+    /// Drop everything — sign-out, account deletion, account switch.
+    static func invalidateAll() { corpusCache.removeAll() }
 
     static func loadChat(cid: String, isGroup: Bool, me: String, limit: Int = 1000) async -> [InChatMessage] {
         if let hit = corpusCache[cid], Date().timeIntervalSince(hit.at) < 120 { return hit.corpus }
@@ -371,6 +389,16 @@ extension MessageSearch {
                 : Crypto.shared.decrypt(data["text"] as? String ?? "", cid: cid)
             guard !text.isEmpty else { return nil }
             if data["viewOnce"] as? Bool == true { return nil }   // view-once is never searchable
+            // ⛔ NOR IS ANYTHING THE READER HAS DELETED FOR THEMSELVES. This corpus reads Firestore
+            // directly, and "Delete for me" is a LOCAL hide — the document survives untouched. So a
+            // message the user had removed from their own chat was decrypted straight back into the
+            // search index: it came back as a hit, inflated the count, and jumping to it landed on
+            // a row that does not exist. The list and the search have to agree about what is in this
+            // conversation, and the list is the one the user can see.
+            if HiddenMessages.isHidden(doc.documentID) { return nil }
+            // A tombstone has no content left to find; matching one would be matching the words of
+            // a message both sides were told was destroyed.
+            if data["deleted"] as? Bool == true { return nil }
             let date = (data["createdAt"] as? Timestamp)?.dateValue() ?? Date()
             // Same raw-marker guard as the global corpus: index/display the safe label.
             let safe = quoteSafeLabel(text)

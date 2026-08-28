@@ -46,6 +46,19 @@ enum SessionWipe {
         StoryOutbox.removeAll()                 // unfinished story posts — never inherited
         AudioCache.removeAll()                  // decrypted voice notes on disk
         VideoCache.removeAll()                  // decrypted videos on disk
+        // ⛔ AND THE THREE DECRYPTED STORES THIS LIST COULD NOT SEE. Each one was missed for the
+        // same reason: the two lines above name the caches that hold RECEIVED media, and these hold
+        // the same content by another route.
+        //
+        //   · The recorded-but-unsent voice note. It is parked to disk when you leave a chat mid
+        //     recording, and it is not "decrypted" — it was NEVER encrypted. The account it belongs
+        //     to could be signed out and the next person still had the audio.
+        //   · The in-flight folder, same story for a note whose upload had not finished.
+        //   · The in-chat search corpus: decrypted message TEXT in a process-lifetime static. It
+        //     outlives the screen, so a signed-out phone kept the last-searched conversations
+        //     readable in memory for the life of the process.
+        AudioRecorder.wipeAllDrafts()
+        MessageSearch.invalidateAll()
         AppRouter.shared.pendingChatId = nil
         AppRouter.shared.pendingChatName = nil
         AppRouter.shared.pendingChatPhoto = nil
