@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import CryptoKit   // drafts are sealed at rest — see the note on `Drafts`
 import FirebaseFirestore
 import UIKit   // the inline thumbnail is decoded here, next to the field that carries it
 
@@ -887,25 +888,93 @@ extension EncMeta {
 
 /// Unsent composer drafts, keyed by conversation id: leave a chat with text still in
 /// the box and the chat list shows "Draft: …" until you send or clear it.
+/// ⛔ DRAFTS ARE ENCRYPTED AT REST — owner's decision, 2026-08-28, and it fixes the oddest hole in
+/// the app: in a messenger whose whole premise is end-to-end encryption, the ONE message body that
+/// was never encrypted anywhere was the one still being typed.
+///
+/// It used to be `UserDefaults.standard.set(map, forKey:)` on every keystroke, which lands the text
+/// in `Library/Preferences/<bundle>.plist` in the clear, keyed by conversation. Readable by anything
+/// with container access, and carried into an unencrypted computer backup.
+///
+/// The shape here is theirs in spirit: they keep the draft body on the thread record inside their
+/// encrypted database, under the same protection as the messages. We have no such database, so the
+/// equivalent is a device-local key in the keychain and the same AES-GCM seal the rest of the app
+/// uses for content.
+///
+/// ⚠️ THE KEY IS DEVICE-ONLY AND SURVIVES REBOOT, deliberately: `Keychain.set` writes with
+/// `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`, so a draft is readable after the first unlock
+/// (which is when the app can run at all) and never leaves this phone or reaches a backup that could
+/// be restored elsewhere. Losing the key simply means the drafts are unreadable and are dropped —
+/// which is the right failure for unsent text, and is why every read is fallible rather than
+/// throwing.
 @Observable
 final class Drafts {
     static let shared = Drafts()
-    private static let key = "chatDrafts"
+    private static let key = "chatDraftsSealed"
+    /// The old plaintext key. Read once at startup so existing drafts are not lost, then deleted —
+    /// leaving it behind would keep the very plaintext this change exists to remove.
+    private static let legacyPlainKey = "chatDrafts"
+    private static let keychainKey = "draftsKey"
+
     private(set) var map: [String: String]
-    private init() { map = UserDefaults.standard.dictionary(forKey: Self.key) as? [String: String] ?? [:] }
+
+    private init() {
+        map = Self.load()
+        // Migrate anything written by the old plaintext store, then take it off the disk.
+        if let old = UserDefaults.standard.dictionary(forKey: Self.legacyPlainKey) as? [String: String] {
+            for (cid, text) in old where map[cid] == nil { map[cid] = text }
+            UserDefaults.standard.removeObject(forKey: Self.legacyPlainKey)
+            Self.save(map)
+        }
+    }
 
     func text(_ cid: String) -> String { map[cid] ?? "" }
     func set(_ cid: String, _ text: String) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard map[cid] ?? "" != t else { return }   // no-op → no observation churn per keystroke
         if t.isEmpty { map.removeValue(forKey: cid) } else { map[cid] = t }
-        UserDefaults.standard.set(map, forKey: Self.key)
+        Self.save(map)
     }
 
-    /// Sign-out/delete: drafts are unsent plaintext — wipe with the account.
+    /// Sign-out/delete: drafts are unsent message text — wipe them, and the key with them, so the
+    /// stored blob is not merely orphaned but unreadable.
     func clear() {
         map = [:]
         UserDefaults.standard.removeObject(forKey: Self.key)
+        Keychain.delete(Self.keychainKey)
+    }
+
+    // MARK: - At-rest
+
+    /// The device-local sealing key, created on first use.
+    private static func sealingKey() -> SymmetricKey {
+        if let stored = Keychain.get(keychainKey), let raw = Data(base64Encoded: stored) {
+            return SymmetricKey(data: raw)
+        }
+        let fresh = SymmetricKey(size: .bits256)
+        let raw = fresh.withUnsafeBytes { Data($0) }
+        Keychain.set(keychainKey, raw.base64EncodedString())
+        return fresh
+    }
+
+    private static func save(_ map: [String: String]) {
+        guard !map.isEmpty else { UserDefaults.standard.removeObject(forKey: key); return }
+        guard let json = try? JSONSerialization.data(withJSONObject: map),
+              let sealed = try? AES.GCM.seal(json, using: sealingKey()).combined else {
+            // A draft we cannot seal is not written in the clear as a fallback. Losing unsent text is
+            // a small harm; writing it as plaintext is the harm this whole type exists to prevent.
+            UserDefaults.standard.removeObject(forKey: key)
+            return
+        }
+        UserDefaults.standard.set(sealed, forKey: key)
+    }
+
+    private static func load() -> [String: String] {
+        guard let blob = UserDefaults.standard.data(forKey: key),
+              let box = try? AES.GCM.SealedBox(combined: blob),
+              let json = try? AES.GCM.open(box, using: sealingKey()),
+              let out = try? JSONSerialization.jsonObject(with: json) as? [String: String] else { return [:] }
+        return out
     }
 }
 

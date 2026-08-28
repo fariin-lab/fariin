@@ -67,6 +67,10 @@ enum Limits {
     /// about 30 MB. 64 covers roughly three and a half minutes at full quality, and anything longer
     /// degrades smoothly instead of failing.
     static let videoMessageBytes = 64 * 1024 * 1024                // 64 MB — storage.rules chat/
+    /// The recording ceiling, and `AudioRecorder.maxDuration` IS this value rather than a copy of it.
+    /// It used to be neither: this constant was referenced nowhere in the app and the recorder
+    /// enforced its own 600, so the documented cap was three times the real one and anybody building
+    /// against this file would have built against a number nothing honoured.
     static let voiceNoteSeconds: TimeInterval = 30 * 60           // 30 min
     static let editWindowSeconds: TimeInterval = 15 * 60          // 15 min
     static let deleteForEveryoneSeconds: TimeInterval = 48 * 3600 // 48 h

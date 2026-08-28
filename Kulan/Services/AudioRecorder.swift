@@ -18,10 +18,15 @@ final class AudioRecorder {
     /// died, and paired with a locked recording that survives leaving the chat, a pocket could
     /// produce a half-hour file nobody knew was being made.
     ///
-    /// Ten minutes, and it does NOT throw the take away — `onReachedLimit` lands it on the review
-    /// bar with everything said so far, so the ceiling is a full stop rather than a loss. Longer than
-    /// any voice note anybody actually means to send, short enough that an accident stays small.
-    static let maxDuration: TimeInterval = 600
+    /// It does NOT throw the take away — `onReachedLimit` lands it on the review bar with everything
+    /// said so far, so the ceiling is a full stop rather than a loss.
+    ///
+    /// ⛔ ONE NUMBER, AND IT LIVES IN `Limits`. This was a local `600` while `Limits.voiceNoteSeconds`
+    /// said 30 minutes and was referenced by nothing at all — the file that calls itself the single
+    /// source of truth and a mirror of the server rules was being ignored by the only code that
+    /// enforces this cap. Owner's decision, 2026-08-28: thirty minutes, and the two must be the same
+    /// value rather than two values that agree by luck.
+    static var maxDuration: TimeInterval { Limits.voiceNoteSeconds }
     /// Fired once when the cap is hit. The view stops the take and shows the review bar.
     var onReachedLimit: (() -> Void)?
     private var limitFired = false
