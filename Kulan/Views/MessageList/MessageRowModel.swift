@@ -51,6 +51,18 @@ struct MetaChrome: Equatable {
     /// When the message was created, so the sending clock can honour its 0.8s grace window. A
     /// healthy send flips to a tick inside that window and the clock is never seen.
     var bornAt: Date?
+    /// ⛔ WHEN THIS MESSAGE DISAPPEARS, if it is on a timer.
+    ///
+    /// Disappearing messages have been live server-side for a while and the row said nothing about
+    /// it: a message could be sitting in the thread with minutes left and look exactly like one that
+    /// will be there forever. Theirs puts a shrinking hourglass in the footer beside the timestamp
+    /// for precisely this — the state is not a detail, it is the whole point of the feature.
+    ///
+    /// ⚠️ NOT PART OF THE FOOTER'S MEASURED WIDTH. The glyph is drawn in the slot the reservation
+    /// already leaves (see `BubbleText.reservation`), so a message does not change size as its timer
+    /// runs down — a bubble that resized every second would be the bloom this file's notes warn
+    /// about, once a second, on every expiring row on screen.
+    var expiresAt: Date?
 }
 
 /// What sits inside the bubble. Phase 1 renders text, jumbomoji and the tombstone; the media and

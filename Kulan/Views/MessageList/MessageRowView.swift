@@ -131,6 +131,63 @@ final class ReactionChipView: UIView {
     }
 }
 
+// ── The disappearing-message countdown ──
+//
+// A ring that empties as the message's time runs out, drawn beside the timestamp. Theirs uses a
+// shrinking hourglass for the same job; a ring is the shape this app already speaks in (the upload
+// indicator is one) and it reads at 9pt, which an hourglass's waist does not.
+//
+// ⚠️ IT SHOWS A PROPORTION, NOT A DURATION. A five-minute timer half spent and a one-day timer half
+// spent look the same, which is what makes it legible at a glance — the exact remaining time is a
+// detail for the message's info, not for a 9pt glyph on every row.
+//
+// ⚠️ NO TIMER OF ITS OWN, deliberately. A per-row display link in a chat full of expiring messages
+// is dozens of live timers; the fraction is recomputed on the repaints the row already gets, and a
+// second's lag on a countdown nobody is watching to the second is invisible.
+final class ExpiryRingView: UIView {
+    private let track = CAShapeLayer()
+    private let fill = CAShapeLayer()
+
+    /// 1 = the whole life left, 0 = due now.
+    var fraction: CGFloat = 1 { didSet { setNeedsLayout() } }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        backgroundColor = .clear
+        for l in [track, fill] {
+            l.fillColor = UIColor.clear.cgColor
+            l.lineWidth = 1.5
+            l.lineCap = .round
+            layer.addSublayer(l)
+        }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func tintColorDidChange() {
+        super.tintColorDidChange()
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)   // the ring must not animate its own relayout
+        let r = min(bounds.width, bounds.height) / 2 - 0.75
+        let c = CGPoint(x: bounds.midX, y: bounds.midY)
+        let full = UIBezierPath(arcCenter: c, radius: r, startAngle: -.pi / 2,
+                                endAngle: 1.5 * .pi, clockwise: true).cgPath
+        track.frame = bounds
+        track.path = full
+        track.strokeColor = tintColor.withAlphaComponent(0.3).cgColor
+        fill.frame = bounds
+        fill.path = full
+        fill.strokeColor = tintColor.cgColor
+        fill.strokeEnd = max(0, min(1, fraction))
+        CATransaction.commit()
+    }
+}
+
 // ── The selection circle ──
 //
 // A port of their `SelectionIndicatorView(style: .list)`, which is what the message list uses.
@@ -392,6 +449,8 @@ final class MessageRowView: UIView {
     private var noticeView: RowNoticePillView?
     private var callView: CallBubbleView?
     private var checkbox: SelectionCheckboxView?
+    /// The disappearing-message countdown, drawn over the footer. See `setExpiryTimer`.
+    private var expiryRing: ExpiryRingView?
 
     private(set) var plan: RowPlan?
     private(set) var model: MessageRowModel?
@@ -627,6 +686,7 @@ final class MessageRowView: UIView {
         // Theirs SPINS while a message is in flight (`isAnimated: true` on the sending indicator,
         // a full turn a second, repeating). A still clock reads as a stuck message.
         setSendingSpin(metaChrome(m).tick == .sending, over: b)
+        setExpiryTimer(metaChrome(m).expiresAt, bornAt: metaChrome(m).bornAt, over: b)
         metaLabel.frame = b.meta
         metaLabel.isHidden = b.meta == .zero
 
@@ -1052,6 +1112,48 @@ final class MessageRowView: UIView {
     ///
     /// ⚠️ A SEPARATE VIEW, not the label's attachment: an attachment cannot rotate, and rotating
     /// the whole footer would spin the timestamp with it.
+    /// ⛔ THE DISAPPEARING-MESSAGE TIMER, beside the timestamp — owner's decision, 2026-08-28.
+    ///
+    /// Disappearing messages have been live server-side and the row said nothing at all about it: a
+    /// message with two minutes left looked exactly like one that stays forever. Theirs puts a
+    /// shrinking hourglass in the footer for this, and it is not a decoration — the whole feature is
+    /// the fact that this message is going away.
+    ///
+    /// ⚠️ DRAWN OVER THE FOOTER, ADDING NO WIDTH AND NO HEIGHT. It sits in the lane the invisible
+    /// reservation already leaves, exactly as the sending clock does, so the bubble does not resize
+    /// while the timer runs. A footer that re-measured every second would re-bloom every expiring row
+    /// on screen, once a second, which is the failure mode this file's own notes keep warning about.
+    ///
+    /// ⚠️ AND IT IS REDRAWN, NOT ANIMATED. A CADisplayLink or a per-second timer per row would mean
+    /// dozens of live timers in a busy chat. The fraction is recomputed whenever the row is
+    /// configured or repainted — which already happens on every land, tick and scroll — and the
+    /// remaining time is coarse enough that a second's lag is invisible.
+    private func setExpiryTimer(_ expiresAt: Date?, bornAt: Date?, over b: BubblePlan) {
+        guard let expiresAt, b.meta != .zero else {
+            expiryRing?.isHidden = true
+            return
+        }
+        let v = expiryRing ?? {
+            let x = ExpiryRingView(frame: .zero)
+            bubbleBox.addSubview(x)
+            expiryRing = x
+            return x
+        }()
+        // The full span this message was given, so the ring can show a PROPORTION rather than an
+        // absolute time — a five-minute timer half gone and a one-day timer half gone should look
+        // the same, which is what makes the glyph readable at a glance.
+        let total = bornAt.map { expiresAt.timeIntervalSince($0) } ?? 0
+        let left = expiresAt.timeIntervalSinceNow
+        v.isHidden = false
+        v.tintColor = b.metaColor
+        v.fraction = total > 0 ? max(0, min(1, left / total)) : 0
+        // Leading of the footer, so it reads before the time rather than colliding with the tick's
+        // reserved slot at the trailing edge.
+        let side: CGFloat = 9
+        v.frame = CGRect(x: b.meta.minX - side - 3, y: b.meta.midY - side / 2, width: side, height: side)
+        bubbleBox.bringSubviewToFront(v)
+    }
+
     private func setSendingSpin(_ on: Bool, over b: BubblePlan) {
         guard on else {
             sendingSpinner?.layer.removeAllAnimations()
@@ -1262,6 +1364,8 @@ final class MessageRowView: UIView {
         bubbleBox.transform = .identity
         bubbleBox.layer.removeAllAnimations()
         highlight.shape.removeAllAnimations()
+        // The countdown belongs to one message's timer; a recycled cell must not inherit it.
+        expiryRing?.isHidden = true
         // The circle is a view that only exists while the selection lane does, so recycling takes it
         // out rather than parking it. A cell coming back for a row that is not in selection mode
         // cannot then be handed a hidden-but-present box to get confused about.

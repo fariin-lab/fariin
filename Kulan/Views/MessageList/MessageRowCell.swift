@@ -163,6 +163,10 @@ final class MessageRowCell: UICollectionViewCell {
                 && x.forwarded == y.forwarded && x.reactions.count == y.reactions.count
                 && x.showsFailedBadge == y.showsFailedBadge
                 && x.meta.edited == y.meta.edited && x.meta.timeText == y.meta.timeText
+                // The countdown is drawn over the footer and adds no size, so a change to it is
+                // geometry-neutral by construction — it belongs on the repaint path, which is what
+                // keeps the ring moving without ever re-measuring the row.
+                && x.meta.expiresAt == y.meta.expiresAt
         default:
             return false
         }

@@ -165,6 +165,9 @@ final class ThreadRepository {
     var memberLastRead: [String: Double] = [:]   // group: uid -> last-read time (millis); for "read by"
     var iBlocked = false
     var disappearSeconds = 0
+    /// Bumped by every expiry sweep while this chat holds anything on a timer, so the footer's
+    /// countdown rings re-render. Read into the row-model cache key; see `sweepExpired`.
+    private(set) var expiryTick = 0
     private var expiryTimer: Timer?
     /// Fires ONCE, at the exact second the next message is due. See `scheduleNextBurn`.
     private var burnTimer: Timer?
@@ -960,6 +963,16 @@ final class ThreadRepository {
     // history that was already due before this chat was opened.
     private func sweepExpired() {
         let now = Date()
+        // ⛔ ADVANCE THE COUNTDOWNS EVERY SWEEP, not only when something is due. The footer's
+        // disappearing-message ring shows how much of a message's life is left, and a ring is only
+        // honest if it moves — but a row is rebuilt from a cache key made of content, and a message
+        // on a timer has identical content from one second to the next. Without a clock in that key
+        // the ring would freeze at whatever fraction it had when the row was last touched.
+        //
+        // The tick rides this sweep rather than a timer of its own: the sweep already exists, already
+        // runs on the right cadence for this, and one counter for the whole chat is the alternative
+        // to a live timer per expiring row.
+        if byId.values.contains(where: { $0.expiresAt != nil }) { expiryTick &+= 1 }
         guard byId.values.contains(where: { ($0.expiresAt.map { now >= $0 }) == true }) else { return }
         burnDue()
     }

@@ -296,7 +296,10 @@ enum MessageRowModelBuilder {
             meta: MetaChrome(timeText: msg.createdAt.formatted(date: .omitted, time: .shortened),
                              edited: msg.edited && !msg.deleted,
                              tick: tick,
-                             bornAt: msg.createdAt),
+                             bornAt: msg.createdAt,
+                             // A tombstone is already gone; putting a countdown on one would be
+                             // promising to remove something that has been removed.
+                             expiresAt: msg.deleted ? nil : msg.expiresAt),
             sender: sender,
             quote: quote,
             storyReply: storyReply,

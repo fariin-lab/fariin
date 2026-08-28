@@ -2503,6 +2503,10 @@ struct ThreadView: View {
             //     card or says the story is gone, and that is a HEIGHT difference.
             //   hiddenTick — `albumBody` drops tiles hidden "for me", which re-solves the mosaic.
             "\(storiesRepo.storiesVersion)", "\(storiesRepo.didLoad)", "\(hiddenTick)",
+            // The disappearing-message countdown is READ while building a row, so by this file's own
+            // rule — stated four times above — it has to be in the key that decides whether the row
+            // is rebuilt. It only moves in a chat that actually has messages on a timer.
+            "\(repo.expiryTick)",
         ].joined(separator: "|")
         if uikitModelCache.key == key { return uikitModelCache.models }
 
