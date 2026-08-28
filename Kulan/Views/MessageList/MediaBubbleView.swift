@@ -131,6 +131,9 @@ final class MediaBubbleView: UIView {
                 // A video shows its POSTER, not its file.
                 let url = m.kind == .video ? m.posterUrl : m.url
                 let enc = m.kind == .video ? m.posterEnc : m.enc
+                // A single photo usually has a blurhash to sit behind, but not always — a message
+                // from an older build, or one whose hash did not survive, showed nothing at all.
+                picture.showsLoadingIndicator = true
                 picture.configure(url: url, enc: enc, cid: cid,
                                   placeholder: InlineThumbCache.image(id: m.thumbCacheId,
                                                                       base64: m.inlineThumbBase64)
@@ -305,6 +308,10 @@ final class AlbumTileView: UIView {
             picture.reset()
             picture.image = ui
         } else {
+            // An album tile is the case that needed this most: it usually has neither an inline
+            // thumb nor a blurhash, so without an indicator it was a flat grey square with nothing
+            // to say whether it was downloading, stuck, or broken.
+            picture.showsLoadingIndicator = true
             picture.configure(url: model?.url, enc: model?.enc, cid: cid, placeholder: placeholder)
         }
 

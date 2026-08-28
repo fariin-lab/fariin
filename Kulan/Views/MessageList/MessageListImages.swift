@@ -16,8 +16,24 @@ import UIKit
 /// A small image inside a row: the reply quote's thumbnail, an album tile's placeholder, a link
 /// preview's picture. Encrypted urls are decrypted with the conversation's key.
 final class RowImageView: UIImageView {
+    /// Where a downloaded photo is decoded and resized. Off the main thread, because both of those
+    /// are real work and doing them on main is what kept the blur up after the bytes had landed.
+    private static let decodeQueue = DispatchQueue(label: "fariin.rowimage.decode",
+                                                   qos: .userInitiated, attributes: .concurrent)
     private var token = 0
     private var currentUrl: String?
+    /// ⛔ A DOWNLOAD THAT IS HAPPENING SHOULD LOOK LIKE ONE — his report, 2026-08-28: an album
+    /// somebody sends has "no download loading".
+    ///
+    /// A single photo at least has a blurhash to sit behind, so something is on screen while the
+    /// bytes come. An album tile often has neither an inline thumb nor a hash, so it was a flat grey
+    /// square with nothing to say whether it was loading, stuck, or broken — and the ring that DOES
+    /// exist on a tile is the UPLOAD ring, which only ever appears on your own outgoing album.
+    ///
+    /// Opt-in, because the same view draws 34pt reply-quote thumbnails, where a spinner would be
+    /// bigger than the picture.
+    var showsLoadingIndicator = false
+    private var spinner: UIActivityIndicatorView?
     /// The url whose REAL bytes are on screen — as opposed to `currentUrl`, which is only what was
     /// last asked for. A fetch that fails leaves the placeholder showing and this nil, so the next
     /// configure tries again instead of treating the blur as a finished picture.
@@ -59,9 +75,11 @@ final class RowImageView: UIImageView {
         // thumbnail that IS on disk would otherwise appear a beat late.
         if let warm = DiskImageCache.shared.smallImageSync(url) { image = warm; return }
         image = placeholder
+        setLoading(true)
 
         Task { @MainActor [weak self] in
             guard let self else { return }
+            defer { if self.token == mine { self.setLoading(false) } }
             if let cached = await DiskImageCache.shared.image(for: url) {
                 guard self.token == mine else { return }
                 self.image = cached
@@ -70,22 +88,55 @@ final class RowImageView: UIImageView {
             }
             guard let u = URL(string: url),
                   let (data, _) = try? await MediaSession.shared.data(from: u) else { return }
-            var ui: UIImage?
-            var clear: Data?
+            // Bytes only here. The decode used to happen on this line as well, on the main actor,
+            // which is half of what kept the blur up — see the note below.
+            let clear: Data?
             if let enc {
-                if let bytes = await Crypto.shared.decryptBytes(cid, cipher: data, meta: enc) {
-                    ui = UIImage(data: bytes); clear = bytes
-                }
+                clear = await Crypto.shared.decryptBytes(cid, cipher: data, meta: enc)
             } else {
-                ui = UIImage(data: data); clear = data
+                clear = data
             }
-            guard let ui, self.token == mine else { return }
-            let bounded = ui.boundedForDisplay()
+            guard let bytes = clear, self.token == mine else { return }
+            // ⛔ THE PICTURE IS PREPARED OFF THE MAIN THREAD — his report: the blur stays for a
+            // moment AFTER the download has finished.
+            //
+            // This whole task is `@MainActor`, so everything between the bytes arriving and the
+            // assignment was running on main while the blurhash sat on screen: `UIImage(data:)`,
+            // then `boundedForDisplay()`, which is a synchronous decode-and-resize
+            // (`preparingThumbnail`) and is the expensive one — tens of milliseconds for a photo
+            // off a modern camera, longer on an older phone. The download had finished; the main
+            // thread was simply too busy to draw the result yet.
+            //
+            // ⚠️ THE DISK PATH ALREADY DOES THIS CORRECTLY, and the asymmetry is the whole bug:
+            // `DiskImageCache.image(for:)` decodes on its own queue, bounds, and force-prepares the
+            // bitmap before handing it back, with a comment saying exactly why. A photo read from
+            // the cache appeared instantly and the same photo arriving from the network did not.
+            //
+            // ⚠️ AND THE DECODE IS FORCED, not just the resize. `UIImage(data:)` is lazy: assigning
+            // it hands the work to the render server and the bitmap is decoded on the main thread at
+            // DRAW time, which puts the stall back one frame later. Mirrors the disk path's rule —
+            // if `boundedForDisplay` actually resized, the result is already decoded; if it returned
+            // the original untouched, prepare it.
+            //
+            // ⚠️ A QUEUE AND A CONTINUATION, NOT `Task.detached`: `Task`'s success type must be
+            // `Sendable` and `UIImage` is not. This is the same shape `DiskImageCache.image(for:)`
+            // uses two files over, for the same reason.
+            let prepared: UIImage? = await withCheckedContinuation { cont in
+                Self.decodeQueue.async {
+                    guard let raw = UIImage(data: bytes) else { cont.resume(returning: nil); return }
+                    let bounded = raw.boundedForDisplay()
+                    cont.resume(returning: (bounded === raw ? raw.preparingForDisplay() : bounded) ?? raw)
+                }
+            }
+            guard let prepared, self.token == mine else { return }
+            // THE PICTURE FIRST, THE BOOKKEEPING AFTER. Storing before the assignment put a memory
+            // insert, a file removal and a disk-write dispatch between the finished image and the
+            // frame that shows it, for no reason — nothing about the cache is owed to this frame.
+            self.image = prepared
+            self.loadedUrl = url
             // owned: a chat photo is the only copy left once the server's is deleted, so it must
             // survive the cache trim exactly as the SwiftUI path stores it.
-            DiskImageCache.shared.store(bounded, data: clear, for: url, owned: true)
-            self.image = bounded
-            self.loadedUrl = url
+            DiskImageCache.shared.store(prepared, data: bytes, for: url, owned: true)
         }
     }
 
@@ -94,6 +145,36 @@ final class RowImageView: UIImageView {
         currentUrl = nil
         loadedUrl = nil
         image = nil
+        setLoading(false)
+    }
+
+    /// Shown only while the bytes are actually in flight, and never for a picture that is already
+    /// on screen — a memory or synchronous-disk hit returns before this is ever switched on.
+    private func setLoading(_ on: Bool) {
+        guard showsLoadingIndicator else { return }
+        guard on else { spinner?.stopAnimating(); spinner?.isHidden = true; return }
+        let v = spinner ?? {
+            let v = UIActivityIndicatorView(style: .medium)
+            v.hidesWhenStopped = true
+            v.color = .white
+            // Legible on a pale photo as well as a dark one, without a scrim over the picture.
+            v.layer.shadowColor = UIColor.black.cgColor
+            v.layer.shadowOpacity = 0.45
+            v.layer.shadowRadius = 3
+            v.layer.shadowOffset = .zero
+            addSubview(v)
+            spinner = v
+            return v
+        }()
+        v.isHidden = false
+        v.startAnimating()
+        bringSubviewToFront(v)
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        spinner?.center = CGPoint(x: bounds.midX, y: bounds.midY)
     }
 }
 

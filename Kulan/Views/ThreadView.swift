@@ -3994,9 +3994,11 @@ struct ThreadView: View {
                 await MainActor.run { sendError = "Couldn't open the file." }; return
             }
             // PDFs open in the custom PDFKit reader (Liquid Glass); everything else uses QuickLook.
-            let isPDF = name.lowercased().hasSuffix(".pdf") || data.prefix(4).elementsEqual([0x25, 0x50, 0x44, 0x46])   // "%PDF"
+            let isPDF = safe.lowercased().hasSuffix(".pdf") || data.prefix(4).elementsEqual([0x25, 0x50, 0x44, 0x46])   // "%PDF"
             await MainActor.run {
-                if isPDF { pdfDoc = PDFDocWrap(url: tmp, title: name) }
+                // The sanitised name is also the one shown as the reader's title: what is on screen
+                // should be the file that was actually opened.
+                if isPDF { pdfDoc = PDFDocWrap(url: tmp, title: safe) }
                 else { filePreview = PreviewFile(url: tmp) }
             }
         }
