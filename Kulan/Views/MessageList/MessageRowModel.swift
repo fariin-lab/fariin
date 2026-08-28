@@ -178,6 +178,9 @@ enum BubbleBody: Equatable {
         var extra: Int                   // "+N" on the last tile, past the 10-item ceiling
         var caption: TextBody?
         var uploading: Bool
+        /// The send failed. Read by every tile's ring so it stops rather than turning forever — see
+        /// `MediaBody.sendFailed`.
+        var sendFailed: Bool
         /// The per-tile X — mine only, for the reason `MediaBody.cancellable` states.
         var cancellable: Bool
         var blurhash: String?
@@ -231,6 +234,10 @@ enum BubbleBody: Equatable {
         var durationText: String?        // a video's badge, "0:42"
         var caption: TextBody?           // nil when the media carries no words
         var uploading: Bool
+        /// The send failed outright. The ring reads it to STOP: an upload that errors leaves no
+        /// progress entry, is not done and is not cancelled, so without this the indicator turned
+        /// forever on a photo that was never going to send.
+        var sendFailed: Bool
         var clientId: String?
         /// Does the indicator carry an X? ⚠️ `uploading` is true on the RECEIVER too — a message
         /// exists before its bytes do, by design — and their upload is not ours to cancel. Only my

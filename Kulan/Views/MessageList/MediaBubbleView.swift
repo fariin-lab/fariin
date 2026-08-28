@@ -186,6 +186,7 @@ final class MediaBubbleView: UIView {
             v.isHidden = false
             v.frame = r
             v.clientId = m.clientId
+            v.sendFailed = m.sendFailed
             v.showsCancel = m.cancellable
             v.start()
         } else {
@@ -236,7 +237,7 @@ final class AlbumBubbleView: UIView {
                         placeholder: i == 0 ? (InlineThumbCache.image(id: a.thumbCacheId,
                                                                       base64: a.inlineThumbBase64)
                                                ?? a.blurhash.flatMap { BlurHash.decode($0) }) : nil,
-                        cid: cid, cancellable: a.cancellable)
+                        cid: cid, cancellable: a.cancellable, sendFailed: a.sendFailed)
         }
 
         if let capsule = plan.metaCapsule {
@@ -297,7 +298,7 @@ final class AlbumTileView: UIView {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(_ model: BubbleBody.AlbumBody.Tile?, tile: AlbumPlan.Tile,
-                   placeholder: UIImage?, cid: String, cancellable: Bool) {
+                   placeholder: UIImage?, cid: String, cancellable: Bool, sendFailed: Bool) {
         let local = CGRect(origin: .zero, size: tile.rect.size)
         picture.frame = local
         if let data = model?.localData, let ui = UIImage(data: data) {
@@ -343,6 +344,7 @@ final class AlbumTileView: UIView {
             v.isHidden = false
             v.frame = r.offsetBy(dx: -tile.rect.minX, dy: -tile.rect.minY)
             v.clientId = model?.uploadKey
+            v.sendFailed = sendFailed
             v.showsCancel = cancellable
             // The X drops THIS item and the album ships without it — so the tile has to say so.
             v.onCancelled = { [weak self] c in self?.picture.alpha = c ? 0.4 : 1 }
@@ -459,6 +461,14 @@ final class UploadRingView: UIView {
     /// Where this ring's bytes are filed: a single photo's `clientId`, an album tile's
     /// "clientId#index". The cell reads it back to know what the X cancels.
     var clientId: String?
+    /// ⛔ THE SEND FAILED, SO THE RING MUST STOP. An upload that errors leaves no progress entry, is
+    /// not done and is not cancelled — so `paint` fell through to the indeterminate branch and the
+    /// ring turned forever on a photo that is never going to send, with nothing to distinguish dead
+    /// from slow. The red badge outside the bubble already says what happened; the ring's job is to
+    /// stop claiming the transfer is still running.
+    var sendFailed = false {
+        didSet { if sendFailed != oldValue { paint() } }
+    }
 
     /// False on a photo somebody ELSE is still uploading: same ring, no X. See
     /// `MediaBody.cancellable`.
@@ -530,7 +540,7 @@ final class UploadRingView: UIView {
         // truth is the only one that can take an indicator off a finished photo.
         let cancelled = MediaSend.shared.isItemCancelled(key)
         onCancelled?(cancelled)
-        let settled = cancelled || MediaSend.shared.isItemDone(key)
+        let settled = cancelled || sendFailed || MediaSend.shared.isItemDone(key)
         alpha = settled ? 0 : 1
         guard !settled else { stopSpinning(); return }
 

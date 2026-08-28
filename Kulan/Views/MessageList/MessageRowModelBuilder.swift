@@ -355,6 +355,7 @@ enum MessageRowModelBuilder {
             durationText: duration,
             caption: caption,
             uploading: m.sendState == .sending || m.uploading,
+            sendFailed: m.sendState == .failed,
             clientId: m.clientId,
             cancellable: m.authorId == ctx.me && m.sendState == .sending,
             // A gif is a public url with nothing to hold back; a photo goes through the
@@ -417,6 +418,7 @@ enum MessageRowModelBuilder {
             // and nothing read it. See [[kulan-media-send-order]] — a message exists before its
             // bytes do, on purpose, and the ring is what says so.
             uploading: m.sendState == .sending || m.uploading,
+            sendFailed: m.sendState == .failed,
             cancellable: m.authorId == ctx.me && m.sendState == .sending,
             blurhash: m.blurhash,
             inlineThumbBase64: m.thumb, thumbCacheId: m.rowId)
