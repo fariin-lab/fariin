@@ -2213,8 +2213,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         collectionView.layoutIfNeeded()
         didFirstLand = true
         perform(.initialPosition)
+        // ⛔ REVEAL IN THIS TURN, NOT THE NEXT ONE — his report, 2026-08-27: "it draws in front of
+        // me, everything shows up after I open", worse from a notification. The measuring was never
+        // the problem and still is not; the wait after it was. This used to hand `reveal` to
+        // `DispatchQueue.main.async`, so the chat had finished its work and then sat invisible for
+        // one more runloop turn — long enough for the push to start with an empty message area and
+        // the bubbles to appear into it.
+        //
+        // ⚠️ THE SECOND `layoutIfNeeded` IS THE PART THAT MAKES IT SAFE, and removing it would put
+        // back a worse bug than the one being fixed. `perform(.initialPosition)` writes a content
+        // offset, and the cells for that offset are not dequeued until the next layout pass — the
+        // async hop was what used to supply that pass. Forcing it here means the frame we uncover
+        // is the LANDED one, which is the whole reason this view starts at alpha 0.
+        collectionView.layoutIfNeeded()
         recordDistanceFromBottom()
-        DispatchQueue.main.async { [weak self] in self?.reveal() }
+        reveal()
     }
 
     private func reveal() {
