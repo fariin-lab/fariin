@@ -88,6 +88,8 @@ final class MediaBubbleView: UIView {
     private let metaCapsule = UIView()
     private let captionLabel = UILabel()
     private var ring: UploadRingView?
+    private var flightKey = ""
+    private var visibilityToken: AnyCancellable?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -112,10 +114,36 @@ final class MediaBubbleView: UIView {
         captionLabel.numberOfLines = 0
         captionLabel.lineBreakMode = .byWordWrapping
         addSubview(captionLabel)
+        // THE SOURCE STEPS ASIDE FOR THE FLIGHT. A swipe-down dismiss carries a copy of the picture
+        // back to this rect, so for the length of the drag the same picture would otherwise be on
+        // screen twice — the copy under the finger and the original still sitting in the row. The
+        // stories row has honoured this signal since it was written; the chat rows were migrated to
+        // UIKit without it, which is why the duplicate showed up here and nowhere else.
+        //
+        // Alpha, never `isHidden`: a hidden view stops reporting its frame, and its frame is the
+        // very rect the copy is flying towards.
+        visibilityToken = MediaSourceVisibility.shared.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.applyVisibility() }
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Everything the flying copy replaces — the picture and the badges drawn over it. The caption
+    /// is not on the copy, so it stays put; it belongs to the bubble, not to the photograph.
+    private func applyVisibility() {
+        let hidden = !flightKey.isEmpty && MediaSourceVisibility.shared.hiddenId == flightKey
+        let a: CGFloat = hidden ? 0 : 1
+        picture.alpha = a
+        gif?.alpha = a
+        playBadge.alpha = a
+        durationPill.alpha = a
+        durationLabel.alpha = a
+        metaCapsule.alpha = a
+        ring?.alpha = a
+    }
+
     func configure(_ m: BubbleBody.MediaBody, plan: MediaPlan, cid: String) {
+        flightKey = m.flightKey
         // The picture. A gif is its own view because it animates; everything else is one image.
         switch m.kind {
         case .gif:
@@ -209,6 +237,11 @@ final class MediaBubbleView: UIView {
             ring?.stop()
             ring?.isHidden = true
         }
+
+        // Last, because the branches above create the gif view and the ring lazily and a row can be
+        // reconfigured in the middle of a drag — a scroll or a reload would otherwise hand the
+        // picture back at full alpha while its copy is still in the air.
+        applyVisibility()
     }
 
     func prepareForReuse() {
@@ -224,6 +257,10 @@ final class AlbumBubbleView: UIView {
     private var tiles: [AlbumTileView] = []
     private let metaCapsule = UIView()
     private let captionLabel = UILabel()
+    /// One key per tile, in tile order. An album flies ONE picture, so the hide has to be per tile —
+    /// alpha-ing the whole grid would blank the three photos that never left.
+    private var flightKeys: [String] = []
+    private var visibilityToken: AnyCancellable?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -233,10 +270,24 @@ final class AlbumBubbleView: UIView {
         captionLabel.numberOfLines = 0
         captionLabel.lineBreakMode = .byWordWrapping
         addSubview(captionLabel)
+        // See `MediaBubbleView`: the tile the dismissing copy is flying home to steps aside so the
+        // same picture is not on screen twice for the length of the drag.
+        visibilityToken = MediaSourceVisibility.shared.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.applyVisibility() }
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    private func applyVisibility() {
+        let id = MediaSourceVisibility.shared.hiddenId
+        for (i, v) in tiles.enumerated() {
+            let key = i < flightKeys.count ? flightKeys[i] : ""
+            v.alpha = (!key.isEmpty && key == id) ? 0 : 1
+        }
+    }
+
     func configure(_ a: BubbleBody.AlbumBody, plan: AlbumPlan, cid: String) {
+        flightKeys = a.tiles.map(\.flightKey)
         while tiles.count < plan.tiles.count {
             let v = AlbumTileView()
             insertSubview(v, at: 0)
@@ -270,6 +321,10 @@ final class AlbumBubbleView: UIView {
         } else {
             captionLabel.isHidden = true
         }
+
+        // Last, and for the same reason as the single-media view: the loop above may have just
+        // built a tile, and a reconfigure mid-drag must not hand the picture back at full alpha.
+        applyVisibility()
     }
 
     /// Which tile is at this point, in this view's coordinates? The album opens the tile you hit,

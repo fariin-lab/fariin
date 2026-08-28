@@ -886,6 +886,11 @@ enum MessageRowLayout {
         innerY = mediaRect.maxY
 
         // The footer: in the caption row when there is a caption, floating on the picture when not.
+        // Those two places have different things behind them, so they get different colours: the
+        // caption row sits on the bubble and keeps the direction colour, the floating one sits on
+        // the dark capsule. `footerColor` is what the row view will actually redraw the string
+        // with — it reads `BubblePlan.metaColor`, not the media plan.
+        var footerColor = metaColor
         let metaAttr = BubbleText.meta(b.meta, isMe: b.isMe, color: metaColor)
         var plan = MediaPlan(media: mediaRect, caption: nil, captionText: nil, captionAttr: nil,
                              captionMetaOnOwnLine: false, metaCapsule: nil, duration: nil,
@@ -916,8 +921,8 @@ enum MessageRowLayout {
             // This is the same rule as the jumbomoji footer, pointing the other way: a footer takes
             // its colour from whatever is actually behind it. The capsule is always dark, so the
             // text on it is always light — and because the row view rebuilds the string from
-            // `plan.metaColor`, the ticks and the sending clock follow it without a second thought.
-            plan.metaColor = BubblePalette.metaOnMedia
+            // `BubblePlan.metaColor`, the ticks and the sending clock follow it too.
+            footerColor = BubblePalette.metaOnMedia
             let r = floatingMeta(BubbleText.meta(b.meta, isMe: b.isMe, color: BubblePalette.metaOnMedia),
                                  over: mediaRect)
             plan.metaCapsule = r.capsule
@@ -962,7 +967,7 @@ enum MessageRowLayout {
             bubble: bubbleRect, radii: b.radii, isCapsule: false, fill: b.fill, rim: b.rim,
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
-            bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
+            bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: footerColor,
             tombstoneIcon: nil, mediaPlan: plan, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
@@ -1008,6 +1013,9 @@ enum MessageRowLayout {
         let grid = CGRect(x: 0, y: innerY, width: solved.size.width, height: solved.size.height)
         innerY = grid.maxY
 
+        // See `mediaPlan`: the floating footer sits on the dark capsule in both themes, so it takes
+        // its colour from the capsule rather than from who sent the album.
+        var footerColor = metaColor
         var tiles: [AlbumPlan.Tile] = []
         for (i, t) in solved.tiles.enumerated() {
             var tile = AlbumPlan.Tile(rect: t.rect, playBadge: nil, duration: nil,
@@ -1061,7 +1069,7 @@ enum MessageRowLayout {
         } else {
             // Same rule as the single-media branch above: the capsule is dark in both themes, so
             // the footer on it is light whoever sent the album.
-            plan.metaColor = BubblePalette.metaOnMedia
+            footerColor = BubblePalette.metaOnMedia
             let r = floatingMeta(BubbleText.meta(b.meta, isMe: b.isMe, color: BubblePalette.metaOnMedia),
                                  over: grid)
             plan.metaCapsule = r.capsule
@@ -1074,7 +1082,7 @@ enum MessageRowLayout {
             bubble: bubbleRect, radii: b.radii, isCapsule: false, fill: b.fill, rim: b.rim,
             text: .zero, meta: metaRect, metaOnOwnLine: plan.captionMetaOnOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
-            bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: metaColor,
+            bodyAttr: NSAttributedString(), links: [], textColor: textColor, metaColor: footerColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: plan, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: nil, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
