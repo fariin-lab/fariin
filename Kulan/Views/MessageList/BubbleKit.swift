@@ -63,6 +63,10 @@ enum BubblePalette {
     static let receivedText = UIColor { $0.userInterfaceStyle == .dark ? .white : .black }
     static let myMeta = UIColor.white.withAlphaComponent(0.7)
     static let receivedMeta = UIColor.secondaryLabel
+    /// The footer when it floats on a dark capsule over a photo or a gif. NOT direction-based: that
+    /// capsule is `black at 0.35` in both themes, so the only thing behind the text is dark and the
+    /// text must be light whoever sent the message. See `MessageRowLayout`'s floating-meta branch.
+    static let metaOnMedia = UIColor.white.withAlphaComponent(0.95)
 
     /// Stable per-sender colour for a group name label — the same arithmetic the SwiftUI bubble
     /// used (sum of unicode scalars into a fixed palette), so a name does not change colour when

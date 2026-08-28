@@ -903,7 +903,23 @@ enum MessageRowLayout {
             metaRect = r.meta
             innerY = r.block.maxY
         } else {
-            let r = floatingMeta(metaAttr, over: mediaRect)
+            // ⛔ ON THE CAPSULE THE COLOUR FOLLOWS THE SURFACE, NOT THE MESSAGE — his screenshot,
+            // 2026-08-28: an incoming GIF's time is nearly unreadable in light mode.
+            //
+            // The floating capsule is `black at 0.35` in BOTH themes, because it sits on a
+            // photograph and has to work over anything. The footer's colour, though, was chosen by
+            // DIRECTION: mine is white at 70%, theirs is `.secondaryLabel` — which in light mode is
+            // near-black. So an incoming photo or gif drew dark text on a dark pill, and only in
+            // light mode, and only on media somebody else sent. Every one of those qualifiers is in
+            // his report.
+            //
+            // This is the same rule as the jumbomoji footer, pointing the other way: a footer takes
+            // its colour from whatever is actually behind it. The capsule is always dark, so the
+            // text on it is always light — and because the row view rebuilds the string from
+            // `plan.metaColor`, the ticks and the sending clock follow it without a second thought.
+            plan.metaColor = BubblePalette.metaOnMedia
+            let r = floatingMeta(BubbleText.meta(b.meta, isMe: b.isMe, color: BubblePalette.metaOnMedia),
+                                 over: mediaRect)
             plan.metaCapsule = r.capsule
             metaRect = r.text
         }
@@ -1043,7 +1059,11 @@ enum MessageRowLayout {
             metaRect = r.meta
             innerY = r.block.maxY
         } else {
-            let r = floatingMeta(metaAttr, over: grid)
+            // Same rule as the single-media branch above: the capsule is dark in both themes, so
+            // the footer on it is light whoever sent the album.
+            plan.metaColor = BubblePalette.metaOnMedia
+            let r = floatingMeta(BubbleText.meta(b.meta, isMe: b.isMe, color: BubblePalette.metaOnMedia),
+                                 over: grid)
             plan.metaCapsule = r.capsule
             metaRect = r.text
         }
