@@ -53,6 +53,21 @@ struct MediaDismissHost: UIViewRepresentable {
         context.coordinator.noteCloseToken(closeToken)
     }
 
+    /// Clear up after a viewer that has gone, once a real landing has had time to finish.
+    ///
+    /// The flying copy deliberately outlives the cover — that is what lets it land on the thumbnail
+    /// after the viewer is gone — so it cannot simply be removed on disappear. A second is far
+    /// longer than the 0.25s landing spring and far shorter than "until you open another photo",
+    /// which is how long an orphan used to sit on the conversation.
+    @MainActor
+    static func scheduleOrphanSweep() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            guard let win = UIApplication.shared.connectedScenes
+                .compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first else { return }
+            Coordinator.sweepOrphanedFlights(in: win)
+        }
+    }
+
     final class Marker: UIView {
         weak var coordinator: Coordinator?
         override func didMoveToWindow() {
@@ -65,6 +80,29 @@ struct MediaDismissHost: UIViewRepresentable {
         var parent: MediaDismissHost
         private weak var root: UIView?
         private var container: UIView?
+
+        /// Marks a flying copy in the window so an orphan can be recognised later. An arbitrary
+        /// constant, deliberately far from anything a real view would carry.
+        static let flightTag = 0x4D46   // "MF"
+
+        /// Remove any flying copy left in the window by an earlier flight. Cheap: the window has a
+        /// handful of direct subviews and this only walks those.
+        static func sweepOrphanedFlights(in window: UIWindow) {
+            for v in window.subviews where v.tag == flightTag {
+                v.layer.removeAllAnimations()
+                v.removeFromSuperview()
+            }
+        }
+
+        /// The case a sweep cannot reach: this coordinator goes away mid-flight, so there is no
+        /// later flight to sweep and the completion that would have cleaned up is never called.
+        deinit {
+            let leftovers = [clipWrap, container].compactMap { $0 }
+            guard !leftovers.isEmpty else { return }
+            DispatchQueue.main.async {
+                for v in leftovers { v.layer.removeAllAnimations(); v.removeFromSuperview() }
+            }
+        }
         private var clipWrap: UIView?      // landing-only clipping view (the chat viewport), see finish()
         private var fromFrame: CGRect = .zero
         private var active = false
@@ -142,8 +180,25 @@ struct MediaDismissHost: UIViewRepresentable {
                 content = root.resizableSnapshotView(from: m.frame, afterScreenUpdates: false,
                                                      withCapInsets: .zero) ?? UIView()
             }
+            // ⛔ SWEEP ANY COPY A PREVIOUS FLIGHT LEFT BEHIND — his screenshot, 2026-08-28: tap a
+            // photo, come back, scroll, and a second copy of it is drawn over the conversation,
+            // full size, not moving with the list. "I see like duplicate images."
+            //
+            // THE COPY LIVES IN THE WINDOW AND NOTHING OWNS IT. Every exit removes it from an
+            // animator completion, and a completion is not a guarantee: interrupt the animator, tear
+            // the cover down mid-flight, or let this coordinator go while it runs, and the block
+            // never comes. The copy then simply stays in the window forever — above the chat,
+            // outside any cell, which is exactly what the screenshot shows.
+            //
+            // Theirs cannot leak this way because the flying copy belongs to a
+            // `UIViewControllerAnimatedTransitioning` context, and UIKit tears that container down
+            // whether or not the transition completes. Ours is hand-placed, so it needs an owner of
+            // its own: the tag below, a sweep before every flight, and a `deinit` that clears up
+            // after the one case a sweep cannot reach.
+            Self.sweepOrphanedFlights(in: win)
             // Shadow container (plain UIView so it can carry both corners and shadow).
             let c = UIView(frame: fromFrame)
+            c.tag = Self.flightTag
             c.layer.shadowColor = UIColor.black.withAlphaComponent(0.2).cgColor   // ows_blackAlpha20
             c.layer.shadowOffset = CGSize(width: 0, height: 32)
             c.layer.shadowRadius = 48
@@ -287,6 +342,7 @@ struct MediaDismissHost: UIViewRepresentable {
                 if let clip = parent.clipRect(), let rootView = c.superview,
                    clip.width > 1, clip.height > 1, clip != rootView.bounds {
                     let wrap = UIView(frame: rootView.bounds)
+                    wrap.tag = Self.flightTag   // the copy moves inside this, so the sweep must see IT
                     wrap.clipsToBounds = true
                     rootView.addSubview(wrap)
                     wrap.addSubview(c)         // wrap sits at the root's origin → same on-screen frame

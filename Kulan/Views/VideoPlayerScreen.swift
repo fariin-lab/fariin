@@ -107,7 +107,10 @@ struct VideoPlayerScreen: View {
         .task { await load() }
         // noteClosed: the cover is gone for real, so a tap that arrived while it was leaving can run
         // now instead of waiting out a fixed guess. See MediaPresentGate.
-        .onDisappear { cleanup(); MediaPresentGate.noteClosed() }
+        // A flying copy outlives this cover on purpose (it lands on the thumbnail after the viewer
+        // is gone). If its landing never completes it is left in the window, drawn over the
+        // conversation — see `sweepOrphanedFlights`.
+        .onDisappear { cleanup(); MediaPresentGate.noteClosed(); MediaDismissHost.scheduleOrphanSweep() }
     }
 
     /// The still the transition flies. the reference app flies a poster frame for video too — never a player

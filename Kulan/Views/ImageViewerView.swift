@@ -276,7 +276,13 @@ struct ImageViewerView: View {
         .presentationBackground(.clear)
         // The cover is gone for real — release a tap that arrived while it was leaving, instead of
         // making it wait out a fixed guess at how long that takes. See MediaPresentGate.
-        .onDisappear { MediaPresentGate.noteClosed() }
+        .onDisappear {
+            MediaPresentGate.noteClosed()
+            // A flying copy outlives this cover on purpose (it lands on the thumbnail after the
+            // viewer is gone). If its landing never completes it is left in the window, drawn over
+            // the conversation — see `sweepOrphanedFlights`.
+            MediaDismissHost.scheduleOrphanSweep()
+        }
         .alert("Couldn't save photo", isPresented: $saveError) {
             Button("OK", role: .cancel) {}
         } message: { Text("Check Photos permission and try again.") }
