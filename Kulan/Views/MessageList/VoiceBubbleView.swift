@@ -153,7 +153,22 @@ final class VoiceBubbleView: UIView {
         if let p = plan { wave.frame = running ? p.waveWithSpeed : p.wave }
         // The dot is live, not planned: its slot is reserved either way, so hiding it the moment
         // this note is heard costs no layout. Playing it at all counts as hearing it.
-        unreadDot.isHidden = !b.unplayed || player.isPlaying(b.messageId)
+        // ⛔ AND ONCE HEARD IT STAYS HIDDEN. `b.unplayed` is baked into the body when the model is
+        // built and `PlayedVoice` publishes nothing this list observes, so the flag never goes
+        // stale-to-false while the chat is open. Both LIVE conditions, meanwhile, go false the
+        // instant playback completes — the engine clears the progress and the paused position — so
+        // the dot popped straight back onto the note the user had just listened to all the way
+        // through, and stayed there until the chat was closed and reopened.
+        //
+        // `PlayedVoice` is the truth and it is already written at the moment of playing, so ask it
+        // rather than the snapshot. Cheap: an in-memory set lookup, on a view that is already
+        // re-reading live player state on every repaint.
+        // The id set alone answers it. `isUnplayed` also carries an "older than the newest played
+        // note" fallback for history whose ids have been trimmed, and that half is already baked
+        // into `b.unplayed` at build time — this only needs the part that changes while the chat is
+        // open, which is the note that was just heard.
+        let heard = PlayedVoice.shared.ids.contains(b.messageId)
+        unreadDot.isHidden = !b.unplayed || heard || player.isPlaying(b.messageId)
             || player.progress(for: b.messageId) > 0
 
         let rate = player.rate(for: cid)

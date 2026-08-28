@@ -179,7 +179,19 @@ enum BubbleText {
         }
         s.append(NSAttributedString(string: m.timeText, attributes: [
             .font: BubbleMetrics.metaFont, .foregroundColor: clear]))
-        guard isMe else { return s }
+        // ⛔ A FAILED SEND RESERVES NOTHING, BECAUSE IT DRAWS NOTHING. The footer refuses the glyph
+        // for `.failed` (theirs: "no status indicator icon" — the red badge outside the bubble says
+        // it instead), and this reserved the double-tick width anyway. So a short message that
+        // failed was sized for "ok  10:09 PM ✓✓" and drew "ok  10:09 PM", leaving about 25pt of
+        // empty bubble beside the red mark — the failed row visibly wider than the identical row
+        // that succeeded.
+        //
+        // ⚠️ This does NOT reopen the resizing this constant exists to prevent. That rule is about
+        // the states a message passes THROUGH on its way out — sending, sent, read — which is why
+        // the widest of them is reserved for all three. A failure is not on that path: it is a stop,
+        // and the send state is already in the row's signature, so a retry re-measures the row like
+        // any other content change.
+        guard isMe, m.tick != .failed else { return s }
         s.append(NSAttributedString(string: " ", attributes: [
             .font: BubbleMetrics.metaFont, .foregroundColor: clear]))
         if let one = BubbleTicks.image(.sent) {
@@ -206,7 +218,9 @@ enum BubbleText {
         var metaW = (metaStr as NSString).size(withAttributes: [.font: BubbleMetrics.metaFont]).width
         // The read pair, ALWAYS — the same constant the reservation makes. These two must agree or
         // the measuring pass and the drawing pass answer differently about the same bubble.
-        if isMe { metaW += 25 }
+        // Same rule as the reservation above, and it has to be the same or the two passes disagree
+    // about the same bubble: a failed send draws no tick, so it needs no room for one.
+    if isMe, meta.tick != .failed { metaW += 25 }
         metaW += BubbleMetrics.metaGap
         let longestWord = text.split(whereSeparator: { $0.isWhitespace })
             .map { (String($0) as NSString).size(withAttributes: [.font: BubbleMetrics.bodyFont]).width }

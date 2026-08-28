@@ -1323,7 +1323,7 @@ struct ThreadView: View {
                     }
                 })
         }
-        .alert("Delete \(selectedIds.count) message\(selectedIds.count == 1 ? "" : "s")?",
+        .alert("Delete \(liveSelection.count) message\(liveSelection.count == 1 ? "" : "s")?",
                isPresented: $showBulkDeleteConfirm) {
             // Same options as the single-message delete (user report: bulk delete offered only one
             // option). "Delete for Everyone" shows when the selection contains any of my own messages
@@ -1341,7 +1341,12 @@ struct ThreadView: View {
             Button("Delete All", role: .destructive) { deleteAllMessages() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Every message here will be removed from your side. The other person keeps their copy.")
+            // Never "the other person" in a group: that is the sentence someone reads to decide
+            // whether this is safe to tap, and in a forty-member group it names somebody who does
+            // not exist.
+            Text(isGroup
+                 ? "Every message here will be removed from your side. Everyone else keeps their copy."
+                 : "Every message here will be removed from your side. The other person keeps their copy.")
         }
         // Pinned-message bar: docked at the top via safeAreaInset (the SAME reliable mechanism the search
         // bar uses) so it ALWAYS sits right below the nav bar — never mid-screen. The old approach placed it
@@ -3363,7 +3368,7 @@ struct ThreadView: View {
     /// The reference app's equivalent check is the same shape: empty is false, then one `guard
     /// item.isForwardable else { return false }` over every item.
     private var selectionIsForwardable: Bool {
-        let picked = repo.items.filter { selectedIds.contains($0.id) }
+        let picked = liveSelection
         guard !picked.isEmpty else { return false }
         // ⛔ THEIR CAP. `selectionCanBeForwarded` refuses more than 32 items outright, before it looks
         // at any of them: a forward is one composed message per recipient and there is a real limit
@@ -3380,12 +3385,19 @@ struct ThreadView: View {
     /// cannot be deleted are not selectable here today, so the two agree in practice; writing it as
     /// the predicate means they still agree when a new row type arrives.
     private var selectionCanBeDeleted: Bool {
-        let picked = repo.items.filter { selectedIds.contains($0.id) }
+        let picked = liveSelection
         guard !picked.isEmpty else { return false }
         return picked.allSatisfy { !$0.isSystem && !$0.isCall }
     }
 
     /// The chat's own colour for a filled tick, matching what the row builder hands the UIKit rows.
+    /// The selected messages that ACTUALLY still exist in the conversation. Everything about
+    /// selection mode reads this rather than the raw id set, so a message that goes away while it is
+    /// ticked cannot leave the count and the buttons describing different things.
+    private var liveSelection: [Message] {
+        repo.items.filter { selectedIds.contains($0.id) }
+    }
+
     private var selectionTint: Color {
         guard let first = chatColorSpec?.colors.first else {
             return Color(hex: dark ? 0x0A84FF : 0x007AFF)   // Theme.defaultBubble
@@ -3419,6 +3431,13 @@ struct ThreadView: View {
         setUIMode(.normal)
         searchQuery = ""; searchMatches = []; highlightId = nil; lastSearchText = nil
         // Leave the conversation where the last result was — no scroll restore on close.
+    }
+
+    /// Has the reader typed enough for a search to have actually run? The matcher needs two
+    /// characters; below that there are no results because nothing was looked up, which is a
+    /// different fact from "looked up and found nothing" and must not be reported as one.
+    private var searchTermIsSearchable: Bool {
+        searchQuery.trimmingCharacters(in: .whitespaces).count >= 2
     }
 
     // Recompute matches as you type — our search semantics:
@@ -5037,6 +5056,13 @@ struct ThreadView: View {
                     .font(.system(size: 17))   // native search-field text
                     .focused($searchFocused)
                     .submitLabel(.search)
+                    // The blue Search key was decorative: the label was set and nothing handled the
+                    // submit, so it neither stepped through results nor dropped the keyboard — which
+                    // is the one gesture that lets you see the conversation behind them.
+                    .onSubmit {
+                        searchFocused = false
+                        if !searchMatches.isEmpty { stepSearch(1) }
+                    }
                     .autocorrectionDisabled()
                     .onChange(of: searchQuery) { _, _ in updateSearchMatches() }
                 if !searchQuery.isEmpty {
@@ -5077,7 +5103,14 @@ struct ThreadView: View {
             .padding(.horizontal, 18).frame(height: 44)   // 44pt Apple tap target, matches the close X
             .liquidGlass(Capsule(), interactive: true)
             Spacer()
-            if !searchMatches.isEmpty || !searchQuery.isEmpty {
+            // ⛔ NOTHING IS SHOWN FOR A QUERY THAT WAS NEVER RUN. Matches are only computed at two
+            // characters and up, but this appeared as soon as the field was non-empty — so one
+            // letter produced a confident "No results" about a search that had not happened, with
+            // both arrows dead beside it. It read as a finished, empty search.
+            //
+            // Theirs makes the same distinction structurally: their current index is optional and
+            // the results bar takes a nil result set, so "not searched" has no appearance at all.
+            if !searchMatches.isEmpty || searchTermIsSearchable {
                 // Same rounded glass pill as the up/down arrow nav (same height / corner / background),
                 // text centered. It's a status label, so the glass is non-interactive; search logic unchanged.
                 Text(searchMatches.isEmpty ? "No results" : "\(searchIndex + 1) of \(searchMatches.count)")
@@ -5092,7 +5125,16 @@ struct ThreadView: View {
     // Bottom action bar during selection (reference design): Delete (glass circle, leading), "N Selected"
     // (glass pill, centre), Forward (glass circle, trailing) — all real Liquid Glass, icons only.
     private var selectionActionBar: some View {
-        SelectionToolbar(count: selectedIds.count,
+        // ⛔ THE COUNT COMES FROM THE SAME PLACE THE BUTTONS DO. It used to be the raw id set while
+        // the enable gates and the actions all resolved against the live list, and nothing pruned
+        // the set when a selected message was deleted remotely, hidden, or expired. Tick three, let
+        // the sender delete one, and the pill still said "3 Selected", the confirm still said
+        // "Delete 3 messages?", and two were acted on.
+        //
+        // Theirs cannot drift this way: every consumer — the count, the delete gate, the forward
+        // gate and the forward payload — reads one selection map, and removal is an explicit
+        // operation on it. `liveSelection` is our version of asking that one source.
+        SelectionToolbar(count: liveSelection.count,
                          deleteEnabled: selectionCanBeDeleted,
                          forwardEnabled: selectionIsForwardable,
                          onDelete: { showBulkDeleteConfirm = true },

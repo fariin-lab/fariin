@@ -680,7 +680,17 @@ enum MessageRowLayout {
             rim: isJumbo ? false : b.rim,
             text: textRect, meta: metaRect, metaOnOwnLine: metaOwnLine,
             quote: quoteRect, quoteInner: quoteInner,
-            bodyAttr: bodyAttr, links: links, textColor: textColor, metaColor: metaColor,
+            // ⛔ A BORDERLESS BUBBLE'S FOOTER CANNOT USE THE OUTGOING COLOUR. `myMeta` is white at
+            // 70% and exists for the blue fill; the jumbomoji branch above clears that fill and drops
+            // the rim, so the footer was left drawing white on whatever the page is. In light mode
+            // with no wallpaper the page is white — so every emoji-only message you send had no
+            // visible timestamp and no visible send state at all.
+            //
+            // Incoming was fine by accident: `receivedMeta` is a system secondary label, which is
+            // already surface-relative. This gives the outgoing side the same property when there is
+            // no bubble under it. Theirs does the same thing for the same reason.
+            bodyAttr: bodyAttr, links: links, textColor: textColor,
+            metaColor: isJumbo ? BubblePalette.receivedMeta : metaColor,
             tombstoneIcon: nil, mediaPlan: nil, albumPlan: nil, filePlan: nil, locationPlan: nil, contactPlan: nil, pollPlan: nil, linkPlan: linkPlan, storyReplyPlan: nil, voicePlan: nil, pillPlan: nil,
             avatar: nil, senderName: nil, senderNameAttr: nil, verifiedMark: nil,
             forwarded: nil, forwardedIcon: nil, reactions: [], reactionAttrs: [], reactionMine: [],
