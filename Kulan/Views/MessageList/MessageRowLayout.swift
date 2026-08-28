@@ -20,6 +20,16 @@ struct QuoteInnerPlan {
     var snippet: CGRect
     var nameAttr: NSAttributedString
     var snippetAttr: NSAttributedString
+    /// ⛔ THE GAP THE TEXT COLUMN MUST LEAVE ON ITS RIGHT, so the view can re-stretch that column to
+    /// the width the box is ACTUALLY drawn at.
+    ///
+    /// The quote box is filled to the bubble's content width by the caller, while these inner rects
+    /// were computed against the quote's own measured width and never re-laid — so replying to a
+    /// short message with a long one drew a grey box about 280 wide holding a text column about 150
+    /// wide, ellipsising at roughly half the box with a hundred points of empty grey beside it. That
+    /// is the "reply empty space" report. The comment above these rects claimed the caller laid them
+    /// out against the filled width; nothing did.
+    var trailingInset: CGFloat
 }
 
 /// Where a photo/video/gif bubble's parts go, in BUBBLE coordinates.
@@ -1934,7 +1944,8 @@ enum MessageRowLayout {
         let snippet = CGRect(x: x, y: top + nameH + 1, width: name.width, height: snippetH)
 
         return (outer, QuoteInnerPlan(accent: accent, thumb: thumb, name: name, snippet: snippet,
-                                      nameAttr: nameAttr, snippetAttr: snippetAttr))
+                                      nameAttr: nameAttr, snippetAttr: snippetAttr,
+                                      trailingInset: hPad))
     }
 
     // ── Notices: the day separator, a system event, a pin notice ──

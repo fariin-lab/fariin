@@ -91,8 +91,18 @@ final class BubbleQuoteView: UIView {
         backing.frame = bounds
         accent.frame = plan.accent
         if let t = plan.thumb { thumb?.frame = t }
-        name.frame = plan.name
-        snippet.frame = plan.snippet
+        // ⛔ THE TEXT COLUMN TAKES THE WIDTH THE BOX IS ACTUALLY DRAWN AT. The plan's rects were
+        // measured against the quote's own natural width, and the caller then FILLS the box to the
+        // bubble's content width — so a quote of a short message inside a long reply drew its name
+        // and snippet at about 150pt inside a 280pt box, truncating with a hundred points of empty
+        // grey to the right of the ellipsis. That is the "reply empty space" report.
+        //
+        // `bounds` is the filled width, so this is the stretch the plan's own comment always claimed
+        // the caller was doing. Never narrower than planned, so a genuinely narrow box is unchanged.
+        let filled = max(plan.name.width, bounds.width - plan.name.minX - plan.trailingInset)
+        name.frame = CGRect(x: plan.name.minX, y: plan.name.minY, width: filled, height: plan.name.height)
+        snippet.frame = CGRect(x: plan.snippet.minX, y: plan.snippet.minY,
+                               width: filled, height: plan.snippet.height)
     }
 }
 

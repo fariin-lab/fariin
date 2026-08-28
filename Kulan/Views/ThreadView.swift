@@ -4873,7 +4873,23 @@ struct ThreadView: View {
     // Runs once; the last `unreadOnOpen` messages are treated as the unread block.
     private func anchorUnread(_ proxy: ScrollViewProxy) {
         guard !didAnchorUnread, unreadOnOpen > 0 else { return }
-        let msgs = repo.messages
+        // ⛔ THE ROWS THE LIST ACTUALLY RENDERS, not `repo.messages`.
+        //
+        // `messages` is the sorted server window; the delete-for-me filter, the block filter and the
+        // expiry filter all run LATER, on the way to `items`. So the anchor could name a row that
+        // never renders — and `didAnchorUnread` below then guarantees it is never recomputed, so
+        // there was no divider at all and the jump arrow's first branch failed too. Delete one of
+        // four unread messages for yourself and the whole marker silently disappeared.
+        //
+        // Those same three filters are also why the INDEX was drifting: `unreadOnOpen` is a
+        // server-side counter, and every filtered-out message shrank the local list without
+        // decrementing it, sliding the divider one row up per dropped message until it sat above
+        // things already read. Counting in the same list the divider is placed in removes both
+        // faults at once, because the two numbers finally describe the same thing.
+        //
+        // (The other copy of this computation, in `nativeList`, already looked up through `items`.
+        // The two sites disagreed about the same question.)
+        let msgs = repo.items.filter { !$0.isSystem && $0.pinNotice == nil }
         guard !msgs.isEmpty else { return }
         // More unread than the loaded window (40 a page) → the real boundary is further up than
         // anything we hold, and `max(0, …)` used to clamp to the OLDEST LOADED row and label it the

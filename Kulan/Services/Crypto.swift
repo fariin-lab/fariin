@@ -177,8 +177,21 @@ final class Crypto {
             }
             skBytes = kp.secretKey
             pkBytes = kp.publicKey
-            Keychain.set(Self.skKeychainKey(uid), Data(kp.secretKey).base64EncodedString())
-            Keychain.set(Self.pkKeychainKey(uid), Data(kp.publicKey).base64EncodedString())
+            // ⛔ IF THE PRIVATE HALF DID NOT REACH THE KEYCHAIN, DO NOT PUBLISH THE PUBLIC ONE.
+            //
+            // A discarded result here meant a refused write still advertised the key: the session
+            // worked, and the next launch found nothing, generated a SECOND keypair, republished,
+            // and everything anyone had sealed to the first became permanently unreadable — showing
+            // as a lock glyph with nothing to explain it. Failing the whole init instead means the
+            // next launch simply tries again with nothing published in between.
+            let storedSk = Keychain.set(Self.skKeychainKey(uid), Data(kp.secretKey).base64EncodedString())
+            let storedPk = Keychain.set(Self.pkKeychainKey(uid), Data(kp.publicKey).base64EncodedString())
+            guard storedSk, storedPk else {
+                Keychain.delete(Self.skKeychainKey(uid))
+                Keychain.delete(Self.pkKeychainKey(uid))
+                throw NSError(domain: "Crypto", code: 3,
+                              userInfo: [NSLocalizedDescriptionKey: "identity key could not be stored"])
+            }
         }
         // Single lock-guarded write (memory barrier); the keypair is immutable after this.
         lock.withLock { mySecretKey = skBytes; myPublicKey = pkBytes; pubCache[uid] = pkBytes }
@@ -638,7 +651,8 @@ enum Keychain {
         return String(data: data, encoding: .utf8)
     }
 
-    static func set(_ key: String, _ value: String) {
+    @discardableResult
+    static func set(_ key: String, _ value: String) -> Bool {
         let data = Data(value.utf8)
         let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -650,7 +664,16 @@ enum Keychain {
         add[kSecValueData as String] = data
         // Available after first unlock; survives reboot, stays on this device only.
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        SecItemAdd(add as CFDictionary, nil)
+        // ⛔ THE RESULT IS THE POINT. This was discarded, and `initKeys` then published the public
+        // half unconditionally — so a keychain that refused the write left the account ADVERTISING a
+        // key whose private half existed only in memory. That session worked. The next launch found
+        // nothing, generated a second keypair, republished, and everything anyone had sealed to the
+        // first key became permanently unreadable, surfacing as a lock glyph with no explanation
+        // anywhere.
+        //
+        // Reported rather than thrown: the caller decides what a storage failure means, and for the
+        // identity key it must mean "do not publish".
+        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 
     static func delete(_ key: String) {
