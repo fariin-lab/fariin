@@ -173,6 +173,10 @@ enum BubbleText {
         let clear = UIColor.clear
         let s = NSMutableAttributedString(string: ownLine ? "\n  " : "  ", attributes: [
             .font: BubbleMetrics.metaFont, .foregroundColor: clear])
+        let gap = NSTextAttachment()
+        gap.image = UIImage()                                  // draws nothing; the bounds reserve
+        gap.bounds = CGRect(x: 0, y: 0, width: BubbleMetrics.metaGap, height: 1)
+        s.append(NSAttributedString(attachment: gap))
         if m.edited {
             s.append(NSAttributedString(string: "edited ", attributes: [
                 .font: BubbleMetrics.metaItalicFont, .foregroundColor: clear]))

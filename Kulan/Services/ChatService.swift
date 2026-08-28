@@ -1203,6 +1203,33 @@ enum ChatService {
             convThumb["lastImageUrl"] = u
             convThumb["lastImageEnc"] = e
         }
+        // ⛔ ONE SURVIVOR IS A PHOTO, NOT AN ALBUM OF ONE — his report, 2026-08-28: send two, cancel
+        // one, and you get the remaining picture plus an empty bubble.
+        //
+        // The X drops a tile from the batch, and the message it was written for is still `type:
+        // "album"`. An album is a MOSAIC: the grid solver is built for two and up, and handed a
+        // single tile it produces a degenerate layout — which is the empty bubble. The count in the
+        // chat-list line was wrong for the same reason, because it was committed before the tiles
+        // finished ("2 Photos" for one picture).
+        //
+        // So the message becomes what it actually is. `type` goes back to "image", the tile's url
+        // and key move to the fields a photo is read from, and the stale `album` array is removed —
+        // a document carrying both would be read as an album again by `isAlbum`.
+        if items.count == 1, let only = items.first,
+           let u = only["imageUrl"], let e = only["enc"] {
+            var single: [String: Any] = [
+                "type": "image", "imageUrl": u, "enc": e,
+                "album": FieldValue.delete(), "albumSizes": FieldValue.delete(),
+            ]
+            if let w = only["width"] { single["width"] = w }
+            if let h = only["height"] { single["height"] = h }
+            // And the chat list must stop announcing a batch that no longer exists.
+            convThumb["lastMessage"] = "📷 Photo"
+            try await attachMedia(single, to: msgRef, conv: convThumb, convRef: convRef)
+            return
+        }
+        // The count the list shows has to be the count that survived, for the same reason.
+        convThumb["lastMessage"] = "📷 \(items.count) Photos"
         try await attachMedia(["album": items], to: msgRef, conv: convThumb, convRef: convRef)
     }
 

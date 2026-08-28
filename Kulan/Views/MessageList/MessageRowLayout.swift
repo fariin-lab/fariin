@@ -665,7 +665,13 @@ enum MessageRowLayout {
 
         var metaRect: CGRect
         if metaOwnLine {
-            innerY += 2                                       // VStack(alignment: .trailing, spacing: 2)
+            // ⛔ THE FOOTER NEEDS ROOM WHEN IT TAKES ITS OWN LINE — his screenshot, 2026-08-28: the
+            // time sitting right up against the last line of the message. Two points is the gap
+            // between two paragraphs of the same sentence, not between a message and its timestamp,
+            // and it read as the two touching. `metaGap` is the number this file already uses for
+            // the same distance measured sideways, so the footer sits the same distance from the
+            // words whichever way it lands.
+            innerY += BubbleMetrics.metaGap
             metaRect = CGRect(x: hPad + contentW - metaSize.width, y: innerY,
                               width: metaSize.width, height: metaSize.height)
             innerY += metaSize.height

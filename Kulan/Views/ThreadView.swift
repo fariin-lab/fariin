@@ -5625,9 +5625,23 @@ struct ThreadView: View {
     }
 
     /// The reply card's thumbnail when replying to a photo / GIF / video.
+    /// The little picture in the composer's reply card.
+    ///
+    /// ⛔ AN ALBUM HAD NO CASE HERE — his screenshot, 2026-08-28: replying to a GIF shows a preview
+    /// and replying to photos shows only the words "2 Photos". A photo, a gif and a video were each
+    /// handled and the one message type that is BY DEFINITION pictures was not, so the reply card
+    /// fell back to its symbol-and-label line. Its first tile is the picture, which is the same tile
+    /// the grid draws first and the same one the chat list shows.
+    ///
+    /// ⚠️ `localAlbum` / `localImageData` are checked too, so replying to something still uploading
+    /// shows the bytes already in hand rather than nothing — the cached branch can only find a url
+    /// that has finished.
     private func replyThumb(_ r: Message) -> ChatComposerBanner.Thumb? {
-        if r.isImage, let url = r.imageUrl { return .cached(url: url) }
         if r.isGif, let url = r.imageUrl { return .gif(url: url) }
+        if let local = r.localImageData, let ui = UIImage(data: local) { return .image(ui) }
+        if let firstLocal = r.localAlbum.first, let ui = UIImage(data: firstLocal) { return .image(ui) }
+        if r.isImage, let url = r.imageUrl { return .cached(url: url) }
+        if r.isAlbum, let first = r.album.first { return .cached(url: first.imageUrl) }
         if r.isVideo, let url = r.thumbUrl { return .cached(url: url) }
         return nil
     }
