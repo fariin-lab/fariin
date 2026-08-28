@@ -94,6 +94,7 @@ final class MessageRowCell: UICollectionViewCell {
         // What this replaced compared against `previous` — the last model THIS cell instance was
         // configured with. A recycled cell has none, so it silently took the no-animation branch,
         // and a cell whose reconfigure was skipped never learned the mode had changed.
+        applyAccessibility(m)
         let entering = m.selecting && !m.wasSelecting
         let leaving = !m.selecting && m.wasSelecting
         // The CONTENT's move is a layout change, so it is still gated to a cell already showing this
@@ -127,6 +128,7 @@ final class MessageRowCell: UICollectionViewCell {
         guard let old = model, m != old else { return }
         guard sameGeometry(old, m) else { return }
         model = m
+        applyAccessibility(m)   // the spoken label follows the tick, the reactions and the selection
         // The tick's 0.25s cross-dissolve. A read receipt arriving is the commonest live change in a
         // chat, and snapping ✓ to ✓✓ reads as a glitch rather than as news — the SwiftUI meta faded
         // it and so did the UIKit cell this replaces.
@@ -138,6 +140,106 @@ final class MessageRowCell: UICollectionViewCell {
             rowView.apply(m, plan: plan, cid: cid)
         }
         rowView.animateDecorations(fromSelected: old.selected, fromHighlighted: old.highlighted)
+    }
+
+    // MARK: - Accessibility
+
+    /// ⛔ THE ROW SPEAKS — owner's decision, 2026-08-28. Before this there was not one
+    /// `accessibilityLabel` or `isAccessibilityElement` anywhere in this directory: the tick is an
+    /// image attachment with no alternative text, and the quote box, reaction chips, checkbox and
+    /// fail badge are plain views. A VoiceOver user heard the message text and the time, and nothing
+    /// else — no sent/delivered/read, no "you replied to", no reactions, no selection state.
+    ///
+    /// ⚠️ ONE ELEMENT PER ROW, not one per part. A bubble is read as a sentence, in the order a
+    /// person would say it: who, what it answers, what it says, when, and what happened to it.
+    /// Exposing the quote, the body, the footer and each chip as separate elements would make
+    /// swiping through a conversation four times longer with no more information in it. Theirs
+    /// takes the same view — their footer carries one label built from the receipt status.
+    ///
+    /// ⚠️ AND IT IS BUILT FROM THE MODEL, so it cannot drift from what is drawn: everything spoken
+    /// here is a value the row was rendered from.
+    private func applyAccessibility(_ m: MessageRowModel) {
+        isAccessibilityElement = true
+        accessibilityLabel = Self.spokenLabel(m)
+        // The whole row is the target in selection mode, and toggling it is the action.
+        accessibilityTraits = m.selecting ? [.button] : []
+        accessibilityValue = m.selecting ? (m.selected ? "Selected" : "Not selected") : nil
+    }
+
+    static func spokenLabel(_ m: MessageRowModel) -> String {
+        var parts: [String] = []
+        if let d = m.dateHeader { parts.append(d.text) }
+        if m.showsUnreadDivider { parts.append("Unread messages") }
+
+        switch m.content {
+        case .notice(let n):
+            parts.append(n.text)
+        case .call(let c):
+            parts.append(c.status)
+            if !c.detail.isEmpty { parts.append(c.detail) }
+        case .bubble(let b):
+            // Who. "You" for my own messages; a group bubble names its sender even when the avatar
+            // is the only thing drawn, because a face is not something VoiceOver can read out.
+            parts.append(b.isMe ? "You" : (b.sender?.name ?? "Them"))
+            if b.forwarded { parts.append("Forwarded") }
+            if let q = b.quote {
+                parts.append(q.isStatus ? "Replying to a status"
+                                        : "Replying to \(q.authorLine), \(q.snippet)")
+            }
+            parts.append(Self.spokenBody(b.body))
+            parts.append(b.meta.timeText)
+            if b.meta.edited { parts.append("Edited") }
+            // The tick has no alternative text of its own — it is an image attachment inside an
+            // attributed string — so this is the only place the send state can be spoken at all.
+            if b.isMe, let state = Self.spokenTick(b.meta.tick) { parts.append(state) }
+            if b.showsFailedBadge { parts.append("Not delivered. Double tap to try again") }
+            if let expires = b.meta.expiresAt, expires > Date() {
+                parts.append("Disappearing message")
+            }
+            for chip in b.reactions {
+                parts.append(chip.count > 1 ? "\(chip.emoji) \(chip.count) reactions"
+                                            : "\(chip.emoji) reaction")
+            }
+        }
+        return parts.joined(separator: ", ")
+    }
+
+    /// What the bubble contains, named rather than described. A photo's caption is the useful part;
+    /// "Photo" alone is what there is to say when it has none.
+    private static func spokenBody(_ body: BubbleBody) -> String {
+        switch body {
+        case .text(let t): return t.text
+        case .jumbomoji(let g): return g
+        case .tombstone(let words): return words
+        case .media(let mb):
+            // Named by what it is, then whatever words came with it. A caption is the useful part;
+            // "Photo" alone is all there is to say when there are none.
+            let noun: String
+            switch mb.kind {
+            case .photo: noun = "Photo"
+            case .video: noun = "Video" + (mb.durationText.map { ", \($0)" } ?? "")
+            case .gif:   noun = "GIF"
+            }
+            if let words = mb.caption?.text, !words.isEmpty { return "\(noun), \(words)" }
+            return noun
+        case .album(let a): return "\(a.tiles.count) photos"
+        case .file(let f): return "File, \(f.name), \(f.sizeLabel)"
+        case .location: return "Location"
+        case .contact(let c): return "Contact, \(c.name)"
+        case .poll(let p): return "Poll, \(p.question)"
+        case .voice(let v): return "Voice message, \(v.durationText)"
+        case .pill(let p): return p.label
+        }
+    }
+
+    private static func spokenTick(_ tick: BubbleTicks.Kind) -> String? {
+        switch tick {
+        case .none: return nil
+        case .sending: return "Sending"
+        case .failed: return nil          // the failed badge says it, in words, just above
+        case .sent: return "Sent"
+        case .read: return "Read"
+        }
     }
 
     private func tickChanged(_ a: MessageRowModel, _ b: MessageRowModel) -> Bool {
