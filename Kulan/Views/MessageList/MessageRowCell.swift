@@ -28,6 +28,7 @@ protocol MessageRowCellDelegate: AnyObject {
     func rowCellDidTapContactMessage(_ cell: MessageRowCell)
     func rowCellDidTapReactions(_ cell: MessageRowCell)
     func rowCellDidTapRetry(_ cell: MessageRowCell)
+    func rowCellDidTapCancelUpload(_ cell: MessageRowCell)
     func rowCellDidToggleSelection(_ cell: MessageRowCell)
     func rowCell(_ cell: MessageRowCell, didTapSender uid: String)
     func rowCellDidTapCallRow(_ cell: MessageRowCell)
@@ -350,13 +351,15 @@ final class MessageRowCell: UICollectionViewCell {
             // falls through to them on purpose: the indicator is gone by then and the tap is
             // somebody opening a photo that happens to have just finished.
             //
-            // Straight to the service, the way the poll option votes: cancelling is a fact about
-            // the in-flight upload, and nothing upstream holds a fresher copy of it. The bubble
-            // itself is removed by `runRegisteredSend`, which already tells a cancel from a
-            // failure.
+            // ⛔ THROUGH THE CHAT, NOT STRAIGHT TO THE SERVICE. This used to call
+            // `MediaSend.cancel` on its own, on the belief that "the bubble itself is removed by
+            // `runRegisteredSend`". It is not: that path removes the LOCAL pending row, and a media
+            // send has already committed a message document by the time its ring is on screen. So
+            // the transfer stopped and the bubble stayed — his "the X does nothing". The chat owns
+            // the whole teardown; see `cancelMediaSend`.
             if rowView.hitsUploadRing(p), case .media(let media) = b.body, media.cancellable,
                let key = media.clientId, !MediaSend.shared.isItemDone(key) {
-                MediaSend.shared.cancel(key)
+                delegate?.rowCellDidTapCancelUpload(self)
                 return
             }
             if let i = rowView.uploadRingTileIndex(at: p), case .album(let a) = b.body, a.cancellable,

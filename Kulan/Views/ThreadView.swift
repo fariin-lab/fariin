@@ -2052,15 +2052,7 @@ struct ThreadView: View {
                 avatarFor: { conversation?.photos[$0] },
                 onReply: { m in beginReply(to: m) },
                 onDelete: { pendingDelete = $0 },   // confirm dialog, not instant
-                onCancelSending: { m in
-                    // Discard the pending optimistic send — and CANCEL the upload behind it. Only
-                    // hiding the bubble was the "images appear anyway a minute later" bug: nothing
-                    // held the send Task, so it ran to the end and committed. See MediaSend.
-                    if let clientId = m.clientId {
-                        MediaSend.shared.cancel(clientId)
-                        repo.removePending(clientId: clientId)
-                    }
-                },
+                onCancelSending: { m in cancelMediaSend(m) },
                 onTapContact: { uid, name, photo in
                     // "message" on a shared-contact card → open (or create) the chat with that user.
                     guard uid != me else { return }           // your own card → no self-chat
@@ -2676,11 +2668,7 @@ struct ThreadView: View {
                 })
             }
             out.append(CMAction(title: "Cancel Sending", icon: "xmark.circle", destructive: true) {
-                // Cancel the UPLOAD too, not just the bubble — see onCancelSending / MediaSend.
-                if let clientId = m.clientId {
-                    MediaSend.shared.cancel(clientId)
-                    repo.removePending(clientId: clientId)
-                }
+                cancelMediaSend(m)
             })
             out.append(CMAction(title: "Select", icon: "checkmark.circle") {
                 setUIMode(.selection); selectedIds = [m.id]   // their order: mode first, then add the item
@@ -3043,6 +3031,9 @@ struct ThreadView: View {
             },
             onTapRetry: { id in
                 if let m = repo.items.first(where: { $0.rowId == id }) { resend(m) }
+            },
+            onCancelUpload: { id in
+                if let m = repo.items.first(where: { $0.rowId == id }) { cancelMediaSend(m) }
             },
             onToggleSelect: { id in
                 if let m = repo.items.first(where: { $0.rowId == id }) { toggleSelect(m.id) }
@@ -4399,6 +4390,33 @@ struct ThreadView: View {
     /// quietly (the user asked for that), a failed one is marked so Tap-to-retry appears.
     /// `onFailure` runs only for REAL failures, after the mark — for paths that also surface a
     /// message (the mixed-group send names its error).
+    /// Stop an in-flight media send and take its bubble down — ALL THREE PIECES, because there are
+    /// three and cancelling used to do only two.
+    ///
+    /// ⛔ THE THIRD IS THE MESSAGE DOCUMENT, and leaving it behind is his 2026-08-28 report: the X
+    /// on an uploading photo "does nothing", Cancel Sending on a video takes seconds, and two
+    /// "Video" bubbles sit spinning afterwards. The transfer really was being cancelled all along —
+    /// what stayed was the committed document. The media paths commit the message BEFORE they
+    /// upload the bytes, on purpose, so the recipient sees the bubble straight away; cancelling
+    /// removed only the LOCAL optimistic row, so the committed one came right back through the
+    /// listener with `uploading: true` and no url, and span for ever on both phones.
+    ///
+    /// Deleting it here rather than when the send task unwinds is also why this is now immediate:
+    /// the task can take seconds to notice (a transcode, a retry backoff), and the reader should
+    /// not have to watch that happen.
+    private func cancelMediaSend(_ m: Message) {
+        guard let clientId = m.clientId else { return }
+        MediaSend.shared.cancel(clientId)
+        // The document, if the send got as far as committing one. `announcedId` is the send's own
+        // record; `m.id` covers a row that has already reconciled to the server copy, where the
+        // row id stays the clientId and `id` has become the document's.
+        let announced = MediaSend.shared.announcedId(clientId) ?? (m.id == clientId ? nil : m.id)
+        if let announced {
+            Task { await ChatService.cancelAnnounced(cid: cid, messageId: announced) }
+        }
+        repo.removePending(clientId: clientId)
+    }
+
     private func runRegisteredSend(_ clientId: String,
                                    onFailure: (@MainActor (Error) -> Void)? = nil,
                                    _ body: @escaping () async throws -> Void) async {

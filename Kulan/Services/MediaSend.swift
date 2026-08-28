@@ -26,6 +26,20 @@ final class MediaSend: ObservableObject {
     private var sendTasks: [String: Task<Void, Error>] = [:]
     private var itemTasks: [String: Task<String, Error>] = [:]
     private var cancelledSends: Set<String> = []
+    /// clientId → the message document this send has ALREADY committed, if it got that far.
+    ///
+    /// ⛔ THE REASON CANCEL LOOKED LIKE IT DID NOTHING. The note at the top of this file says the
+    /// send "throws before its batch commit", and that stopped being true: the media paths now
+    /// commit the message FIRST and upload the bytes afterwards, deliberately, so the recipient
+    /// sees the bubble immediately ("NOW the bytes. Everything above is already on the recipient's
+    /// screen"). Cancelling therefore stopped the transfer and removed the LOCAL optimistic row,
+    /// while the committed document stayed behind with `uploading: true` and no url — a bubble
+    /// spinning for ever on both phones. His screenshot, two "Video" rows left doing exactly that.
+    ///
+    /// The document id is a Firestore auto-id, so the cancel site cannot work it out from the
+    /// clientId; the send has to say. Recorded at the commit, read by the cancel, dropped in
+    /// `finish` with everything else filed under this send.
+    private var announcedIds: [String: String] = [:]
     @Published private(set) var cancelledItems: Set<String> = []
     /// Items whose MAIN transfer has landed. The tiles read this to drop their ring the moment
     /// their own upload is done — the message stays `.sending` until the whole batch commits, and
@@ -57,6 +71,12 @@ final class MediaSend: ObservableObject {
         for (key, t) in itemTasks where key.hasPrefix("\(clientId)#") { t.cancel() }
     }
 
+    /// The send has committed its message document. Called at the commit, not at the end.
+    func noteAnnounced(_ clientId: String, messageId: String) { announcedIds[clientId] = messageId }
+
+    /// The document this send committed, if any — what Cancel has to delete.
+    func announcedId(_ clientId: String) -> String? { announcedIds[clientId] }
+
     /// True when the failure the send path just caught was this user pressing Cancel — the caller
     /// then removes the bubble quietly instead of marking it failed.
     func wasCancelled(_ clientId: String) -> Bool { cancelledSends.contains(clientId) }
@@ -65,6 +85,7 @@ final class MediaSend: ObservableObject {
     func finish(_ clientId: String) {
         sendTasks[clientId] = nil
         cancelledSends.remove(clientId)
+        announcedIds[clientId] = nil
         let prefix = "\(clientId)#"
         for key in itemTasks.keys where key.hasPrefix(prefix) { itemTasks[key] = nil }
         if cancelledItems.contains(where: { $0.hasPrefix(prefix) }) {

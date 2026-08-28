@@ -1010,6 +1010,9 @@ enum ChatService {
         }
         batch.updateData(convUpdate, forDocument: convRef)
         try await batch.commit()
+        // The bubble now exists on both phones, so Cancel has something to take back down. Its id
+        // is an auto-id the cancel site cannot derive — see MediaSend.announcedIds.
+        if let clientId { await MediaSend.shared.noteAnnounced(clientId, messageId: msgRef.documentID) }
 
         // NOW the bytes. Everything above is already on the recipient's screen.
         let url = try await uploadedURL
@@ -1802,6 +1805,9 @@ enum ChatService {
         }
         batch.updateData(convUpdate, forDocument: convRef)
         try await batch.commit()
+        // Same as the photo path: from here Cancel has a document to delete, and only this side
+        // knows its id.
+        if let clientId { await MediaSend.shared.noteAnnounced(clientId, messageId: msgRef.documentID) }
         // Mailman model: the SENDER's copy lives on their own device from day one — the
         // server object exists only to deliver, and the recipient deletes it on pickup.
         VideoCache.store(video, for: msgRef.documentID)
