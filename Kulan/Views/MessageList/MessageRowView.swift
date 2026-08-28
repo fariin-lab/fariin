@@ -232,7 +232,12 @@ final class SelectionCheckboxView: UIView {
         selectedDisc.isUserInteractionEnabled = false
         addSubview(selectedDisc)
         tick.tintColor = .white
-        tick.contentMode = .scaleAspectFit
+        // ⛔ NEVER SCALED. `.scaleAspectFit` in a frame the size of the disc STRETCHES the glyph up
+        // to fill it, which is why the tick looked oversized inside its circle. Theirs is explicit
+        // about this — "Checkmark is self-sized and only needs to be centered properly" — and its
+        // asset is simply centred in the filled circle at its own size. `.center` is the mode that
+        // means that: draw the image as it is, in the middle.
+        tick.contentMode = .center
         selectedDisc.addSubview(tick)
         selectedDisc.isHidden = true
         applyAppearance()
@@ -296,7 +301,9 @@ final class SelectionCheckboxView: UIView {
         selectedDisc.bounds = CGRect(x: 0, y: 0, width: diameter, height: diameter)
         selectedDisc.center = CGPoint(x: bounds.midX, y: bounds.midY)
         selectedDisc.layer.cornerRadius = diameter / 2
-        tick.frame = selectedDisc.bounds
+        // Its own size, centred — not the disc's bounds. See the note on `contentMode` above.
+        tick.bounds = CGRect(origin: .zero, size: tick.image?.size ?? .zero)
+        tick.center = CGPoint(x: selectedDisc.bounds.midX, y: selectedDisc.bounds.midY)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         ring.frame = bounds
