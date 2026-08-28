@@ -82,21 +82,42 @@ final class MessageRowCell: UICollectionViewCell {
         model = m
         rowView.frame = CGRect(origin: .zero, size: CGSize(width: plan.width, height: plan.height))
 
-        // Entering or leaving selection mode SLIDES: the checkbox comes in from the leading edge and
-        // the content moves over to make room, on the same 0.2s ease the toolbar uses.
+        // ⛔ THE ANIMATION IS DECIDED BY THE MODEL, NOT BY WHAT THIS CELL DREW LAST.
         //
-        // Gated to a cell that is already showing THIS row. Reconfigure and dequeue call the same
-        // method, so without the id test a cell being recycled during a scroll would animate its way
-        // from the last row's layout into this one's — motion out of nowhere, mid-scroll.
-        let togglingSelection = previous?.id == m.id && previous?.selecting != m.selecting
-        guard togglingSelection else {
+        // Theirs asks one question of the render state — `isShowingSelectionUI` against
+        // `wasShowingSelectionUI` — and gets three answers: animate in, animate out, or neither.
+        // Because both halves ride on the model, a cell that was dequeued fresh mid-transition
+        // animates correctly too, and a cell that missed the transition entirely cannot be left in
+        // the wrong state: the pass after the slide carries neither flag, and the row is rebuilt
+        // without a selection lane at all.
+        //
+        // What this replaced compared against `previous` — the last model THIS cell instance was
+        // configured with. A recycled cell has none, so it silently took the no-animation branch,
+        // and a cell whose reconfigure was skipped never learned the mode had changed.
+        let entering = m.selecting && !m.wasSelecting
+        let leaving = !m.selecting && m.wasSelecting
+        // The CONTENT's move is a layout change, so it is still gated to a cell already showing this
+        // row: a recycled one would slide from the previous row's geometry, which is motion out of
+        // nowhere mid-scroll. The circle's own slide is a layer animation and is safe either way.
+        let sameRow = previous?.id == m.id
+        guard entering || leaving else {
             rowView.apply(m, plan: plan, cid: cid)
-                return
+            return
         }
-        rowView.prepareSelectionEntry(entering: m.selecting, plan: plan)
-        UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseInOut, .allowUserInteraction]) {
-            self.rowView.apply(m, plan: plan, cid: cid)
+        if sameRow {
+            // Incoming rows move over; outgoing ones do not. That falls out of the geometry rather
+            // than a direction test — theirs puts a flexible spacer between the selection lane and an
+            // outgoing bubble, and `MessageRowLayout` now right-aligns to the same trailing edge in
+            // both modes, so an outgoing row's rects simply do not change and there is nothing for
+            // this animation to interpolate.
+            UIView.animate(withDuration: MessageRowLayout.selectionAnimationDuration, delay: 0,
+                           options: [.curveEaseInOut, .allowUserInteraction]) {
+                self.rowView.apply(m, plan: plan, cid: cid)
+            }
+        } else {
+            rowView.apply(m, plan: plan, cid: cid)
         }
+        rowView.animateSelectionSlide(entering: entering)
     }
 
     /// A geometry-neutral repaint — the tick upgraded, the time changed, the row was selected. Held
@@ -127,7 +148,9 @@ final class MessageRowCell: UICollectionViewCell {
     /// Do these two models produce the same rects? Only the fields that cannot move anything are
     /// allowed to differ.
     private func sameGeometry(_ a: MessageRowModel, _ b: MessageRowModel) -> Bool {
-        guard a.selecting == b.selecting, a.topSpacing == b.topSpacing,
+        // `wasSelecting` is as much a geometry input as `selecting` is: it is half of what decides
+        // whether the row has a selection lane at all (see MessageRowLayout).
+        guard a.selecting == b.selecting, a.wasSelecting == b.wasSelecting, a.topSpacing == b.topSpacing,
               a.showsUnreadDivider == b.showsUnreadDivider, a.dateHeader == b.dateHeader else { return false }
         switch (a.content, b.content) {
         case (.bubble(let x), .bubble(let y)):
@@ -170,14 +193,20 @@ final class MessageRowCell: UICollectionViewCell {
 
         if m.selecting {
             // In selection mode the whole row toggles — the checkbox is the affordance, not the
-            // only target.
+            // only target. Theirs suppresses every other tap handler here for the same reason.
+            //
+            // THE TICK IS WRITTEN ONTO THE VIEW FIRST, then the model is told. That is their
+            // `handleTap`: `selectionView.isSelected = true`, then `selectionState.add(...)`. The
+            // circle fills on the same frame as the finger instead of waiting for a model rebuild,
+            // a signature re-hash and a reconfigure to come back round.
+            rowView.setSelectedImmediately(!m.selected)
+            model?.selected.toggle()
             delegate?.rowCellDidToggleSelection(self)
             return
         }
-        if rowView.hitsCheckbox(p) {
-            delegate?.rowCellDidToggleSelection(self)
-            return
-        }
+        // ⚠️ NO CHECKBOX TARGET OUTSIDE SELECTION MODE. The lane survives one pass past the exit so
+        // the circle has somewhere to slide out through, and a tap landing in that 0.2s window used
+        // to re-enter selection. Theirs gates on `isShowingSelectionUI` alone, which is `m.selecting`.
         switch m.content {
         case .call:
             // Only the bubble asks to call again; the empty row beside it is wallpaper (his

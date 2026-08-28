@@ -101,6 +101,9 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onMenuRestoreKeyboard: () -> Void = {}
     var onReachedTop: () -> Void               // near the oldest loaded row -> page older
     var selecting: Bool = false                // selection mode â€” drives the selection-animation land gate
+    /// Their `wasShowingSelectionUI`. Half of the pair the rows render from, so the list can tell a
+    /// slide-out pass from the pass that takes the circle out of the cell.
+    var wasSelecting: Bool = false
     // The initial scroll position: when the conversation has unread messages, the FIRST open lands with
     // the first-unread row (its unread divider) near the top â€” not at the newest. Consumed exactly once at
     // first open; nil (or an id outside the loaded window) falls back to the newest message.
@@ -235,7 +238,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.setTopOverlayHeight(topOverlayHeight)
         // (`noteSendTick` is at the top of this method — it has to precede `applyComposer`.)
         vc.noteMenuActionTick(menuActionTick)   // BEFORE setSelecting/apply: arm the dismissal grace first
-        vc.setSelecting(selecting)
+        vc.setSelectionState(selecting: selecting, wasSelecting: wasSelecting)
         vc.initialScrollId = initialScrollId
         vc.canSwipeReply = canSwipeReply
         vc.onSwipeReply = onSwipeReply
@@ -493,10 +496,23 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private enum SelectionAnimationState { case idle, willAnimate, animating }
     private var selectionAnimationState: SelectionAnimationState = .idle
     private var isSelecting = false
+    /// The pair the rows are actually rendered from, mirroring their `isShowingSelectionUI` /
+    /// `wasShowingSelectionUI`. Leaving selection moves through it TWICE — (false, true) slides the
+    /// circle out, then (false, false) removes it — and both passes have to reach every visible cell.
+    private var selectionUIState: (selecting: Bool, wasSelecting: Bool) = (false, false)
 
-    func setSelecting(_ s: Bool) {
-        guard s != isSelecting else { return }
-        isSelecting = s
+    /// ⛔ ARMED OFF THE WHOLE PAIR, NOT OFF A FLAG THIS CONTROLLER KEEPS FOR ITSELF.
+    ///
+    /// What this replaced was `guard s != isSelecting`, where `isSelecting` was a second copy of the
+    /// truth living on the controller. If it ever disagreed with the screen — the controller
+    /// outliving a state reset, two updates coalescing into one — the exit never armed the selection
+    /// branch and fell back to an ordinary signature diff, which is one of the ways a checkbox got
+    /// stranded. The pair is recomputed from the model on every pass, so there is nothing to drift.
+    func setSelectionState(selecting: Bool, wasSelecting: Bool) {
+        let next = (selecting: selecting, wasSelecting: wasSelecting)
+        guard next != selectionUIState else { return }
+        selectionUIState = next
+        isSelecting = selecting
         selectionAnimationState = .willAnimate   // the next land carries the checkboxes â€” let it through
     }
 
@@ -1634,8 +1650,31 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // Flush whatever was blocked by a genuine animation (see canLandLoad) once that animation ends.
     // Loads do not come through here â€” they retry on their own tight loop â€” so what is left is the tail of
     // work that a keyboard, selection, context-menu or send animation legitimately held back.
+    /// One pending settle retry at a time. Without the flag a gate that stays shut for half a second
+    /// would queue one of these per attempt; with it there is always exactly one in flight.
+    private var settleRetryScheduled = false
+    private func scheduleSettleRetry() {
+        guard !settleRetryScheduled else { return }
+        settleRetryScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
+            guard let self else { return }
+            self.settleRetryScheduled = false
+            self.settleFlush()          // re-parks itself if the gate is still shut
+        }
+    }
+
     private func settleFlush() {
-        guard canLandLoad else { return }
+        guard canLandLoad else {
+            // ⛔ A HELD-BACK SELECTION FLIP MUST COME BACK AND TRY AGAIN.
+            //
+            // This used to return here and nothing rescheduled it, so an exit that arrived while the
+            // gate was shut (a context menu still dismissing, a send glide, a swipe in flight) waited
+            // for some unrelated future land to carry it — and if none came, the checkboxes stayed.
+            // Their equivalent is a load coordinator that retries on its own loop; this is the same
+            // promise, made only for the work that cannot be left half done.
+            if selectionAnimationState == .willAnimate || needsRefreshOnSettle { scheduleSettleRetry() }
+            return
+        }
         if let pending = pendingIdsApply {
             pendingIdsApply = nil
             apply(rowIds: pending, scrollTarget: nil)
@@ -1920,7 +1959,15 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // EVERY changed row is re-measured; only the visible ones are reconfigured. See
         // `remeasureOffscreenChanged` for why those are two different questions.
         let sigChanged = ids.filter { rowSignatures[$0] != lastRowSigs[$0] }
-        let contentChanged = sigChanged.filter { liveSet.contains($0) }
+        // ⛔ A SELECTION FLIP LANDING TOGETHER WITH A ROW CHANGE STILL REACHES EVERY LIVE CELL.
+        //
+        // The force-refresh used to exist only on the "no rows added or removed" path above, so a
+        // flip that arrived in the same turn as a delete fell down here and was left to the
+        // signature diff. That is exactly what a bulk delete does: it removes the rows and calls
+        // `exitSelection()` in the same turn. Any row the diff missed kept its circle.
+        let contentChanged = selectionAnimationState == .willAnimate
+            ? ids.filter { liveSet.contains($0) }
+            : sigChanged.filter { liveSet.contains($0) }
         lastRowSigs = rowSignatures
 
         // Radar 28167779: settle any dirty layout against the OLD data BEFORE mutating heights/ids â€” a

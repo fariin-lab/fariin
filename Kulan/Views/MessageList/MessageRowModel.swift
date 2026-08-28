@@ -352,7 +352,19 @@ struct MessageRowModel: Equatable {
     // compared here so a selection flip or a highlight pulse reconfigures without re-resolving
     // the message.
     var selecting: Bool
+    /// ⛔ WAS SELECTION MODE UP ON THE PREVIOUS PASS. The reference's `wasShowingSelectionUI`, and
+    /// the thing this row system did not have.
+    ///
+    /// The checkbox exists in the cell while `selecting || wasSelecting`, and ONLY then. So leaving
+    /// selection is two passes, not one: the first still carries the circle (with `selecting` false)
+    /// and slides it out, the second has neither flag and the view is taken out of the hierarchy
+    /// altogether. That second pass is what makes the circle actually GONE rather than parked at
+    /// alpha 0 waiting for the cell to be recycled — the stranded-checkbox bug.
+    var wasSelecting: Bool
     var selected: Bool
+    /// The chat's own colour, for the filled tick. Theirs tints the selection indicator with
+    /// `chatColorValue`, so the tick is red in a red chat; ours used one hard-coded blue everywhere.
+    var selectionTint: UInt
     var highlighted: Bool
 
     /// True while a wallpaper is behind the list — the notice pills and incoming bubbles change

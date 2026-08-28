@@ -27,6 +27,10 @@ enum Limits {
     static let albumMaxItems = 10
     static let pinnedChats = 3
     static let forwardChatsAtOnce = 5
+    /// Messages that can be ticked and forwarded in one go, the reference's `maxForwardCount`. Past
+    /// this the Forward button in the selection bar switches off rather than handing the picker a
+    /// list the send path will not carry.
+    static let maxForwardSelection = 32
     static let mediaPerMessage = 32   // raised for parity with standard messengers (user request; was 30)
     // ALL FOUR OF THESE NOW MATCH THE STORAGE RULES, and every one of them used to lie.
     //

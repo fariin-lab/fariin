@@ -25,6 +25,26 @@ struct PickedMovie: Transferable {
     }
 }
 
+/// What the chat screen is currently doing — a straight port of their `ConversationUIMode`.
+///
+/// The three are MUTUALLY EXCLUSIVE, which is the point. As two separate booleans it was possible
+/// to be searching and selecting at once, and the bottom bar picked a winner by the order of its
+/// `if` chain rather than because the states could not coexist.
+enum ChatUIMode {
+    case normal
+    case search
+    case selection
+
+    /// Their `hasSelectionUI`. Written as a switch rather than `== .selection` for the same reason
+    /// theirs is: a fourth mode added later has to answer this question deliberately.
+    var hasSelectionUI: Bool {
+        switch self {
+        case .normal, .search: return false
+        case .selection: return true
+        }
+    }
+}
+
 struct ThreadView: View {
     let cid: String
     let title: String
@@ -174,8 +194,21 @@ struct ThreadView: View {
     /// Set when this person's identity key has been replaced by a different one — see SafetyKeyLog.
     /// Read once on open and again whenever the fetch notices a change while the chat is up.
     @State private var keyChanged = false
-    // Message multi-select: leading checkmark, whole-row tap, bottom action bar.
-    @State private var selecting = false
+    // ⛔ ONE MODE, ONE WRITER — their `ConversationUIMode` and the `uiMode` setter that owns it.
+    //
+    // Selection and search used to be two loose booleans that any call site could set. Six different
+    // places wrote `selecting = true` by hand and one of them forgot the animation; nothing made the
+    // two states mutually exclusive; and nothing ran when either changed, so the work that has to
+    // follow a mode change had to be remembered at every site. Theirs is an enum whose setter resets
+    // the selection and notifies, and every entry point is one line: `uiMode = .selection`.
+    //
+    // ⚠️ `selecting`, `wasSelecting` and `searchActive` are DERIVED below. Nothing writes them.
+    @State private var uiMode: ChatUIMode = .normal
+    /// The mode as of the previous pass — their `previousViewStateSnapshot?.uiMode`, which is what
+    /// `wasShowingSelectionUI` is read from. Leaving selection is two passes: this still says
+    /// `.selection` for the one that slides the circle out, then catches up and the circle is
+    /// removed from the cell. Catching up IS their second `enqueueReload`.
+    @State private var previousUIMode: ChatUIMode = .normal
     @State private var selectedIds = Set<String>()
     // Bumped inside SWIFTUI context-menu actions that reload cells (Select). The UIKit list defers its
     // reloads through the menu's dismissal animation — UIKit's own callbacks can't see SwiftUI menus,
@@ -188,8 +221,9 @@ struct ThreadView: View {
     @State private var linkDetectTask: Task<Void, Never>?
     @State private var bulkForward: [Message]?
     @State private var showBulkDeleteConfirm = false
+    /// The header's "Delete All" — the whole conversation, not the selection. See `navigationBar`.
+    @State private var showDeleteAllConfirm = false
     // In-chat search (opened from the profile's "search" tile) — a top bar + ↑/↓ through matches.
-    @State private var searchActive = false
     @State private var searchQuery = ""
     @State private var searchCorpus: [InChatMessage] = []
     @State private var searchMatches: [InChatMessage] = []   // filtered, oldest→newest
@@ -1296,6 +1330,15 @@ struct ThreadView: View {
             Button("Delete for Me", role: .destructive) { bulkDelete(everyone: false) }
             Button("Cancel", role: .cancel) {}
         }
+        // The header's Delete All. Theirs is a separate sheet with its own body text, because it is a
+        // separate and much larger action than deleting a selection — and it offers one destructive
+        // choice, not two: clearing the thread is always for you alone.
+        .alert("Delete all messages in this chat?", isPresented: $showDeleteAllConfirm) {
+            Button("Delete All", role: .destructive) { deleteAllMessages() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Every message here will be removed from your side. The other person keeps their copy.")
+        }
         // Pinned-message bar: docked at the top via safeAreaInset (the SAME reliable mechanism the search
         // bar uses) so it ALWAYS sits right below the nav bar — never mid-screen. The old approach placed it
         // as an overlay padded by a controller-reported navBarHeight, which repeatedly came back wrong and
@@ -2014,7 +2057,7 @@ struct ThreadView: View {
                 // appears instantly — only the CELL reload waits, which is exactly the UIKit path's order.
                 onSelect: { m in
                     menuActionTick += 1
-                    withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
+                    setUIMode(.selection); selectedIds = [m.id]   // their order: mode first, then add the item
                 },
                 onInfo: { infoTarget = $0 },
                 onEdit: { m in
@@ -2060,7 +2103,9 @@ struct ThreadView: View {
                 onVisible: { visibleRows.ids.insert(msg.id); schedulePersistScrollPosition() },
                 onHidden: { visibleRows.ids.remove(msg.id) }))
             .transition(.identity)
-            .modifier(SelectableRow(selecting: selecting, selected: selectedIds.contains(msg.id),
+            .modifier(SelectableRow(selecting: selecting, wasSelecting: wasSelecting,
+                                    selected: selectedIds.contains(msg.id),
+                                    tint: selectionTint, onWallpaper: chatHasWallpaper,
                                     onToggle: { toggleSelect(msg.id) }))
         }
     }
@@ -2339,15 +2384,19 @@ struct ThreadView: View {
         //    without it the visible rows never reconfigured and checkboxes were missing (308 bug).
         //  • HIGHLIGHT must be in the signature: the jump-to flash renders via isHighlighted — without a
         //    signature change the target row never reconfigured (the "jump didn't work" bug).
-        if !selecting && highlightId == nil { return sigCache.base }
+        // ⚠️ `wasSelecting` IS PART OF THIS QUESTION. The row still draws a selection lane on the
+        // pass after the exit, so the fast path is only safe once BOTH flags are down. Reading
+        // `selecting` alone sent the slide-out pass down the base path, where its signature matched
+        // the one before selection ever opened and no row was reconfigured.
+        if !selecting && !wasSelecting && highlightId == nil { return sigCache.base }
         // Only the SELECTED ids and the highlighted id can change a decorated value, so they are the whole
         // key. `selectedIds` is hashed rather than joined: Set's hashValue is order-independent and does
         // not allocate, and this runs on the body path.
-        let decoratedKey = "\(key)|\(selecting)|\(selectedIds.count)|\(selectedIds.hashValue)|\(highlightId ?? "-")"
+        let decoratedKey = "\(key)|\(selecting)|\(wasSelecting)|\(selectedIds.count)|\(selectedIds.hashValue)|\(highlightId ?? "-")"
         if sigCache.decoratedKey == decoratedKey { return sigCache.decorated }
         var out = sigCache.base
         for m in repo.items {
-            let sel = selecting ? (selectedIds.contains(m.id) ? "S1" : "S0") : "S-"
+            let sel = selecting ? (selectedIds.contains(m.id) ? "S1" : "S0") : (wasSelecting ? "SW" : "S-")
             let hl = m.id == highlightId ? "H1" : "H0"
             out[m.rowId] = (out[m.rowId] ?? "") + "|\(sel)|\(hl)"
         }
@@ -2411,7 +2460,7 @@ struct ThreadView: View {
             "\(chatHasWallpaper):\(wallpaperBlur?.id ?? 0)",
             // Hashed, not joined: Set's hashValue is order-independent and does not allocate, and
             // this runs on the body path — the same reason `rowSignatures` hashes it.
-            "\(selecting)", "\(selectedIds.count):\(selectedIds.hashValue)",
+            "\(selecting)", "\(wasSelecting)", "\(selectedIds.count):\(selectedIds.hashValue)",
             chatColorSpec?.stored ?? "-", firstUnreadId ?? "-",
             searchActive ? searchQuery.trimmingCharacters(in: .whitespaces) : "",
             "\(isGroup)", "\(groupMembers.count)",
@@ -2427,7 +2476,7 @@ struct ThreadView: View {
 
         let ctx = MessageRowContext(
             me: me, cid: cid, isGroup: isGroup, dark: dark,
-            selecting: selecting, selectedIds: selectedIds,
+            selecting: selecting, wasSelecting: wasSelecting, selectedIds: selectedIds,
             highlightId: highlightId, firstUnreadId: firstUnreadId,
             chatColor: chatColorSpec,
             onWallpaper: chatHasWallpaper, wallpaperBlur: wallpaperBlur,
@@ -2497,7 +2546,7 @@ struct ThreadView: View {
             })
         }
         items.append(UIAction(title: "Select", image: UIImage(systemName: "checkmark.circle")) { _ in
-            withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
+            setUIMode(.selection); selectedIds = [m.id]   // their order: mode first, then add the item
         })
         // NO "Report" on a message. The whole point of end-to-end encryption is that we cannot read what
         // was sent, so a message report would either carry nothing useful or force us to ship the plaintext
@@ -2537,7 +2586,7 @@ struct ThreadView: View {
             // Everyone button is gated on !deleted.
             out.append(CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = m })
             out.append(CMAction(title: "Select", icon: "checkmark.circle") {
-                selecting = true; selectedIds = [m.id]
+                setUIMode(.selection); selectedIds = [m.id]   // their order: mode first, then add the item
             })
             return out
         }
@@ -2557,7 +2606,7 @@ struct ThreadView: View {
                 }
             })
             out.append(CMAction(title: "Select", icon: "checkmark.circle") {
-                withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
+                setUIMode(.selection); selectedIds = [m.id]   // their order: mode first, then add the item
             })
             return out
         }
@@ -2581,7 +2630,7 @@ struct ThreadView: View {
                 })
             }
             out.append(CMAction(title: "Select", icon: "checkmark.circle") {
-                withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
+                setUIMode(.selection); selectedIds = [m.id]   // their order: mode first, then add the item
             })
             out.append(CMAction(title: "Delete", icon: "trash", destructive: true) { pendingDelete = m })
             return out
@@ -2625,7 +2674,7 @@ struct ThreadView: View {
             })
         }
         out.append(CMAction(title: "Select", icon: "checkmark.circle") {
-            withAnimation(.easeInOut(duration: 0.2)) { selecting = true; selectedIds = [m.id] }
+            setUIMode(.selection); selectedIds = [m.id]   // their order: mode first, then add the item
         })
         if isGroup && mine && m.sendState == nil {
             out.append(CMAction(title: "Info", icon: "info.circle") { infoTarget = m })
@@ -2951,6 +3000,7 @@ struct ThreadView: View {
             // is the 399 SwiftUI deferred gesture again — see listBody.
             onReachedTop: { repo.loadOlder() },
             selecting: selecting,   // selection-animation land gate (the checkbox slide isn't clobbered)
+            wasSelecting: wasSelecting,   // the other half of their (isShowing / wasShowing) pair
             // The reference behavior (user-approved 2026-07-13, replacing open-at-bottom): with unread
             // messages, the FIRST open lands at the first unread — the same row anchorUnread marks with
             // the divider. Computed synchronously (unreadOnOpen seeds from the cached conversation) so
@@ -3122,11 +3172,68 @@ struct ThreadView: View {
     /// are in the app. This one had no animation and no haptic at all: it added to a Set and the
     /// checkbox changed between one frame and the next (owner 2026-08-16, comparing it against the
     /// chat list, which he had just called good).
-    private func toggleSelect(_ id: String) { toggleTick(id, in: $selectedIds) }
-
-    private func exitSelection() {
-        withAnimation(.easeInOut(duration: 0.2)) { selecting = false; selectedIds = [] }
+    /// ⚠️ NO SPRING AND NO HAPTIC. Theirs writes the new state onto the view in the tap handler with
+    /// `animated: false` and then updates the model; the list is not reloaded for a tick at all. The
+    /// UIKit row already flips its own circle on the same frame as the finger
+    /// (`setSelectedImmediately`), so this is only the model catching up behind it.
+    ///
+    /// This used to call `toggleTick`, the shared helper the three lists in MainShell use — a 0.24s
+    /// spring plus a selection haptic per tap. Those lists still use it; the chat does not, because
+    /// theirs does not. Wrapping the set change in an animation here also re-animated every row the
+    /// signature touched, not just the one that was tapped.
+    private func toggleSelect(_ id: String) {
+        if selectedIds.contains(id) { selectedIds.remove(id) } else { selectedIds.insert(id) }
     }
+
+    // MARK: - UI mode
+
+    /// Is selection mode up right now — their `isShowingSelectionUI`.
+    private var selecting: Bool { uiMode.hasSelectionUI }
+    /// Was it up on the previous pass — their `wasShowingSelectionUI`. The rows keep their selection
+    /// lane while EITHER is true, so the circle has a pass to slide out through before it is removed.
+    private var wasSelecting: Bool { previousUIMode.hasSelectionUI }
+    /// In-chat search, now a mode rather than its own flag.
+    private var searchActive: Bool { uiMode == .search }
+
+    /// THE ONE PLACE THE MODE CHANGES. Their `uiMode` setter, in the same order:
+    ///
+    ///  1. remember what it was, for `wasShowingSelectionUI`;
+    ///  2. reset the selection — theirs calls `selectionState.reset()` on ANY change, including on
+    ///     the way IN, which is why "Select" adds its message immediately after this returns and not
+    ///     before;
+    ///  3. move the mode;
+    ///  4. schedule the pass that clears `previousUIMode`, which is their second `enqueueReload`.
+    ///
+    /// Step 4 is what actually takes the checkbox out of the cells. Without it the rows would sit
+    /// forever in the "was showing" state, which still draws a circle.
+    private func setUIMode(_ newValue: ChatUIMode) {
+        let oldValue = uiMode
+        guard newValue != oldValue else { return }
+        withAnimation(.easeInOut(duration: MessageRowLayout.selectionAnimationDuration)) {
+            previousUIMode = oldValue
+            selectedIds = []
+            uiMode = newValue
+        }
+        uiModeDidChange(oldValue: oldValue)
+    }
+
+    private func uiModeDidChange(oldValue: ChatUIMode) {
+        // Only a selection transition has a second pass to schedule. Theirs guards the same way:
+        // `oldValue == .selection || uiMode == .selection`.
+        guard oldValue.hasSelectionUI || uiMode.hasSelectionUI else {
+            previousUIMode = uiMode
+            return
+        }
+        let target = uiMode
+        DispatchQueue.main.asyncAfter(deadline: .now() + MessageRowLayout.selectionAnimationDuration) {
+            // A newer mode change during the animation owns the state; this pass is stale and must
+            // not stamp an old value over it.
+            guard uiMode == target else { return }
+            previousUIMode = target
+        }
+    }
+
+    private func exitSelection() { setUIMode(.normal) }
 
     // Begin a reply (from the context menu OR the swipe-to-reply pan). Cancels any in-progress edit — they
     // can't both be active, or send would commit the edit and silently drop the reply.
@@ -3167,9 +3274,26 @@ struct ThreadView: View {
                     await MainActor.run { deleteForMe(m) }   // also cancels unsent messages properly
                 }
             }
-            if anyRefused { await MainActor.run { showJumpToast("Some messages couldn't be deleted") } }
+            await MainActor.run {
+                // ⛔ THE MODE CLOSES AFTER THE WRITE, NOT BEFORE IT. Theirs runs `uiMode = .normal`
+                // inside the completion of the modal that covered the delete, so the selection is
+                // still up if the write fails and the toast lands over the messages it is about.
+                // Ours closed it synchronously while the deletes were still in flight, which is how
+                // "some messages couldn't be deleted" arrived on a screen with nothing selected.
+                if anyRefused { showJumpToast("Some messages couldn't be deleted") }
+                exitSelection()
+            }
         }
-        exitSelection()
+    }
+
+    /// The header's Delete All: every message in this conversation, for me. Theirs is
+    /// `threadDeletionManager.removeAllInteractions`; ours is the same "clear chat" write the group
+    /// screen and the chat-list swipe already use, so there is one meaning of a cleared thread.
+    private func deleteAllMessages() {
+        Task {
+            await ChatService.deleteForMe(cid)
+            await MainActor.run { exitSelection() }
+        }
     }
 
     /// THE one answer to "can this message be forwarded". Every forward path asks this and only this:
@@ -3202,7 +3326,32 @@ struct ThreadView: View {
     private var selectionIsForwardable: Bool {
         let picked = repo.items.filter { selectedIds.contains($0.id) }
         guard !picked.isEmpty else { return false }
+        // ⛔ THEIR CAP. `selectionCanBeForwarded` refuses more than 32 items outright, before it looks
+        // at any of them: a forward is one composed message per recipient and there is a real limit
+        // to what the send path will carry. Ours had no cap at all, so ticking a hundred messages
+        // left the button live and handed the whole lot to the picker.
+        guard picked.count <= Limits.maxForwardSelection else { return false }
         return picked.allSatisfy(canForward)
+    }
+
+    /// Their `selectionCanBeDeleted`. Empty is false, and then every item has to be something that
+    /// CAN be deleted — a date header, an unread marker or a typing row is not.
+    ///
+    /// Ours asked only `!selectedIds.isEmpty`, which is the count and not the question. Rows that
+    /// cannot be deleted are not selectable here today, so the two agree in practice; writing it as
+    /// the predicate means they still agree when a new row type arrives.
+    private var selectionCanBeDeleted: Bool {
+        let picked = repo.items.filter { selectedIds.contains($0.id) }
+        guard !picked.isEmpty else { return false }
+        return picked.allSatisfy { !$0.isSystem && !$0.isCall }
+    }
+
+    /// The chat's own colour for a filled tick, matching what the row builder hands the UIKit rows.
+    private var selectionTint: Color {
+        guard let first = chatColorSpec?.colors.first else {
+            return Color(hex: dark ? 0x0A84FF : 0x007AFF)   // Theme.defaultBubble
+        }
+        return Color(hex: first)
     }
 
     private func bulkForwardStart() {
@@ -3216,7 +3365,7 @@ struct ThreadView: View {
     // MARK: - In-chat search (top bar + step through matches)
 
     private func activateSearch() {
-        withAnimation(.easeInOut(duration: 0.2)) { searchActive = true }
+        setUIMode(.search)
         searchQuery = ""; searchMatches = []; searchIndex = 0; lastSearchText = nil
         inputFocused = false
         Task {
@@ -3228,7 +3377,7 @@ struct ThreadView: View {
 
     private func closeSearch() {
         searchFocused = false
-        withAnimation(.easeInOut(duration: 0.2)) { searchActive = false }
+        setUIMode(.normal)
         searchQuery = ""; searchMatches = []; highlightId = nil; lastSearchText = nil
         // Leave the conversation where the last result was — no scroll restore on close.
     }
@@ -3306,8 +3455,18 @@ struct ThreadView: View {
     /// titleView when selection begins, and neither does this.
     private var navigationBar: ChatNavigationItem.Bar {
         if selecting {
-            return .selection(deleteAll: { showBulkDeleteConfirm = true },
-                              deleteEnabled: !selectedIds.isEmpty,
+            // ⛔ "DELETE ALL" DELETES THE CONVERSATION, NOT THE TICKED MESSAGES.
+            //
+            // Theirs is `didTapDeleteAll` → `removeAllInteractions(thread:)`: every message in the
+            // chat, gone. It has nothing to do with what is selected, which is why it is ALWAYS
+            // ENABLED — including with nothing ticked at all. Deleting the ticked messages is the
+            // trash icon in the bottom bar, and that is the one their `selectionCanBeDeleted` gates.
+            //
+            // Ours pointed this button at the bulk-delete alert and greyed it out on an empty
+            // selection, so it carried their label over our action and opened a dialog that said
+            // "Delete 3 messages?" under a button that said Delete All.
+            return .selection(deleteAll: { showDeleteAllConfirm = true },
+                              deleteEnabled: true,
                               cancel: { exitSelection() })
         }
         let state = CallService.shared.state
@@ -4882,27 +5041,12 @@ struct ThreadView: View {
     // Bottom action bar during selection (reference design): Delete (glass circle, leading), "N Selected"
     // (glass pill, centre), Forward (glass circle, trailing) — all real Liquid Glass, icons only.
     private var selectionActionBar: some View {
-        HStack {
-            Button { showBulkDeleteConfirm = true } label: {
-                Image(systemName: "trash").font(.system(size: 18)).foregroundStyle(.red)
-                    .frame(width: 48, height: 48).liquidGlass(Circle(), interactive: true)
-                    .contentShape(Circle())   // whole circle is the tap target, not just the icon
-            }
-            .buttonStyle(.plain).disabled(selectedIds.isEmpty)
-            Spacer()
-            Text("\(selectedIds.count) Selected").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                .padding(.horizontal, 22).frame(height: 44).liquidGlass(Capsule(), interactive: false)
-            Spacer()
-            Button { bulkForwardStart() } label: {
-                Image(systemName: "arrowshape.turn.up.right").font(.system(size: 18)).foregroundStyle(.primary)
-                    .frame(width: 48, height: 48).liquidGlass(Circle(), interactive: true)
-                    .contentShape(Circle())   // whole circle is the tap target, not just the icon
-            }
-            // Off unless EVERY pick can be forwarded. See selectionIsForwardable for why the earlier
-            // "any of them" reading was wrong. Tombstones, calls and system rows all switch it off.
-            .buttonStyle(.plain).disabled(!selectionIsForwardable)
-        }
-        .padding(.horizontal, 20).padding(.bottom, 4)
+        SelectionToolbar(count: selectedIds.count,
+                         deleteEnabled: selectionCanBeDeleted,
+                         forwardEnabled: selectionIsForwardable,
+                         onDelete: { showBulkDeleteConfirm = true },
+                         onForward: { bulkForwardStart() })
+            .frame(height: 44)
     }
 
     /// ONE SHAPE FOR EVERY BAR THAT STANDS IN FOR THE COMPOSER.
@@ -5964,42 +6108,129 @@ struct EmptyChatNotice: ViewModifier {
     }
 }
 
+/// The selection mode's bottom bar: a real `UIToolbar`, which is what theirs is.
+///
+/// ⛔ NOT GLASS CIRCLES. This was three SwiftUI `liquidGlass` shapes — a red trash circle, an
+/// "N Selected" capsule and a forward circle. Their `MessageActionsToolbar` in `.selection` mode is
+/// a `UIToolbar` whose items are `[delete, flexibleSpace, label, flexibleSpace, forward]`, and on
+/// iOS 26 that means the system's own bar treatment rather than one drawn to look like it.
+///
+/// The label is a disabled `UIBarButtonItem` with a custom view, exactly as theirs is, so the bar's
+/// own layout centres it between the two flexible spaces instead of a hand-tuned padding.
+private struct SelectionToolbar: UIViewRepresentable {
+    var count: Int
+    var deleteEnabled: Bool
+    var forwardEnabled: Bool
+    var onDelete: () -> Void
+    var onForward: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    /// ⚠️ `NSObject`, not a plain class: `#selector` needs an Objective-C-visible target, and `@objc`
+    /// members are only allowed on a type that reaches the runtime.
+    final class Coordinator: NSObject {
+        var parent: SelectionToolbar
+        let label = UILabel()
+        init(_ parent: SelectionToolbar) { self.parent = parent }
+        // Read at tap time, never captured, so a re-render that only produced new closures does not
+        // have to rebuild the items.
+        @objc func delete() { parent.onDelete() }
+        @objc func forward() { parent.onForward() }
+    }
+
+    func makeUIView(context: Context) -> UIToolbar {
+        let bar = UIToolbar()
+        // ⚠️ THE SYSTEM'S OWN BACKGROUND IS THE POINT. Clearing it would leave a UIToolbar drawn to
+        // look like the glass shapes this replaced, which is the thing being removed. Theirs only
+        // clears the SHADOW, and only below iOS 26 — from 26 the bar draws its own glass edge and an
+        // override fights it.
+        if #available(iOS 26, *) {} else { bar.setShadowImage(UIImage(), forToolbarPosition: .any) }
+
+        let c = context.coordinator
+        c.label.textAlignment = .center
+        c.label.textColor = .label
+        if #available(iOS 26, *) {
+            c.label.font = UIFont.preferredFont(forTextStyle: .headline)
+        } else {
+            c.label.font = UIFont.preferredFont(forTextStyle: .body)
+        }
+
+        let trash = UIBarButtonItem(image: UIImage(systemName: "trash"),
+                                    style: .plain, target: c, action: #selector(Coordinator.delete))
+        trash.tintColor = .systemRed
+        let fwd = UIBarButtonItem(image: UIImage(systemName: "arrowshape.turn.up.right"),
+                                  style: .plain, target: c, action: #selector(Coordinator.forward))
+        let labelItem = UIBarButtonItem(customView: c.label)
+        labelItem.isEnabled = false        // a caption, not a control — theirs disables it too
+        bar.items = [trash, .flexibleSpace(), labelItem, .flexibleSpace(), fwd]
+        return bar
+    }
+
+    func updateUIView(_ bar: UIToolbar, context: Context) {
+        context.coordinator.parent = self
+        // Their `MESSAGE_ACTIONS_TOOLBAR_CAPTION_%d`, rebuilt on every selection change the same way
+        // `updateContent()` rebuilds theirs.
+        context.coordinator.label.text = "\(count) selected"
+        context.coordinator.label.sizeToFit()
+        bar.items?.first?.isEnabled = deleteEnabled
+        bar.items?.last?.isEnabled = forwardEnabled
+    }
+}
+
+/// The selection lane for the rows that are still drawn by SwiftUI (media, album, voice, cards).
+///
+/// ⚠️ IT HAS TO MATCH `SelectionCheckboxView` EXACTLY. There are two renderers in this list until
+/// the migration finishes, and a person scrolling past a photo should not be able to tell which one
+/// drew the circle beside it. Every number and colour here is the same as the UIKit one's: 24pt, a
+/// 2pt ring inset 1pt, an 8pt gap, the chat's own colour when filled, no shadow.
 struct SelectableRow: ViewModifier {
     let selecting: Bool
+    /// Their `wasShowingSelectionUI`. The lane stays for the pass that slides the circle out, and
+    /// the pass after that removes it — the same two-pass exit the UIKit rows use.
+    let wasSelecting: Bool
     let selected: Bool
+    /// The chat's own colour for the filled state, as theirs tints the indicator with `chatColorValue`.
+    let tint: Color
+    let onWallpaper: Bool
     let onToggle: () -> Void
+
+    @Environment(\.colorScheme) private var scheme
+
+    /// Theirs is `tertiaryLabel`, dropping to a flat grey at 50% in LIGHT theme over a wallpaper,
+    /// where the system tertiary is too faint to find.
+    private var ringColor: Color {
+        (scheme != .dark && onWallpaper) ? Color(white: 0x80 / 255).opacity(0.5) : Color(.tertiaryLabel)
+    }
+
     func body(content: Content) -> some View {
-        if selecting {
-            HStack(spacing: 10) {
-                // READS ON ANY BACKGROUND (user: hard to see in light mode / over a wallpaper). The old
-                // unselected state was a hairline `circle` in secondary grey at 55% — it vanished over a
-                // photo wallpaper and was barely there in light mode. the reference app's selection circle carries
-                // its own contrast rather than borrowing the background's: a filled disc UNDER a light
-                // ring, plus a soft shadow, so the control is legible over white, black, or a photo.
+        if selecting || wasSelecting {
+            HStack(spacing: 8) {
                 ZStack {
+                    // Unselected is an EMPTY RING. No disc behind it and no shadow — theirs hides the
+                    // ring behind the fill rather than drawing one on top of the other.
                     Circle()
-                        .fill(selected ? Color(hex: 0x3DA1FD) : Color.black.opacity(0.30))
-                        .frame(width: 24, height: 24)
+                        .strokeBorder(ringColor, lineWidth: 2)
+                        .frame(width: 22, height: 22)
+                        .opacity(selected ? 0 : 1)
                     Circle()
-                        .strokeBorder(Color.white.opacity(selected ? 0 : 0.92), lineWidth: 1.5)
-                        .frame(width: 24, height: 24)
-                    // ⚠️ ALWAYS PRESENT, never inside `if selected`. A conditional inserts and removes
-                    // the glyph, and an insertion cannot be animated from a state it was never in —
-                    // which is why this tick popped while the chat list's grew. Scale and opacity
-                    // carry it now, so it lands with the same spring the toggle sets.
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.white)
-                        .scaleEffect(selected ? 1 : 0.4)
+                        .fill(tint)
+                        .frame(width: 22, height: 22)
+                        .overlay(
+                            // ⚠️ The tick does NOT scale in. Theirs sets the state with
+                            // `animated: false`, so the fill and the glyph arrive together on the
+                            // frame the finger lands.
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 13, weight: .bold))
+                                .foregroundStyle(.white)
+                        )
                         .opacity(selected ? 1 : 0)
                 }
-                .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
+                .frame(width: 24, height: 24)
                 .transition(.move(edge: .leading).combined(with: .opacity))
                 content.allowsHitTesting(false)
             }
-            .padding(.horizontal, 4)
             .contentShape(Rectangle())
-            .onTapGesture(perform: onToggle)   // checkbox only — no row highlight
+            .onTapGesture(perform: onToggle)
         } else {
             content
         }

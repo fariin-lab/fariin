@@ -260,11 +260,21 @@ struct RowPlan {
 
 enum MessageRowLayout {
 
-    // Selection chrome: a 24pt circle, 10pt from the content, inside 4pt of horizontal padding.
-    private static let checkboxSize: CGFloat = 24
-    private static let checkboxGap: CGFloat = 10
-    private static let checkboxPad: CGFloat = 4
-    static var selectionShift: CGFloat { checkboxPad + checkboxSize + checkboxGap }
+    // Selection chrome, to the reference's numbers: a 24pt circle (`selectionViewWidth`) sitting at
+    // the row's own leading margin, with their `messageStackSpacing` of 8 between it and the
+    // content. Ours had a 4pt outer pad and a 10pt gap, so the whole row moved 38 instead of 32 and
+    // the circle sat 4pt in from where theirs does.
+    static let checkboxSize: CGFloat = 24
+    private static let checkboxGap: CGFloat = 8
+    /// How far the CONTENT moves over. Their `hInnerStackOffset`: the circle's width plus the gap.
+    static var selectionShift: CGFloat { checkboxSize + checkboxGap }
+    /// How far the CIRCLE itself travels on the way in and out — further than the content, because it
+    /// starts fully outside the leading margin rather than at it. Their `selectionOffset`.
+    static var checkboxTravel: CGFloat { BubbleMetrics.rowMargin + checkboxSize }
+    /// Their `CVComponentMessage.selectionAnimationDuration`. One number for the row slide, the bar
+    /// swap and the delay before the second pass takes the circle out of the cell — if they drift,
+    /// the circle is either removed mid-slide or left parked on screen after it.
+    static let selectionAnimationDuration: TimeInterval = 0.2
 
     // ── The entry point ──
 
@@ -291,11 +301,20 @@ enum MessageRowLayout {
             divider = p
         }
 
-        // Selection insets the content and narrows it; the checkbox is centred on the content.
-        let shift = m.selecting ? selectionShift : 0
-        let trailingInset = m.selecting ? checkboxPad : 0
+        // ⛔ THE SELECTION LANE EXISTS WHILE `selecting || wasSelecting`, exactly as theirs does.
+        // Their whole build and measure of the selection column is guarded by
+        // `isShowingSelectionUI || wasShowingSelectionUI`, so the lane is still there for the ONE
+        // pass that slides the circle out, and gone on the next. Keying it on `selecting` alone is
+        // what left the row no space to animate out through.
+        let selectionUI = m.selecting || m.wasSelecting
+        let shift = selectionUI ? selectionShift : 0
+        // ⚠️ NO TRAILING INSET. Theirs puts a FLEXIBLE spacer between the selection column and an
+        // outgoing bubble, so the bubble's right edge does not move at all when selection opens —
+        // only its cap shrinks. Ours took 4pt off the trailing side as well, which walked every
+        // outgoing bubble 4pt left on the way in and back again on the way out. Right-aligning to
+        // `rowMargin + shift + contentW` lands the trailing edge exactly where it was.
         let contentX = BubbleMetrics.rowMargin + shift
-        let contentW = max(1, width - BubbleMetrics.rowMargin * 2 - shift - trailingInset)
+        let contentW = max(1, width - BubbleMetrics.rowMargin * 2 - shift)
 
         var body: RowBodyPlan
         var contentHeight: CGFloat
@@ -322,9 +341,9 @@ enum MessageRowLayout {
         // The checkbox is centred against the row's content, not the whole row: with a date header
         // above, centring on the row would float it into the separator.
         var checkbox: CGRect?
-        if m.selecting {
+        if selectionUI {
             let cy = y + (contentHeight - checkboxSize) / 2
-            checkbox = CGRect(x: BubbleMetrics.rowMargin + checkboxPad, y: cy,
+            checkbox = CGRect(x: BubbleMetrics.rowMargin, y: cy,
                               width: checkboxSize, height: checkboxSize)
         }
 

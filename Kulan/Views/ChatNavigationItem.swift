@@ -12,8 +12,8 @@ import UIKit
 //   · `leftBarButtonItem`     = nil normally; "Delete All" (plain) in selection mode
 //   · `rightBarButtonItems`   = [system Cancel] in selection mode
 //   · `hidesBackButton`       = false normally, true in selection mode
-// and it does NOT touch `titleView` when selection begins — the header stays up throughout, and
-// only the items either side of it change. This bridge does exactly that list, and nothing else.
+//   · `titleView`             = nil in selection mode (`uiModeDidChange`)
+// This bridge does exactly that list, and nothing else.
 //
 // What was SwiftUI until today, and is gone: the call items as `ToolbarItem`s, the selection bar
 // as `ToolbarItem`s with a `.principal` title, `.navigationBarBackButtonHidden`, and the whole
@@ -107,6 +107,9 @@ struct ChatNavigationItem: UIViewRepresentable {
         private var rightItems: [UIBarButtonItem] = []
         private var leftItem: UIBarButtonItem?
         private var hidesBack = false
+        /// Does the title area belong to the header right now. False in selection mode, where theirs
+        /// nils the `titleView` outright — the avatar and name give way to Delete All and Cancel.
+        private var showsTitle = true
 
         private weak var target: UIViewController?
         private var observations: [NSKeyValueObservation] = []
@@ -147,9 +150,12 @@ struct ChatNavigationItem: UIViewRepresentable {
                 rightItems = items
                 leftItem = nil
                 hidesBack = false
+                showsTitle = true
             case let .selection(_, enabled, _):
                 // Theirs: `.cancelButton { uiMode = .normal }` on the right, a plain-style "Delete
-                // All" on the left, back button hidden. The header itself is left where it is.
+                // All" on the left, back button hidden, and the TITLE AREA CLEARED — their
+                // `uiModeDidChange` runs `navigationItem.titleView = nil` for `.selection`. This file
+                // used to claim the opposite in a comment; it was read from an older source.
                 rightItems = [UIBarButtonItem(systemItem: .cancel,
                                               primaryAction: UIAction { [weak self] _ in self?.tapCancel() })]
                 let delete = UIBarButtonItem(title: "Delete All", style: .plain,
@@ -159,6 +165,7 @@ struct ChatNavigationItem: UIViewRepresentable {
                 delete.tintColor = .systemRed
                 leftItem = delete
                 hidesBack = true
+                showsTitle = false
             case let .custom(buttons):
                 rightItems = buttons.map { b in
                     let item = UIBarButtonItem(image: UIImage(named: b.image)?.withRenderingMode(.alwaysTemplate),
@@ -168,6 +175,7 @@ struct ChatNavigationItem: UIViewRepresentable {
                 }
                 leftItem = nil
                 hidesBack = false
+                showsTitle = true
             }
         }
 
@@ -215,7 +223,10 @@ struct ChatNavigationItem: UIViewRepresentable {
         private func assertAll() {
             guard let item = target?.navigationItem else { return }
             var changed = false
-            if item.titleView !== header { item.titleView = header; changed = true }
+            // The header owns the title area except in selection mode, where theirs hands it back
+            // to the bar so Delete All and Cancel sit alone.
+            let wantedTitle: UIView? = showsTitle ? header : nil
+            if item.titleView !== wantedTitle { item.titleView = wantedTitle; changed = true }
             if !(item.rightBarButtonItems ?? []).elementsEqual(rightItems, by: ===) {
                 item.rightBarButtonItems = rightItems; changed = true
             }

@@ -133,51 +133,108 @@ final class ReactionChipView: UIView {
 
 // ── The selection circle ──
 //
-// It carries its own contrast rather than borrowing the background's: a filled disc UNDER a light
-// ring, plus a soft shadow, so it reads over white, black, or a photo wallpaper.
+// A port of their `SelectionIndicatorView(style: .list)`, which is what the message list uses.
+//
+// Unselected is an EMPTY 2pt ring — no disc behind it, no shadow. Selected swaps the ring for a
+// filled circle in the CHAT'S OWN COLOUR with a white tick on it. Ours used to draw a black disc at
+// 30% under a white ring with a drop shadow, and fill it with one hard-coded blue on every chat.
+//
+// ⚠️ The two states are two views, hidden against each other, not one view repainted. That is
+// theirs, and it is what makes `animated: false` genuinely instant: there is no colour to
+// interpolate, only a swap.
 
 final class SelectionCheckboxView: UIView {
-    private let disc = UIView()
+    /// Their `SelectionIndicatorView.preferredSize` and `ringStrokeWidth`.
+    static let preferredSize: CGFloat = 24
+    private static let ringStrokeWidth: CGFloat = 2
+    private static let innerRingInset: CGFloat = 1
+
     private let ring = CAShapeLayer()
+    private let selectedDisc = UIView()
     private let tick = UIImageView(image: UIImage(systemName: "checkmark",
-                                                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 12, weight: .bold)))
+                                                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .bold)))
+
+    private var isSelectedState = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        disc.isUserInteractionEnabled = false
-        addSubview(disc)
+        isUserInteractionEnabled = false
         ring.fillColor = UIColor.clear.cgColor
-        ring.lineWidth = 1.5
+        ring.lineWidth = Self.ringStrokeWidth
         layer.addSublayer(ring)
+        selectedDisc.isUserInteractionEnabled = false
+        addSubview(selectedDisc)
         tick.tintColor = .white
-        tick.contentMode = .center
-        addSubview(tick)
-        layer.shadowColor = UIColor.black.cgColor
-        layer.shadowOpacity = 0.28
-        layer.shadowRadius = 2
-        layer.shadowOffset = CGSize(width: 0, height: 1)
+        tick.contentMode = .scaleAspectFit
+        selectedDisc.addSubview(tick)
+        selectedDisc.isHidden = true
+        applyAppearance()
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    /// ⚠️ The tick is ALWAYS present, never inserted on selection. An insertion cannot animate from
-    /// a state it was never in, which is why this control used to pop while the chat list's grew.
-    /// Scale and opacity carry it, so it lands with whatever spring the caller sets.
-    func setSelected(_ on: Bool) {
-        disc.backgroundColor = on ? BubblePalette.hex(0x3DA1FD) : UIColor.black.withAlphaComponent(0.30)
-        ring.strokeColor = UIColor.white.withAlphaComponent(on ? 0 : 0.92).cgColor
-        tick.alpha = on ? 1 : 0
-        tick.transform = on ? .identity : CGAffineTransform(scaleX: 0.4, y: 0.4)
+    // MARK: - Appearance
+
+    /// The filled state's colour — the chat's own, handed down on the row model. Their
+    /// `updateStyle(conversationStyle:)` does exactly this with `chatColorValue`.
+    private var fillColor: UIColor = .systemBlue
+    /// The empty ring's colour. Theirs is `tertiaryLabel`, dropping to a flat grey at 50% in LIGHT
+    /// theme over a wallpaper, where a system tertiary is too faint to find.
+    private var ringColor: UIColor = .tertiaryLabel
+
+    func updateStyle(tint: UInt, onWallpaper: Bool) {
+        // Same narrowing every other hex in this file uses — the models carry `UInt`, the palette
+        // takes `UInt32`.
+        fillColor = BubblePalette.hex(UInt32(truncatingIfNeeded: tint))
+        let isLight = traitCollection.userInterfaceStyle != .dark
+        ringColor = (isLight && onWallpaper) ? UIColor(white: 0x80 / 255, alpha: 0.5) : .tertiaryLabel
+        applyAppearance()
+    }
+
+    /// Their `setIsSelected(_:animated:)`. The tap path passes `animated: false`, so the tick lands
+    /// on the same frame as the finger — no spring, no delay, nothing to wait for.
+    func setSelected(_ on: Bool, animated: Bool = false) {
+        guard on != isSelectedState else { return }
+        isSelectedState = on
+        guard animated else { applyAppearance(); return }
+        UIView.transition(with: self, duration: 0.15, options: [.transitionCrossDissolve, .allowUserInteraction]) {
+            self.applyAppearance()
+        }
+    }
+
+    /// Re-assert the current state without animating — for a reconfigure that is not a state change.
+    func refreshSelected(_ on: Bool) {
+        isSelectedState = on
+        applyAppearance()
+    }
+
+    private func applyAppearance() {
+        selectedDisc.backgroundColor = fillColor
+        selectedDisc.isHidden = !isSelectedState
+        ring.strokeColor = ringColor.cgColor
+        ring.isHidden = isSelectedState        // theirs: the ring is hidden by the fill, not drawn under it
+    }
+
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+        super.traitCollectionDidChange(previous)
+        // A CAShapeLayer's colour is a resolved CGColor and does not follow the trait environment on
+        // its own, unlike a UIView's backgroundColor. Re-resolve it when the theme flips.
+        if previous?.userInterfaceStyle != traitCollection.userInterfaceStyle { applyAppearance() }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        disc.frame = bounds
-        disc.layer.cornerRadius = bounds.height / 2
-        tick.frame = bounds
+        // Their layout: the inner ring is inset 1pt from the view's bounds, and the filled circle has
+        // the SAME diameter as that ring rather than filling the whole box.
+        let diameter = bounds.height - Self.innerRingInset * 2
+        selectedDisc.bounds = CGRect(x: 0, y: 0, width: diameter, height: diameter)
+        selectedDisc.center = CGPoint(x: bounds.midX, y: bounds.midY)
+        selectedDisc.layer.cornerRadius = diameter / 2
+        tick.frame = selectedDisc.bounds
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         ring.frame = bounds
-        ring.path = UIBezierPath(ovalIn: bounds.insetBy(dx: 0.75, dy: 0.75)).cgPath
+        ring.path = UIBezierPath(ovalIn: bounds.insetBy(dx: Self.innerRingInset + Self.ringStrokeWidth / 2,
+                                                        dy: Self.innerRingInset + Self.ringStrokeWidth / 2)).cgPath
         CATransaction.commit()
     }
 }
@@ -469,30 +526,71 @@ final class MessageRowView: UIView {
 
     private func applyCheckbox(_ m: MessageRowModel, _ p: RowPlan) {
         guard let rect = p.checkbox else {
-            // Leaving selection: the circle slides back out the way it came rather than vanishing.
-            // It stays in the hierarchy at alpha 0 — hiding it here would cut the animation off on
-            // its first frame — and `prepareForReuse` is what actually puts it away.
-            if let box = checkbox, !box.isHidden {
-                box.alpha = 0
-                box.transform = CGAffineTransform(translationX: -MessageRowLayout.selectionShift, y: 0)
-            }
+            // ⛔ THE CIRCLE IS TAKEN OUT OF THE CELL, NOT FADED. This is the fix for the stranded
+            // checkbox, and it is theirs: their message component only puts the selection view into
+            // the stack while `isShowingSelectionUI || wasShowingSelectionUI`, so the pass after the
+            // slide-out simply builds a cell that has no such view in it.
+            //
+            // What this replaced set `alpha = 0`, left the view in the hierarchy, and said in a
+            // comment that `prepareForReuse` was what actually put it away. That made the whole exit
+            // depend on one reconfigure reaching one cell at one moment — and any cell that missed
+            // it (a land held back by the gate, a row the signature diff skipped, an exit that
+            // arrived in the same turn as a delete) kept a fully drawn circle until it was recycled.
+            // There is nothing left to strand now.
+            checkbox?.layer.removeAllAnimations()
+            checkbox?.removeFromSuperview()
+            checkbox = nil
             return
         }
+        let isNew = checkbox == nil
         let v = checkbox ?? {
             let v = SelectionCheckboxView(); addSubview(v); checkbox = v; return v
         }()
         v.isHidden = false
-        // Bounds and center, for the same reason the bubble box uses them: this runs INSIDE the
-        // selection animation, where the circle is carrying the translation it slides in from, and
-        // `frame` is undefined while a transform is applied.
-        v.bounds = CGRect(origin: .zero, size: rect.size)
-        v.center = CGPoint(x: rect.midX, y: rect.midY)
-        v.setSelected(m.selected)
-        // The arrival state. When this call is wrapped in the selection animation the from-state was
-        // already seeded by `prepareSelectionEntry`, so writing the destination here is what makes
-        // the circle slide in; on every ordinary configure it is simply the correct state.
+        // Bounds and center, for the same reason the bubble box uses them: a translation may be
+        // riding on this view from the slide, and a view's `frame` is undefined under a transform.
+        let seat = {
+            v.bounds = CGRect(origin: .zero, size: rect.size)
+            v.center = CGPoint(x: rect.midX, y: rect.midY)
+        }
+        // ⚠️ A CIRCLE BEING BORN INSIDE THE ENTRY ANIMATION MUST NOT INTERPOLATE ITS WAY THERE. This
+        // method is called from inside the cell's `UIView.animate` block, and a view created in that
+        // block starts life at the origin — so writing its centre there would fly it in diagonally
+        // from the row's top-left corner. It is seated at its final place with no animation, and the
+        // slide is added afterwards as a layer animation, which is theirs.
+        if isNew { UIView.performWithoutAnimation(seat) } else { seat() }
+        v.updateStyle(tint: m.selectionTint, onWallpaper: m.onWallpaper)
+        v.refreshSelected(m.selected)
         v.alpha = 1
-        v.transform = .identity
+    }
+
+    /// The slide, as a layer animation on top of a layout that is already final — their model
+    /// exactly (`CABasicAnimation` on `transform.translation.x`, 0.2s, ease-in-ease-out).
+    ///
+    /// ⚠️ The circle travels FURTHER than the content: it starts fully outside the leading margin
+    /// (`checkboxTravel`), while the content only moves by its own lane (`selectionShift`). Their
+    /// two constants, `selectionOffset` and `hInnerStackOffset`, say the same thing.
+    ///
+    /// Leaving is `fillMode: .forwards` with `isRemovedOnCompletion = false`, so the circle STAYS
+    /// parked off the edge when the animation ends instead of snapping back for one frame. The pass
+    /// that follows removes the view outright, so nothing is left holding a stale animation.
+    func animateSelectionSlide(entering: Bool) {
+        guard let box = checkbox else { return }
+        let travel = -MessageRowLayout.checkboxTravel
+        let a = CABasicAnimation(keyPath: "transform.translation.x")
+        a.duration = MessageRowLayout.selectionAnimationDuration
+        a.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        if entering {
+            a.fromValue = travel
+            a.toValue = 0
+            box.layer.add(a, forKey: "insert")
+        } else {
+            a.fromValue = 0
+            a.toValue = travel
+            a.fillMode = .forwards
+            a.isRemovedOnCompletion = false
+            box.layer.add(a, forKey: "remove")
+        }
     }
 
     private func applyBubble(_ b: BubblePlan, model m: MessageRowModel, dark: Bool, cid: String) {
@@ -1119,12 +1217,12 @@ final class MessageRowView: UIView {
     /// "flash that never fades" both look like the animation was never written.
     func animateDecorations(fromSelected: Bool, fromHighlighted: Bool) {
         guard let m = model else { return }
+        // ⚠️ THE TICK DOES NOT ANIMATE. Theirs writes `setIsSelected(_, animated: false)` straight
+        // onto the view from the tap handler: the fill appears on the same frame as the finger.
+        // Ours used a 0.35s spring with a scale-up on the glyph, which is a third of a second of
+        // catch-up on every tap of a twenty-message selection.
         if let box = checkbox, m.selected != fromSelected {
-            box.setSelected(fromSelected)
-            UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.7,
-                           initialSpringVelocity: 0.4, options: [.allowUserInteraction]) {
-                box.setSelected(m.selected)
-            }
+            box.refreshSelected(m.selected)
         }
         if case .bubble = plan?.body, m.highlighted != fromHighlighted {
             let a = CABasicAnimation(keyPath: "fillColor")
@@ -1136,25 +1234,14 @@ final class MessageRowView: UIView {
         }
     }
 
-    /// Seat the checkbox at the state it should animate FROM — offset to the leading edge and
-    /// invisible — BEFORE the animation block runs.
+    /// Write the tick straight onto the live view, ahead of the model round trip.
     ///
-    /// ⚠️ It has to happen outside that block. `UIView.animate` interpolates from the values that
-    /// were in place when the block STARTED, so seeding alpha 0 inside it and then setting alpha 1
-    /// in the same block nets to "already visible" and nothing moves at all.
-    ///
-    /// Leaving selection needs no seed: the circle is on screen at alpha 1, and `applyCheckbox`
-    /// writes the fade-out from inside the block, which is the right way round.
-    func prepareSelectionEntry(entering: Bool, plan: RowPlan) {
-        guard entering, let rect = plan.checkbox else { return }
-        let v = checkbox ?? {
-            let v = SelectionCheckboxView(); addSubview(v); checkbox = v; return v
-        }()
-        v.isHidden = false
-        v.transform = .identity          // seat it square before reading a frame off it
-        v.frame = rect
-        v.alpha = 0
-        v.transform = CGAffineTransform(translationX: -MessageRowLayout.selectionShift, y: 0)
+    /// Theirs does exactly this in `handleTap`: `selectionView.isSelected = true` on the view first,
+    /// then the selection state is updated. The list is never reloaded for a tick. Ours put the id
+    /// into a SwiftUI `Set`, which rebuilt every row model, re-hashed every row signature and
+    /// reconfigured every visible cell before the circle you tapped could fill in.
+    func setSelectedImmediately(_ on: Bool) {
+        checkbox?.setSelected(on, animated: false)
     }
 
     /// The box a long press lifts and a swipe translates. A notice and a call row are not bubbles,
@@ -1175,11 +1262,13 @@ final class MessageRowView: UIView {
         bubbleBox.transform = .identity
         bubbleBox.layer.removeAllAnimations()
         highlight.shape.removeAllAnimations()
+        // The circle is a view that only exists while the selection lane does, so recycling takes it
+        // out rather than parking it. A cell coming back for a row that is not in selection mode
+        // cannot then be handed a hidden-but-present box to get confused about.
         if let box = checkbox {
             box.layer.removeAllAnimations()
-            box.transform = .identity
-            box.alpha = 1
-            box.isHidden = true
+            box.removeFromSuperview()
+            checkbox = nil
         }
         quoteView?.isHidden = true
         hideBubbleChrome()

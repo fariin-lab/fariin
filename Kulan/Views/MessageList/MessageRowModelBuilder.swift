@@ -17,6 +17,9 @@ struct MessageRowContext {
     var isGroup: Bool
     var dark: Bool
     var selecting: Bool
+    /// Their `wasShowingSelectionUI`: was selection mode up on the PREVIOUS pass. See
+    /// `MessageRowModel.wasSelecting` for why leaving selection needs two passes.
+    var wasSelecting: Bool
     var selectedIds: Set<String>
     var highlightId: String?
     var firstUnreadId: String?
@@ -120,7 +123,9 @@ enum MessageRowModelBuilder {
             content: content,
             topSpacing: topSpacing,
             selecting: ctx.selecting,
+            wasSelecting: ctx.wasSelecting,
             selected: ctx.selectedIds.contains(msg.id),
+            selectionTint: selectionTint(ctx),
             highlighted: msg.id == ctx.highlightId,
             onWallpaper: ctx.onWallpaper,
             wallpaperBlur: ctx.wallpaperBlur)
@@ -476,6 +481,17 @@ enum MessageRowModelBuilder {
             name: m.fileName ?? "Document", sizeLabel: size,
             previewUrl: m.thumbUrl, previewEnc: m.thumbEnc, localPreview: m.localImageData,
             uploading: m.sendState == .sending)
+    }
+
+    /// The filled tick's colour: the chat's own, exactly as theirs tints the selection indicator
+    /// with `chatColorValue`. A gradient chat takes its first stop — the indicator is a 24pt disc
+    /// and a gradient across it would read as a flat colour anyway. Falls back to the same default
+    /// bubble blue `myFill` uses, so an untinted chat looks unchanged.
+    private static func selectionTint(_ ctx: MessageRowContext) -> UInt {
+        guard let spec = ctx.chatColor, let first = spec.colors.first else {
+            return ctx.dark ? 0x0A84FF : 0x007AFF      // Theme.defaultBubble
+        }
+        return first
     }
 
     private static func myFill(_ ctx: MessageRowContext) -> BubbleFill {
