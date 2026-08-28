@@ -307,14 +307,32 @@ struct VideoPlayerScreen: View {
             await MainActor.run { unavailable = true }
             return
         }
+        // ⛔ THE SERVER COPY GOES ONLY IF THE LOCAL ONE ARRIVED. `VideoCache.store` is a `try?` write
+        // that swallows every failure — a full disk, a protection class refusing while the device is
+        // locked — and under the mailman model the server object is the ONLY other copy. The line
+        // below already gated the player on the file existing; the delete did not, so opening a video
+        // with no room to save it destroyed the video permanently.
         VideoCache.store(data, for: message.id)
-        if let local = VideoCache.url(for: message.id) { await MainActor.run { startPlayer(local) } }
+        guard let local = VideoCache.url(for: message.id) else {
+            await MainActor.run { unavailable = true }
+            return
+        }
+        await MainActor.run { startPlayer(local) }
         if cid.contains("_"), message.authorId != AuthService.shared.uid {
             try? await Storage.storage().reference(forURL: s).delete()
         }
     }
 
     @MainActor private func startPlayer(_ url: URL) {
+        // ⛔ ONE THING PLAYS AT A TIME. This screen sets the category and activates the session
+        // directly, with no call check and no handover — and only ONE place in the whole app ever
+        // pauses the voice player, which is not this one. So a note playing on the floating bar kept
+        // playing underneath a video, both audible at once, and opening a video during a call took
+        // the category out from under the call service.
+        //
+        // The broadcast that used to prevent this was removed on the reasoning that there is only one
+        // player now. There are three: this, the gallery and the story player.
+        VoiceNotePlayer.shared.pause()
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         try? AVAudioSession.sharedInstance().setActive(true)
         let p = AVPlayer(url: url)

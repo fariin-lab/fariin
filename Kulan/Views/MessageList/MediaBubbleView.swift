@@ -14,6 +14,9 @@ import Combine
 final class RowGifView: UIImageView {
     private static let cache = NSCache<NSString, UIImage>()
     private var loadedURL: String?
+    /// The url whose bytes are actually on screen. `loadedURL` is only what was last REQUESTED, and
+    /// a request that fails must not look like a finished picture. See `configure`.
+    private var displayedURL: String?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -24,13 +27,24 @@ final class RowGifView: UIImageView {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(url: String?) {
-        guard let url, !url.isEmpty else { loadedURL = nil; image = nil; return }
-        guard url != loadedURL else { return }
+        guard let url, !url.isEmpty else { loadedURL = nil; displayedURL = nil; image = nil; return }
+        // ⛔ THE SENTINEL IS THE REQUEST, THE RETRY GATE IS THE RESULT. `loadedURL` is set BEFORE the
+        // fetch so a re-configure mid-flight cannot start a second download — that part is right and
+        // stays. But it was also the only thing the guard above consulted, and the network callback
+        // has no failure path, so a gif whose fetch failed was a permanently grey box for the life of
+        // the view. The comment's stated intent, "a re-configure cannot re-download", is exactly what
+        // made it unrecoverable.
+        //
+        // `displayedURL` records what actually arrived, so a failure is retried on the next
+        // configure while an in-flight request is still not duplicated.
+        guard url != displayedURL else { return }
+        guard url != loadedURL || image == nil else { return }
         loadedURL = url                      // marked BEFORE loading, so a re-configure cannot re-download
-        if let hit = Self.cache.object(forKey: url as NSString) { image = hit; return }
+        if let hit = Self.cache.object(forKey: url as NSString) { image = hit; displayedURL = url; return }
         if let bytes = GifBytesCache.data(url), let img = UIImage.animatedGif(data: bytes) {
             Self.cache.setObject(img, forKey: url as NSString)
             image = img
+            displayedURL = url
             return
         }
         image = nil
@@ -43,12 +57,13 @@ final class RowGifView: UIImageView {
                 // The view may have been REUSED for a different gif while this was in flight — only
                 // assign if it still wants THIS url, or the old gif overwrites the new one.
                 guard let self, self.loadedURL == url else { return }
+                self.displayedURL = url
                 self.image = img
             }
         }.resume()
     }
 
-    func reset() { loadedURL = nil; image = nil }
+    func reset() { loadedURL = nil; displayedURL = nil; image = nil }
 }
 
 final class MediaBubbleView: UIView {

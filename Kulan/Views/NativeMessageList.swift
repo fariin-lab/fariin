@@ -3265,6 +3265,16 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // from "put this screen back exactly as it was". This one is kept for any reader, in memory,
         // and is what `restoreRecordedDistance` reaches for first.
         anchorOnDisappear = isAtNewest ? nil : viewportAnchor()
+        // ⛔ THE MENU DOES NOT OUTLIVE THE SCREEN. Its overlay is a subview of the WINDOW, retained by
+        // the window rather than by this controller, and nothing here used to touch it. So if the
+        // chat was replaced while a menu was up — tapping an incoming-message banner, answering a
+        // call, any programmatic pop — the blur, the lifted bubble and the card were left sitting on
+        // top of the NEW screen, with a full-screen catcher swallowing every touch until the user
+        // tapped once to clear it. The bubble the menu lifted from also stays hidden, so it comes
+        // back blank.
+        //
+        // Theirs does exactly this, in this method: `dismissMessageContextMenu(animated: false)`.
+        dismissCustomMenu(animated: false)
         isDisappearing = true
         isViewCompletelyAppeared = false   // theirs, same method
     }
@@ -3989,7 +3999,17 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     /// The overlay finished its return spring: unhide the real bubble, drop the gates, settle.
-    private func customMenuDidEnd() {
+    /// Take the menu down from the outside — the screen is going away, so there is nobody left to
+    /// dismiss it by tapping. `customMenuDidEnd` is the shared teardown, and calling it directly
+    /// rather than through the overlay's own completion is deliberate: on a pop there may be no next
+    /// runloop turn on this controller for a completion block to arrive in.
+    private func dismissCustomMenu(animated: Bool) {
+        guard let menu = activeMenu else { return }
+        menu.overlay.dismiss(animated: animated)
+        customMenuDidEnd(restoringKeyboard: false)
+    }
+
+    private func customMenuDidEnd(restoringKeyboard: Bool = true) {
         guard let menu = activeMenu else { return }
         menu.sourceView.isHidden = false
         menu.sourceView.transform = .identity
@@ -4007,7 +4027,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         activeMenu = nil
         contextMenuVisible = false
         contextMenuSourceId = nil
-        if menu.keyboardWasUp { onMenuRestoreKeyboard() }
+        // Not when the screen itself is leaving: raising the keyboard on a chat being popped puts it
+        // up over whatever comes next.
+        if restoringKeyboard, menu.keyboardWasUp { onMenuRestoreKeyboard() }
         interactionHoldUntil = Date()
         settleFlush()   // land everything the menu held back
     }

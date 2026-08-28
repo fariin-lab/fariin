@@ -18,6 +18,10 @@ import UIKit
 final class RowImageView: UIImageView {
     private var token = 0
     private var currentUrl: String?
+    /// The url whose REAL bytes are on screen — as opposed to `currentUrl`, which is only what was
+    /// last asked for. A fetch that fails leaves the placeholder showing and this nil, so the next
+    /// configure tries again instead of treating the blur as a finished picture.
+    private var loadedUrl: String?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -38,7 +42,15 @@ final class RowImageView: UIImageView {
         token += 1
         let mine = token
         guard let url, !url.isEmpty else { currentUrl = nil; image = placeholder; return }
-        guard url != currentUrl || image == nil else { return }   // same photo, already drawn
+        // ⛔ "ALREADY DRAWN" MUST MEAN THE REAL BYTES, NOT ANY IMAGE. The placeholder — an inline
+        // thumb or a decoded blurhash — is not nil, so a fetch that failed once left `image` holding
+        // the blur, and every later configure with the same url returned here immediately. The photo
+        // stayed blurred for good: reopening the chat did not help, because the url had not changed,
+        // and only a cell recycling through `prepareForReuse` ever cleared it.
+        //
+        // `loadedUrl` records what actually LANDED, so a failure is retried the next time the row is
+        // configured, and a success still costs nothing.
+        guard url != loadedUrl else { return }
         currentUrl = url
 
         // Synchronous memory hit → the first frame already has the picture, no skeleton flash.
@@ -53,6 +65,7 @@ final class RowImageView: UIImageView {
             if let cached = await DiskImageCache.shared.image(for: url) {
                 guard self.token == mine else { return }
                 self.image = cached
+                self.loadedUrl = url
                 return
             }
             guard let u = URL(string: url),
@@ -72,12 +85,14 @@ final class RowImageView: UIImageView {
             // survive the cache trim exactly as the SwiftUI path stores it.
             DiskImageCache.shared.store(bounded, data: clear, for: url, owned: true)
             self.image = bounded
+            self.loadedUrl = url
         }
     }
 
     func reset() {
         token += 1
         currentUrl = nil
+        loadedUrl = nil
         image = nil
     }
 }
