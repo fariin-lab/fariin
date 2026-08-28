@@ -3930,9 +3930,27 @@ struct ThreadView: View {
                   let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
                 await MainActor.run { sendError = "Couldn't open the file." }; return
             }
-            let name = message.fileName ?? "file"
-            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(name)
-            try? data.write(to: tmp)
+            // ⛔ THE NAME COMES FROM THE SENDER, SO IT IS NOT A PATH. `appendingPathComponent` does
+            // not reject "/" or "..", and nothing sanitises `fileName` on the way in or out — so a
+            // crafted name could write outside the temporary directory, and an ordinary one could
+            // collide: two people both sending "receipt.pdf" land on the same path, and because the
+            // write is `try?` a failure leaves the PREVIOUS sender's file there and opens the wrong
+            // document with no error.
+            //
+            // The name is reduced to its last component and stripped of separators, and the file
+            // goes in a folder of its own per message, so two documents can never meet.
+            let raw = (message.fileName ?? "file") as NSString
+            var safe = raw.lastPathComponent
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: ":", with: "_")
+            if safe.isEmpty || safe == "." || safe == ".." { safe = "file" }
+            let box = FileManager.default.temporaryDirectory
+                .appendingPathComponent("open-\(message.id)", isDirectory: true)
+            try? FileManager.default.createDirectory(at: box, withIntermediateDirectories: true)
+            let tmp = box.appendingPathComponent(safe)
+            guard (try? data.write(to: tmp)) != nil else {
+                await MainActor.run { sendError = "Couldn't open the file." }; return
+            }
             // PDFs open in the custom PDFKit reader (Liquid Glass); everything else uses QuickLook.
             let isPDF = name.lowercased().hasSuffix(".pdf") || data.prefix(4).elementsEqual([0x25, 0x50, 0x44, 0x46])   // "%PDF"
             await MainActor.run {
@@ -5436,6 +5454,14 @@ struct ThreadView: View {
                 // was pure dead time before the card appeared (owner report: "the preview is late").
                 // TYPING still needs it, or every keystroke fires a fetch at a half-written url. The
                 // jump in length is what separates them: a keystroke moves it by one.
+                // ⛔ AND NOTHING IS FETCHED IF THE READER HAS TURNED PREVIEWS OFF. Building a preview
+                // means THIS DEVICE contacting the linked site — with a browser User-Agent — before
+                // anything is sent, so it is a request the person makes whether they meant to or not:
+                // paste a link into the composer to ask somebody about it, delete it unsent, and the
+                // site already has your address and the time. Theirs puts the whole feature behind a
+                // setting and checks it before the fetch, which is the only way to make that
+                // avoidable. Default on, as theirs is.
+                guard UserDefaults.standard.object(forKey: "linkPreviewsEnabled") as? Bool ?? true else { return }
                 let pasted = text.count - old.count > 1
                 linkDetectTask = Task {
                     if !pasted { try? await Task.sleep(nanoseconds: 400_000_000) }   // let typing settle
@@ -6186,7 +6212,12 @@ struct ThreadView: View {
             withAnimation(.easeInOut(duration: 0.2)) { replyingTo = nil }
         }
         do {
-            try await ChatService.sendAudio(cid: cid, data: data, duration: dur, waveform: wf, replyTo: reply, clientId: clientId, group: isGroup ? groupMembers : nil, viewOnce: viewOnce)
+            // ⛔ THE WIRE COPY WITHHOLDS THE SHAPE TOO. The local bubble is built with
+            // `waveform: viewOnce ? [] : wf` — so the sender is shown a plain pill and reasonably
+            // concludes the envelope was not sent — and this line sent the full forty bars anyway,
+            // where they persist in the document after the note has been burned. Either both hold it
+            // back or neither does.
+            try await ChatService.sendAudio(cid: cid, data: data, duration: dur, waveform: viewOnce ? [] : wf, replyTo: reply, clientId: clientId, group: isGroup ? groupMembers : nil, viewOnce: viewOnce)
             AudioRecorder.dropInFlight(clientId: clientId)   // it landed; the spare copy has no job left
         }
         catch {
@@ -6197,7 +6228,7 @@ struct ThreadView: View {
             // The bytes are already parked on disk under this clientId, so the queue only records
             // that they are owed a send. The red bubble stays either way — retrying by hand still
             // works, this just means nobody HAS to.
-            SendQueue.addAudio(clientId: clientId, cid: cid, duration: dur, waveform: wf,
+            SendQueue.addAudio(clientId: clientId, cid: cid, duration: dur, waveform: viewOnce ? [] : wf,
                                reply: reply, ts: Date().timeIntervalSince1970)
             await MainActor.run { repo.markFailed(clientId: clientId) }
         }

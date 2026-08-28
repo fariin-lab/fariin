@@ -8,6 +8,12 @@ import SwiftUI
 struct ChatsSettingsView: View {
     @AppStorage(AutoSaveToPhotos.defaultsKey) private var saveToPhotos = false
     @AppStorage(UnknownChatArchiver.defaultsKey) private var autoArchiveUnknown = false
+    /// ⛔ THE SWITCH THAT MAKES THE LINK PREVIEW AVOIDABLE. Building one means THIS PHONE contacting
+    /// the linked site before anything is sent, so it is a request the person makes whether they
+    /// meant to or not — paste a link to ask somebody about it, delete it unsent, and the site has
+    /// your address and the time. Theirs has exactly this setting for exactly this reason. Default
+    /// on, as theirs is.
+    @AppStorage("linkPreviewsEnabled") private var linkPreviews = true
     @State private var confirmClear = false
     @State private var clearing = false
 
@@ -19,6 +25,12 @@ struct ChatsSettingsView: View {
                 Toggle("Save to Photos", isOn: $saveToPhotos).tint(.green)
             } footer: {
                 Text("Automatically save received photos and videos to your Photos library.")
+            }
+
+            Section {
+                Toggle("Link Previews", isOn: $linkPreviews).tint(.green)
+            } footer: {
+                Text("Show a preview card for links you type or paste. Your phone contacts the site to build it, before the message is sent.")
             }
 
             // The setting moves WHERE a stranger's first message waits, and nothing else. It is
