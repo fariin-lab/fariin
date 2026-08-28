@@ -38,6 +38,9 @@ final class RowImageView: UIImageView {
     /// last asked for. A fetch that fails leaves the placeholder showing and this nil, so the next
     /// configure tries again instead of treating the blur as a finished picture.
     private var loadedUrl: String?
+    /// The url currently being fetched. Without it a reconfigure mid-download looks identical to a
+    /// fresh one. See `configure`.
+    private var inFlight: String?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -66,7 +69,14 @@ final class RowImageView: UIImageView {
         //
         // `loadedUrl` records what actually LANDED, so a failure is retried the next time the row is
         // configured, and a success still costs nothing.
-        guard url != loadedUrl else { return }
+        // ⛔ THREE STATES, NOT TWO — the same fault as the gif view next door, and I introduced both
+        // in the same change. `loadedUrl` alone means a reconfigure DURING a download does not match
+        // it, so every one of them (a tick landing, a reaction, a scroll — this row reconfigures
+        // constantly) reset the picture to the placeholder and started ANOTHER fetch.
+        //
+        // `inFlight` is the missing state: a reconfigure while the bytes are coming does nothing, a
+        // reconfigure after a failure retries, and a reconfigure after success returns above.
+        guard url != loadedUrl, inFlight != url else { return }
         currentUrl = url
 
         // Synchronous memory hit → the first frame already has the picture, no skeleton flash.
@@ -75,11 +85,19 @@ final class RowImageView: UIImageView {
         // thumbnail that IS on disk would otherwise appear a beat late.
         if let warm = DiskImageCache.shared.smallImageSync(url) { image = warm; return }
         image = placeholder
+        inFlight = url
         setLoading(true)
 
         Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { if self.token == mine { self.setLoading(false) } }
+            defer {
+                if self.token == mine {
+                    // Cleared whatever happened, so a failure is retryable and a success is not
+                    // re-fetched — `loadedUrl` is what says which of the two it was.
+                    if self.inFlight == url { self.inFlight = nil }
+                    self.setLoading(false)
+                }
+            }
             if let cached = await DiskImageCache.shared.image(for: url) {
                 guard self.token == mine else { return }
                 self.image = cached
@@ -144,6 +162,7 @@ final class RowImageView: UIImageView {
         token += 1
         currentUrl = nil
         loadedUrl = nil
+        inFlight = nil
         image = nil
         setLoading(false)
     }

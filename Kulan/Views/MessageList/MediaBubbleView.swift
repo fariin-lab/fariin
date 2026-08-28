@@ -13,10 +13,12 @@ import Combine
 /// the SwiftUI path had already stored.
 final class RowGifView: UIImageView {
     private static let cache = NSCache<NSString, UIImage>()
-    private var loadedURL: String?
-    /// The url whose bytes are actually on screen. `loadedURL` is only what was last REQUESTED, and
-    /// a request that fails must not look like a finished picture. See `configure`.
+    /// The url whose bytes are actually ON SCREEN — as opposed to one that was merely asked for.
+    /// A request that fails must not look like a finished picture. See `configure`.
     private var displayedURL: String?
+    /// The url currently being fetched. The third state: a reconfigure while this is set must not
+    /// start a second download or clear the picture. See `configure`.
+    private var inFlight: String?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -27,19 +29,23 @@ final class RowGifView: UIImageView {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(url: String?) {
-        guard let url, !url.isEmpty else { loadedURL = nil; displayedURL = nil; image = nil; return }
-        // ⛔ THE SENTINEL IS THE REQUEST, THE RETRY GATE IS THE RESULT. `loadedURL` is set BEFORE the
-        // fetch so a re-configure mid-flight cannot start a second download — that part is right and
-        // stays. But it was also the only thing the guard above consulted, and the network callback
-        // has no failure path, so a gif whose fetch failed was a permanently grey box for the life of
-        // the view. The comment's stated intent, "a re-configure cannot re-download", is exactly what
-        // made it unrecoverable.
+        guard let url, !url.isEmpty else { displayedURL = nil; inFlight = nil; image = nil; return }
+        // ⛔ THREE STATES, NOT TWO: shown, in flight, and neither. Collapsing them is what broke this.
         //
-        // `displayedURL` records what actually arrived, so a failure is retried on the next
-        // configure while an in-flight request is still not duplicated.
+        // The original guard was `url != loadedURL`, with `loadedURL` set BEFORE the fetch — which
+        // stopped a re-configure re-downloading, and also made a FAILED fetch permanent, because the
+        // sentinel said "handled" when nothing had arrived. Adding `|| image == nil` to catch the
+        // failure was worse: this row reconfigures constantly (a tick, a reaction, a scroll), and
+        // every one of those passes matched `image == nil` while the first download was still in
+        // flight, so each reconfigure nulled the picture and started ANOTHER download. A gif could
+        // sit grey indefinitely, re-fetching, which is what he is looking at.
+        //
+        // `inFlight` is the missing third state. A reconfigure during a download does nothing at
+        // all; a reconfigure after a FAILED one tries again; a reconfigure after a successful one
+        // returns at the first line.
         guard url != displayedURL else { return }
-        guard url != loadedURL || image == nil else { return }
-        loadedURL = url                      // marked BEFORE loading, so a re-configure cannot re-download
+        guard inFlight != url else { return }
+
         if let hit = Self.cache.object(forKey: url as NSString) { image = hit; displayedURL = url; return }
         if let bytes = GifBytesCache.data(url), let img = UIImage.animatedGif(data: bytes) {
             Self.cache.setObject(img, forKey: url as NSString)
@@ -47,23 +53,30 @@ final class RowGifView: UIImageView {
             displayedURL = url
             return
         }
-        image = nil
         guard let u = URL(string: url) else { return }
-        URLSession.shared.dataTask(with: u) { [weak self] data, _, _ in
-            guard let data, let img = UIImage.animatedGif(data: data) else { return }
-            GifBytesCache.store(data, url)
-            Self.cache.setObject(img, forKey: url as NSString)
-            DispatchQueue.main.async {
-                // The view may have been REUSED for a different gif while this was in flight — only
-                // assign if it still wants THIS url, or the old gif overwrites the new one.
-                guard let self, self.loadedURL == url else { return }
+        image = nil
+        inFlight = url
+        // The app's own session rather than `URLSession.shared`, which is the shared cookie jar every
+        // other request in the app deliberately avoids.
+        Task { [weak self] in
+            let fetched: Data? = try? await MediaSession.shared.data(from: u).0
+            await MainActor.run {
+                guard let self, self.inFlight == url else { return }
+                self.inFlight = nil
+                // ⚠️ A FAILURE LEAVES NOTHING BEHIND, so the next configure retries. `animatedGif`
+                // already falls back to a still frame for anything with one usable image in it, so
+                // reaching here with nil means the bytes were not an image at all — an error page, or
+                // an empty body — and re-asking is the only thing that can help.
+                guard let data = fetched, let img = UIImage.animatedGif(data: data) else { return }
+                GifBytesCache.store(data, url)
+                Self.cache.setObject(img, forKey: url as NSString)
                 self.displayedURL = url
                 self.image = img
             }
-        }.resume()
+        }
     }
 
-    func reset() { loadedURL = nil; displayedURL = nil; image = nil }
+    func reset() { displayedURL = nil; inFlight = nil; image = nil }
 }
 
 final class MediaBubbleView: UIView {
