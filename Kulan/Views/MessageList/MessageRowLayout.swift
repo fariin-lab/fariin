@@ -1740,11 +1740,23 @@ enum MessageRowLayout {
     private static func floatingMeta(_ attr: NSAttributedString,
                                      over rect: CGRect) -> (capsule: CGRect, text: CGRect) {
         let size = BubbleText.lineSize(attr)
-        let capsule = CGRect(x: rect.maxX - 7 - (size.width + 14),
-                             y: rect.maxY - 7 - (size.height + 6),
-                             width: size.width + 14, height: size.height + 6)
-        return (capsule, CGRect(x: capsule.minX + 7, y: capsule.minY + 3,
-                                width: size.width, height: size.height))
+        // ⚠️ THE HEIGHT COMES FROM THE FONT, NOT FROM THE MEASURED STRING. Anything the footer ever
+        // carries — the tick today, whatever is added later — is drawn inside a text line, and a
+        // line's height is a property of the font. Taking it from `boundingRect` meant one oversized
+        // attachment could grow the pill on one side only, which is exactly the bug this pairs with
+        // (see the tick's bounds in `BubbleText.meta`). Fixing that one alone would leave the door
+        // open; taking the height from the font closes it.
+        let lineH = ceil(BubbleMetrics.metaFont.lineHeight)
+        let hPad: CGFloat = 7, vPad: CGFloat = 3
+        let capsule = CGRect(x: rect.maxX - 7 - (size.width + hPad * 2),
+                             y: rect.maxY - 7 - (lineH + vPad * 2),
+                             width: size.width + hPad * 2, height: lineH + vPad * 2)
+        // Centred on the capsule rather than offset from its corner, so the two cannot drift apart
+        // if either padding is ever changed on its own.
+        let text = CGRect(x: capsule.midX - size.width / 2,
+                          y: capsule.midY - lineH / 2,
+                          width: size.width, height: lineH)
+        return (capsule, text)
     }
 
     // ── Media boxes ──

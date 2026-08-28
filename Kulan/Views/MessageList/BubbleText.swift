@@ -140,7 +140,23 @@ enum BubbleText {
         // footer measures identically, so the bubble never resizes when the tick lands.
         let ink: UIColor = m.tick == .sending ? .clear : (m.tick == .failed ? .systemRed : color)
         a.image = img.withTintColor(ink, renderingMode: .alwaysOriginal)
-        a.bounds = CGRect(x: 0, y: -1, width: img.size.width, height: img.size.height)
+        // ⛔ CENTRED ON THE CAP HEIGHT, AND IT MUST NOT MAKE THE LINE TALLER — his screenshot,
+        // 2026-08-28: on a photo, the timestamp sits low in its dark pill with a visible gap above
+        // it and almost none below. Measured off that screenshot: a 59px pill with 27px above the
+        // digits and 11px below.
+        //
+        // THE PILL WAS NOT THE PROBLEM; THIS LINE WAS. `y: -1` hangs a symbol image that is about
+        // 12pt tall one point below the baseline, so it reaches ~11pt ABOVE it — past the 10pt
+        // font's own ascent. `boundingRect` then reports a line ~2pt taller than the font's, the
+        // capsule is built from that inflated box (`floatingMeta`), and the capsule grows UPWARD
+        // while the text stays where its baseline puts it. The gap all ends up on top.
+        //
+        // Centring the glyph on the cap height is where the eye expects a tick beside text anyway,
+        // and it keeps the glyph inside the font's own ascent/descent, so the line box is the
+        // font's line box and every footer in the app is measured from the same number again.
+        let f = BubbleMetrics.metaFont
+        a.bounds = CGRect(x: 0, y: (f.capHeight - img.size.height) / 2,
+                          width: img.size.width, height: img.size.height)
         s.append(NSAttributedString(string: " "))
         s.append(NSAttributedString(attachment: a))
         return s
