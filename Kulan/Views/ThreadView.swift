@@ -3188,10 +3188,18 @@ struct ThreadView: View {
         } else if repo.pinnedMessageIds.count < Limits.pinnedMessagesPerChat {
             Task {
                 await ChatService.addPinnedMessage(cid, m.id)
+                // A pin notice is a NOTICE, not a message: it says something happened to a message
+                // that is already in the conversation. Counting it lit up the other person's chat
+                // row with a "1" for something nobody sent them.
+                //
+                // ⚠️ Only the pin. A poll and a location marker are messages the sender deliberately
+                // put in the chat, so they count like any other — the fault was that all three went
+                // through the same unconditional increment, not that notices and messages are alike.
                 try? await ChatService.sendText(
                     cid: cid,
                     text: Message.pinMarkerText(messageId: m.id, label: Self.pinLabel(m)),
-                    group: isGroup ? groupMembers : nil)
+                    group: isGroup ? groupMembers : nil,
+                    countsAsUnread: false)
             }
         }   // already at the pin max → ignore
     }
@@ -3466,7 +3474,11 @@ struct ThreadView: View {
         inputFocused = false
         Task {
             let corpus = await MessageSearch.loadChat(cid: cid, isGroup: isGroup, me: me)
-            await MainActor.run { searchCorpus = corpus }
+            // ⛔ RE-RUN THE MATCHER. The field auto-focuses 0.15s below while this is still fetching
+            // and decrypting up to a thousand documents, so anything typed in that window searched
+            // only the loaded page — and retyping the same text could not fix it, because an
+            // identical query is deduped away. "No results" that never filled in.
+            await MainActor.run { searchCorpus = corpus; updateSearchMatches(force: true) }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { searchFocused = true }
     }
@@ -3494,13 +3506,17 @@ struct ThreadView: View {
     //  • capped at the newest 500 matches (default max results)
     //  • the focused position is PRESERVED across query refinement (clamped), measured from the newest
     //    end — clamp the previous index rather than yanking you back to the first result
-    private func updateSearchMatches() {
+    /// `force` skips the identical-query dedup. The dedup exists so arrow keys and focus changes do
+    /// not re-run a search that cannot have changed — but that assumes the only thing a result
+    /// depends on is the query, and the corpus and the live window are inputs too. Both of the
+    /// callers that pass `force` are cases where the query is the same and the ANSWER is not.
+    private func updateSearchMatches(force: Bool = false) {
         let q = searchQuery.trimmingCharacters(in: .whitespaces)
         guard q.count >= 2 else {
             searchMatches = []; lastSearchText = nil
             return
         }
-        guard q != lastSearchText else { return }   // identical query → no re-run (dedup)
+        if !force, q == lastSearchText { return }   // identical query → no re-run (dedup)
         lastSearchText = q
         let terms = ChatSearch.queryTerms(q)
         guard !terms.isEmpty else { searchMatches = []; return }
@@ -5110,6 +5126,15 @@ struct ThreadView: View {
                     }
                     .autocorrectionDisabled()
                     .onChange(of: searchQuery) { _, _ in updateSearchMatches() }
+        // ⛔ AND WHENEVER THE CONVERSATION ITSELF CHANGES. Matches used to recompute on keystroke and
+        // on nothing else, so a message that arrived, was edited, was deleted for everyone or expired
+        // while search was open left the results untouched: the pill still said "3 of 7", and
+        // stepping onto a message that no longer exists silently did nothing, which reads as the
+        // arrow being broken. Theirs re-runs the search against the database on every update pass.
+        .onChange(of: repo.itemsVersion) { _, _ in
+            guard searchActive else { return }
+            updateSearchMatches(force: true)
+        }
                 if !searchQuery.isEmpty {
                     Button { searchQuery = "" } label: {
                         Image(systemName: "xmark.circle.fill").font(.system(size: 16)).foregroundStyle(.secondary)

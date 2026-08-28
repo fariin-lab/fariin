@@ -604,7 +604,13 @@ enum ChatService {
         return d
     }
 
-    static func sendText(cid: String, text: String, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, mentions: [String] = [], preview: OutgoingLinkPreview? = nil, forwarded: Bool = false) async throws {
+    /// ⛔ `countsAsUnread` — a NOTICE IS NOT A MESSAGE. Pin notices, poll cards and location markers
+    /// all route through here, and this unconditionally incremented the other person's unread badge,
+    /// so pinning something in an already-read chat lit up their chat row with a "1" for a message
+    /// they had not been sent. The reaction path already refuses to do this and says why ("a reaction
+    /// shouldn't reorder chats or re-arm unread"); the intent existed and these three callers simply
+    /// were not covered by it.
+    static func sendText(cid: String, text: String, replyTo: ReplyRef? = nil, clientId: String? = nil, group: [String]? = nil, mentions: [String] = [], preview: OutgoingLinkPreview? = nil, forwarded: Bool = false, countsAsUnread: Bool = true) async throws {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
         // Group path: per-member encryption + unread fan-out. 1:1 path below is untouched.
@@ -681,12 +687,13 @@ enum ChatService {
             msg["linkPreview"] = lp
         }
         batch.setData(msg, forDocument: msgRef)
-        batch.updateData([
+        var convUpdate: [String: Any] = [
             "lastMessage": cipher,
             "lastSender": uid,                 // drives the read-receipt ticks in the chat list
             "updatedAt": FieldValue.serverTimestamp(),
-            "unreadCount.\(other)": FieldValue.increment(Int64(1)),
-        ], forDocument: convRef)
+        ]
+        if countsAsUnread { convUpdate["unreadCount.\(other)"] = FieldValue.increment(Int64(1)) }
+        batch.updateData(convUpdate, forDocument: convRef)
         try await batch.commit()
     }
 

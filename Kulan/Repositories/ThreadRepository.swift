@@ -480,6 +480,7 @@ final class ThreadRepository {
         otherUid = other
         stop()
         // Conversation doc: the other person's typing flag + their read timestamp.
+        convListener?.remove()   // same re-entry rule as the message listener above
         convListener = db.collection("conversations").document(cid)
             .addSnapshotListener { [weak self] snap, _ in
                 guard let self else { return }
@@ -558,7 +559,8 @@ final class ThreadRepository {
         // hidden their last seen from non-contacts looks like. The snapshot simply never arrives and
         // the header shows nothing, which is exactly right.
         if isOneToOne, !other.isEmpty {
-            userListener = db.collection("users").document(other)
+            userListener?.remove()   // same re-entry rule as the message listener above
+        userListener = db.collection("users").document(other)
                 .addSnapshotListener { [weak self] snap, _ in
                     let privacy = (snap?.data()?["privacy"] as? [String: String]) ?? [:]
                     self?.otherPrivacy = privacy
@@ -571,7 +573,8 @@ final class ThreadRepository {
                     // a stale answer.
                     CallPrivacyIndex.record(uid: other, privacy: privacy)
                 }
-            presenceListener = db.collection("users").document(other)
+            presenceListener?.remove()   // same re-entry rule as the message listener above
+        presenceListener = db.collection("users").document(other)
                 .collection("presence").document("state")
                 .addSnapshotListener { [weak self] snap, _ in
                     let d = snap?.data()
@@ -590,6 +593,15 @@ final class ThreadRepository {
         // a NEW chat — left the screen stuck on a loading spinner for many seconds.)
         // Live listener over the most-recent page only (bounds first paint, memory, and
         // Firestore reads regardless of how long the history is).
+        // ⛔ ONE LISTENER. `onAppear` is not once-per-identity — it fires again on every return from
+        // a pushed screen (the profile, the gallery, a full-screen cover tearing down), and this
+        // assignment had no guard and no prior removal, so each return attached a SECOND live
+        // snapshot stream with its own off-main decrypt fan. `stop()` removes only the last handle,
+        // so the earlier ones kept streaming, and billing reads, after the chat was left.
+        //
+        // The two notification observers a few lines above ARE guarded, which is the tell that
+        // re-entry was considered for one half of this method and not the other.
+        listener?.remove()
         listener = db.collection("conversations").document(cid).collection("messages")
             .order(by: "createdAt", descending: true)
             .limit(to: pageSize)
