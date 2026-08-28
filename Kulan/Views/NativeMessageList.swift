@@ -356,6 +356,18 @@ final class HardenedCollectionView: UICollectionView {
     }
 }
 
+/// The bottom bar's container, which reports any touch inside itself. See `bottomBarContainer`.
+final class BarTouchView: UIView {
+    var onTouch: (() -> Void)?
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let v = super.hitTest(point, with: event)
+        // A real finger only — a nil event is a layout-time query, the same rule
+        // `VoiceBubbleView.hitTest` follows.
+        if event != nil, bounds.contains(point) { onTouch?() }
+        return v
+    }
+}
+
 final class MessageListController: UIViewController, UICollectionViewDelegate, UIGestureRecognizerDelegate {
     var coordinator: NativeMessageList.Coordinator!
     private var collectionView: UICollectionView!
@@ -417,7 +429,21 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // is false for their blocking/error panels, which pin to the screen bottom instead — there is no
     // keyboard when you cannot type. Ours keeps its blocked / request / muted bars in SwiftUI for
     // the same reason.
-    let bottomBarContainer = UIView()
+    /// ⛔ THE MARGINS AROUND THE BAR ARE STILL THE BAR — his screenshot, 2026-08-28: tapping beside
+    /// the "+", beside Send, or in the strip under the field closes the keyboard.
+    ///
+    /// `ChatComposerView.hitTest` already claims every point inside the BAR, control or bare padding,
+    /// which fixed the gaps between its buttons. But the bar is inset from the screen edges by the
+    /// composer margin and sits above the home indicator, and all of that belongs to this CONTAINER,
+    /// not to the bar — so a tap there stamped nothing and the conversation's deferred dismissal went
+    /// ahead. He circled exactly that band.
+    ///
+    /// Theirs has no such band to get wrong: their tap-to-dismiss is attached to the collection view,
+    /// so no part of the input area is inside the recogniser at all. Ours cannot move the gesture
+    /// there — that was tried and he rejected the feel of it on an A/B (builds 408-411) — so the same
+    /// boundary is drawn from the other side, and this is where it has to end: the outermost view
+    /// that is "the input area".
+    let bottomBarContainer = BarTouchView()
     private var bottomBarHeight: NSLayoutConstraint?
     private var barLeading: NSLayoutConstraint?
     private var barTrailing: NSLayoutConstraint?
@@ -4211,6 +4237,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// rest. Only the OUTER insets are constraints, because those are what SwiftUI used to apply.
     func applyComposer(state: ChatComposerState, actions: ChatComposerActions,
                        recorder: AudioRecorder, margin: CGFloat) {
+        // The container stamps the SAME clock the bar does, so the conversation's deferred dismissal
+        // treats a tap in the margin around the bar exactly as it treats a tap on the bar itself.
+        // Re-assigned on every pass because `actions` is rebuilt with the body.
+        bottomBarContainer.onTouch = actions.barTouched
         let bar: ChatComposerView
         if let existing = composerBar as? ChatComposerView {
             bar = existing
