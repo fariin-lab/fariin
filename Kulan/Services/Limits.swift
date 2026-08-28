@@ -6,6 +6,20 @@ import Foundation
 // Mirror of functions/limits + firestore.rules — keep the three in sync.
 enum Limits {
     // Chat
+    /// Characters in one typed message. His call, 2026-08-27, after asking what the big apps do:
+    /// the reference app's own number. The other one's 4,096 was refused as too tight for pasted
+    /// text.
+    ///
+    /// ⚠️ THE REASON IS THE CHAT SCREEN, NOT THE DATABASE. Firestore's own ceiling is 1 MB a
+    /// document, which after encryption is somewhere near 700,000 characters — so the write is not
+    /// what breaks first. The message list MEASURES and DRAWS every line of a bubble, on both
+    /// phones, so one pasted wall of text freezes the conversation for whoever opens it. A cap is
+    /// cheaper than a special case in the layout.
+    ///
+    /// ⛔ NOT A TRUNCATION OF WHAT IS SENT. It stops the field accepting more; nothing typed is ever
+    /// cut, which is the distinction he drew when he had the 20-line "Read more" collapse removed
+    /// the same day.
+    static let messageMaxChars = 65_536
     static let pinnedMessagesPerChat = 3
     /// Photos or videos in one album message. Picking more starts another album rather than hiding the
     /// remainder behind a "+N" badge — 12 pictures ship as 10 + 2. Matches the ceiling the mosaic layout

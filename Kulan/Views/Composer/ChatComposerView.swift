@@ -1020,6 +1020,39 @@ final class ChatComposerView: UIView {
 // MARK: - Text delegate
 
 extension ChatComposerView: UITextViewDelegate {
+
+    /// The message length cap, `Limits.messageMaxChars`. Typing simply stops at the ceiling; a
+    /// PASTE that would overflow is trimmed to what fits rather than refused whole, because
+    /// dropping somebody's entire clipboard on the floor with no explanation is worse than keeping
+    /// the part there was room for.
+    ///
+    /// ⚠️ TRIMMED ON A CHARACTER BOUNDARY, NOT A UNIT ONE. `NSString` counts UTF-16 units, so a cut
+    /// at an arbitrary index can land inside an emoji's surrogate pair and produce a broken glyph;
+    /// `rangeOfComposedCharacterSequence` backs the cut off to the start of whatever it landed in.
+    ///
+    /// ⚠️ AND `textViewDidChange` IS CALLED BY HAND. Assigning `.text` programmatically does not
+    /// fire the delegate, so without it the placeholder, the send button, the bar's height and
+    /// ThreadView's copy of the draft would all keep describing the text from before the paste.
+    func textView(_ tv: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+        guard !text.isEmpty else { return true }          // a deletion is always allowed
+        let ns = tv.text as NSString
+        let room = Limits.messageMaxChars - (ns.length - range.length)
+        guard room > 0 else { return false }
+        let incoming = text as NSString
+        if incoming.length <= room { return true }
+
+        var cut = room
+        if cut < incoming.length {
+            let seq = incoming.rangeOfComposedCharacterSequence(at: cut)
+            if seq.location < cut { cut = seq.location }
+        }
+        guard cut > 0 else { return false }
+        tv.text = ns.replacingCharacters(in: range, with: incoming.substring(to: cut))
+        tv.selectedRange = NSRange(location: range.location + cut, length: 0)
+        textViewDidChange(tv)
+        return false
+    }
+
     func textViewDidChange(_ tv: UITextView) {
         textView.refreshPlaceholder()
         actions.textChanged(tv.text)
