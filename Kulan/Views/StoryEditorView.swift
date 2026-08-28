@@ -270,6 +270,16 @@ struct StoryEditorView: View {
     @State private var trimEnd: Double = 0
     @State private var trimOpenedStart: Double = 0   // what X puts back
     @State private var trimOpenedEnd: Double = 0
+    /// ⛔ AND THE BRIGHTNESS TOO — his 2026-08-28 report: turn the dial, press ✕, and the clip keeps
+    /// the new exposure with no way to take it off.
+    ///
+    /// The two tools on this bar were built differently and only one of them was undoable. The trim
+    /// edits SCRATCH state (`trimStart`/`trimEnd`) and commits it into the item on Done, so ✕ had
+    /// something to put back. The dial writes straight through to `items[index].brightness` on every
+    /// tick — there was no "before" anywhere, so ✕ reverted the handles and left the exposure. One
+    /// slot, two controls (see `trimBar`), so ✕ has to answer for both.
+    @State private var brightnessOpened: Double = 0
+    @State private var showBrightnessDiscard = false
     @State private var trimThumbs: [UIImage] = []
     /// Which clip the strip above belongs to. The strip is the WHOLE clip with handles over it, so it
     /// does not change when the handles do — only when the item does. Keeping it is what stops a
@@ -1426,6 +1436,11 @@ struct StoryEditorView: View {
                      onDestructive: { drawing = PKDrawing() })
         .darkConfirm("Discard this story?", isPresented: $showDiscard,
                      destructive: "Discard", onDestructive: { dismiss() })
+        // The dial's own cancel. Smaller question than the one above — this sitting's exposure, not
+        // the whole post — so it says so, and "Keep Editing" leaves the bar open with the value
+        // where it was, the way the pen's Keep does.
+        .darkConfirm("Discard brightness change?", isPresented: $showBrightnessDiscard,
+                     destructive: "Discard", onDestructive: { closeTrim(keep: false) })
         // THE PEN'S OWN CANCEL, asked the same way and drawn the same way. It is a smaller question
         // than the one above — this session's strokes, not the whole post — so it says so.
         //
@@ -2528,7 +2543,14 @@ struct StoryEditorView: View {
         HStack(spacing: 12) {
             // X puts the handles back where they were; Done keeps them. Neither may leave half a
             // cut behind, which is the rule the video editor's trim already follows.
-            Button { closeTrim(keep: false) } label: {
+            Button {
+                // ⛔ AN EXPOSURE CHANGE IS ASKED ABOUT, A CUT IS NOT — his 2026-08-28 instruction,
+                // and the asymmetry is his. A cut is visible on the strip and put back the instant
+                // ✕ lands, so nothing is lost that is not obviously lost; the dial is a value you
+                // arrived at by eye and cannot find again by looking. Same helper and same shape as
+                // the pen's own cancel, which asks about strokes for the same reason.
+                if brightnessChanged { showBrightnessDiscard = true } else { closeTrim(keep: false) }
+            } label: {
                 Image(systemName: "xmark").font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.white).frame(width: 44, height: 44)
                     .liquidGlass(Circle(), interactive: true).contentShape(Circle())
@@ -2630,6 +2652,13 @@ struct StoryEditorView: View {
         abs(trimStart - trimOpenedStart) > 0.001 || abs(trimEnd - trimOpenedEnd) > 0.001
     }
 
+    /// Has the dial moved since this sitting opened? Same hair of tolerance as `canUndoTrim`, and
+    /// for the same reason: the dial lands on a float.
+    private var brightnessChanged: Bool {
+        guard items.indices.contains(index) else { return false }
+        return abs(items[index].brightness - brightnessOpened) > 0.001
+    }
+
     /// ⛔ THE DIAL HAS TO SHOW ON THE CLIP, or it is a number with no picture attached — and the
     /// export would then be the first place anybody saw what they had chosen.
     ///
@@ -2692,6 +2721,8 @@ struct StoryEditorView: View {
         trimEnd = items[index].trimEnd > 0 ? items[index].trimEnd : items[index].duration
         trimOpenedStart = trimStart
         trimOpenedEnd = trimEnd
+        // The exposure this sitting started at, for the same reason as the two handles above.
+        brightnessOpened = items.indices.contains(index) ? items[index].brightness : 0
         // ⚠️ EVERY CLIP IS SHOWN BY THE PLAYER HERE, AND THAT IS THE WHOLE OF HIS 2026-08-16
         // "the video becomes noticeably darker/dimmer… only videos added later through the +".
         //
@@ -2760,6 +2791,13 @@ struct StoryEditorView: View {
             items[index].trimEnd = trimEnd
         } else {
             trimStart = trimOpenedStart; trimEnd = trimOpenedEnd
+            // The dial wrote through to the item on every tick, so putting it back is a real write
+            // and the preview has to be told — otherwise the value is restored and the picture on
+            // screen still shows the exposure that was just discarded.
+            if items.indices.contains(index) {
+                items[index].brightness = brightnessOpened
+                applyPreviewBrightness(brightnessOpened)
+            }
         }
         // ⚠️ THE STRIP IS NOT THROWN AWAY ANY MORE — see `loadTrimThumbs` for what that cost. It is
         // ten frames of THIS clip and the clip has not changed, so the next open draws it instantly

@@ -86,7 +86,6 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
     var onTapRetry: (String) -> Void = { _ in }
-    var onCancelUpload: (String) -> Void = { _ in }
     var onToggleSelect: (String) -> Void = { _ in }
     var onTapSender: (String) -> Void = { _ in }
     var onTapCallRow: (String) -> Void = { _ in }
@@ -221,7 +220,6 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onTapContactMessage = onTapContactMessage
         vc.onTapReactions = onTapReactions
         vc.onTapRetry = onTapRetry
-        vc.onCancelUpload = onCancelUpload
         vc.onToggleSelect = onToggleSelect
         vc.onTapSender = onTapSender
         vc.onTapCallRow = onTapCallRow
@@ -396,21 +394,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     /// `adoptSystemKeyboardGuide`.
     private let keyboardTracker = UIView()
 
-    // ⚠️ TEMPORARY INSTRUMENTATION — 2026-08-28, the re-entry jump. Not a fix and not a keeper:
-    // this exists to answer "what moves the offset between the land and the reveal, and why only
-    // after the reader has scrolled". Delete the `jlog` calls and this helper once the cause is
-    // written down. DEBUG only, so it cannot reach a shipped build.
-    private func jlog(_ s: @autoclosure () -> String) {
-        #if DEBUG
-        let o = collectionView.contentOffset.y
-        print("[JUMP] off=\(String(format: "%.1f", o)) max=\(String(format: "%.1f", maxContentOffsetY)) " +
-              "csz=\(String(format: "%.1f", collectionView.contentSize.height)) " +
-              "top=\(String(format: "%.1f", collectionView.adjustedContentInset.top)) " +
-              "bot=\(String(format: "%.1f", collectionView.adjustedContentInset.bottom)) | \(s())")
-        #endif
-    }
-
-    private var jlogLastOffset: CGFloat = 0   // TEMPORARY, paired with the MOVE log
     private var didFirstLand = false          // the first open has been positioned
     private var didReveal = false             // hidden until the first frame is final
     private var scheduledEmptyReveal = false  // one-shot fallback for a genuinely-empty / slow-decrypt chat
@@ -638,7 +621,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
     var onTapRetry: (String) -> Void = { _ in }
-    var onCancelUpload: (String) -> Void = { _ in }
     var onToggleSelect: (String) -> Void = { _ in }
     var onTapSender: (String) -> Void = { _ in }
     var onTapCallRow: (String) -> Void = { _ in }
@@ -739,8 +721,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
               let id = dataSource.itemIdentifier(for: ip),
               let attr = collectionView.layoutAttributesForItem(at: ip) else { return }
         let viewportTop = collectionView.contentOffset.y + collectionView.adjustedContentInset.top
-        jlog("STORE pos id=\(id.suffix(6)) row=\(ip.item)/\(currentIds.count) " +
-             "belowTop=\(String(format: "%.1f", attr.frame.minY - viewportTop))")
         onReadingPosition(ChatReadingPosition(rowId: id,
                                               offsetFromTop: attr.frame.minY - viewportTop))
     }
@@ -1143,7 +1123,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         guard !seededRenderedHeights, !cid.isEmpty, width > 0 else { return }
         seededRenderedHeights = true
         let known = RenderedHeightStore.shared.heights(cid: cid, width: width)
-        jlog("SEED store w=\(String(format: "%.0f", width)) known=\(known.count) rows=\(currentIds.count)")
         guard !known.isEmpty else { return }
         // Only for rows this list still holds — a store entry for a message that has since been
         // deleted is dead weight, and `measure()` would never ask for it anyway.
@@ -1336,8 +1315,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     // lies ABOVE the reader's anchor; a row below the viewport moves nothing they can see.
     private func adoptHeight(_ h: CGFloat, for id: String) {
         guard collectionView.bounds.height > 0, let cached = heights[id], abs(cached - h) > 2 else { return }
-        jlog("ADOPT id=\(id.suffix(6)) \(String(format: "%.1f", cached))->\(String(format: "%.1f", h)) " +
-             "Δ=\(String(format: "%.1f", h - cached)) atNewest=\(isAtNewest) canLand=\(canLandLoad) reveal=\(didReveal)")
         guard canLandLoad else {
             pendingSettleHeights.insert(id)
             needsRefreshOnSettle = true
@@ -1368,7 +1345,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             if abs(collectionView.contentOffset.y - bound) > 0.5 {
                 collectionView.setContentOffset(CGPoint(x: 0, y: bound), animated: false)
             }
-            jlog("ADOPT-bottom id=\(id.suffix(6)) pinned")
             recordDistanceFromBottom()
             return
         }
@@ -1390,10 +1366,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         if delta != 0 { ctx.contentOffsetAdjustment = CGPoint(x: 0, y: delta) }
         layout.invalidateLayout(with: ctx)
         collectionView.layoutIfNeeded()
-        var anchorName = "NONE"
-        if let l = landed, let a = l.anchor { anchorName = String(a.id.suffix(6)) }
-        jlog("ADOPT-anchor id=\(id.suffix(6)) delta=\(String(format: "%.1f", delta)) " +
-             "anchor=\(anchorName) reveal=\(didReveal)")
         if delta != 0 { verifyAnchor(landed?.anchor) }
     }
 
@@ -1580,7 +1552,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             guard let target = initialScrollId,
                   let ip = dataSource.indexPath(for: target),
                   let attr = layout.layoutAttributesForItem(at: ip) else {
-                jlog("LAND bottom (initialScrollId=\(initialScrollId ?? "nil"))")
                 collectionView.setContentOffset(CGPoint(x: 0, y: maxContentOffsetY), animated: false)
                 lastStableOffset = maxContentOffsetY
                 return
@@ -1595,8 +1566,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             // arithmetic is one line for both.
             let belowTop = initialScrollOffset ?? 12
             let y = clampOffset(attr.frame.minY - collectionView.adjustedContentInset.top - belowTop)
-            jlog("LAND restore id=\(target.suffix(6)) row=\(ip.item)/\(currentIds.count) " +
-                 "minY=\(String(format: "%.1f", attr.frame.minY)) belowTop=\(String(format: "%.1f", belowTop)) -> y=\(String(format: "%.1f", y))")
             collectionView.setContentOffset(CGPoint(x: 0, y: y), animated: false)
             lastStableOffset = y
         }
@@ -1828,7 +1797,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         pendingSettleHeights.removeAll()
         let target = Array(Set(changed).union(heightIds))
         guard !target.isEmpty else { return }
-        jlog("SETTLE refresh \(target.count) rows (lateHeights=\(heightIds.count))")
         refreshVisible(target)
     }
 
@@ -2380,13 +2348,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             return
         }
         updateInsets()
-        var initId = "nil"
-        if let s = initialScrollId { initId = String(s.suffix(6)) }
-        var initTop = "nil"
-        if let o = initialScrollOffset { initTop = String(format: "%.1f", o) }
-        let rowCount = currentIds.count
-        let seeded = renderedHeights.count
-        jlog("FIRSTLAND begin rows=\(rowCount) seeded=\(seeded) id=\(initId) belowTop=\(initTop)")
         measureMissing(currentIds, width: collectionView.bounds.width)
         layout.generation += 1
         layout.invalidateLayout()
@@ -2413,7 +2374,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     private func reveal() {
         guard !didReveal, collectionView.bounds.height > 0 else { return }
         didReveal = true
-        jlog("REVEAL — everything after this line is visible to the reader")
         collectionView.alpha = 1
         // First frame is on screen â€” from here on, keep an extra viewport of rows rendered on each side so
         // scrolling always reveals already-rendered bubbles (the connected-sheet feel).
@@ -4161,16 +4121,6 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        // ⚠️ TEMPORARY (re-entry jump): every offset move NOT driven by a finger. A jump the reader
-        // sees is by definition one of these, so this is the line that names the culprit.
-        #if DEBUG
-        if !scrollView.isDragging, !scrollView.isTracking, !scrollView.isDecelerating,
-           abs(scrollView.contentOffset.y - jlogLastOffset) > 0.5 {
-            jlog("MOVE programmatic \(String(format: "%.1f", jlogLastOffset)) -> " +
-                 "\(String(format: "%.1f", scrollView.contentOffset.y)) reveal=\(didReveal)")
-        }
-        jlogLastOffset = scrollView.contentOffset.y
-        #endif
         // THE WALLPAPER SLICES FOLLOW THE SCROLL, BEFORE ANY OF THE GUARDS BELOW. An incoming bubble
         // on a wallpaper shows the piece of blurred wallpaper that sits under it (see
         // `WallpaperBlur`), and a cell that scrolls is moved by this view's offset, not laid out — so
@@ -4609,11 +4559,6 @@ extension MessageListController: MessageRowCellDelegate {
     func rowCellDidTapRetry(_ cell: MessageRowCell) {
         guard let id = cell.rowId else { return }
         onTapRetry(id)
-    }
-
-    func rowCellDidTapCancelUpload(_ cell: MessageRowCell) {
-        guard let id = cell.rowId else { return }
-        onCancelUpload(id)
     }
 
     func rowCellDidToggleSelection(_ cell: MessageRowCell) {

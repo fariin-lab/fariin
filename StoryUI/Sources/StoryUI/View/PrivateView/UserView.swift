@@ -442,6 +442,22 @@ struct StoryMoreMenu: UIViewRepresentable {
         b.menu = menu(context.coordinator)
     }
 
+    /// The square an SF Symbol occupies in a menu row, measured from a real one. Asset artwork is
+    /// drawn to fit inside it, aspect kept, so a hand-drawn icon sits at the same visual weight as
+    /// the symbols above and below it. Nil-safe: without a reference symbol the art is left alone,
+    /// which is exactly what it did before.
+    private static func fittedToSymbolBox(_ art: UIImage) -> UIImage {
+        guard let box = UIImage(systemName: "square.and.arrow.down")?.size,
+              box.width > 1, box.height > 1, art.size.width > 1, art.size.height > 1 else { return art }
+        let scale = min(box.width / art.size.width, box.height / art.size.height)
+        let target = CGSize(width: art.size.width * scale, height: art.size.height * scale)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.opaque = false
+        return UIGraphicsImageRenderer(size: target, format: format).image { _ in
+            art.draw(in: CGRect(origin: .zero, size: target))
+        }
+    }
+
     private func menu(_ coordinator: Coordinator) -> UIMenu {
         // ⛔ NO OPENING ELEMENT HERE ANY MORE. A `UIDeferredMenuElement.uncached` used to sit at the
         // head of this menu purely to be ASKED, so that being asked could stand in for "the menu is
@@ -451,8 +467,19 @@ struct StoryMoreMenu: UIViewRepresentable {
             // The app's own artwork when the entry names one, the SF Symbol otherwise. Template
             // rendering so a `UIMenu` tints it exactly like the symbols around it; without it the
             // file's own colour is drawn and the row looks like a different app's.
+            // ⛔ AND THE ARTWORK IS SIZED LIKE A SYMBOL, NOT SHIPPED AT ITS OWN SIZE — his
+            // 2026-08-28 screenshot, where "Edit viewers" wears a visibly bigger, heavier glyph than
+            // Save and Share on either side of it.
+            //
+            // A `UIMenu` sizes an SF Symbol for itself: it applies the row's own point size and
+            // every symbol comes out matching. A file from the asset catalogue gets no such
+            // treatment — it is drawn at whatever it was exported at, so one hand-drawn icon among
+            // symbols is the one row that looks wrong. Fitting it into the box a symbol occupies is
+            // the whole fix, and it is measured from a real symbol rather than a guessed constant so
+            // it follows the system's own metrics if they change.
             let icon = item.assetImage
-                .flatMap { UIImage(named: $0)?.withRenderingMode(.alwaysTemplate) }
+                .flatMap { UIImage(named: $0) }
+                .map { Self.fittedToSymbolBox($0).withRenderingMode(.alwaysTemplate) }
                 ?? UIImage(systemName: item.systemImage)
             let action = UIAction(title: item.title,
                                   image: icon,
