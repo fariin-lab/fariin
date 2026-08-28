@@ -26,6 +26,15 @@ final class AudioRecorder {
     var onReachedLimit: (() -> Void)?
     private var limitFired = false
     var isRecording = false
+    /// ⛔ IS THE MIC ACTUALLY CAPTURING RIGHT NOW — which is a different question from `isRecording`.
+    ///
+    /// `isRecording` means "a recording session exists and has not been sent or cancelled", and the
+    /// interruption handler's `.ended` branch depends on that reading to know whether to resume. This
+    /// one means "bytes are being captured this instant", and it is what anything OUTWARD-FACING must
+    /// follow: the presence broadcast that tells the other person we are recording, and the sleep
+    /// blocker that keeps the screen awake for it. During a phone call both of those must stop, and
+    /// the session must survive.
+    var isCapturing = false
     var elapsed: TimeInterval = 0
     var currentTime: TimeInterval { recorder?.currentTime ?? 0 }   // live (not the 0.05s-throttled `elapsed`)
     var levels: [Float] = []          // recent normalized levels (0…1), 30Hz — feeds the mic halo
@@ -88,6 +97,12 @@ final class AudioRecorder {
     // interrupted draft; the old behavior deleted a long recording with no recovery).
     var wasInterrupted = false
 
+    /// Does the user still want to be recording — the gesture's intent, as opposed to whether the
+    /// mic has actually started. Set when a take is asked for, cleared by every path that ends one.
+    /// It exists for the permission round trip, which is the one place where the answer can arrive
+    /// long after the question stopped being relevant.
+    private var wantsRecording = false
+
     init() {
         // Observe audio-session interruptions (phone call, Siri, alarm, another app grabbing the mic).
         interruptionObserver = NotificationCenter.default.addObserver(
@@ -101,6 +116,21 @@ final class AudioRecorder {
                 guard self.isRecording else { return }
                 self.recorder?.pause()          // keep the file + captured audio — do NOT discard
                 self.timer?.invalidate(); self.timer = nil
+                // ⛔ THE MIC IS NO LONGER CAPTURING, AND THE APP HAS TO SAY SO. `isRecording` cannot
+                // carry this: the `.ended` branch below reads it to mean "the session is still
+                // alive, nobody cancelled or sent" and would never resume if it were cleared here.
+                // So capture is its own flag.
+                //
+                // What it was costing: the presence broadcast is driven off `isRecording`, which
+                // stays true through an interruption, so taking a call mid-note told the other
+                // person "recording voice message…" for the WHOLE call, re-asserted every ten
+                // seconds — and the screen was held awake for it too. The comment at the broadcast
+                // claims `isRecording` "flips for every path… including interruption". It did not.
+                self.isCapturing = false
+                // Nothing is being captured, so nothing is worth keeping the screen awake for. The
+                // block was taken when the take started and only released on send/cancel, so a call
+                // taken mid-note held the display on for the length of the call.
+                Task { @MainActor in SleepBlocker.shared.remove("voice-record") }
                 self.wasInterrupted = true      // the view flips to the locked bar (send/cancel the draft)
                 self.onInterrupt?()
             case .ended:
@@ -109,6 +139,8 @@ final class AudioRecorder {
                 if self.wasInterrupted, self.isRecording, opts?.contains(.shouldResume) == true {
                     try? AVAudioSession.sharedInstance().setActive(true)
                     self.recorder?.record()
+                    self.isCapturing = true
+                    Task { @MainActor in SleepBlocker.shared.add("voice-record") }
                     // Re-arm metering: .began invalidated the timer, so without this the elapsed
                     // clock and live waveform stayed frozen after the interruption ended.
                     self.beginMetering(resuming: true)
@@ -144,6 +176,9 @@ final class AudioRecorder {
     }
 
     func requestAndStart() {
+        // The intent to record, held for as long as the gesture is. See the guard in the cold path
+        // below for what a grant arriving without it used to do.
+        wantsRecording = true
         if let r = recorder {
             let s = AVAudioSession.sharedInstance()
             // ONLY reconfigure if the session isn't already recording-ready (e.g. voice playback left
@@ -159,8 +194,19 @@ final class AudioRecorder {
             return
         }
         // Not warmed yet (permission just granted / first launch): set up then start.
+        //
+        // ⛔ THE FINGER HAS TO STILL BE DOWN WHEN THE ANSWER COMES BACK. On the first-ever hold iOS
+        // puts up the permission alert, and putting it up CANCELS the touch — the composer runs its
+        // cancel path and is back to normal before the user has finished reading the question.
+        // Tapping Allow then landed here and started recording anyway, with no recording UI anywhere
+        // on screen: the mic live, the screen held awake, and "recording voice message…" broadcast
+        // to the other person every ten seconds until the ten-minute cap stopped it.
+        //
+        // A grant that arrives after the gesture has ended now does what the alert was actually for
+        // — it records the permission — and nothing else. The next hold starts instantly, because by
+        // then the warm path above has what it needs.
         AVAudioApplication.requestRecordPermission { [weak self] granted in
-            guard let self, granted else { return }
+            guard let self, granted, self.wantsRecording else { return }
             DispatchQueue.global(qos: .userInitiated).async {
                 let session = AVAudioSession.sharedInstance()
                 try? session.setCategory(.playAndRecord, mode: .default, options: [.duckOthers])
@@ -179,7 +225,7 @@ final class AudioRecorder {
         // `resuming` = restarting the timer after an interruption ends: skip the state reset so the
         // pre-interruption waveform/levels are kept (a full reset would wipe the captured envelope).
         if !resuming {
-            isRecording = true; elapsed = 0; completedElapsed = 0; levels = []; liveWindow = []; allLevels = []; smoothed = 0
+            isRecording = true; isCapturing = true; elapsed = 0; completedElapsed = 0; levels = []; liveWindow = []; allLevels = []; smoothed = 0
             limitFired = false
             Task { @MainActor in SleepBlocker.shared.add("voice-record") }   // no auto-lock mid-recording (sleep block)
         }
@@ -327,7 +373,7 @@ final class AudioRecorder {
     func pauseForReview() async -> (URL, Double, [Int])? {
         timer?.invalidate(); timer = nil
         closeCurrentSegment()
-        isRecording = false
+        isRecording = false; isCapturing = false; wantsRecording = false
         Task { @MainActor in SleepBlocker.shared.remove("voice-record") }
         guard !segments.isEmpty else { reset(); return nil }
         let wf = waveform()
@@ -369,7 +415,7 @@ final class AudioRecorder {
             r.record()
             recorder = r; fileURL = url
         }
-        isRecording = true
+        isRecording = true; isCapturing = true
         Task { @MainActor in SleepBlocker.shared.add("voice-record") }
         // `resuming: true` keeps the captured envelope and `completedElapsed`, so the waveform and
         // the clock carry on from where the pause left them.
@@ -527,7 +573,7 @@ final class AudioRecorder {
     func parkDraft(cid: String) {
         timer?.invalidate(); timer = nil
         closeCurrentSegment()
-        isRecording = false
+        isRecording = false; isCapturing = false; wantsRecording = false
         Task { @MainActor in SleepBlocker.shared.remove("voice-record") }
         guard !segments.isEmpty else { reset(); return }
         let fm = FileManager.default
@@ -612,7 +658,7 @@ final class AudioRecorder {
     }
 
     private func reset() {
-        isRecording = false
+        isRecording = false; isCapturing = false; wantsRecording = false
         Task { @MainActor in SleepBlocker.shared.remove("voice-record") }
         recorder = nil
         fileURL = nil

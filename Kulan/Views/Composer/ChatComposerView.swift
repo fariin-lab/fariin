@@ -576,7 +576,16 @@ final class ChatComposerView: UIView {
         // is also what takes it out of the hit test, and the glyph carries both reasons to be gone:
         // the slot is not offered (text / locked), or the hold is running and the red bubble has
         // taken over.
-        micButton.alpha = (s.hasText || s.recordLocked) ? 0 : 1
+        // ⛔ AND NEVER WHILE AN INLINE EDIT IS OPEN. The slot belongs to the checkmark then, and the
+        // mic was appearing in it the moment the field went empty — which is exactly what you do to
+        // replace a message: select all, delete, then speak.
+        //
+        // What that produced: a brand-new voice message appended to the thread, while the edit
+        // banner was hidden (it is suppressed during a recording, so nothing was on screen to say an
+        // edit was open), and the edit itself then silently abandoned by the empty-text branch of
+        // save. Two wrong outcomes and no warning, from one reasonable intention. Nothing on the
+        // voice path consults `editingMessage`; the honest fix is not to offer the mic at all.
+        micButton.alpha = (s.hasText || s.recordLocked || s.editing) ? 0 : 1
         micGlyph.alpha = (s.hasText || s.recordLocked || s.recordingHeld) ? 0 : 1
         for (_, v) in bannerViews { v.alpha = s.recordingActive ? 0 : 1 }
     }

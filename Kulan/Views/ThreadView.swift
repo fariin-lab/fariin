@@ -184,6 +184,10 @@ struct ThreadView: View {
     @State private var composerTouch = TouchClock()
     /// Bumped at the TOP of every send path, before the composer is cleared. See `noteSendTick`.
     @State private var sendTick = 0
+    /// When a message was last sent, for the mic's post-send cooldown. See `beginHoldRecording`:
+    /// the mic fades into the send button's slot, so a double-tap on Send would otherwise start a
+    /// recording. Theirs keeps the same window under its own named constant.
+    @State private var lastSendAt = Date.distantPast
     @State private var infoTarget: Message?        // group message → "read by" info sheet
     @State private var nativeScrollTarget: String? // UIKit list: rowId to scroll into view (reply/search jump)
     // Keyboard is native (safeAreaBar + .always). But because the list is full-bleed UNDER the composer, the
@@ -1537,7 +1541,17 @@ struct ThreadView: View {
                 recordDrag = .zero
                 holdStarted = false
                 recordLocked = true
-                Task { _ = await recorder.pauseForReview() }
+                // ⛔ LAND ON THE REVIEW BAR, WHICH IS WHAT THE CAP PROMISES. `maxDuration`'s own note
+                // says the ceiling "does NOT throw the take away — it lands it on the review bar with
+                // everything said so far".
+                //
+                // This used to call `pauseForReview()` and discard the result. `beginPreview()` is
+                // the only thing that sets `reviewingNote`, the URL and the waveform, so the recorder
+                // stopped and the bar carried on rendering as live: a frozen 10:00, a waveform that
+                // had stopped moving, no play button and no scrubber. The audio was all there and
+                // Send still worked, so nothing was lost — it simply looked like the app had hung at
+                // the exact moment it was meant to explain itself.
+                beginPreview()
             }
             // A parked note from last time — leaving the chat, or the whole app, mid-recording —
             // is adopted back and the bar lands on the review: listen, continue with the red mic,
@@ -1646,7 +1660,11 @@ struct ThreadView: View {
         // Voice-note recording indicator, sender side: isRecording is the single source of truth —
         // it flips for every path (hold, lock, send, cancel, too-short, interruption), so no per-path
         // wiring. While ON, refresh every 10s: receivers self-clear at 15s and a note runs longer.
-        .onChange(of: recorder.isRecording) { _, rec in
+        // ⚠️ `isCapturing`, NOT `isRecording`. The two differ for exactly one case and it is the one
+        // that matters here: a phone call pauses the mic but keeps the session alive so the take can
+        // be resumed. `isRecording` stays true through that, so this told the other person we were
+        // recording for the whole call and re-asserted it every ten seconds.
+        .onChange(of: recorder.isCapturing) { _, rec in
             typingBox.recordingRefresh?.invalidate(); typingBox.recordingRefresh = nil
             broadcastRecording(rec)
             if rec {
@@ -3963,6 +3981,7 @@ struct ThreadView: View {
         // composer first, then scroll back". The list holds its offset from this tick until the row
         // lands. It must be raised here, above the first line that changes the bar's height.
         sendTick &+= 1
+        lastSendAt = Date()
         // Demo: echo locally, no encryption and no Firestore. Keyed on the conversation, so typing
         // in a real chat is completely untouched by this — without it, a message typed into a demo
         // chat would be encrypted and sent to a person who does not exist.
@@ -5696,6 +5715,15 @@ struct ThreadView: View {
     private static let lockThreshold: CGFloat = 88
     private func beginHoldRecording() {
         guard !holdStarted, !recordLocked else { return }
+        // ⛔ NOT IN THE MOMENT AFTER A SEND. Sending clears the input, so `hasText` goes false and
+        // the mic cross-fades up into the slot the send button just vacated, over 0.25s. A second
+        // tap of a double-tap on Send lands in that fade, hits the mic's hold recogniser, and a
+        // quick release LOCKS the user into a recording bar they never asked for.
+        //
+        // Theirs has a named constant for exactly this and refuses the voice gesture outright for
+        // two seconds after a send. Same rule, same reason: within that window a tap on this spot
+        // was aimed at the button that used to be here.
+        guard Date().timeIntervalSince(lastSendAt) > 2 else { return }
         // A live call OWNS the microphone. CallKit holds the audio session in manual mode and WebRTC has
         // the mic hot, so starting a recording here would either capture nothing or fight the call for the
         // session - and the user would only find out afterwards, from a silent voice note. Say so instead.
@@ -5971,6 +5999,19 @@ struct ThreadView: View {
         resetRecordingState()
     }
     private func sendRecording() {
+        // ⛔ THE ONE-SECOND FLOOR APPLIES HERE TOO. `finish()` refuses anything shorter and returns
+        // nil, and `stopAndSendAudio` then returns at its own guard — so this path gave a send
+        // haptic, closed the bar, and produced NO message, no error and no hint.
+        //
+        // The hold path has always checked this and shown the "hold to record" hint. The locked path
+        // never did, and locking is exactly where it bites: tap the mic to go hands-free and tap
+        // Send straight away and the note is gone with the app behaving as though it sent. Same
+        // refusal, same hint, so the two ways of recording answer the same way.
+        guard recorder.elapsed >= 1.0 else {
+            cancelRecording()
+            flashHoldHint()
+            return
+        }
         // Sending from the review bar must not leave the note playing over the send. The bytes are
         // read by `finish()` inside stopAndSendAudio, which knows to use the finalized file.
         stopPreviewPlayback()
