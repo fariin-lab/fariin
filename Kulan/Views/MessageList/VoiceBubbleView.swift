@@ -221,6 +221,25 @@ final class VoiceBubbleView: UIView {
     /// gesture recognition, and two recognisers on one touch have no guaranteed order between them.
     static let controlTouch = TouchClock()
 
+    /// ⛔ DID ONE OF THE THREE CONTROLS JUST TAKE A TOUCH — his report, 2026-08-28: tapping Play,
+    /// Pause or the speed pill a few times in a row leaves a heart on the message.
+    ///
+    /// It is the SAME shape of bug as the keyboard one above, one gesture further out: double-tap to
+    /// react is recognised across the whole conversation, it cannot see what a tap was for, and two
+    /// taps on Play are indistinguishable to it from two taps on the note. Play/Pause is a control
+    /// people press repeatedly by its nature — that is what a pause button is for — so the collision
+    /// is not an edge case, it is the normal way the control gets used.
+    ///
+    /// The window is a touch wider than the keyboard one: a double tap is two touches with a gap
+    /// between them, and the recogniser only fires after waiting to see whether a third is coming, so
+    /// the stamp being read here is already several hundred milliseconds old by then.
+    ///
+    /// Reacting to a voice note still works — on the note itself, which is the duration, the mic mark,
+    /// the timestamp and the bubble around them — and the long-press bar reaches it from anywhere.
+    static func controlTookTouchRecently(within: TimeInterval = 0.75) -> Bool {
+        Date().timeIntervalSince(controlTouch.last) < within
+    }
+
     /// The disc and the waveform own their touches; everything else lets them through so the
     /// bubble's own long press and reply swipe still work over the rest of the note.
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
