@@ -31,6 +31,8 @@ enum BubbleMetrics {
     static let failBadge: CGFloat = 24
     static let failBadgeGap: CGFloat = 8
     static let hairline: CGFloat = 1 / UIScreen.main.scale
+    /// The bubble RIM only — dividers keep `hairline` above. See `Theme.bubbleRimWidth`.
+    static let rimWidth: CGFloat = Theme.bubbleRimWidth
 
     static let bodyFont = UIFont.systemFont(ofSize: 17)
     static let metaFont = UIFont.systemFont(ofSize: 10)

@@ -356,7 +356,7 @@ final class RowNoticePillView: UIView {
             fill.apply(bubbleFill, path: path, bounds: CGRect(origin: .zero, size: size))
             fill.alpha = 1
             rim.shape.path = path.cgPath
-            rim.shape.lineWidth = plan.onWallpaper ? BubbleMetrics.hairline : 0.5
+            rim.shape.lineWidth = plan.onWallpaper ? BubbleMetrics.rimWidth : 0.5
             rim.shape.lineDashPattern = nil     // cleared: this view is reused for both styles
             rim.shape.strokeColor = plan.onWallpaper
                 ? BubblePalette.rim(dark).cgColor
@@ -386,7 +386,7 @@ final class CallBubbleView: UIView {
     override init(frame: CGRect) {
         super.init(frame: frame)
         addSubview(fill)
-        rim.shape.lineWidth = BubbleMetrics.hairline
+        rim.shape.lineWidth = BubbleMetrics.rimWidth
         addSubview(rim)
         disc.isUserInteractionEnabled = false
         addSubview(disc)
@@ -497,7 +497,7 @@ final class MessageRowView: UIView {
         bubbleBox.addSubview(metaLabel)
         // The rim and the jump-to flash are `.overlay`s in the design: above the content, added
         // last so subview order puts them there.
-        rim.shape.lineWidth = BubbleMetrics.hairline
+        rim.shape.lineWidth = BubbleMetrics.rimWidth
         bubbleBox.addSubview(rim)
         bubbleBox.addSubview(highlight)
         addSubview(bubbleBox)

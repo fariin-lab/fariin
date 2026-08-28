@@ -429,7 +429,7 @@ struct AnnouncementRow: View {
             .overlay {
                 if WallpaperStore.shared.hasWallpaper(for: OfficialChannel.cid) {
                     UnevenRoundedRectangle(cornerRadii: corners, style: .continuous)
-                        .strokeBorder(Theme.bubbleRim(dark), lineWidth: Theme.hairline)
+                        .strokeBorder(Theme.bubbleRim(dark), lineWidth: Theme.bubbleRimWidth)
                         .allowsHitTesting(false)
                 }
             }

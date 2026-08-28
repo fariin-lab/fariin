@@ -77,8 +77,20 @@ enum Theme {
     /// 25% in dark mode, BLACK at 35% in light (the "white rim" is a dark-mode fact). Incoming only,
     /// wallpaper only; outgoing never gets one.
     static func bubbleRim(_ dark: Bool) -> Color {
-        dark ? Color.white.opacity(0.25) : Color.black.opacity(0.35)
+        dark ? Color.white.opacity(0.20) : Color.black.opacity(0.30)
     }
+
+    /// THE RIM'S OWN WIDTH, and it is deliberately not `hairline`.
+    ///
+    /// Owner, 2026-08-28: 0.30pt. `hairline` is 1/scale — 0.33pt on a 3× phone, one physical pixel
+    /// exactly — and it is shared with things that are not rims (the composer banner's divider, the
+    /// dividers inside card bubbles). Thinning those was not what was asked for, so the rim gets a
+    /// constant of its own and the dividers keep landing on a whole pixel.
+    ///
+    /// ⚠️ 0.30pt is BELOW one physical pixel at 3× (0.9px), so the line is antialiased across two
+    /// rows rather than lighting one. That reads slightly softer than the number suggests, on top
+    /// of the opacity coming down in the same change — which is the direction asked for.
+    static var bubbleRimWidth: CGFloat { 0.30 }
 
     /// One physical pixel, in points. What survives of their 2-hairline centred stroke after the
     /// mask eats the outer half — so this is the width to draw INSIDE the edge (`strokeBorder`).

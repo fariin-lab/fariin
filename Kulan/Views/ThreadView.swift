@@ -4818,7 +4818,7 @@ struct ThreadView: View {
             .overlay {
                 if !mine, chatHasWallpaper {
                     RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Theme.bubbleRim(dark), lineWidth: Theme.hairline)
+                        .strokeBorder(Theme.bubbleRim(dark), lineWidth: Theme.bubbleRimWidth)
                         .allowsHitTesting(false)
                 }
             }
@@ -6388,7 +6388,7 @@ struct ChatNoticePill: ViewModifier {
             .clipShape(Capsule())
             .overlay {
                 if onWallpaper {
-                    Capsule().strokeBorder(Theme.bubbleRim(dark), lineWidth: Theme.hairline)
+                    Capsule().strokeBorder(Theme.bubbleRim(dark), lineWidth: Theme.bubbleRimWidth)
                         .allowsHitTesting(false)
                 } else {
                     // The old hairline, kept for the no-wallpaper case it was designed against.
@@ -6765,7 +6765,7 @@ struct MessageBubble: View, Equatable {
     /// shape the bubble was clipped with, and a rim on the wrong shape is worse than none.
     @ViewBuilder private func bubbleRim<S: InsettableShape>(_ shape: S) -> some View {
         if !isMe, onWallpaper {
-            shape.strokeBorder(Theme.bubbleRim(dark), lineWidth: Theme.hairline)
+            shape.strokeBorder(Theme.bubbleRim(dark), lineWidth: Theme.bubbleRimWidth)
                 .allowsHitTesting(false)
         }
     }

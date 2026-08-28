@@ -358,7 +358,7 @@ import UIKit
         imageView.contentMode = .scaleToFill
         addSubview(imageView)
         strokeShape.fillColor = nil
-        strokeShape.lineWidth = 2 * Theme.hairline
+        strokeShape.lineWidth = 2 * Theme.bubbleRimWidth
         layer.addSublayer(strokeShape)   // added after the image view → above it; the mask clips both
         // The rim colour is baked to a CGColor, so a light↔dark switch has to re-resolve it by hand.
         registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: WallpaperBlurSliceView, _) in
