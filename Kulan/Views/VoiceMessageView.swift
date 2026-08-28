@@ -157,6 +157,23 @@ struct VoiceMessageView: View {
     /// disc and the stacked wave/caption actually need, and this only stops it going under.
     static let contentHeight: CGFloat = 55
 
+    /// ⛔ HOW MUCH OF A FULL-WIDTH BUBBLE A VOICE NOTE TAKES — owner, 2026-08-28, with the width he
+    /// wants drawn on the bubble in pen. THE THIRD TIME THIS HAS BEEN SET; the history is kept in
+    /// `MessageRowLayout.voice` and is worth reading before touching it a fourth.
+    ///
+    /// Measured off his screenshot: the note was 923px on a 3× 430pt screen (308pt, a full-width
+    /// bubble) and his mark lands at 274pt. 274 / 308 = 0.89.
+    ///
+    /// ⚠️ A FRACTION, NOT A FIXED WIDTH, and that is the difference from the version he rejected in
+    /// August. That one was a flat 224pt: nearly full width on a small phone and visibly stranded on
+    /// a large one, which is what made a 0:09 note look shorter than another app's 0:03. Every other
+    /// bubble in this app is already a fraction of the row (`maxWidthFraction`), so a note now
+    /// narrows with the screen instead of standing still while the screen grows.
+    ///
+    /// ⚠️ WIDTH ONLY — his words, "dont tuch height". Nothing here is in the height chain: the
+    /// bubble's height is the disc, the wave and the duration line, none of which are width-derived.
+    static let widthFraction: CGFloat = 0.89
+
     /// Everything to the right of the disc: the wave, the pill, and the caption line under them.
     static func columnWidth(for message: Message) -> CGFloat {
         waveWidth(for: message) + discGap + speedSlot

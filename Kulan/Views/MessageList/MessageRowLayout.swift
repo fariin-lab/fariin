@@ -1163,7 +1163,14 @@ enum MessageRowLayout {
         // the bloom: it comes from `maxBubble`, which the layout already knows before measuring, and
         // NOT from playback state. What the pill's arrival changes is the waveform inside a bubble
         // that does not move — see `waveWithSpeed`.
-        let contentW = max(1, maxBubble - hPad * 2)
+        //
+        // 2026-08-28, AND THIS IS THE THIRD SETTING: he sent the note with the width he wants drawn
+        // on it in pen. Measured off that screenshot, his mark is at 274pt where the bubble was 308.
+        // So it is no longer the full `maxBubble` — it is a FRACTION of it, which is the part that
+        // differs from the 224 he rejected in August. A fraction narrows with the screen; a fixed
+        // width does not, and standing still while the screen grew is what made a long note look
+        // short beside another app's. See `VoiceMessageView.widthFraction`.
+        let contentW = max(1, maxBubble * VoiceMessageView.widthFraction - hPad * 2)
         var innerY = vPad
 
         var quoteRect: CGRect?
