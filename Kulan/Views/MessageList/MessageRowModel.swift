@@ -107,7 +107,6 @@ enum BubbleBody: Equatable {
         var bars: [Int]
         var durationText: String
         var unplayed: Bool          // the unread dot beside the duration
-        var contentWidth: Double
         /// The bytes are still on their way up. The bubble is the REAL voice bubble — the send
         /// writes the duration and the waveform before the first byte, exactly so it can be — and
         /// only the play disc says so, by spinning. His order, 2026-08-26: "when it is loading

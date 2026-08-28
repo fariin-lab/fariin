@@ -35,6 +35,11 @@ final class VoiceWaveformView: UIView {
         super.init(frame: frame)
         backgroundColor = .clear
         isOpaque = false
+        // ⛔ REDRAW ON A WIDTH CHANGE, DO NOT STRETCH. The default `.scaleToFill` reuses the drawn
+        // bitmap and squashes it, and this view now has two widths: the speed pill appears when the
+        // note starts playing and the wave gives up its space (see `VoicePlan.waveWithSpeed`).
+        // Without this the bars would visibly compress instead of re-laying out.
+        contentMode = .redraw
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
         tap.delegate = self

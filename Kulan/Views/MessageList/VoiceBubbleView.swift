@@ -38,6 +38,9 @@ final class VoiceBubbleView: UIView {
 
     private var bag = Set<AnyCancellable>()
     private var body: BubbleBody.VoiceBody?
+    /// Kept because the waveform has two frames and `paint` chooses between them on playback state.
+    /// Every other rect is applied once in `configure` and never asked for again.
+    private var plan: VoicePlan?
     private var cid = ""
     private var tint: UIColor = .label
 
@@ -86,9 +89,11 @@ final class VoiceBubbleView: UIView {
         self.cid = cid
         self.tint = tint
 
+        self.plan = plan
         disc.frame = plan.disc
         disc.discTint = tint
-        wave.frame = plan.wave
+        // The wave's frame is `paint`'s, not this method's: it depends on whether the speed pill is
+        // on screen, which is playback state and changes without a reconfigure.
         wave.bars = v.bars
         wave.playedColor = tint
         wave.unplayedColor = tint.withAlphaComponent(0.35)
@@ -134,6 +139,18 @@ final class VoiceBubbleView: UIView {
         // until the bytes land, and the disc is the one place that says so.
         disc.isBusy = b.loading || player.isLoading(b.messageId)
         wave.progress = player.progress(for: b.messageId)
+        // ⛔ THE SPEED PILL ONLY EXISTS ONCE THE NOTE IS RUNNING — his order, 2026-08-27, off a
+        // side-by-side: a permanent "1x" was spending 40pt of a bubble whose waveform is the point.
+        // "Running" is playing OR part-heard, so pausing halfway does not make the control vanish
+        // under the finger that just used it.
+        //
+        // ⚠️ THE BUBBLE DOES NOT RESIZE. Only the waveform inside it does, between two rects the
+        // PLAN supplies. The rule this file states about the unread dot — reserve the slot, never
+        // change geometry on playback — is about the row's measured size, and that is a constant
+        // here for a given row width. Nothing outside the bubble can move.
+        let running = player.isPlaying(b.messageId) || player.progress(for: b.messageId) > 0
+        speedPill.isHidden = !running
+        if let p = plan { wave.frame = running ? p.waveWithSpeed : p.wave }
         // The dot is live, not planned: its slot is reserved either way, so hiding it the moment
         // this note is heard costs no layout. Playing it at all counts as hearing it.
         unreadDot.isHidden = !b.unplayed || player.isPlaying(b.messageId)

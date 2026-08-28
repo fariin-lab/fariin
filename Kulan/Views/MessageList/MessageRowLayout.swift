@@ -128,7 +128,11 @@ struct PillPlan {
 /// it plays, and neither is geometry.
 struct VoicePlan {
     var disc: CGRect                    // bubble coordinates
+    /// At rest: the whole column, because the speed pill is not drawn until the note is playing.
     var wave: CGRect
+    /// While the speed pill is on screen: the same rect, shortened by the pill and its gap. Two
+    /// rects rather than arithmetic in the view, so the plan still owns every number.
+    var waveWithSpeed: CGRect
     var speedPill: CGRect
     var duration: CGRect
     var durationAttr: NSAttributedString
@@ -1108,9 +1112,11 @@ enum MessageRowLayout {
     // ⛔ THE WIDTH IS A CONSTANT AND THAT IS THE WHOLE POINT. The old bubble bloomed on first play,
     // and the cause was never the waveform: it was a greedy `Spacer` beside the footer, which
     // SwiftUI re-resolved toward the bubble cap on the reconfigure that fired when playback began.
-    // Here nothing is flexible — every rect below comes from `VoiceMessageView.contentWidth`, which
-    // is worked out from the note's own duration and nothing else, so it is identical before,
-    // during and after playback.
+    // Here nothing is flexible — every rect below is worked out from `maxBubble`, which the layout
+    // knows before it measures anything, so the bubble is identical before, during and after
+    // playback. ⚠️ It used to be derived from the note's DURATION instead; that was equally
+    // constant and equally safe, and it is gone only because he chose a wider bubble on
+    // 2026-08-27 — see the block inside `voice`.
 
     private static func voice(_ v: BubbleBody.VoiceBody, row b: BubbleRow,
                               originX: CGFloat, columnX: CGFloat, columnW: CGFloat,
@@ -1120,24 +1126,25 @@ enum MessageRowLayout {
                               forwardedSize: CGSize, forwardedIconW: CGFloat) -> BubbleResult {
         let y = startY
         let hPad: CGFloat = 13, vPad: CGFloat = 7   // vPad 8 → 7 in the 2026-08-27 slimming
-        // ⛔ BACK TO THE INTRINSIC WIDTH, AND THIS REVERSES THE CHANGE MADE EARLIER THE SAME DAY.
+        // ⛔ FULL WIDTH — HIS ORDER, 2026-08-27, ON A SIDE-BY-SIDE HE SHOT HIMSELF. THIS REVERSES
+        // THE 2026-08-24 DECISION RECORDED HERE, AND THE HISTORY IS KEPT BECAUSE IT HAS NOW FLIPPED
+        // TWICE AND WILL BE ASKED AGAIN.
         //
-        // He asked for "wide, like the reference" that morning, and the reference genuinely is
-        // flexible — their `AudioMessageView.measure` declares the waveform `CGSize(width: 0, …)`
-        // with only the height fixed, so it stretches into whatever the bubble has. That is what was
-        // built, and it made every note a full max-width bubble.
+        // 2026-08-24 morning: built flexible, every note a full max-width bubble, because the
+        // reference genuinely is flexible — their `AudioMessageView.measure` declares the waveform
+        // `CGSize(width: 0, …)` with only the height fixed. 2026-08-24 evening: he sent three shots
+        // and chose the NARROW one, and this became `min(max, v.contentWidth)` = a fixed 224.
         //
-        // ⚠️ HE THEN SAW IT AND SENT THREE SHOTS: the new one, the one he wants, and the two stacked
-        // to show the gap. Both bubbles in that last shot are right-aligned, so only their left edges
-        // differ, and the one he wants measures about 0.81 of the one he has. Against a max bubble of
-        // 72% of the row, 0.81 of it lands within a couple of points of 224 — which is precisely the
-        // fixed sum this used to produce (disc 38 + gap 8 + wave 104 + gap 8 + pill 40, plus 13 each
-        // side). The picture he is asking for is the build he had before that change.
+        // 2026-08-27: he put our 0:09 note beside another messenger's 0:03 and asked why ours looks
+        // short. It looks short because 224 is fixed and 98 of it is waveform. Theirs fills the
+        // bubble. He has now seen the narrow build on a device for three days and chosen the wide
+        // one with the comparison in front of him, which is the stronger signal of the two.
         //
-        // So the flexible width is out and `v.contentWidth` decides again. The reference is not being
-        // followed here, deliberately: he has now seen both and chosen, and what he can see beats
-        // what their source says.
-        let contentW = min(max(1, maxBubble - hPad * 2), CGFloat(v.contentWidth))
+        // ⚠️ The width is STILL A CONSTANT for a given row width, which is the property that stops
+        // the bloom: it comes from `maxBubble`, which the layout already knows before measuring, and
+        // NOT from playback state. What the pill's arrival changes is the waveform inside a bubble
+        // that does not move — see `waveWithSpeed`.
+        let contentW = max(1, maxBubble - hPad * 2)
         var innerY = vPad
 
         var quoteRect: CGRect?
@@ -1169,7 +1176,14 @@ enum MessageRowLayout {
         let contentH = max(VoiceMessageView.contentHeight, stackH)
         let stackTop = innerY + (contentH - stackH) / 2
 
-        let waveW = max(1, columnW2 - gap - speed)
+        // ⛔ THE WAVE TAKES THE PILL'S SPACE WHEN THE PILL IS NOT THERE — his order, 2026-08-27:
+        // "1x sits there always and takes another 40pt", against a reference that shows a speed
+        // control only once you start playing. So the wave has TWO widths and the bubble has one:
+        // the full column at rest, the column minus the pill while it plays. Nothing outside the
+        // bubble moves either way, which is what makes a live swap safe here — the rule the unread
+        // dot's note states is about the ROW's measured size, and that is untouched.
+        let waveW = max(1, columnW2)
+        let waveWithSpeedW = max(1, columnW2 - gap - speed)
 
         // ⛔ THE TIMESTAMP IS ANCHORED TO THE BUBBLE'S BOTTOM, exactly as the text bubble's footer
         // is — his order, 2026-08-26, after comparing the two side by side. `innerY + contentH` is
@@ -1194,7 +1208,8 @@ enum MessageRowLayout {
         let plan = VoicePlan(
             disc: CGRect(x: hPad, y: innerY + (contentH - disc) / 2, width: disc, height: disc),
             wave: CGRect(x: columnStart, y: stackTop, width: waveW, height: waveH),
-            speedPill: CGRect(x: columnStart + waveW + gap, y: stackTop + (waveH - 22) / 2,
+            waveWithSpeed: CGRect(x: columnStart, y: stackTop, width: waveWithSpeedW, height: waveH),
+            speedPill: CGRect(x: columnStart + waveWithSpeedW + gap, y: stackTop + (waveH - 22) / 2,
                               width: speed, height: 22),
             duration: CGRect(x: columnStart, y: durY, width: durW, height: durH),
             durationAttr: durationAttr,

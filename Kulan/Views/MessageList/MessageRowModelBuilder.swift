@@ -438,10 +438,6 @@ enum MessageRowModelBuilder {
             // `PlayedVoice` has no record of me listening to.
             unplayed: m.authorId != ctx.me && m.localAudioData == nil
                 && PlayedVoice.shared.isUnplayed(cid: ctx.cid, messageId: m.id, createdAt: m.createdAt),
-            // ⚠️ A CONSTANT DERIVED FROM THE NOTE'S OWN DURATION AND NOTHING ELSE, so it is the same
-            // number at pre-measure, at render and in every playback state. That is the property
-            // the old bubble's width-on-play bloom fix actually needed.
-            contentWidth: Double(VoiceMessageView.contentWidth(for: m)),
             // Still uploading: everything is drawn, only the disc spins. See `VoiceBody.loading`.
             loading: m.pendingMediaKind == "audio")
     }
