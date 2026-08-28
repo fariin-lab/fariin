@@ -380,7 +380,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             let tmp = FileManager.default.temporaryDirectory
                 .appendingPathComponent("local-\(message.rowId).m4a")
             try? local.write(to: tmp)
-            open(tmp)
+            open(tmp, for: message.id)
             return
         }
         // ONE-TIME VOICE: never the cache, in either direction. The decrypted bytes live in one
@@ -391,7 +391,10 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
                 clearNowPlaying(); return
             }
             loadingId = message.id
-            defer { loadingId = "" }
+            // ⚠️ ONLY CLEAR MY OWN SPINNER. Two loads can overlap, and an unconditional clear meant
+            // whichever finished FIRST stopped the other note's disc spinning while it was still
+            // downloading.
+            defer { if loadingId == message.id { loadingId = "" } }
             guard let (cipher, _) = try? await MediaSession.shared.data(from: url),
                   let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
                 clearNowPlaying(); return
@@ -400,7 +403,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
                 .appendingPathComponent("voice-once-\(message.id).m4a")
             try? data.write(to: tmp)
             transientURL = tmp
-            open(tmp)
+            open(tmp, for: message.id)
             return
         }
         // Persistent cache hit → instant, no download and no decrypt, and it survives relaunch. The
@@ -408,7 +411,7 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         // it a reconciled own-note fell through to the download path and span on "loading".
         if let cached = AudioCache.url(for: message.id)
             ?? message.clientId.flatMap({ AudioCache.url(for: $0) }) {
-            open(cached)
+            open(cached, for: message.id)
             return
         }
         // Nothing to fetch, or the fetch/decrypt failed: hand the lock screen back rather than leaving
@@ -417,16 +420,27 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             clearNowPlaying(); return
         }
         loadingId = message.id
-        defer { loadingId = "" }
+        defer { if loadingId == message.id { loadingId = "" } }   // see the note above — mine only
         guard let (cipher, _) = try? await MediaSession.shared.data(from: url),
               let data = await Crypto.shared.decryptBytes(cid, cipher: cipher, meta: meta) else {
             clearNowPlaying(); return
         }
         // Persist the decrypted note so it never downloads twice.
-        open(AudioCache.store(data, for: message.id))
+        open(AudioCache.store(data, for: message.id), for: message.id)
     }
 
-    private func open(_ url: URL) {
+    /// ⛔ `forNote` IS AN ARGUMENT, NOT A READ OF THE CURRENT STATE.
+    ///
+    /// This used to capture `let forNote = messageId` — the engine's id AT THE MOMENT THE FILE WAS
+    /// READY, not the id the load was actually for. Loads run in detached tasks, so two can overlap:
+    /// tap note A (needs a download), tap note B while A is still fetching, and B overwrites
+    /// `messageId`. When A's download finishes it captures B as its own, the guard below compares B
+    /// against B and passes, and **note A's audio plays out of note B's bubble** with B's waveform
+    /// tracking it.
+    ///
+    /// The id has to travel with the load from the point the load was decided, which is what every
+    /// caller now passes.
+    private func open(_ url: URL, for forNote: String) {
         // A call owns the session, or the file will not open (truncated, still uploading, wrong bytes).
         // Either way nothing is going to play, so leave nothing behind claiming otherwise.
         guard !VoiceAudio.callActive else { clearNowPlaying(); return }
@@ -435,7 +449,6 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
         // froze whatever frame was mid-flight: the eye reads the dropped frames as a jump it
         // cannot quite catch. Only the FIRST play pays it (pause holds the session since the
         // late-play fix), which is exactly the first-time-only shape he reported.
-        let forNote = messageId
         Task.detached(priority: .userInitiated) {
             VoiceNotePlayer.setCategoryIfNeeded(.playback)
             try? AVAudioSession.sharedInstance().setActive(true)
@@ -503,7 +516,22 @@ final class VoiceNotePlayer: NSObject, ObservableObject {
             p.currentTime = saved * p.duration
             progress = saved
         }
-        p.play()
+        // ⛔ A REFUSED PLAY IS NOT A FINISHED ONE. `play()` returns false when the session was lost
+        // between `open` and here — a call starting, another app taking the hardware — or when the
+        // file is truncated. The result was discarded, and the tick below treats ANY non-playing
+        // player as playback having completed: it clears the position, releases the note and
+        // advances the run. So one failure tore through an entire consecutive run in about a second,
+        // marking each note played on the way — telling the sender their notes had been heard when
+        // nothing came out of the speaker.
+        //
+        // Theirs distinguishes the two because it uses the delegate's `successfully` flag; this is
+        // the same distinction reached from `play()`'s own return value.
+        guard p.play() else {
+            playing = false
+            timer?.invalidate(); timer = nil
+            clearNowPlaying()
+            return
+        }
         hasNote = true
         // (One-time notes are not consumed here any more: they play in OneTimeVoicePage, never
         // through this engine, and CLOSING that page is what spends the listen — his order, the
