@@ -86,6 +86,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
     var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
     var onTapRetry: (String) -> Void = { _ in }
+    var onCancelUpload: (String) -> Void = { _ in }
     var onToggleSelect: (String) -> Void = { _ in }
     var onTapSender: (String) -> Void = { _ in }
     var onTapCallRow: (String) -> Void = { _ in }
@@ -220,6 +221,7 @@ struct NativeMessageList: UIViewControllerRepresentable {
         vc.onTapContactMessage = onTapContactMessage
         vc.onTapReactions = onTapReactions
         vc.onTapRetry = onTapRetry
+        vc.onCancelUpload = onCancelUpload
         vc.onToggleSelect = onToggleSelect
         vc.onTapSender = onTapSender
         vc.onTapCallRow = onTapCallRow
@@ -621,6 +623,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     var onTapContactMessage: (String) -> Void = { _ in }
     var onTapReactions: (String) -> Void = { _ in }
     var onTapRetry: (String) -> Void = { _ in }
+    var onCancelUpload: (String) -> Void = { _ in }
     var onToggleSelect: (String) -> Void = { _ in }
     var onTapSender: (String) -> Void = { _ in }
     var onTapCallRow: (String) -> Void = { _ in }
@@ -4559,6 +4562,11 @@ extension MessageListController: MessageRowCellDelegate {
     func rowCellDidTapRetry(_ cell: MessageRowCell) {
         guard let id = cell.rowId else { return }
         onTapRetry(id)
+    }
+
+    func rowCellDidTapCancelUpload(_ cell: MessageRowCell) {
+        guard let id = cell.rowId else { return }
+        onCancelUpload(id)
     }
 
     func rowCellDidToggleSelection(_ cell: MessageRowCell) {
