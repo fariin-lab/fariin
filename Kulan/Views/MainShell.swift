@@ -49,10 +49,11 @@ struct MainShell: View {
     private var profile = ProfileStore.shared
     private var callsRepo = CallsRepository.shared   // @Observable: drives the missed-call tab badge
     @State private var settingsIcon: UIImage?
-    @State private var tab = 0
+    /// ⚠️ 1, NOT 0 — Chats. Stories took slot 0 when the tab bar was rebuilt (2026-08-30) and a
+    /// zero default would open the app on Stories, which nobody asked for.
+    @State private var tab = 1
     /// Was a story upload in flight on the last body pass? Drives the tab switch below; see its note.
     @State private var sawStoryUpload = false
-    @State private var previousTab = 0   // last non-search tab → drives what the search circle searches
     // Missed-call badge on the Calls tab: incoming missed calls newer
     // than the last time the tab was viewed. Local-only "seen" watermark.
     @AppStorage("callsSeenAt") private var callsSeenAt: Double = 0
@@ -112,7 +113,7 @@ struct MainShell: View {
         // A pending chat (from a notification tap or the Calls "Go to Chat" menu) must
         // foreground the Chats tab — otherwise it opens on a hidden tab and looks like a no-op.
         .onChange(of: AppRouter.shared.pendingChatId) { _, id in
-            if id != nil { tab = 0 }
+            if id != nil { tab = 1 }   // 1 = Chats since Stories took slot 0
         }
         // REMOVED: the conversations delta-detector banner. It was the SECOND in-app banner system.
         // `InAppBannerCenter`, added in build 383 and mounted on RootView, is driven by the push actually
@@ -136,7 +137,7 @@ struct MainShell: View {
         // An invite deep link (kulan://g/<code>) presents its Join sheet from the Chats tab — foreground
         // it so the sheet isn't dropped on a hidden tab.
         .onChange(of: AppRouter.shared.pendingInviteCode) { _, code in
-            if code != nil { tab = 0 }
+            if code != nil { tab = 1 }   // 1 = Chats since Stories took slot 0
         }
         // Call UI is mounted at the root (CallContainer in RootView) so it survives all
         // navigation. Here we only start listening for incoming calls.
@@ -147,15 +148,16 @@ struct MainShell: View {
             if callsSeenAt == 0 { callsSeenAt = Date().timeIntervalSince1970 }
         }
         .task(id: profile.me?.photoUrl) { await loadSettingsIcon() }
-        // Remember the last real tab so the search circle (tab 3) knows whether to do a
-        // Chats / Calls / Settings search.
+        // ⚠️ `previousTab` IS GONE WITH THE SEARCH TAB. It existed for one reason: the detached
+        // search circle had to know whether it was searching Chats, Calls or Settings, so the
+        // shell remembered where you came from. Search lives on its own page now and each page
+        // knows what it searches, so there is nothing left to remember.
         .onChange(of: tab) { _, new in
-            if new != 3 { previousTab = new }
-            if new == 1 { callsSeenAt = Date().timeIntervalSince1970 }   // viewing Calls clears the badge
+            if new == 2 { callsSeenAt = Date().timeIntervalSince1970 }   // viewing Calls clears the badge
         }
         // New records landing while the user is already ON the Calls tab count as seen too.
         .onChange(of: callsRepo.calls) { _, _ in
-            if tab == 1 { callsSeenAt = Date().timeIntervalSince1970 }
+            if tab == 2 { callsSeenAt = Date().timeIntervalSince1970 }
         }
         // Load call history at startup so the badge is right before the tab is ever opened
         // (CallsView's own .task keeps it fresh after; the 30s TTL stops double-fires).
@@ -178,7 +180,7 @@ struct MainShell: View {
             if let ui = settingsIcon {
                 Image(uiImage: ui).renderingMode(.original)
             } else {
-                Image(systemName: tab == 2 ? "person.crop.circle.fill" : "person.crop.circle")
+                Image(systemName: tab == 3 ? "person.crop.circle.fill" : "person.crop.circle")
                     .contentTransition(.symbolEffect(.replace))   // smooth fill<->outline swap
             }
         }
@@ -236,42 +238,44 @@ struct MainShell: View {
             // the `label:` closure form. Do not "fix" it as a typo, and read the memory note first:
             // it holds the Apple guidance, why a black tint leaves the capsule as the only signal,
             // and the outline asset that is already drawn and waiting (`ic_chat_outline`).
-            Tab("Chats", image: "ic_chat", value: 0) {
+            // ⛔ STORIES FIRST, AND SEARCH IS NOT A TAB ANY MORE — his call, 2026-08-30, off two
+            // mockups. Search belongs at the top of the page it searches: Calls has had its own bar
+            // for months and Chats has one now, which is what the detached circle was standing in
+            // for. Settings gets none at all, on his word.
+            Tab("Stories", systemImage: tab == 0 ? "circle.dashed.inset.filled" : "circle.dashed", value: 0) {
+                StoriesTabView(onSignOut: onSignOut)
+            }
+            Tab("Chats", image: "ic_chat", value: 1) {
                 ChatsView(onSignOut: onSignOut)
             }
             .badge(unreadChatsBadge)   // 0 hides it, same as the Calls tab
-            Tab("Calls", systemImage: tab == 1 ? "phone.fill" : "phone", value: 1) {
+            Tab("Calls", systemImage: tab == 2 ? "phone.fill" : "phone", value: 2) {
                 CallsView()
             }
             .badge(missedBadge)   // 0 hides it
-            Tab(value: 2) {
+            Tab(value: 3) {
                 SettingsView(onSignOut: onSignOut, asTab: true)
             } label: {
                 settingsTabLabel
-            }
-            // Detached circular search button (native iOS 26 search role). Context-aware:
-            // searches Chats / Calls / Settings depending on the tab you came from.
-            Tab(value: 3, role: .search) {
-                SearchHubView(context: previousTab, onSignOut: onSignOut, onCancel: { tab = previousTab })
             }
         }
     }
 
     private var legacyTabView: some View {
         TabView(selection: $tab) {
+            StoriesTabView(onSignOut: onSignOut)
+                .tabItem { Label("Stories", systemImage: "circle.dashed") }
+                .tag(0)
             ChatsView(onSignOut: onSignOut)
                 .tabItem { Label("Chats", image: "ic_chat") }
                 .badge(unreadChatsBadge)
-                .tag(0)
-            CallsView()
-                .tabItem { Label("Calls", systemImage: tab == 1 ? "phone.fill" : "phone") }
-                .badge(missedBadge)
                 .tag(1)
+            CallsView()
+                .tabItem { Label("Calls", systemImage: tab == 2 ? "phone.fill" : "phone") }
+                .badge(missedBadge)
+                .tag(2)
             SettingsView(onSignOut: onSignOut, asTab: true)
                 .tabItem { settingsTabLabel }
-                .tag(2)
-            SearchHubView(context: previousTab, onSignOut: onSignOut, onCancel: { tab = previousTab })
-                .tabItem { Label("Search", systemImage: "magnifyingglass") }
                 .tag(3)
         }
     }
@@ -799,6 +803,10 @@ struct ChatsView: View {
     /// An arrival is not a rearrangement. Nothing should animate until the list is a list.
     @State private var listSettled = false
     @State private var chatFilter = 0   // 0 = all, 1 = unread
+    /// The page's own search box (2026-08-30). Matches the Calls page: it filters the list in
+    /// place rather than pushing a separate results screen, so the row you tap is the row you
+    /// were already looking at.
+    @State private var chatSearch = ""
     @State private var path = NavigationPath()
     // NO "CURRENTLY OPEN CHAT" HIGHLIGHT. There was one here, and it is gone on the owner's word
     // (2026-08-03): "highlight only while the user's finger is touching it… never during the back
@@ -831,14 +839,8 @@ struct ChatsView: View {
     /// scroll-down feel like a different gesture depending on which circle you had tapped, and it is
     /// what build 481's crash cost. `StoryDoor` is the one way in.
     @State private var profileGroup: StoryGroup?
-    /// Whether a story viewer is up, so the row can hold its order still while one is. Read from the
-    /// door rather than mirrored here — a second copy of this was how the row froze on a viewer that
-    /// had already closed.
-    private var storyDoorState = StoryDoorState.shared
-    // Stories row scrolls WITH the chat list: the row stays OUTSIDE the List (per-card
-    // long-press dies inside a List row — build 147) but is offset 1:1 by the list's
-    // scroll, and the List gets a matching top margin so rows start below it.
-    @State private var chatScrollY: CGFloat = 0
+    // (`storyDoorState` went with the row: it existed to freeze the row's order while a viewer was
+    // open, and this page has no row to freeze. It lives in `StoriesTabView` now.)
     /// ⛔ THE ARCHIVE ROW IS HIDDEN UNTIL THE LIST IS PULLED DOWN — the reference app's behaviour,
     /// which he asked for by name and asked me to change nothing else about the row.
     ///
@@ -853,50 +855,18 @@ struct ChatsView: View {
     /// time this flips true the finger has already dragged the content down past the row's own
     /// height, so a 44pt row appearing at the top fills a gap that is already there instead of
     /// shoving every chat down. That is why there is no animation on it: the finger is the animation.
-    @State private var storiesRowHeight: CGFloat = (UIScreen.main.bounds.width - 54) / 4 * 1.46 + 41
     // Stories opt-out (Settings > Stories > Turn Off Stories): the row disappears and chat-row
     // rings go dark — the whole surface, not a hidden-but-alive row.
     @AppStorage("storiesOptedOut") private var storiesOptedOut = false
 
-    // MARK: - The stories-row door (our own presentation — owner's spec 2026-08-07)
-
-    /// Open a story from the top stories row through `StoryDoor`: our screen, our gesture, our
-    /// animation, nothing of Apple's presentation machinery in the interaction.
-    ///
-    /// `pinned: false` is what makes this door different from every other one: the viewer pages
-    /// person to person, and the row has a card for whoever you paged to, so the anchor follows.
-    private func openStoryFromRow(_ g: StoryGroup) {
-        let others = StoriesRepository.shared.others.filter { !StoryPrefs.isHidden($0.authorUid) }
-        // ⚠️ MY OWN STORY IS ONE PAGE AMONG SEVERAL NOW — the 2026-08-09 revert (build 512) is undone
-        // on purpose, and the thing that made it unsafe is gone.
-        //
-        // The revert's note said the sheet stopped shrinking because "the real morph does not hold on
-        // the pager's scroll view", and prescribed re-asserting the transform through UIKit's layout.
-        // Both halves were wrong, and the revert commit (`e0d54d6b`) admits the diagnosis came off a
-        // screenshot rather than a measurement. Nothing in this repo ever showed `_UIQueuingScrollView`
-        // resetting `transform`, and per-frame re-assertion was ALREADY running when it was prescribed
-        // (`SheetProgressAnimator`'s CADisplayLink drives `driveMorph` every frame of the drag AND the
-        // release). The real difference was the ATTACH TARGET: the solo host attaches the morph to a
-        // plain container it owns, this one attached it to UIKit's private scroll view — which also
-        // crashed build 481 inside `queuingScrollView:didEndManualScroll:toRevealView:`.
-        //
-        // `757da9e4` moved the morph onto `StoryPagerHostVC.cardContainer`, a plain view we lay out
-        // ourselves, and neutralises the internal scroll while the sheet is up. So the sheet now has
-        // the same ground under it here as on the solo host.
-        //
-        // ⚠️ THE CHECK THAT WAS NEVER RUN, and the one to run on this build: pull the viewers sheet
-        // over a FRIEND'S story and confirm it shrinks. Until mine came through here that combination
-        // could not happen, because the sheet only exists on my own story and my story never paged.
-        //
-        // What this buys, both asked for on 2026-08-12: the cube swipe from my story to a friend's,
-        // and tapping past my last story into the next person instead of closing the viewer.
-        StoryDoor.open(g, among: g.isMine ? [g] + others : others, from: g.id, pinned: false,
-                       // These came out of `StoriesRepository.others`, whose query is "recipientUids
-                       // contains me" — so being here IS the author's audience choice, and the reply
-                       // bar follows it rather than testing my chat list a second time.
-                       deliveredToMe: true,
-                       onProfile: { grp in profileGroup = grp })
-    }
+    // MARK: - The chat list's story door
+    //
+    // ⛔ `openStoryFromRow` AND `openUploadingStory` MOVED TO `StoriesTabView` (2026-08-30),
+    // with the row itself. They are not duplicated here: the row's door is unpinned (the
+    // viewer pages person to person and the row has a card for whoever you paged to), the
+    // ring's door below is pinned, and two copies of that distinction is exactly how one of
+    // them ends up quietly wrong. The story-limit alerts and `composeStory` DO stay, because
+    // the chat list's own menu still offers Add Story.
 
     /// THE CHAT LIST'S RINGED AVATAR. Same door, same flight, and because the ring reports its
     /// radius as half its width the story grows out of it and lands back into it as a CIRCLE —
@@ -910,14 +880,6 @@ struct ChatsView: View {
     private func openStoryFromRing(_ conv: Conversation, _ g: StoryGroup) {
         StoryDoor.open(g, from: "row-\(conv.id)", deliveredToMe: true,
                        onProfile: { grp in profileGroup = grp })
-    }
-
-    /// The still-uploading card's door. Same presentation and same flight as a posted story; its
-    /// content is the handoff view, which swaps itself for the real viewer when the upload lands.
-    private func openUploadingStory() {
-        StoryDoor.openUploading(meName: profile.me?.name ?? "You",
-                                mePhoto: profile.me?.photoUrl,
-                                onProfile: { grp in profileGroup = grp })
     }
 
     // Welcome empty state: icon + copy + the three ways to get a first chat going.
@@ -1289,6 +1251,14 @@ struct ChatsView: View {
                     || AudioRecorder.draftIndex[c.id] != nil   // a parked voice draft keeps its chat listed
                     || c.id == live   // ...and so does a call: ringing someone you have never texted
             }                         //   otherwise the "Active call" row has no chat to sit on
+            // THE SEARCH BOX, applied before the tab filter so it narrows the same set the list
+            // would otherwise show. Name only: the previews are ciphertext until they are
+            // decrypted for the row, so matching on them here would search a decrypted subset
+            // and silently miss the rest.
+            .filter { c in
+                let q = chatSearch.trimmingCharacters(in: .whitespaces).lowercased()
+                return q.isEmpty || c.displayName(me).lowercased().contains(q)
+            }
             .filter { c in   // Filter: 0 = All, 1 = Unread, 2 = Groups
                 switch chatFilter {
                 // Blocked-aware, like the row badge and the tab badge (audit: a silently blocked
@@ -1648,7 +1618,10 @@ struct ChatsView: View {
                         .tint(Theme.defaultBubble(dark))
                         // Rows start below the stories row; as the list scrolls, the row above is
                         // offset by the same amount, so both move as ONE scroll surface.
-                        .contentMargins(.top, storiesOptedOut ? 8 : storiesRowHeight, for: .scrollContent)
+                        // 8pt, flat: the top margin used to be the stories row's own height,
+                        // because the row was drawn over the list and the list had to start below
+                        // it. The row is a page of its own now and there is nothing to clear.
+                        .contentMargins(.top, 8, for: .scrollContent)
                         // Extra bottom clearance so chat rows don't sit UNDER the native floating tab bar
                         // (its transparent margins otherwise show + tap-through to a row behind the pill).
                         .contentMargins(.bottom, 28, for: .scrollContent)
@@ -1657,97 +1630,25 @@ struct ChatsView: View {
                         // directions. Soft top edge = blur fade, no drawn line (bottom stays default,
                         // which the user confirmed fixed).
                         .scrollEdgeEffectStyle(.soft, for: .top)
-                        .onScrollGeometryChange(for: CGFloat.self,
-                                                of: { $0.contentOffset.y + $0.contentInsets.top },
-                                                action: { _, y in
-                            chatScrollY = y
-                            // ⛔ THE PULL-TO-REVEAL MACHINERY IS GONE, AND IT IS THE OWNER REVERSING
-                            // HIS OWN CALL — BOTH TIMES DELIBERATE, THE LATER ONE WINS.
-                            //
-                            // 2026-08-21, morning: "go read the reference app, how it's hidden and how
-                            // it's shown, copy that". So the row was hidden until the list was pulled
-                            // down past a threshold, with a dead band across zero to stop it
-                            // flickering. 2026-08-21, evening, with the row circled: "make it how it
-                            // was before, now hide and show remove".
-                            //
-                            // Everything that machinery cost is worth writing down, because it is why
-                            // he changed his mind: the row is a real row INSIDE the list, so revealing
-                            // it grew the content by 44pt mid-drag and the scroll view stepped its
-                            // offset to absorb that. That step is what jumped the stories row, what
-                            // opened the gap under it, and what made the row vanish while it was still
-                            // half on screen. Three separate reports, all of them downstream of
-                            // inserting a row into a scroll view somebody is currently dragging.
-                            //
-                            // `chatScrollY` above stays — the stories row rides it, and it was never
-                            // part of this.
-                        })
 
-                          // Stories row stays OUTSIDE the List so EACH card long-presses on its
-                          // own. Inside a List, the whole row lifts as one cell (the bug). (Build 147.)
-                          if !storiesOptedOut {
-                          StoriesRow(meName: profile.me?.name ?? "You", mePhoto: profile.me?.photoUrl,
-                                     // HOLD THE ROW STILL WHILE A STORY IS OPEN. Watching someone's last
-                                     // unseen story re-sorts the row live, so their card slid out from
-                                     // under the close before it could land on it — his story leaving
-                                     // sideways towards the screen edge. See `StoriesRow.displayedOthers`.
-                                     freezeOrder: storyDoorState.isOpen,
-                                     onCompose: { composeStory() },
-                                     // EVERY SURFACE IS ON OUR OWN TRANSITION NOW (migration finished
-                                     // 2026-08-07). The viewer is presented by `StoryZoomPresenter` — a
-                                     // screen we own, added and removed with no system animation — and
-                                     // the card flying out of this row IS the open. The drag-down close
-                                     // is the same flight in reverse, on the same view. `StoryDoor` is
-                                     // the only way in, from here and from the other five doors alike.
-                                     //
-                                     // THE 481 LESSON THIS IS BUILT ON: the previous custom transition
-                                     // flew UIPageViewController's INTERNAL scroll view and UIKit
-                                     // asserted while animating it. The flight now transforms only the
-                                     // presenter's own container (`StoryCardMorph.flightCard`); nothing
-                                     // private is ever touched, so that crash is structurally gone.
-                                     onOpen: { g in openStoryFromRow(g) },
-                                     onMessage: { g in openStoryChat(g) },
-                                     onProfile: { g in profileGroup = g },
-                                     // ⚠️ A METHOD, NOT AN INLINE CLOSURE. Written out here it tipped this
-                                     // body over the type-checker's budget ("unable to type-check this
-                                     // expression in reasonable time") — `body` is already a very large
-                                     // single expression and every optional-chained default inside a new
-                                     // closure is more work for it. Same rule as the other handlers above.
-                                     onOpenUploading: { openUploadingStory() })
-                            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { storiesRowHeight = $0 }
-                            // ⛔ A BARE `-chatScrollY`, AND THE CLAMP THAT WAS HERE IS REVERTED.
-                            //
-                            // I clamped this at zero on 2026-08-21 to stop the row jumping when the
-                            // archive row appears, and it broke the thing that matters more: he
-                            // reported the stories row no longer following the scroll at all, with a
-                            // gap opening between it and the list. The clamp is not wrong on its own
-                            // — for a positive offset it is the identical value — but it MASKS a list
-                            // that has come to rest at a negative one, and a frozen row over a
-                            // displaced list is exactly what he photographed.
-                            //
-                            // The jump it was aiming at is real and is still unfixed. It is not
-                            // fixable from this line: it comes from `archivedEntryRow` being a real
-                            // row INSIDE the list, so revealing it grows the content by 44pt and the
-                            // scroll view steps its offset to absorb that. The honest fix is to stop
-                            // inserting the row — keep it permanently in the tree and hide it above
-                            // the fold — which is a layout change, not an offset tweak. Until then a
-                            // small jump is the lesser bug and this line stays as it always was.
-                            .offset(y: -chatScrollY)
-                            // NO clip and NO mask on the stories row (user's 3-stage proof, build 225):
-                            // ANY truncation chops the card images in a straight line while they slide
-                            // away — that visible cut WAS the "top border" all along. Unclipped, the
-                            // cards slide up behind the glass header pills exactly like the chat rows
-                            // do once the stories are gone (stage 3, confirmed "looks normal").
-                            // MELT-AWAY (user's 4-stage proof, build 226): the row is a separate layer
-                            // from the List, so its header blur and the List's own edge blur are TWO
-                            // systems — a visible seam where they met ("feels like two pages"). Fade
-                            // the row out over the last stretch of its slide (untouched through the
-                            // approved stage-2 phase), so only ONE blur is ever visible — no seam.
-                            .opacity({
-                                let h = max(1, storiesRowHeight)
-                                let t = (chatScrollY - h * 0.45) / (h * 0.45)
-                                return 1 - min(1, max(0, t))
-                            }())
-                          }   // if !storiesOptedOut
+                          // ⛔ THE STORIES ROW LEFT THIS PAGE — his call, 2026-08-30, off two
+                          // mockups of the app: stories get a tab of their own
+                          // (`StoriesTabView`) and the chat list is chats.
+                          //
+                          // What went with it is worth knowing, because it was most of the
+                          // machinery here. The row was drawn OUTSIDE the List (inside one,
+                          // the whole row lifts as ONE cell on a long press instead of each
+                          // card lifting on its own — build 147), so it had to be slid by
+                          // hand against `chatScrollY`, the List had to carry a top content
+                          // margin the exact height of the row, and the row had to fade out
+                          // over the last stretch of its slide so its blur and the List's
+                          // edge blur were never both visible at once. Three mechanisms to
+                          // make one view look like it was part of a list it could not be
+                          // part of. On a page of its own it is simply the first thing on
+                          // the page, and none of that is ported.
+                          //
+                          // ⚠️ THE RINGED AVATARS IN THE ROWS ARE NOT THIS AND DID NOT MOVE.
+                          // A ring belongs to a conversation; see `openStoryFromRing`.
                         }   // ZStack (stories row scrolling in sync above the list)
                         // Empty state sits BELOW the stories row (which stays visible). "No chats yet"
                         // only when truly unfiltered; a filtered empty result says so instead.
@@ -1756,25 +1657,31 @@ struct ChatsView: View {
                             // "No chats yet" to someone who has chats. An empty list is only news once
                             // we have actually heard back.
                             if visible.isEmpty, repo.hasLoaded {
-                                if chatFilter == 0 {
+                                // A SEARCH THAT FOUND NOTHING IS NOT AN EMPTY INBOX. Without this
+                                // branch, typing a name nobody has empties the list and the welcome
+                                // state below tells someone with two hundred chats that they have
+                                // none and offers to teach them how to start one.
+                                if !chatSearch.trimmingCharacters(in: .whitespaces).isEmpty {
+                                    ContentUnavailableView.search(text: chatSearch)
+                                        .allowsHitTesting(false)
+                                } else if chatFilter == 0 {
                                     // First run: an empty list must TEACH the next step, not dead-end
                                     // (big-app pattern) — find people, share your QR, invite friends.
-                                    // With stories opted out the row is unmounted but storiesRowHeight
-                                    // keeps its initial value — the empty state floated ~175pt too low
-                                    // (audit). Pad only for a row that actually exists.
+                                    // The stories row used to be cleared here as well, and getting
+                                    // that clearance wrong floated this ~175pt too low whenever
+                                    // stories were switched off. There is no row on this page now.
                                     // + the archive row when it is showing: archive every chat you
                                     // have and the list is "empty", so this overlay would otherwise
                                     // land on top of the one row still standing (and eat its taps).
                                     emptyWelcome
-                                        .padding(.top, (storiesOptedOut ? 0 : storiesRowHeight) + 24
-                                                 + (showsArchivedRow ? archivedRowHeight : 0))
+                                        .padding(.top, 24 + (showsArchivedRow ? archivedRowHeight : 0))
                                 } else {
                                     // Per-filter copy — the Groups filter was showing the Unread text.
                                     ContentUnavailableView(
                                         chatFilter == 2 ? "No groups yet" : "No unread chats",
                                         systemImage: chatFilter == 2 ? "person.3" : "checkmark.circle",
                                         description: Text(chatFilter == 2 ? "Groups you join will appear here." : "You're all caught up."))
-                                        .padding(.top, (storiesOptedOut ? 0 : storiesRowHeight) + 24)
+                                        .padding(.top, 24)
                                         // No archive row under a filter (see showsArchivedRow), so
                                         // this branch needs no clearance for it.
                                         .allowsHitTesting(false)
@@ -1824,8 +1731,13 @@ struct ChatsView: View {
             }
             .navigationTitle("Chats")
             .navigationBarTitleDisplayMode(.inline)   // one row: avatar · Chats · compose
-            // Search now lives in its own tab (the detached search circle), so the old
-            // in-list search FAB + inline search bar were removed.
+            // ⛔ SEARCH IS BACK ON THE PAGE — his call, 2026-08-30: "settings does not need search at
+            // all, calls has one inside so the chat also will be like the one in the call page".
+            // The detached search circle in the tab bar is gone with it. It was one control standing
+            // in for three different searches depending on which tab you had come from, which is why
+            // the shell had to remember where you had been; a page that knows what it searches needs
+            // none of that.
+            .searchable(text: $chatSearch, prompt: "Search chats")
             .toolbar { homeToolbar }
             // Hide the header icons whenever a chat is on the stack (incl. the swipe-back
             // drag); reveal them only when we're fully back at the root list.
