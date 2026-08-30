@@ -418,6 +418,35 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     private var jlogLastOffset: CGFloat = 0   // TEMPORARY, paired with the MOVE log
+
+    /// ⚠️ TEMPORARY — 2026-08-30, the row-cost measurement. Goes out with `JumpLog`.
+    ///
+    /// A running tally per row kind, summarised into the log every 60 rows. The point is to survive
+    /// the case where nothing is slow: a threshold log that prints nothing cannot be told apart from
+    /// a threshold log that is not running, and that ambiguity has already cost one build.
+    private final class RowCost {
+        private var count: [String: Int] = [:]
+        private var total: [String: Double] = [:]
+        private var worst: [String: Double] = [:]
+        private var since = 0
+
+        func add(kind: String, ms: Double) {
+            count[kind, default: 0] += 1
+            total[kind, default: 0] += ms
+            worst[kind] = max(worst[kind] ?? 0, ms)
+            since += 1
+            guard since >= 60 else { return }
+            since = 0
+            let parts = count.keys.sorted().map { k -> String in
+                let n = count[k] ?? 1
+                let avg = String(format: "%.1f", (total[k] ?? 0) / Double(n))
+                let mx = String(format: "%.1f", worst[k] ?? 0)
+                return "\(k) n=\(n) avg=\(avg) max=\(mx)"
+            }
+            JumpLog.shared.append("[COST] " + parts.joined(separator: " | "))
+        }
+    }
+    private let rowCost = RowCost()
     private var didFirstLand = false          // the first open has been positioned
     private var didReveal = false             // hidden until the first frame is final
     private var scheduledEmptyReveal = false  // one-shot fallback for a genuinely-empty / slow-decrypt chat
@@ -1077,7 +1106,13 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             cell.delegate = self
             cell.configure(m, plan: plan, cid: self.cid)
             let ms = (CACurrentMediaTime() - t0) * 1000
-            if ms > 4 {   // half a 120Hz frame: below this a row cannot be what you feel
+            // ⛔ EVERY ROW IS COUNTED, NOT ONLY THE SLOW ONES, and that is the fix to the first
+            // version of this. A threshold-only log has a silent failure mode: if no row ever
+            // crosses it the log says nothing, which reads exactly like instrumentation that is not
+            // running. The running total can always answer "what does a text row cost on this
+            // phone", and the answer "1.2ms, worst 3" is a real result — it rules text out.
+            self.rowCost.add(kind: m.content.kindName, ms: ms)
+            if ms > 4 {   // half a 120Hz frame: a row that alone could drop one
                 // Plain interpolation, not String(format:) with %@ — these files have a known
                 // type-checker budget and a multi-argument format is where it gets spent.
                 let total = String(format: "%.1f", ms)

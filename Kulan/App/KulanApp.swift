@@ -17,6 +17,11 @@ struct KulanApp: App {
                 // Someone still on one of the removed tri-arrow icons has a name iOS can no longer
                 // resolve — put them back on the default rather than leave them with a broken icon.
                 .task { RetiredAppIcons.resetIfInUse() }
+                // ⚠️ TEMPORARY — 2026-08-30. Touching the singleton is what writes its `[BOOT]`
+                // line, and it has to happen at LAUNCH rather than whenever something first logs:
+                // the timestamps are the evidence, and a boot stamped at the moment he opened
+                // Settings would date the run wrong. Goes out with `JumpLog`.
+                .task { _ = JumpLog.shared.count }
                 // Voice notes whose send never finished keep a copy of their own bytes so a retry
                 // survives a restart. Anything still there after a week belongs to a send nobody is
                 // coming back for, so it goes — see AudioRecorder.sweepInFlight.
