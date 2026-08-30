@@ -94,7 +94,10 @@ struct CallRowSkeleton: View {
             }
             Spacer(minLength: 8)
             SkeletonBlock(width: 44, height: 11)
-            SkeletonCircle(size: 30)
+            // 22, not 30: the row's trailing control is the (i) glyph now, not the filled disc the
+            // call-back button used to draw. This file's whole job is to be the same shape as the
+            // row it stands in for, so it moves when the row does.
+            SkeletonCircle(size: 22)
         }
         .frame(minHeight: 56)
         .padding(.vertical, 7)

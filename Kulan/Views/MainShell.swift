@@ -410,8 +410,9 @@ struct CallsView: View {
                                 call: call,
                                 count: run.entries.count,
                                 onProfile: { profileTarget = call },
-                                onCall: {   // call back the same way (video stays video) — after a confirm
-                                    pendingCall = PendingCall(uid: call.otherUid, name: call.name, photo: call.photoUrl, video: call.video)
+                                onCall: {   // the ROW: call back the same way (video stays video), no confirm
+                                    CallService.shared.startCall(to: call.otherUid, name: call.name,
+                                                                 photo: call.photoUrl, video: call.video)
                                 }
                             )
                             // In edit mode the row's own buttons stayed live, so tapping the name or
@@ -612,8 +613,15 @@ struct CallHistoryRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // Whole left area (avatar, name, direction, time) → opens the contact profile.
-            Button(action: onProfile) {
+            // ⛔ THE ROW DIALS. THE (i) OPENS THE PROFILE. Owner, 2026-08-29, with the reference
+            // app's calls list beside ours: "that is how people assume it to work, not like now we
+            // do". Ours had the two the other way round — the row opened a profile and a round
+            // button dialled after a confirm — which reads backwards to anyone who has used any
+            // other phone or messaging app: a call log is a list of calls, and tapping one places it.
+            //
+            // The confirm went with it. A call log entry is already a deliberate act of picking one
+            // person out of a history, and every app people came from dials on that tap.
+            Button(action: onCall) {
                 HStack(spacing: 12) {
                     AvatarView(name: call.name, photoUrl: call.photoUrl, size: 46)
                     VStack(alignment: .leading, spacing: 2) {
@@ -642,13 +650,13 @@ struct CallHistoryRow: View {
             }
             .buttonStyle(.plain)
 
-            // Round call-back button → the ONLY thing that calls back; camera for video calls.
-            Button(action: onCall) {
-                Image(systemName: call.video ? "video.fill" : "phone.fill")
-                    .font(.system(size: 15))
+            // The (i) → the contact profile. Plain glyph, no disc behind it: the reference's is an
+            // outline on the page's own background, and the disc we used to draw was there to make a
+            // call button look like an action. This is not the action any more.
+            Button(action: onProfile) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 21))
                     .foregroundStyle(.tint)
-                    .frame(width: 38, height: 38)
-                    .background(Color.primary.opacity(0.07), in: Circle())
                     .frame(width: 44, height: 44)        // 44pt hit target (HIG min) without enlarging the visual
                     .contentShape(Rectangle())
             }
