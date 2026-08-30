@@ -98,10 +98,15 @@ final class JumpLog {
         return lines.count
     }
 
+    /// ⚠️ CLEARING LEAVES A `[BOOT]` LINE BEHIND, ON PURPOSE. An empty log and a broken log look
+    /// identical from the Settings row — that ambiguity is what cost build 716 — so the reset
+    /// re-states which build is running rather than dropping to a bare zero.
     func clear() {
         lock.lock()
         lines.removeAll()
         lock.unlock()
         if let url = Self.fileURL { try? FileManager.default.removeItem(at: url) }
+        let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
+        append("[BOOT] build \(build) (log cleared)")
     }
 }

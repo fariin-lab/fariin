@@ -418,6 +418,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     }
 
     private var jlogLastOffset: CGFloat = 0   // TEMPORARY, paired with the MOVE log
+    /// The top inset the first landing was computed against, and whether that landing is still
+    /// waiting to be re-applied against a corrected one. See `repinIfTopInsetArrived`.
+    private var landedTopInset: CGFloat?
+    private var awaitingInitialRepin = false
 
     /// ⚠️ TEMPORARY — 2026-08-30, the row-cost measurement. Goes out with `JumpLog`.
     ///
@@ -2285,6 +2289,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
             guard let self, glide, !glideStarted else { return }
             glideStarted = true
             self.collectionView.layoutIfNeeded()
+            // ⚠️ TEMPORARY: one of three places can animate a reader to the newest message, and
+            // his 717 log shows one of them doing it 2.3s after every re-entry. Naming them is
+            // the whole remaining question.
+            self.jlog("NEWEST by send/receive glide")
             self.perform(.newest(animated: true))
             // ⛔ THIS BACKSTOP NEEDS THE SEQUENCE NUMBER ITS SIBLING HAS. `scrollToOffset`'s 0.5s
             // arrival check refuses when a newer move has superseded it; this one only asked whether
@@ -2365,7 +2373,10 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
 
     private func performScrollTarget(_ target: String) {
         // Sentinel: the scroll-to-latest button and an own send while scrolled up route here.
-        if target == "BOTTOM" { perform(.newest(animated: true)) } else { perform(.message(target)) }
+        if target == "BOTTOM" {
+            jlog("NEWEST by scrollTarget BOTTOM (ThreadView asked)")   // TEMPORARY
+            perform(.newest(animated: true))
+        } else { perform(.message(target)) }
     }
 
     private func reflowInserted(_ ids: [String]) {
@@ -2473,7 +2484,48 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // is the LANDED one, which is the whole reason this view starts at alpha 0.
         collectionView.layoutIfNeeded()
         recordDistanceFromBottom()
+        // ⛔ REMEMBER WHICH TOP INSET THIS LANDING WAS COMPUTED AGAINST. See `repinIfTopInsetArrived`.
+        landedTopInset = collectionView.adjustedContentInset.top
+        awaitingInitialRepin = initialScrollId != nil && initialScrollOffset != nil
         reveal()
+    }
+
+    /// ⛔ THE NAV BAR'S INSET ARRIVES AFTER THE LANDING, AND THE LANDING IS WRONG BY EXACTLY IT.
+    ///
+    /// From his log, build 717, on every restored re-entry:
+    ///
+    ///     FIRSTLAND begin ... top=0.0      ← the land is computed with a top inset of ZERO
+    ///     LAND restore  ... -> y=6456.7
+    ///     REVEAL        ... top=101.0      ← 11ms later the bar's 101pt lands
+    ///     MOVE 6456.7 -> 6355.7            ← the content shifts by exactly -101
+    ///     MOVE 6355.7 -> 6456.7            ← and half a second later it is shoved back
+    ///
+    /// The reading position was SAVED against a 101pt inset (`reportReadingPosition` measures
+    /// `attr.frame.minY - (contentOffset.y + adjustedContentInset.top)`) and RESTORED against a
+    /// zero one, so the row lands a nav bar too low and the two corrections either side of it are
+    /// what he sees as the jump.
+    ///
+    /// `performFirstLandIfReady` already waits for `updateInsets`, and that was not enough: the
+    /// top inset is not ours to write. It comes from the navigation controller's safe area, which
+    /// propagates on its own schedule — after the first layout pass, inside the push.
+    ///
+    /// So the landing is re-applied ONCE, when that inset actually arrives. Not a correction on a
+    /// timer and not a clamp: the same `perform(.initialPosition)` with the same stored row and
+    /// offset, now measured against the geometry it was saved in.
+    ///
+    /// ⚠️ ONCE, AND NEVER AFTER A FINGER. `awaitingInitialRepin` is cleared by the first drag, so
+    /// a reader who has started scrolling can never be pulled back to where they opened.
+    private func repinIfTopInsetArrived() {
+        guard didFirstLand, awaitingInitialRepin, !isDisappearing,
+              !collectionView.isTracking, !collectionView.isDragging, !collectionView.isDecelerating,
+              let landed = landedTopInset else { return }
+        let top = collectionView.adjustedContentInset.top
+        guard abs(top - landed) > 0.5 else { return }
+        awaitingInitialRepin = false
+        landedTopInset = top
+        jlog("REPIN top \(String(format: "%.1f", landed)) -> \(String(format: "%.1f", top))")
+        perform(.initialPosition)
+        recordDistanceFromBottom()
     }
 
     private func reveal() {
@@ -3552,7 +3604,11 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // interactive dismiss, safe area updates rapidly in quick succession, which causes this method
         // to go haywire". The bar has already been re-placed synchronously above; this is only the
         // inset half, debounced exactly as theirs is.
-        let work = DispatchWorkItem { [weak self] in self?.updateInsets() }
+        let work = DispatchWorkItem { [weak self] in
+            self?.updateInsets()
+            // The bars have landed: this is the moment the first landing's top inset becomes real.
+            self?.repinIfTopInsetArrived()
+        }
         safeAreaInsetsWork = work
         let delay = 0.01   // theirs: a 0.01s last-only debounce, nothing more
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
@@ -4218,6 +4274,7 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // is about to coast or not: perform() kills the coast on its way past.
         if let animated = pendingNewestJump {
             pendingNewestJump = nil
+            jlog("NEWEST by pendingNewestJump (deferred to drag end)")   // TEMPORARY
             perform(.newest(animated: animated))
         }
     }
@@ -4229,6 +4286,9 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         // ⚠️ TEMPORARY (re-entry jump): every offset move NOT driven by a finger. A jump the reader
         // sees is by definition one of these, so this is the line that names the culprit.
+        // A finger on the list ends the one-shot re-pin: whatever the insets do from here, this
+        // reader has chosen where they are. See `repinIfTopInsetArrived`.
+        if scrollView.isDragging || scrollView.isTracking { awaitingInitialRepin = false }
         if !scrollView.isDragging, !scrollView.isTracking, !scrollView.isDecelerating,
            abs(scrollView.contentOffset.y - jlogLastOffset) > 0.5 {
             jlog("MOVE programmatic \(String(format: "%.1f", jlogLastOffset)) -> " +

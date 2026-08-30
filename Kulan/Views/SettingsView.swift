@@ -1219,6 +1219,7 @@ struct PrivacySettingsView: View {
 struct AboutView: View {
     /// ⚠️ TEMPORARY — the re-entry scroll jump. Goes with the "Copy scroll log" row below.
     @State private var jumpLogCopied = false
+    @State private var jumpLogCleared = false
     private var appVersion: String {
         (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"
     }
@@ -1284,11 +1285,24 @@ struct AboutView: View {
                 Button {
                     UIPasteboard.general.string = JumpLog.shared.text
                     jumpLogCopied = true
+                    jumpLogCleared = false
                 } label: {
                     LabeledContent("Copy scroll log",
                                    value: jumpLogCopied ? "Copied" : "\(JumpLog.shared.count) lines")
                 }
                 .foregroundStyle(.primary)
+                // ⛔ AND A WAY TO EMPTY IT. His report, 2026-08-30: "I tried to clear it and make
+                // another log but it keeps stuck". Putting the log on disk so it would survive a
+                // relaunch also made it survive everything else, and a log you cannot reset is one
+                // reproduction long — every run after the first arrives buried under the one before
+                // it. Clearing is half of the tool.
+                Button(role: .destructive) {
+                    JumpLog.shared.clear()
+                    jumpLogCleared = true
+                    jumpLogCopied = false
+                } label: {
+                    LabeledContent("Clear scroll log", value: jumpLogCleared ? "Cleared" : "")
+                }
                 outLink("Privacy Policy", URL(string: "https://fariin.com/privacy")!)
                 outLink("Terms & Conditions", URL(string: "https://fariin.com/terms")!)
             } header: {

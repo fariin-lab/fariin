@@ -1256,42 +1256,46 @@ struct ChatsView: View {
         // keeps its release channel hidden the same way (an internal visibility flag) so a brand-new account never
         // opens onto an empty official chat.
         let live = liveCallCid   // read ONCE — the comparator below runs n·log n times
-        return (repo.conversations + [officialChannel.listEntry].compactMap { $0 })
-            .filter { !$0.isCleared(me) && !$0.isArchived(me) }
-            .filter { Flags.groupsEnabled || !$0.isGroup }
-            // A 1:1 chat you merely OPENED (from search / a profile) but never exchanged a message
-            // in stays OUT of the list (standard behavior) until something real happens: a message
-            // either way, an unread, a pin, or a draft you typed. Groups always list — creating
-            // one is deliberate.
-            .filter { c in
-                c.isGroup || !c.lastMessageCipher.isEmpty || c.hasUnreadMark(me) || c.isPinned(me)
-                    || !Drafts.shared.text(c.id).isEmpty
-                    || AudioRecorder.draftIndex[c.id] != nil   // a parked voice draft keeps its chat listed
-                    || c.id == live   // ...and so does a call: ringing someone you have never texted
-            }                         //   otherwise the "Active call" row has no chat to sit on
-            .filter { searchMatches($0) }
-            .filter { c in   // Filter: 0 = All, 1 = Unread, 2 = Groups
-                switch chatFilter {
-                // Blocked-aware, like the row badge and the tab badge (audit: a silently blocked
-                // chat appeared under Unread with no badge and a zero tab count).
-                case 1: return !c.isBlockedByMe(me) && c.hasUnreadMark(me)
-                case 2: return c.isGroup
-                default: return true
-                }
+        // ⛔ STEPS, NOT ONE CHAIN. This was a single chained expression and it sat exactly at the
+        // type-checker's budget: adding one `.filter` for the search box tipped it into "unable to
+        // type-check this expression in reasonable time", twice. Each step is annotated, so the
+        // checker resolves them one at a time instead of solving the whole pipeline at once.
+        var out = repo.conversations + [officialChannel.listEntry].compactMap { $0 }
+        out = out.filter { !$0.isCleared(me) && !$0.isArchived(me) }
+        out = out.filter { Flags.groupsEnabled || !$0.isGroup }
+        // A 1:1 chat you merely OPENED (from search / a profile) but never exchanged a message
+        // in stays OUT of the list (standard behavior) until something real happens: a message
+        // either way, an unread, a pin, or a draft you typed. Groups always list — creating
+        // one is deliberate.
+        out = out.filter { (c: Conversation) -> Bool in
+            c.isGroup || !c.lastMessageCipher.isEmpty || c.hasUnreadMark(me) || c.isPinned(me)
+                || !Drafts.shared.text(c.id).isEmpty
+                || AudioRecorder.draftIndex[c.id] != nil   // a parked voice draft keeps its chat listed
+                || c.id == live   // ...and so does a call: ringing someone you have never texted
+        }                         //   otherwise the "Active call" row has no chat to sit on
+        out = out.filter { searchMatches($0) }
+        out = out.filter { (c: Conversation) -> Bool in   // Filter: 0 = All, 1 = Unread, 2 = Groups
+            switch chatFilter {
+            // Blocked-aware, like the row badge and the tab badge (audit: a silently blocked
+            // chat appeared under Unread with no badge and a zero tab count).
+            case 1: return !c.isBlockedByMe(me) && c.hasUnreadMark(me)
+            case 2: return c.isGroup
+            default: return true
             }
-            .sorted { a, b in
-                // A call you are ON outranks a pin. It is the one thing in the list that is
-                // happening RIGHT NOW, and it goes back to where it was the moment it ends —
-                // nothing is written to the conversation, so this costs the order nothing.
-                if (a.id == live) != (b.id == live) { return a.id == live }
-                if a.isPinned(me) != b.isPinned(me) { return a.isPinned(me) }
-                // Both pinned: manual order (higher rank = higher in list).
-                if a.isPinned(me) && b.isPinned(me) {
-                    if a.pinRank(me) != b.pinRank(me) { return a.pinRank(me) > b.pinRank(me) }
-                    return a.displayUpdatedAt(me) > b.displayUpdatedAt(me)
-                }
-                return a.displayUpdatedAt(me) > b.displayUpdatedAt(me)   // recency (frozen if blocked)
+        }
+        return out.sorted { (a: Conversation, b: Conversation) -> Bool in
+            // A call you are ON outranks a pin. It is the one thing in the list that is
+            // happening RIGHT NOW, and it goes back to where it was the moment it ends —
+            // nothing is written to the conversation, so this costs the order nothing.
+            if (a.id == live) != (b.id == live) { return a.id == live }
+            if a.isPinned(me) != b.isPinned(me) { return a.isPinned(me) }
+            // Both pinned: manual order (higher rank = higher in list).
+            if a.isPinned(me) && b.isPinned(me) {
+                if a.pinRank(me) != b.pinRank(me) { return a.pinRank(me) > b.pinRank(me) }
+                return a.displayUpdatedAt(me) > b.displayUpdatedAt(me)
             }
+            return a.displayUpdatedAt(me) > b.displayUpdatedAt(me)   // recency (frozen if blocked)
+        }
     }
 
     /// The one chat that is on a call right now — 1:1 or group — or nil. Read by the sort above and
