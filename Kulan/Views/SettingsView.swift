@@ -1217,6 +1217,8 @@ struct PrivacySettingsView: View {
 // its own Settings page — the old Clear Cache button here also wiped AudioCache, and voice
 // notes are ONLY-copies (mailman model), so that button was silent data loss. Gone.
 struct AboutView: View {
+    /// ⚠️ TEMPORARY — the re-entry scroll jump. Goes with the "Copy scroll log" row below.
+    @State private var jumpLogCopied = false
     private var appVersion: String {
         (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"
     }
@@ -1271,6 +1273,22 @@ struct AboutView: View {
                 // screen somebody else will ask them to read out.
                 LabeledContent("Version", value: "\(appVersion) (\(buildNumber))")
                     .textSelection(.enabled)
+                // ⚠️ TEMPORARY, 2026-08-29 — the re-entry scroll jump. Delete this row, `JumpLog`
+                // and the `jlog` calls in `NativeMessageList` once the cause is written down.
+                //
+                // A VISIBLE ROW RATHER THAN A LONG-PRESS ON THE VERSION ABOVE, deliberately: that
+                // row is `.textSelection(.enabled)`, so a long press there belongs to UIKit's text
+                // selection and a gesture competing with it is a coin toss. The reproduction has
+                // already been paid for twice; the way to read the result must not be the part that
+                // fails.
+                Button {
+                    UIPasteboard.general.string = JumpLog.shared.text
+                    jumpLogCopied = true
+                } label: {
+                    LabeledContent("Copy scroll log",
+                                   value: jumpLogCopied ? "Copied" : "\(JumpLog.shared.count) lines")
+                }
+                .foregroundStyle(.primary)
                 outLink("Privacy Policy", URL(string: "https://fariin.com/privacy")!)
                 outLink("Terms & Conditions", URL(string: "https://fariin.com/terms")!)
             } header: {
