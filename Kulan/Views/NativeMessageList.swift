@@ -1058,9 +1058,33 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
         // Native UIKit row registration (the migration path).
         uikitReg = UICollectionView.CellRegistration<MessageRowCell, String> { [weak self] cell, _, id in
             guard let self, let m = self.rowModels[id], self.collectionView.bounds.width > 0 else { return }
+            // ⚠️ TEMPORARY MEASUREMENT — 2026-08-30, "when does the scroll get smooth like theirs".
+            // Goes out with `JumpLog`.
+            //
+            // A rough scroll is a DROPPED FRAME, and a frame is 8.3ms at 120Hz. This is the only
+            // place a row can spend that budget: everything else about the row is decided before it
+            // exists (the plan is the height, the layout is precomputed), so the cost of a row
+            // arriving on screen IS this closure. Timing it per KIND is what turns "it feels rough"
+            // into "photo bubbles cost 11ms and text bubbles cost 2".
+            //
+            // ⛔ MEASURE BEFORE REWRITING THE TEXT STACK. Drawing text off the main thread is real
+            // work and it is the right answer only if text is what costs. `UILabel` typesets on the
+            // main thread here, so it is the first suspect — but a picture decoding on arrival looks
+            // identical from the outside, and so does a bubble with too many layers.
+            let t0 = CACurrentMediaTime()
             let plan = self.planStore.plan(for: m, width: self.collectionView.bounds.width)
+            let tPlan = CACurrentMediaTime()
             cell.delegate = self
             cell.configure(m, plan: plan, cid: self.cid)
+            let ms = (CACurrentMediaTime() - t0) * 1000
+            if ms > 4 {   // half a 120Hz frame: below this a row cannot be what you feel
+                // Plain interpolation, not String(format:) with %@ — these files have a known
+                // type-checker budget and a multi-argument format is where it gets spent.
+                let total = String(format: "%.1f", ms)
+                let planMs = String(format: "%.1f", (tPlan - t0) * 1000)
+                JumpLog.shared.append("[ROW] \(m.content.kindName) \(total)ms plan=\(planMs) "
+                                      + "h=\(Int(plan.height)) id=\(id.suffix(6))")
+            }
             // Safety net: UIKit rows never report a rendered height (they cannot drift on their own —
             // the plan IS the height), but an OFFSCREEN content change can leave a stale cached
             // number. Verify at dequeue and adopt if the cache drifted.

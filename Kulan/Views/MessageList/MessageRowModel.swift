@@ -356,6 +356,33 @@ struct MessageRowModel: Equatable {
         case bubble(BubbleRow)
         case notice(NoticeRow)
         case call(CallRow)
+
+        /// ⚠️ TEMPORARY — 2026-08-30, the scroll-cost measurement in `NativeMessageList`. Goes out
+        /// with `JumpLog`.
+        ///
+        /// "bubble" is too coarse to act on: a text bubble and an album share the case and cannot
+        /// share a fix. The whole point of timing rows is to learn WHICH kind spends the frame, so
+        /// the label has to be the kind.
+        var kindName: String {
+            switch self {
+            case .notice: return "notice"
+            case .call:   return "call"
+            case .bubble(let b):
+                switch b.body {
+                case .text:      return "text"
+                case .jumbomoji: return "jumbo"
+                case .tombstone: return "tombstone"
+                case .media:     return "media"
+                case .album:     return "album"
+                case .file:      return "file"
+                case .location:  return "location"
+                case .contact:   return "contact"
+                case .poll:      return "poll"
+                case .voice:     return "voice"
+                case .pill:      return "pill"
+                }
+            }
+        }
     }
 
     var id: String
