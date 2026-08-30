@@ -440,7 +440,20 @@ struct CallsView: View {
                                 }
                             }
                             .tag(run.id)
-                            .listRowSeparator(.hidden)
+                            // ⛔ THE HAIRLINE, ON EVERY ROW. All three references he compared us
+                            // against draw one here: Apple's Recents (measured off his
+                            // screenshot, 77pt rows ruled from 76pt) and the reference app's
+                            // own source (`ChatListItem.swift`). Ours drew none.
+                            //
+                            // 58, because the guide is measured from the ROW's leading edge and
+                            // the row already sits 16pt in: 16 + 46pt avatar + 12pt gap = 74pt
+                            // from the screen edge, which is where this row's text starts.
+                            //
+                            // No trailing guide needed, unlike the chat list: that list zeroes
+                            // its row insets, so its rule had to be pulled back by hand. This
+                            // one's 16pt trailing inset already ends the line where theirs ends.
+                            .listRowSeparator(.visible)
+                            .alignmentGuide(.listRowSeparatorLeading) { _ in 58 }
                             .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) { deleteRun(run) } label: {
