@@ -242,7 +242,12 @@ struct MainShell: View {
             // mockups. Search belongs at the top of the page it searches: Calls has had its own bar
             // for months and Chats has one now, which is what the detached circle was standing in
             // for. Settings gets none at all, on his word.
-            Tab("Stories", systemImage: tab == 0 ? "circle.dashed.inset.filled" : "circle.dashed", value: 0) {
+            // ⚠️ `ic_stories`, THE APP'S OWN GLYPH, NOT AN SF SYMBOL. His mockup of the bar draws
+            // the stacked cards with a plus — the same mark the Add Story menu entry already wears,
+            // so the tab and the action that fills it are one drawing. SF Symbols has nothing that
+            // reads as "stories", and the circle-dashed stand-in that was here first read as a
+            // loading state.
+            Tab("Stories", image: "ic_stories", value: 0) {
                 StoriesTabView(onSignOut: onSignOut)
             }
             Tab("Chats", image: "ic_chat", value: 1) {
@@ -264,7 +269,7 @@ struct MainShell: View {
     private var legacyTabView: some View {
         TabView(selection: $tab) {
             StoriesTabView(onSignOut: onSignOut)
-                .tabItem { Label("Stories", systemImage: "circle.dashed") }
+                .tabItem { Label("Stories", image: "ic_stories") }
                 .tag(0)
             ChatsView(onSignOut: onSignOut)
                 .tabItem { Label("Chats", image: "ic_chat") }
