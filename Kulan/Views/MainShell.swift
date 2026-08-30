@@ -173,6 +173,21 @@ struct MainShell: View {
     // Your profile photo as the Settings tab icon (full-color circle); falls back to a
     // person glyph — outline when inactive, filled when this tab is active. SwiftUI does NOT
     // auto-swap a base SF Symbol to its .fill on selection (it only tints), so we pick it.
+    /// ⛔ A PRE-RENDERED GLYPH, BECAUSE A TAB ITEM DROPS VIEW MODIFIERS. His screenshot: the
+    /// Stories icon came in at roughly twice the others and sat over its own label.
+    ///
+    /// `ic_stories.svg` declares an intrinsic 64pt and `ic_chat.svg` declares 27, which is the whole
+    /// difference — Chats has been correct by accident. The 64 is deliberate and must stay: MenuIcon
+    /// measures the ink on something big so the trim does not turn on a few edge pixels.
+    ///
+    /// `.resizable().frame(25)` does not fix it either. A tab item is converted to a native UIKit
+    /// element and that conversion drops view modifiers — the same failure `MenuIcon`'s own comment
+    /// records from the menus and the swipe actions, twice. Baking the size into the bitmap is the
+    /// one thing the conversion cannot ignore, so this uses the same renderer they do.
+    @ViewBuilder private var storiesTabLabel: some View {
+        Label { Text("Stories") } icon: { MenuIcon("ic_stories", size: 25) }
+    }
+
     @ViewBuilder private var settingsTabLabel: some View {
         Label {
             Text("Settings")
@@ -247,8 +262,10 @@ struct MainShell: View {
             // so the tab and the action that fills it are one drawing. SF Symbols has nothing that
             // reads as "stories", and the circle-dashed stand-in that was here first read as a
             // loading state.
-            Tab("Stories", image: "ic_stories", value: 0) {
+            Tab(value: 0) {
                 StoriesTabView(onSignOut: onSignOut)
+            } label: {
+                storiesTabLabel
             }
             Tab("Chats", image: "ic_chat", value: 1) {
                 ChatsView(onSignOut: onSignOut)
@@ -269,7 +286,7 @@ struct MainShell: View {
     private var legacyTabView: some View {
         TabView(selection: $tab) {
             StoriesTabView(onSignOut: onSignOut)
-                .tabItem { Label("Stories", image: "ic_stories") }
+                .tabItem { storiesTabLabel }
                 .tag(0)
             ChatsView(onSignOut: onSignOut)
                 .tabItem { Label("Chats", image: "ic_chat") }
