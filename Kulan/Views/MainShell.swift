@@ -2814,7 +2814,10 @@ struct ChatRow: View, Equatable {
         return Crypto.shared.decryptCached(conv.lastMessageCipher, cid: conv.id)   // memoized: no re-decrypt per render
     }
     // Stored plaintext markers → an SF Symbol + clean label (native look, no emoji).
-    private func previewBadge(_ s: String) -> (String, String)? {
+    /// `mine` = I placed the call this marker describes (`lastSender` is the caller's uid on a call
+    /// record). It only ever changes the UNANSWERED cases: a call I placed that nobody picked up is
+    /// an outgoing call, not a missed one, and the red belongs to the person who tried to reach me.
+    private func previewBadge(_ s: String, mine: Bool = false) -> (String, String)? {
         // Newer voice markers carry the length ("🎤 Voice message · 0:53") — prefix match
         // keeps old plain markers working and surfaces the duration when present.
         if s.hasPrefix("🎤 Voice message") {
@@ -2855,14 +2858,22 @@ struct ChatRow: View, Equatable {
         // Our own GIF mark, the one the composer button wears. `sparkles` was standing in for a
         // symbol Apple does not ship, and it says "magic" rather than "GIF" (his 573 screenshot).
         case "GIF":                  return ("ic_gif", "GIF")
-        case "📞 Missed call":         return ("phone.down.fill", "Missed call")
+        // ⛔ AN UNANSWERED CALL IS "MISSED" ONLY FOR THE PERSON WHO WAS CALLED. The same marker
+        // string reaches both phones — one conversation document, two readers — so the direction is
+        // read from `lastSender` and applied here. The Calls tab has always drawn it this way; the
+        // list is the surface that could not, and his own outgoing call sat in it in red.
+        case "📞 Missed call":         return mine ? ("phone.arrow.up.right", "Outgoing call")
+                                                  : ("phone.down.fill", "Missed call")
         case "📞 Call":                return ("phone.fill", "Call")
         // Legacy markers from before declines were removed from the log (2026-08-12): old
         // conversations may still hold the string, but it must not SAY declined to anyone.
-        case "📞 Declined call":       return ("phone.down.fill", "Missed call")
-        case "📹 Missed video call":   return ("video.slash.fill", "Missed video call")
+        case "📞 Declined call":       return mine ? ("phone.arrow.up.right", "Outgoing call")
+                                                  : ("phone.down.fill", "Missed call")
+        case "📹 Missed video call":   return mine ? ("arrow.up.right.video.fill", "Outgoing video call")
+                                                  : ("video.slash.fill", "Missed video call")
         case "📹 Video call":          return ("video.fill", "Video call")
-        case "📹 Declined video call": return ("video.slash.fill", "Missed video call")
+        case "📹 Declined video call": return mine ? ("arrow.up.right.video.fill", "Outgoing video call")
+                                                  : ("video.slash.fill", "Missed video call")
         default: return nil
         }
     }
@@ -2939,6 +2950,18 @@ struct ChatRow: View, Equatable {
     }
     // "Alice: " prefix for group previews so you can tell who sent the last message.
     // Only for real messages (ciphertext or media markers) — NOT system events like "X added Y".
+    /// Is the newest event in this chat a CALL RECORD? Two places need the answer and they need the
+    /// same one: the preview, which reads `lastSender` as the caller, and the tick, which must not
+    /// draw for a call at all.
+    ///
+    /// The two call emoji are the whole test. 📹 is a call marker and 🎥 is a video MESSAGE — a
+    /// distinction the badge function above already turns on, and the reason this is not a
+    /// `hasPrefix("🎥")` away from marking every sent video as a call.
+    private var lastIsCall: Bool {
+        let c = conv.lastMessageCipher
+        return c.hasPrefix("📞 ") || c.hasPrefix("📹 ")
+    }
+
     private var lastSenderPrefix: String {
         guard conv.isGroup, !conv.lastSender.isEmpty, conv.lastSender != me else { return "" }
         let c = conv.lastMessageCipher
@@ -3033,16 +3056,16 @@ struct ChatRow: View, Equatable {
                     .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                 Text(lastSenderPrefix + photoPreviewLabel).font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(1)
             }
-        } else if let badge = previewBadge(conv.lastMessageCipher) {
+        } else if let badge = previewBadge(conv.lastMessageCipher, mine: lastIsCall && conv.lastIsMine(me)) {
             // A MISSED CALL IS THE ONE PREVIEW THAT IS BAD NEWS, and it was the same grey as
             // "Photo" (owner, 2026-08-23). Red now, icon and words together — the Calls tab has
             // always drawn its missed rows red and the list disagreed with it.
             //
-            // ⚠️ RED FOR MISSED IN EITHER DIRECTION, unlike the Calls tab, which reddens only calls
-            // that came IN. Not an oversight: a call row deliberately writes an EMPTY `lastSender`
-            // (see ChatService — a call record is nobody's message and must not wear my delivery
-            // ticks), so the list has no direction to read. Both directions are worth chasing
-            // anyway: one is somebody who wanted you, the other is somebody you did not reach.
+            // ⚠️ RED FOR THE CALLS THAT CAME IN, exactly as the Calls tab does. This used to redden
+            // BOTH directions, and the reasoning written here was that a call record wrote an empty
+            // `lastSender` so the list had no direction to read. It carries the caller's uid now
+            // (see `recordCall`), so the excuse is gone and so is the bug behind it: he placed a
+            // call nobody answered and his own list called it missed.
             let missed = badge.1.hasPrefix("Missed")
             // Unheard voice note = accent mic (like an unread badge, but for your ears).
             previewRow(badge.0, lastSenderPrefix + badge.1,
@@ -3183,7 +3206,12 @@ struct ChatRow: View, Equatable {
                     previewContent
                     Spacer(minLength: 8)
                     // Status tick now lives in the right column — under the timestamp, beside the pin.
-                    if conv.lastIsMine(me) { ticksView.padding(.top, 1) }
+                    // ⚠️ NEVER ON A CALL ROW. `lastSender` carries the CALLER on a call record, which
+                    // is what lets the preview above say "Outgoing call" instead of red "Missed
+                    // call" — but a call is not a message and has no sent/read state, so a tick
+                    // beside one would be reporting delivery of something that was never sent. The
+                    // field used to be cleared to prevent exactly this; the guard lives here now.
+                    if conv.lastIsMine(me), !lastIsCall { ticksView.padding(.top, 1) }
                     if conv.isPinned(me) {
                         Image(systemName: "pin.fill")
                             .font(.system(size: 11)).foregroundStyle(.tertiary)

@@ -2306,10 +2306,25 @@ enum ChatService {
         }()
         try? await convRef.setData([
             "lastMessage": marker,
-            // Clear lastSender (audit): it kept naming whoever sent the previous real message, so if
-            // that was me the chat row drew MY delivery ticks beside "Missed call" — a call record
-            // is not my message and has no sent/read state. Empty suppresses them via lastIsMine.
-            "lastSender": "",
+            // ⛔ THE CALLER'S UID, AND THE CHAT LIST NEEDS IT TO TELL THE STORY STRAIGHT. His report,
+            // 2026-08-29: he placed a call nobody answered and his own chat list said red "Missed
+            // call", as though he had missed it.
+            //
+            // The marker above cannot carry the answer, because ONE conversation document is read by
+            // BOTH phones and each of them has to draw the opposite thing. So the direction has to
+            // travel as a uid the reader compares to itself, exactly as the call MESSAGE already
+            // does with `callerUid`.
+            //
+            // ⚠️ THIS FIELD USED TO BE CLEARED ON PURPOSE and the reason was real: it named whoever
+            // sent the previous message, so the row drew MY delivery ticks beside a call record,
+            // which is not my message and has no sent/read state. The ticks are suppressed by the
+            // row itself now (a call marker never draws them), so the field is free to mean what its
+            // name says.
+            //
+            // ⚠️ OLD ROWS STAY AMBIGUOUS. Conversations whose last event is a call recorded before
+            // today hold an empty `lastSender` and there is nothing anywhere that remembers who
+            // called; those keep rendering as they did.
+            "lastSender": callerUid,
             "updatedAt": FieldValue.serverTimestamp(),
         ], merge: true)
         // Keep the Calls tab (list + missed badge) live — the history repo has no listener.
