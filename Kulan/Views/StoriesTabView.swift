@@ -21,7 +21,11 @@ import SwiftUI
 /// its own logic, we still work on it". This page is the row and nothing else, so the grid has
 /// somewhere to land without this file being unpicked first.
 struct StoriesTabView: View {
-    var onSignOut: () -> Void = {}
+    var onSignOut: () -> Void
+    /// ⚠️ AN EXPLICIT INIT, LIKE `ChatsView`'S, AND IT IS NOT DECORATION. A struct with any
+    /// private stored property gets a PRIVATE memberwise initializer, so `StoriesTabView(...)`
+    /// from another file does not compile — "argument passed to call that takes no arguments".
+    init(onSignOut: @escaping () -> Void = {}) { self.onSignOut = onSignOut }
 
     private var profile = ProfileStore.shared
     // (No `StoriesRepository` property: `StoriesRow` is UIKit and observes the repository

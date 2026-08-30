@@ -1236,6 +1236,19 @@ struct ChatsView: View {
         }
     }
 
+    /// THE SEARCH BOX'S TEST, A METHOD AND NOT AN INLINE CLOSURE. `visible` is one long chained
+    /// expression and it is already at this file's type-checker budget — adding four lines
+    /// inside the chain tipped it over ("unable to type-check this expression in reasonable
+    /// time"), which is the same wall the story handlers hit. Named, it costs the checker
+    /// nothing.
+    ///
+    /// Name only. The previews are ciphertext until a row decrypts them, so matching on those
+    /// would search whatever subset happened to be decrypted and silently miss the rest.
+    private func searchMatches(_ c: Conversation) -> Bool {
+        let q = chatSearch.trimmingCharacters(in: .whitespaces).lowercased()
+        return q.isEmpty || c.displayName(me).lowercased().contains(q)
+    }
+
     private var visible: [Conversation] {
         // The official channel joins the list as an ordinary Conversation value, so every filter,
         // sort, badge and swipe below treats it like any other chat and none of them had to learn
@@ -1256,14 +1269,7 @@ struct ChatsView: View {
                     || AudioRecorder.draftIndex[c.id] != nil   // a parked voice draft keeps its chat listed
                     || c.id == live   // ...and so does a call: ringing someone you have never texted
             }                         //   otherwise the "Active call" row has no chat to sit on
-            // THE SEARCH BOX, applied before the tab filter so it narrows the same set the list
-            // would otherwise show. Name only: the previews are ciphertext until they are
-            // decrypted for the row, so matching on them here would search a decrypted subset
-            // and silently miss the rest.
-            .filter { c in
-                let q = chatSearch.trimmingCharacters(in: .whitespaces).lowercased()
-                return q.isEmpty || c.displayName(me).lowercased().contains(q)
-            }
+            .filter { searchMatches($0) }
             .filter { c in   // Filter: 0 = All, 1 = Unread, 2 = Groups
                 switch chatFilter {
                 // Blocked-aware, like the row badge and the tab badge (audit: a silently blocked
