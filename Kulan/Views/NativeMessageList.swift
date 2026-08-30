@@ -202,6 +202,18 @@ struct NativeMessageList: UIViewControllerRepresentable {
             vc.hideComposer()
         }
         vc.rowModels = rowModels   // BEFORE apply: measure + cell provider see the same frozen routing
+        // ⛔ WARM EVERY PICTURE'S PLACEHOLDER OFF THE MAIN THREAD, HERE, BEFORE ANY OF THEM IS
+        // DEQUEUED. Measured from his log, 2026-08-30: media rows averaged 2.0ms and peaked at
+        // 8.3ms — a whole frame at 120Hz — while text averaged 0.5ms. The peak is the FIRST
+        // appearance of a picture, which decodes its own blurhash or its inline thumbnail inside
+        // the cell, on the main thread, in the frame it lands. Both results are cached, so the
+        // cache only ever made the second appearance free and left the first one as expensive as
+        // it always was.
+        //
+        // ⚠️ THE TEXT STACK WAS THE WRONG SUSPECT, and this comment is here so nobody re-suspects
+        // it. UILabel typesetting on the main thread is the textbook answer and it is what I was
+        // about to rewrite; the measurement said 0.5ms and sent the work here instead.
+        vc.warmMediaPlaceholders(rowModels)
         vc.cid = cid
         vc.uikitMenu = uikitMenu
         vc.onUikitDoubleTap = onUikitDoubleTap
@@ -1064,6 +1076,53 @@ final class MessageListController: UIViewController, UICollectionViewDelegate, U
     func setLoadingOlder(_ loading: Bool) {
         if loading { topSpinner.startAnimating() } else { topSpinner.stopAnimating() }
     }
+
+    /// ⛔ DECODE EVERY PICTURE'S PLACEHOLDER BEFORE ITS ROW IS ASKED FOR, OFF THE MAIN THREAD.
+    ///
+    /// A media cell builds its placeholder inline: `InlineThumbCache.image(...)` if the message
+    /// carried a tiny thumbnail, else `BlurHash.decode(...)`. Both are cached, and both fill their
+    /// cache ON DEMAND — inside the cell, on the main thread, in the frame the row lands. The cache
+    /// therefore only ever made the SECOND appearance free.
+    ///
+    /// His log, 2026-08-30: media rows averaged 2.0ms and peaked at 8.3ms against an 8.3ms frame,
+    /// while text averaged 0.5ms. The peaks are first appearances and the averages are cache hits,
+    /// which is the same statement twice.
+    ///
+    /// ⚠️ ONE PASS PER MODEL SET, NOT PER SCROLL TICK. `warmedPlaceholders` remembers what has been
+    /// asked for, so re-applying the same conversation costs a Set lookup rather than another walk.
+    /// The work itself is idempotent — every warm is a cache probe first — but the walk is not free
+    /// and this runs from `updateUIViewController`, which SwiftUI calls often.
+    ///
+    /// ⚠️ UTILITY, NOT USER-INITIATED. This must never compete with the scroll it exists to protect:
+    /// being late costs one slow row, being greedy costs the frames themselves.
+    func warmMediaPlaceholders(_ models: [String: MessageRowModel]) {
+        var jobs: [(String, String?, String?)] = []   // (cacheId, base64, blurhash)
+        for (id, m) in models where !warmedPlaceholders.contains(id) {
+            guard case .bubble(let b) = m.content else { continue }
+            switch b.body {
+            case .media(let mb):
+                jobs.append((mb.thumbCacheId, mb.inlineThumbBase64, mb.blurhash))
+            case .album(let ab):
+                jobs.append((ab.thumbCacheId, ab.inlineThumbBase64, ab.blurhash))
+            default: continue
+            }
+            warmedPlaceholders.insert(id)
+        }
+        guard !jobs.isEmpty else { return }
+        DispatchQueue.global(qos: .utility).async {
+            for (cacheId, base64, hash) in jobs {
+                if let base64, !base64.isEmpty {
+                    InlineThumbCache.warm(id: cacheId, base64: base64)
+                } else if let hash, !hash.isEmpty {
+                    // Populates BlurHash's own decode cache; the result is discarded here on purpose.
+                    _ = BlurHash.decode(hash)
+                }
+            }
+        }
+    }
+    /// Row ids whose placeholder has already been queued. Bounded by the conversation's loaded
+    /// window, which is what `rowModels` holds.
+    private var warmedPlaceholders = Set<String>()
 
     private func buildDataSource() {
         reg = UICollectionView.CellRegistration<UICollectionViewCell, String> { [weak self] cell, _, id in

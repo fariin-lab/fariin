@@ -106,9 +106,30 @@ enum InlineThumbCache {
     static func image(id: String, base64: String?) -> UIImage? {
         guard let base64, !base64.isEmpty else { return nil }
         if let hit = cache.object(forKey: id as NSString) { return hit }
-        guard let data = Data(base64Encoded: base64), let img = UIImage(data: data) else { return nil }
+        guard let data = Data(base64Encoded: base64), let raw = UIImage(data: data) else { return nil }
+        // ⛔ FORCE THE BITMAP DECODE. `UIImage(data:)` is lazy: it parses the header and defers the
+        // actual pixels until something draws it — which is the main thread, mid-scroll, in the
+        // frame the row appears. `DiskImageCache.image(for:)` has done this for its own path for
+        // months and its comment says exactly why; this path was the one that never learned.
+        //
+        // Measured from his own log, 2026-08-30: media rows averaged 2.0ms and peaked at 8.3ms,
+        // which is a whole frame at 120Hz. Text averaged 0.5ms. The picture rows were the only
+        // thing in the chat that could drop a frame on its own.
+        let img = raw.preparingForDisplay() ?? raw
         cache.setObject(img, forKey: id as NSString)
         return img
+    }
+
+    /// ⛔ WARM IT OFF THE MAIN THREAD, BEFORE THE ROW IS ASKED FOR. Both this cache and
+    /// `BlurHash.decode`'s are filled on demand, inside the cell, while the finger is moving — so
+    /// the FIRST appearance of every picture pays for its own placeholder in the frame it lands.
+    /// The cache made the second appearance free and left the first one exactly as expensive.
+    ///
+    /// `NSCache` is thread-safe and `UIImage` decoding off the main thread is the ordinary way to do
+    /// this, so warming is just calling the same function early, somewhere that is not a frame.
+    static func warm(id: String, base64: String?) {
+        guard let base64, !base64.isEmpty, cache.object(forKey: id as NSString) == nil else { return }
+        _ = image(id: id, base64: base64)
     }
 }
 
