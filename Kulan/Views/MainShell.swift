@@ -1059,6 +1059,17 @@ struct ChatsView: View {
         // gets an inset separator: without it the line would run under the avatar.
         .listRowSeparator(.visible)
         .alignmentGuide(.listRowSeparatorLeading) { _ in 84 }
+        // ⛔ AND IT STOPS 16pt SHORT OF THE RIGHT EDGE. Read out of the reference's own source
+        // (`ChatListItem.swift`: `rightSeparatorInset = 16.0` on every ordinary row), and Apple
+        // does the same — measured off his Recents screenshot, the rule ends at 373.7pt on a
+        // 390pt screen. Mine ran to the edge on the first attempt, which is the one shape none
+        // of the three references uses.
+        //
+        // ⚠️ STILL NOT PORTED, and it is theirs: the last row of the list and the last PINNED
+        // row before an unpinned one take `leftSeparatorInset = 0, rightSeparatorInset = 0` —
+        // a full-width rule that closes off the pinned block. That one needs a row to know
+        // whether the row after it is pinned, so it is a deliberate omission, not an oversight.
+        .alignmentGuide(.listRowSeparatorTrailing) { d in d.width - 16 }
         // NO explicit row background: forcing systemBackground made the swiped row paint a
         // white slab OVER its own content (blank row on swipe, user report). The native
         // swipe platter (grey) is correct and keeps the row content visible.
