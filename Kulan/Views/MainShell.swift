@@ -1079,7 +1079,19 @@ struct ChatsView: View {
         }
         .tag(conv.id)
         .listRowInsets(EdgeInsets())
-        .listRowSeparator(.hidden)   // clean, no row lines
+        // ⛔ THE HAIRLINE IS BACK, AND IT STARTS AT 84pt. Measured off his reference screenshot,
+        // 2026-08-29: every row carries a separator that begins where the text column begins (16pt
+        // margin + 56pt avatar + 12pt gap = 84) and runs to the right edge.
+        //
+        // ⚠️ THE COMMENT THAT USED TO SIT HERE SAID "clean, no row lines", and that was the single
+        // biggest reason his list read looser and older than theirs beside it. The two lists already
+        // agree to the point on everything structural — 56pt avatar at 16pt, text at 85pt, 80pt row
+        // — so the missing rule was doing all of the difference on its own.
+        //
+        // The leading alignment guide is how a full-bleed row (listRowInsets is zeroed above) still
+        // gets an inset separator: without it the line would run under the avatar.
+        .listRowSeparator(.visible)
+        .alignmentGuide(.listRowSeparatorLeading) { _ in 84 }
         // NO explicit row background: forcing systemBackground made the swiped row paint a
         // white slab OVER its own content (blank row on swipe, user report). The native
         // swipe platter (grey) is correct and keeps the row content visible.
@@ -1247,7 +1259,11 @@ struct ChatsView: View {
             .disabled(selecting)
             .selectionDisabled(true)        // no checkbox, ever
             .listRowInsets(EdgeInsets())
-            .listRowSeparator(.hidden)
+            // Same hairline as the chat rows below it, same 84pt start — theirs draws one under the
+            // archive entry too. A single row without a rule, sitting on top of a list that has one,
+            // is more conspicuous than no rules at all.
+            .listRowSeparator(.visible)
+            .alignmentGuide(.listRowSeparatorLeading) { _ in 84 }
             .deleteDisabled(true)
             .moveDisabled(true)
         }
@@ -3001,6 +3017,14 @@ struct ChatRow: View, Equatable {
     }
     // Preview area, in priority order: live call → blocked freeze → live typing → 2+ unread count →
     // unsent draft → photo thumbnail → media/call badge → say-hello → decrypted text.
+    /// ⛔ THE "N NEW MESSAGES" BRANCH IS DELETED, AND IT WAS HIS OWN ORDER BOTH TIMES. He asked for
+    /// it on 2026-08-23 ("when user send one message its shows what is saying, but when its one and
+    /// more must count") and asked for it out on 2026-08-29, having put our list beside the
+    /// reference: every large messenger shows the newest message whatever the unread count is, and
+    /// lets the badge do the counting. A row that hides the words tells you less than the row above
+    /// it that shows them.
+    ///
+    /// Do not restore it from the older instruction. The badge beside the preview is the count.
     @ViewBuilder private var previewContent: some View {
         if onCall {
             // FIRST, above everything — a call in progress outranks typing, a draft, the last
@@ -3014,26 +3038,6 @@ struct ChatRow: View, Equatable {
                 .font(.system(size: 15)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
         } else if let t = typingLabel, !activityExpired {
             Text(t).font(.system(size: 15)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
-        } else if unread > 1 {
-            // MORE THAN ONE WAITING → COUNT THEM, don't quote the newest (owner, 2026-08-23, with
-            // the reference row: "when user send one message its shows what is saying, but when its
-            // one and more must count"). Two unread messages shown as the last line of the pair says
-            // nothing about the first one, and the row looks the same whether you missed two or
-            // twenty.
-            //
-            // ONE unread still shows the message itself, deliberately: with a single message there
-            // is nothing to summarise, and "1 new message" would be strictly less than the words.
-            //
-            // Below typing and recording on purpose: those are happening RIGHT NOW, and a count of
-            // what already arrived should not cover somebody mid-sentence.
-            //
-            // "9+" past nine, matching the reference. The badge beside it caps at 99 instead, and
-            // that is right — a badge is a number, this is a sentence, and "23 new messages" reads
-            // like an inbox report rather than a chat.
-            Text(unread > 9 ? "9+ new messages" : "\(unread) new messages")
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(Color.primary)
-                .lineLimit(1)
         } else if voiceDraftSecs > 0 {
             // A parked voice recording (his reference screenshots): the same red "Draft:" the text
             // draft below wears, then the mic and the note's length. Wins over a text draft — the
@@ -3130,17 +3134,28 @@ struct ChatRow: View, Equatable {
         // 56pt avatar; up to 2 preview lines; mute/pin/tick indicators inline.
         HStack(spacing: 12) {
             let _ = clockTick   // dependency: the tick task's flip must re-evaluate muted/timeStr
-            // Rule: a story ring must NOT enlarge the row — the photo shrinks a hair
-            // inside the same 56pt footprint, so ringed and ringless avatars line up equal.
+            // ⛔ THE RING GOES OUTSIDE THE PHOTO. THE PHOTO NEVER SHRINKS. Measured off his
+            // reference screenshot, 2026-08-29: their avatar is 56pt whether it has a story or not,
+            // and the ring is a 2pt stroke at 60pt OUTER — it overhangs the 16pt margin by 2pt and
+            // touches nothing else.
+            //
+            // ⚠️ THIS REVERSES THE RULE THAT USED TO BE WRITTEN HERE ("the photo shrinks a hair
+            // inside the same 56pt footprint, so ringed and ringless avatars line up equal"). The
+            // footprint did line up. The FACES did not: 49 against 56 is an eighth of the diameter,
+            // and in a list where most rows have a story and some do not, the faces visibly change
+            // size from row to row. That is what he was seeing.
+            //
+            // The text column does not move either way — the HStack still measures 56 — because the
+            // ring is an overlay that draws past its own bounds.
             Group {
                 // The official channel has no account and therefore no profile photo to fetch: its
                 // face is the app's own mark, drawn from the bundle. Same 56pt footprint as every
                 // other row, so nothing about the list's rhythm changes.
                 if OfficialChannel.isOfficial(conv.id) {
-                    OfficialAvatar(size: storySeen.isEmpty ? 56 : 49)
+                    OfficialAvatar(size: 56)
                 } else {
                     AvatarView(name: conv.displayName(me), photoUrl: conv.displayPhoto(me),
-                               size: storySeen.isEmpty ? 56 : 49)
+                               size: 56)
                 }
             }
                 // THIS CIRCLE IS THE STORY'S DOOR: opening from here grows the viewer out of it, and
@@ -3155,12 +3170,15 @@ struct ChatRow: View, Equatable {
                 // Reported on the PHOTO, not the ring: with the ring inside the anchor the transition
                 // stretched the grey ring segments, which the owner screenshotted.
                 .modifier(MediaRectReporter(id: "row-\(conv.id)", scope: .storyRow,
-                                            cornerRadius: (storySeen.isEmpty ? 56 : 49) / 2))
+                                            cornerRadius: 28))
                 .frame(width: 56, height: 56)
                 .overlay {   // story ring around the avatar when this person has an active story
                     if !storySeen.isEmpty {
+                        // 60, not 56: a 2pt stroke on a 60pt circle sits just OUTSIDE a 56pt photo,
+                        // which is their geometry measured to the point. An overlay is allowed to
+                        // draw past its parent's bounds, so nothing in the row moves to make room.
                         StoryRingView(seen: storySeen, lineWidth: 2)
-                            .frame(width: 56, height: 56)
+                            .frame(width: 60, height: 60)
                     }
                 }
                 // Tap the ringed avatar → open their story (high-priority so it beats the row's open-chat tap).
