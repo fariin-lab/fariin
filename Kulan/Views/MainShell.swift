@@ -469,7 +469,8 @@ struct CallsView: View {
                             // No trailing guide needed, unlike the chat list: that list zeroes
                             // its row insets, so its rule had to be pulled back by hand. This
                             // one's 16pt trailing inset already ends the line where theirs ends.
-                            .listRowSeparator(.visible)
+                            .listRowSeparator(.hidden, edges: .top)   // never above the first row
+                            .listRowSeparator(.visible, edges: .bottom)
                             .alignmentGuide(.listRowSeparatorLeading) { _ in 58 }
                             .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
                             .swipeActions(edge: .trailing) {
@@ -1087,7 +1088,12 @@ struct ChatsView: View {
         //
         // The leading alignment guide is how a full-bleed row (listRowInsets is zeroed above) still
         // gets an inset separator: without it the line would run under the avatar.
-        .listRowSeparator(.visible)
+        // ⛔ BOTTOM EDGE ONLY. A bare `.visible` also draws a rule at the TOP of the FIRST row,
+        // so the list opened with a hairline under the search field and nothing above it —
+        // his screenshot, circled. Every reference rules BETWEEN rows and never above the
+        // first one, which is what `edges: .bottom` says.
+        .listRowSeparator(.hidden, edges: .top)
+        .listRowSeparator(.visible, edges: .bottom)
         .alignmentGuide(.listRowSeparatorLeading) { _ in 84 }
         // ⛔ AND IT STOPS 16pt SHORT OF THE RIGHT EDGE. Read out of the reference's own source
         // (`ChatListItem.swift`: `rightSeparatorInset = 16.0` on every ordinary row), and Apple
@@ -1270,7 +1276,8 @@ struct ChatsView: View {
             // Same hairline as the chat rows below it, same 84pt start — theirs draws one under the
             // archive entry too. A single row without a rule, sitting on top of a list that has one,
             // is more conspicuous than no rules at all.
-            .listRowSeparator(.visible)
+            .listRowSeparator(.hidden, edges: .top)   // see the chat row: never above the first
+            .listRowSeparator(.visible, edges: .bottom)
             .alignmentGuide(.listRowSeparatorLeading) { _ in 84 }
             .deleteDisabled(true)
             .moveDisabled(true)
