@@ -49,9 +49,10 @@ struct MainShell: View {
     private var profile = ProfileStore.shared
     private var callsRepo = CallsRepository.shared   // @Observable: drives the missed-call tab badge
     @State private var settingsIcon: UIImage?
-    /// ⚠️ 1, NOT 0 — Chats. Stories took slot 0 when the tab bar was rebuilt (2026-08-30) and a
-    /// zero default would open the app on Stories, which nobody asked for.
-    @State private var tab = 1
+    /// ⚠️ 2, WHICH IS CHATS. Stories took slot 0 when the bar was rebuilt (2026-08-30) and Calls
+    /// took slot 1 when he swapped the two middle tabs the same day. The app opens on Chats, so
+    /// this number follows Chats wherever it sits — it is not a default of "first tab".
+    @State private var tab = 2
     /// Was a story upload in flight on the last body pass? Drives the tab switch below; see its note.
     @State private var sawStoryUpload = false
     // Missed-call badge on the Calls tab: incoming missed calls newer
@@ -113,7 +114,7 @@ struct MainShell: View {
         // A pending chat (from a notification tap or the Calls "Go to Chat" menu) must
         // foreground the Chats tab — otherwise it opens on a hidden tab and looks like a no-op.
         .onChange(of: AppRouter.shared.pendingChatId) { _, id in
-            if id != nil { tab = 1 }   // 1 = Chats since Stories took slot 0
+            if id != nil { tab = 2 }   // 2 = Chats: Stories took 0 and Calls took 1
         }
         // REMOVED: the conversations delta-detector banner. It was the SECOND in-app banner system.
         // `InAppBannerCenter`, added in build 383 and mounted on RootView, is driven by the push actually
@@ -137,7 +138,7 @@ struct MainShell: View {
         // An invite deep link (kulan://g/<code>) presents its Join sheet from the Chats tab — foreground
         // it so the sheet isn't dropped on a hidden tab.
         .onChange(of: AppRouter.shared.pendingInviteCode) { _, code in
-            if code != nil { tab = 1 }   // 1 = Chats since Stories took slot 0
+            if code != nil { tab = 2 }   // 2 = Chats: Stories took 0 and Calls took 1
         }
         // Call UI is mounted at the root (CallContainer in RootView) so it survives all
         // navigation. Here we only start listening for incoming calls.
@@ -153,11 +154,11 @@ struct MainShell: View {
         // shell remembered where you came from. Search lives on its own page now and each page
         // knows what it searches, so there is nothing left to remember.
         .onChange(of: tab) { _, new in
-            if new == 2 { callsSeenAt = Date().timeIntervalSince1970 }   // viewing Calls clears the badge
+            if new == 1 { callsSeenAt = Date().timeIntervalSince1970 }   // viewing Calls clears the badge
         }
         // New records landing while the user is already ON the Calls tab count as seen too.
         .onChange(of: callsRepo.calls) { _, _ in
-            if tab == 2 { callsSeenAt = Date().timeIntervalSince1970 }
+            if tab == 1 { callsSeenAt = Date().timeIntervalSince1970 }
         }
         // Load call history at startup so the badge is right before the tab is ever opened
         // (CallsView's own .task keeps it fresh after; the 30s TTL stops double-fires).
@@ -267,14 +268,17 @@ struct MainShell: View {
             } label: {
                 storiesTabLabel
             }
-            Tab("Chats", image: "ic_chat", value: 1) {
-                ChatsView(onSignOut: onSignOut)
-            }
-            .badge(unreadChatsBadge)   // 0 hides it, same as the Calls tab
-            Tab("Calls", systemImage: tab == 2 ? "phone.fill" : "phone", value: 2) {
+            // ⛔ CALLS SITS BESIDE STORIES, CHATS SITS BESIDE SETTINGS — his call, 2026-08-30.
+            // The two middle tabs are swapped from where they were this morning; the indices
+            // follow the position, so Calls is 1 and Chats is 2 everywhere in this file.
+            Tab("Calls", systemImage: tab == 1 ? "phone.fill" : "phone", value: 1) {
                 CallsView()
             }
             .badge(missedBadge)   // 0 hides it
+            Tab("Chats", image: "ic_chat", value: 2) {
+                ChatsView(onSignOut: onSignOut)
+            }
+            .badge(unreadChatsBadge)   // 0 hides it, same as the Calls tab
             Tab(value: 3) {
                 SettingsView(onSignOut: onSignOut, asTab: true)
             } label: {
@@ -288,13 +292,13 @@ struct MainShell: View {
             StoriesTabView(onSignOut: onSignOut)
                 .tabItem { storiesTabLabel }
                 .tag(0)
+            CallsView()
+                .tabItem { Label("Calls", systemImage: tab == 1 ? "phone.fill" : "phone") }
+                .badge(missedBadge)
+                .tag(1)
             ChatsView(onSignOut: onSignOut)
                 .tabItem { Label("Chats", image: "ic_chat") }
                 .badge(unreadChatsBadge)
-                .tag(1)
-            CallsView()
-                .tabItem { Label("Calls", systemImage: tab == 2 ? "phone.fill" : "phone") }
-                .badge(missedBadge)
                 .tag(2)
             SettingsView(onSignOut: onSignOut, asTab: true)
                 .tabItem { settingsTabLabel }
