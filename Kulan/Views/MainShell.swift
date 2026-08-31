@@ -240,7 +240,26 @@ struct MainShell: View {
             //
             // ⚠️ THE COST, STATED: a bitmap cannot play `.symbolEffect(.replace)`, so the swap is
             // instant rather than animated. Theirs animates; ours is correct first.
-            MenuIcon(system: tab == 1 ? "phone.fill" : "phone", size: 25)
+            // ⛔ A REAL SYMBOL, NOT A BITMAP, AND `.symbolVariant(.none)` IS THE WHOLE TRICK.
+            //
+            // Two facts pull in opposite directions here. A tab bar applies the `.fill` variant to
+            // its items, which is why this read as filled in both states and why the previous fix
+            // handed it a pre-rendered bitmap. But a bitmap is also the one thing iOS 26 CANNOT
+            // fill progressively as the selection capsule slides over it — his report: theirs
+            // "fills as you go", ours snaps.
+            //
+            // `.symbolVariant(.none)` refuses the automatic fill while leaving a real symbol in
+            // place, so the ternary decides the state AND the system keeps something it can
+            // interpolate. This tab costs nothing to try: it has always used Apple's own glyph, so
+            // there is no drawing of ours to give up.
+            //
+            // ⚠️ IF THE CAPSULE FILL DOES NOT APPEAR, the answer is that iOS 26 does not do it and
+            // the reference's own way is the only way — their tab icons are ANIMATION FILES
+            // (`AnimatedStickerNode`, `playbackMode: .once`, read from their `TabBarNode`), not
+            // pictures at all. Do not go looking for a third mechanism.
+            Image(systemName: tab == 1 ? "phone.fill" : "phone")
+                .symbolVariant(.none)
+                .contentTransition(.symbolEffect(.replace))
         }
         .foregroundStyle(tab == 1 ? Color.primary : Color.secondary)
     }
