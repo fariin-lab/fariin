@@ -312,6 +312,21 @@ struct MenuIcon: View {
     }
 
     private static var cache: [String: UIImage] = [:]
+    /// ⛔ THE SAME RENDERER, FOR A UIKit BAR BUTTON. His screenshot of the official chat: the bell
+    /// in the header came out as a black blob overflowing its own pill.
+    ///
+    /// `ChatNavigationItem` built its items with `UIImage(named:)` at NATURAL SIZE, and nearly every
+    /// `ic_*` asset in this app declares an intrinsic 64 — they are drawn for `MenuIcon`, which
+    /// measures the ink at that size and re-renders. The three that looked correct (`ic_chat` at 27,
+    /// the two call glyphs at 24) were correct by accident, which is why this went unnoticed.
+    ///
+    /// ⚠️ THE SAME BUG AS THE STORIES TAB, hours earlier and one layer over. Any place that hands a
+    /// UIKit control one of our assets has to come through here; UIKit will not scale it and, in a
+    /// bar item or a tab item, view modifiers are dropped on the way.
+    static func barImage(_ name: String, size: CGFloat = 22) -> UIImage {
+        rendered(name, size, false)
+    }
+
     private static func rendered(_ name: String, _ size: CGFloat, _ system: Bool) -> UIImage {
         let key = "\(system ? "sf:" : "")\(name)|\(size)"
         if let hit = cache[key] { return hit }

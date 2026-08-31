@@ -134,14 +134,16 @@ struct ChatNavigationItem: UIViewRepresentable {
             case let .conversation(audio, video, enabled):
                 var items: [UIBarButtonItem] = []
                 if audio != nil {
-                    let item = UIBarButtonItem(image: UIImage(named: "ic_call_voice"),
+                    // Correct today only because this SVG happens to be 24pt; through the
+                    // renderer it stays correct if the drawing is ever replaced.
+                    let item = UIBarButtonItem(image: MenuIcon.barImage("ic_call_voice"),
                                                primaryAction: UIAction { [weak self] _ in self?.tapAudio() })
                     item.isEnabled = enabled
                     item.accessibilityLabel = "Voice call"
                     items.append(item)
                 }
                 if video != nil {
-                    let item = UIBarButtonItem(image: UIImage(named: "ic_call_video"),
+                    let item = UIBarButtonItem(image: MenuIcon.barImage("ic_call_video"),
                                                primaryAction: UIAction { [weak self] _ in self?.tapVideo() })
                     item.isEnabled = enabled
                     item.accessibilityLabel = "Video call"
@@ -168,7 +170,11 @@ struct ChatNavigationItem: UIViewRepresentable {
                 showsTitle = false
             case let .custom(buttons):
                 rightItems = buttons.map { b in
-                    let item = UIBarButtonItem(image: UIImage(named: b.image)?.withRenderingMode(.alwaysTemplate),
+                    // ⛔ THROUGH THE RENDERER, NOT `UIImage(named:)`. Nearly every `ic_*` asset
+                    // declares a 64pt intrinsic — see `MenuIcon.barImage` — and UIKit draws a bar
+                    // item's image at whatever size it is handed. His screenshot: the bell filled
+                    // the header as a black blob.
+                    let item = UIBarButtonItem(image: MenuIcon.barImage(b.image).withRenderingMode(.alwaysTemplate),
                                                primaryAction: UIAction { [weak self] _ in self?.tapCustom(b.id) })
                     item.accessibilityLabel = b.accessibilityLabel
                     return item
