@@ -222,8 +222,17 @@ struct MainShell: View {
         Label {
             Text("Calls")
         } icon: {
-            Image(systemName: tab == 1 ? "phone.fill" : "phone")
-                .contentTransition(.symbolEffect(.replace))   // theirs animates through the change
+            // ⛔ PRE-RENDERED, BECAUSE A TAB BAR SUBSTITUTES THE `.fill` VARIANT BY ITSELF. His
+            // report on 721: "the call one is always full, tap or not". The ternary was right and
+            // the system was overriding it — UIKit's tab bar asks SF Symbols for the FILLED variant
+            // of whatever symbol it is handed, so `phone` and `phone.fill` both arrive filled.
+            //
+            // Handing it a bitmap ends the argument: there is no symbol left for it to substitute.
+            // Same renderer as the other three tabs, so all four are now one mechanism.
+            //
+            // ⚠️ THE COST, STATED: a bitmap cannot play `.symbolEffect(.replace)`, so the swap is
+            // instant rather than animated. Theirs animates; ours is correct first.
+            MenuIcon(system: tab == 1 ? "phone.fill" : "phone", size: 25)
         }
         .foregroundStyle(tab == 1 ? Color.primary : Color.secondary)
     }
