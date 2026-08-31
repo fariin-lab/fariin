@@ -240,24 +240,28 @@ struct MainShell: View {
             //
             // ⚠️ THE COST, STATED: a bitmap cannot play `.symbolEffect(.replace)`, so the swap is
             // instant rather than animated. Theirs animates; ours is correct first.
-            // ⛔ PRE-RENDERED, AND THE EXPERIMENT THAT PROVED IT IS WORTH KEEPING WRITTEN DOWN.
+            // ⛔ `.environment(\.symbolVariants, .none)`, NOT `.symbolVariant(.none)`, AND THE
+            // DIFFERENCE IS THE WHOLE BUG.
             //
-            // A tab bar fills SF Symbols, in BOTH states, and will not be talked out of it.
-            // `.symbolVariant(.none)` on the label was ignored — build 722 shipped it and his
-            // verdict was "the call icon is always full whether you are on the page or not". So a
-            // symbol cannot show an unselected state here at all; there is no hollow phone to have.
+            // A tab bar deliberately forces the FILLED variant of any SF Symbol it is given — that
+            // is documented behaviour since iOS 15, and it is why build 722 showed a filled phone
+            // whether or not Calls was the selected tab. My first attempt to refuse it used
+            // `.symbolVariant(.none)`, which COMBINES with the variant already in the environment
+            // rather than replacing it, so the bar's `.fill` survived and nothing changed. Writing
+            // the environment value directly is what overwrites it.
             //
-            // A pre-rendered bitmap is the only thing the bar leaves alone, which is why all four
-            // tabs use one. The cost is real and stated: a bitmap cannot be filled progressively as
-            // the glass pill glides over it, and it cannot play `.symbolEffect(.replace)`.
+            // Kept as a real symbol rather than the bitmap the other tabs use, deliberately: a
+            // symbol is the only thing iOS can fill progressively as the glass pill glides over it,
+            // which is the effect he is asking for. A bitmap forecloses it.
             //
-            // ⚠️ WHAT HE IS ASKING FOR IS NOT AVAILABLE HERE. "Fill as the pill arrives, the
-            // previous icon returning to an outline" needs the pill's live position and a
-            // touch-DOWN signal, and SwiftUI's TabView publishes neither. The reference app does it
-            // by not using a system tab bar at all: theirs is hand-built, and each icon is a
-            // one-shot animation file (`AnimatedStickerNode`, `playbackMode: .once` — TabBarNode).
-            // That is the price of the effect, and it is a whole tab bar, not a tweak.
-            MenuIcon(system: tab == 1 ? "phone.fill" : "phone", size: 25)
+            // ⚠️ IF THIS STILL COMES BACK FILLED, the environment is not the lever either and the
+            // answer is that the bar simply cannot show an unselected symbol. Then this goes back to
+            // `MenuIcon(system:)`, which does work, and the smooth fill needs a hand-built tab bar —
+            // which is how the reference app does it: no system tab bar at all, and each icon is a
+            // one-shot animation file (`AnimatedStickerNode`, `playbackMode: .once`, TabBarNode).
+            Image(systemName: tab == 1 ? "phone.fill" : "phone")
+                .environment(\.symbolVariants, .none)
+                .contentTransition(.symbolEffect(.replace))
         }
         .foregroundStyle(tab == 1 ? Color.primary : Color.secondary)
     }
