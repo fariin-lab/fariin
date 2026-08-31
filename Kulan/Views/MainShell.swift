@@ -186,10 +186,18 @@ struct MainShell: View {
     /// records from the menus and the swipe actions, twice. Baking the size into the bitmap is the
     /// one thing the conversion cannot ignore, so this uses the same renderer they do.
     @ViewBuilder private var storiesTabLabel: some View {
-        // ⚠️ ONE DRAWING, NOT TWO, AND THAT IS NOT AN OVERSIGHT. There is no filled `ic_stories`; the
-        // only asset is this outline. Stories therefore says "selected" with weight alone until
-        // somebody draws the filled twin, and inventing one is not mine to do.
-        Label { Text("Stories") } icon: { MenuIcon("ic_stories", size: 25) }
+        // ⛔ `ic_stories_fill` IS THE OUTLINE'S OWN GEOMETRY, NOT A NEW DRAWING. He asked for this
+        // tab to fill like the others, so the front card of the existing mark is filled solid and
+        // the plus is knocked OUT of it with `fill-rule="evenodd"` — the plus has to be a hole
+        // rather than a white shape, because these assets render as TEMPLATES and a white fill
+        // would be repainted with everything else.
+        //
+        // The back card stays a stroke on purpose. Filling both would need the front card
+        // subtracted out of the back one to keep the gap between them, which is boolean geometry
+        // and not something to hand-write into a path. One solid card behind one outlined card
+        // reads as "selected" and keeps the mark he approved.
+        Label { Text("Stories") } icon: { MenuIcon(tab == 0 ? "ic_stories_fill" : "ic_stories", size: 25) }
+            .foregroundStyle(tab == 0 ? Color.primary : Color.secondary)
     }
 
     /// ⛔ THE ICON ACTUALLY SWAPS NOW, AND THE OLD CODE ONLY LOOKED LIKE IT DID.
