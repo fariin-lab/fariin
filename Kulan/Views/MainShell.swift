@@ -186,7 +186,46 @@ struct MainShell: View {
     /// records from the menus and the swipe actions, twice. Baking the size into the bitmap is the
     /// one thing the conversion cannot ignore, so this uses the same renderer they do.
     @ViewBuilder private var storiesTabLabel: some View {
+        // ⚠️ ONE DRAWING, NOT TWO, AND THAT IS NOT AN OVERSIGHT. There is no filled `ic_stories`; the
+        // only asset is this outline. Stories therefore says "selected" with weight alone until
+        // somebody draws the filled twin, and inventing one is not mine to do.
         Label { Text("Stories") } icon: { MenuIcon("ic_stories", size: 25) }
+    }
+
+    /// ⛔ THE ICON ACTUALLY SWAPS NOW, AND THE OLD CODE ONLY LOOKED LIKE IT DID.
+    ///
+    /// `Tab("Calls", systemImage: tab == 1 ? "phone.fill" : "phone", value: 1)` takes the icon's
+    /// NAME and keeps whichever it was handed, so that ternary was read exactly ONCE, at launch,
+    /// when the selected tab was not Calls. No build has ever drawn the filled phone. It reads like
+    /// working code and has been dead since it was written.
+    ///
+    /// The `label:` closure form is re-evaluated when `tab` changes, which is the whole fix, and the
+    /// Settings tab has quietly proved it for months.
+    ///
+    /// His call, 2026-08-30, after reading what the reference does on a tap: three things change
+    /// there — a different drawing, a different colour, and a small animation. He asked for BLACK on
+    /// the selected tab, so ours is a filled glyph in `.primary` against an outline in `.secondary`.
+    ///
+    /// ⚠️ THE COLOUR HALF MAY NOT TAKE. The tab bar is native UIKit under SwiftUI and it tints its
+    /// own items; a `foregroundStyle` on the label is advice it is free to ignore, the same way it
+    /// ignores `.resizable()`. The glyph swap does not depend on the colour landing.
+    @ViewBuilder private var chatsTabLabel: some View {
+        Label {
+            Text("Chats")
+        } icon: {
+            MenuIcon(tab == 2 ? "ic_chat" : "ic_chat_outline", size: 25)
+        }
+        .foregroundStyle(tab == 2 ? Color.primary : Color.secondary)
+    }
+
+    @ViewBuilder private var callsTabLabel: some View {
+        Label {
+            Text("Calls")
+        } icon: {
+            Image(systemName: tab == 1 ? "phone.fill" : "phone")
+                .contentTransition(.symbolEffect(.replace))   // theirs animates through the change
+        }
+        .foregroundStyle(tab == 1 ? Color.primary : Color.secondary)
     }
 
     @ViewBuilder private var settingsTabLabel: some View {
@@ -271,12 +310,16 @@ struct MainShell: View {
             // ⛔ CALLS SITS BESIDE STORIES, CHATS SITS BESIDE SETTINGS — his call, 2026-08-30.
             // The two middle tabs are swapped from where they were this morning; the indices
             // follow the position, so Calls is 1 and Chats is 2 everywhere in this file.
-            Tab("Calls", systemImage: tab == 1 ? "phone.fill" : "phone", value: 1) {
+            Tab(value: 1) {
                 CallsView()
+            } label: {
+                callsTabLabel
             }
             .badge(missedBadge)   // 0 hides it
-            Tab("Chats", image: "ic_chat", value: 2) {
+            Tab(value: 2) {
                 ChatsView(onSignOut: onSignOut)
+            } label: {
+                chatsTabLabel
             }
             .badge(unreadChatsBadge)   // 0 hides it, same as the Calls tab
             Tab(value: 3) {
@@ -293,11 +336,11 @@ struct MainShell: View {
                 .tabItem { storiesTabLabel }
                 .tag(0)
             CallsView()
-                .tabItem { Label("Calls", systemImage: tab == 1 ? "phone.fill" : "phone") }
+                .tabItem { callsTabLabel }
                 .badge(missedBadge)
                 .tag(1)
             ChatsView(onSignOut: onSignOut)
-                .tabItem { Label("Chats", image: "ic_chat") }
+                .tabItem { chatsTabLabel }
                 .badge(unreadChatsBadge)
                 .tag(2)
             SettingsView(onSignOut: onSignOut, asTab: true)
