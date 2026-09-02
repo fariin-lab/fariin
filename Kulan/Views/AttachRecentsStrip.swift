@@ -42,8 +42,52 @@ import UIKit
     /// Wait for an in-flight `prewarm`. Returns at once when there isn't one, or when it is done.
     static func awaitWarm() async { await warmTask?.value }
 
+    /// ⛔ THE LIBRARY TELLS US, WE DO NOT FIND OUT ON OPEN — owner, 2026-09-02: "when I close, take a
+    /// new photo, then open, it refreshes AFTER opening; it must be ready when I open".
+    ///
+    /// ⚠️ THE BUG WAS THE FIRST WORD OF `prewarm`'s GUARD. `assets.isEmpty` made this a once-per-
+    /// process warm: the chat opened, the first page landed, and from then on nothing ever asked the
+    /// library again. Every later open showed that first page and then let `load()` replace it a
+    /// beat later, which is exactly the "refreshing after opening" he is describing — the sheet was
+    /// not slow, it was showing a stale answer while it fetched the real one.
+    ///
+    /// A change observer is the fix rather than a shorter cache life or a fetch on tap. PhotoKit
+    /// already knows the moment a screenshot or a camera roll write happens and will say so; asking
+    /// on every open would be work done at the one moment there is no time for it, and asking on a
+    /// timer would be both later and more often than needed.
+    private final class LibraryWatcher: NSObject, PHPhotoLibraryChangeObserver {
+        func photoLibraryDidChange(_ changeInstance: PHChange) {
+            // ⚠️ CALLED OFF THE MAIN THREAD, always. Everything this cache holds is main-actor.
+            Task { @MainActor in RecentsCache.refresh() }
+        }
+    }
+    private static let watcher = LibraryWatcher()
+    private static var watching = false
+    /// A change that arrived while a warm was already running. Without this the newest photo of a
+    /// burst can be the one that gets dropped: the change fires, `refresh` sees `warming` and
+    /// returns, and nothing asks again.
+    private static var refreshPending = false
+
+    /// Start listening. Safe to call repeatedly and before access is granted — it does nothing until
+    /// there is a library to watch, and the next call gets it.
+    static func startWatching() {
+        guard !watching else { return }
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status == .authorized || status == .limited else { return }
+        watching = true
+        PHPhotoLibrary.shared().register(watcher)
+    }
+
     static func prewarm() {
-        guard assets.isEmpty, !warming else { return }
+        guard assets.isEmpty else { return }
+        refresh()
+    }
+
+    /// Re-read the first page whether or not one is already cached. `prewarm` is this with a
+    /// "only if we have nothing" gate in front of it.
+    static func refresh() {
+        startWatching()
+        guard !warming else { refreshPending = true; return }
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard status == .authorized || status == .limited else { return }
         warming = true
@@ -62,6 +106,12 @@ import UIKit
                 RecentsCache.assets = out
                 RecentsCache.precache(Array(out.prefix(60)))   // first ~2 screens of thumbs, decoded + ready
                 RecentsCache.warming = false
+                // A change landed while this was in flight — go again, or the shot that arrived
+                // mid-warm is the one the sheet will be missing.
+                if RecentsCache.refreshPending {
+                    RecentsCache.refreshPending = false
+                    RecentsCache.refresh()
+                }
             }
         }
     }
@@ -178,6 +228,9 @@ struct AttachRecentsStrip: View {
         .overlay { if loadingPick { ProgressView().tint(.secondary) } }
         .task {
             guard status == .authorized || status == .limited else { return }
+            // Access may have been granted since the chat opened, in which case nothing has
+            // registered yet. Idempotent — see `RecentsCache.startWatching`.
+            RecentsCache.startWatching()
             // STABLE open: render the cached first page + albums instantly (no empty flash), then
             // refresh fresh underneath — the same pattern as the media gallery.
             if assets.isEmpty, selectedAlbum == nil {
