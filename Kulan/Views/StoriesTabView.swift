@@ -100,14 +100,21 @@ struct StoriesTabView: View {
                     ToolbarItem(placement: .topBarTrailing) { notificationsButton }
                     ToolbarItem(placement: .topBarTrailing) { addStoryButton }
                 }
-                // ⛔ A SEARCH FIELD UNDER THE HEADER — owner, 2026-09-02: "story page header make it
-                // like this, exactly like this, also search bar add". His reference draws it always
-                // present, not revealed by a pull, which is what `.always` means here; the default
-                // `.automatic` hides it until the page is scrolled to the top and his mockup has it
-                // sitting there with the page already scrolled.
-                .searchable(text: $search,
-                            placement: .navigationBarDrawer(displayMode: .always),
-                            prompt: "Search")
+                // ⛔ THE SAME CALL THE CHAT LIST AND THE CALLS PAGE MAKE, placement and all — owner,
+                // 2026-09-02: "make the story search bar exactly like the one on the chat list or
+                // the calls page".
+                //
+                // ⚠️ THE PLACEMENT IS WHAT HE WAS SEEING, not the shape. This asked for
+                // `.navigationBarDrawer(displayMode: .always)`, which pins the field open — and iOS
+                // draws a PINNED field differently from a scrolling one: outlined on a light ground
+                // rather than the filled grey the other two pages get. Two search fields in one app
+                // that do not match, from one argument.
+                //
+                // I added `.always` off his earlier "the header must look exactly like this", where
+                // the mockup showed the field sitting under a scrolled page. Matching the rest of
+                // the app is the better reading of the same wish, and it is the one he has now
+                // stated outright.
+                .searchable(text: $search, prompt: "Search")
                 .navigationDestination(for: GlowRoute.self) { glowDestination($0) }
                 .navigationDestination(for: ChatTarget.self) { t in
                     // Same rule as the chat list's stack: the official channel is its own screen,
