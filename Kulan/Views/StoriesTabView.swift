@@ -431,11 +431,15 @@ struct StoriesTabView: View {
                 }
                 .padding(.horizontal, GlowStoryCardView.margin)
             }
-            // ⛔ 8 — the gap BETWEEN two sections, on top of the heading's own 14 above. That comes
-            // to 22 from the strip's last label to the Glowing text, which is Apple's own spacing
-            // between a section and the heading of the next one. It was 20 here on top of a
-            // symmetric 44pt box, which is where his "too much" came from.
-            .padding(.top, 8)
+            // ⛔ NOTHING — owner, 2026-09-02: "Glowing, copy the spacing from the chat list's Chats
+            // text; use the top and bottom it uses".
+            //
+            // The chat list's headings carry 14 above and 8 below and NOTHING else: its list margin
+            // is 0 and its section spacing is 0, which is the reference app's rule read from source
+            // ("we do not want that spacing") and the reason his chat list looks right. This page
+            // added 8 on top of that, so the same heading sat 22 from what came before it there and
+            // 14 here. One number for one kind of label, across both pages.
+
         }
     }
 
