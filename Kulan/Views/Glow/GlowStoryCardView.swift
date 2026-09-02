@@ -7,6 +7,23 @@ import SwiftUI
 /// because they are the identical thing: somebody's newest story, big enough to judge by its
 /// picture. Two card views would be two places for a corner radius to drift.
 struct GlowStoryCardView: View {
+    /// ⛔ THE GEOMETRY IS FaceTime's CALL GRID, MEASURED — owner, 2026-09-02, sending that screen
+    /// beside ours: "size and rounded corners, I want like image one but you did image two, make it
+    /// like image one exactly". What was here was a guess at his earlier reference and it read as a
+    /// squatter, tighter grid: 0.74 against 0.655 is about 30pt of height on a card this wide, and
+    /// 10pt gutters against 16 is what made four cards read as a block rather than four cards.
+    ///
+    /// ⚠️ STATED ONCE BECAUSE THREE GRIDS DRAW THEM. Friends, Glowing, and the full Glowing page all
+    /// build the same card, and the Glowing section also draws a PLACEHOLDER that has to be the
+    /// identical size or the real cards jump when they land. Four copies of 22 is four places for a
+    /// corner to drift, which is the thing this file's own header warns about.
+    static let aspect: CGFloat = 0.655
+    static let corner: CGFloat = 26
+    /// The grid around the card, from the same screen: a 20pt margin each side and 16 between, which
+    /// on a 393pt phone leaves cards ~168pt wide.
+    static let gutter: CGFloat = 16
+    static let margin: CGFloat = 20
+
     let thumbUrl: String
     let name: String
     let authorPhoto: String?
@@ -37,16 +54,16 @@ struct GlowStoryCardView: View {
         Color.clear
             // His reference's proportion: a tall card, a touch shorter than a full 9:16 story, so
             // two columns of them leave room for a third row to peek and invite a scroll.
-            .aspectRatio(0.74, contentMode: .fit)
+            .aspectRatio(Self.aspect, contentMode: .fit)
             .overlay { StoryImage(url: thumbUrl) }
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
             .overlay(alignment: .bottom) {
                 // The name has to survive a bright photograph, and a scrim is what does that
                 // without dimming the whole card — the same trick the story caption uses.
                 LinearGradient(colors: [.black.opacity(0), .black.opacity(0.55)],
                                startPoint: .top, endPoint: .bottom)
                     .frame(height: 90)
-                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
                     .allowsHitTesting(false)
             }
             .overlay(alignment: .bottomLeading) {

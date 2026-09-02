@@ -188,10 +188,11 @@ struct StoriesTabView: View {
                 Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold))
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, GlowStoryCardView.margin)
 
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10),
-                                GridItem(.flexible(), spacing: 10)], spacing: 10) {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: GlowStoryCardView.gutter),
+                                GridItem(.flexible(), spacing: GlowStoryCardView.gutter)],
+                      spacing: GlowStoryCardView.gutter) {
                 // My own card first, wearing the ⊕ — his reference puts My Story at the front of
                 // the grid exactly as it is at the front of the strip.
                 if let mine = StoriesRepository.shared.mine, let newest = mine.stories.last {
@@ -213,7 +214,7 @@ struct StoriesTabView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, GlowStoryCardView.margin)
         }
         .padding(.top, 4)
     }
@@ -244,18 +245,20 @@ struct StoriesTabView: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .padding(.horizontal, 16)
+                .padding(.horizontal, GlowStoryCardView.margin)
 
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10),
-                                    GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: GlowStoryCardView.gutter),
+                                    GridItem(.flexible(), spacing: GlowStoryCardView.gutter)],
+                          spacing: GlowStoryCardView.gutter) {
                     if cards.isEmpty {
                         // Two empty cards while the pictures are fetched. They hold exactly the
                         // space the real ones will take, so nothing under them moves when they
                         // land — a placeholder that is a different size is just a slower jump.
                         ForEach(0..<2, id: \.self) { _ in
                             Color.primary.opacity(0.08)
-                                .aspectRatio(0.74, contentMode: .fit)
-                                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                                .aspectRatio(GlowStoryCardView.aspect, contentMode: .fit)
+                                .clipShape(RoundedRectangle(cornerRadius: GlowStoryCardView.corner,
+                                                            style: .continuous))
                         }
                     } else {
                         ForEach(cards) { c in
@@ -274,7 +277,7 @@ struct StoriesTabView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, GlowStoryCardView.margin)
             }
             .padding(.top, 20)
         }

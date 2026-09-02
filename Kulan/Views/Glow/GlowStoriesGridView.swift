@@ -58,8 +58,9 @@ struct GlowStoriesGridView: View {
                     : "Nobody you have a Glow with has posted in the last 24 hours."))
         case .loaded(let cards):
             ScrollView {
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10),
-                                    GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: GlowStoryCardView.gutter),
+                                    GridItem(.flexible(), spacing: GlowStoryCardView.gutter)],
+                          spacing: GlowStoryCardView.gutter) {
                     ForEach(cards) { c in
                         // The CARD is the story; the face on it is the person. Same split as the
                         // notifications row and the section this page grew out of — the picture
@@ -72,7 +73,7 @@ struct GlowStoriesGridView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, GlowStoryCardView.margin)
                 .padding(.top, 8)
             }
         }
