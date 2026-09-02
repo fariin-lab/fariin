@@ -134,6 +134,21 @@ struct ChatListTable: UIViewControllerRepresentable {
     var onStoryTap: (Conversation) -> Void
     var storySeen: (Conversation) -> [Bool]
 
+    /// ⛔ THEIR SWIPE SET, IN THEIR ORDER — `ThreadContextualActionProvider`, read from source:
+    /// leading is read-state then pin-state, trailing is archive, delete, mute. Ours had pin alone
+    /// on the leading edge and archive/mute/delete trailing, so two of the three were in a different
+    /// place and one was missing entirely.
+    var onToggleRead: (Conversation) -> Void
+    var onTogglePin: (Conversation) -> Void
+    var onArchive: (Conversation) -> Void
+    var onDelete: (Conversation) -> Void
+    var onMute: (Conversation) -> Void
+    /// The long-press menu's rows, as the SwiftUI screen already builds them, plus the peek it shows
+    /// above them. Handed over as makers rather than as views so the table can build a real
+    /// `UIContextMenuConfiguration` — which is what gives the peek its lift and its own dismissal.
+    var menuActions: (Conversation) -> [UIAction]
+    var peek: (Conversation) -> UIViewController
+
     func makeUIViewController(context: Context) -> ChatListTableController {
         let vc = ChatListTableController()
         vc.host = context.coordinator
@@ -262,6 +277,88 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
         return c
     }
 
+    // MARK: - Swipes
+
+    /// ⛔ THEIR ORDER, READ FROM `ThreadContextualActionProvider`: leading is READ-STATE then
+    /// PIN-STATE; trailing is ARCHIVE, DELETE, MUTE. Ours was pin alone on the left and
+    /// archive/mute/delete on the right — so mark-unread did not exist, and delete and mute were
+    /// swapped against theirs.
+    ///
+    /// ⚠️ A `UISwipeActionsConfiguration`'s array reads OUTWARDS FROM THE EDGE, which is why their
+    /// list looks reversed on screen: the first element is the one nearest the edge you dragged
+    /// from. Writing them in their order and letting UIKit place them is what keeps the two apps'
+    /// muscle memory the same.
+    func tableView(_ tableView: UITableView, canEditRowAt indexPath: IndexPath) -> Bool { true }
+
+    func tableView(_ tableView: UITableView,
+                   leadingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard let c = conversation(at: indexPath), let p = host?.parent else { return nil }
+        let read = UIContextualAction(style: .normal, title: c.hasUnreadMark(p.me) ? "Read" : "Unread") { _, _, done in
+            p.onToggleRead(c); done(true)
+        }
+        read.image = UIImage(systemName: c.hasUnreadMark(p.me) ? "envelope.open.fill" : "envelope.badge.fill")
+        read.backgroundColor = .systemBlue
+
+        let pinned = c.isPinned(p.me)
+        let pin = UIContextualAction(style: .normal, title: pinned ? "Unpin" : "Pin") { _, _, done in
+            p.onTogglePin(c); done(true)
+        }
+        pin.image = UIImage(systemName: pinned ? "pin.slash.fill" : "pin.fill")
+        pin.backgroundColor = .systemOrange
+
+        return UISwipeActionsConfiguration(actions: [read, pin])
+    }
+
+    func tableView(_ tableView: UITableView,
+                   trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard let c = conversation(at: indexPath), let p = host?.parent else { return nil }
+        let archive = UIContextualAction(style: .normal, title: "Archive") { _, _, done in
+            p.onArchive(c); done(true)
+        }
+        archive.image = UIImage(systemName: "archivebox.fill")
+        archive.backgroundColor = .systemGray
+
+        // ⚠️ `.destructive` ON DELETE, AND IT IS NOT ONLY THE COLOUR. A destructive contextual
+        // action is the one a FULL swipe performs, and it is the one UIKit animates the row out on.
+        // Ours was destructive too; the difference is that it now sits where theirs does.
+        let del = UIContextualAction(style: .destructive, title: "Delete") { _, _, done in
+            p.onDelete(c); done(true)
+        }
+        del.image = UIImage(systemName: "trash.fill")
+
+        let mute = UIContextualAction(style: .normal, title: "Mute") { _, _, done in
+            p.onMute(c); done(true)
+        }
+        mute.image = UIImage(systemName: "bell.slash.fill")
+        mute.backgroundColor = .systemIndigo
+
+        let cfg = UISwipeActionsConfiguration(actions: [archive, del, mute])
+        // ⛔ NO FULL-SWIPE DELETE. Theirs leaves `performsFirstActionWithFullSwipe` at its default,
+        // where the first trailing action is ARCHIVE — a full swipe archives, which is undoable.
+        // Ours must not let a long drag delete a conversation with no confirmation; `onDelete`
+        // raises the app's own alert, so the guard is really in the closure, and this line says the
+        // gesture is deliberate rather than inherited.
+        cfg.performsFirstActionWithFullSwipe = true
+        return cfg
+    }
+
+    // MARK: - Long press
+
+    /// ⛔ A REAL `UIContextMenuConfiguration`, WITH THE PEEK AS ITS PREVIEW — the same shape theirs
+    /// uses (`contextMenuConfigurationForRowAt` with a `previewProvider` and an `actionProvider`).
+    ///
+    /// ⚠️ THE IDENTIFIER IS THE CHAT'S ID, deliberately, and theirs is too. UIKit hands the identifier
+    /// back when the menu is dismissed, and a menu whose row has moved underneath it — which this
+    /// list does on every new message — can only find its way home if it can say WHICH chat it was.
+    func tableView(_ tableView: UITableView,
+                   contextMenuConfigurationForRowAt indexPath: IndexPath,
+                   point: CGPoint) -> UIContextMenuConfiguration? {
+        guard let c = conversation(at: indexPath), let p = host?.parent else { return nil }
+        return UIContextMenuConfiguration(identifier: c.id as NSString,
+                                          previewProvider: { p.peek(c) },
+                                          actionProvider: { _ in UIMenu(children: p.menuActions(c)) })
+    }
+
     // MARK: - Headers
 
     /// Their numbers, read from `CLVTableDataSource.viewForHeaderInSection`: a plain container with
@@ -313,10 +410,17 @@ final class ChatListTableController: UIViewController, UITableViewDataSource, UI
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
+        guard let c = conversation(at: indexPath) else { return }
+        host?.parent.onOpen(c)
+    }
+
+    /// One lookup for every delegate method above. Bounds-checked because a swipe or a menu can
+    /// outlive the row it started on — the list re-sorts on an incoming message, and an index path
+    /// captured a moment ago may now be past the end.
+    private func conversation(at indexPath: IndexPath) -> Conversation? {
         guard let s = ChatListSection(rawValue: indexPath.section),
-              let id = state.ids(in: s)[safe: indexPath.row],
-              let host, let conv = host.conversation(id) else { return }
-        host.parent.onOpen(conv)
+              let id = state.ids(in: s)[safe: indexPath.row] else { return nil }
+        return host?.conversation(id)
     }
 }
 
