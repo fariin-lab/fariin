@@ -158,7 +158,11 @@ struct ProfilePhotoSheet: View {
             Text("Choose a Photo")
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundStyle(ink)
-                .frame(height: 52)
+                // ⛔ 44, HIS NUMBER — 2026-09-02, with the button ringed. It was 52, which is a
+                // primary-action height, and this is not the page's primary action: the picture
+                // above it is, and Recents and Emoji under it are two more ways to change it. 44 is
+                // also Apple's touch floor, so it gives nothing up.
+                .frame(height: 44)
                 .padding(.horizontal, 30)
                 .liquidGlass(Capsule(), interactive: true)
                 .contentShape(Capsule())
