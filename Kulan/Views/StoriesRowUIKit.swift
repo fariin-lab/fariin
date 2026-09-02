@@ -45,7 +45,14 @@ import StoryUI
 /// and the 1.46 card aspect.
 @MainActor enum StoryRowMetrics {
     static let spacing: CGFloat = 10
-    static let hPad: CGFloat = 12
+    /// ⛔ 20, TO KEEP ONE LEFT EDGE — owner, 2026-09-02. He asked for the Glowing cards to be the
+    /// size his reference draws, which needs a 20pt margin, and he had earlier asked for the strip
+    /// and the grid to share an edge. Both hold only if this moves too, so it does.
+    ///
+    /// ⚠️ IT CHANGES `cardW`, WHICH IS DERIVED FROM IT — four cards and three gaps in the width
+    /// less two margins, so each strip tile loses four points. That is the arithmetic below doing
+    /// its job rather than a second decision.
+    static let hPad: CGFloat = 20
     static let vPad: CGFloat = 10
     static let labelGap: CGFloat = 6
     static let radius: CGFloat = 24
