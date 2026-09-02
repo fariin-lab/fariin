@@ -4032,8 +4032,23 @@ struct ThreadView: View {
             // ⚠️ No symbol transition on the swap. The app has one (`.contentTransition`) and it is
             // deliberately not used here — a travelling glyph on a control the finger just pressed
             // reads as lag, which is written up against the voice note's play disc.
-            Image(systemName: attachShowAlbums ? "chevron.left" : "photo.on.rectangle.angled")
-                .font(.system(size: 22, weight: .regular))
+            // ⚠️ TWO DRAWING MECHANISMS IN ONE BUTTON, and they cannot share a modifier chain. The
+            // album mark is one of HIS OWN SVGs (`ic_album`, supplied 2026-09-02) and an asset is
+            // sized by a `frame`; the back chevron is an SF Symbol and is sized by `font`. Sizing an
+            // asset with `font` does nothing at all, which is the quiet way this goes wrong.
+            //
+            // 24 against the symbol's 22 is not a mismatch: a symbol is drawn inset within its own
+            // box while an asset fills the frame it is given, so equal numbers would leave the
+            // drawing looking bigger than the chevron it replaces.
+            Group {
+                if attachShowAlbums {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 22, weight: .regular))
+                } else {
+                    Image("ic_album").renderingMode(.template).resizable().scaledToFit()
+                        .frame(width: 24, height: 24)
+                }
+            }
                 .foregroundStyle(.primary)
                 .frame(width: Self.attachBarHeight, height: Self.attachBarHeight)
                 // ⚠️ The glass goes on the LABEL, not around the Button. That is how the removed
