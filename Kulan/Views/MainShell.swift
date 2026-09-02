@@ -3400,19 +3400,25 @@ struct ChatRow: View, Equatable {
         // 56pt avatar; up to 2 preview lines; mute/pin/tick indicators inline.
         HStack(spacing: 12) {
             let _ = clockTick   // dependency: the tick task's flip must re-evaluate muted/timeStr
-            // ⛔ THE RING GOES OUTSIDE THE PHOTO. THE PHOTO NEVER SHRINKS. Measured off his
-            // reference screenshot, 2026-08-29: their avatar is 56pt whether it has a story or not,
-            // and the ring is a 2pt stroke at 60pt OUTER — it overhangs the 16pt margin by 2pt and
-            // touches nothing else.
+            // ⛔ ONE OUTER CIRCLE FOR EVERY ROW, AND THE PHOTO SHRINKS TO PAY FOR THE RING — owner,
+            // 2026-09-02, with the ringed run of rows circled: "story users and non-story users look
+            // different sizes; when a user uploads a story make the avatar small, the same as
+            // non-story users; now story users are bigger".
             //
-            // ⚠️ THIS REVERSES THE RULE THAT USED TO BE WRITTEN HERE ("the photo shrinks a hair
-            // inside the same 56pt footprint, so ringed and ringless avatars line up equal"). The
-            // footprint did line up. The FACES did not: 49 against 56 is an eighth of the diameter,
-            // and in a list where most rows have a story and some do not, the faces visibly change
-            // size from row to row. That is what he was seeing.
+            // ⚠️ THIS IS THE THIRD SETTING AND IT REVERSES HIS OWN 2026-08-29 RULE, deliberately and
+            // on his newer word. There are only two ways to draw a ring and they cannot both be had:
             //
-            // The text column does not move either way — the HStack still measures 56 — because the
-            // ring is an overlay that draws past its own bounds.
+            //   equal FACES  → the ring must live outside 56, so a ringed row's outer circle is 66
+            //                  and reads as a bigger avatar. That was here, and it is what he just
+            //                  circled.
+            //   equal CIRCLES → the ring is the 56, so the photo inside it is 46 and ringed faces
+            //                  are smaller. That is this, and it is what he asked for.
+            //
+            // The arithmetic: the arc is drawn inset by its own stroke, so a 56pt ring's inner edge
+            // sits at 28 − 2 = 26, and a 46pt photo leaves the same 3pt of breathing room all round
+            // that the 66/56 pair had. Nothing else about the row moves — the slot below is still a
+            // flat 56, so the text column, the row height and the 16pt margin are untouched.
+            let photoSize: CGFloat = storySeen.isEmpty ? 56 : 46
             Group {
                 // The official channel has no account and therefore no profile photo to fetch: its
                 // face is the app's own mark, drawn from the bundle. Same 56pt footprint as every
@@ -3421,7 +3427,7 @@ struct ChatRow: View, Equatable {
                     OfficialAvatar(size: 56)
                 } else {
                     AvatarView(name: conv.displayName(me), photoUrl: conv.displayPhoto(me),
-                               size: 56)
+                               size: photoSize)
                 }
             }
                 // THIS CIRCLE IS THE STORY'S DOOR: opening from here grows the viewer out of it, and
@@ -3435,24 +3441,19 @@ struct ChatRow: View, Equatable {
                 //
                 // Reported on the PHOTO, not the ring: with the ring inside the anchor the transition
                 // stretched the grey ring segments, which the owner screenshotted.
+                // ⚠️ HALF THE PHOTO, WHICH IS NOW A VARIABLE. A source reporting half its short side
+                // gets a CIRCULAR flight, so a hardcoded 28 against a 46pt photo would hand the
+                // morph a rounded square and the story would fly out of the wrong shape.
                 .modifier(MediaRectReporter(id: "row-\(conv.id)", scope: .storyRow,
-                                            cornerRadius: 28))
+                                            cornerRadius: photoSize / 2))
                 .frame(width: 56, height: 56)
                 .overlay {   // story ring around the avatar when this person has an active story
                     if !storySeen.isEmpty {
-                        // ⛔ 66, NOT 60 — owner, 2026-09-02, ringed in red: "avatar and circle
-                        // there's no space". The 60 was measured as "just outside a 56pt photo"
-                        // and the arithmetic shows why it photographed as TOUCHING: the ring's arc
-                        // is drawn inset by its own stroke, so its inner edge sits at 60⁄2 − 2 =
-                        // 28pt — the photo's exact radius, a 0pt gap. At 66 the inner edge is 31,
-                        // a visible 3pt of breathing room all round.
-                        //
-                        // The photo stays 56 — his standing rule from 2026-08-29: the ring goes
-                        // OUTSIDE the photo, the photo never shrinks. An overlay may draw past its
-                        // parent's bounds, so nothing in the row moves; the ring now reaches 11pt
-                        // from the screen edge (was 14) and still touches nothing.
+                        // 56, THE SAME OUTER CIRCLE A PLAIN AVATAR HAS — see the note above. It was
+                        // 66 while the photo stayed 56; both numbers moved together because they are
+                        // one measurement, and the 3pt gap between arc and face is unchanged.
                         StoryRingView(seen: storySeen, lineWidth: 2)
-                            .frame(width: 66, height: 66)
+                            .frame(width: 56, height: 56)
                     }
                 }
                 // Tap the ringed avatar → open their story (high-priority so it beats the row's open-chat tap).
