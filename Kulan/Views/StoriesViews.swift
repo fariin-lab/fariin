@@ -2774,6 +2774,8 @@ struct StoryViewer: View {
         if s.oneTime { return StoryAudienceBadge(systemImage: "1.circle", text: text) }
         switch s.audienceLabel {
         case "everyone": return StoryAudienceBadge(systemImage: "globe", text: text)
+        // Glow's own mark, so the pill on the story says the same thing as the row in the sheet.
+        case "glowers": return StoryAudienceBadge(systemImage: "sparkles", text: text)
         case "custom":
             // The owner's own folder drawing (2026-08-07). OUTLINE here: this pill is a thin line of
             // white over a photograph, next to a light-weight name, and the filled version reads as a
@@ -5431,6 +5433,14 @@ func storyAudienceTitle(for s: Story) -> String {
     if s.oneTime { return "View once" }
     switch s.audienceLabel {
     case "everyone": return "Everyone"
+    // ⛔ HIS REPORT OFF BUILD 727: post to Glowers, and the header still said "My Friends".
+    //
+    // ⚠️ THE LABEL WAS BEING WRITTEN CORRECTLY ALL ALONG — the bug was on the READING side. Adding
+    // `StoryAudienceTag.glowers` gave the post path a fifth word, and THREE separate switches over
+    // `audienceLabel` end in `default: "My Friends"`. A new word therefore does not appear as a
+    // gap; it silently becomes the default, which is the most convincing way to be wrong.
+    // The other two are `storyAudienceBadge` below and `ShareStorySheet.seedFromStory`.
+    case "glowers": return "Glowers"
     case "custom":
         // The author's private name for the list. A name this device happens not to have (posted
         // from another phone, or reinstalled) falls through to the plain type, which is the safe way

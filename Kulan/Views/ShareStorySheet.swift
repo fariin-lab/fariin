@@ -285,6 +285,9 @@ struct ShareStorySheet: View {
     private func seedFromStory(_ s: Story) {
         switch s.audienceLabel {
         case "everyone": editSelection = store.everyone.id
+        // Without this, re-opening the audience sheet on a Glowers story would show My Friends
+        // ticked — and saving would then MOVE the story to an audience he never chose.
+        case "glowers": editSelection = StoryAudience.glowersId
         case "custom":
             let remembered = StoryPrefs.audienceName(storyId: s.id) ?? ""
             let names = Set(remembered.split(separator: ",")

@@ -91,6 +91,18 @@ struct SettingsView: View {
                     NavigationLink { AccountSettingsView(onSignOut: onSignOut) } label: {
                         SettingsRowLabel("Account", "ic_account")
                     }
+                    // ⛔ MY PROFILE — his ask, 2026-09-02: "add My profile card in between account
+                    // and Devices". It opens `GlowProfileView` on his OWN uid, which is the page
+                    // that already exists for this: photo, name, handle, bio, the Glow stats card
+                    // and Posted stories. A second "my profile" screen would be a second place for
+                    // those to drift.
+                    NavigationLink {
+                        GlowProfileView(uid: AuthService.shared.uid ?? "",
+                                        initialName: profile.me?.name ?? "",
+                                        initialPhoto: profile.me?.photoUrl)
+                    } label: {
+                        SettingsRowLabel("My Profile", "ic_account")
+                    }
                     NavigationLink { DevicesView() } label: {
                         SettingsRowLabel("Devices", "ic_linked_devices")
                     }
