@@ -56,13 +56,29 @@ struct GlowProfileView: View {
                     Color.clear.frame(height: 32)
                 }
             }
+            // ⛔ THE PHOTOGRAPH RUNS TO THE TOP OF THE SCREEN — owner, 2026-09-02: "when I enter my
+            // profile the top header looks a different colour". It was not a colour, it was a gap:
+            // the scroll content started BELOW the status bar, so the strip behind the clock was
+            // `pageColor` — a flat tone pulled from the photo — while the photo itself began an inch
+            // lower. Two versions of the same colour meeting in a line is exactly what he saw.
+            //
+            // A full-bleed header means full bleed. The back button already floats on the picture
+            // and `header`'s own `ZStack(alignment: .top)` keeps it clear of the clock.
+            .ignoresSafeArea(edges: .top)
         }
+        // ⛔ NO TAB BAR ON THIS PAGE — owner, same report: "when I enter, hide the nav bottom bar".
+        // It is a profile opened from a story, not a tab, and the bar was sitting over the Posted
+        // stories card. `.tabBar` is the placement; hiding it here restores it on the way back.
+        .toolbar(.hidden, for: .tabBar)
         // The page is a coloured photograph whatever the phone is set to — the same rule the chat
         // with a wallpaper follows, and for the same reason: light chrome on a lit picture washes
         // out. `\.colorScheme`, never `preferredColorScheme` — see the note in ThreadView.
         .environment(\.colorScheme, .dark)
         .toolbar(.hidden, for: .navigationBar)
         .task { await load() }
+        // Keyed on the relationship, so the faces appear the moment the listeners deliver rather
+        // than only if they happened to be there on the first frame. See `faceKey`.
+        .task(id: faceKey) { await loadFaces() }
     }
 
     // MARK: - Header
@@ -329,11 +345,28 @@ struct GlowProfileView: View {
         } else if profile == nil {
             failed = true
         }
-        if isMe {
-            let ids = Array(glow.glowRelationship).sorted()
-            await faces.load(Array(ids.prefix(3)), key: "faces-" + ids.prefix(3).joined())
-        }
         await loadStories()
+    }
+
+    /// The three uids whose faces the card draws, as a key.
+    ///
+    /// ⛔ THE FACES USED TO LOAD ONCE, INSIDE `load()`, AND THAT IS WHY HE SAW THE GLYPH — owner,
+    /// 2026-09-02: "remove the icon on my profile, change it to 3 people avatars; that icon should
+    /// only show when glowers is 0". His card said 4 Glowers and drew the fallback anyway.
+    ///
+    /// ⚠️ IT WAS A RACE, NOT A MISSING FEATURE. `load()` runs in `.task`, which fires on the first
+    /// frame — often before `GlowService`'s two listeners have delivered anything. So `ids` was
+    /// empty, the loader was asked for nobody, and it recorded that as its loaded answer; when the
+    /// relationship arrived a moment later nothing asked again. Keyed on the relationship instead,
+    /// so the arrival IS the trigger — the same fix the Stories page's `hasGlowGrid` needed.
+    private var faceKey: String {
+        isMe ? Array(glow.glowRelationship).sorted().prefix(3).joined(separator: ",") : ""
+    }
+
+    private func loadFaces() async {
+        guard isMe else { return }
+        let ids = Array(glow.glowRelationship).sorted().prefix(3)
+        await faces.load(Array(ids), key: "faces-" + faceKey)
     }
 
     private func loadStories() async {

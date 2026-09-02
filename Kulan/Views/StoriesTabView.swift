@@ -57,6 +57,32 @@ struct StoriesTabView: View {
     /// card geometry has already been through once today.
     private static let sectionTitle = Font.system(size: 17, weight: .bold)
 
+    /// A section heading that opens a page.
+    ///
+    /// ⛔ 44 TALL AND THE FULL WIDTH — owner, 2026-09-02: "the Glowing text touch area is so small,
+    /// when I click the text at the same time a story opens". The heading was a bare `HStack`, which
+    /// hugs its own words: about 80 by 22 points of target in a row 393 wide. A tap a few points off
+    /// the letters missed it entirely and landed on the card underneath, which opens a story — so
+    /// the miss did not feel like a miss, it felt like the wrong thing happening.
+    ///
+    /// `Spacer` + `contentShape` is what makes the whole row hittable rather than only the ink, and
+    /// 44 is Apple's floor for a touch target. Nothing else lives on this row, so the width costs
+    /// nothing.
+    @ViewBuilder private func sectionHeading(_ title: String, route: GlowRoute) -> some View {
+        NavigationLink(value: route) {
+            HStack(spacing: 4) {
+                Text(title).font(Self.sectionTitle).foregroundStyle(.primary)
+                Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, GlowStoryCardView.margin)
+            .frame(height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     var body: some View {
         NavigationStack(path: $path) {
             content
@@ -148,6 +174,12 @@ struct StoriesTabView: View {
                     // The reasoning holds up: with a Glowing grid underneath it, Friends is a strip
                     // so the two sections can both be seen. With nothing underneath, a single strip
                     // leaves most of the page empty, and the cards are the better use of it.
+                    // ⛔ THE STRIP GETS A HEADING TOO — owner, 2026-09-02: "add text for friends
+                    // story… and when I click it show friends' stories". The grid layout has had
+                    // one since it was built; the strip layout did not, so the same section was
+                    // named on one design and anonymous on the other, and only one of them could be
+                    // opened in full.
+                    if hasGlowGrid { sectionHeading("Friends", route: .friends) }
                     if hasGlowGrid { StoriesRow(meName: profile.me?.name ?? "You", mePhoto: profile.me?.photoUrl,
                                // HOLD THE ROW STILL WHILE A STORY IS OPEN. Watching someone's last
                                // unseen story re-sorts the row live, so their card slid out from
@@ -159,7 +191,7 @@ struct StoriesTabView: View {
                                onProfile: { g in profileGroup = g },
                                onOpenUploading: { openUploadingStory() })
                     } else {
-                        friendsGrid
+                        friendsGrid()
                     }
                     // ⛔ GLOW SITS UNDER FRIENDS AND IS NOT MIXED INTO IT — his requirement 10,
                     // 2026-09-02: "Glowers must not be mixed into the Friends Story list". The row
@@ -278,15 +310,12 @@ struct StoriesTabView: View {
     /// is teaching the UIKit row a second layout, which is a much larger change to the one file this
     /// app has been most often burned by. If the missing morph reads wrong on his phone, the fix is
     /// to register these cards with `StoryCardMorph` — not to reimplement the row.
-    @ViewBuilder private var friendsGrid: some View {
+    /// - Parameter showsHeading: false on the page the heading itself opens — a nav bar already
+    ///   says "Friends" there, and a second one under it is the same word twice.
+    @ViewBuilder private func friendsGrid(showsHeading: Bool = true) -> some View {
         let groups = StoriesRepository.shared.others.filter { !StoryPrefs.isHidden($0.authorUid) }
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 4) {
-                Text("Friends").font(Self.sectionTitle)
-                Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, GlowStoryCardView.margin)
+            if showsHeading { sectionHeading("Friends", route: .friends) }
 
             LazyVGrid(columns: [GridItem(.flexible(), spacing: GlowStoryCardView.gutter),
                                 GridItem(.flexible(), spacing: GlowStoryCardView.gutter)],
@@ -339,16 +368,7 @@ struct StoriesTabView: View {
         // the page never changes shape once it is on screen.
         if hasGlowGrid {
             VStack(alignment: .leading, spacing: 12) {
-                NavigationLink(value: GlowRoute.stories) {
-                    HStack(spacing: 4) {
-                        Text("Glowing").font(Self.sectionTitle)
-                            .foregroundStyle(.primary)
-                        Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, GlowStoryCardView.margin)
+                sectionHeading("Glowing", route: .stories)
 
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: GlowStoryCardView.gutter),
                                     GridItem(.flexible(), spacing: GlowStoryCardView.gutter)],
@@ -400,6 +420,10 @@ struct StoriesTabView: View {
         /// stories. The people list belongs to the profile's stats card, where the question
         /// really is "who".
         case stories
+        /// All FRIENDS' stories, the same grid the page falls back to when there is no Glowing
+        /// section — owner, 2026-09-02: "add text for friends story, and when I click it show
+        /// friends' stories". The strip shows four; this shows everybody.
+        case friends
         case notifications
         case storyPrivacy
         case profile(String, String, String)   // uid, name, photo
@@ -411,6 +435,12 @@ struct StoriesTabView: View {
             GlowPeopleListView(side: .glowers)
         case .stories:
             GlowStoriesGridView()
+        case .friends:
+            // The same grid the page draws when nothing sits under it — one definition, so the
+            // full page and the no-Glow layout can never come to disagree about a card.
+            ScrollView { friendsGrid(showsHeading: false).padding(.top, 4) }
+                .navigationTitle("Friends")
+                .navigationBarTitleDisplayMode(.inline)
         case .notifications:
             GlowNotificationsView()
         case .storyPrivacy:
