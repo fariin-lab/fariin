@@ -58,10 +58,12 @@ final class VoicePlayDiscControl: UIView {
     /// is exactly the pale disc in his screenshot. It is also why the disc needs no knowledge of
     /// the wallpaper, the chat colour or the theme — a lighter version of whatever it sits on.
     ///
-    /// ⚠️ ONLY WHERE THE BUBBLE IS A MATERIAL. On a flat bubble — no wallpaper, or Reduce
-    /// Transparency, or any note I sent, which is a solid chat colour — a blur samples a flat
-    /// colour and resolves to very nearly that colour, so the disc would disappear into the bubble.
-    /// Those keep the solid fill, which is what `MessageRowView` decides from the row's own fill.
+    /// ⚠️ ONLY WHERE THE BUBBLE IS A BLURRED WALLPAPER SURFACE — his slice recipe or a system
+    /// material, `BubbleFill.isWallpaperBlur` decides, and NOT `== .material`: that comparison made
+    /// this disc fall silently back to a flat colour the day the slice was restored, and he sent
+    /// the identical screenshot twice in one day because of it. On a genuinely flat bubble — no
+    /// wallpaper, Reduce Transparency, or any note I sent, a solid chat colour — a blur samples a
+    /// flat colour and resolves to very nearly that colour, so those keep the solid fill.
     var usesBlur: Bool = false {
         didSet {
             guard usesBlur != oldValue else { return }

@@ -93,8 +93,10 @@ enum Theme {
     /// surface again, it has to grow the `dark` argument the preview path already takes, or a chat
     /// will draw two different greys in one conversation — that mismatch has shipped here once.
     ///
-    /// ⚠️ `VoicePlayDiscControl` also reads this for the play disc's own blur, and its disc only
-    /// turns to a blur when the row's fill really is `.material`, so the two agree by construction.
+    /// ⚠️ `VoicePlayDiscControl` also reads this for the play disc's own blur. The disc turns to a
+    /// blur on ANY blurred wallpaper surface (`BubbleFill.isWallpaperBlur` — the slice included),
+    /// so on a slice bubble this material samples the slice's pixels and lands as a lighter patch
+    /// of it, which is exactly the disc he asked for.
     static var receivedBlurStyle: UIBlurEffect.Style { .systemUltraThinMaterial }
     static var receivedMaterial: Material { .ultraThin }
 

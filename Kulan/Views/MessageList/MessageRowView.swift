@@ -920,9 +920,11 @@ final class MessageRowView: UIView {
         v2.frame = CGRect(origin: .zero, size: b.bubble.size)
         v2.onPlayToggle = { [weak self] in self?.onVoicePlayToggle?() }
         // The row already resolved what paints behind this bubble; the disc only needs to know
-        // whether that is the system blur, so it can be one too rather than a flat colour.
+        // whether that is a blurred wallpaper surface — EITHER recipe — so it can be a blur too.
+        // ⚠️ `isWallpaperBlur`, never `== .material`: that exact comparison is what made the disc
+        // fall back to a flat colour the day the slice was restored. See the note on the helper.
         v2.configure(v, plan: plan, tint: b.textColor,
-                     onMaterial: row.fill == .material, cid: cid)
+                     onMaterial: row.fill.isWallpaperBlur, cid: cid)
     }
 
     private func applyLinkPreview(_ b: BubblePlan, model m: MessageRowModel, cid: String) {

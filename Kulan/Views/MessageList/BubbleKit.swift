@@ -121,6 +121,22 @@ enum BubbleFill: Equatable {
     /// jumbomoji, which is why an emoji message lines up with an ordinary one exactly.
     case clear
 
+    /// Does this bubble wear a blurred picture of the wallpaper — EITHER recipe? True for the
+    /// hand-built slice and for the system material alike.
+    ///
+    /// ⛔ Owner, 2026-09-02, the SAME screenshot twice in one day: "play button inside the voice
+    /// bubble now is only fixed color, make it using blur of the bubble". The first fix keyed the
+    /// voice disc off `== .material`, which was true that morning and became false the moment he
+    /// restored the slice — so his own restore silently switched the disc back to a flat colour and
+    /// the report came straight back. The disc's question was never "is this a material"; it is
+    /// "is there a blurred wallpaper under me that a second blur would read as a lighter patch of".
+    /// Both surfaces answer yes, and whichever way that family flips next, this stays true.
+    var isWallpaperBlur: Bool {
+        if case .wallpaperSlice = self { return true }
+        if case .material = self { return true }
+        return false
+    }
+
     /// A representative colour, for the places that need one number. Never used to paint a gradient.
     var representative: UIColor {
         switch self {
