@@ -59,26 +59,37 @@ struct GlowPeopleListView: View {
         HStack(spacing: 0) {
             ForEach([Side.glowers, Side.glowing], id: \.self) { s in
                 Button { tab = s; query = "" } label: {
-                    VStack(spacing: 8) {
+                    VStack(spacing: 7) {
                         Text("\(count(s)) \(s.title)")
                             .font(.system(size: 16, weight: tab == s ? .bold : .regular))
                             .foregroundStyle(tab == s ? Color.primary : .secondary)
                             .lineLimit(1)
-                        Rectangle()
+                        // ⛔ THE UNDERLINE IS THE WORD'S WIDTH, NOT THE TAB'S — owner, 2026-09-02:
+                        // "the white line now looks too much, make it small". It was a full-width
+                        // rule under half the screen, which reads as a divider that happens to be
+                        // white rather than as a mark on the selected tab. `fixedSize` collapses
+                        // the stack to the label, and the `maxWidth` below centres that in its half.
+                        Capsule()
                             .fill(tab == s ? Color.primary : .clear)
                             .frame(height: 2)
                     }
+                    .fixedSize(horizontal: true, vertical: false)
                 }
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity)
             }
         }
         .padding(.top, 4)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Color.primary.opacity(0.10)).frame(height: 1)
-        }
+        // ⛔ NO HAND-DRAWN HAIRLINE — owner, same report: "the top header now has a border, use
+        // Apple native design". A 1pt rule under the tabs is a second edge competing with the nav
+        // bar's own, which draws its separator only when there is content under it. Ours was always
+        // there, which is what made the header read as boxed in.
     }
 
+    /// ⛔ A NATIVE-SHAPED SEARCH FIELD — owner, 2026-09-02: "search bar size and rounded corners,
+    /// use Apple corners". The system's own field is a fully rounded capsule about 36pt tall; this
+    /// was a 12pt rounded rectangle at roughly 38, which reads as a text box rather than a search
+    /// field. Capsule and a stated 36 so it matches the one the chat list gets from `.searchable`.
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -92,8 +103,9 @@ struct GlowPeopleListView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 12).padding(.vertical, 9)
-        .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 12)
+        .frame(height: 36)
+        .background(Color.primary.opacity(0.07), in: Capsule())
         .padding(.horizontal, 16).padding(.vertical, 12)
     }
 
@@ -170,6 +182,11 @@ private struct GlowPersonRow: View {
     let person: GlowPerson
     let side: GlowPeopleListView.Side
     private var glow = GlowService.shared
+    @State private var showProfile = false
+    /// ⚠️ READ FOR THE BUTTON LABELS, and it is not cosmetic. `GlowStyle.accent` is `Color.primary`,
+    /// which is WHITE at night — so a filled button needs `onAccent`, and a hardcoded white label on
+    /// it is invisible. See the note on `GlowStyle.accent`.
+    @Environment(\.colorScheme) private var scheme
 
     init(person: GlowPerson, side: GlowPeopleListView.Side) {
         self.person = person
@@ -178,12 +195,14 @@ private struct GlowPersonRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            NavigationLink {
-                GlowProfileView(uid: person.id, initialName: person.name,
-                                initialPhoto: person.photoUrl)
-            } label: {
+            // ⛔ A BUTTON AND A SHEET, NOT A `NavigationLink` — owner, 2026-09-02: "remove the small
+            // arrow next to the name". A `NavigationLink` inside a `List` draws a disclosure chevron
+            // and there is no modifier that turns it off; the row has its own trailing controls, so
+            // a second arrow between the name and them was pointing at nothing the eye could follow.
+            Button { showProfile = true } label: {
                 HStack(spacing: 12) {
-                    AvatarView(name: person.name, photoUrl: person.photoUrl, size: 48)
+                    // 62, his number.
+                    AvatarView(name: person.name, photoUrl: person.photoUrl, size: 62)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(person.name).font(.system(size: 15, weight: .semibold)).lineLimit(1)
                         if !person.handle.isEmpty {
@@ -200,6 +219,30 @@ private struct GlowPersonRow: View {
             action
             dismissX
         }
+        // ⛔ THE ORDINARY PROFILE, NOT THE GLOW ONE — owner, 2026-09-02: "when I click a profile
+        // you're showing me Glowers and Posted stories; that's wrong, that's the one I see when I
+        // enter MY profile. Show a normal profile like the chat profile: call, mute, disappearing
+        // messages."
+        //
+        // He is right and it was my mistake to route here. `GlowProfileView` was built from his
+        // reference of HIS OWN page — the stats card is a door to my own lists and the posted-stories
+        // rail is my own stories with their view counts. On somebody else it shows a stats card that
+        // cannot open (their names are private, by his own rule) above a rail of their stories, and
+        // none of the things you actually want on a person: call, mute, media, disappearing
+        // messages. Those all already exist on `ContactInfoView`, which is also where his Glow
+        // button lives.
+        .sheet(isPresented: $showProfile) {
+            NavigationStack {
+                ContactInfoView(cid: Self.cid(with: person.id), name: person.name,
+                                photoUrl: person.photoUrl, source: .story)
+            }
+        }
+    }
+
+    /// The 1:1 conversation id for somebody, which is derived rather than looked up — the chat need
+    /// not exist yet, and `ContactInfoView` opens on a person whether or not there is a thread.
+    private static func cid(with other: String) -> String {
+        [AuthService.shared.uid ?? "", other].sorted().joined(separator: "_")
     }
 
     /// The wide button. What it offers depends on the side AND on whether the glow is already
@@ -208,29 +251,45 @@ private struct GlowPersonRow: View {
     @ViewBuilder private var action: some View {
         if side == .glowers {
             if glow.isGlowing(person.id) {
-                Text("Glowing")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(minWidth: 92)
+                outlined("Glowing") { glow.remove(to: person.id) }
             } else {
-                Button { glow.give(to: person.id) } label: {
-                    Text("Glow back")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(minWidth: 92)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(GlowStyle.accent)
-                .controlSize(.regular)
+                filled("Glow back") { glow.give(to: person.id) }
             }
         } else {
-            Button { glow.remove(to: person.id) } label: {
-                Text("Glowing")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(minWidth: 92)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.regular)
+            outlined("Glowing") { glow.remove(to: person.id) }
         }
+    }
+
+    /// ⛔ THE LABEL TAKES ITS COLOUR FROM `onAccent` — owner, 2026-09-02: "fix Glow back, the text
+    /// can't be seen in dark mode". `.borderedProminent` tinted with `GlowStyle.accent` filled the
+    /// capsule with `Color.primary` — white at night — and then drew the system's own white label on
+    /// it. White on white. This is the exact trap `GlowStyle.accent`'s note warns about, and I wrote
+    /// the warning and then walked into it here.
+    private func filled(_ title: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(GlowStyle.onAccent(scheme == .dark))
+                .frame(minWidth: 92).frame(height: 34)
+                .background(GlowStyle.accent, in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// ⛔ A DRAWN BORDER — owner, same report: "the Glowing button has no border". `.bordered` fills
+    /// with a tint at about 12% and draws no stroke at all, which on this page's black is a button
+    /// you can only find by knowing it is there. A stated 1pt outline is the pair to `filled` above:
+    /// same size, same shape, opposite emphasis.
+    private func outlined(_ title: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.primary)
+                .frame(minWidth: 92).frame(height: 34)
+                .background(Color.primary.opacity(0.06), in: Capsule())
+                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.35), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
     }
 
     /// ⚠️ THE ✕ MEANS TWO DIFFERENT THINGS AND ONLY ONE OF THEM IS DESTRUCTIVE. On the GLOWERS side

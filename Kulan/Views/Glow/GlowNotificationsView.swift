@@ -188,9 +188,13 @@ private struct GlowEventRow: View {
             Circle().fill(unread ? GlowStyle.accent : .clear).frame(width: 6, height: 6)
 
             // THE PERSON — face and words together, because they name one thing.
+            // The ORDINARY profile — see the note on the same route in `StoriesTabView`. The Glow
+            // profile is my own page and nobody else's.
             NavigationLink {
-                GlowProfileView(uid: event.person.id, initialName: event.person.name,
-                                initialPhoto: event.person.photoUrl)
+                ContactInfoView(cid: [AuthService.shared.uid ?? "", event.person.id]
+                                    .sorted().joined(separator: "_"),
+                                name: event.person.name,
+                                photoUrl: event.person.photoUrl, source: .story)
             } label: {
                 HStack(spacing: 12) {
                     // 52, up from 44 — his "avatars look small".

@@ -450,8 +450,17 @@ struct StoriesTabView: View {
             // copy of those switches is how two screens come to disagree about one setting.
             StorySettingsView()
         case .profile(let uid, let name, let photo):
-            GlowProfileView(uid: uid, initialName: name,
-                            initialPhoto: photo.isEmpty ? nil : photo)
+            // ⛔ THE ORDINARY PROFILE FOR ANOTHER PERSON — owner, 2026-09-02: "when I click a
+            // profile you're showing me Glowers and Posted stories; that's the one I see when I
+            // enter MY profile. Show a normal profile like the chat profile."
+            //
+            // `GlowProfileView` was built from his reference of HIS OWN page and stays that: the
+            // stats card is a door to my own lists and the rail is my own stories with their view
+            // counts. On somebody else it offers a card that cannot open and withholds everything
+            // you actually want on a person — call, mute, media, disappearing messages — all of
+            // which `ContactInfoView` already has, along with his Glow button.
+            ContactInfoView(cid: storyCid(uid), name: name,
+                            photoUrl: photo.isEmpty ? nil : photo, source: .story)
         }
     }
 

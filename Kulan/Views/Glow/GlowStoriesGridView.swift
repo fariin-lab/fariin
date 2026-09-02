@@ -25,8 +25,11 @@ struct GlowStoriesGridView: View {
         content
             .navigationTitle("Glowing")
             .navigationBarTitleDisplayMode(.inline)
+            // The ORDINARY profile — see the note on the same route in `StoriesTabView`. The Glow
+            // profile is my own page and nobody else's.
             .navigationDestination(item: $profileTarget) { p in
-                GlowProfileView(uid: p.id, initialName: p.name, initialPhoto: p.photoUrl)
+                ContactInfoView(cid: [AuthService.shared.uid ?? "", p.id].sorted().joined(separator: "_"),
+                                name: p.name, photoUrl: p.photoUrl, source: .story)
             }
             .task(id: key) { await loader.load(Array(glow.glowRelationship).sorted(), key: key) }
     }
