@@ -46,7 +46,15 @@ struct GlowNotificationsView: View {
             chips
             content
         }
-        .navigationTitle("Glow notifications")
+        // ⛔ "Notifications", NOT "Glow notifications" — owner, 2026-09-02: "this page is not only
+        // glow notifications, it's the person's notifications: when you upload a story and friends
+        // react you see it here, when you get new glowers you see it here. Don't say glow
+        // notifications, say only notifications."
+        //
+        // He is right about what it already holds. Loves come from reactions on MY stories by
+        // anybody, friends included, and have nothing to do with Glow — naming the page after one
+        // of its three chips told people the other two were something else.
+        .navigationTitle("Notifications")
         .navigationBarTitleDisplayMode(.inline)
         .task { await events.load() }
         // Opening the page IS reading it — the badge on the Stories tab clears from here, which is
@@ -101,18 +109,20 @@ struct GlowNotificationsView: View {
                     Text(emptyBody)
                 }
             } else {
+                // ⛔ NO DATE HEADINGS — owner, 2026-09-02: "remove text cards like Last 30 days and
+                // This week". The rows are already newest-first and each carries its own date, so
+                // the headings restated the order they were already in and broke a short list into
+                // three shorter ones.
+                //
+                // ⚠️ 10 LEADING, NOT 16 — his "the avatar's left angle has more space". The unread
+                // dot and its 12pt gap sit before the face, so a 16pt row inset put the picture at
+                // 34 while everything else on the page starts at 16. The dot moved into the row's
+                // own padding; this is now the page's margin, and the face lands on it.
                 List {
-                    ForEach(sections(rows), id: \.title) { section in
-                        Section {
-                            ForEach(section.rows) { e in
-                                GlowEventRow(event: e, unread: e.at > glow.seenUpTo, dark: dark)
-                                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-                                    .listRowSeparator(.hidden)
-                            }
-                        } header: {
-                            Text(section.title).font(.headline)
-                                .foregroundStyle(Color(.label)).textCase(nil)
-                        }
+                    ForEach(rows) { e in
+                        GlowEventRow(event: e, unread: e.at > glow.seenUpTo, dark: dark)
+                            .listRowInsets(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 16))
+                            .listRowSeparator(.hidden)
                     }
                 }
                 .listStyle(.plain)
@@ -154,17 +164,9 @@ struct GlowNotificationsView: View {
         }
     }
 
-    /// "This week" / "Last 30 days" / "Older" — his reference's own grouping.
-    private func sections(_ rows: [GlowEvent]) -> [(title: String, rows: [GlowEvent])] {
-        let now = Date()
-        var week: [GlowEvent] = [], month: [GlowEvent] = [], older: [GlowEvent] = []
-        for e in rows {
-            let days = now.timeIntervalSince(e.at) / 86_400
-            if days <= 7 { week.append(e) } else if days <= 30 { month.append(e) } else { older.append(e) }
-        }
-        return [("This week", week), ("Last 30 days", month), ("Older", older)]
-            .filter { !$0.1.isEmpty }
-    }
+    // ⛔ DELETED HERE: `sections`, which split the rows into This week / Last 30 days / Older.
+    // Owner removed those headings by name, 2026-09-02 — see the note at the list. Recorded rather
+    // than silently dropped so nobody restores it thinking it was an oversight.
 }
 
 /// One row: face, sentence, and then EITHER the story it happened to OR a Glow back.
@@ -176,6 +178,7 @@ private struct GlowEventRow: View {
     let unread: Bool
     let dark: Bool
     private var glow = GlowService.shared
+    @State private var showProfile = false
 
     init(event: GlowEvent, unread: Bool, dark: Bool) {
         self.event = event
@@ -184,21 +187,24 @@ private struct GlowEventRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 6) {
+            // ⚠️ THE DOT AND ITS GAP ARE THE ROW'S LEADING SPACE — his "the avatar's left angle has
+            // more space". A 6pt dot on a 12pt gap inside a 16pt row inset put the face at 34 while
+            // the chips and the title above start at 16. The row inset came down to 10 and this gap
+            // to 6, which lands the face on 22 — clear of the dot, and close enough to the page's
+            // margin that the column reads straight.
             Circle().fill(unread ? GlowStyle.accent : .clear).frame(width: 6, height: 6)
 
             // THE PERSON — face and words together, because they name one thing.
-            // The ORDINARY profile — see the note on the same route in `StoriesTabView`. The Glow
-            // profile is my own page and nobody else's.
-            NavigationLink {
-                ContactInfoView(cid: [AuthService.shared.uid ?? "", event.person.id]
-                                    .sorted().joined(separator: "_"),
-                                name: event.person.name,
-                                photoUrl: event.person.photoUrl, source: .story)
-            } label: {
+            //
+            // ⛔ A BUTTON AND A SHEET, NOT A `NavigationLink` — owner, 2026-09-02: "remove the small
+            // arrow". A link inside a `List` draws a disclosure chevron and nothing turns it off;
+            // this row already ends in a story thumbnail or a button, so the arrow sat in the middle
+            // pointing at neither.
+            Button { showProfile = true } label: {
                 HStack(spacing: 12) {
-                    // 52, up from 44 — his "avatars look small".
-                    AvatarView(name: event.person.name, photoUrl: event.person.photoUrl, size: 52)
+                    // 62, his number.
+                    AvatarView(name: event.person.name, photoUrl: event.person.photoUrl, size: 62)
                     sentence
                     Spacer(minLength: 6)
                 }
@@ -208,29 +214,64 @@ private struct GlowEventRow: View {
 
             trailing
         }
+        // The ORDINARY profile — see the note on the same route in `StoriesTabView`. The Glow
+        // profile is my own page and nobody else's.
+        .sheet(isPresented: $showProfile) {
+            NavigationStack {
+                ContactInfoView(cid: [AuthService.shared.uid ?? "", event.person.id]
+                                    .sorted().joined(separator: "_"),
+                                name: event.person.name,
+                                photoUrl: event.person.photoUrl, source: .story)
+            }
+        }
     }
 
+    /// ⛔ THE DATE RIDES THE SENTENCE — owner, 2026-09-02: "the time or date position is wrong, put
+    /// it next to the text like 'reacted to your story • 1 Sep'". It was a second line under the
+    /// words, which gave every row three lines and a date that read as a heading for the row below
+    /// it. Inline, dimmed, after a middle dot: the same shape a chat row's timestamp has.
     private var sentence: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Group {
-                switch event.kind {
-                case .glowed:
-                    Text(event.person.name).fontWeight(.semibold) + Text(" glowed at you.")
-                case .loved(let emoji):
-                    Text(event.person.name).fontWeight(.semibold)
-                        + Text(" reacted \(emoji) to your story.")
-                case .replied(let what):
-                    Text(event.person.name).fontWeight(.semibold) + Text(" replied: \"\(what)\"")
-                }
+        Group {
+            switch event.kind {
+            case .glowed:
+                Text(event.person.name).fontWeight(.semibold) + Text(" glowed at you.") + stamp
+            case .loved(let emoji):
+                Text(event.person.name).fontWeight(.semibold)
+                    + Text(" reacted \(emoji) to your story.") + stamp
+            case .replied(let what):
+                Text(event.person.name).fontWeight(.semibold) + Text(" replied: \"\(what)\"") + stamp
             }
-            .font(.subheadline)
-            .foregroundStyle(.primary)
-            .lineLimit(2)
-
-            Text(event.at.formatted(date: .abbreviated, time: .omitted))
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
+        .font(.subheadline)
+        .foregroundStyle(.primary)
+        .lineLimit(3)
+    }
+
+    private var stamp: Text {
+        Text("  •  " + Self.stampText(event.at)).foregroundColor(.secondary)
+    }
+
+    /// ⛔ HIS RULES, IN ORDER — 2026-09-02: "if only days or weeks show like 10d or 1W; every time
+    /// don't show the year when it's the year you're talking about; if it's another year tell me."
+    ///
+    ///   under 7 days   → "3d"      (today is "now")
+    ///   under 5 weeks  → "2w"
+    ///   this year      → "1 Sep"
+    ///   another year   → "16 Jul 2025"
+    ///
+    /// ⚠️ THE YEAR IS DECIDED BY THE CALENDAR, NOT BY 365 DAYS. Two dates eleven months apart can
+    /// sit in different years and two dates a week apart can straddle New Year, so "is it this year"
+    /// is a question about the calendar and nothing else.
+    static func stampText(_ d: Date, now: Date = Date(), cal: Calendar = .current) -> String {
+        let secs = now.timeIntervalSince(d)
+        if secs < 60 { return "now" }
+        let days = Int(secs / 86_400)
+        if days < 7 { return days < 1 ? "today" : "\(days)d" }
+        let weeks = days / 7
+        if weeks < 5 { return "\(weeks)w" }
+        let sameYear = cal.component(.year, from: d) == cal.component(.year, from: now)
+        return d.formatted(sameYear ? .dateTime.day().month(.abbreviated)
+                                    : .dateTime.day().month(.abbreviated).year())
     }
 
     @ViewBuilder private var trailing: some View {
@@ -245,7 +286,19 @@ private struct GlowEventRow: View {
             .buttonStyle(.plain)
         } else if event.isGlow {
             if glow.isGlowing(event.person.id) {
-                Text("Glowing").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                // ⛔ A DRAWN BORDER — owner, 2026-09-02: "the Glowing button has no borders". It was
+                // bare secondary text beside a filled capsule, so the mutual state read as a label
+                // rather than as the same control in its other state. Same size and shape as
+                // "Glow back" above, opposite emphasis — the pair the Glowers list now uses too.
+                Button { glow.remove(to: event.person.id) } label: {
+                    Text("Glowing")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.primary)
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(Capsule().fill(Color.primary.opacity(0.06)))
+                        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.35), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
             } else {
                 Button { glow.give(to: event.person.id) } label: {
                     Text("Glow back")
