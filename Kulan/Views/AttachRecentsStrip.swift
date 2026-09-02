@@ -289,7 +289,9 @@ struct AttachRecentsStrip: View {
                         // open the multi-image approval (paging) of the selected set instead. Tap the
                         // CHECKBOX → (de)select. Separate, never conflict.
                         RecentThumb(asset: a, selectionNumber: selectionIndex(a),
-                                    selectionActive: !selectedIds.isEmpty,
+                                    // Always — see `RecentThumb.selectionActive`. He could not find
+                                    // the checkbox when it only appeared after the first tick.
+                                    selectionActive: true,
                                     onOpen: { openTapped(a) },
                                     onToggle: { toggle(a) })
                             .onAppear { loadMoreIfNeeded(a) }   // near the end → page in the next batch
@@ -766,11 +768,16 @@ private struct AlbumThumb: View {
 private struct RecentThumb: View {
     let asset: PHAsset
     var selectionNumber: Int? = nil
-    /// ≥1 photo is ticked somewhere in the grid. The circles draw only then — owner, 2026-09-02,
-    /// off build 725: "when i open attach sheet first time user dont show select tick box, only
-    /// appear when user click image". At rest the grid is clean photographs; the first tick makes
-    /// every tile show its circle so the running numbers read as a set.
-    var selectionActive: Bool = false
+    /// ⛔ THE CIRCLES ARE BACK ON FROM THE FIRST FRAME — owner, 2026-09-02: "please show the select
+    /// checkbox, users can't understand this, show it like before". He asked for the opposite
+    /// earlier the same day, off build 725, and hiding them did read cleaner — but a control that is
+    /// invisible until you have already used it teaches nobody it exists, and picking a SECOND photo
+    /// is the thing the grid is for. His first call was about how it looked; this one is about
+    /// whether it works, and that wins.
+    ///
+    /// Kept as a parameter rather than deleted: the hit area, the numbering and the circle were
+    /// always three separate things, and this is the one switch between them.
+    var selectionActive: Bool = true
     let onOpen: () -> Void      // tap the PHOTO → open it
     let onToggle: () -> Void    // tap the CHECKBOX → (de)select
     @State private var image: UIImage?

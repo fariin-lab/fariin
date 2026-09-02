@@ -83,7 +83,6 @@ struct WallpaperPickerSheet: View {
         // showing the first photo). Keyed on the photo id below so the Image reloads too.
         let _ = store.version
         VStack(spacing: 16) {
-            header
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
@@ -113,7 +112,15 @@ struct WallpaperPickerSheet: View {
             chatColorSection
         }
         .frame(maxHeight: .infinity, alignment: .top)
-        .padding(.top, 8)      // native gap under the system grabber (was a big dead band)
+        // ⛔ THE HEADER IS A TOP BAR FOR THE SAME REASON THE BUTTONS ARE A BOTTOM ONE — owner,
+        // 2026-09-02, ringing the ✕ and Reset and sending the rule a fourth time: content inside the
+        // safe area is APP CONTENT; edge-attached chrome is a SYSTEM BAR. The ✕ and Reset are chrome
+        // — they act on the sheet, not on anything in it — and they were the first row of a VStack,
+        // which is app content wearing a system control's clothes.
+        //
+        // ⚠️ AND IT IS WHY THE GRABBER GAP STOPS BEING A NUMBER. The 8 that was here was clearing the
+        // system's own drag indicator by hand. `safeAreaBar` places the bar under it.
+        .safeAreaBar(edge: .top) { header }
         // ⛔ THE BUTTON IS SYSTEM CHROME, SO IT SITS WHERE SYSTEM CHROME SITS — owner,
         // 2026-08-24, third time he has sent the same rule: "use system chrome / edge-attached UI,
         // system-positioned", with the space under Apply Wallpaper circled.
@@ -143,8 +150,20 @@ struct WallpaperPickerSheet: View {
         // ⚠️ THE DETENT STILL MEASURES FROM THE BOTTOM OF THE SCREEN and still has to cover the bar,
         // which is why the band term stays in the height below even though nothing pads by it now.
         .safeAreaBar(edge: .bottom) { bottomBar }
-        // Taller only while the secondary "Apply For All Chats" button is present.
-        .presentationDetents([.height((hasPendingChange && !globalOnly ? 416 : 372) + Self.bottomChromeGap)])
+        // ⛔ THE HEIGHT CAME DOWN 48 — owner, 2026-09-02, ringing the dead band above Apply
+        // Wallpaper. Moving both bars out of the VStack did not shrink the sheet with them: a fixed
+        // detent is a number, it does not follow its content, so the space the two rows used to
+        // occupy inside the stack stayed reserved and showed up as the gap he circled.
+        //
+        // Recomputed rather than nudged. The old 372 was 8 (grabber pad) + 48 (header) + three 16pt
+        // gaps + 54 (button) + 29 (hand-padded bottom) + 185 of strip and colour rows. What is left
+        // in the stack is those 185 plus their one 16pt gap; the header and the button are now bars
+        // the system measures, and the indicator band comes back as the sheet's own safe area rather
+        // than as `bottomChromeGap`, which is why this term is the FULL inset and not the dipped one.
+        //
+        // ⚠️ 44 apart, not 48: the secondary "Apply For All Chats" row is 34 and its gap is 6, plus
+        // the 4 the taller button block adds. Both bases move by the same amount so that stays true.
+        .presentationDetents([.height((hasPendingChange && !globalOnly ? 363 : 319) + Self.bottomInset)])
         .presentationDragIndicator(.visible)
         .sheet(isPresented: $showCustomColor) {
             CustomColorView(cid: cid) { spec in
@@ -278,15 +297,16 @@ struct WallpaperPickerSheet: View {
     // otherwise → "Choose Wallpaper from Photos".
     /// The home indicator's strip, read from the window. A sheet's own safe area does not reach a
     /// fixed-height detent's arithmetic, which is what has to know about it here.
-    /// Where a SYSTEM-POSITIONED control rests above the physical edge: the indicator's band, less
-    /// the dip the system's own bars take into it. Stated once, and the same rule the composer uses —
-    /// see `composerRestDip` in ThreadView, which is where the 5 comes from.
-    ///
-    /// ⚠️ A phone with no indicator has no band, so this collapses to 0 and the control sits on the
-    /// margin the layout already gives it. That is the point of deriving it instead of stating a
-    /// number: one expression that is right on every device.
+    /// ⛔ NOTHING USES THIS ANY MORE and it is kept only as the record of a wrong turn. It computed
+    /// where a system-positioned control should rest — the indicator's band less the 5pt dip the
+    /// system's own bars take into it — so this file could pad by that number itself. The whole
+    /// point of `safeAreaBar` is that the number is not ours to compute; the system rests its own
+    /// bar and the sheet's safe area accounts for the band. Reviving this would be re-introducing
+    /// the hand-padding it took three of his reports to remove.
     static var bottomChromeGap: CGFloat { max(0, bottomInset - 5) }
 
+    /// The indicator band, read from the window. A sheet's own safe area does not reach a
+    /// fixed-height detent's arithmetic, which is what still has to know about it.
     static var bottomInset: CGFloat {
         UIApplication.shared.connectedScenes
             .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.bottom }

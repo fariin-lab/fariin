@@ -3902,18 +3902,22 @@ struct ThreadView: View {
     /// number now beats theirs: the bar shares its row with the Album button since this morning, and
     /// two 62pt objects side by side are heavier than the one centred capsule that number was
     /// measured for. The Album button reads this too, so both moved together as he asked.
-    private static let attachBarHeight: CGFloat = 52
-    /// ⛔ **26, DOWN FROM THE REFERENCE'S 30, AND IT IS FORCED BY THE 52 ABOVE — not a second
-    /// opinion about icon size.**
+    /// ⛔ 56 — owner, 2026-09-02, with the row ringed: "attach bar and Album button make it 56pt".
+    /// His number, third setting for this bar (62 → 52 → 56), and the Album button reads the same
+    /// constant so the two still move together.
+    private static let attachBarHeight: CGFloat = 56
+    /// ⛔ **FORCED BY THE BAR HEIGHT ABOVE — not a second opinion about icon size.**
     ///
-    /// A tile is `attachBarHeight - 8` tall and stacks icon + 4 + label. At 62 that was 54 holding
-    /// 30 + 4 + 12 = 46, with room to spare. At 52 it is 44 holding 46 — **two points of overflow**,
-    /// which SwiftUI resolves by squeezing the label, so the words under the glyphs would have gone
-    /// fuzzy or clipped rather than anything looking obviously wrong. 26 brings the stack to 42 and
-    /// leaves a point above and below.
+    /// A tile is `attachBarHeight - 8` tall and stacks icon + 4 + label(12). At 62 the tile was 54
+    /// and held a 30pt glyph with room to spare. At 52 the tile was 44 holding 46 — **two points of
+    /// overflow**, which SwiftUI resolves by squeezing the LABEL, so the words would have gone fuzzy
+    /// rather than anything looking obviously wrong; 26 was what fixed that.
     ///
-    /// ⚠️ If the bar is ever put back to 62, put this back to 30 with it. They are one measurement.
-    private static let attachIconSize: CGFloat = 26
+    /// At 56 the tile is 48 and 28 + 4 + 12 = 44 fits with two points spare, so his four extra
+    /// points of bar go into the glyph rather than into more air around it.
+    ///
+    /// ⚠️ THE TWO ARE ONE MEASUREMENT. Move the bar and this moves with it, every time.
+    private static let attachIconSize: CGFloat = 28
 
     /// ONE TILE'S WIDTH, AND IT HAS TO BE ARITHMETIC NOW — owner, 2026-09-02.
     ///
