@@ -193,6 +193,90 @@ struct GlowStoryCard: Identifiable, Equatable {
     func invalidate() { loadedKey = "" }
 }
 
+/// One line on the Glow notifications page. Three kinds share one row shape, which is what his
+/// reference shows: a face, a sentence, a time, and — for the two that are about a story — the
+/// story's own thumbnail on the right.
+struct GlowEvent: Identifiable, Equatable {
+    enum Kind: Equatable {
+        case glowed                  // they gave me a glow
+        case loved(String)           // they reacted to my story; the emoji they used
+        case replied(String)         // they replied to my story; what they said
+    }
+    let id: String
+    var person: GlowPerson
+    var kind: Kind
+    var at: Date
+    /// The story this is about — nil for a glow, which is about a person rather than a post.
+    var storyThumb: String?
+
+    var isGlow: Bool { if case .glowed = kind { return true }; return false }
+    var isLove: Bool { if case .loved = kind { return true }; return false }
+    var isReply: Bool { if case .replied = kind { return true }; return false }
+}
+
+/// EVERYTHING THAT HAPPENED TO ME — glows given to me, and reactions left on my own live stories.
+///
+/// ⛔ THE LOVES ARE REAL, and they come from a place that already exists: a reaction is stored ON
+/// the view receipt (`stories/{id}/views/{uid}.reaction`), which is what the Seen-by sheet has been
+/// reading all along. So "who loved my story" needs no new collection, no new write path and no
+/// function — it is my own stories' receipts, filtered to the ones carrying an emoji.
+///
+/// ⚠️ AUTHOR-ONLY AND RECIPROCAL, BOTH BY THE RULES AND BY `fetchViewers` ITSELF. Receipts are
+/// readable by the story's author, and `fetchViewers` refuses when the person has turned view
+/// receipts off — "if disabled, you won't see when others view your stories" is a promise this page
+/// has to keep too, so with receipts off the Loves list is honestly empty rather than quietly full.
+///
+/// ⚠️ `fetchViewers` RETURNS NIL FOR A FAILED READ AND [] FOR "NOBODY", and that distinction is
+/// load-bearing — its own note records a bug where the two were collapsed and a dropped request
+/// read as "nobody watched this". A nil here skips that story rather than claiming it had no loves.
+@MainActor @Observable final class GlowEventsLoader {
+    private(set) var state: GlowLoad<[GlowEvent]> = .loading
+    private var loading = false
+
+    func load() async {
+        guard !loading else { return }
+        loading = true
+        defer { loading = false }
+        state = .loading
+
+        var out: [GlowEvent] = []
+
+        // 1. Glows aimed at me. The edge document IS the record — see `GlowService.recentGlowers`.
+        let glows = await GlowService.shared.recentGlowers()
+        let people = GlowPeopleLoader()
+        await people.load(glows.map(\.uid),
+                          dates: Dictionary(glows.map { ($0.uid, $0.at) }, uniquingKeysWith: { a, _ in a }),
+                          key: "events-" + glows.map(\.uid).joined())
+        let resolved = people.state.value ?? []
+        for g in glows {
+            guard let p = resolved.first(where: { $0.id == g.uid }) else { continue }
+            out.append(GlowEvent(id: "glow-\(g.uid)", person: p, kind: .glowed, at: g.at,
+                                 storyThumb: nil))
+        }
+
+        // 2. Reactions on my own live stories.
+        let me = AuthService.shared.uid ?? ""
+        if !me.isEmpty {
+            let mine = PostedStoriesLoader()
+            await mine.load(uid: me)
+            for story in mine.state.value ?? [] {
+                guard let viewers = await StoriesService.shared.fetchViewers(storyId: story.id)
+                else { continue }   // nil = a failed read, not an empty one
+                for v in viewers where !(v.reaction ?? "").isEmpty {
+                    out.append(GlowEvent(
+                        id: "love-\(story.id)-\(v.id)",
+                        person: GlowPerson(id: v.id, name: v.name, handle: "", photoUrl: v.photoUrl),
+                        kind: .loved(v.reaction ?? "❤️"),
+                        at: v.viewedAt,
+                        storyThumb: story.thumbUrl))
+                }
+            }
+        }
+
+        state = .loaded(out.sorted { $0.at > $1.at })
+    }
+}
+
 /// Short form for a view count badge — 25600 → "25.6K", his screenshot's own format.
 enum GlowCount {
     static func short(_ n: Int) -> String {

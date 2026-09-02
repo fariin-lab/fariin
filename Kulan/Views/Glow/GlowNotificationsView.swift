@@ -1,39 +1,40 @@
 import SwiftUI
 
-/// GLOW NOTIFICATIONS — his first screenshot, 2026-09-02: a back chevron, the title, a row of
-/// filter chips (All / Glowers / Comments / like), and rows of avatar + sentence + time, with a
-/// pink "Glow back" on a glow row.
+/// GLOW NOTIFICATIONS — his reference, sent twice: a back chevron, the title, a row of filter
+/// chips, and rows of face + sentence + time, with the story's own thumbnail on the right and a
+/// pink Glow back on a glow row.
 ///
-/// ⛔ THE ROWS ARE DERIVED, NOT A SECOND COLLECTION. A glow document already carries who and when,
-/// which IS the row — so there is no `notifications` collection to write, to keep in step with the
-/// truth, or to clean up when a glow is taken back. Un-glowing removes the edge and the row goes
-/// with it, which is the correct behaviour and costs nothing to implement.
+/// ⛔ THE LOVES ARE REAL — his second sending made that the point: "you can see who give you love
+/// and Glow back or glow". My first pass showed an honest "not available yet" on the strength of
+/// there being no reaction feed. There is one, and it was already in the app: a reaction is stored
+/// ON the view receipt, which is what the Seen-by sheet has read all along. See `GlowEventsLoader`.
 ///
-/// ⚠️ REACTIONS AND REPLIES ARE NOT WIRED YET, and the chips for them say so rather than showing an
-/// empty list that looks like "nobody has ever reacted". His spec asks for "people who Loved your
-/// Story" as well as glows; the story reaction path exists but does not yet write anything this page
-/// can read, and inventing a fake feed for it would be worse than an honest empty state.
+/// ⛔ THE ROWS ARE DERIVED, NOT A SECOND COLLECTION. A glow document carries who and when, which IS
+/// the row; a love is a receipt carrying an emoji. So there is nothing to write, nothing to keep in
+/// step with the truth, and nothing to clean up — un-glowing removes the edge and the row goes with
+/// it, which is the correct behaviour for free.
 struct GlowNotificationsView: View {
-    /// Explicit, for the private-stored-property rule - see the note in GlowProfileView.
+    /// Explicit, for the private-stored-property rule — see the note in `GlowProfileView`.
     init() {}
 
+    /// His chips, in his order and his words. "Comments" and "like" are what his reference says;
+    /// Replies is the app's own word for a story reply and Loves matches the heart, so the two are
+    /// named for what they are here rather than copied letter for letter.
     enum Chip: String, CaseIterable, Identifiable {
-        case all, glowers, comments, likes
+        case all, glowers, replies, loves
         var id: String { rawValue }
         var title: String {
             switch self {
             case .all: return "All"
             case .glowers: return "Glowers"
-            case .comments: return "Replies"
-            case .likes: return "Loves"
+            case .replies: return "Replies"
+            case .loves: return "Loves"
             }
         }
     }
 
     @State private var chip: Chip = .all
-    @State private var loader = GlowPeopleLoader()
-    @State private var events: [(uid: String, at: Date)] = []
-    @State private var loading = true
+    @State private var events = GlowEventsLoader()
     private var glow = GlowService.shared
 
     var body: some View {
@@ -44,7 +45,7 @@ struct GlowNotificationsView: View {
         }
         .navigationTitle("Glow notifications")
         .navigationBarTitleDisplayMode(.inline)
-        .task { await load() }
+        .task { await events.load() }
         // Opening the page IS reading it — the badge on the Stories tab clears from here, which is
         // his "read/unread notification states" without a per-row flag to store or sync.
         .onDisappear { glow.markSeen() }
@@ -70,112 +71,163 @@ struct GlowNotificationsView: View {
     }
 
     @ViewBuilder private var content: some View {
-        switch chip {
-        case .comments, .likes:
-            // Honest, not empty. See the note at the top: the reaction and reply feeds have no
-            // source yet, and a blank list here would read as "this never happens to you".
+        switch events.state {
+        case .loading:
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .failed:
             ContentUnavailableView {
-                Label("Not available yet", systemImage: "clock")
+                Label("Could not load", systemImage: "wifi.exclamationmark")
             } description: {
-                Text("\(chip.title) on your stories will appear here once story activity is recorded.")
+                Text("Check your connection and try again.")
+            } actions: {
+                Button("Try Again") { Task { await events.load() } }.buttonStyle(.borderedProminent)
             }
-        case .all, .glowers:
-            if loading {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if events.isEmpty {
-                ContentUnavailableView("No Glow activity yet", systemImage: GlowStyle.symbol,
-                                       description: Text("When somebody glows you, it appears here."))
+        case .loaded(let all):
+            let rows = all.filter(matches)
+            if rows.isEmpty {
+                ContentUnavailableView(emptyTitle, systemImage: emptyIcon,
+                                       description: Text(emptyBody))
             } else {
                 List {
-                    ForEach(sections, id: \.title) { section in
+                    ForEach(sections(rows), id: \.title) { section in
                         Section {
-                            ForEach(section.rows, id: \.uid) { row in
-                                GlowNotificationRow(uid: row.uid, at: row.at,
-                                                    person: person(row.uid),
-                                                    unread: row.at > glow.seenUpTo)
-                                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                            ForEach(section.rows) { e in
+                                GlowEventRow(event: e, unread: e.at > glow.seenUpTo)
+                                    .listRowInsets(EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14))
                                     .listRowSeparator(.hidden)
                             }
                         } header: {
-                            Text(section.title).font(.headline).foregroundStyle(Color(.label))
-                                .textCase(nil)
+                            Text(section.title).font(.headline)
+                                .foregroundStyle(Color(.label)).textCase(nil)
                         }
                     }
                 }
                 .listStyle(.plain)
-                .refreshable { await load(force: true) }
+                .refreshable { await events.load() }
             }
         }
     }
 
-    /// "This week" / "Last 30 days" / "Older" — his screenshot's own grouping, which is what makes a
+    private func matches(_ e: GlowEvent) -> Bool {
+        switch chip {
+        case .all: return true
+        case .glowers: return e.isGlow
+        case .replies: return e.isReply
+        case .loves: return e.isLove
+        }
+    }
+
+    // Each empty state names the thing that is missing, rather than one sentence for four cases.
+    private var emptyTitle: String {
+        switch chip {
+        case .all: return "Nothing yet"
+        case .glowers: return "No Glows yet"
+        case .replies: return "No replies yet"
+        case .loves: return "No loves yet"
+        }
+    }
+    private var emptyIcon: String {
+        switch chip {
+        case .loves: return "heart"
+        case .replies: return "bubble.left"
+        default: return GlowStyle.symbol
+        }
+    }
+    private var emptyBody: String {
+        switch chip {
+        case .glowers: return "When somebody glows you, it appears here."
+        case .loves: return "When somebody loves one of your stories, it appears here."
+        case .replies: return "Replies to your stories appear here."
+        case .all: return "Glows and reactions to your stories appear here."
+        }
+    }
+
+    /// "This week" / "Last 30 days" / "Older" — his reference's own grouping, which is what makes a
     /// long list readable without a date on every row.
-    private var sections: [(title: String, rows: [(uid: String, at: Date)])] {
+    private func sections(_ rows: [GlowEvent]) -> [(title: String, rows: [GlowEvent])] {
         let now = Date()
-        var week: [(uid: String, at: Date)] = []
-        var month: [(uid: String, at: Date)] = []
-        var older: [(uid: String, at: Date)] = []
-        for e in events {
+        var week: [GlowEvent] = [], month: [GlowEvent] = [], older: [GlowEvent] = []
+        for e in rows {
             let days = now.timeIntervalSince(e.at) / 86_400
             if days <= 7 { week.append(e) } else if days <= 30 { month.append(e) } else { older.append(e) }
         }
         return [("This week", week), ("Last 30 days", month), ("Older", older)]
             .filter { !$0.1.isEmpty }
     }
-
-    private func person(_ uid: String) -> GlowPerson? {
-        loader.state.value?.first { $0.id == uid }
-    }
-
-    private func load(force: Bool = false) async {
-        loading = true
-        events = await glow.recentGlowers()
-        if force { loader.invalidate() }
-        await loader.load(events.map(\.uid),
-                          dates: Dictionary(events.map { ($0.uid, $0.at) }, uniquingKeysWith: { a, _ in a }),
-                          key: events.map(\.uid).joined())
-        loading = false
-    }
 }
 
-/// One notification. His screenshot's shape: avatar, a sentence naming the person, the date, and an
-/// action on the right.
-private struct GlowNotificationRow: View {
-    let uid: String
-    let at: Date
-    let person: GlowPerson?
+/// One row. His reference's shape: face, a sentence that names the person in bold, the date, then
+/// either the story's thumbnail (a love or a reply, which are ABOUT a story) or a Glow back button
+/// (a glow, which is about a person).
+private struct GlowEventRow: View {
+    let event: GlowEvent
     let unread: Bool
     private var glow = GlowService.shared
 
-    init(uid: String, at: Date, person: GlowPerson?, unread: Bool) {
-        self.uid = uid; self.at = at; self.person = person; self.unread = unread
+    init(event: GlowEvent, unread: Bool) {
+        self.event = event
+        self.unread = unread
     }
 
     var body: some View {
-        HStack(spacing: 12) {
-            // The unread mark: a dot, not a coloured row. A tinted row is hard to read and hard to
-            // clear; a dot says the same thing and leaves the row alone.
-            Circle().fill(unread ? GlowStyle.accent : .clear).frame(width: 7, height: 7)
+        HStack(spacing: 10) {
+            // A dot, not a tinted row: a coloured row is hard to read and hard to clear.
+            Circle().fill(unread ? GlowStyle.accent : .clear).frame(width: 6, height: 6)
+
             NavigationLink {
-                GlowProfileView(uid: uid, initialName: person?.name ?? "", initialPhoto: person?.photoUrl)
+                GlowProfileView(uid: event.person.id, initialName: event.person.name,
+                                initialPhoto: event.person.photoUrl)
             } label: {
-                HStack(spacing: 12) {
-                    AvatarView(name: person?.name ?? "", photoUrl: person?.photoUrl, size: 44)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(person?.name ?? "Someone").font(.headline).lineLimit(1)
-                        Text("Glowed at you · \(at.formatted(date: .abbreviated, time: .omitted))")
-                            .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    Spacer(minLength: 8)
+                HStack(spacing: 10) {
+                    AvatarView(name: event.person.name, photoUrl: event.person.photoUrl, size: 44)
+                    sentence
+                    Spacer(minLength: 6)
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
-            if glow.isGlowing(uid) {
+            trailing
+        }
+    }
+
+    /// The name in bold inside a running sentence, which is what makes his reference's rows read as
+    /// language rather than as fields.
+    private var sentence: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Group {
+                switch event.kind {
+                case .glowed:
+                    Text(event.person.name).fontWeight(.semibold) + Text(" glowed at you.")
+                case .loved(let emoji):
+                    Text(event.person.name).fontWeight(.semibold)
+                        + Text(" reacted \(emoji) to your story.")
+                case .replied(let what):
+                    Text(event.person.name).fontWeight(.semibold)
+                        + Text(" replied: \"\(what)\"")
+                }
+            }
+            .font(.subheadline)
+            .foregroundStyle(.primary)
+            .lineLimit(2)
+
+            Text(event.at.formatted(date: .abbreviated, time: .omitted))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var trailing: some View {
+        if let thumb = event.storyThumb, !thumb.isEmpty {
+            // The story it happened to — his reference puts it on the right of every story row.
+            StoryImage(url: thumb)
+                .frame(width: 38, height: 54)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        } else if event.isGlow {
+            if glow.isGlowing(event.person.id) {
                 Text("Glowing").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
             } else {
-                Button { glow.give(to: uid) } label: {
+                Button { glow.give(to: event.person.id) } label: {
                     Text("Glow back").font(.subheadline.weight(.semibold))
                 }
                 .buttonStyle(.borderedProminent)

@@ -113,6 +113,9 @@ struct ContactInfoView: View {
     @State private var handle = ""
     @State private var about = ""
     @State private var targetPrivacy: [String: String] = [:]   // their audience map (users doc)
+    /// The glow relationship, for the Glow button and its menu entry. `@Observable`, so a plain
+    /// property observes it — see the note on `GlowService`.
+    private var glow = GlowService.shared
     @State private var muted = false
     @State private var mutedUntil: Double = 0   // millis; drives the "Muted until <time>" menu header
     @State private var blocked = false
@@ -536,6 +539,9 @@ struct ContactInfoView: View {
     // The "More" tile's menu: housekeeping only. Block/Report moved OUT to the always-visible
     // dangerCard at the bottom of the page (the reference app pattern, user decision).
     @ViewBuilder private var moreMenuItems: some View {
+        // Glow first: it is the one entry here about the PERSON rather than about the chat, and it
+        // is the second of his two doors to the same action — see `glowActionButton`.
+        if !isSelf { glowMenuItem; Divider() }
         // (No "View Profile Photo" here: tapping the avatar now offers the choice directly when the
         // person has both a story and a photo, so a menu duplicate would be clutter.)
         // Wallpaper pops back to the CHAT and posts to its ThreadView — from a story-opened profile
@@ -1667,12 +1673,14 @@ struct ContactInfoView: View {
                 // it zooms in comes down through the environment — see `CallZoomNamespaceKey`. A
                 // separate id each, or the page would grow out of whichever was registered last
                 // instead of the one under his thumb.
-                Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl,
-                                                      fromProfile: true) } label: {
-                    PosterActionIcon(icon: "phone.fill", onPhoto: hasPhotoHeader)
-                }
-                .tint(.primary)
-                .modifier(CallZoomSourceModifier(video: false))
+                // ⛔ GLOW TOOK THE VOICE-CALL BUTTON'S PLACE — owner, 2026-09-02: "remove voice call
+                // button to change Glow button". Video stays, so a call is still one tap from here;
+                // what went is the second call button, and Glow is the thing he wants people to
+                // reach on somebody's profile.
+                //
+                // ⚠️ TWO DOORS TO ONE ACTION, HIS ASK: this button AND "Glow Story" in the ••• menu
+                // below. They call the same thing — a second door is only a second door.
+                glowActionButton
                 Button { CallService.shared.startCall(to: otherUid, name: name, photo: photoUrl,
                                                       video: true, fromProfile: true) } label: {
                     PosterActionIcon(icon: "video.fill", onPhoto: hasPhotoHeader)
@@ -1695,6 +1703,43 @@ struct ContactInfoView: View {
     }
 
 
+
+    /// GIVE OR TAKE BACK A GLOW, from the profile — his 2026-09-02 design, and the only place in
+    /// the app a glow can be given.
+    ///
+    /// ⚠️ GIVING IS ONE TAP; TAKING BACK ASKS. They are not symmetrical acts: giving a glow is
+    /// generous and instantly undoable, while removing one silently cuts somebody out of an
+    /// audience they are currently in. His words: "when he click Glowing show context menu remove
+    /// glowing" — so the second state is a MENU, not a toggle that fires on touch.
+    @ViewBuilder private var glowActionButton: some View {
+        if glow.isGlowing(otherUid) {
+            Menu {
+                Button("Remove Glowing", systemImage: "xmark", role: .destructive) {
+                    glow.remove(to: otherUid)
+                }
+            } label: {
+                // The ticked mark, which is what his mockup shows on an already-glowing profile.
+                PosterActionIcon(icon: "checkmark.seal.fill", onPhoto: hasPhotoHeader)
+            }
+            .tint(.primary)
+        } else {
+            Button { glow.give(to: otherUid) } label: {
+                PosterActionIcon(icon: GlowStyle.symbol, onPhoto: hasPhotoHeader)
+            }
+            .tint(.primary)
+        }
+    }
+
+    /// The ••• menu's Glow entry — the second of his two doors. Same two states as the button.
+    @ViewBuilder private var glowMenuItem: some View {
+        if glow.isGlowing(otherUid) {
+            Button("Remove Glowing", systemImage: "xmark", role: .destructive) {
+                glow.remove(to: otherUid)
+            }
+        } else {
+            Button("Glow Story", systemImage: GlowStyle.symbol) { glow.give(to: otherUid) }
+        }
+    }
 
     // Shareable contact link (opens/starts a chat with this user in Fariin).
     private var shareText: String {
