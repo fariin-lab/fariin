@@ -145,9 +145,16 @@ struct VoicePlan {
     var waveWithSpeed: CGRect
     var speedPill: CGRect
     var duration: CGRect
+    /// The TOTAL length, which is what the label reads at rest.
     var durationAttr: NSAttributedString
+    /// The same attributes on their own, so the view can spell an ELAPSED time in them while the
+    /// note plays without restating the font and the colour. This file's rule is that the plan owns
+    /// every number; a view that rebuilt the styling would be a second place for it to drift.
+    var durationAttrs: [NSAttributedString.Key: Any]
     var unreadDot: CGRect               // always reserved; the DOT itself is shown or hidden live
-    var micGlyph: CGRect
+    // ⛔ NO `micGlyph` — owner, 2026-09-02: "remove the small icon next of duration". It was a
+    // 10pt `mic.fill` sitting 19pt past the duration text. The unread DOT beside it stays: it is
+    // not decoration, it is the mark that says nobody has listened to this note yet.
 }
 
 /// The story-reply card that floats above a bubble. ROW coordinates — it is not inside the bubble.
@@ -1245,9 +1252,10 @@ enum MessageRowLayout {
         let columnStart = hPad + disc + gap
         let columnW2 = max(1, contentW - disc - gap)
 
-        let durationAttr = NSAttributedString(string: v.durationText, attributes: [
+        let durationAttrs: [NSAttributedString.Key: Any] = [
             .font: UIFont.systemFont(ofSize: 11),
-            .foregroundColor: textColor.withAlphaComponent(0.8)])
+            .foregroundColor: textColor.withAlphaComponent(0.8)]
+        let durationAttr = NSAttributedString(string: v.durationText, attributes: durationAttrs)
         let durH = lineSizeOf(durationAttr).height
         let durW = lineSizeOf(durationAttr).width
 
@@ -1293,16 +1301,16 @@ enum MessageRowLayout {
                               width: speed, height: 22),
             duration: CGRect(x: columnStart, y: durY, width: durW, height: durH),
             durationAttr: durationAttr,
-            // ⛔ THE DOT'S SLOT IS ALWAYS RESERVED, whether or not the dot is drawn — and the mic
-            // never moves because of it. This is the rule the old bubble states about its own speed
+            durationAttrs: durationAttrs,
+            // ⛔ THE DOT'S SLOT IS ALWAYS RESERVED, whether or not the dot is drawn. (It used to be
+            // phrased as "and the mic never moves because of it"; the mic is gone, the rule is
+            // not.) This is the rule the old bubble states about its own speed
             // pill and mic: the row is pre-measured before playback state arrives, so anything that
             // appears or disappears later would change a height that was already measured. The dot
             // is SHOWN or HIDDEN live by the view; the geometry is a constant.
             unreadDot: CGRect(x: columnStart + durW + 8,
                               y: durY + (durH - 7) / 2,
-                              width: 7, height: 7),
-            micGlyph: CGRect(x: columnStart + durW + 19,
-                             y: durY + (durH - 10) / 2, width: 10, height: 10))
+                              width: 7, height: 7))
         innerY += contentH
         innerY += vPad
 

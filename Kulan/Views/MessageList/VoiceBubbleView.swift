@@ -29,7 +29,6 @@ final class VoiceBubbleView: UIView {
     private let speedPill = UILabel()
     private let duration = UILabel()
     private let unreadDot = UIView()
-    private let micGlyph = UIImageView()
 
     /// The disc's tap routes UP, like every other tap in this directory. `VoiceNotePlayer.toggle`
     /// takes a whole `Message`, and a view that reached for one would be a view holding app state.
@@ -59,9 +58,6 @@ final class VoiceBubbleView: UIView {
         unreadDot.layer.cornerRadius = 3.5
         unreadDot.isUserInteractionEnabled = false
         addSubview(unreadDot)
-        micGlyph.contentMode = .scaleAspectFit
-        micGlyph.isUserInteractionEnabled = false
-        addSubview(micGlyph)
 
         // Nothing to play while the bytes are still going up; the disc is already spinning.
         disc.onTap = { [weak self] in
@@ -84,13 +80,17 @@ final class VoiceBubbleView: UIView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(_ v: BubbleBody.VoiceBody, plan: VoicePlan, tint: UIColor, cid: String) {
+    /// `onMaterial` says the bubble behind this note is the system blur rather than a flat colour.
+    /// The disc uses it to decide whether it can be a blur too — see `VoicePlayDiscControl.usesBlur`.
+    func configure(_ v: BubbleBody.VoiceBody, plan: VoicePlan, tint: UIColor,
+                   onMaterial: Bool, cid: String) {
         self.body = v
         self.cid = cid
         self.tint = tint
 
         self.plan = plan
         disc.frame = plan.disc
+        disc.usesBlur = onMaterial
         disc.discTint = tint
         // The wave's frame is `paint`'s, not this method's: it depends on whether the speed pill is
         // on screen, which is playback state and changes without a reconfigure.
@@ -104,13 +104,11 @@ final class VoiceBubbleView: UIView {
         speedPill.transform = .identity
         speedPill.frame = plan.speedPill
         duration.frame = plan.duration
-        duration.attributedText = plan.durationAttr
+        // The TEXT is `paint`'s now, not this method's — it counts while the note runs. Setting it
+        // here as well would show the full length for one frame on every reconfigure, which is
+        // every scroll tick that recycles this cell.
         unreadDot.frame = plan.unreadDot
         unreadDot.backgroundColor = BubblePalette.accent
-        micGlyph.frame = plan.micGlyph
-        micGlyph.image = UIImage(systemName: "mic.fill",
-                                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
-        micGlyph.tintColor = tint.withAlphaComponent(0.8)
 
         subscribe()
         paint()
@@ -138,7 +136,27 @@ final class VoiceBubbleView: UIView {
         // The upload's spinner and the player's are the same spinner: there is nothing to play
         // until the bytes land, and the disc is the one place that says so.
         disc.isBusy = b.loading || player.isLoading(b.messageId)
-        wave.progress = player.progress(for: b.messageId)
+        let progress = player.progress(for: b.messageId)
+        wave.progress = progress
+
+        // ⛔ THE DURATION COUNTS — owner, 2026-09-02: "when i click play Duration is not runing".
+        //
+        // It was set once, in `configure`, from the plan's pre-formatted total. `configure` runs
+        // when the row is built or recycled and never again, so the label showed how long the note
+        // is and went on showing it for the whole of playback. Nothing was broken in the player:
+        // the waveform beside it was already reading the same progress on the same repaint.
+        //
+        // ⚠️ THE LABEL'S RECT IS NOT RE-MEASURED, and it does not need to be. The plan sizes it
+        // against the TOTAL, and elapsed time is by definition never longer than the total — so
+        // "0:04" always fits a box measured for "0:11", and "9:59" fits one measured for "10:00".
+        // A label that re-measured itself would move the unread dot beside it on every tick.
+        //
+        // At rest it is the total again, which is what a voice note says before you play it.
+        let elapsed = Int((Double(b.durationSeconds) * progress).rounded(.down))
+        duration.attributedText = progress > 0
+            ? NSAttributedString(string: String(format: "%d:%02d", elapsed / 60, elapsed % 60),
+                                 attributes: plan?.durationAttrs ?? [:])
+            : plan?.durationAttr
         // ⛔ THE SPEED PILL ONLY EXISTS ONCE THE NOTE IS RUNNING — his order, 2026-08-27, off a
         // side-by-side: a permanent "1x" was spending 40pt of a bubble whose waveform is the point.
         // "Running" is playing OR part-heard, so pausing halfway does not make the control vanish

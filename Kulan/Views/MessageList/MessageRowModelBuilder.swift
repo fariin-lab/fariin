@@ -461,6 +461,7 @@ enum MessageRowModelBuilder {
             url: m.audioUrl, enc: m.enc, localData: m.localAudioData,
             bars: m.waveform,
             durationText: String(format: "%d:%02d", secs / 60, secs % 60),
+            durationSeconds: secs,
             // The unread dot: a note I did not send, that is not my own optimistic copy, and that
             // `PlayedVoice` has no record of me listening to.
             unplayed: m.authorId != ctx.me && m.localAudioData == nil

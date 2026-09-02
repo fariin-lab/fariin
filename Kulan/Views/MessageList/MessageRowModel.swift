@@ -118,6 +118,15 @@ enum BubbleBody: Equatable {
         var localData: Data?
         var bars: [Int]
         var durationText: String
+        /// The same length as a NUMBER, because the label counts through it now.
+        ///
+        /// ⛔ Owner, 2026-09-02: "when I click play Duration is not runing". The bubble only ever
+        /// had the length as pre-formatted text, so the label could show how long the note is and
+        /// nothing else — there was no total to multiply the player's 0…1 progress by. The text
+        /// stays: it is what the label reads at rest, it is measured at plan time to size the
+        /// label's rect, and re-deriving it from this number in two places would be two chances to
+        /// format it differently.
+        var durationSeconds: Int
         var unplayed: Bool          // the unread dot beside the duration
         /// The bytes are still on their way up. The bubble is the REAL voice bubble — the send
         /// writes the duration and the waveform before the first byte, exactly so it can be — and

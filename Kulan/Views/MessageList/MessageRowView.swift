@@ -919,7 +919,10 @@ final class MessageRowView: UIView {
         v2.isHidden = false
         v2.frame = CGRect(origin: .zero, size: b.bubble.size)
         v2.onPlayToggle = { [weak self] in self?.onVoicePlayToggle?() }
-        v2.configure(v, plan: plan, tint: b.textColor, cid: cid)
+        // The row already resolved what paints behind this bubble; the disc only needs to know
+        // whether that is the system blur, so it can be one too rather than a flat colour.
+        v2.configure(v, plan: plan, tint: b.textColor,
+                     onMaterial: row.fill == .material, cid: cid)
     }
 
     private func applyLinkPreview(_ b: BubblePlan, model m: MessageRowModel, cid: String) {
