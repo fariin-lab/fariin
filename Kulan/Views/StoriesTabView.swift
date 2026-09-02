@@ -153,7 +153,21 @@ struct StoriesTabView: View {
     }
 
     /// Is there a Glowing grid below? Decides whether Friends is a strip or a grid.
-    private var hasGlowGrid: Bool { !(glowStories.state.value ?? []).isEmpty }
+    ///
+    /// ⛔ ASKS THE RELATIONSHIP, NOT THE LOADER — his report, 2026-09-02: "first time I click story
+    /// tab it's showing this, after refreshing it's showing glowing stories".
+    ///
+    /// ⚠️ THE BUG WAS THAT THIS ANSWERED A QUESTION ABOUT PICTURES. It read the loaded CARDS, which
+    /// are empty for the moment the fetch takes — so the first frame decided "no Glowing section",
+    /// drew Friends as the full-page grid, and then flipped the ENTIRE page to a strip plus a grid
+    /// when the cards landed. A layout that changes shape after its data arrives is the worst kind
+    /// of flicker: it is not a spinner replaced by content, it is one design replaced by another.
+    ///
+    /// `glowRelationship` is known synchronously off two listeners, so from the very first frame
+    /// the page knows which of the two shapes it is — and the cards then simply fill into a grid
+    /// that was always going to be there. This is the same rule the chat list follows about its
+    /// own skeleton: decide the layout on what you know, fill it with what arrives.
+    private var hasGlowGrid: Bool { !glow.glowRelationship.isEmpty }
 
     /// FRIENDS AS A GRID — the layout when nothing sits under it. Same card as Glowing.
     ///
@@ -216,7 +230,10 @@ struct StoriesTabView: View {
     /// is the one that already suited this page.
     @ViewBuilder private var glowSection: some View {
         let cards = glowStories.state.value ?? []
-        if !cards.isEmpty {
+        // Present from the first frame whenever there IS a relationship — see `hasGlowGrid`. The
+        // cards fill in underneath the heading rather than the heading appearing after them, so
+        // the page never changes shape once it is on screen.
+        if hasGlowGrid {
             VStack(alignment: .leading, spacing: 12) {
                 NavigationLink(value: GlowRoute.people) {
                     HStack(spacing: 4) {
@@ -231,12 +248,23 @@ struct StoriesTabView: View {
 
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 10),
                                     GridItem(.flexible(), spacing: 10)], spacing: 10) {
-                    ForEach(cards) { c in
-                        NavigationLink(value: GlowRoute.profile(c.person.id, c.person.name,
-                                                                c.person.photoUrl ?? "")) {
-                            GlowStoryCardView(card: c)
+                    if cards.isEmpty {
+                        // Two empty cards while the pictures are fetched. They hold exactly the
+                        // space the real ones will take, so nothing under them moves when they
+                        // land — a placeholder that is a different size is just a slower jump.
+                        ForEach(0..<2, id: \.self) { _ in
+                            Color.primary.opacity(0.08)
+                                .aspectRatio(0.74, contentMode: .fit)
+                                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                         }
-                        .buttonStyle(.plain)
+                    } else {
+                        ForEach(cards) { c in
+                            NavigationLink(value: GlowRoute.profile(c.person.id, c.person.name,
+                                                                    c.person.photoUrl ?? "")) {
+                                GlowStoryCardView(card: c)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
                 .padding(.horizontal, 16)
