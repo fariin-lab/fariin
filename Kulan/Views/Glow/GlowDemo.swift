@@ -108,7 +108,7 @@ import UIKit
         let audiences = ["glowers", "friends", "custom"]
         return PostedStory(
             id: "glowdemo_story_\(uid)_\(index)",
-            thumbUrl: thumb(seed),
+            thumbUrl: demoAsset(seed) ?? thumb(seed),
             blurThumb: "",
             createdAt: now.addingTimeInterval(-3600 * Double(3 + index * 5)),
             expiresAt: now.addingTimeInterval(3600 * 20),
@@ -117,8 +117,41 @@ import UIKit
             audience: audiences[index % audiences.count])
     }
 
-    /// A drawn placeholder, as a data: URL, so the cards have real pictures with no network and no
-    /// bundled assets. `DemoStoryMedia` draws its own art the same way and for the same reason.
+    /// ⛔ THE REAL DEMO PHOTOGRAPHS, NOT A GRADIENT — owner, 2026-09-02: "my preview stories, Glowing
+    /// and Friends story, make it real images".
+    ///
+    /// ⚠️ THE OLD NOTE HERE SAID "no bundled assets" AND THAT WAS SIMPLY NOT TRUE. There are
+    /// twenty-five `demo-story-*` images in the catalogue, put there for exactly this and already
+    /// used by `DemoMode` for the friends row. This file drew a two-colour gradient instead, so the
+    /// Glowing grid — the one screen where the picture IS the reason to tap — was the only place in
+    /// the app showing demo people as flat colour.
+    ///
+    /// ⚠️ STORED WHERE BOTH READERS LOOK, which is why this is not just `UIImage(named:)`. A card
+    /// reads through `DiskImageCache` and the story viewer reads through `URLCache`; a picture in
+    /// one is invisible to the other. `DemoMode.story` learned this the hard way and its note says
+    /// so, so this does the same two writes behind the same unreachable host.
+    private static func demoAsset(_ seed: Int) -> String? {
+        let names = ["demo-story-ayaan", "demo-story-cabdi", "demo-story-sagal",
+                     "demo-story-khadra", "demo-story-linnea", "demo-story-ilhan",
+                     "demo-story-ayaan-2", "demo-story-cabdi-3", "demo-story-sagal-2",
+                     "demo-story-khadra-2", "demo-story-linnea-2", "demo-story-ilhan-2"]
+        let name = names[abs(seed) % names.count]
+        let urlStr = "https://fariin.local/\(name).jpg"
+        guard let img = UIImage(named: name) else { return nil }
+        guard let url = URL(string: urlStr) else { return nil }
+        if DiskImageCache.shared.isCached(urlStr) { return urlStr }
+        if let data = img.jpegData(compressionQuality: 0.85) {
+            DiskImageCache.shared.store(img, data: data, for: urlStr)
+            let resp = URLResponse(url: url, mimeType: "image/jpeg",
+                                   expectedContentLength: data.count, textEncodingName: nil)
+            URLCache.shared.storeCachedResponse(CachedURLResponse(response: resp, data: data),
+                                                for: URLRequest(url: url))
+        }
+        return urlStr
+    }
+
+    /// A drawn placeholder, kept as the FALLBACK only: an asset that has been renamed or dropped
+    /// must still leave a card with something on it rather than a hole.
     private static func thumb(_ seed: Int) -> String {
         let pairs: [(UIColor, UIColor)] = [
             (.systemIndigo, .systemBlue), (.systemPink, .systemRed),
