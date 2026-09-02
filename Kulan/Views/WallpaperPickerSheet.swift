@@ -163,7 +163,10 @@ struct WallpaperPickerSheet: View {
         //
         // ⚠️ 44 apart, not 48: the secondary "Apply For All Chats" row is 34 and its gap is 6, plus
         // the 4 the taller button block adds. Both bases move by the same amount so that stays true.
-        .presentationDetents([.height((hasPendingChange && !globalOnly ? 363 : 319) + Self.bottomInset)])
+        // ⚠️ +26 ON BOTH, for the header's new 14 above and 12 below. A fixed detent does not follow
+        // its content, so padding the bar without paying for it here would just take the room out of
+        // the wallpaper strip — which is the half of his report about the tiles being cut off.
+        .presentationDetents([.height((hasPendingChange && !globalOnly ? 389 : 345) + Self.bottomInset)])
         .presentationDragIndicator(.visible)
         .sheet(isPresented: $showCustomColor) {
             CustomColorView(cid: cid) { spec in
@@ -266,6 +269,19 @@ struct WallpaperPickerSheet: View {
         }
         .padding(.leading, 16)
         .padding(.trailing, 16)
+        // ⛔ THE BAR NEEDS ITS OWN ROOM — owner, 2026-09-02: "the chat wallpaper sheet header looks
+        // broken, the buttons are touching the top edge and the wallpapers below".
+        //
+        // ⚠️ I ASSUMED `safeAreaBar` WOULD CLEAR THE GRABBER AND IT DOES NOT. Its own note said so
+        // in as many words ("the grabber gap stops being a number, safeAreaBar places the bar under
+        // it") and that was a guess about a modifier I could not run. The bar is placed at the
+        // sheet's edge and its content is exactly its content, so a 48pt button drawn there sits on
+        // the sheet's top corner with the drag indicator over it, and its bottom edge is the
+        // wallpaper strip's top edge.
+        //
+        // 14 above clears the indicator; 12 below is the gap the strip should have had all along.
+        .padding(.top, 14)
+        .padding(.bottom, 12)
     }
 
     private func resetToDefault() {
