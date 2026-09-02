@@ -191,9 +191,13 @@ service cloud.firestore {
       // stage 4 of the push-token move, and adding them before the fleet has the new build would
       // stop old phones registering for notifications. See the note on the /push subcollection.
       function serverOnlyUserFields() {
+        // glowerCount / glowingCount: the Glow feature's public numbers, maintained by the
+        // onGlowWrite function off the /glows collection. Here so no phone can inflate its own —
+        // the same reason `verification` is here, and the profile card renders whatever these say.
         return ['banned', 'bannedAt', 'bannedBy', 'banReason',
                 'handle', 'handleLower', 'usernameHistory',
-                'verification', 'usernameChecks'];
+                'verification', 'usernameChecks',
+                'glowerCount', 'glowingCount'];
       }
 
       allow create: if signedIn() && request.auth.uid == uid
@@ -480,6 +484,49 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['handled', 'handledBy', 'handledAt', 'outcome']);
       allow delete: if false;
+    }
+
+    // ── GLOW ─────────────────────────────────────────────────────────────────────────────────
+    //
+    // One document per glow: /glows/{from}_{to}, exactly {from, to, createdAt}. A glow is the
+    // relationship behind Glow Stories — two people who are not friends and have never chatted
+    // reaching each other's stories. It is REMOVABLE (an edge, not an event), and it is kept
+    // strictly separate from conversations: nothing here reads that collection, and a person can
+    // be friend, glower, glowing, or any combination.
+    //
+    // ⛔ THE ID IS CHECKED AGAINST THE PAYLOAD. Without that, anybody could write a document whose
+    // id claims one edge while its fields claim another, and every reader that trusts one of the
+    // two is lied to by the other. With it, one edge has one possible document.
+    //
+    // ⛔ LISTS ARE OWNER-SCOPED, AND THAT IS THE PRIVACY MODEL (his ruling, 2026-09-02: counts are
+    // public, the name lists are yours alone). A list is only allowed when every returned document
+    // provably has the caller on one end — which in rules terms means the query pins `from` or
+    // `to` to the caller's own uid. Walking somebody ELSE's glower list is refused wholesale.
+    // The same class of decision that closed the user directory on 2026-08-10: public counts must
+    // not become a walkable graph.
+    //
+    // The public counts live on the user document as glowerCount / glowingCount, written only by
+    // the onGlowWrite function — both names are in serverOnlyUserFields() above.
+    match /glows/{edgeId} {
+      allow get: if signedIn()
+        && (request.auth.uid == resource.data.from || request.auth.uid == resource.data.to);
+      allow list: if signedIn()
+        && (request.auth.uid == resource.data.from || request.auth.uid == resource.data.to);
+      allow create: if signedIn()
+        && request.auth.uid == request.resource.data.from
+        && request.resource.data.from != request.resource.data.to
+        && edgeId == request.resource.data.from + '_' + request.resource.data.to
+        && request.resource.data.keys().hasOnly(['from', 'to', 'createdAt'])
+        && request.resource.data.keys().hasAll(['from', 'to', 'createdAt'])
+        && request.resource.data.to is string && request.resource.data.to.size() > 0
+        && !isBanned();
+      // No update: a glow has nothing to edit. Give again after a remove is a fresh create.
+      allow update: if false;
+      // EITHER END may sever the edge: the giver taking it back, or the receiver removing a glower
+      // from their own list — his requirement that a relationship change is handleable from both
+      // sides.
+      allow delete: if signedIn()
+        && (request.auth.uid == resource.data.from || request.auth.uid == resource.data.to);
     }
 
     // Official sticker packs. Published by us and readable by everyone signed in; no client
