@@ -111,8 +111,8 @@ struct WallpaperPickerSheet: View {
                 }
             }
             chatColorSection
-            bottomBar
         }
+        .frame(maxHeight: .infinity, alignment: .top)
         .padding(.top, 8)      // native gap under the system grabber (was a big dead band)
         // ⛔ THE BUTTON IS SYSTEM CHROME, SO IT SITS WHERE SYSTEM CHROME SITS — owner,
         // 2026-08-24, third time he has sent the same rule: "use system chrome / edge-attached UI,
@@ -129,10 +129,20 @@ struct WallpaperPickerSheet: View {
         // reported. The old note was right that the indicator must be accounted for and wrong about
         // clearing all of it and then some.
         //
-        // ⚠️ THE DETENT MOVES WITH THE PADDING OR THE SHEET STOPS FITTING ITS CONTENT. A fixed detent
-        // measures from the bottom of the SCREEN, so the two are one arithmetic: the padding lost 17
-        // (12 + 5), so the two base heights lose the same 12 and the band term becomes the gap.
-        .padding(.bottom, Self.bottomChromeGap)
+        // ⛔ AND THE ONLY WAY TO SIT WHERE SYSTEM CHROME SITS IS TO BE SYSTEM CHROME — owner,
+        // 2026-09-02, sending the rule itself this time: content inside the safe area is APP
+        // CONTENT; an edge-attached control is a SYSTEM BAR, system-positioned. Hand-padding the
+        // bottom of a VStack is the first thing, however carefully the number is derived, and a
+        // derived number was still a number this file was choosing.
+        //
+        // `safeAreaBar` is the second thing. It hands the buttons to the system as an edge-attached
+        // bar: the system decides the rest above the indicator, and the rest of the sheet is inset
+        // to clear it. That is the same treatment the tab bar and the composer get, so the gap under
+        // Apply Wallpaper now matches them by construction instead of by arithmetic.
+        //
+        // ⚠️ THE DETENT STILL MEASURES FROM THE BOTTOM OF THE SCREEN and still has to cover the bar,
+        // which is why the band term stays in the height below even though nothing pads by it now.
+        .safeAreaBar(edge: .bottom) { bottomBar }
         // Taller only while the secondary "Apply For All Chats" button is present.
         .presentationDetents([.height((hasPendingChange && !globalOnly ? 416 : 372) + Self.bottomChromeGap)])
         .presentationDragIndicator(.visible)

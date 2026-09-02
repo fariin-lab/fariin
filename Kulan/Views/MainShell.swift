@@ -1390,7 +1390,19 @@ struct ChatsView: View {
     /// by default, so this would read "PINNED" — which is Apple's grouped-list convention and not
     /// what theirs draws. ⚠️ `.listRowInsets` is what lets the 16pt leading land where the row's own
     /// 16pt gutter does; the header is a row like any other and inherits the same zeroed insets.
-    @ViewBuilder private func chatSectionHeader(_ title: String) -> some View {
+    ///
+    /// ⛔ IT IS A ROW, NOT A `Section` HEADER — owner, 2026-09-02: "when I scroll the chat list,
+    /// Pinned text and Chats text is not following scroll". A plain-list section header is PINNED by
+    /// UIKit: it parks itself under the nav bar and hangs there while its own section scrolls past
+    /// underneath it. Theirs scrolls away with the rows it names, and the only way to get that out of
+    /// a `List` is to stop being a header — a row scrolls because rows scroll. So this returns a row:
+    /// no separator, no background, nothing selectable. A label that happens to occupy a row.
+    ///
+    /// ⚠️ `first` IS THE GAP UNDER THE SEARCH FIELD, and it is a different question from the gap
+    /// between two sections. 14 above is what separates a heading from the ROWS ABOVE IT; the top
+    /// heading has no rows above it, only the search field, and inheriting the 14 there is what made
+    /// his "space between Pinned text and search bar is not like the reference".
+    @ViewBuilder private func chatSectionHeader(_ title: String, first: Bool = false) -> some View {
         Text(title)
             .font(.headline)
             // ⛔ `Color(.label)`, NOT `.primary` — owner, 2026-09-02, off build 725: "chats and
@@ -1402,11 +1414,14 @@ struct ChatsView: View {
             // colour, and a concrete `Color` carries no hierarchy for a container to dim.
             .foregroundStyle(Color(.label))
             .textCase(nil)
-            .padding(.top, 14)
+            .padding(.top, first ? 8 : 14)
             .padding(.bottom, 8)
             .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .listRowInsets(EdgeInsets())
+            .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .selectionDisabled(true)
     }
 
     private var visible: [Conversation] {
@@ -1772,7 +1787,7 @@ struct ChatsView: View {
                           // ⚠️ THE ROW BODY IS UNCHANGED AND THAT IS DELIBERATE. `chatListRow` owns
                           // this row's structural identity — this file's own note explains that
                           // changing it cross-faded two copies of every row when Select mode was
-                          // entered. Rows move into a `Section`, they are not rebuilt.
+                          // entered. Two label rows join the flow; no chat row is rebuilt.
                           // ⚠️ Read ONCE into `split`. Naming it here is what keeps `visible` — a
                           // filter and a sort over every conversation — to a single evaluation per
                           // body pass; the un-sectioned branch rebuilds the same array from the two
@@ -1782,12 +1797,14 @@ struct ChatsView: View {
                           if split.pinned.isEmpty || split.rest.isEmpty {
                               ForEach(split.pinned + split.rest) { conv in chatListRow(conv) }
                           } else {
-                              Section {
-                                  ForEach(split.pinned) { conv in chatListRow(conv) }
-                              } header: { chatSectionHeader("Pinned") }
-                              Section {
-                                  ForEach(split.rest) { conv in chatListRow(conv) }
-                              } header: { chatSectionHeader("Chats") }
+                              // ⛔ NO `Section` — see `chatSectionHeader`. A section header pins
+                              // itself under the nav bar while its own rows scroll past underneath,
+                              // which is the "not following scroll" he reported. These are rows in
+                              // the same flat flow as the chats, so they scroll like chats do.
+                              chatSectionHeader("Pinned", first: true)
+                              ForEach(split.pinned) { conv in chatListRow(conv) }
+                              chatSectionHeader("Chats")
+                              ForEach(split.rest) { conv in chatListRow(conv) }
                           }
                           archivedEntryRow
                         }
