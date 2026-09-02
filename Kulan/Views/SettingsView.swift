@@ -1375,6 +1375,13 @@ struct StorySettingsView: View {
                                 NavigationLink { MyFriendsPrivacyView() } label: {
                                     StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
                                 }
+                            } else if a.kind == .glowers {
+                                // ⛔ ITS OWN PAGE — owner, 2026-09-02. It used to fall through to
+                                // `CustomStoryDetailView`, which looks up `store.custom` by id and
+                                // finds nothing for a built-in, so the row opened an empty screen.
+                                NavigationLink { GlowersPrivacyView() } label: {
+                                    StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
+                                }
                             } else {
                                 NavigationLink { CustomStoryDetailView(audienceId: a.id) } label: {
                                     StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }

@@ -88,10 +88,17 @@ struct StoryAudience: Identifiable, Codable, Equatable {
     static let defaultMyFriends = StoryAudience(id: myFriendsId, kind: .myFriends, name: "My Friends",
                                                 mode: .all, members: [], allowReplies: true,
                                                 createdAt: sortsFirst)
-    /// ⚠️ BUILT-IN AND MEMBERLESS. Its people are the live glow relationship, not a stored list, so
-    /// there is nothing to edit and nothing to keep in sync — the same shape as Everyone. It is
-    /// never written to Firestore for that reason: a `storyLists` document for it would be a second
-    /// copy of an answer `GlowService` already holds.
+    /// ⚠️ ITS PEOPLE ARE THE LIVE RELATIONSHIP; ITS `members` ARE WHO TO LEAVE OUT OF IT.
+    ///
+    /// This started memberless, on the reasoning that a stored list would be a second copy of an
+    /// answer `GlowService` already holds. That is still true of the audience — it is never a list
+    /// of glowers — but not of an EXCEPT list, which is a choice the person made and nothing else
+    /// knows. Owner, 2026-09-02: "when I click Glowers show a new page that lets me hide the same
+    /// user, like the My Friends one". So it stores like `myFriends`: `.all` reaches every glower,
+    /// `.except` reaches every glower but these.
+    ///
+    /// ⚠️ `.only` IS NOT OFFERED for this audience — see `GlowersPrivacyView`. "Only these glowers"
+    /// is a custom story with extra steps, and it already exists as one.
     static let glowersAudience = StoryAudience(id: glowersId, kind: .glowers, name: "Glowers",
                                                mode: .all, members: [], allowReplies: true,
                                                createdAt: sortsFirst)
@@ -189,7 +196,15 @@ struct StoryAudience: Identifiable, Codable, Equatable {
         case .custom:
             return Set(members).intersection(contacts)
         case .glowers:
-            return glow
+            // ⛔ THE EXCEPT-LIST IS SUBTRACTED HERE — owner, 2026-09-02: hide the story from
+            // particular glowers. `.only` never reaches this audience (see `GlowersPrivacyView`),
+            // and if one were ever written by hand it would still be a narrowing rather than a way
+            // to reach somebody the relationship does not include.
+            switch mode {
+            case .all: return glow
+            case .except: return glow.subtracting(members)
+            case .only: return Set(members).intersection(glow)
+            }
             // ⛔ NOT INTERSECTED WITH `contacts`, AND THAT IS THE FEATURE. Every branch above ends
             // in the accepted-chat set because every audience above describes people you talk to.
             // Glow exists so two people who have NEVER chatted can reach each other, so an
@@ -216,10 +231,13 @@ struct StoryAudience: Identifiable, Codable, Equatable {
             case .only: return "\(members.count) selected"
             }
         case .glowers:
-            // Counted off the live relationship, not off `members` — this audience has none.
-            let n = glow.count
-            return n == 0 ? "People you have a Glow with"
-                          : "\(n) \(n == 1 ? "person" : "people") you have a Glow with"
+            // Counted off the live relationship, because `members` here is who to LEAVE OUT rather
+            // than who is in — the count has to be what the story will actually reach.
+            let n = mode == .except ? glow.subtracting(members).count : glow.count
+            if n == 0 { return "People you have a Glow with" }
+            let people = "\(n) \(n == 1 ? "person" : "people") you have a Glow with"
+            return mode == .except && !members.isEmpty ? "\(people) · \(members.count) hidden"
+                                                       : people
         case .custom:
             let n = members.count
             return "Custom story · \(n) \(n == 1 ? "viewer" : "viewers")"
@@ -249,6 +267,9 @@ final class StoryAudienceStore {
     let everyone = StoryAudience.everyone
     /// Editable, and stored — its mode and its except/only list have to follow the account.
     private(set) var myFriends = StoryAudience.defaultMyFriends
+    /// Editable and stored, like `myFriends` — its `members` are the people to leave OUT. See the
+    /// note on `StoryAudience.glowersAudience`.
+    private(set) var glowers = StoryAudience.glowersAudience
     private(set) var custom: [StoryAudience] = []
     /// People hidden from every story, whatever audience it is posted to. See `Kind.hidden`.
     private(set) var hiddenFrom: Set<String> = []
@@ -291,7 +312,7 @@ final class StoryAudienceStore {
     /// ⚠️ He has a CUSTOM list literally named "Glowers" from before this existed (his 2026-09-02
     /// screenshot of the share sheet). This does not touch it: it is a different id and a different
     /// kind, so the two can sit in the same sheet. Tell him to delete his by hand if he wants to.
-    var all: [StoryAudience] { [everyone, myFriends, .glowersAudience] + custom }
+    var all: [StoryAudience] { [everyone, myFriends, glowers] + custom }
 
     func audience(id: String) -> StoryAudience? { all.first { $0.id == id } }
 
@@ -309,15 +330,21 @@ final class StoryAudienceStore {
             .addSnapshotListener { [weak self] snap, _ in
                 guard let self, let docs = snap?.documents else { return }
                 var friends = StoryAudience.defaultMyFriends
+                var glow = StoryAudience.glowersAudience
                 var lists: [StoryAudience] = []
                 var hidden: Set<String> = []
                 for d in docs {
                     guard let a = Self.decode(id: d.documentID, data: d.data()) else { continue }
                     if a.id == StoryAudience.myFriendsId { friends = a }
+                    // ⚠️ BY ID, NOT BY KIND, and before the `.custom` test. A decoded document's
+                    // kind comes from its own field; the id is the one thing this document cannot
+                    // lie about, and it is what `write` filed it under.
+                    else if a.id == StoryAudience.glowersId { glow = a }
                     else if a.kind == .hidden { hidden = Set(a.members) }
                     else if a.kind == .custom { lists.append(a) }
                 }
                 self.myFriends = friends
+                self.glowers = glow
                 self.hiddenFrom = hidden
                 self.custom = lists.sorted { $0.createdAt < $1.createdAt }
                 self.saveMirror()
@@ -335,6 +362,7 @@ final class StoryAudienceStore {
     func clear() {
         stop()
         myFriends = .defaultMyFriends
+        glowers = .glowersAudience
         custom = []
         hiddenFrom = []
         select(StoryAudience.myFriendsId)
@@ -401,6 +429,8 @@ final class StoryAudienceStore {
     func update(_ a: StoryAudience) {
         if a.id == StoryAudience.myFriendsId {
             myFriends = a
+        } else if a.id == StoryAudience.glowersId {
+            glowers = a
         } else if let i = custom.firstIndex(where: { $0.id == a.id }) {
             custom[i] = a
         } else {
@@ -472,10 +502,14 @@ final class StoryAudienceStore {
         var custom: [StoryAudience]
         /// Optional so a mirror written before hiding existed still decodes.
         var hiddenFrom: [String]? = nil
+        /// Optional for the same reason: a mirror written before the Glowers except-list existed
+        /// decodes to nil and falls back to the built-in, which is "every glower", the old meaning.
+        var glowers: StoryAudience? = nil
     }
 
     private func saveMirror() {
-        let m = DiskCopy(myFriends: myFriends, custom: custom, hiddenFrom: Array(hiddenFrom))
+        let m = DiskCopy(myFriends: myFriends, custom: custom, hiddenFrom: Array(hiddenFrom),
+                         glowers: glowers)
         guard let d = try? JSONEncoder().encode(m) else { return }
         UserDefaults.standard.set(d, forKey: Self.mirrorKey)
     }
@@ -486,5 +520,6 @@ final class StoryAudienceStore {
         myFriends = m.myFriends
         custom = m.custom
         hiddenFrom = Set(m.hiddenFrom ?? [])
+        glowers = m.glowers ?? .glowersAudience
     }
 }

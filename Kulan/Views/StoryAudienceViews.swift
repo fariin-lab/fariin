@@ -580,6 +580,123 @@ struct MyFriendsPrivacyView: View {
     }
 }
 
+// MARK: - Glowers
+
+/// ⛔ THE GLOWERS AUDIENCE'S OWN PAGE — owner, 2026-09-02: "add a feature, when I click Glowers show
+/// a new page that lets me hide the same user, like image 2". Image 2 is `MembersEditor`, the sheet
+/// My Friends already uses for its except-list, so this is that pattern applied to a second
+/// audience rather than a second pattern.
+///
+/// ⚠️ TWO MODES, NOT THREE. My Friends offers All / All Except / Only Share With; this offers the
+/// first two. "Only these glowers" is a custom story described a different way, and the app already
+/// has custom stories — a third mode here would be a second door to one place, and the two would
+/// drift. What he asked for is hiding, which is `.except`.
+///
+/// ⚠️ THE CANDIDATE LIST IS THE LIVE RELATIONSHIP, resolved to names and faces the same way every
+/// other Glow screen resolves it. `StoryContact.all()` is the wrong source here and would be the
+/// same mistake `rawRecipients` documents: it lists people you share an accepted chat with, and a
+/// glower is precisely somebody you might not.
+struct GlowersPrivacyView: View {
+    @State private var store = StoryAudienceStore.shared
+    @State private var people = GlowPeopleLoader()
+    @State private var picking = false
+    /// Being chosen right now, not yet chosen — the same draft rule as My Friends, and for the same
+    /// reason: backing out of the picker must not leave "All Except" ticked with nobody excluded,
+    /// which reaches exactly the same people as "All" while claiming to be something else.
+    @State private var draft: Set<String> = []
+    private var glow = GlowService.shared
+
+    private var a: StoryAudience { store.glowers }
+    /// ⚠️ `glowRelationship`, THE SCREEN-FACING ONE, so demo people are listed and can be hidden
+    /// while he is testing. A demo uid landing in this except-list is safe in a way it would not be
+    /// in `recipientUids`: this list only ever SUBTRACTS, so a fake id in it reaches nobody and
+    /// removes nobody. See the note on `realGlowRelationship`.
+    private var uids: [String] { Array(glow.glowRelationship).sorted() }
+    private var key: String { uids.joined(separator: ",") }
+    /// The glow people as picker rows. `.loading` and `.failed` both come out empty, which leaves
+    /// the editor with nothing to choose — see the disabled row below.
+    private var contacts: [StoryContact] {
+        (people.state.value ?? []).map { StoryContact(id: $0.id, name: $0.name, photo: $0.photoUrl) }
+    }
+
+    var body: some View {
+        List {
+            Section {
+                modeRow(.all, "Everyone you have a Glow with",
+                        detail: "\(uids.count) \(uids.count == 1 ? "Viewer" : "Viewers")")
+                modeRow(.except, "All Except…",
+                        detail: a.mode == .except ? "\(a.members.count) hidden" : nil)
+            } header: {
+                Text("Who Can View This Story")
+            } footer: {
+                Text("A Glow reaches people you have not chatted with, so this list is not your chats. Changes won't affect stories you've already sent.")
+            }
+
+            Section {
+                Toggle("Allow Replies & Reactions", isOn: Binding(
+                    get: { a.allowReplies },
+                    set: { v in var n = a; n.allowReplies = v; store.update(n) }
+                )).tint(.green)
+            } header: {
+                Text("Replies & Reactions")
+            } footer: {
+                Text("Let people who can view your story react and reply.")
+            }
+        }
+        .navigationTitle("Glowers")
+        .navigationBarTitleDisplayMode(.inline)
+        .task(id: key) { await people.load(uids, key: key) }
+        .sheet(isPresented: $picking) {
+            NavigationStack {
+                MembersEditor(
+                    title: "All Except",
+                    contacts: contacts,
+                    members: $draft,
+                    requireAtLeastOne: true,
+                    onDone: {
+                        if !draft.isEmpty {
+                            var n = a
+                            n.mode = .except
+                            n.members = Array(draft)
+                            store.update(n)
+                        }
+                        picking = false
+                    },
+                    onCancel: { picking = false })
+            }
+        }
+    }
+
+    private func modeRow(_ m: StoryAudience.Mode, _ title: String, detail: String?) -> some View {
+        Button {
+            guard m != .all else {
+                var n = a
+                n.mode = .all
+                n.members = []
+                store.update(n)
+                return
+            }
+            draft = a.mode == m ? Set(a.members) : []
+            picking = true
+        } label: {
+            HStack(spacing: 12) {
+                StoryTick(on: a.mode == m)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).foregroundStyle(.primary)
+                    if let detail { Text(detail).font(.subheadline).foregroundStyle(.secondary) }
+                }
+                Spacer()
+                if a.mode == m && m != .all {
+                    Text("Edit").font(.subheadline).foregroundStyle(Color.accentColor)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        // Nobody to hide from yet: the row would open an empty picker whose Done can never light up.
+        .disabled(m == .except && contacts.isEmpty)
+    }
+}
+
 // MARK: - A custom story's page
 
 struct CustomStoryDetailView: View {
