@@ -126,7 +126,8 @@ struct StoryAudienceRow<Trailing: View>: View {
                         .frame(width: 23, height: 23)
                         .foregroundStyle(.white)
                 } else {
-                    Image(systemName: badgeIcon).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                    Image(systemName: badgeIcon).font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(badgeGlyph)
                 }
             }
             .frame(width: 40, height: 40)
@@ -145,14 +146,23 @@ struct StoryAudienceRow<Trailing: View>: View {
         case .hidden: return "eye.slash.fill"
         }
     }
+    /// The glyph ON the badge. Every built-in except Glowers sits on a saturated colour and takes
+    /// white; Glowers sits on `.primary`, which IS white at night — so it takes the opposite.
+    private var badgeGlyph: Color {
+        audience.kind == .glowers ? Color(.systemBackground) : .white
+    }
+
     private var badgeTint: Color {
         switch audience.kind {
         case .everyone: return .blue
         case .myFriends: return .orange
-        // Glow's own colour, the pink of the "Glow back" button in his notifications screenshot —
-        // one hue for the whole feature, so a Glowers row is recognisable at a glance beside the
-        // blue and orange built-ins.
-        case .glowers: return Color(hex: 0xFF3B6B)
+        // ⛔ THE APP'S OWN ACCENT — owner, 2026-09-02: "follow my app color is black and white".
+        // The pink that was here was read off another app's screenshot and was never Fariin's.
+        //
+        // ⚠️ `Color.primary` IS WHITE AT NIGHT, so the glyph on this one badge cannot be the
+        // hardcoded `.white` the others use — see `badgeGlyph`. That is the exact mistake the
+        // accent-is-white-at-night note in this repo was written about.
+        case .glowers: return Color.primary
         case .custom: return .gray
         case .hidden: return .gray
         }

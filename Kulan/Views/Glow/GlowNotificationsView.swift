@@ -1,33 +1,35 @@
 import SwiftUI
 
-/// GLOW NOTIFICATIONS — his reference, sent twice: a back chevron, the title, a row of filter
-/// chips, and rows of face + sentence + time, with the story's own thumbnail on the right and a
-/// pink Glow back on a glow row.
+/// GLOW NOTIFICATIONS — his reference, and then his corrections off the built screen (2026-09-02).
 ///
-/// ⛔ THE LOVES ARE REAL — his second sending made that the point: "you can see who give you love
-/// and Glow back or glow". My first pass showed an honest "not available yet" on the strength of
-/// there being no reaction feed. There is one, and it was already in the app: a reaction is stored
-/// ON the view receipt, which is what the Seen-by sheet has read all along. See `GlowEventsLoader`.
+/// ⛔ THE CORRECTIONS, ALL SIX, BECAUSE THEY ARE THE FILE'S REAL SPEC NOW:
+///   · **No Replies tab.** There is no reply feed to read, and a tab that only ever says "nothing
+///     here" is a tab that teaches people the page is empty. Glows and Loves are what exist.
+///   · **The tabs are glass** — the app's own `liquidGlass`, not flat capsules of my own making.
+///   · **Bigger faces.** 44 read as small against the two-line sentence beside them; 52 is the size
+///     the rest of this app gives a person in a list.
+///   · **Two tap targets, not one.** The person opens the PERSON; the story preview opens the
+///     STORY. One row that always went to the profile made the preview a decoration.
+///   · **The app's colour, not mine.** See `GlowStyle.accent` — the pink was read off a screenshot
+///     of another app and was never Fariin's.
+///   · **No chevron.** With two real tap targets an arrow points at neither of them.
 ///
 /// ⛔ THE ROWS ARE DERIVED, NOT A SECOND COLLECTION. A glow document carries who and when, which IS
-/// the row; a love is a receipt carrying an emoji. So there is nothing to write, nothing to keep in
-/// step with the truth, and nothing to clean up — un-glowing removes the edge and the row goes with
-/// it, which is the correct behaviour for free.
+/// the row; a love is a view receipt carrying an emoji. Nothing to write, nothing to keep in step,
+/// and un-glowing removes the row for free.
 struct GlowNotificationsView: View {
     /// Explicit, for the private-stored-property rule — see the note in `GlowProfileView`.
     init() {}
 
-    /// His chips, in his order and his words. "Comments" and "like" are what his reference says;
-    /// Replies is the app's own word for a story reply and Loves matches the heart, so the two are
-    /// named for what they are here rather than copied letter for letter.
+    /// Three, not four. See the header: Replies has no source and an always-empty tab is worse
+    /// than no tab.
     enum Chip: String, CaseIterable, Identifiable {
-        case all, glowers, replies, loves
+        case all, glowers, loves
         var id: String { rawValue }
         var title: String {
             switch self {
             case .all: return "All"
             case .glowers: return "Glowers"
-            case .replies: return "Replies"
             case .loves: return "Loves"
             }
         }
@@ -35,12 +37,13 @@ struct GlowNotificationsView: View {
 
     @State private var chip: Chip = .all
     @State private var events = GlowEventsLoader()
+    @Environment(\.colorScheme) private var scheme
     private var glow = GlowService.shared
+    private var dark: Bool { scheme == .dark }
 
     var body: some View {
         VStack(spacing: 0) {
             chips
-            Divider()
             content
         }
         .navigationTitle("Glow notifications")
@@ -51,19 +54,26 @@ struct GlowNotificationsView: View {
         .onDisappear { glow.markSeen() }
     }
 
+    /// Glass, his word. The selected one is the app's accent filled, with its label taken from
+    /// `onAccent` — never `.white`, which is invisible on a white accent at night.
     private var chips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(Chip.allCases) { c in
+                    let on = chip == c
                     Button { chip = c } label: {
                         Text(c.title)
                             .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(chip == c ? Color.white : Color.primary)
-                            .padding(.horizontal, 16).padding(.vertical, 9)
-                            .background(chip == c ? GlowStyle.accent : Color.primary.opacity(0.08),
-                                        in: Capsule())
+                            .foregroundStyle(on ? GlowStyle.onAccent(dark) : Color.primary)
+                            .padding(.horizontal, 18).padding(.vertical, 10)
+                            .background {
+                                if on { Capsule().fill(GlowStyle.accent) }
+                            }
                     }
                     .buttonStyle(.plain)
+                    // The unselected chips are real glass; the selected one is a solid accent, so
+                    // the glass goes UNDER both and the fill sits on top of it.
+                    .liquidGlass(Capsule(), interactive: true, enabled: !on)
                 }
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
@@ -92,8 +102,8 @@ struct GlowNotificationsView: View {
                     ForEach(sections(rows), id: \.title) { section in
                         Section {
                             ForEach(section.rows) { e in
-                                GlowEventRow(event: e, unread: e.at > glow.seenUpTo)
-                                    .listRowInsets(EdgeInsets(top: 8, leading: 14, bottom: 8, trailing: 14))
+                                GlowEventRow(event: e, unread: e.at > glow.seenUpTo, dark: dark)
+                                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                                     .listRowSeparator(.hidden)
                             }
                         } header: {
@@ -112,38 +122,27 @@ struct GlowNotificationsView: View {
         switch chip {
         case .all: return true
         case .glowers: return e.isGlow
-        case .replies: return e.isReply
         case .loves: return e.isLove
         }
     }
 
-    // Each empty state names the thing that is missing, rather than one sentence for four cases.
     private var emptyTitle: String {
         switch chip {
         case .all: return "Nothing yet"
         case .glowers: return "No Glows yet"
-        case .replies: return "No replies yet"
         case .loves: return "No loves yet"
         }
     }
-    private var emptyIcon: String {
-        switch chip {
-        case .loves: return "heart"
-        case .replies: return "bubble.left"
-        default: return GlowStyle.symbol
-        }
-    }
+    private var emptyIcon: String { chip == .loves ? "heart" : GlowStyle.symbol }
     private var emptyBody: String {
         switch chip {
         case .glowers: return "When somebody glows you, it appears here."
         case .loves: return "When somebody loves one of your stories, it appears here."
-        case .replies: return "Replies to your stories appear here."
         case .all: return "Glows and reactions to your stories appear here."
         }
     }
 
-    /// "This week" / "Last 30 days" / "Older" — his reference's own grouping, which is what makes a
-    /// long list readable without a date on every row.
+    /// "This week" / "Last 30 days" / "Older" — his reference's own grouping.
     private func sections(_ rows: [GlowEvent]) -> [(title: String, rows: [GlowEvent])] {
         let now = Date()
         var week: [GlowEvent] = [], month: [GlowEvent] = [], older: [GlowEvent] = []
@@ -156,30 +155,34 @@ struct GlowNotificationsView: View {
     }
 }
 
-/// One row. His reference's shape: face, a sentence that names the person in bold, the date, then
-/// either the story's thumbnail (a love or a reply, which are ABOUT a story) or a Glow back button
-/// (a glow, which is about a person).
+/// One row: face, sentence, and then EITHER the story it happened to OR a Glow back.
+///
+/// ⚠️ TWO TAP TARGETS AND NO CHEVRON. His correction: the person opens the person, the preview
+/// opens the story. A chevron would point at neither, which is why it is gone rather than moved.
 private struct GlowEventRow: View {
     let event: GlowEvent
     let unread: Bool
+    let dark: Bool
     private var glow = GlowService.shared
 
-    init(event: GlowEvent, unread: Bool) {
+    init(event: GlowEvent, unread: Bool, dark: Bool) {
         self.event = event
         self.unread = unread
+        self.dark = dark
     }
 
     var body: some View {
-        HStack(spacing: 10) {
-            // A dot, not a tinted row: a coloured row is hard to read and hard to clear.
+        HStack(spacing: 12) {
             Circle().fill(unread ? GlowStyle.accent : .clear).frame(width: 6, height: 6)
 
+            // THE PERSON — face and words together, because they name one thing.
             NavigationLink {
                 GlowProfileView(uid: event.person.id, initialName: event.person.name,
                                 initialPhoto: event.person.photoUrl)
             } label: {
-                HStack(spacing: 10) {
-                    AvatarView(name: event.person.name, photoUrl: event.person.photoUrl, size: 44)
+                HStack(spacing: 12) {
+                    // 52, up from 44 — his "avatars look small".
+                    AvatarView(name: event.person.name, photoUrl: event.person.photoUrl, size: 52)
                     sentence
                     Spacer(minLength: 6)
                 }
@@ -191,8 +194,6 @@ private struct GlowEventRow: View {
         }
     }
 
-    /// The name in bold inside a running sentence, which is what makes his reference's rows read as
-    /// language rather than as fields.
     private var sentence: some View {
         VStack(alignment: .leading, spacing: 2) {
             Group {
@@ -203,8 +204,7 @@ private struct GlowEventRow: View {
                     Text(event.person.name).fontWeight(.semibold)
                         + Text(" reacted \(emoji) to your story.")
                 case .replied(let what):
-                    Text(event.person.name).fontWeight(.semibold)
-                        + Text(" replied: \"\(what)\"")
+                    Text(event.person.name).fontWeight(.semibold) + Text(" replied: \"\(what)\"")
                 }
             }
             .font(.subheadline)
@@ -219,21 +219,37 @@ private struct GlowEventRow: View {
 
     @ViewBuilder private var trailing: some View {
         if let thumb = event.storyThumb, !thumb.isEmpty {
-            // The story it happened to — his reference puts it on the right of every story row.
-            StoryImage(url: thumb)
-                .frame(width: 38, height: 54)
-                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            // THE STORY — its own tap target, opening the story this happened to. A love is on one
+            // of MY stories, so the door is my own row in the viewer.
+            Button { openMyStory() } label: {
+                StoryImage(url: thumb)
+                    .frame(width: 42, height: 58)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .buttonStyle(.plain)
         } else if event.isGlow {
             if glow.isGlowing(event.person.id) {
                 Text("Glowing").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
             } else {
                 Button { glow.give(to: event.person.id) } label: {
-                    Text("Glow back").font(.subheadline.weight(.semibold))
+                    Text("Glow back")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(GlowStyle.onAccent(dark))
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(Capsule().fill(GlowStyle.accent))
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(GlowStyle.accent)
-                .controlSize(.small)
+                .buttonStyle(.plain)
             }
         }
+    }
+
+    /// Open my own story row at the story this reaction landed on.
+    ///
+    /// ⚠️ A DEMO ROW OPENS NOTHING. Its story id belongs to no document, so `StoryDoor` would be
+    /// handed a group it cannot page — see `GlowDemo`.
+    private func openMyStory() {
+        guard !GlowDemo.isDemoPerson(event.person.id),
+              let mine = StoriesRepository.shared.mine else { return }
+        StoryDoor.open(mine, among: [mine], from: mine.id, pinned: true, deliveredToMe: false)
     }
 }

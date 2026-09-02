@@ -148,7 +148,7 @@ struct GlowProfileView: View {
                 .frame(minWidth: 150)
         }
         .buttonStyle(.borderedProminent)
-        .tint(glow.isGlowing(uid) ? Color.white.opacity(0.18) : GlowStyle.accent)
+        .tint(glow.isGlowing(uid) ? Color.white.opacity(0.18) : Color.white)
         .controlSize(.large)
     }
 
@@ -197,7 +197,7 @@ struct GlowProfileView: View {
             if facePeople.isEmpty {
                 Image(systemName: GlowStyle.symbol)
                     .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(GlowStyle.accent)
+                    .foregroundStyle(.white)
                     .frame(width: 38, height: 38)
                     .background(Color.white.opacity(0.12), in: Circle())
             } else {

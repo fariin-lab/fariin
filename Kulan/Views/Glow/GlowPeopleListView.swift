@@ -255,7 +255,20 @@ private struct GlowPersonRow: View {
 /// notifications screenshot, and it is the one hue the whole feature uses — the audience badge, the
 /// buttons, the section header's mark — so a Glow thing is recognisable anywhere in the app.
 enum GlowStyle {
-    static let accent = Color(hex: 0xFF3B6B)
+    /// ⛔ THE APP'S OWN ACCENT, NOT A COLOUR OF MINE — owner, 2026-09-02, seeing it built: "you are
+    /// using different color, use my app design plz, don't use red, follow my app color is black
+    /// and white".
+    ///
+    /// He is right and it was my mistake to invent one. I read a pink off the "Glow back" button in
+    /// a screenshot of ANOTHER app and made it this feature's hue; nothing in Fariin is that colour.
+    /// The app tints itself `.primary` — white at night, black by day — and every accent surface in
+    /// it is that pair.
+    ///
+    /// ⚠️ `Color.primary` IS WHITE IN DARK MODE, which is the trap this codebase has a whole memory
+    /// file about: a hardcoded white label on it is correct every day and invisible every night.
+    /// So anything FILLED with `accent` must take its label from `onAccent`, never from `.white`.
+    static let accent = Color.primary
+    static func onAccent(_ dark: Bool) -> Color { Theme.onAccent(dark) }
     /// The word for the relationship in the one place a glyph is needed. `sparkles` is the system's
     /// nearest idea of a glow and it costs no drawing; if he supplies one, this is where it goes.
     static let symbol = "sparkles"
