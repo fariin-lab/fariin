@@ -1162,35 +1162,20 @@ struct ChatsView: View {
         }
         .tag(conv.id)
         .listRowInsets(EdgeInsets())
-        // ⛔ THE HAIRLINE IS BACK, AND IT STARTS AT 84pt. Measured off his reference screenshot,
-        // 2026-08-29: every row carries a separator that begins where the text column begins (16pt
-        // margin + 56pt avatar + 12pt gap = 84) and runs to the right edge.
+        // ⛔ NO SEPARATOR AT ALL — owner, 2026-09-02: "also remove lines", settling a comparison
+        // that had gone the other way.
         //
-        // ⚠️ THE COMMENT THAT USED TO SIT HERE SAID "clean, no row lines", and that was the single
-        // biggest reason his list read looser and older than theirs beside it. The two lists already
-        // agree to the point on everything structural — 56pt avatar at 16pt, text at 85pt, 80pt row
-        // — so the missing rule was doing all of the difference on its own.
+        // ⚠️ **THE HAIRLINE ADDED ON 2026-08-29 WAS BUILT ON A WRONG PREMISE, AND THE COMMIT
+        // MESSAGE SAID SO OUT LOUD: "as theirs does".** It does not. Their chat list sets
+        // `tableView.separatorStyle = .none` (`CLVTableDataSource.swift:119`) and draws no rule
+        // between rows anywhere — verified in their source on 2026-09-02, not inferred from a
+        // screenshot, because the screenshot that started this was ALSO misread as ours when it was
+        // theirs. A colour is still assigned on the line after that one in their file, which is
+        // dead code and is probably what an earlier reading latched onto.
         //
-        // The leading alignment guide is how a full-bleed row (listRowInsets is zeroed above) still
-        // gets an inset separator: without it the line would run under the avatar.
-        // ⛔ BOTTOM EDGE ONLY. A bare `.visible` also draws a rule at the TOP of the FIRST row,
-        // so the list opened with a hairline under the search field and nothing above it —
-        // his screenshot, circled. Every reference rules BETWEEN rows and never above the
-        // first one, which is what `edges: .bottom` says.
-        .listRowSeparator(.hidden, edges: .top)
-        .listRowSeparator(.visible, edges: .bottom)
-        .alignmentGuide(.listRowSeparatorLeading) { _ in 84 }
-        // ⛔ AND IT STOPS 16pt SHORT OF THE RIGHT EDGE. Read out of the reference's own source
-        // (`ChatListItem.swift`: `rightSeparatorInset = 16.0` on every ordinary row), and Apple
-        // does the same — measured off his Recents screenshot, the rule ends at 373.7pt on a
-        // 390pt screen. Mine ran to the edge on the first attempt, which is the one shape none
-        // of the three references uses.
-        //
-        // ⚠️ STILL NOT PORTED, and it is theirs: the last row of the list and the last PINNED
-        // row before an unpinned one take `leftSeparatorInset = 0, rightSeparatorInset = 0` —
-        // a full-width rule that closes off the pinned block. That one needs a row to know
-        // whether the row after it is pinned, so it is a deliberate omission, not an oversight.
-        .alignmentGuide(.listRowSeparatorTrailing) { d in d.width - 16 }
+        // The 84pt leading guide and the 16pt trailing guide went with it. Both were correct
+        // arithmetic for a rule that should not be drawn.
+        .listRowSeparator(.hidden)
         // NO explicit row background: forcing systemBackground made the swiped row paint a
         // white slab OVER its own content (blank row on swipe, user report). The native
         // swipe platter (grey) is correct and keeps the row content visible.
@@ -1380,6 +1365,40 @@ struct ChatsView: View {
     private func searchMatches(_ c: Conversation) -> Bool {
         let q = chatSearch.trimmingCharacters(in: .whitespaces).lowercased()
         return q.isEmpty || c.displayName(me).lowercased().contains(q)
+    }
+
+    /// The two halves of `visible`, for the "Pinned" / "Chats" sections.
+    ///
+    /// ⚠️ ONE PROPERTY RETURNING BOTH, AND THAT IS NOT TIDINESS. `visible` filters and SORTS the
+    /// whole conversation list every time it is read, and this body re-runs on typing indicators,
+    /// presence dots and read receipts. Two separate `pinned` / `unpinned` properties would sort it
+    /// twice more on every one of those passes, for an answer that was already in hand.
+    ///
+    /// Split off the SAME sorted array, so a chat cannot land in both or in neither, and the order
+    /// inside each section is the order it already had.
+    private var chatSections: (pinned: [Conversation], rest: [Conversation]) {
+        let v = visible
+        return (v.filter { $0.isPinned(me) }, v.filter { !$0.isPinned(me) })
+    }
+
+    /// A section heading, theirs, read from source 2026-09-02 (`CLVTableDataSource.swift:309-322`):
+    /// `.headline` — 17pt semibold, the same style and weight as a row's NAME — in the label colour,
+    /// with insets of 14 above, 8 below and 16 each side.
+    ///
+    /// ⚠️ `.textCase(nil)` IS LOAD-BEARING. A SwiftUI plain-list section header upper-cases its text
+    /// by default, so this would read "PINNED" — which is Apple's grouped-list convention and not
+    /// what theirs draws. ⚠️ `.listRowInsets` is what lets the 16pt leading land where the row's own
+    /// 16pt gutter does; the header is a row like any other and inherits the same zeroed insets.
+    @ViewBuilder private func chatSectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.headline)
+            .foregroundStyle(.primary)
+            .textCase(nil)
+            .padding(.top, 14)
+            .padding(.bottom, 8)
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .listRowInsets(EdgeInsets())
     }
 
     private var visible: [Conversation] {
@@ -1721,9 +1740,40 @@ struct ChatsView: View {
                           // archived — the `if` lives inside the property so this body only grows by
                           // one element (this file's type-checker budget is a known cost).
                           archivedEntryRow
-                          // Row body extracted (chatListRow): the inline closure blew past the
-                          // type-checker's budget once the peek preview + row background joined it.
-                          ForEach(visible) { conv in chatListRow(conv) }
+                          // ⛔ TWO SECTIONS, "Pinned" AND "Chats" — owner, 2026-09-02: "separate the
+                          // chat list into Pinned and Chats sections exactly like the reference app".
+                          //
+                          // `visible` is ALREADY sorted with pinned chats first (its comparator
+                          // does that), so this splits a sorted array rather than re-sorting it —
+                          // the order inside each section is exactly the order the rows had before.
+                          //
+                          // ⚠️ BOTH HEADERS APPEAR ONLY WHEN BOTH SECTIONS EXIST. Theirs does the
+                          // same: the header is `.leastNormalMagnitude` tall when it has no title,
+                          // so a list with nothing pinned shows no "Chats" heading either — it just
+                          // looks like the plain list it has always been. Showing a lone "Chats"
+                          // above every chat in the app would be a label with nothing to contrast
+                          // against.
+                          //
+                          // ⚠️ THE ROW BODY IS UNCHANGED AND THAT IS DELIBERATE. `chatListRow` owns
+                          // this row's structural identity — this file's own note explains that
+                          // changing it cross-faded two copies of every row when Select mode was
+                          // entered. Rows move into a `Section`, they are not rebuilt.
+                          // ⚠️ Read ONCE into `split`. Naming it here is what keeps `visible` — a
+                          // filter and a sort over every conversation — to a single evaluation per
+                          // body pass; the un-sectioned branch rebuilds the same array from the two
+                          // halves rather than asking for it again. They concatenate back to
+                          // exactly `visible` because `visible` is already sorted pinned-first.
+                          let split = chatSections
+                          if split.pinned.isEmpty || split.rest.isEmpty {
+                              ForEach(split.pinned + split.rest) { conv in chatListRow(conv) }
+                          } else {
+                              Section {
+                                  ForEach(split.pinned) { conv in chatListRow(conv) }
+                              } header: { chatSectionHeader("Pinned") }
+                              Section {
+                                  ForEach(split.rest) { conv in chatListRow(conv) }
+                              } header: { chatSectionHeader("Chats") }
+                          }
                         }
                         .listStyle(.plain)
                         // THE STUCK GREY ROW, real cause. This List carries a `selection` binding for
@@ -3243,10 +3293,26 @@ struct ChatRow: View, Equatable {
                 }
                 // Tap the ringed avatar → open their story (high-priority so it beats the row's open-chat tap).
                 .modifier(StoryAvatarTap(active: !storySeen.isEmpty && onStoryTap != nil) { onStoryTap?() })
-            VStack(alignment: .leading, spacing: 3) {
+                // Their `avatarStackConfig`, vMargin 12. With a 56pt avatar that is an 80pt floor —
+                // the same number the row used to get from a hardcoded `minHeight: 76`, except it is
+                // derived from the picture now, the way theirs is.
+                .padding(.vertical, 12)
+            // ⛔ 1, NOT 3 — their `vStackConfig` spacing. It reads impossibly tight as a number and
+            // is right on screen: both rows are label boxes carrying their own font leading, so the
+            // visible gap is that leading plus this, not this alone.
+            VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
                     Text(conv.displayName(me))
-                        .font(.system(size: 16, weight: unread > 0 ? .bold : .semibold))   // heavier when unread
+                        // ⛔ `.headline`, WHICH IS 17pt SEMIBOLD — theirs, read from source
+                        // 2026-09-02: `nameLabelConfig` uses `dynamicTypeHeadlineClamped`. Ours was
+                        // a hardcoded 16.
+                        //
+                        // ⚠️ THE POINT SIZE IS THE SMALLER HALF OF THIS CHANGE. A semantic style
+                        // GROWS with the phone's text size and a `.system(size:)` never does, so on
+                        // a phone set larger than default their list re-flowed and ours stayed put.
+                        // That is the ninth difference in the comparison and it is invisible until
+                        // somebody changes their text size, which is why it survived this long.
+                        .font(.headline.weight(unread > 0 ? .bold : .semibold))   // heavier when unread
                         .lineLimit(1)
                     // TWO TICKS, from two different authorities, and they are not interchangeable.
                     //
@@ -3270,7 +3336,11 @@ struct ChatRow: View, Equatable {
                     }
                     Spacer(minLength: 8)
                     Text(timeStr)
-                        .font(.system(size: 12))
+                        // ⛔ `.subheadline` — 15pt, the SAME style as the preview line beneath it,
+                        // which is theirs (`dateTimeLabelConfig` and `snippetLabelConfig` both take
+                        // `dynamicTypeSubheadlineClamped`). Ours was 12, the single biggest number
+                        // in the whole comparison: a quarter smaller than theirs.
+                        .font(.subheadline)
                         .foregroundStyle(unread > 0 ? Theme.accent(dark) : .secondary)
                         // NEVER WRAP. The list's first layout pass can offer a row almost no width,
                         // and an unconstrained Text answers that by stacking one letter per line —
@@ -3281,7 +3351,28 @@ struct ChatRow: View, Equatable {
                         .fixedSize(horizontal: true, vertical: false)
                 }
                 HStack(alignment: .top, spacing: 4) {
-                    previewContent
+                    // ⛔ TWO LINES OF PREVIEW ARE ALWAYS RESERVED, whatever this row's preview
+                    // actually is — theirs, and the difference he can see most.
+                    //
+                    // `ChatListCell` reserves `snippetLineHeight * 2` as a fixed measurement rather
+                    // than letting the label decide, so every row in their list is exactly the same
+                    // height. Ours gave two lines to a text message and one to a voice note, a photo
+                    // or a file, so the rows were ragged — that raggedness is why his list did not
+                    // read as evenly spaced as theirs beside it.
+                    //
+                    // ⚠️ A HIDDEN TWO-LINE `Text`, NOT A HARDCODED HEIGHT. 44pt would be right today
+                    // and wrong the moment the phone's text size moves, which is the ninth
+                    // difference this same pass is fixing. An empty two-line label in the same style
+                    // is two line heights by construction, at every text size, for free.
+                    //
+                    // ⚠️ It must not be reachable by VoiceOver or the row would read a blank line.
+                    ZStack(alignment: .topLeading) {
+                        // ⚠️ " \n " AND NOT "\n". A trailing EMPTY line is not guaranteed to be laid
+                        // out, so a bare newline can measure as one line and reserve half of what is
+                        // wanted. A space on each side makes both lines real.
+                        Text(" \n ").font(.subheadline).hidden().accessibilityHidden(true)
+                        previewContent
+                    }
                     Spacer(minLength: 8)
                     // Status tick now lives in the right column — under the timestamp, beside the pin.
                     // ⚠️ NEVER ON A CALL ROW. `lastSender` carries the CALLER on a call record, which
@@ -3309,10 +3400,16 @@ struct ChatRow: View, Equatable {
                     }
                     if unread > 0 {
                         Text("\(min(unread, 99))")
-                            .font(.caption2.bold()).foregroundColor(Theme.onAccent(dark))
+                            // ⛔ `.footnote` — 13pt, theirs (`unreadCounterLabelConfig` takes
+                            // `dynamicTypeFootnoteClamped`). Ours was `.caption2`, which is 11.
+                            // Their pill's height is `ceil(footnote.lineHeight * 1.25)`, about 20 at
+                            // the default text size, which is where the 20 below comes from — and
+                            // both the font and the box grow together with Dynamic Type, so the
+                            // number can never outgrow the circle it sits in.
+                            .font(.footnote.bold()).foregroundColor(Theme.onAccent(dark))
                             .contentTransition(.numericText())   // count rolls instead of snapping
                             .padding(.horizontal, 5)
-                            .frame(minWidth: 19, minHeight: 19)   // 19×19 min badge
+                            .frame(minWidth: 20, minHeight: 20)
                             .background(Theme.accent(dark)).clipShape(Capsule())
                     } else if conv.manuallyUnread(me) {
                         // A PLAIN DOT, no number. You marking a chat unread is a note to yourself;
@@ -3326,8 +3423,17 @@ struct ChatRow: View, Equatable {
                     }
                 }
             }
+            // Their `vStackConfig` margins, and they are NOT symmetrical: 7 above, 9 below. The two
+            // point difference is what sits the text block optically level against a 56pt circle
+            // rather than mathematically level, and it is theirs, not a rounding artefact.
+            .padding(.top, 7)
+            .padding(.bottom, 9)
         }
-        .frame(minHeight: 76)
+        // ⛔ NO `minHeight` ANY MORE. Theirs has no fixed row height at all — the table is
+        // `.automaticDimension` and the cell measures itself, so the height is whichever of its two
+        // columns is taller: the avatar with 12 above and below (56 + 24 = 80), or the text with 7
+        // above and 9 below. A 76pt floor was ours, and with the two columns padded the way theirs
+        // are it can only fight them.
         .animation(.easeInOut(duration: 0.22), value: unread)   // smooth bold/color/badge changes
         .animation(.easeInOut(duration: 0.22), value: muted)
         .animation(.easeInOut(duration: 0.22), value: conv.isPinned(me))   // pin icon fade
@@ -3356,7 +3462,10 @@ struct ChatRow: View, Equatable {
                 clockTick.toggle()
             }
         }
-        .padding(.vertical, 2)
+        // ⛔ NO ROW-LEVEL VERTICAL PADDING — the two columns carry their own now, theirs do, and a
+        // shared 2 on top of both would be 2 the reference does not have. See the two `padding`
+        // calls inside: 12/12 on the avatar (`avatarStackConfig`, vMargin 12) and 7/9 on the text
+        // (`vStackConfig`). Those two numbers ARE their row height.
         .padding(.horizontal, 16)   // 16pt gutter moved inside the cell (row insets are now
                                     // zero) so the reorder drag preview matches the cell width
                                     // and stays locked to the vertical axis (no horizontal drift)
