@@ -72,24 +72,8 @@ import UIKit
 // access it simply shows whatever the user granted. Photos open the chat editor
 // (crop/caption); videos go straight into the send pipeline.
 struct AttachRecentsStrip: View {
-    /// ⛔ 44, THEIR NUMBER, READ FROM THEIR SOURCE — owner, 2026-08-24: "make it like tg".
-    ///
-    /// The reference app lays its picker's header controls out inside a 44pt-high container
-    /// (`MediaPickerScreen`, `containerSize: CGSize(width: …, height: 44.0)`), inset 16 from the
-    /// screen edges (`barButtonSideInset`). Ours were 48 with the same 16 inset, so the inset already
-    /// matched and only the button was four points over.
-    ///
-    /// ⚠️ BOTH BUTTONS, NOT JUST THE ✕. The close and the selected-count sit either side of the
-    /// title and read as a pair; changing one would leave the header lopsided. Their glyphs are
-    /// unchanged — 44 is the size the reference states for the control, and the marks inside ours
-    /// were never what he was comparing.
-    ///
-    /// ⚠️ ONLY THIS SHEET. `CloseXButton` in the design system is still 48 and is used by the GIF
-    /// picker, Edit Profile and the wallpaper sheet; this is the photo sheet's header, which is the
-    /// one he measured against theirs.
-    private static let headerButtonSize: CGFloat = 44
-
-    var onCamera: () -> Void = {}
+    /// Dismiss the sheet. The ✕ that used to call this is gone (owner, 2026-09-02: no header, swipe
+    /// down to close) — SEND still calls it, which is the one place the sheet closes itself.
     var onClose: () -> Void = {}
     var onPickPhoto: (UIImage) -> Void
     var onPickVideo: (URL) -> Void                              // TAP a video → open the trim editor
@@ -108,6 +92,16 @@ struct AttachRecentsStrip: View {
     /// complaint), so the one thing that must travel back is a removal — otherwise a video dropped
     /// in the editor is still ticked here (owner 2026-08-04).
     var removedIds: Set<String> = []
+    /// ⛔ OWNER, 2026-09-02: THE ALBUM DOOR MOVED OUT OF THIS VIEW. It was the "Recents ▾" title in
+    /// a header that no longer exists; it is the round button at the bottom right of the sheet now,
+    /// which the PARENT draws beside the attach bar so the two read as one row. The flag has to be a
+    /// binding rather than this view's own state, because the button that opens the list and the
+    /// list itself are in two different views and must agree.
+    ///
+    /// ⚠️ DECLARED LAST OF THE EXTERNAL INPUTS ON PURPOSE. Swift matches the memberwise init by
+    /// position as well as by name, and the call site already relies on that for `removedIds` — the
+    /// note there says so. A new input goes at the end or it silently reorders the existing ones.
+    @Binding var showAlbums: Bool
     @FocusState private var captionFocused: Bool
     /// The KEYBOARD's state, which is not the same thing as `captionFocused`. The composer moved off
     /// its focus flag for exactly this reason — focus flips a beat before the keys move, and on one
@@ -127,51 +121,31 @@ struct AttachRecentsStrip: View {
     @State private var selectedAssets: [String: PHAsset] = [:]
     @State private var caption = ""                  // caption for the selected batch
     @State private var viewOnce = false              // "view once" toggle (single photo only)
-    @State private var showAlbums = false
+    /// Still local. Nothing outside shows the album's name any more (the header that did is gone),
+    /// but the picker still needs to know which album it is in — `load()` reads it and the list
+    /// writes it.
     @State private var albumTitle = "Recents"
     @State private var selectedAlbum: PHAssetCollection?   // nil = the newest across the whole library
     @State private var albums: [AttachAlbum] = []
 
     private let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 3)   // 3 per row (user request)
 
-    /// The header's own height: the 44pt close button plus 8 above it and 8 below. The grid and the
-    /// album list start this far down (see `grid`), so nothing sits UNDER an opaque bar at rest.
-    ///
-    /// ⚠️ KEEP THIS EQUAL TO WHAT `header` ACTUALLY PADS TO. It is not decoration — `contentMargins`
-    /// feeds it to both scroll views as their top margin, so a number smaller than the bar hides the
-    /// first row of photos under it and a larger one leaves a strip of empty sheet he has rejected
-    /// twice. It was still 56 for a 48pt button after the button became 44 and gained 8 on top.
-    private let headerHeight: CGFloat = 60
-
     var body: some View {
-        // THE PHOTOS RUN UNDER THE HEADER (his reference, 2026-08-14: "make the white follow the
-        // photo… swipe down and it comes back"). It used to be the first row of a VStack, which is a
-        // slot: the grid started below it and the sheet's own white filled the strip, so the header
-        // was a lid rather than something the content passes beneath.
-        //
-        // As a top safe-area inset it reserves exactly its own height, so nothing is hidden at rest —
-        // and everything slides under it the moment you scroll, coming back as you scroll down. The
-        // header itself paints NOTHING now: the close button carries its own glass circle and the
-        // album title floats, which is what theirs does.
-        //
-        // ⚠️ THAT LAST LINE STOPPED BEING TRUE on 2026-08-17, when the header took a solid background
-        // so the title and chevron would stop dissolving into the photos (see `header`). An opaque bar
-        // over a grid that starts at the very top edge means the Camera tile and the first row are
-        // half covered before you touch anything — owner 2026-08-19, screenshot. The fix is NOT to go
-        // back to an inset (that brings back the strip of empty sheet he rejected): the header stays
-        // an overlay, and the SCROLL CONTENT gets a top margin of the header's height. At rest the
-        // grid begins under a clear edge; scrolled, the photos still run beneath the bar exactly as
-        // before, because a content margin moves the content, not the scroll view.
         Group {
             if showAlbums { albumsList } else { grid }
         }
-        // ⚠️ AN OVERLAY, NOT AN INSET, and that is his follow-up ("it still has a bit left"). An inset
-        // RESERVES its height, so at rest there was still a strip of the sheet's own background above
-        // the first photos — the white was gone but the space it held was not. Overlaid, the grid
-        // runs to the very top edge and the header floats on it from the first frame, which is what
-        // theirs does. Nothing is unreachable: the first row sits under a close button with its own
-        // glass circle and a floating title, and one scroll moves it clear.
-        .overlay(alignment: .top) { header }
+        // ⛔ THE HEADER IS GONE — OWNER, 2026-09-02, with a screenshot: "Photo sheet no header".
+        //
+        // What went with it: the ✕, the "Recents ▾" title, and the selected-count circle. The way
+        // into Albums is the round button at the bottom right now; the way out of the sheet is a
+        // swipe down, which the system sheet has always done and which was the second half of his
+        // instruction. The count is the only thing with no new home — the numbered ticks on the
+        // photos themselves are what is left of it, and he has the screenshot he asked to match.
+        //
+        // ⚠️ The long comment that used to sit here argued overlay-versus-inset for the header, and
+        // both halves of that argument are now moot. What survives it is the conclusion the grid
+        // still depends on: this grid runs to the sheet's very top edge and paints nothing above
+        // itself. That is why the content margin below went to zero rather than to a smaller number.
         // ≥1 selected → a caption + Send bar as a native bottom inset bar, so iOS pins it directly above
         // the keyboard (no home-indicator gap between the bar and the keyboard) and above the home
         // indicator when the keyboard is down — exactly like a composer.
@@ -203,81 +177,10 @@ struct AttachRecentsStrip: View {
         }
     }
 
-    // X close (48pt glass) + a "Recents ▾" title. (Selection is per-thumbnail via the checkbox — no
-    // separate Select button; tapping the photo itself opens it.)
-    private var header: some View {
-        ZStack {
-            Button { withAnimation(.snappy(duration: 0.25)) { showAlbums.toggle() } } label: {
-                HStack(spacing: 5) {
-                    Text(albumTitle).font(.headline)
-                    Image(systemName: "chevron.down").font(.system(size: 13, weight: .bold))
-                        .rotationEffect(.degrees(showAlbums ? 180 : 0))
-                }
-                .foregroundStyle(.primary)
-            }
-            HStack {
-                // Inside a specific album (folder) the X becomes a BACK arrow → returns to Recents;
-                // at the top it's the close X.
-                Button {
-                    if selectedAlbum != nil || showAlbums {
-                        selectedAlbum = nil
-                        albumTitle = "Recents"
-                        withAnimation(.snappy(duration: 0.25)) { showAlbums = false }
-                        load()
-                    } else {
-                        onClose()
-                    }
-                } label: {
-                    Image(systemName: (selectedAlbum != nil || showAlbums) ? "chevron.left" : "xmark")
-                        .font(.system(size: 18, weight: .semibold))
-                        // ⚠️ MERGE 2026-08-24, TWO BRANCHES DISAGREED HERE AND BOTH WERE RIGHT ON
-                        // THEIR OWN SIDE. The other branch had this white, correctly, because it
-                        // still carries the black header bar. This branch REMOVED that bar on the
-                        // owner's word ("back the way it before"), so the header follows the phone's
-                        // scheme again and white would be an invisible X in daylight. Colour comes
-                        // from the revert, size comes from the other branch's measurement — the two
-                        // decisions are independent and neither one cancels the other.
-                        .foregroundStyle(.primary)
-                        .frame(width: Self.headerButtonSize, height: Self.headerButtonSize)
-                        .liquidGlass(Circle(), interactive: true)
-                }
-                Spacer()
-                // Selected count — BLUE Liquid Glass (user spec 2026-07-14 evening: "make blue, don't
-                // remove liquid glass"): interactive glass WITH the bubble-blue tint + white number.
-                if !selectedIds.isEmpty {
-                    Text("\(selectedIds.count)")
-                        .font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
-                        .frame(width: Self.headerButtonSize, height: Self.headerButtonSize)
-                        .liquidGlass(Circle(), interactive: true, tint: Theme.defaultBubble(false))
-                }
-            }
-        }
-        .padding(.horizontal, 16)
-        // ⛔ THE ✕ WAS RIDING THE SHEET'S ROUNDED CORNER — owner, 2026-08-24, magnified: his shot shows
-        // the glass circle crossing the corner curve and poking outside it. There was no top padding at
-        // all, so a 44pt circle began at the sheet's very first pixel, where the corner radius is still
-        // cutting the surface away.
-        //
-        // ⚠️ THIS IS A BAR, SO IT IS SPACED LIKE ONE. His words for what he wants: system chrome
-        // attached to the edge, not app content floating in the safe area. A bar item is CENTRED in its
-        // bar, and the bar starts below the grabber — it does not start at the sheet's own edge. 8 above
-        // and 8 below puts the circle clear of both the grabber and the corner, and centres it.
-        .padding(.top, 8)
-        .padding(.bottom, 8)
-        // ⚠️ A SURFACE UNDER THE HEADER. Owner 2026-08-17, with the sheet open: "Recents ▾" and the
-        // X sat directly on the photo grid, so the title and its chevron dissolved into whatever
-        // pictures happened to be behind them — and the way into Albums is that chevron, so a
-        // control nobody can see is a door nobody can find.
-        //
-        // The page's own background, not white: this sheet follows the colour scheme, and a
-        // hardcoded white bar would be a bright slab across a dark picker. Same reasoning as the
-        // rest of the app — see the accent-is-white-at-night note. Extended under the top safe area
-        // so it reads as the sheet's own header rather than a stripe floating in it.
-        .background(Color(.systemBackground).ignoresSafeArea(edges: .top))
-    }
-
-    // Caption + Send bar shown while items are selected (replaces the source row). The selected COUNT is
-    // shown at the header top-right (not on the send button); the send button is real Liquid Glass.
+    // Caption + Send bar shown while items are selected (replaces the source row).
+    // ⚠️ The selected COUNT used to be a circle at the header's top right. The header is gone
+    // (owner, 2026-09-02) and the count did NOT move onto the send button — the numbered ticks on
+    // the photos themselves are the only count now. That is what his screenshot shows.
     private var captionBar: some View {
         HStack(alignment: .bottom, spacing: 10) {   // send hugs the bottom as the caption grows
             HStack(alignment: .bottom, spacing: 8) {
@@ -351,7 +254,10 @@ struct AttachRecentsStrip: View {
                 .padding(.horizontal, 16).padding(.bottom, 8)
             }
             LazyVGrid(columns: cols, spacing: 6) {
-                cameraTile                                   // first cell = Camera
+                // ⛔ NO CAMERA TILE — owner, 2026-09-02. Camera is a tile INSIDE the attach bar now,
+                // beside GIF, Files and Location, and one action does not get two doors on one
+                // screen. The grid is photos and nothing else, which is what makes the first row
+                // start flush at the top edge.
                 switch status {
                 case .authorized, .limited:
                     ForEach(assets, id: \.localIdentifier) { a in
@@ -374,8 +280,10 @@ struct AttachRecentsStrip: View {
             .padding(.horizontal, 12)
             .padding(.top, 2)
         }
-        // Starts the Camera tile and the first row of photos clear of the header bar. See `body`.
-        .contentMargins(.top, headerHeight, for: .scrollContent)
+        // ⛔ NO TOP MARGIN — owner, 2026-09-02. It existed to hold the first row clear of an opaque
+        // header, and there is no header. The photos begin at the sheet's own top edge, which is the
+        // whole of what "no header" looks like; the system drag indicator floats over them, exactly
+        // as it does in the screenshot he sent.
     }
 
     // Native-style album list (Recents, Favorites, Videos, Selfies, Live Photos, Panoramas, user albums).
@@ -408,8 +316,7 @@ struct AttachRecentsStrip: View {
                 }
             }
         }
-        // Same as the grid: the first album row is not born under the bar.
-        .contentMargins(.top, headerHeight, for: .scrollContent)
+        // Same as the grid: no header to clear, so no top margin. See the note there.
     }
 
     private func selectAlbum(_ album: AttachAlbum) {
@@ -417,25 +324,6 @@ struct AttachRecentsStrip: View {
         albumTitle = album.title
         withAnimation(.snappy(duration: 0.25)) { showAlbums = false }
         load()
-    }
-
-    // The Camera tile is the first cell of the grid; tap to open the camera.
-    private var cameraTile: some View {
-        Button(action: onCamera) {
-            Color.clear.aspectRatio(1, contentMode: .fit)
-                .overlay {
-                    VStack(spacing: 6) {
-                        // The app's OWN camera icon (ic_camera SVG — same one the composer uses),
-                        // not the SF Symbol (user spec 2026-07-14).
-                        Image("ic_camera").renderingMode(.template).resizable().scaledToFit()
-                            .frame(width: 26, height: 26)
-                        Text("Camera").font(.system(size: 11, weight: .medium))
-                    }
-                    .foregroundStyle(.primary)
-                }
-                .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        }
-        .buttonStyle(.plain)
     }
 
     private func accessTile(_ text: String, icon: String, action: @escaping () -> Void) -> some View {

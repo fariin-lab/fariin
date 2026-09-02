@@ -114,6 +114,10 @@ struct ThreadView: View {
     static let attachOpenDetent: PresentationDetent = .fraction(0.62)
     @State private var attachDetent: PresentationDetent = ThreadView.attachOpenDetent
     @State private var recentsHasSelection = false   // attach sheet: ≥1 photo selected → show caption+send, hide sources
+    /// The attach sheet showing its album LIST instead of the photo grid. It lives here rather than
+    /// inside the strip because the button that flips it (`albumButton`) sits in this view's bottom
+    /// row, beside the attach bar, and the list it flips is inside the strip.
+    @State private var attachShowAlbums = false
     @State private var comingSoon: ComingSoonWrap?   // generic "coming soon" sheet (currently unused tiles)
     enum CallBackKind: String, Identifiable { case voice, video; var id: String { rawValue } }
     @State private var pendingCallBack: CallBackKind?   // tapped a call-history row → confirm before dialing
@@ -1143,7 +1147,9 @@ struct ThreadView: View {
                 Task { await sendVideo(from: finalURL, caption: caption, hd: hd) }
             }
         }
-        .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false; attachDetent = ThreadView.attachOpenDetent }) {
+        // `attachShowAlbums` is reset with the rest: the sheet reopens on the photo grid, never on
+        // the album list you happened to leave it on.
+        .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false; attachShowAlbums = false; attachDetent = ThreadView.attachOpenDetent }) {
             attachPanel
                 .presentationDetents([ThreadView.attachOpenDetent, .large], selection: $attachDetent)   // ~62% open, pull up for more
                 // SOLID system background (white in light / dark in dark mode) — the default iOS 26 glass
@@ -3676,10 +3682,9 @@ struct ThreadView: View {
             // capsule produced the "two lines" at the top.)
             // Grid: X + "Recents ▾" album dropdown header, Camera tile, then recent photos/videos.
             AttachRecentsStrip(
-                onCamera: {
-                    showAttachPanel = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showCamera = true }
-                },
+                // `onCamera` is gone with the grid's camera tile — Camera is a tile in `sourceBar`
+                // now and goes through `attachTile`, which already closes the sheet and waits the
+                // same 0.35s before opening the next screen.
                 onClose: { showAttachPanel = false },
                 onPickPhoto: { ui in
                     // The editor opens OVER the media sheet (sheet stays underneath): X closes just the
@@ -3756,10 +3761,14 @@ struct ThreadView: View {
                 hasSelection: $recentsHasSelection,
                 // Declared last on the strip, so it goes last here — Swift matches these by position
                 // as well as by name.
-                removedIds: deselectedIds)
-                .padding(.top, 10)
-                // Source row (GIF/Files/Location/Poll) — HIDDEN while items are selected (the caption
-                // + Send bar inside the strip takes its place, and two bottom bars is one too many).
+                removedIds: deselectedIds,
+                showAlbums: $attachShowAlbums)
+                // ⛔ NO TOP PADDING — owner, 2026-09-02, "no header". This 10 held the sheet's own
+                // header clear of the grabber. With the header gone it is a strip of empty sheet
+                // above the photos, which is the exact thing he has rejected twice before.
+                // Source row (Camera/GIF/Files/Location + Album) — HIDDEN while items are selected
+                // (the caption + Send bar inside the strip takes its place, and two bottom bars is
+                // one too many).
                 .safeAreaInset(edge: .bottom, spacing: 0) { sourceBar }
         }
         // Single-image editor presented OVER the media sheet (the sheet stays underneath): X dismisses
@@ -3844,15 +3853,46 @@ struct ThreadView: View {
     /// Their icon, stated once so the tile and anything else that draws one cannot drift apart.
     private static let attachIconSize: CGFloat = 30
 
+    /// ONE TILE'S WIDTH, AND IT HAS TO BE ARITHMETIC NOW — owner, 2026-09-02.
+    ///
+    /// 72 was safe while the bar was three tiles centred in the whole width. It is not free any
+    /// more: Camera made a fourth, and the bar now shares its row with the Album button, so the
+    /// space it has is the screen less that button, the gap and both margins — 62 + 12 + 32 = 106.
+    ///
+    /// On his 428pt phone (measured, [[kulan-fill-image-sizes-its-parent]]):
+    ///   1:1    4 × 72 = 288, + 6 spacing + 12 padding = 306, + 106 = 412 of 428.  Fits.
+    ///   group  5 × 72 = 360, + 8      + 12            = 380, + 106 = 486 of 428.  Does NOT.
+    ///   group  5 × 58 = 290, + 8      + 12            = 310, + 106 = 416 of 428.  Fits.
+    ///
+    /// ⚠️ A STATED NUMBER PER COUNT, NOT A FLEXIBLE FRAME. The note on the bar above says a finite
+    /// `maxWidth` inflates this capsule rather than capping it, and that was paid for once already;
+    /// a `ViewThatFits` inside an `HStack` that also holds a `Spacer` is the same argument with more
+    /// moving parts. The tile count is known at build time, so the width can be too.
+    private var attachTileWidth: CGFloat { isGroup ? 58 : 72 }
+
     @ViewBuilder private var sourceBar: some View {
         if !recentsHasSelection {
+            // ⛔ THE BAR IS LEFT, THE ALBUM BUTTON IS RIGHT — owner, 2026-09-02, with a screenshot:
+            // "bottom left side attach bar and bottom right side buttom Album". It was centred
+            // between two spacers before, which is why it had to justify its own width in the note
+            // above; that argument is over. The row is now one bar hugging the leading edge and one
+            // round button on the trailing edge, with the gap between them doing the work.
+            // ⚠️ SPACING 0, AND THE GAP IS THE SPACER'S `minLength`. An HStack spacing of 12 with a
+            // Spacer between the two would put 12 on EACH side of it, so the smallest gap the row
+            // can reach is 24 — and the tile-width arithmetic above is written against 12. On a
+            // group that four-point difference is the whole margin.
             HStack(spacing: 0) {
-                Spacer(minLength: 0)
                 HStack(spacing: 2) {
-                    // Order: GIF · Files · Location · Poll (groups only). The Contacts tile is gone
-                    // (user 2026-07-29): sharing "a contact" is a phone-book idea, and Fariin has no
-                    // phone book — you introduce someone by sharing their profile from THEIR profile
-                    // page, which is where the action still lives.
+                    // Order: Camera · GIF · Files · Location · Poll (groups only). The Contacts tile
+                    // is gone (user 2026-07-29): sharing "a contact" is a phone-book idea, and
+                    // Fariin has no phone book — you introduce someone by sharing their profile from
+                    // THEIR profile page, which is where the action still lives.
+                    //
+                    // ⛔ CAMERA IS A TILE IN HERE NOW — owner, 2026-09-02, and the tile that used to
+                    // be the grid's first cell is DELETED rather than kept as a second door. It goes
+                    // first because it is the only one of the five that makes something new; the
+                    // other four go and fetch something that already exists.
+                    attachTile("ic_camera", "Camera") { showCamera = true }
                     attachTile("ic_gif_tile", "GIF") { showGifPicker = true }
                     attachTile("ic_file", "Files") { showFileImporter = true }
                     attachTile("ic_location", "Location") { showLocationShare = true }
@@ -3869,7 +3909,8 @@ struct ThreadView: View {
                 // `2b9bb0a5` (the blur, with their numbers and how they were read) and `c94bb7be`
                 // (the 27 gate), if the 27 bottom-bar change ever does need answering.
                 .liquidGlass(Capsule())   // the ONE piece of glass here, and the only background
-                Spacer(minLength: 0)
+                Spacer(minLength: 12)
+                albumButton
             }
             .padding(.horizontal, 16)
             // ⛔ NO NUMBER HERE AGAIN — owner, 2026-08-24, second look with the gap circled: "the
@@ -3897,6 +3938,34 @@ struct ThreadView: View {
             // so the arithmetic stays device-derived and a phone with no band still collapses to the
             // layout's own margin rather than being pulled off the edge.
             .padding(.bottom, -Self.composerRestDip)
+        }
+    }
+
+    /// THE WAY INTO ALBUMS, and the only thing the deleted header did that still had to live
+    /// somewhere. Owner, 2026-09-02: "bottom right side buttom Album".
+    ///
+    /// It is a TOGGLE, which is also the way back out. The header used to turn its ✕ into a back
+    /// chevron once you were inside an album; with no header, tapping this again reopens the list,
+    /// and "Recents" is the first row of that list. So there is no state you can reach that you
+    /// cannot leave, which is the thing the removed ✕ was quietly providing.
+    ///
+    /// ⚠️ IT DOES NOT CLOSE THE SHEET, which is why it cannot be an `attachTile`. Every tile in the
+    /// bar dismisses the panel and opens something else 0.35s later; this one swaps what the panel
+    /// is showing and must leave it standing.
+    ///
+    /// Round, and as tall as the bar beside it, so the two read as one row rather than two
+    /// unrelated controls. The diameter is the bar's own height rather than a second number — the
+    /// day the bar changes height, this follows it.
+    private var albumButton: some View {
+        Button { withAnimation(.snappy(duration: 0.25)) { attachShowAlbums.toggle() } } label: {
+            // ⚠️ The glass goes on the LABEL, not on the Button. That is how the header's ✕ carried
+            // its circle for the last month and it is the shape that is known to work here — glass
+            // wrapped around the Button instead has to guess at the hit area.
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.system(size: 22, weight: .regular))
+                .foregroundStyle(.primary)
+                .frame(width: Self.attachBarHeight, height: Self.attachBarHeight)
+                .liquidGlass(Circle(), interactive: true)
         }
     }
 
@@ -3947,7 +4016,7 @@ struct ThreadView: View {
                 Text(label).font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.primary).lineLimit(1)
             }
-            .frame(width: 72, height: Self.attachBarHeight - 8)
+            .frame(width: attachTileWidth, height: Self.attachBarHeight - 8)
             .contentShape(Capsule())
         }
         // The app's own press feel, rather than nothing at all — same style the story editor's
