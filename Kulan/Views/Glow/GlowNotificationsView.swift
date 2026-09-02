@@ -14,6 +14,9 @@ import SwiftUI
 /// Story" as well as glows; the story reaction path exists but does not yet write anything this page
 /// can read, and inventing a fake feed for it would be worse than an honest empty state.
 struct GlowNotificationsView: View {
+    /// Explicit, for the private-stored-property rule - see the note in GlowProfileView.
+    init() {}
+
     enum Chip: String, CaseIterable, Identifiable {
         case all, glowers, comments, likes
         var id: String { rawValue }

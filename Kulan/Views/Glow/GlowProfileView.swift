@@ -20,9 +20,22 @@ struct GlowProfileView: View {
     var initialName: String = ""
     var initialPhoto: String?
 
+    /// ⚠️ AN EXPLICIT INIT, AND IT IS NOT DECORATION — the same trap `StoriesTabView` records in
+    /// its own header. A struct with ANY private stored property gets a PRIVATE memberwise
+    /// initializer, so `GlowProfileView(uid:)` from another file does not compile: "initializer is
+    /// inaccessible due to 'private' protection level". The `private var glow` below is what does
+    /// it. The compile check caught this on the first run of these screens.
+    init(uid: String, initialName: String = "", initialPhoto: String? = nil) {
+        self.uid = uid
+        self.initialName = initialName
+        self.initialPhoto = initialPhoto
+    }
+
     @State private var profile: UserProfile?
     @State private var failed = false
     @State private var stories = PostedStoriesLoader()
+    /// The three faces on the stats card — my own glow people, resolved for their pictures.
+    @State private var faces = GlowPeopleLoader()
     @State private var palette: ProfilePalette?
     @Environment(\.dismiss) private var dismiss
     private var glow = GlowService.shared
@@ -154,7 +167,7 @@ struct GlowProfileView: View {
         let glowing = profile?.glowingCount ?? 0
         return Group {
             if isMe {
-                NavigationLink { GlowStatsDestination() } label: { statsCardBody(glowers, glowing) }
+                NavigationLink { GlowPeopleListView(side: .glowers, title: profile?.handle ?? profile?.name ?? "Glow") } label: { statsCardBody(glowers, glowing) }
                     .buttonStyle(.plain)
             } else {
                 statsCardBody(glowers, glowing)
@@ -164,18 +177,39 @@ struct GlowProfileView: View {
 
     private func statsCardBody(_ glowers: Int, _ glowing: Int) -> some View {
         HStack(spacing: 12) {
-            Image(systemName: GlowStyle.symbol)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(GlowStyle.accent)
-                .frame(width: 34, height: 34)
-                .background(Color.white.opacity(0.12), in: Circle())
+            // ⛔ OVERLAPPING FACES, NOT A GLYPH — his reference has three small avatars tucked into
+            // each other at the card's leading edge, and the line under the numbers names two of
+            // them ("by sophieraiin, stefdraper_raper_"). A symbol in a circle was my first pass
+            // and it loses what the faces are for: the card says WHO, not just how many.
+            //
+            // ⚠️ Falls back to the glyph when there is nobody to draw, rather than three empty
+            // circles — an account with no glowers must not look like an account with three
+            // faceless ones.
+            if facePeople.isEmpty {
+                Image(systemName: GlowStyle.symbol)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(GlowStyle.accent)
+                    .frame(width: 38, height: 38)
+                    .background(Color.white.opacity(0.12), in: Circle())
+            } else {
+                HStack(spacing: -12) {
+                    ForEach(facePeople.prefix(3)) { p in
+                        AvatarView(name: p.name, photoUrl: p.photoUrl, size: 30)
+                            .overlay(Circle().strokeBorder(cardColor, lineWidth: 2))
+                    }
+                }
+                .frame(height: 38)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(GlowCount.short(glowers)) Glowers  ·  \(GlowCount.short(glowing)) Glowing")
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.white)
-                Text(isMe ? "See who glowed you" : "Glow activity")
+                // His reference's own second line: "by <name>, <name>". Named people beat a generic
+                // sentence, and it falls back to one when there are no names yet.
+                Text(byLine)
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.7))
+                    .lineLimit(1)
             }
             Spacer(minLength: 8)
             if isMe {
@@ -186,6 +220,17 @@ struct GlowProfileView: View {
         }
         .padding(14)
         .background(cardColor, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    /// The faces on the stats card — a few of the people in the glow relationship. Only ever drawn
+    /// on MY OWN profile, because those are the only names the rules will hand over (his ruling:
+    /// counts public, names private), and the card is the door to my own lists.
+    private var facePeople: [GlowPerson] { isMe ? (faces.state.value ?? []) : [] }
+
+    private var byLine: String {
+        let names = facePeople.prefix(2).map(\.name).filter { !$0.isEmpty }
+        if names.isEmpty { return isMe ? "See who glowed you" : "Glow activity" }
+        return "by " + names.joined(separator: ", ")
     }
 
     /// POSTED STORIES — a horizontal rail of live stories with a view badge, and a See All row.
@@ -257,6 +302,10 @@ struct GlowProfileView: View {
         } else if profile == nil {
             failed = true
         }
+        if isMe {
+            let ids = Array(glow.glowRelationship).sorted()
+            await faces.load(Array(ids.prefix(3)), key: "faces-" + ids.prefix(3).joined())
+        }
         await loadStories()
     }
 
@@ -268,23 +317,8 @@ struct GlowProfileView: View {
 
 /// The two-list destination behind the stats card. A tiny screen on purpose: his spec asks for both
 /// values to be tappable, and one push carrying a segmented pair is fewer taps than two rows.
-private struct GlowStatsDestination: View {
-    @State private var side: GlowPeopleListView.Side = .glowers
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Picker("", selection: $side) {
-                Text("Glowers").tag(GlowPeopleListView.Side.glowers)
-                Text("Glowing").tag(GlowPeopleListView.Side.glowing)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16).padding(.vertical, 10)
-            GlowPeopleListView(side: side)
-        }
-        .navigationTitle("Glow")
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
+/// The stats card pushes straight to the list now — the list owns its own tabs (his fourth
+/// reference), so the wrapper that used to carry a segmented picker above it is gone.
 
 /// One story in the profile's rail: the poster, and the view badge from his screenshot.
 struct PostedStoryTile: View {

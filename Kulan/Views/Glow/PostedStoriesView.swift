@@ -13,6 +13,11 @@ struct PostedStoriesView: View {
     var isMe: Bool = false
     var title: String = ""
 
+    /// Explicit, for the private-stored-property rule - see the note in GlowProfileView.
+    init(uid: String, isMe: Bool = false, title: String = "") {
+        self.uid = uid; self.isMe = isMe; self.title = title
+    }
+
     /// The audiences a story can have been posted to, as the filter offers them. `everyone` is
     /// included because it exists and a filter that cannot show one of the four would hide stories
     /// with no way to find them; his three named ones are the rest.
@@ -55,28 +60,42 @@ struct PostedStoriesView: View {
     @State private var showFilters = false
     @Environment(\.dismiss) private var dismiss
 
-    private let columns = [GridItem(.flexible(), spacing: 3),
-                           GridItem(.flexible(), spacing: 3),
-                           GridItem(.flexible(), spacing: 3)]
+    /// ⛔ 6pt GUTTERS AND ROUNDED TILES — his third reference, 2026-09-02. My first pass was a
+    /// flush 3pt mosaic, which is the ATTACH SHEET's language (edge to edge, square, no gaps) and
+    /// wrong here: that grid is a picker where the photographs are the surface, this one is a
+    /// gallery of separate posts. Cards, with air between them.
+    private let columns = [GridItem(.flexible(), spacing: 6),
+                           GridItem(.flexible(), spacing: 6),
+                           GridItem(.flexible(), spacing: 6)]
 
     var body: some View {
         content
-            .navigationTitle("Posted Stories")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showFilters = true } label: {
-                        Image(systemName: filter == .all
-                              ? "line.3.horizontal.decrease.circle"
-                              : "line.3.horizontal.decrease.circle.fill")
+                // ⛔ THE FILTER IS THE TITLE — his reference: "Posted stories ⌄", a menu hanging off
+                // the heading rather than an icon in the corner. That is better than my first pass
+                // for a reason worth keeping: the title then always says WHICH set you are looking
+                // at, so a filtered page cannot be mistaken for the whole list. A corner icon puts
+                // the state somewhere you have to go looking for.
+                ToolbarItem(placement: .principal) {
+                    Menu {
+                        Picker("Filter", selection: $filter) {
+                            ForEach(Filter.allCases) { f in
+                                // The sentence rides along inside the menu row, so the explanation
+                                // he asked for survives losing the sheet.
+                                Text(f == .all ? f.title : "\(f.title) — \(f.explain)").tag(f)
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(filter == .all ? "Posted stories" : filter.title)
+                                .font(.headline)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 11, weight: .bold))
+                        }
+                        .foregroundStyle(.primary)
                     }
-                    .tint(filter == .all ? .primary : GlowStyle.accent)
                 }
-            }
-            .sheet(isPresented: $showFilters) {
-                FilterSheet(selection: $filter)
-                    .presentationDetents([.height(360)])
-                    .presentationDragIndicator(.visible)
             }
             .task { await loader.load(uid: uid); await loader.loadViewCounts(isMe: isMe) }
     }
