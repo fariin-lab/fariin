@@ -4078,12 +4078,22 @@ struct ThreadView: View {
             // box while an asset fills the frame it is given, so equal numbers would leave the
             // drawing looking bigger than the chevron it replaces.
             Group {
+                // ⛔ BIGGER — owner, 2026-09-02, with the album button ringed: "the icon looks
+                // small, fix that icon". A 24pt drawing inside a 56pt circle is 43% of it; the
+                // tiles beside it carry a 28pt glyph in a 48pt tile, which is 58%, so this one read
+                // as a smaller mark on a bigger button. 29 puts it at 52% and beside them.
+                //
+                // ⚠️ BOTH STATES MOVE, and only because they are one icon slot. Sizing the album
+                // drawing and leaving the arrow behind would make the back state the small one the
+                // next time he opens it. The +3 between them is the existing rule, restated: an
+                // asset fills the frame it is given while a symbol draws inset in its own box, so
+                // equal numbers would leave the drawing looking bigger than the chevron.
                 if attachShowAlbums || attachInAlbum {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 22, weight: .regular))
+                        .font(.system(size: 26, weight: .regular))
                 } else {
                     Image("ic_album").renderingMode(.template).resizable().scaledToFit()
-                        .frame(width: 24, height: 24)
+                        .frame(width: 29, height: 29)
                 }
             }
                 .foregroundStyle(.primary)
