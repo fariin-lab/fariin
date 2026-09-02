@@ -102,6 +102,16 @@ struct AttachRecentsStrip: View {
     /// position as well as by name, and the call site already relies on that for `removedIds` — the
     /// note there says so. A new input goes at the end or it silently reorders the existing ones.
     @Binding var showAlbums: Bool
+    /// True while a specific album (not Recents) fills the grid — his report off build 725: "when
+    /// i click in album like favorite the arrow is going to hide". The parent's round button needs
+    /// to keep showing the back arrow INSIDE an album, not only while the list is up, and it
+    /// cannot see `selectedAlbum` because that is this view's own state. The strip WRITES this
+    /// when an album is chosen; the parent WRITES IT FALSE to mean "take me back to Recents", and
+    /// the `.onChange` in `body` is what honours that.
+    ///
+    /// ⚠️ Declared after `showAlbums`, still last of the external inputs — the memberwise-init
+    /// position rule, third time now.
+    @Binding var inAlbum: Bool
     @FocusState private var captionFocused: Bool
     /// The KEYBOARD's state, which is not the same thing as `captionFocused`. The composer moved off
     /// its focus flag for exactly this reason — focus flips a beat before the keys move, and on one
@@ -183,6 +193,7 @@ struct AttachRecentsStrip: View {
             load(); loadAlbums()
         }
         .onChange(of: selectedIds.isEmpty) { _, empty in hasSelection = !empty }
+        .onChange(of: inAlbum) { _, now in exitAlbumIfNeeded(now) }
         .onChange(of: removedIds) { _, gone in
             guard !gone.isEmpty else { return }
             selectedIds.removeAll { gone.contains($0) }
@@ -318,20 +329,7 @@ struct AttachRecentsStrip: View {
                         // above and below is a 66pt row against the reference's ~76; the leading
                         // inset is the other half of it, at 16 against their 20-plus.
                         .padding(.leading, 20).padding(.trailing, 16)
-                        // ⛔ THE FIRST ROW HAS NO PADDING ABOVE IT — owner, 2026-09-02, with the
-                        // gap ringed in red: "top header sheet has small space".
-                        //
-                        // 11 above and below is the row's own breathing room and it is right
-                        // BETWEEN rows. On the first one it is a band of empty sheet between the
-                        // top edge and the first thumbnail, which is the same thing he had just
-                        // had taken out of the photo grid — the two doors of this sheet have to
-                        // start at the same place or switching between them jumps.
-                        //
-                        // ⚠️ Killed per-row rather than with a negative margin on the stack. A
-                        // negative inset on scroll content pulls the whole list up, so the LAST
-                        // row loses 11 points at the bottom as well, and it fights the bounce.
-                        .padding(.top, album.id == albums.first?.id ? 0 : 11)
-                        .padding(.bottom, 11)
+                        .padding(.vertical, 11)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -342,13 +340,38 @@ struct AttachRecentsStrip: View {
                 }
             }
         }
-        // Same as the grid: no header to clear, so no top margin. See the note there.
+        // ⛔ 16pt OF TOP MARGIN, AND THE GRID KEEPS NONE — owner, 2026-09-02, build 725 on his
+        // phone, corner ringed in red: "sheet angle and album, there's no space".
+        //
+        // My previous pass took the top space off BOTH doors of this sheet so they would start in
+        // the same place, and that was right for one door and wrong for the other. The photo grid
+        // is full-bleed pictures: the sheet's corner cuts into an image and it reads as designed.
+        // This list is a THUMBNAIL AND A TITLE: the corner cuts into a 60pt rounded rect and the
+        // grabber sits on the row's text, and it reads as broken — which is what he ringed.
+        //
+        // 16 plus the row's own 11 puts the first thumbnail ~27pt down: clear of the grabber,
+        // clear of the corner curve, and visibly a list that starts rather than one that leaks
+        // out of the top.
+        .contentMargins(.top, 16, for: .scrollContent)
     }
 
     private func selectAlbum(_ album: AttachAlbum) {
         selectedAlbum = album.isAllRecents ? nil : album.collection
         albumTitle = album.title
+        // Tells the parent's round button to stay a back arrow while a real album fills the grid.
+        inAlbum = selectedAlbum != nil
         withAnimation(.snappy(duration: 0.25)) { showAlbums = false }
+        load()
+    }
+
+    /// The parent lowering `inAlbum` MEANS "back to Recents" — the round button's arrow tap. The
+    /// reset lives here because `selectedAlbum` and `load()` are this view's own; the parent only
+    /// speaks through the binding. Guarded so the strip's own write in `selectAlbum` (false, for
+    /// Recents, with `selectedAlbum` already nil) does not re-run a load that just ran.
+    private func exitAlbumIfNeeded(_ nowInAlbum: Bool) {
+        guard !nowInAlbum, selectedAlbum != nil else { return }
+        selectedAlbum = nil
+        albumTitle = "Recents"
         load()
     }
 

@@ -118,6 +118,10 @@ struct ThreadView: View {
     /// inside the strip because the button that flips it (`albumButton`) sits in this view's bottom
     /// row, beside the attach bar, and the list it flips is inside the strip.
     @State private var attachShowAlbums = false
+    /// A specific album (not Recents) fills the sheet's grid. Written by the strip when one is
+    /// picked; written FALSE by the round button's arrow to mean "back to Recents". See the
+    /// binding's note in `AttachRecentsStrip`.
+    @State private var attachInAlbum = false
     @State private var comingSoon: ComingSoonWrap?   // generic "coming soon" sheet (currently unused tiles)
     enum CallBackKind: String, Identifiable { case voice, video; var id: String { rawValue } }
     @State private var pendingCallBack: CallBackKind?   // tapped a call-history row → confirm before dialing
@@ -1171,9 +1175,9 @@ struct ThreadView: View {
                 Task { await sendVideo(from: finalURL, caption: caption, hd: hd) }
             }
         }
-        // `attachShowAlbums` is reset with the rest: the sheet reopens on the photo grid, never on
-        // the album list you happened to leave it on.
-        .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false; attachShowAlbums = false; attachDetent = ThreadView.attachOpenDetent }) {
+        // `attachShowAlbums` and `attachInAlbum` are reset with the rest: the sheet reopens on the
+        // photo grid, never on the album list or inside the album you happened to leave it in.
+        .sheet(isPresented: $showAttachPanel, onDismiss: { recentsHasSelection = false; attachShowAlbums = false; attachInAlbum = false; attachDetent = ThreadView.attachOpenDetent }) {
             attachPanel
                 .presentationDetents([ThreadView.attachOpenDetent, .large], selection: $attachDetent)   // ~62% open, pull up for more
                 // SOLID system background (white in light / dark in dark mode) — the default iOS 26 glass
@@ -3805,7 +3809,8 @@ struct ThreadView: View {
                 // Declared last on the strip, so it goes last here — Swift matches these by position
                 // as well as by name.
                 removedIds: deselectedIds,
-                showAlbums: $attachShowAlbums)
+                showAlbums: $attachShowAlbums,
+                inAlbum: $attachInAlbum)
                 // ⛔ NO TOP PADDING — owner, 2026-09-02, "no header". This 10 held the sheet's own
                 // header clear of the grabber. With the header gone it is a strip of empty sheet
                 // above the photos, which is the exact thing he has rejected twice before.
@@ -4015,7 +4020,26 @@ struct ThreadView: View {
     /// unrelated controls. The diameter is the bar's own height rather than a second number — the
     /// day the bar changes height, this follows it.
     private var albumButton: some View {
-        Button { withAnimation(.snappy(duration: 0.25)) { attachShowAlbums.toggle() } } label: {
+        Button {
+            withAnimation(.snappy(duration: 0.25)) {
+                // ⛔ THE ARROW MEANS "BACK TO MY PHOTOS", FROM EITHER DEPTH — his report off build
+                // 725: "when i click in album like favorite the arrow is going to hide". The first
+                // wiring only knew about the LIST, so entering Favorites flipped the glyph back to
+                // the album icon and there was no visible way out of the album.
+                //
+                // One tap out from anywhere is the deleted header's exact behaviour (its chevron
+                // reset to Recents whether the list was up or an album was open), and it kept a
+                // simple rule for him: the arrow always returns you to your own photos; the album
+                // glyph always opens the list. Popping one level instead loops — grid to list to
+                // grid — and the arrow would never reach Recents.
+                if attachShowAlbums || attachInAlbum {
+                    attachShowAlbums = false
+                    attachInAlbum = false      // the strip's .onChange resets to Recents
+                } else {
+                    attachShowAlbums = true
+                }
+            }
+        } label: {
             // ⛔ IT BECOMES A BACK ARROW ONCE THE ALBUM LIST IS OPEN — owner, 2026-09-02: "When i
             // click album then i want to go back User cant understand to go back, album button icon
             // make it arrow when user inter alpum".
@@ -4041,7 +4065,7 @@ struct ThreadView: View {
             // box while an asset fills the frame it is given, so equal numbers would leave the
             // drawing looking bigger than the chevron it replaces.
             Group {
-                if attachShowAlbums {
+                if attachShowAlbums || attachInAlbum {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 22, weight: .regular))
                 } else {
