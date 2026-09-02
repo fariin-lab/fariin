@@ -336,7 +336,7 @@ struct MainShell: View {
             // for months and Chats has one now, which is what the detached circle was standing in
             // for. Settings gets none at all, on his word.
             // ⚠️ `ic_stories`, THE APP'S OWN GLYPH, NOT AN SF SYMBOL. His mockup of the bar draws
-            // the stacked cards with a plus — the same mark the Add Story menu entry already wears,
+            // the stacked cards with a plus — the same mark the Stories tab's own add button wears,
             // so the tab and the action that fills it are one drawing. SF Symbols has nothing that
             // reads as "stories", and the circle-dashed stand-in that was here first read as a
             // loading state.
@@ -986,8 +986,8 @@ struct ChatsView: View {
     // with the row itself. They are not duplicated here: the row's door is unpinned (the
     // viewer pages person to person and the row has a card for whoever you paged to), the
     // ring's door below is pinned, and two copies of that distinction is exactly how one of
-    // them ends up quietly wrong. The story-limit alerts and `composeStory` DO stay, because
-    // the chat list's own menu still offers Add Story.
+    // them ends up quietly wrong. The story-limit alerts and `composeStory` stay standing but
+    // UNREFERENCED since the menu's Add Story was removed (2026-09-02) — see the note there.
 
     /// THE CHAT LIST'S RINGED AVATAR. Same door, same flight, and because the ring reports its
     /// radius as half its width the story grows out of it and lands back into it as a CIRCLE —
@@ -1486,7 +1486,7 @@ struct ChatsView: View {
     private var editButton: some View {
         Button("Edit") { withAnimation(.smooth(duration: 0.35)) { selecting = true } }.tint(.primary)
     }
-    // Right: Mark all read + filter (All / Unread / Groups) + Archived + Add Story.
+    // Right: Mark all read + filter (All / Unread / Groups) + Archive.
     private var filterMenu: some View {
         Menu {
             Button { markAllRead() } label: { Label("Mark All Read", systemImage: "checkmark.circle") }
@@ -1501,12 +1501,12 @@ struct ChatsView: View {
             Button { path.append(ArchiveRoute.archive) } label: {
                 Label { Text("Archive") } icon: { MenuIcon("ic_archive") }
             }
-            // Stories off (Settings > Stories > Turn Off Stories) → no Add Story entry.
-            if !storiesOptedOut {
-                Button { composeStory() } label: {
-                    Label { Text("Add Story") } icon: { MenuIcon("ic_stories") }
-                }
-            }
+            // ⛔ NO "ADD STORY" HERE — owner, 2026-09-02, with the entry ringed. Posting a story is
+            // the Stories tab's job and that tab now opens with its own add button in the header;
+            // this menu belongs to the chat list, and every other thing in it acts on the chat list.
+            // `composeStory` below is left standing, unreferenced, with the day's-limit alerts it
+            // owns — it is the one door with the limit check in it, and the day a second entry point
+            // is wanted it should be this, not a second copy of the check.
         } label: {
             // Plain three-lines filter glyph (no inner circle) — Apple moved off the
             // `.circle` variant; the glass button already supplies the round shape, so
