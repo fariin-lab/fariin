@@ -377,6 +377,26 @@ struct GlowProfileView: View {
                 Task { palette = await ProfilePalette.resolve(url: url) }
             }
         }
+        // ⛔ THE HANDLE AND THE BIO ARE PAINTED BEFORE THE ROUND TRIP TOO — owner, 2026-09-02: "when
+        // I click my profile the bio and username appear AFTER opening the page".
+        //
+        // Same shape as the palette above and the same cause: `profile` was only ever set from the
+        // network fetch, so the page opened with the name it was pushed with and nothing else, then
+        // grew a handle and a bio when the answer came back. On MY OWN profile that wait is for
+        // information already sitting in memory.
+        //
+        //   • mine  → `ProfileStore.me`, synchronous, already loaded and kept current.
+        //   • other → `cachedPeer`, Firestore's on-disk copy with no network. Its own note says it
+        //             exists for exactly this: "lets a profile paint its @handle and bio on the
+        //             first frame for anyone we've loaded before, instead of the bio arriving a
+        //             moment later and shoving the whole page down".
+        if profile == nil {
+            if isMe {
+                profile = ProfileStore.shared.me
+            } else if let hit = await ProfileStore.shared.cachedPeer(uid) {
+                profile = hit
+            }
+        }
         if let p = await ProfileStore.shared.fetch(uid) {
             profile = p
             // The server's photo may differ from the one the push carried (changed since, or none
