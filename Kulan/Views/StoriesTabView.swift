@@ -47,10 +47,25 @@ struct StoriesTabView: View {
     /// The header's search field — his reference, 2026-09-02, has one sitting under the title.
     @State private var search = ""
 
+    /// ⛔ 17, NOT 22 — owner, 2026-09-02, with "Glowing" ringed: "the text Glowing looks big".
+    ///
+    /// Measured off his own reference rather than adjusted by feel: the section heading there has a
+    /// cap height of about 12pt, which is a 17pt face, and the 22 that was here was a guess at it.
+    ///
+    /// ⚠️ EVERY HEADING ON THE PAGE TAKES IT, not only the one he ringed. Friends and Glowing are
+    /// the same kind of label, and two sizes for one kind of label is exactly the drift this page's
+    /// card geometry has already been through once today.
+    private static let sectionTitle = Font.system(size: 17, weight: .bold)
+
     var body: some View {
         NavigationStack(path: $path) {
             content
                 .navigationTitle("Stories")
+                // ⛔ INLINE, THE SECOND HALF OF "make the header like this exactly" — his reference
+                // centres a small "Stories" between the ••• and the bell/add capsule, with the
+                // search field under it. A large title pushes the name onto its own line below the
+                // buttons, which is the header he photographed and asked me to change.
+                .navigationBarTitleDisplayMode(.inline)
                 // ⛔ THREE BUTTONS, HIS REFERENCE: the ••• menu on the LEFT, and the bell and the
                 // add-story mark together on the RIGHT — the two right-hand ones read as one glass
                 // capsule in his mockup because iOS groups adjacent trailing items that way.
@@ -191,7 +206,8 @@ struct StoriesTabView: View {
                                     GlowStoryCardView(
                                         thumbUrl: g.stories.last.map { $0.thumbUrl.isEmpty ? $0.mediaUrl : $0.thumbUrl } ?? "",
                                         name: g.name,
-                                        authorPhoto: g.photoUrl)
+                                        authorPhoto: g.photoUrl,
+                                        rectKey: g.id)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -202,8 +218,9 @@ struct StoriesTabView: View {
                             ForEach(glowing) { c in
                                 // Same split as the section this came from: the card is the story,
                                 // the face on it is the person.
-                                Button { Task { await GlowStoryOpen.open(c.person) } } label: {
-                                    GlowStoryCardView(card: c) {
+                                let key = "glow-\(c.person.id)"
+                                Button { Task { await GlowStoryOpen.open(c.person, from: key) } } label: {
+                                    GlowStoryCardView(card: c, rectKey: key) {
                                         path.append(GlowRoute.profile(c.person.id, c.person.name,
                                                                       c.person.photoUrl ?? ""))
                                     }
@@ -222,7 +239,7 @@ struct StoriesTabView: View {
     @ViewBuilder private func searchGroup<C: View>(_ title: String,
                                                    @ViewBuilder cards: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(title).font(.system(size: 22, weight: .bold))
+            Text(title).font(Self.sectionTitle)
                 .padding(.horizontal, GlowStoryCardView.margin)
             LazyVGrid(columns: [GridItem(.flexible(), spacing: GlowStoryCardView.gutter),
                                 GridItem(.flexible(), spacing: GlowStoryCardView.gutter)],
@@ -265,7 +282,7 @@ struct StoriesTabView: View {
         let groups = StoriesRepository.shared.others.filter { !StoryPrefs.isHidden($0.authorUid) }
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 4) {
-                Text("Friends").font(.system(size: 22, weight: .bold))
+                Text("Friends").font(Self.sectionTitle)
                 Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold))
                     .foregroundStyle(.secondary)
             }
@@ -276,12 +293,16 @@ struct StoriesTabView: View {
                       spacing: GlowStoryCardView.gutter) {
                 // My own card first, wearing the ⊕ — his reference puts My Story at the front of
                 // the grid exactly as it is at the front of the strip.
+                // ⚠️ THE KEY IS THE GROUP'S OWN ID because `openStoryFromRow` opens `from: g.id`,
+                // and it does not collide with the UIKit row's identical key: this grid is the
+                // layout used INSTEAD of that row, never beside it.
                 if let mine = StoriesRepository.shared.mine, let newest = mine.stories.last {
                     Button { openStoryFromRow(mine) } label: {
                         GlowStoryCardView(thumbUrl: newest.thumbUrl.isEmpty ? newest.mediaUrl : newest.thumbUrl,
                                           name: "My Story",
                                           authorPhoto: profile.me?.photoUrl,
-                                          isMine: true)
+                                          isMine: true,
+                                          rectKey: mine.id)
                     }
                     .buttonStyle(.plain)
                 }
@@ -290,7 +311,8 @@ struct StoriesTabView: View {
                         GlowStoryCardView(
                             thumbUrl: g.stories.last.map { $0.thumbUrl.isEmpty ? $0.mediaUrl : $0.thumbUrl } ?? "",
                             name: g.name,
-                            authorPhoto: g.photoUrl)
+                            authorPhoto: g.photoUrl,
+                            rectKey: g.id)
                     }
                     .buttonStyle(.plain)
                 }
@@ -319,7 +341,7 @@ struct StoriesTabView: View {
             VStack(alignment: .leading, spacing: 12) {
                 NavigationLink(value: GlowRoute.stories) {
                     HStack(spacing: 4) {
-                        Text("Glowing").font(.system(size: 22, weight: .bold))
+                        Text("Glowing").font(Self.sectionTitle)
                             .foregroundStyle(.primary)
                         Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold))
                             .foregroundStyle(.secondary)
@@ -346,10 +368,15 @@ struct StoriesTabView: View {
                             // THE CARD OPENS THE STORY — his correction, 2026-09-02: "when I click
                             // story glowing, open story, don't open profile". The FACE on it opens
                             // the person; see `GlowStoryCardView.onAvatarTap`.
+                            // ⚠️ A KEY OF ITS OWN, NOT the person's bare uid. The UIKit friends row
+                            // registers `key(.storyRow, <uid>)` for ITS cards, and a friend you
+                            // also have a Glow with would be two views claiming one key — the
+                            // flight would land on whichever reported last.
+                            let key = "glow-\(c.person.id)"
                             Button {
-                                Task { await GlowStoryOpen.open(c.person) }
+                                Task { await GlowStoryOpen.open(c.person, from: key) }
                             } label: {
-                                GlowStoryCardView(card: c) {
+                                GlowStoryCardView(card: c, rectKey: key) {
                                     path.append(GlowRoute.profile(c.person.id, c.person.name,
                                                                   c.person.photoUrl ?? ""))
                                 }

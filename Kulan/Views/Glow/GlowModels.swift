@@ -304,7 +304,10 @@ struct GlowEvent: Identifiable, Equatable {
 /// only the NEWEST — that is what makes the grid one card per person — but opening should page
 /// through everything they have live, which is what the viewer is for.
 @MainActor enum GlowStoryOpen {
-    static func open(_ person: GlowPerson) async {
+    /// - Parameter sourceKey: the `.storyRow` rect key of the card that was tapped, so the viewer
+    ///   grows out of THAT card and lands back on it. Nil falls back to the person's own id, which
+    ///   is what a door with nothing registered wants; see `GlowStoryCardView.rectKey`.
+    static func open(_ person: GlowPerson, from sourceKey: String? = nil) async {
         let loader = PostedStoriesLoader()
         await loader.load(uid: person.id, force: true)
         let rows = loader.state.value ?? []
@@ -325,7 +328,8 @@ struct GlowEvent: Identifiable, Equatable {
         // somebody else's story the way the friends row's unpinned door does.
         // `deliveredToMe: false` — a glow story is not addressed to me through my chat list, so the
         // reply bar must not offer to reply as though it were.
-        StoryDoor.open(group, among: [group], from: group.id, pinned: true, deliveredToMe: false)
+        StoryDoor.open(group, among: [group], from: sourceKey ?? group.id,
+                       pinned: true, deliveredToMe: false)
     }
 }
 

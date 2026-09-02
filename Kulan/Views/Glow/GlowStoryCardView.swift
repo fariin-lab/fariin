@@ -44,20 +44,35 @@ struct GlowStoryCardView: View {
     /// the face on it opens the person. Nil leaves the face inert, which is what the friends grid
     /// wants (its whole card is one story door).
     var onAvatarTap: (() -> Void)? = nil
+    /// ⛔ THE ANCHOR THE STORY FLIES OUT OF AND BACK INTO — owner, 2026-09-02: "when I open a story
+    /// it opens and closes good, because it goes back where I came from… make it like that for the
+    /// Glowing story row, and when I scroll down it must work like the friends story".
+    ///
+    /// This file's own note said the grid cards had no anchor registered, so they got `StoryDoor`'s
+    /// plain presentation instead of the morph, and named registering them as the fix. This is that.
+    /// It costs one modifier: `MediaRectReporter` files the card's rect under a `.storyRow` key, and
+    /// `StoryDoor.open(from:)` given the same key flies the viewer out of that rectangle, hides the
+    /// card underneath while it is up, and lands back on it.
+    ///
+    /// ⚠️ IT REPORTS A LIVE RECT, WHICH IS THE WHOLE OF WHY SCROLLING WORKS. The rect is re-captured
+    /// on every frame change, so the anchor is wherever the card IS, not where it was when the page
+    /// was built. Nil (or empty) registers nothing and degrades to the plain presentation.
+    var rectKey: String? = nil
 
     init(thumbUrl: String, name: String, authorPhoto: String?, isMine: Bool = false,
-         onAvatarTap: (() -> Void)? = nil) {
+         rectKey: String? = nil, onAvatarTap: (() -> Void)? = nil) {
         self.thumbUrl = thumbUrl
         self.name = name
         self.authorPhoto = authorPhoto
         self.isMine = isMine
+        self.rectKey = rectKey
         self.onAvatarTap = onAvatarTap
     }
 
     /// The Glowing grid's convenience spelling.
-    init(card: GlowStoryCard, onAvatarTap: (() -> Void)? = nil) {
+    init(card: GlowStoryCard, rectKey: String? = nil, onAvatarTap: (() -> Void)? = nil) {
         self.init(thumbUrl: card.story.thumbUrl, name: card.person.name,
-                  authorPhoto: card.person.photoUrl, onAvatarTap: onAvatarTap)
+                  authorPhoto: card.person.photoUrl, rectKey: rectKey, onAvatarTap: onAvatarTap)
     }
 
     var body: some View {
@@ -112,5 +127,9 @@ struct GlowStoryCardView: View {
                 .highPriorityGesture(TapGesture().onEnded { onAvatarTap?() },
                                      including: onAvatarTap == nil ? .subviews : .all)
             }
+            // LAST, so the rect it files is the whole card including its overlays — the flight lands
+            // on a rectangle, and half a rectangle would land short.
+            .modifier(MediaRectReporter(id: rectKey ?? "", scope: .storyRow,
+                                        cornerRadius: Self.corner))
     }
 }

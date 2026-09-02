@@ -68,10 +68,14 @@ struct GlowStoriesGridView: View {
                         // The CARD is the story; the face on it is the person. Same split as the
                         // notifications row and the section this page grew out of — the picture
                         // opens the picture.
+                        // Its own key prefix: this page and the Stories tab's Glowing section draw
+                        // the same person, and the one that is on screen must be the one the
+                        // story flies out of.
+                        let key = "glowpage-\(c.person.id)"
                         Button {
-                            Task { await GlowStoryOpen.open(c.person) }
+                            Task { await GlowStoryOpen.open(c.person, from: key) }
                         } label: {
-                            GlowStoryCardView(card: c) { profileTarget = c.person }
+                            GlowStoryCardView(card: c, rectKey: key) { profileTarget = c.person }
                         }
                         .buttonStyle(.plain)
                     }
