@@ -81,14 +81,17 @@ struct GlowStoryCardView: View {
             // two columns of them leave room for a third row to peek and invite a scroll.
             .aspectRatio(Self.aspect, contentMode: .fit)
             .overlay { StoryImage(url: thumbUrl) }
-            .clipShape(RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
             .overlay(alignment: .bottom) {
                 // The name has to survive a bright photograph, and a scrim is what does that
                 // without dimming the whole card — the same trick the story caption uses.
+                //
+                // ⚠️ NO CLIP OF ITS OWN ANY MORE. It used to round ITS 90pt box, which rounds the
+                // scrim's TOP corners as well — two little notches partway up the card — and only
+                // matched the card's bottom corners by both numbers happening to be the same. The
+                // card is clipped once, below, and this is a plain rectangle inside it.
                 LinearGradient(colors: [.black.opacity(0), .black.opacity(0.55)],
                                startPoint: .top, endPoint: .bottom)
                     .frame(height: 90)
-                    .clipShape(RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
                     .allowsHitTesting(false)
             }
             .overlay(alignment: .bottomLeading) {
@@ -127,6 +130,23 @@ struct GlowStoryCardView: View {
                 .highPriorityGesture(TapGesture().onEnded { onAvatarTap?() },
                                      including: onAvatarTap == nil ? .subviews : .all)
             }
+            // ⛔ ONE CLIP, OVER THE FINISHED CARD — owner, 2026-09-02: "when I scroll down to close,
+            // as it goes back to position I see something at the story card's bottom corners; in a
+            // second they're gone".
+            //
+            // The clip used to sit halfway up the chain, right after the picture, so it rounded the
+            // PICTURE and nothing else. Everything added afterwards — the scrim, the name, the face
+            // — drew on top of a rounded card with square corners of their own, each rounding itself
+            // or not. At rest that mostly reads fine because the picture is what you see; under the
+            // landing transform, when the whole thing is being scaled and composited, the layers
+            // that were never clipped are the ones that show up in the corners.
+            //
+            // ⚠️ `compositingGroup()` IS THE HALF THAT MATTERS HERE. Without it the clip is applied
+            // to each layer as it is drawn; with it the card is flattened FIRST and the rounded rect
+            // cuts the finished image. That is what survives being scaled by a transform, which is
+            // exactly what the close does.
+            .compositingGroup()
+            .clipShape(RoundedRectangle(cornerRadius: Self.corner, style: .continuous))
             // LAST, so the rect it files is the whole card including its overlays — the flight lands
             // on a rectangle, and half a rectangle would land short.
             .modifier(MediaRectReporter(id: rectKey ?? "", scope: .storyRow,
