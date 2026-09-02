@@ -118,6 +118,7 @@ enum ProfilePhotoIndex {
     static func hasPicture(_ url: String?) -> Bool {
         guard let u = url, !u.isEmpty else { return false }
         if DiskImageCache.shared.isCached(u) { return true }
+        lock.lock(); defer { lock.unlock() }
         return !failedURLs.contains(u)
     }
 
@@ -130,6 +131,7 @@ enum ProfilePhotoIndex {
     /// remembered anyway — by the bytes themselves, in the cache.
     static func noteLoad(_ url: String?, ok: Bool) {
         guard let u = url, !u.isEmpty else { return }
+        lock.lock(); defer { lock.unlock() }
         if ok { failedURLs.remove(u) } else { failedURLs.insert(u) }
     }
 
@@ -137,6 +139,7 @@ enum ProfilePhotoIndex {
 
     static func facts(_ uid: String) -> Facts? {
         guard !uid.isEmpty else { return nil }
+        lock.lock(); defer { lock.unlock() }
         return store[uid]
     }
 
@@ -161,6 +164,7 @@ enum ProfilePhotoIndex {
                          poster: poster ?? "",
                          thumb: thumb,
                          audience: privacy["photo"] ?? "")
+        lock.lock(); defer { lock.unlock() }
         // A same-value write would rewrite the defaults file on every profile read.
         if let old = store[uid], old.photo == next.photo, old.poster == next.poster,
            old.thumb == next.thumb, old.audience == next.audience { return }
@@ -177,6 +181,7 @@ enum ProfilePhotoIndex {
 
     /// Forget everything. Sign-out only: the next account must not inherit the last one's answers.
     static func reset() {
+        lock.lock(); defer { lock.unlock() }
         store = [:]
         UserDefaults.standard.removeObject(forKey: key)
     }
@@ -184,6 +189,21 @@ enum ProfilePhotoIndex {
     // MARK: - Storage
 
     private static let key = "profilePhotoIndex"
+
+    /// ⛔ ONE LOCK FOR BOTH STORES — same crash, same cause as `CallPrivacyIndex`, found in the same
+    /// stack: `ProfileStore.fetch` runs on the cooperative pool and calls `record` on every profile
+    /// read, while the main thread reads `facts` and `hasPicture` to draw avatars. Two threads on
+    /// one Dictionary is what corrupts a copy-on-write buffer.
+    ///
+    /// ⚠️ THIS ONE WAS NOT IN HIS CRASH AND IS FIXED ANYWAY. It is the same hook — `record` here is
+    /// what calls `CallPrivacyIndex.record` — reached from the same async function, holding the same
+    /// kind of unguarded dictionary. Fixing only the frame that happened to fault would leave the
+    /// identical bug one line away, waiting for a different tap.
+    ///
+    /// ⚠️ `persist()` IS CALLED WITH THE LOCK HELD, deliberately. It encodes `store`, so it has to
+    /// see the same value the write just made; the alternative is a second snapshot and a window
+    /// where two writers persist in the wrong order.
+    private static let lock = NSLock()
     private static var store: [String: Facts] = load()
 
     private static func load() -> [String: Facts] {

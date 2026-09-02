@@ -18,6 +18,28 @@ import FirebaseFirestore
 enum CallPrivacyIndex {
     /// What each person we have SEEN chose for calls. Absent from this map means we have never read
     /// their document, which must mean ring.
+    ///
+    /// ⛔ EVERY TOUCH OF THIS GOES THROUGH `lock` — his crash, build 730, 2026-09-02, symbolicated
+    /// from the .ips: `ContactInfoView.load` → `ProfileStore.fetch` → `record(uid:privacy:)` →
+    /// `swift_isUniquelyReferenced_nonNull_native`, EXC_BAD_ACCESS on a cooperative thread.
+    ///
+    /// ⚠️ THAT CRASH IS THIS DICTIONARY, AND THE STACK NAMES IT EXACTLY.
+    /// `isUniquelyReferenced` is the copy-on-write check Swift runs before mutating a Dictionary. It
+    /// only faults on a garbage pointer if the buffer reference was ALREADY corrupt — which is what
+    /// two threads writing the same dictionary at once produces. `ProfileStore.fetch` is async and
+    /// runs on the cooperative pool, it calls `indexed(...)` which calls this on every profile read,
+    /// and nothing here was ever isolated.
+    ///
+    /// ⚠️ IT WAS ALWAYS WRONG AND TODAY IS WHEN IT FIRED. One profile fetch at a time races with
+    /// nothing; the Glow work added several concurrent readers — `GlowPeopleLoader` fetches in a
+    /// loop, the profile page fetches, the chat list's people search fetches — so the window this
+    /// has always had finally got hit.
+    ///
+    /// ⚠️ A LOCK RATHER THAN `@MainActor`, and the reason is in this file's own header: `startCall`
+    /// has to answer on the frame the button is pressed and cannot await. Isolating the index would
+    /// make every reader async and take that guarantee away; a lock keeps the synchronous API and
+    /// costs a few nanoseconds on a dictionary read.
+    private static let lock = NSLock()
     private static var audiences: [String: Audience] = [:]
 
     /// Record what a users document said about calls. Called from the one hook every profile read
@@ -35,12 +57,17 @@ enum CallPrivacyIndex {
     /// predict.
     static func record(uid: String, privacy: [String: String]) {
         guard !uid.isEmpty else { return }
-        audiences[uid] = Audience(rawValue: privacy["calls"] ?? "")
+        let value = Audience(rawValue: privacy["calls"] ?? "")
             ?? PrivacyPrefs.defaultAudience(for: "calls")
+        lock.lock(); defer { lock.unlock() }
+        audiences[uid] = value
     }
 
     /// What we know, or nil when this person has never been seen.
-    static func audience(for uid: String) -> Audience? { audiences[uid] }
+    static func audience(for uid: String) -> Audience? {
+        lock.lock(); defer { lock.unlock() }
+        return audiences[uid]
+    }
 
     /// Would their phone refuse a call from me right now, as far as we can tell?
     ///
@@ -52,7 +79,9 @@ enum CallPrivacyIndex {
     /// device decide, which is the behaviour that existed before this index and the one that cannot
     /// wrongly block a legitimate call on a guess.
     static func refuses(_ uid: String, iAmTheirContact: Bool) -> Bool {
-        switch audiences[uid] {
+        // Through `audience(for:)` rather than the dictionary, so there is exactly one place that
+        // touches the storage and no reader can be added later that forgets the lock.
+        switch audience(for: uid) {
         case .nobody:   return true
         case .contacts: return !iAmTheirContact
         case .everyone: return false
@@ -71,6 +100,7 @@ enum CallPrivacyIndex {
 
     /// Sign-out: the next account must not inherit a map of who refuses calls.
     static func clear() {
+        lock.lock(); defer { lock.unlock() }
         audiences.removeAll()
     }
 }
