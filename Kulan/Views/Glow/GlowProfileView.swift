@@ -292,13 +292,7 @@ struct GlowProfileView: View {
                     .frame(width: 38, height: 38)
                     .background(Color.white.opacity(0.12), in: Circle())
             } else {
-                HStack(spacing: -12) {
-                    ForEach(facePeople.prefix(3)) { p in
-                        AvatarView(name: p.name, photoUrl: p.photoUrl, size: 30)
-                            .overlay(Circle().strokeBorder(cardColor, lineWidth: 2))
-                    }
-                }
-                .frame(height: 38)
+                faceCluster
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(GlowCount.short(glowers)) Glowers  ·  \(GlowCount.short(glowing)) Glowing")
@@ -320,6 +314,41 @@ struct GlowProfileView: View {
         }
         .padding(14)
         .background(cardColor, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+
+    /// ⛔ A CLUSTER, NOT A ROW — owner, 2026-09-02, with his reference beside ours: one large face
+    /// with two smaller ones tucked under its lower corners.
+    ///
+    /// ⚠️ WHAT WAS HERE WAS AN OVERLAPPING ROW — three 30pt circles at −12 spacing, the "stacked
+    /// avatars" every app uses for a list of people. It is the wrong figure for this card: a row
+    /// reads as "and N more, in order", while his cluster reads as a GROUP, which is what a glow
+    /// count is. It also fits three faces into the width of about two, which is why the card had
+    /// room for the sentence beside it.
+    ///
+    /// The geometry, so it can be adjusted without guessing: a 34pt face centred, then a 22 at the
+    /// lower left and a 22 at the lower right, each pushed out by 60% of its own width and down by
+    /// 40%. Every circle carries the card's colour as a 2pt border, which is what makes them read as
+    /// stacked rather than merged.
+    @ViewBuilder private var faceCluster: some View {
+        let faces = Array(facePeople.prefix(3))
+        ZStack {
+            if faces.count > 1 {
+                AvatarView(name: faces[1].name, photoUrl: faces[1].photoUrl, size: 22)
+                    .overlay(Circle().strokeBorder(cardColor, lineWidth: 2))
+                    .offset(x: -13, y: 9)
+            }
+            if faces.count > 2 {
+                AvatarView(name: faces[2].name, photoUrl: faces[2].photoUrl, size: 22)
+                    .overlay(Circle().strokeBorder(cardColor, lineWidth: 2))
+                    .offset(x: 13, y: 9)
+            }
+            // ⚠️ THE BIG ONE LAST, so it sits ON the two small ones rather than under them. His
+            // reference has the large face in front; drawing it first would tuck it behind.
+            AvatarView(name: faces[0].name, photoUrl: faces[0].photoUrl, size: 34)
+                .overlay(Circle().strokeBorder(cardColor, lineWidth: 2))
+                .offset(y: -4)
+        }
+        .frame(width: 52, height: 44)
     }
 
     /// The faces on the stats card — a few of the people in the glow relationship. Only ever drawn
