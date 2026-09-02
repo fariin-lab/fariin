@@ -2550,7 +2550,19 @@ struct StoryViewer: View {
                     .font(.system(size: 16))
                     .foregroundStyle(.white.opacity(0.55))
                     .frame(maxWidth: .infinity)
-                    .frame(height: 48)
+                    // ⛔ 44 AND +16, TO SIT ON THE HEART'S LINE — owner, 2026-09-02: "when I open a
+                    // glowing story the reply card and the love icon are not aligned".
+                    //
+                    // ⚠️ THEY ARE TWO LAYERS AND THEY WERE MEASURED FROM THE SAME EDGE DIFFERENTLY.
+                    // The heart comes from the library's `MessageView`, which is placed with
+                    // `.padding()` — 16 on every side — plus the window's bottom inset, and its row
+                    // is `Constant.MessageView.height`, 44. This pill is ours, drawn as an overlay
+                    // on the card at the bottom inset alone and 48 tall. So the heart's centre sat
+                    // 16 + 2 higher, which is the 14 points he ringed.
+                    //
+                    // Matching both numbers is what aligns them, not nudging one: same height, same
+                    // 16 above the same inset.
+                    .frame(height: 44)
                     .background(Capsule().stroke(.white.opacity(0.28), lineWidth: 1))
                     .padding(.leading, 16)
                     // ⚠️ THE HEART SHARES THIS SLOT NOW. `MessageView`'s `.plain(config:)` branch
@@ -2558,7 +2570,8 @@ struct StoryViewer: View {
                     // that still ran to a 16pt trailing margin would sit under it. 60 is the
                     // heart's 44pt target plus the 16 the capsule used to have.
                     .padding(.trailing, 60)
-                    .padding(.bottom, max(10, bottomInset))
+                    // The library's own `.padding()` is 16 on top of the window inset — see above.
+                    .padding(.bottom, max(10, bottomInset) + 16)
                     // Steps aside for the same three things every other piece of chrome does: the
                     // close drag, a hero flight (a button close moves no finger), and the viewers
                     // sheet coming up over the card.

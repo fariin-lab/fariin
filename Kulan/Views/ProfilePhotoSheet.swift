@@ -44,7 +44,7 @@ struct ProfilePhotoSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var scheme
 
-    @State private var palette: ProfilePalette.Result?
+    @State private var palette: ProfilePalette?
     @State private var recents: [UIImage] = []
 
     private let circle: CGFloat = 190

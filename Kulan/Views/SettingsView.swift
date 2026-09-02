@@ -1657,6 +1657,16 @@ struct EditProfileView: View {
                         case .camera:  showCamera = true
                         case .library: showPhotoPicker = true
                         case .remove:  confirmRemovePhoto = true
+                        // A Recents pick goes to the SAME cropper a chosen photo does — one framing
+                        // path, so only one of them can be wrong.
+                        case .image(let img): cropCandidate = CropItem(image: img)
+                        // An emoji disc is already square and already centred. Held for Save like
+                        // every other change on this screen, and the poster is the same square:
+                        // there is no second framing of a circle.
+                        case .emoji(let img):
+                            pendingPhoto = img
+                            pendingPoster = img
+                            pendingRemove = false
                         }
                     }) {
                         ProfilePhotoSheet(name: editingName,
