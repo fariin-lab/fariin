@@ -1438,6 +1438,16 @@ struct ChatsView: View {
         searchingUsers = false
     }
 
+    /// WHICH CHATS ARE PINNED, as one comparable value — the trigger for the list's pin animation.
+    ///
+    /// ⚠️ OFF THE REPOSITORY, NOT OFF `visible`. `visible` filters and sorts every conversation and
+    /// this is read on each body pass, which the note below is about; this is a filter and a map
+    /// over the raw list and nothing else. It also has to IGNORE the sort, because a message
+    /// arriving reorders `visible` without changing what is pinned, and that must not animate.
+    private var pinnedKey: String {
+        repo.conversations.filter { $0.isPinned(me) }.map(\.id).sorted().joined(separator: ",")
+    }
+
     /// The two halves of `visible`, for the "Pinned" / "Chats" sections.
     ///
     /// ⚠️ ONE PROPERTY RETURNING BOTH, AND THAT IS NOT TIDINESS. `visible` filters and SORTS the
@@ -1931,6 +1941,32 @@ struct ChatsView: View {
                         // background is hidden here and the spacing is already zeroed below.
                         .listStyle(.grouped)
                         .scrollContentBackground(.hidden)
+                        // ⛔ THE PIN IS ONE ANIMATED TRANSACTION, WHICH IS THE HALF I HAD MISSING —
+                        // owner, 2026-09-02, third report on this: "still not like the reference,
+                        // read the real code".
+                        //
+                        // I did, and the sections were only half of it. `applyRowChanges` wraps
+                        // every change in `beginUpdates()` / `endUpdates()` with
+                        // `defaultRowAnimation = .automatic`, so the whole rearrangement is ONE
+                        // animation the table runs. Ours had none at all: `setPinned` writes to the
+                        // server and the list moves whenever the listener echoes back, outside any
+                        // transaction, so the rows and the headings simply appeared in their new
+                        // places. That is the jump, and no amount of getting the sections right was
+                        // ever going to fix it, because there was nothing animating.
+                        //
+                        // ⚠️ KEYED ON THE PINNED SET, NOT ON THE WHOLE LIST. A message arriving
+                        // re-sorts this list all day; animating that would make every new message
+                        // slide the page around. This value changes when — and only when — a chat
+                        // is pinned or unpinned, so the animation runs for his action and nothing
+                        // else.
+                        //
+                        // ⚠️ WHAT THIS STILL IS NOT: their `moveRow(at:to:)` across sections, where
+                        // one row physically travels from Chats to Pinned. SwiftUI has no such call
+                        // — a row leaving one `ForEach` for another is a delete and an insert to its
+                        // diff — so ours crossfades in place instead of flying. Matching that last
+                        // detail means this list becoming a `UITableView`, which is a much bigger
+                        // change than he has asked for and I am not starting it unasked.
+                        .animation(.snappy(duration: 0.3), value: pinnedKey)
                         // ⛔ THE SECTION GAP IS THE HEADER'S OWN 14, NOTHING MORE — owner,
                         // 2026-09-02, off build 725: "space between chats and pinned chats, make
                         // like the reference". The List adds its own inter-section spacing on top of
