@@ -4016,13 +4016,28 @@ struct ThreadView: View {
     /// day the bar changes height, this follows it.
     private var albumButton: some View {
         Button { withAnimation(.snappy(duration: 0.25)) { attachShowAlbums.toggle() } } label: {
-            // ⚠️ The glass goes on the LABEL, not on the Button. That is how the header's ✕ carried
-            // its circle for the last month and it is the shape that is known to work here — glass
-            // wrapped around the Button instead has to guess at the hit area.
-            Image(systemName: "photo.on.rectangle.angled")
+            // ⛔ IT BECOMES A BACK ARROW ONCE THE ALBUM LIST IS OPEN — owner, 2026-09-02: "When i
+            // click album then i want to go back User cant understand to go back, album button icon
+            // make it arrow when user inter alpum".
+            //
+            // The button was already the way back; nothing about it SAID so. A control that toggles
+            // has to say which way it is pointing, and this one had a picture-library glyph in both
+            // states, so from inside the list it read as "open the album list" — the thing you were
+            // already looking at.
+            //
+            // `chevron.left` rather than a drawn arrow: it is the exact glyph this sheet's own
+            // header used for this exact job before the header was removed this morning, and it is
+            // what the chat header's back button draws. The mark moved, its meaning did not.
+            //
+            // ⚠️ No symbol transition on the swap. The app has one (`.contentTransition`) and it is
+            // deliberately not used here — a travelling glyph on a control the finger just pressed
+            // reads as lag, which is written up against the voice note's play disc.
+            Image(systemName: attachShowAlbums ? "chevron.left" : "photo.on.rectangle.angled")
                 .font(.system(size: 22, weight: .regular))
                 .foregroundStyle(.primary)
                 .frame(width: Self.attachBarHeight, height: Self.attachBarHeight)
+                // ⚠️ The glass goes on the LABEL, not around the Button. That is how the removed
+                // header's ✕ carried its circle, and it is the shape known to work here.
                 .liquidGlass(Circle(), interactive: true)
         }
     }

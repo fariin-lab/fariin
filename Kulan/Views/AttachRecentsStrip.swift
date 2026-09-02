@@ -318,7 +318,20 @@ struct AttachRecentsStrip: View {
                         // above and below is a 66pt row against the reference's ~76; the leading
                         // inset is the other half of it, at 16 against their 20-plus.
                         .padding(.leading, 20).padding(.trailing, 16)
-                        .padding(.vertical, 11)
+                        // ⛔ THE FIRST ROW HAS NO PADDING ABOVE IT — owner, 2026-09-02, with the
+                        // gap ringed in red: "top header sheet has small space".
+                        //
+                        // 11 above and below is the row's own breathing room and it is right
+                        // BETWEEN rows. On the first one it is a band of empty sheet between the
+                        // top edge and the first thumbnail, which is the same thing he had just
+                        // had taken out of the photo grid — the two doors of this sheet have to
+                        // start at the same place or switching between them jumps.
+                        //
+                        // ⚠️ Killed per-row rather than with a negative margin on the stack. A
+                        // negative inset on scroll content pulls the whole list up, so the LAST
+                        // row loses 11 points at the bottom as well, and it fights the bounce.
+                        .padding(.top, album.id == albums.first?.id ? 0 : 11)
+                        .padding(.bottom, 11)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
