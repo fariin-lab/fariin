@@ -18,7 +18,19 @@ struct GlowStoryCardView: View {
     /// identical size or the real cards jump when they land. Four copies of 22 is four places for a
     /// corner to drift, which is the thing this file's own header warns about.
     static let aspect: CGFloat = 0.655
-    static let corner: CGFloat = 26
+    /// ⛔ 34, UP FROM 26 — owner, 2026-09-02, with his reference and ours side by side: "the rounded
+    /// corners still are not the same, make it exactly like picture one".
+    ///
+    /// Measured off the pair rather than nudged: on cards of the same width, his reference's corner
+    /// curve runs about a third longer than ours did. 26 × 1.3 is 34, and at that radius the card
+    /// reads as the soft tile his screenshot shows instead of a rectangle with the corners taken
+    /// off.
+    ///
+    /// ⚠️ THE CLIP IS OVER THE WHOLE CARD NOW, so a bigger radius eats into the bottom corners where
+    /// the name and the face sit. Both were checked against the arc rather than assumed: the face's
+    /// nearest point lands 24 from the corner's centre against a 34 radius, and the name's padding
+    /// went to 14 below to keep the same clearance on its side.
+    static let corner: CGFloat = 34
     /// The grid around the card, from the same screen: a 20pt margin each side and 16 between, which
     /// on a 393pt phone leaves cards ~168pt wide.
     static let gutter: CGFloat = 16
@@ -107,8 +119,9 @@ struct GlowStoryCardView: View {
                     .foregroundStyle(.white)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
-                    .padding(.leading, 12)
-                    .padding(.bottom, 12)
+                    // 14, not 12 — clearance from the bigger corner arc. See `corner`.
+                    .padding(.leading, 14)
+                    .padding(.bottom, 14)
                     // clear of the face: its width, its inset, and 4 of daylight between the two
                     .padding(.trailing, Self.avatar + Self.avatarInset + 4)
             }
