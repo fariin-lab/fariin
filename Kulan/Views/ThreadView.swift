@@ -3935,16 +3935,19 @@ struct ThreadView: View {
 
     @ViewBuilder private var sourceBar: some View {
         if !recentsHasSelection {
-            // ⛔ THE BAR IS LEFT, THE ALBUM BUTTON IS RIGHT — owner, 2026-09-02, with a screenshot:
-            // "bottom left side attach bar and bottom right side buttom Album". It was centred
-            // between two spacers before, which is why it had to justify its own width in the note
-            // above; that argument is over. The row is now one bar hugging the leading edge and one
-            // round button on the trailing edge, with the gap between them doing the work.
+            // ⛔ THE ALBUM BUTTON IS LEFT, THE BAR IS RIGHT — owner, 2026-09-02, reversing his own
+            // call from this morning ("bottom left side attach bar and bottom right side buttom
+            // Album"): "album button make it left attach bar right". Seen on the phone, the round
+            // button reads as the back control for the grid above it, and a back control belongs on
+            // the leading edge — the same side the chat header puts its chevron. The bar is a set of
+            // destinations, and destinations are what the trailing edge is for.
             // ⚠️ SPACING 0, AND THE GAP IS THE SPACER'S `minLength`. An HStack spacing of 12 with a
             // Spacer between the two would put 12 on EACH side of it, so the smallest gap the row
             // can reach is 24 — and the tile-width arithmetic above is written against 12. On a
             // group that four-point difference is the whole margin.
             HStack(spacing: 0) {
+                albumButton
+                Spacer(minLength: 12)
                 HStack(spacing: 2) {
                     // Order: Camera · GIF · Files · Location · Poll (groups only). The Contacts tile
                     // is gone (user 2026-07-29): sharing "a contact" is a phone-book idea, and
@@ -3972,8 +3975,6 @@ struct ThreadView: View {
                 // `2b9bb0a5` (the blur, with their numbers and how they were read) and `c94bb7be`
                 // (the 27 gate), if the 27 bottom-bar change ever does need answering.
                 .liquidGlass(Capsule())   // the ONE piece of glass here, and the only background
-                Spacer(minLength: 12)
-                albumButton
             }
             .padding(.horizontal, 16)
             // ⛔ NO NUMBER HERE AGAIN — owner, 2026-08-24, second look with the gap circled: "the
@@ -4022,19 +4023,27 @@ struct ThreadView: View {
     private var albumButton: some View {
         Button {
             withAnimation(.snappy(duration: 0.25)) {
-                // ⛔ THE ARROW MEANS "BACK TO MY PHOTOS", FROM EITHER DEPTH — his report off build
-                // 725: "when i click in album like favorite the arrow is going to hide". The first
-                // wiring only knew about the LIST, so entering Favorites flipped the glyph back to
-                // the album icon and there was no visible way out of the album.
+                // ⛔ THE ARROW POPS ONE LEVEL, IT DOES NOT JUMP HOME — owner, 2026-09-02: "back
+                // button is jumping recent page when i inside the folder… it must go back albums,
+                // then if i click back again that time go recent".
                 //
-                // One tap out from anywhere is the deleted header's exact behaviour (its chevron
-                // reset to Recents whether the list was up or an album was open), and it kept a
-                // simple rule for him: the arrow always returns you to your own photos; the album
-                // glyph always opens the list. Popping one level instead loops — grid to list to
-                // grid — and the arrow would never reach Recents.
-                if attachShowAlbums || attachInAlbum {
+                // It used to reset to Recents from either depth, on the theory that one tap out from
+                // anywhere is the simplest rule. It is a simpler rule and it is the wrong one: this
+                // sheet has three places you can stand, so a back control has three places to go
+                // back TO, and collapsing two of them loses the album list — the thing he was
+                // looking at one tap ago and the only way to reach a DIFFERENT album without
+                // starting over.
+                //
+                // ⚠️ INSIDE AN ALBUM, BOTH FLAGS MOVE AND THEY MOVE IN OPPOSITE DIRECTIONS. Lowering
+                // `attachInAlbum` is what makes the strip drop the album and reload Recents into the
+                // grid (its `.onChange` → `exitAlbumIfNeeded`); raising `attachShowAlbums` puts the
+                // list back over that grid. So the next tap has a Recents grid already loaded
+                // underneath it and only has to close the list.
+                if attachInAlbum {
+                    attachInAlbum = false
+                    attachShowAlbums = true
+                } else if attachShowAlbums {
                     attachShowAlbums = false
-                    attachInAlbum = false      // the strip's .onChange resets to Recents
                 } else {
                     attachShowAlbums = true
                 }
