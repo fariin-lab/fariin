@@ -50,46 +50,51 @@ enum Theme {
     /// the received grey, because the grey is a bubble-on-background colour and there is a picture
     /// here instead.
     ///
-    /// ⛔ **OWNER, 2026-09-02: THE HAND-BUILT BLUR IS OUT.** This used to return `.slice` — an
-    /// image of the wallpaper rendered once, gaussian-blurred at radius 20, washed with 80% black
-    /// in dark / two white passes in light, then vibrance and +0.4 exposure, with every bubble
-    /// showing its own slice of that one picture and repositioning on each scroll tick. It was the
-    /// reference app's recipe ported number for number, and it is the thing he asked to be replaced
-    /// with Apple's native blur. The slice is darker, flatter and more opaque than a system
-    /// material; that difference is the whole point of the change.
+    /// ⛔ **IT IS THE SLICE AGAIN — OWNER, 2026-09-02: "Plz restore my custom blur i dont like it
+    /// apple type". THIS SURFACE HAS NOW FLIPPED THREE TIMES; DO NOT FLIP IT A FOURTH WITHOUT HIS
+    /// WORD IN HIS OWN SENTENCE.**
     ///
-    /// ⚠️ `.slice` IS STILL IN THIS ENUM AND NOTHING RETURNS IT. Kept deliberately: this exact
-    /// question has now been answered twice in opposite directions, so the machinery in
-    /// `WallpaperBlur.swift` and the branches that draw it stay compiled and correct. Switching
-    /// back is this function plus the early return in `WallpaperBlur.state`, nothing else.
+    /// The slice is an image of the wallpaper rendered once, gaussian-blurred at radius 20, washed
+    /// with 80% black in dark / two white passes in light, then vibrance and +0.4 exposure — every
+    /// bubble showing its own part of that one picture, repositioned on each scroll tick. Earlier
+    /// the same day this returned `.material` (the system blur) on his ask for the Apple look; he
+    /// saw it on his phone and wanted this back. **The slice is darker, flatter and more opaque
+    /// than a system material, and that is the thing he likes about it.**
+    ///
+    /// ⚠️ **`.material` IS THE FALLBACK AGAIN, NOT THE SURFACE.** It is what a bubble gets when a
+    /// wallpaper is present but no slice could be made for it — a preview platter that is not the
+    /// size of the window, or a render that failed. It is an approximation, kept only so those
+    /// places still read as "on a wallpaper" rather than going flat.
+    ///
+    /// ⚠️ **PAIRED WITH `WallpaperBlur.enabled`.** This asks for a slice; that decides whether one
+    /// is ever built. Change one without the other and every incoming bubble goes flat grey.
     enum ReceivedSurface: Equatable {
         case flat(Color)
         case slice(WallpaperBlurState)
         case material
     }
 
-    /// `blur` is now ignored — see the note above. It stays in the signature because it is the
-    /// switch-back lever and because `WallpaperBlurState.id` is still what the row caches key on.
     static func receivedSurface(_ dark: Bool, onWallpaper: Bool,
                                 blur: WallpaperBlurState?) -> ReceivedSurface {
         guard onWallpaper else { return .flat(received(dark)) }
         if UIAccessibility.isReduceTransparencyEnabled { return .flat(bg(dark)) }
+        if let blur { return .slice(blur) }
         return .material
     }
 
-    /// THE SYSTEM BLUR AN INCOMING BUBBLE WEARS OVER A WALLPAPER, in each render path's own type.
+    /// THE FALLBACK SURFACE, for the case where a wallpaper is present and no slice could be built
+    /// for it. Since the slice came back (2026-09-02) this is not what an incoming bubble normally
+    /// wears — see `receivedSurface`.
     ///
-    /// Ultra-thin in BOTH themes, which is not what the reference app does (thin in light, ultra-thin
-    /// in dark). Ultra-thin is the most see-through material the system ships and see-through is the
-    /// look he asked for; a thin material in light mode is close enough to opaque white that the
-    /// wallpaper stops showing through the bubble at all, which is the flat surface this change is
-    /// getting rid of.
+    /// ⚠️ ONE WEIGHT, and it does NOT match the two-weight pair the SwiftUI preview platters use.
+    /// That is deliberate and it is only safe because this is a fallback: the UIKit view that reads
+    /// it (`BubbleFillView`) has no `dark` to branch on, and inventing a trait lookup for a surface
+    /// that should never render would be a mechanism with no user. If this ever becomes the normal
+    /// surface again, it has to grow the `dark` argument the preview path already takes, or a chat
+    /// will draw two different greys in one conversation — that mismatch has shipped here once.
     ///
-    /// ⚠️ These two must stay the same weight. `UIBlurEffect(.systemUltraThinMaterial)` and
-    /// SwiftUI's `.ultraThin` are the same recipe, and a chat draws both — UIKit for a plain text
-    /// row, SwiftUI for everything else — so two different weights means two different greys in one
-    /// conversation. That mismatch has already shipped once here, from a stale row asking for the
-    /// wrong one.
+    /// ⚠️ `VoicePlayDiscControl` also reads this for the play disc's own blur, and its disc only
+    /// turns to a blur when the row's fill really is `.material`, so the two agree by construction.
     static var receivedBlurStyle: UIBlurEffect.Style { .systemUltraThinMaterial }
     static var receivedMaterial: Material { .ultraThin }
 
@@ -126,13 +131,17 @@ enum Theme {
     /// mask eats the outer half — so this is the width to draw INSIDE the edge (`strokeBorder`).
     static var hairline: CGFloat { 1 / UIScreen.main.scale }
 
-    /// The shape-style spelling of the above, for the places that need a `ShapeStyle` rather than a
-    /// view — the colour-picker platter and the chat peek. Same decision, same material; these used
-    /// to be an approximation of a surface they could not draw, and now they draw the real one.
+    /// The previews' version of the above — the colour-picker platter and the chat peek, which draw
+    /// the wallpaper at a size that is not the window's and so cannot take a slice. Same decision,
+    /// with the surface drawn as the system material that approximates it.
+    ///
+    /// ⚠️ TWO WEIGHTS HERE, one above. This is the pair that was in place before the material
+    /// briefly became the real surface, and it is what these platters have always drawn; the single
+    /// weight above serves a fallback nobody should see. Restored with the slice, 2026-09-02.
     static func receivedStyle(_ dark: Bool, onWallpaper: Bool) -> AnyShapeStyle {
         switch receivedSurface(dark, onWallpaper: onWallpaper, blur: nil) {
         case .flat(let c): return AnyShapeStyle(c)
-        case .slice, .material: return AnyShapeStyle(receivedMaterial)
+        case .slice, .material: return AnyShapeStyle(dark ? Material.ultraThin : Material.thin)
         }
     }
     static func accent(_ dark: Bool) -> Color { dark ? .white : .black }
@@ -543,7 +552,9 @@ struct ReceivedBubbleSurface: View {
         switch Theme.receivedSurface(dark, onWallpaper: onWallpaper, blur: blur) {
         case .flat(let c): c
         case .slice(let s): WallpaperBlurSlice(state: s)
-        case .material: Rectangle().fill(Theme.receivedMaterial)
+        // The fallback, and it keeps the preview pair's two weights rather than the single one —
+        // this is a SwiftUI surface and it has `dark` in hand, so it can. See `receivedStyle`.
+        case .material: Rectangle().fill(dark ? Material.ultraThin : Material.thin)
         }
     }
 }

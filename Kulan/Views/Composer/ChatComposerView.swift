@@ -1240,12 +1240,13 @@ extension IconButton: UIGestureRecognizerDelegate {
 }
 
 /// The "Set to one-time listen" toast: the composer's notice in the chat's own bubble surface — the
-/// same system blur an incoming bubble wears, with the hairline rim, or the flat received colour.
+/// same slice of blurred wallpaper an incoming bubble wears, with the hairline rim, or the flat
+/// received colour. Never a material in the normal case: a material samples live and comes out a
+/// different colour from the bubble beside it.
 ///
-/// ⚠️ The note here used to say "never a material, a material samples live and comes out a different
-/// colour from the bubble beside it". That was true while bubbles were a slice of ONE pre-rendered
-/// picture; it is backwards now. Both this and the bubbles sample live off the same `Theme`
-/// constant, so they agree — and they only agree while they read that one constant.
+/// ⚠️ That paragraph was rewritten to say the opposite for one day (2026-09-02, while bubbles were
+/// briefly a live material) and then rewritten back when the slice was restored the same evening.
+/// It is correct as written now. The `.material` branch below is only the no-slice fallback.
 final class NoticePillView: UIView {
     private var surface: UIView?
     private let icon = UIImageView()
@@ -1284,7 +1285,9 @@ final class NoticePillView: UIView {
             sv.state = state
             v = sv
         case .material:
-            v = UIVisualEffectView(effect: UIBlurEffect(style: Theme.receivedBlurStyle))
+            // The fallback weight pair, restored with the slice on 2026-09-02. This has `dark` in
+            // hand so it uses the two-weight version rather than `Theme.receivedBlurStyle`.
+            v = UIVisualEffectView(effect: UIBlurEffect(style: dark ? .systemUltraThinMaterial : .systemThinMaterial))
         }
         v.isUserInteractionEnabled = false
         insertSubview(v, at: 0)

@@ -114,22 +114,24 @@ import UIKit
         return total / CGFloat(n * n)
     }
 
-    /// ⛔ **SWITCHED OFF — OWNER, 2026-09-02. ONE LINE TO TURN BACK ON.**
+    /// ⛔ **BACK ON — OWNER, 2026-09-02, SAME DAY IT WAS SWITCHED OFF: "Plz restore my custom blur i
+    /// dont like it apple type".**
     ///
-    /// Incoming bubbles wear the system's own blur now: `Theme.receivedSurface` returns `.material`
-    /// and no longer returns `.slice`, so nothing on screen draws one of these. This flag is what
-    /// stops the WORK — without it every chat open still pays for an `ImageRenderer` pass over the
-    /// wallpaper plus six CoreImage filters, to make a picture no view asks for.
+    /// This flag existed for exactly one working day. The system-material version shipped in build
+    /// 724 that morning, he saw it on his phone, and he wanted this back. **That is the answer to a
+    /// question this file's neighbours have now flipped THREE times** — do not offer him a material
+    /// again without a fresh screenshot from him asking for one.
     ///
-    /// ⚠️ **THIS FLAG AND THE RETURN IN `Theme.receivedSurface` ARE A PAIR.** Turning only this one
-    /// back on changes nothing you can see, because the surface decision no longer asks for a slice.
-    /// Turning only the other one back on gives every bubble the flat grey, because it would ask for
-    /// a slice and be handed nil. Both, or neither.
+    /// ⚠️ **THIS FLAG AND THE RETURN IN `Theme.receivedSurface` ARE A PAIR.** On alone changes
+    /// nothing you can see, because the surface decision would not ask for a slice. The other on
+    /// alone gives every bubble the flat grey, because it would ask and be handed nil. Both, or
+    /// neither. That is why it was left as a flag rather than deleted, and it is what made the
+    /// restore a two-line change instead of a revert.
     ///
-    /// Everything below and after it is intact and correct — the recipe, the cache, the anchor, the
-    /// scroll-tick repositioning. It is switched off, not half-removed, because this question has
-    /// been answered twice in opposite directions already.
-    static let enabled = false
+    /// ⚠️ **WHAT DID NOT COME BACK WITH IT: the rim.** His words were "dont tuch stack thin Line
+    /// only Restore the custom blur" — the white-in-both-themes stroke from the morning STAYS. The
+    /// surface and the stroke were one commit and are two decisions, and he kept one of them.
+    static let enabled = true
 
     /// The state for this chat, or nil when no picture is wanted: no wallpaper, or Reduce
     /// Transparency on (theirs shows the plain theme background then, and so do we — see
