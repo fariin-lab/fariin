@@ -1172,6 +1172,16 @@ struct ChatsView: View {
         }
         .tag(conv.id)
         .listRowInsets(EdgeInsets())
+        // ⛔ NO GREY UNDER A ROW — owner, 2026-09-02: "why is the chat list Chats card using grey,
+        // remove that". It is the grouped list style's own doing and it arrived with the switch to
+        // `.grouped` for the pin animation: a grouped list paints each row on
+        // `secondarySystemGroupedBackground`, which is the raised card look those lists are for.
+        //
+        // ⚠️ `scrollContentBackground(.hidden)` DOES NOT REACH IT. That hides the LIST's background;
+        // the row's is a separate surface the style gives every cell, and only `listRowBackground`
+        // clears it. The headings already had this, which is why they looked right and the rows did
+        // not — the grey stopped exactly where the headers began, in his screenshot.
+        .listRowBackground(Color.clear)
         // ⛔ NO SEPARATOR AT ALL — owner, 2026-09-02: "also remove lines", settling a comparison
         // that had gone the other way.
         //
@@ -1360,6 +1370,9 @@ struct ChatsView: View {
             // row without a rule on a list that has one is conspicuous — has exactly inverted:
             // the list has none now, so the one line left was the conspicuous one.
             .listRowSeparator(.hidden)
+            // Same grey the chat rows shed — see the note there. This row lives in its own property
+            // and would otherwise be the one card left on the page.
+            .listRowBackground(Color.clear)
             .deleteDisabled(true)
             .moveDisabled(true)
         }
