@@ -3318,11 +3318,19 @@ struct ChatRow: View, Equatable {
                 .frame(width: 56, height: 56)
                 .overlay {   // story ring around the avatar when this person has an active story
                     if !storySeen.isEmpty {
-                        // 60, not 56: a 2pt stroke on a 60pt circle sits just OUTSIDE a 56pt photo,
-                        // which is their geometry measured to the point. An overlay is allowed to
-                        // draw past its parent's bounds, so nothing in the row moves to make room.
+                        // ⛔ 66, NOT 60 — owner, 2026-09-02, ringed in red: "avatar and circle
+                        // there's no space". The 60 was measured as "just outside a 56pt photo"
+                        // and the arithmetic shows why it photographed as TOUCHING: the ring's arc
+                        // is drawn inset by its own stroke, so its inner edge sits at 60⁄2 − 2 =
+                        // 28pt — the photo's exact radius, a 0pt gap. At 66 the inner edge is 31,
+                        // a visible 3pt of breathing room all round.
+                        //
+                        // The photo stays 56 — his standing rule from 2026-08-29: the ring goes
+                        // OUTSIDE the photo, the photo never shrinks. An overlay may draw past its
+                        // parent's bounds, so nothing in the row moves; the ring now reaches 11pt
+                        // from the screen edge (was 14) and still touches nothing.
                         StoryRingView(seen: storySeen, lineWidth: 2)
-                            .frame(width: 60, height: 60)
+                            .frame(width: 66, height: 66)
                     }
                 }
                 // Tap the ringed avatar → open their story (high-priority so it beats the row's open-chat tap).
