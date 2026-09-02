@@ -1626,13 +1626,32 @@ struct StoryViewer: View {
                             // a direct line to somebody who never accepted you — on the one surface
                             // built for reach. `isFriend` is the same accepted-chat test the audience
                             // itself is built from, so the two cannot disagree about who counts.
-                            storyType: g.isMine || !(deliveredToMe || StoryContact.isFriend(g.authorUid))
+                            // ⛔ THE LOVE IS NOT PART OF THE REPLY — owner, 2026-09-02, on a Glow
+                            // story: "don't close react love, open react, only close reply".
+                            //
+                            // A locked story used to be `.plain()` with no config at all, which
+                            // draws nothing, so closing the reply line silently closed the heart
+                            // with it. They are different acts. A reply is a message in somebody's
+                            // chat, which is the thing the L3 rule exists to stop; a love is a mark
+                            // on the story's own "Seen by" row (`setStoryReaction`, a write to my
+                            // own view receipt) and reaches no chat at all.
+                            //
+                            // ⚠️ AND THE WHOLE GLOW FEATURE ASSUMES IT. Its notifications page has
+                            // a Loves tab built from exactly these reactions, and glow stories are
+                            // the ones that can never be replied to — so with the heart gone that
+                            // tab could only ever have been empty for the people it was built for.
+                            //
+                            // `.plain(config:)` is a heart with no text field, which is precisely
+                            // the state he is asking for. My own story keeps the bare `.plain()`:
+                            // it has the owner bar instead, and loving your own story is not a
+                            // thing.
+                            storyType: g.isMine
                                 ? .plain()
-                                : (s.allowsReplies
+                                : (deliveredToMe || StoryContact.isFriend(g.authorUid)) && s.allowsReplies
                                     ? .message(config: StoryInteractionConfig(showLikeButton: true),
                                                emojis: [["😭", "😍", "🤣", "❤️", "😄", "🔥", "❤️‍🔥"]],
                                                placeholder: "Send message…")
-                                    : .plain()),
+                                    : .plain(config: StoryInteractionConfig(showLikeButton: true)),
                             mediaType: s.isVideo ? .video : .image
                         )
                     )
@@ -2533,7 +2552,12 @@ struct StoryViewer: View {
                     .frame(maxWidth: .infinity)
                     .frame(height: 48)
                     .background(Capsule().stroke(.white.opacity(0.28), lineWidth: 1))
-                    .padding(.horizontal, 16)
+                    .padding(.leading, 16)
+                    // ⚠️ THE HEART SHARES THIS SLOT NOW. `MessageView`'s `.plain(config:)` branch
+                    // pushes the like button to the trailing edge in the same strip, so a capsule
+                    // that still ran to a 16pt trailing margin would sit under it. 60 is the
+                    // heart's 44pt target plus the 16 the capsule used to have.
+                    .padding(.trailing, 60)
                     .padding(.bottom, max(10, bottomInset))
                     // Steps aside for the same three things every other piece of chrome does: the
                     // close drag, a hero flight (a button close moves no finger), and the viewers
