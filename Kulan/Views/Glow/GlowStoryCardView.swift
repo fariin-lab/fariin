@@ -95,10 +95,18 @@ struct GlowStoryCardView: View {
                     .allowsHitTesting(false)
             }
             .overlay(alignment: .bottomLeading) {
+                // ⛔ TWO LINES, NOT AN ELLIPSIS — owner, 2026-09-02, with "Ayaan Warsa…" ringed and
+                // his reference beside it, where a long label wraps rather than truncating.
+                //
+                // ⚠️ ONE LINE WAS THE WRONG ECONOMY. A card is 168 wide less the face and its
+                // margins, so about 100 points of room — which cuts most people off mid-surname,
+                // and a name you cannot read is the one thing this card has to get right. Two lines
+                // of 15pt is 36 points inside a 90pt scrim, so nothing else has to move.
                 Text(name)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
                     .padding(.leading, 12)
                     .padding(.bottom, 12)
                     // clear of the face: its width, its inset, and 4 of daylight between the two
