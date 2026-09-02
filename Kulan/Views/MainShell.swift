@@ -1398,11 +1398,22 @@ struct ChatsView: View {
     /// a `List` is to stop being a header — a row scrolls because rows scroll. So this returns a row:
     /// no separator, no background, nothing selectable. A label that happens to occupy a row.
     ///
-    /// ⚠️ `first` IS THE GAP UNDER THE SEARCH FIELD, and it is a different question from the gap
-    /// between two sections. 14 above is what separates a heading from the ROWS ABOVE IT; the top
-    /// heading has no rows above it, only the search field, and inheriting the 14 there is what made
-    /// his "space between Pinned text and search bar is not like the reference".
-    @ViewBuilder private func chatSectionHeader(_ title: String, first: Bool = false) -> some View {
+    /// ⛔ ONE NUMBER FOR EVERY HEADING, 14, AND I INVENTED THE EXCEPTION — owner, 2026-09-02: "go
+    /// read the real code, get the space the reference uses between search and Pinned, then make it
+    /// exactly like that".
+    ///
+    /// Read from their source rather than guessed at this time. `CLVTableDataSource`'s
+    /// `viewForHeaderInSection` builds a plain container with
+    /// `layoutMargins = (top: 14, leading: 16, bottom: 8, trailing: 16)` and a `dynamicTypeHeadline`
+    /// label in `.label`, and that is the whole of it — there is no first-section case in their file.
+    /// My `first: 8` was an adjustment by eye toward a number I had not looked up, which is the
+    /// exact move his instruction is aimed at.
+    ///
+    /// ⚠️ AND THE 14 IS THE ONLY SPACING THEY ALLOW. The same file returns `.leastNormalMagnitude`
+    /// for every titleless header and for every footer, with the comment "we do not want that
+    /// spacing" — so nothing sits between the search field and this heading except these 14 points.
+    /// The list's own top margin below therefore has to be 0, or ours is 14 plus whatever we added.
+    @ViewBuilder private func chatSectionHeader(_ title: String) -> some View {
         Text(title)
             .font(.headline)
             // ⛔ `Color(.label)`, NOT `.primary` — owner, 2026-09-02, off build 725: "chats and
@@ -1414,7 +1425,7 @@ struct ChatsView: View {
             // colour, and a concrete `Color` carries no hierarchy for a container to dim.
             .foregroundStyle(Color(.label))
             .textCase(nil)
-            .padding(.top, first ? 8 : 14)
+            .padding(.top, 14)
             .padding(.bottom, 8)
             .padding(.horizontal, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1801,7 +1812,7 @@ struct ChatsView: View {
                               // itself under the nav bar while its own rows scroll past underneath,
                               // which is the "not following scroll" he reported. These are rows in
                               // the same flat flow as the chats, so they scroll like chats do.
-                              chatSectionHeader("Pinned", first: true)
+                              chatSectionHeader("Pinned")
                               ForEach(split.pinned) { conv in chatListRow(conv) }
                               chatSectionHeader("Chats")
                               ForEach(split.rest) { conv in chatListRow(conv) }
@@ -1857,10 +1868,17 @@ struct ChatsView: View {
                         .tint(Theme.defaultBubble(dark))
                         // Rows start below the stories row; as the list scrolls, the row above is
                         // offset by the same amount, so both move as ONE scroll surface.
-                        // 8pt, flat: the top margin used to be the stories row's own height,
-                        // because the row was drawn over the list and the list had to start below
-                        // it. The row is a page of its own now and there is nothing to clear.
-                        .contentMargins(.top, 8, for: .scrollContent)
+                        // ⛔ 0, AND IT HAS TO BE — read from their source, 2026-09-02. Their chat
+                        // list allows exactly one piece of spacing above a heading, the heading's
+                        // own 14pt top margin: every titleless header and every footer in
+                        // `CLVTableDataSource` returns `.leastNormalMagnitude`, with the comment
+                        // "we do not want that spacing". Any margin here is added ON TOP of the 14
+                        // and is the gap he measured against theirs.
+                        //
+                        // The 8 that was here was left over from the era when the stories row was
+                        // drawn OVER this list and the list had to start below it. The row has been
+                        // a page of its own for days; the number outlived its reason.
+                        .contentMargins(.top, 0, for: .scrollContent)
                         // Extra bottom clearance so chat rows don't sit UNDER the native floating tab bar
                         // (its transparent margins otherwise show + tap-through to a row behind the pill).
                         .contentMargins(.bottom, 28, for: .scrollContent)
