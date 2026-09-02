@@ -142,7 +142,7 @@ struct GlowProfileView: View {
                 // circle for lists, the tall one for this very header). A copy of that here would be
                 // a second answer to all three.
                 if isMe {
-                    CircleGlyphButton(system: "pencil") { showEdit = true }
+                    GlassTextButton(title: "Edit") { showEdit = true }
                 }
             }
             .padding(.horizontal, 16)
@@ -496,6 +496,33 @@ private struct CircleGlyphButton: View {
                 .foregroundStyle(.white)
                 .frame(width: 44, height: 44)
                 .liquidGlass(Circle(), interactive: true)
+        }
+    }
+}
+
+/// ⛔ THE WORD, NOT A PENCIL — owner, 2026-09-02: "don't use an icon, use Edit text like when I
+/// enter other people's profile; make it a text button, not an icon button".
+///
+/// He is right that the word is the app's own convention here: Settings' profile page puts a plain
+/// `Button("Edit")` in its top right, and a profile is the one screen where both of those live. A
+/// pencil was me matching the back button's shape instead of the app's habit.
+///
+/// The same 44pt height and the same glass as the circle beside it, so the two still read as one row
+/// of chrome floating on the photograph — a capsule rather than a circle only because a word is
+/// wider than a glyph.
+private struct GlassTextButton: View {
+    let title: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(height: 44)
+                .padding(.horizontal, 18)
+                .liquidGlass(Capsule(), interactive: true)
+                .contentShape(Capsule())
         }
     }
 }
