@@ -1353,6 +1353,8 @@ struct StorySettingsView: View {
     @State private var audiences = StoryAudienceStore.shared
     @State private var contacts: [StoryContact] = []
     @State private var creating = false
+    /// The Glowers picker — see the row that raises it.
+    @State private var editingGlowers = false
 
     var body: some View {
         List {
@@ -1376,12 +1378,19 @@ struct StorySettingsView: View {
                                     StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
                                 }
                             } else if a.kind == .glowers {
-                                // ⛔ ITS OWN PAGE — owner, 2026-09-02. It used to fall through to
-                                // `CustomStoryDetailView`, which looks up `store.custom` by id and
-                                // finds nothing for a built-in, so the row opened an empty screen.
-                                NavigationLink { GlowersPrivacyView() } label: {
+                                // ⛔ A SHEET, AND IT IS THE PICKER ITSELF — owner, 2026-09-02: "only
+                                // show, when the user clicks Glowers, the glowers list and select to
+                                // hide", with the members editor as his reference. It was a pushed
+                                // page of radio rows with the picker one tap behind them; Glowers
+                                // has one question and that wrapped it in a screen.
+                                //
+                                // A sheet rather than a push because his reference is one: the
+                                // editor carries its own ✕ and Done, which is a sheet's chrome, and
+                                // pushing it would put a back button beside a Cancel.
+                                Button { editingGlowers = true } label: {
                                     StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
                                 }
+                                .buttonStyle(.plain)
                             } else {
                                 NavigationLink { CustomStoryDetailView(audienceId: a.id) } label: {
                                     StoryAudienceRow(audience: a, contacts: StoryContact.ids(contacts)) { EmptyView() }
@@ -1446,6 +1455,11 @@ struct StorySettingsView: View {
         .sheet(isPresented: $creating) {
             CreateCustomStoryFlow(onCreated: { _ in creating = false },
                                   onCancel: { creating = false })
+        }
+        // The Glowers picker — its own stack, because `MembersEditor` carries a title and a
+        // Cancel/Done pair and is no longer inside this screen's navigation.
+        .sheet(isPresented: $editingGlowers) {
+            NavigationStack { GlowersPrivacyView() }
         }
         .alert("Turn off stories?", isPresented: $confirmOff) {
             Button("Cancel", role: .cancel) {}

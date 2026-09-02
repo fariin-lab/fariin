@@ -1274,7 +1274,20 @@ struct ThreadView: View {
         // what he asked to have back. Both doors — the composer's button and the attach panel's GIF
         // tile — hand the pick to `sendGif`.
         .sheet(isPresented: $showGifPicker) {
+            // ⛔ THE PHONE'S SCHEME, NOT THE CHAT'S — owner, 2026-09-02: "the GIF bar is always
+            // using dark mode, make it both".
+            //
+            // ⚠️ IT WAS INHERITING THE WALLPAPER RULE. This screen pins `\.colorScheme` to `.dark`
+            // whenever the chat has a wallpaper — his own standing rule, because light chrome on a
+            // lit photograph washes out — and a sheet inherits the environment of the view that
+            // presented it. So the GIF picker, which has no wallpaper behind it at all, was drawing
+            // its glass bar for a dark room while its own page stayed light. That is the grey strip
+            // on white he photographed.
+            //
+            // `scheme` is the device's own value, read before this screen overrides it, so the sheet
+            // simply gets what the phone is set to.
             GifPickerView { gif in sendGif(gif) }
+                .environment(\.colorScheme, scheme)
         }
         .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
             handlePickedFile(result)
