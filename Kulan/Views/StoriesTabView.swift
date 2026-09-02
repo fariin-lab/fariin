@@ -77,7 +77,16 @@ struct StoriesTabView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, GlowStoryCardView.margin)
-            .frame(height: 44)
+            // ⛔ 34, DOWN FROM 44 — owner, 2026-09-02: "the spaces between the Glowing text and the
+            // story card top and bottom, and between Friends and the cards, this is too much".
+            //
+            // ⚠️ THIS IS A TRADE AGAINST HIS OWN EARLIER REPORT AND IT STILL LANDS ON HIS SIDE. 44
+            // was Apple's touch floor, taken after "the Glowing text touch area is so small"; the
+            // complaint underneath that was that only the LETTERS were hittable — about 80 by 22
+            // points. A 34pt row across the full 393 is still five times that area, and the eight
+            // points come out of the dead air above and below the word, which is what he is
+            // pointing at now.
+            .frame(height: 34)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -321,7 +330,8 @@ struct StoriesTabView: View {
     ///   says "Friends" there, and a second one under it is the same word twice.
     @ViewBuilder private func friendsGrid(showsHeading: Bool = true) -> some View {
         let groups = StoriesRepository.shared.others.filter { !StoryPrefs.isHidden($0.authorUid) }
-        VStack(alignment: .leading, spacing: 12) {
+        // 4, matching the Glowing section — one gap under every heading on the page.
+        VStack(alignment: .leading, spacing: 4) {
             if showsHeading { sectionHeading("Friends", route: .friends) }
 
             LazyVGrid(columns: [GridItem(.flexible(), spacing: GlowStoryCardView.gutter),
@@ -374,7 +384,9 @@ struct StoriesTabView: View {
         // cards fill in underneath the heading rather than the heading appearing after them, so
         // the page never changes shape once it is on screen.
         if hasGlowGrid {
-            VStack(alignment: .leading, spacing: 12) {
+            // ⛔ 4, NOT 12 — the gap under a heading is the heading's own bottom air plus this, and
+            // 12 on top of a 34pt row was reading as a blank band between the word and its cards.
+            VStack(alignment: .leading, spacing: 4) {
                 sectionHeading("Glowing", route: .stories)
 
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: GlowStoryCardView.gutter),
@@ -414,7 +426,10 @@ struct StoriesTabView: View {
                 }
                 .padding(.horizontal, GlowStoryCardView.margin)
             }
-            .padding(.top, 20)
+            // ⛔ 6, NOT 20 — the distance from the friends strip down to the Glowing heading. It was
+            // 20 stacked on top of the heading's own top air and the strip's bottom label, which is
+            // the widest of the three gaps he arrowed and the one he drew twice.
+            .padding(.top, 6)
         }
     }
 
