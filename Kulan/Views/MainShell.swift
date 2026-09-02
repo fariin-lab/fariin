@@ -1461,12 +1461,12 @@ struct ChatsView: View {
     /// what theirs draws. ⚠️ `.listRowInsets` is what lets the 16pt leading land where the row's own
     /// 16pt gutter does; the header is a row like any other and inherits the same zeroed insets.
     ///
-    /// ⛔ IT IS A ROW, NOT A `Section` HEADER — owner, 2026-09-02: "when I scroll the chat list,
-    /// Pinned text and Chats text is not following scroll". A plain-list section header is PINNED by
-    /// UIKit: it parks itself under the nav bar and hangs there while its own section scrolls past
-    /// underneath it. Theirs scrolls away with the rows it names, and the only way to get that out of
-    /// a `List` is to stop being a header — a row scrolls because rows scroll. So this returns a row:
-    /// no separator, no background, nothing selectable. A label that happens to occupy a row.
+    /// ⛔ A `Section` HEADER AGAIN, AND THE STYLE IS WHAT KEEPS IT SCROLLING. It was briefly a plain
+    /// row, because a PLAIN list floats its headers and he reported them not following the scroll.
+    /// That worked and cost more than it bought: a heading that is a row is a peer of a chat row in
+    /// SwiftUI's diff, free to animate across one, which is the pin/unpin overlap he reported next.
+    /// Their table is `style: .grouped`, where headers scroll AND sections stay sections — see
+    /// `.listStyle(.grouped)` at the list.
     ///
     /// ⛔ ONE NUMBER FOR EVERY HEADING, 14, AND I INVENTED THE EXCEPTION — owner, 2026-09-02: "go
     /// read the real code, get the space the reference uses between search and Pinned, then make it
@@ -1878,14 +1878,33 @@ struct ChatsView: View {
                           if split.pinned.isEmpty || split.rest.isEmpty {
                               ForEach(split.pinned + split.rest) { conv in chatListRow(conv) }
                           } else {
-                              // ⛔ NO `Section` — see `chatSectionHeader`. A section header pins
-                              // itself under the nav bar while its own rows scroll past underneath,
-                              // which is the "not following scroll" he reported. These are rows in
-                              // the same flat flow as the chats, so they scroll like chats do.
-                              chatSectionHeader("Pinned")
-                              ForEach(split.pinned) { conv in chatListRow(conv) }
-                              chatSectionHeader("Chats")
-                              ForEach(split.rest) { conv in chatListRow(conv) }
+                              // ⛔ REAL SECTIONS AGAIN, AND THE STYLE IS WHAT MAKES THEM SCROLL —
+                              // owner, 2026-09-02, after a pin and an unpin: "the Chats text jumps
+                              // before the chat card comes down, causing overlap… don't do what you
+                              // want, go read the reference app's real code and see how they do it".
+                              //
+                              // I read it. `ChatListViewController+Loading.applyRowChanges` inserts
+                              // and deletes SECTIONS (`insertSections` / `deleteSections`) inside
+                              // one `beginUpdates`/`endUpdates` transaction, so a heading moves as
+                              // part of its section and can never travel on its own. A pin is a
+                              // `moveRow` ACROSS sections, and their own comment beside it says why
+                              // they do not use delete-plus-insert there: "it results in a weird
+                              // animation". That comment is his bug, written down in their source.
+                              //
+                              // ⚠️ AND HEADINGS-AS-ROWS WAS MY WRONG ANSWER TO THE EARLIER REPORT.
+                              // He said the headings did not scroll; they were pinned because a
+                              // PLAIN list floats its headers. Their table is `style: .grouped`
+                              // (`CLVTableView.init`), where headers scroll with the content — so
+                              // the right fix was the list STYLE, not giving up sections. Turning
+                              // them into rows did stop the pinning, and it also made a heading a
+                              // peer of a chat row in SwiftUI's diff, free to animate across one.
+                              // See `.listStyle(.grouped)` below: the two are one decision.
+                              Section {
+                                  ForEach(split.pinned) { conv in chatListRow(conv) }
+                              } header: { chatSectionHeader("Pinned") }
+                              Section {
+                                  ForEach(split.rest) { conv in chatListRow(conv) }
+                              } header: { chatSectionHeader("Chats") }
                           }
                           // ⛔ PEOPLE YOU HAVE NEVER CHATTED WITH, UNDER THE CHATS — owner,
                           // 2026-09-02. Only while searching, and only below every chat that
@@ -1898,7 +1917,20 @@ struct ChatsView: View {
                           }
                           archivedEntryRow
                         }
-                        .listStyle(.plain)
+                        // ⛔ GROUPED, THEIR STYLE, READ FROM SOURCE — `CLVTableView.init` is
+                        // `super.init(frame: .zero, style: .grouped)`. This is the modifier that
+                        // does the job headings-as-rows was doing: a PLAIN list floats its section
+                        // headers under the nav bar, a GROUPED one scrolls them with the content.
+                        // So we get non-sticky headings AND real sections, which is exactly the
+                        // pair their table has.
+                        //
+                        // ⚠️ THE GROUPED CHROME IS TURNED OFF, not inherited. Grouped brings a
+                        // system background and its own inter-section spacing; theirs shows neither
+                        // (`separatorStyle = .none`, and every titleless header and footer returns
+                        // `.leastNormalMagnitude` "because we do not want that spacing"). The
+                        // background is hidden here and the spacing is already zeroed below.
+                        .listStyle(.grouped)
+                        .scrollContentBackground(.hidden)
                         // ⛔ THE SECTION GAP IS THE HEADER'S OWN 14, NOTHING MORE — owner,
                         // 2026-09-02, off build 725: "space between chats and pinned chats, make
                         // like the reference". The List adds its own inter-section spacing on top of
