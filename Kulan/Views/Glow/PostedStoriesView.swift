@@ -1,0 +1,207 @@
+import SwiftUI
+
+/// POSTED STORIES, FULL PAGE — his requirement 6: a header, a Filter button top right, and filter
+/// options for My Friends / Custom / Glowers.
+///
+/// ⚠️ THE FILTER IS OVER THE AUDIENCE A STORY WAS POSTED TO, which is a fact frozen onto the story
+/// at post time and never recomputed — the same `audience` label the author's own header shows.
+/// That is what makes the filter honest: it groups by what was actually chosen when the story went
+/// out, not by who happens to be a glower today. Changing your glow list cannot re-file an old
+/// story, for the same reason editing a list cannot reach one.
+struct PostedStoriesView: View {
+    let uid: String
+    var isMe: Bool = false
+    var title: String = ""
+
+    /// The audiences a story can have been posted to, as the filter offers them. `everyone` is
+    /// included because it exists and a filter that cannot show one of the four would hide stories
+    /// with no way to find them; his three named ones are the rest.
+    enum Filter: String, CaseIterable, Identifiable {
+        case all, friends, custom, glowers
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .all: return "All"
+            case .friends: return "My Friends"
+            case .custom: return "Custom"
+            case .glowers: return "Glowers"
+            }
+        }
+        /// What it means in one line, his "the filtering behaviour should be clear and easy to
+        /// understand" — shown under the option rather than left to be guessed.
+        var explain: String {
+            switch self {
+            case .all: return "Every story you have posted that is still live"
+            case .friends: return "Stories visible to your friends"
+            case .custom: return "Stories shared with a custom audience"
+            case .glowers: return "Stories shared with your Glowers"
+            }
+        }
+        /// ⚠️ MATCHES THE STORY'S OWN LABEL. "everyone" is deliberately counted as a friends-visible
+        /// story here: an Everyone story reaches every chat you have accepted AND the profile, so
+        /// hiding it from the My Friends filter would be a lie about who can see it.
+        func matches(_ audience: String) -> Bool {
+            switch self {
+            case .all: return true
+            case .friends: return audience == "friends" || audience == "everyone"
+            case .custom: return audience == "custom"
+            case .glowers: return audience == "glowers"
+            }
+        }
+    }
+
+    @State private var loader = PostedStoriesLoader()
+    @State private var filter: Filter = .all
+    @State private var showFilters = false
+    @Environment(\.dismiss) private var dismiss
+
+    private let columns = [GridItem(.flexible(), spacing: 3),
+                           GridItem(.flexible(), spacing: 3),
+                           GridItem(.flexible(), spacing: 3)]
+
+    var body: some View {
+        content
+            .navigationTitle("Posted Stories")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showFilters = true } label: {
+                        Image(systemName: filter == .all
+                              ? "line.3.horizontal.decrease.circle"
+                              : "line.3.horizontal.decrease.circle.fill")
+                    }
+                    .tint(filter == .all ? .primary : GlowStyle.accent)
+                }
+            }
+            .sheet(isPresented: $showFilters) {
+                FilterSheet(selection: $filter)
+                    .presentationDetents([.height(360)])
+                    .presentationDragIndicator(.visible)
+            }
+            .task { await loader.load(uid: uid); await loader.loadViewCounts(isMe: isMe) }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch loader.state {
+        case .loading:
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .failed:
+            ContentUnavailableView {
+                Label("Could not load stories", systemImage: "wifi.exclamationmark")
+            } description: {
+                Text("Check your connection and try again.")
+            } actions: {
+                Button("Try Again") {
+                    loader.invalidate()
+                    Task { await loader.load(uid: uid, force: true); await loader.loadViewCounts(isMe: isMe) }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        case .loaded(let all):
+            let rows = all.filter { filter.matches($0.audience) }
+            if rows.isEmpty {
+                // ⚠️ TWO DIFFERENT EMPTIES, AND THEY MUST READ DIFFERENTLY. No stories at all is a
+                // fact about the account; no stories THROUGH THIS FILTER is a fact about the
+                // filter, and offering "Show all" is the way out of a corner the person filtered
+                // themselves into.
+                if all.isEmpty {
+                    ContentUnavailableView("No live stories", systemImage: "photo.on.rectangle.angled",
+                                           description: Text("Stories disappear after 24 hours."))
+                } else {
+                    ContentUnavailableView {
+                        Label("Nothing in \(filter.title)", systemImage: "line.3.horizontal.decrease.circle")
+                    } description: {
+                        Text(filter.explain)
+                    } actions: {
+                        Button("Show All") { filter = .all }.buttonStyle(.borderedProminent)
+                    }
+                }
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: columns, spacing: 3) {
+                        ForEach(rows) { s in PostedStoryGridTile(story: s) }
+                    }
+                    .padding(.horizontal, 3)
+                }
+                .refreshable {
+                    await loader.load(uid: uid, force: true)
+                    await loader.loadViewCounts(isMe: isMe)
+                }
+            }
+        }
+    }
+}
+
+/// The filter sheet. Rows rather than a segmented control, because each one carries a sentence
+/// explaining what it shows — which is his requirement, and does not fit in a segment.
+private struct FilterSheet: View {
+    @Binding var selection: PostedStoriesView.Filter
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(PostedStoriesView.Filter.allCases) { f in
+                    Button {
+                        selection = f
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(f.title).font(.headline).foregroundStyle(.primary)
+                                Text(f.explain).font(.subheadline).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 8)
+                            if selection == f {
+                                Image(systemName: "checkmark")
+                                    .font(.headline).foregroundStyle(GlowStyle.accent)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .navigationTitle("Filter")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }.font(.headline)
+                }
+            }
+        }
+    }
+}
+
+/// One cell of the full-page grid: the poster, the view badge, and a mark for a video.
+private struct PostedStoryGridTile: View {
+    let story: PostedStory
+
+    var body: some View {
+        Color.clear
+            .aspectRatio(9.0 / 16.0, contentMode: .fit)
+            .overlay { StoryImage(url: story.thumbUrl) }
+            .clipped()
+            .overlay(alignment: .bottomLeading) {
+                if let v = story.views {
+                    Label(GlowCount.short(v), systemImage: "eye.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6).padding(.vertical, 3)
+                        .background(.black.opacity(0.55), in: Capsule())
+                        .padding(6)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if story.isVideo {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(5)
+                        .background(.black.opacity(0.45), in: Circle())
+                        .padding(6)
+                }
+            }
+    }
+}

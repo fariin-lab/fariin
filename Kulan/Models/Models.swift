@@ -53,6 +53,18 @@ struct UserProfile: Identifiable, Equatable {
     /// only by us, never requested, never bought — see Verification.swift.
     var verification: Verification?
     var privacy: [String: String]   // per-field audience: "everyone" | "contacts" | "nobody"
+    /// ⛔ THE GLOW COUNTS, AND THEY ARE THE SERVER'S — his Glow feature, 2026-09-02. Public numbers
+    /// on a document any signed-in account may read, which is the half of his privacy ruling that
+    /// is meant to travel: counts are public, the NAME LISTS are the owner's alone and the rules
+    /// enforce that separately.
+    ///
+    /// ⚠️ Both names are in `serverOnlyUserFields()` in `firestore.rules`, so no phone can inflate
+    /// its own — the same protection the verification badge has. They are written by `onGlowWrite`
+    /// off the /glows collection. **Zero until that function is deployed**, which is why the profile
+    /// card reads them straight and never counts rows itself: counting would need the very list the
+    /// rules refuse to hand over for anybody but yourself.
+    var glowerCount: Int = 0
+    var glowingCount: Int = 0
     /// Set when the owner asks for deletion. The account is HIDDEN from everyone else from that moment
     /// but nothing is destroyed until this date passes, so signing back in can restore it. nil = live.
     var deletionScheduledFor: Date?
@@ -78,6 +90,10 @@ struct UserProfile: Identifiable, Equatable {
         // for why that single decision is what makes the badge appear everywhere without a request.
         self.verification = Verification(data["verification"] as? [String: Any])
         self.privacy = (data["privacy"] as? [String: String]) ?? [:]
+        // Absent on every account until the function has run for it once, and absent means zero —
+        // which is the truth for somebody nobody has glowed.
+        self.glowerCount = data["glowerCount"] as? Int ?? 0
+        self.glowingCount = data["glowingCount"] as? Int ?? 0
     }
 }
 

@@ -1,6 +1,5 @@
 import Foundation
 import FirebaseFirestore
-import Combine
 
 // ===== GLOW — the relationship behind Glow Stories =====
 //
@@ -33,22 +32,28 @@ import Combine
 // COUNTERS ARE THE SERVER'S. `glowerCount` / `glowingCount` live on the user document, maintained
 // by the `onGlowWrite` Cloud Function, and both field names sit in `serverOnlyUserFields()` in the
 // rules so no phone can inflate its own numbers. This service never writes them.
-@MainActor final class GlowService: ObservableObject {
+/// ⚠️ `@Observable`, NOT `ObservableObject`, AND THE DIFFERENCE IS WHETHER THE SCREENS WORK AT ALL.
+/// Every store in this app that a view reads is `@Observable` (`ProfileStore`, `StoryAudienceStore`),
+/// and the house way to read one is a plain `private var x = Store.shared`. That line observes an
+/// `@Observable` and observes NOTHING on an `ObservableObject` — the view would render once with the
+/// right answer and then never move again, which is the worst kind of wrong because it looks correct
+/// on the first frame. Caught before the Glow screens shipped, not after.
+@MainActor @Observable final class GlowService {
     static let shared = GlowService()
 
     /// Uids of people who glowed me. Live.
-    @Published private(set) var glowers: Set<String> = []
+    private(set) var glowers: Set<String> = []
     /// Uids of people I glowed. Live.
-    @Published private(set) var glowing: Set<String> = []
+    private(set) var glowing: Set<String> = []
     /// True once BOTH listeners have delivered their first snapshot. The audience resolve refuses
     /// to post a Glowers story before this is up, for the same reason `resolveAudience` waits for
     /// the chat list: an empty set that means "not loaded yet" must never be read as "no people".
-    @Published private(set) var hasLoaded = false
+    private(set) var hasLoaded = false
 
     /// When the person last opened the Glow notifications page — everything newer is "unread".
     /// Kept on the phone: it is a reading position, not shared state, and the notifications page
     /// derives its badge from it without another server field to guard.
-    @Published private(set) var seenUpTo: Date
+    private(set) var seenUpTo: Date
 
     /// The union, which IS the Glowers story audience (his ruling: either direction).
     var glowRelationship: Set<String> { glowers.union(glowing) }
