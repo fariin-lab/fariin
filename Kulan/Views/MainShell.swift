@@ -542,21 +542,23 @@ struct CallsView: View {
                                 }
                             }
                             .tag(run.id)
-                            // ⛔ THE HAIRLINE, ON EVERY ROW. All three references he compared us
-                            // against draw one here: Apple's Recents (measured off his
-                            // screenshot, 77pt rows ruled from 76pt) and the reference app's
-                            // own source (`ChatListItem.swift`). Ours drew none.
+                            // ⚠️ THE HAIRLINE IS GONE, AND ITS ARGUMENT IS RECORDED because it was
+                            // a good one at the time: all three references drew a rule here —
+                            // Apple's Recents (77pt rows ruled from 76) and the reference app's
+                            // own source — and it was inset 58 so it began where this row's text
+                            // does. That was measured, not guessed. It is simply not what he
+                            // wants any more, and his own chat list has drawn no rules for weeks.
                             //
-                            // 58, because the guide is measured from the ROW's leading edge and
-                            // the row already sits 16pt in: 16 + 46pt avatar + 12pt gap = 74pt
-                            // from the screen edge, which is where this row's text starts.
+                            // ⛔ NO RULES ON THIS LIST EITHER — owner, 2026-09-02: "on the call
+                            // page remove lines". The chat list lost its separators on his word
+                            // weeks ago and this one kept the pair it was given, so the two lists in
+                            // one app disagreed about whether rows are divided. They do not divide
+                            // rows anywhere now.
                             //
-                            // No trailing guide needed, unlike the chat list: that list zeroes
-                            // its row insets, so its rule had to be pulled back by hand. This
-                            // one's 16pt trailing inset already ends the line where theirs ends.
-                            .listRowSeparator(.hidden, edges: .top)   // never above the first row
-                            .listRowSeparator(.visible, edges: .bottom)
-                            .alignmentGuide(.listRowSeparatorLeading) { _ in 58 }
+                            // ⚠️ THE LEADING GUIDE GOES WITH THEM. A 58pt inset on a rule that is
+                            // never drawn is a number waiting to be wrong the day somebody turns
+                            // them back on with a different avatar size.
+                            .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 7, leading: 16, bottom: 7, trailing: 16))
                             .swipeActions(edge: .trailing) {
                                 Button(role: .destructive) { deleteRun(run) } label: {
@@ -781,7 +783,11 @@ struct CallHistoryRow: View {
             Button(action: onProfile) {
                 Image(systemName: "info.circle")
                     .font(.system(size: 21))
-                    .foregroundStyle(.tint)
+                    // ⛔ THE APP'S OWN INK, NOT THE TINT — owner, 2026-09-02: "the blue icon, make
+                    // it our colour". `.tint` here resolved to the system blue rather than the
+                    // app's `.primary`, so this was the one blue mark on a black-and-white page —
+                    // the same rule he set for Glow: the app is black and white.
+                    .foregroundStyle(Color.primary)
                     .frame(width: 44, height: 44)        // 44pt hit target (HIG min) without enlarging the visual
                     .contentShape(Rectangle())
             }
