@@ -39,6 +39,17 @@ struct GlowProfileView: View {
     @State private var palette: ProfilePalette?
     @Environment(\.dismiss) private var dismiss
     private var glow = GlowService.shared
+    /// The Edit sheet — my own profile only. See the button in `header`.
+    @State private var showEdit = false
+
+    /// The status bar strip, read from the window. A view whose ancestor has given up the top safe
+    /// area cannot read it back from a `GeometryReader` — it has been consumed — so the controls
+    /// floating on the photograph get it from here.
+    private static var topInset: CGFloat {
+        UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.safeAreaInsets.top }
+            .first ?? 0
+    }
 
     private var isMe: Bool { uid == (AuthService.shared.uid ?? "") }
     private var pageColor: Color { palette.map { Color($0.page) } ?? Theme.bg(true) }
@@ -70,6 +81,9 @@ struct GlowProfileView: View {
         // It is a profile opened from a story, not a tab, and the bar was sitting over the Posted
         // stories card. `.tabBar` is the placement; hiding it here restores it on the way back.
         .toolbar(.hidden, for: .tabBar)
+        // Refreshes on the way back out: `load()` re-reads the profile, so a new name, bio or photo
+        // is on screen the moment the sheet closes rather than on the next visit.
+        .sheet(isPresented: $showEdit, onDismiss: { Task { await load() } }) { EditProfileView() }
         // The page is a coloured photograph whatever the phone is set to — the same rule the chat
         // with a wallpaper follows, and for the same reason: light chrome on a lit picture washes
         // out. `\.colorScheme`, never `preferredColorScheme` — see the note in ThreadView.
@@ -117,9 +131,24 @@ struct GlowProfileView: View {
             HStack {
                 CircleGlyphButton(system: "chevron.left") { dismiss() }
                 Spacer()
+                // ⛔ EDIT, TOP RIGHT, MINE ONLY — owner, 2026-09-02: "on my profile top right side
+                // add an edit button; when I click it I can change name, bio, avatar, username like
+                // in Settings > Edit profile".
+                //
+                // ⚠️ THE SAME `EditProfileView` SETTINGS PRESENTS, not a second editor. It already
+                // owns the rules this page must not re-decide: nothing is written until Save, the
+                // username has its own claim-and-release flow, and the avatar is cropped twice (the
+                // circle for lists, the tall one for this very header). A copy of that here would be
+                // a second answer to all three.
+                if isMe {
+                    CircleGlyphButton(system: "pencil") { showEdit = true }
+                }
             }
             .padding(.horizontal, 16)
-            .padding(.top, 8)
+            // ⚠️ THE INSET IS PUT BACK BY HAND. The scroll view ignores the top safe area so the
+            // photograph can reach the screen edge, which also strips it from everything floating on
+            // that photograph — without this the two buttons sit under the clock.
+            .padding(.top, Self.topInset + 8)
         }
     }
 
