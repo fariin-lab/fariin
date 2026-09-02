@@ -1724,7 +1724,9 @@ struct ContactInfoView: View {
             .tint(.primary)
         } else {
             Button { glow.give(to: otherUid) } label: {
-                PosterActionIcon(icon: GlowStyle.symbol, onPhoto: hasPhotoHeader)
+                // `PosterActionIcon` already knows an "ic_*" asset from an SF Symbol name, so his
+                // drawing needed nothing here beyond the new name.
+                PosterActionIcon(icon: GlowStyle.icon, onPhoto: hasPhotoHeader)
             }
             .tint(.primary)
         }
@@ -1737,7 +1739,9 @@ struct ContactInfoView: View {
                 glow.remove(to: otherUid)
             }
         } else {
-            Button("Glow Story", systemImage: GlowStyle.symbol) { glow.give(to: otherUid) }
+            Button { glow.give(to: otherUid) } label: {
+                Label { Text("Glow Story") } icon: { GlowStyle.mark(20) }
+            }
         }
     }
 

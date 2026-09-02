@@ -50,12 +50,15 @@ struct GlowStoriesGridView: View {
         case .loaded(let cards) where cards.isEmpty:
             // Two different empties: nobody to glow with at all, versus people who simply have no
             // live story right now. The second is the common one and is not a problem to fix.
-            ContentUnavailableView(
-                glow.glowRelationship.isEmpty ? "No Glows yet" : "No live stories",
-                systemImage: GlowStyle.symbol,
-                description: Text(glow.glowRelationship.isEmpty
+            ContentUnavailableView {
+                Label {
+                    Text(glow.glowRelationship.isEmpty ? "No Glows yet" : "No live stories")
+                } icon: { GlowStyle.mark(48) }
+            } description: {
+                Text(glow.glowRelationship.isEmpty
                     ? "Open somebody's profile and choose Glow to see their stories here."
-                    : "Nobody you have a Glow with has posted in the last 24 hours."))
+                    : "Nobody you have a Glow with has posted in the last 24 hours.")
+            }
         case .loaded(let cards):
             ScrollView {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: GlowStoryCardView.gutter),

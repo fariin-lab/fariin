@@ -95,8 +95,11 @@ struct GlowNotificationsView: View {
         case .loaded(let all):
             let rows = all.filter(matches)
             if rows.isEmpty {
-                ContentUnavailableView(emptyTitle, systemImage: emptyIcon,
-                                       description: Text(emptyBody))
+                ContentUnavailableView {
+                    Label { Text(emptyTitle) } icon: { emptyIcon }
+                } description: {
+                    Text(emptyBody)
+                }
             } else {
                 List {
                     ForEach(sections(rows), id: \.title) { section in
@@ -133,7 +136,16 @@ struct GlowNotificationsView: View {
         case .loves: return "No loves yet"
         }
     }
-    private var emptyIcon: String { chip == .loves ? "heart" : GlowStyle.symbol }
+    /// ⚠️ A VIEW, NOT A NAME. Loves is still an SF Symbol and Glow is now one of his own drawings,
+    /// so the two cannot be a single `String` handed to `systemImage:` any more — one of them would
+    /// have drawn nothing. They agree on SIZE instead, which is the only thing they had to share.
+    @ViewBuilder private var emptyIcon: some View {
+        if chip == .loves {
+            Image(systemName: "heart").font(.system(size: 44))
+        } else {
+            GlowStyle.mark(48)
+        }
+    }
     private var emptyBody: String {
         switch chip {
         case .glowers: return "When somebody glows you, it appears here."

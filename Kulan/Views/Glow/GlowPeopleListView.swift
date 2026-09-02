@@ -121,8 +121,11 @@ struct GlowPeopleListView: View {
                 if !query.isEmpty {
                     ContentUnavailableView.search(text: query)
                 } else {
-                    ContentUnavailableView(tab.title, systemImage: GlowStyle.symbol,
-                                           description: Text(tab.emptyHint))
+                    ContentUnavailableView {
+                        Label { Text(tab.title) } icon: { GlowStyle.mark(48) }
+                    } description: {
+                        Text(tab.emptyHint)
+                    }
                 }
             } else {
                 List(rows) { p in
@@ -269,7 +272,28 @@ enum GlowStyle {
     /// So anything FILLED with `accent` must take its label from `onAccent`, never from `.white`.
     static let accent = Color.primary
     static func onAccent(_ dark: Bool) -> Color { Theme.onAccent(dark) }
-    /// The word for the relationship in the one place a glyph is needed. `sparkles` is the system's
-    /// nearest idea of a glow and it costs no drawing; if he supplies one, this is where it goes.
-    static let symbol = "sparkles"
+    /// ⛔ HIS OWN DRAWING, SUPPLIED 2026-09-02 — outline and filled. The note that stood here said
+    /// `sparkles` was the system's nearest idea of a glow and that this is where a real one goes if
+    /// he ever sent one. He sent one.
+    ///
+    /// ⚠️ AN ASSET IS NOT AN SF SYMBOL AND EVERY CALL SITE HAD TO MOVE WITH IT. `systemImage:` takes
+    /// a SYMBOL NAME: hand it an asset name and it draws nothing at all, quietly. So the six places
+    /// that said `systemImage: GlowStyle.symbol` now build their label with `mark` below, and it is
+    /// sized by a `frame` because an asset ignores `font` — the same trap written up against the
+    /// attach sheet's album button.
+    static let icon = "ic_glow"
+    static let iconFill = "ic_glow_fill"
+
+    /// The Glow mark at a stated size.
+    ///
+    /// Filled means THE RELATIONSHIP EXISTS — it is the same distinction the tab bar draws between
+    /// the tab you are on and the ones you are not. Outline is the action and the empty state: the
+    /// thing you could do, or the thing there is none of yet.
+    static func mark(_ size: CGFloat, filled: Bool = false) -> some View {
+        Image(filled ? iconFill : icon)
+            .renderingMode(.template)
+            .resizable()
+            .scaledToFit()
+            .frame(width: size, height: size)
+    }
 }

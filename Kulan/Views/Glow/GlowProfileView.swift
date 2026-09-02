@@ -142,10 +142,19 @@ struct GlowProfileView: View {
         Button {
             if glow.isGlowing(uid) { glow.remove(to: uid) } else { glow.give(to: uid) }
         } label: {
-            Label(glow.isGlowing(uid) ? "Glowing" : "Glow",
-                  systemImage: glow.isGlowing(uid) ? "checkmark" : GlowStyle.symbol)
-                .font(.headline)
-                .frame(minWidth: 150)
+            Label {
+                Text(glow.isGlowing(uid) ? "Glowing" : "Glow")
+            } icon: {
+                // The tick stays for "already glowing" — his mockup shows a tick there, and a mark
+                // that is the same drawing in both states says nothing about which state it is in.
+                if glow.isGlowing(uid) {
+                    Image(systemName: "checkmark")
+                } else {
+                    GlowStyle.mark(18)
+                }
+            }
+            .font(.headline)
+            .frame(minWidth: 150)
         }
         .buttonStyle(.borderedProminent)
         .tint(glow.isGlowing(uid) ? Color.white.opacity(0.18) : Color.white)
@@ -195,8 +204,9 @@ struct GlowProfileView: View {
             // circles — an account with no glowers must not look like an account with three
             // faceless ones.
             if facePeople.isEmpty {
-                Image(systemName: GlowStyle.symbol)
-                    .font(.system(size: 18, weight: .semibold))
+                // Filled here: this disc is a solid little badge, and the outline's 1.5pt strokes
+                // disappear against a tinted circle at 18pt.
+                GlowStyle.mark(18, filled: true)
                     .foregroundStyle(.white)
                     .frame(width: 38, height: 38)
                     .background(Color.white.opacity(0.12), in: Circle())
