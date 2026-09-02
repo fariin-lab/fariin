@@ -297,7 +297,15 @@ struct GlowProfileView: View {
         if let p = await ProfileStore.shared.fetch(uid) {
             profile = p
             if let url = p.photoUrl, !url.isEmpty {
-                palette = ProfilePalette.cached(for: url) ?? (await ProfilePalette.resolve(url: url))
+                // ⚠️ NOT `cached(...) ?? (await resolve(...))`. The right side of `??` is an
+                // AUTOCLOSURE, which cannot be async — "'async' call in an autoclosure that does
+                // not support concurrency". Written out, the cheap synchronous hit still short
+                // circuits the round trip, which was the whole point of the `??`.
+                if let hit = ProfilePalette.cached(for: url) {
+                    palette = hit
+                } else {
+                    palette = await ProfilePalette.resolve(url: url)
+                }
             }
         } else if profile == nil {
             failed = true
