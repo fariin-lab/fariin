@@ -116,6 +116,8 @@ struct ContactInfoView: View {
     /// The glow relationship, for the Glow button and its menu entry. `@Observable`, so a plain
     /// property observes it — see the note on `GlowService`.
     private var glow = GlowService.shared
+    /// The explainer that stands in front of GIVING a glow — see `glowActionButton`.
+    @State private var showGlowIntro = false
     @State private var muted = false
     @State private var mutedUntil: Double = 0   // millis; drives the "Muted until <time>" menu header
     @State private var blocked = false
@@ -928,6 +930,16 @@ struct ContactInfoView: View {
                 VerifyEncryptionView(cid: cid, peerName: name, peerUid: otherUid, peerPhotoUrl: photoUrl)
             }
             .navigationDestination(isPresented: $showSounds) { SoundsNotificationsView(cid: cid) }
+            // ⛔ ONLY THE GIVE PATH REACHES THIS — see `glowActionButton`. The sheet's own button is
+            // what performs the give, so backing out of it with the ✕ or a swipe leaves the
+            // relationship exactly as it was.
+            .sheet(isPresented: $showGlowIntro) {
+                // The name you gave them wins over the one they gave themselves, the same order
+                // every other label on this page uses. `localName` is optional, not empty-string.
+                GlowIntroSheet(name: localName ?? name) {
+                    glow.give(to: otherUid)
+                }
+            }
             .sheet(isPresented: $showRename) {
                 // The editor owns the whole card now (first/last/note + delete); this just re-reads
                 // the resulting display name for the header.
@@ -1723,7 +1735,11 @@ struct ContactInfoView: View {
             }
             .tint(.primary)
         } else {
-            Button { glow.give(to: otherUid) } label: {
+            // ⛔ THE EXPLAINER STANDS BETWEEN THE TAP AND THE GIVE — owner, 2026-09-02: "when the
+            // user clicks Glow on a profile, show a sheet explaining what Glow is… only when they
+            // want to GIVE a glow, not when they want to remove one". Both give doors go through it;
+            // the Remove branch above is untouched, which is the asymmetry he asked for.
+            Button { showGlowIntro = true } label: {
                 // `PosterActionIcon` already knows an "ic_*" asset from an SF Symbol name, so his
                 // drawing needed nothing here beyond the new name.
                 PosterActionIcon(icon: GlowStyle.icon, onPhoto: hasPhotoHeader)
@@ -1739,7 +1755,8 @@ struct ContactInfoView: View {
                 glow.remove(to: otherUid)
             }
         } else {
-            Button { glow.give(to: otherUid) } label: {
+            // Same door, same sheet — see `glowActionButton`.
+            Button { showGlowIntro = true } label: {
                 Label { Text("Glow Story") } icon: { GlowStyle.mark(20) }
             }
         }
