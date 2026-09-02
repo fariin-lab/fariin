@@ -171,6 +171,23 @@ struct NativeMessageList: UIViewControllerRepresentable {
     /// scope — the SwiftUI rows got it from the closure that built them.
     var cid: String = ""
 
+    /// ⛔ **THE THIRD DARK-MODE LEVER — owner, 2026-09-02: a chat with a wallpaper is always dark.**
+    ///
+    /// The other two are in `ThreadView`: the `dark` flag it passes into every model, and a
+    /// `\.colorScheme` override for its SwiftUI children. Neither reaches here. **A hosted UIKit
+    /// view resolves a dynamic `UIColor` from its OWN trait collection**, and this side of the chat
+    /// is full of them — `BubblePalette.receivedFill`, `.label`, `.secondaryLabel`, every colour the
+    /// composer's bar draws itself in. Left alone they would answer for the phone's appearance while
+    /// the SwiftUI half answered dark, and the chat would draw itself in two appearances at once.
+    ///
+    /// ⚠️ ONE FLAG COVERS BOTH UIKIT SURFACES because the composer moved INTO this controller — the
+    /// bar is a subview of `vc.view`, and `overrideUserInterfaceStyle` cascades to subviews. If the
+    /// bar is ever hosted separately again, it needs its own.
+    ///
+    /// ⚠️ Declared LAST, so the memberwise init's argument order at the call site is unchanged for
+    /// everything above it.
+    var forceDark: Bool = false
+
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIViewController(context: Context) -> MessageListController {
@@ -184,6 +201,14 @@ struct NativeMessageList: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: MessageListController, context: Context) {
         context.coordinator.parent = self
         vc.loadViewIfNeeded()
+        // The dark pin, before anything reads a colour. `.unspecified` is the way back to the
+        // phone's own appearance, NOT `.light` — a chat whose wallpaper is removed has to start
+        // following the system again rather than being pinned the other way.
+        // ⚠️ Assigned only on a change: setting it re-resolves every dynamic colour in the subtree
+        // and fires `traitCollectionDidChange` on every live cell, and this method runs on every
+        // SwiftUI update — typing flags, presence dots and keyboard focus all land here.
+        let wanted: UIUserInterfaceStyle = forceDark ? .dark : .unspecified
+        if vc.overrideUserInterfaceStyle != wanted { vc.overrideUserInterfaceStyle = wanted }
         // ⛔ THE SEND HOLD IS ARMED BEFORE THE COMPOSER IS APPLIED. Since the bar moved into the
         // controller, `applyComposer` is where the reply banner's collapse actually happens (the
         // bar re-lays out, reports its new height, and the container shrinks on the spot). The tick
