@@ -55,9 +55,13 @@ import UIKit
     /// already knows the moment a screenshot or a camera roll write happens and will say so; asking
     /// on every open would be work done at the one moment there is no time for it, and asking on a
     /// timer would be both later and more often than needed.
+    /// ⚠️ `nonisolated` ON THE CALLBACK, and it is not optional. This class is nested inside a
+    /// `@MainActor` enum, so it inherits that isolation, while `photoLibraryDidChange` is a
+    /// nonisolated protocol requirement — a main-actor method cannot satisfy one, and the compiler
+    /// says so. It is also simply true: PhotoKit calls this on its own queue.
     private final class LibraryWatcher: NSObject, PHPhotoLibraryChangeObserver {
-        func photoLibraryDidChange(_ changeInstance: PHChange) {
-            // ⚠️ CALLED OFF THE MAIN THREAD, always. Everything this cache holds is main-actor.
+        nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
+            // Everything this cache holds is main-actor, so the hop is the first thing that happens.
             Task { @MainActor in RecentsCache.refresh() }
         }
     }
