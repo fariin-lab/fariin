@@ -11,7 +11,7 @@ import FirebaseFirestore
 
 /// One person, resolved for a list row. Deliberately not a `UserProfile`: a row needs four fields
 /// and re-resolving a whole profile per row is what makes a list of forty people slow.
-struct GlowPerson: Identifiable, Equatable {
+struct GlowPerson: Identifiable, Equatable, Hashable {
     let id: String          // uid
     var name: String
     var handle: String
@@ -290,6 +290,42 @@ struct GlowEvent: Identifiable, Equatable {
         }
 
         state = .loaded(out.sorted { $0.at > $1.at })
+    }
+}
+
+/// OPENING A GLOW PERSON'S STORY — his correction, 2026-09-02: "when I click story glowing, open
+/// story, don't open profile, I want to see that story".
+///
+/// He is right and the split is the same one the notifications row already uses: **the picture
+/// opens the picture, the face opens the person.** A card whose whole surface went to a profile
+/// made the photograph a decoration.
+///
+/// ⚠️ IT FETCHES THE WHOLE SET FIRST, not just the one story the card is showing. The card carries
+/// only the NEWEST — that is what makes the grid one card per person — but opening should page
+/// through everything they have live, which is what the viewer is for.
+@MainActor enum GlowStoryOpen {
+    static func open(_ person: GlowPerson) async {
+        let loader = PostedStoriesLoader()
+        await loader.load(uid: person.id, force: true)
+        let rows = loader.state.value ?? []
+        guard !rows.isEmpty else { return }
+        // ⚠️ OLDEST → NEWEST. `StoryGroup.stories` is documented in that order and the viewer pages
+        // forward through it; the loader returns newest first, so this reverses rather than trusting
+        // the two to agree by luck.
+        let stories: [Story] = rows.reversed().map { s in
+            Story(id: s.id, authorUid: person.id, createdAt: s.createdAt, expiresAt: s.expiresAt,
+                  // A demo row has no uploaded media — its picture IS the thumbnail, drawn on the
+                  // phone. Falling back to it keeps the demo openable instead of black.
+                  mediaUrl: s.thumbUrl, allowsReplies: false, caption: "",
+                  isVideo: s.isVideo, duration: 0, thumbUrl: s.thumbUrl)
+        }
+        let group = StoryGroup(authorUid: person.id, name: person.name, photoUrl: person.photoUrl,
+                               stories: stories, lastViewedAt: nil, isMine: false)
+        // `pinned: true` — this door opens ONE person, so the viewer must not page away to
+        // somebody else's story the way the friends row's unpinned door does.
+        // `deliveredToMe: false` — a glow story is not addressed to me through my chat list, so the
+        // reply bar must not offer to reply as though it were.
+        StoryDoor.open(group, among: [group], from: group.id, pinned: true, deliveredToMe: false)
     }
 }
 

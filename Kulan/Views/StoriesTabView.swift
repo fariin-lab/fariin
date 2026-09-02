@@ -259,9 +259,16 @@ struct StoriesTabView: View {
                         }
                     } else {
                         ForEach(cards) { c in
-                            NavigationLink(value: GlowRoute.profile(c.person.id, c.person.name,
-                                                                    c.person.photoUrl ?? "")) {
-                                GlowStoryCardView(card: c)
+                            // THE CARD OPENS THE STORY — his correction, 2026-09-02: "when I click
+                            // story glowing, open story, don't open profile". The FACE on it opens
+                            // the person; see `GlowStoryCardView.onAvatarTap`.
+                            Button {
+                                Task { await GlowStoryOpen.open(c.person) }
+                            } label: {
+                                GlowStoryCardView(card: c) {
+                                    path.append(GlowRoute.profile(c.person.id, c.person.name,
+                                                                  c.person.photoUrl ?? ""))
+                                }
                             }
                             .buttonStyle(.plain)
                         }

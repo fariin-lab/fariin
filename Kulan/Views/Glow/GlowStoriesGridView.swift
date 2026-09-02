@@ -14,6 +14,9 @@ struct GlowStoriesGridView: View {
     init() {}
 
     @State private var loader = GlowStoriesLoader()
+    /// The face tapped on a card — pushes that person's profile. `GlowPerson` is Identifiable, so
+    /// this doubles as the presentation trigger.
+    @State private var profileTarget: GlowPerson?
     private var glow = GlowService.shared
 
     private var key: String { Array(glow.glowRelationship).sorted().joined(separator: ",") }
@@ -22,6 +25,9 @@ struct GlowStoriesGridView: View {
         content
             .navigationTitle("Glowing")
             .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(item: $profileTarget) { p in
+                GlowProfileView(uid: p.id, initialName: p.name, initialPhoto: p.photoUrl)
+            }
             .task(id: key) { await loader.load(Array(glow.glowRelationship).sorted(), key: key) }
     }
 
@@ -56,12 +62,12 @@ struct GlowStoriesGridView: View {
                                     GridItem(.flexible(), spacing: 10)], spacing: 10) {
                     ForEach(cards) { c in
                         // The CARD is the story; the face on it is the person. Same split as the
-                        // notifications row — the picture opens the picture.
-                        NavigationLink {
-                            GlowProfileView(uid: c.person.id, initialName: c.person.name,
-                                            initialPhoto: c.person.photoUrl)
+                        // notifications row and the section this page grew out of — the picture
+                        // opens the picture.
+                        Button {
+                            Task { await GlowStoryOpen.open(c.person) }
                         } label: {
-                            GlowStoryCardView(card: c)
+                            GlowStoryCardView(card: c) { profileTarget = c.person }
                         }
                         .buttonStyle(.plain)
                     }

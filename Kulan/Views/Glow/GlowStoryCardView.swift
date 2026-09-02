@@ -13,18 +13,24 @@ struct GlowStoryCardView: View {
     /// Draws the small ⊕ on the face, which marks YOUR OWN card — his reference has it on My Story
     /// and nowhere else.
     var isMine: Bool = false
+    /// ⛔ THE FACE IS ITS OWN TAP TARGET — his correction, 2026-09-02. The CARD opens the story;
+    /// the face on it opens the person. Nil leaves the face inert, which is what the friends grid
+    /// wants (its whole card is one story door).
+    var onAvatarTap: (() -> Void)? = nil
 
-    init(thumbUrl: String, name: String, authorPhoto: String?, isMine: Bool = false) {
+    init(thumbUrl: String, name: String, authorPhoto: String?, isMine: Bool = false,
+         onAvatarTap: (() -> Void)? = nil) {
         self.thumbUrl = thumbUrl
         self.name = name
         self.authorPhoto = authorPhoto
         self.isMine = isMine
+        self.onAvatarTap = onAvatarTap
     }
 
     /// The Glowing grid's convenience spelling.
-    init(card: GlowStoryCard) {
+    init(card: GlowStoryCard, onAvatarTap: (() -> Void)? = nil) {
         self.init(thumbUrl: card.story.thumbUrl, name: card.person.name,
-                  authorPhoto: card.person.photoUrl)
+                  authorPhoto: card.person.photoUrl, onAvatarTap: onAvatarTap)
     }
 
     var body: some View {
@@ -72,6 +78,11 @@ struct GlowStoryCardView: View {
                     }
                 }
                 .padding(10)
+                // ⚠️ HIGH PRIORITY, or the card's own tap underneath wins the touch and the face
+                // opens the story instead of the person — the same rule the chat list's ringed
+                // avatar follows for exactly this reason.
+                .highPriorityGesture(TapGesture().onEnded { onAvatarTap?() },
+                                     including: onAvatarTap == nil ? .subviews : .all)
             }
     }
 }
