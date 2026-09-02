@@ -3486,7 +3486,12 @@ struct ChatRow: View, Equatable {
             // sits at 28 − 2 = 26, and a 46pt photo leaves the same 3pt of breathing room all round
             // that the 66/56 pair had. Nothing else about the row moves — the slot below is still a
             // flat 56, so the text column, the row height and the 16pt margin are untouched.
-            let photoSize: CGFloat = storySeen.isEmpty ? 56 : 46
+            // ⛔ 48, NOT 46 — owner, 2026-09-02: "the story circle and the avatar have more space,
+            // fix". He has now bracketed this from both sides, which is what makes the number
+            // findable rather than a guess: at a 0pt gap (ring 60 over a 56pt photo) he asked for
+            // space; at 3 (ring 56 over 46) he says it is too much. 48 puts the photo's edge at 24
+            // against the arc's inner edge at 26 — a 2pt gap, the midpoint of his own two reports.
+            let photoSize: CGFloat = storySeen.isEmpty ? 56 : 48
             Group {
                 // The official channel has no account and therefore no profile photo to fetch: its
                 // face is the app's own mark, drawn from the bundle. Same 56pt footprint as every
