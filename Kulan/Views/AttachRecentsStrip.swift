@@ -890,9 +890,25 @@ private struct RecentThumb: View {
                 Button(action: onToggle) {
                     ZStack {
                         if selectionActive || selected {
-                            Circle().fill(selected ? Color(hex: 0x3DA1FD) : Color.black.opacity(0.35))
-                                .frame(width: 26, height: 26)
+                            // ⛔ THE EMPTY STATE IS AN EMPTY CIRCLE — owner, 2026-09-02: "the select
+                            // checkbox is using grey, remove that grey, make it only a circle, not
+                            // grey inside the circle".
+                            //
+                            // ⚠️ THE GREY WAS DOING A JOB AND THE RING CAN DO IT INSTEAD. A 35%
+                            // black disc was there so a white ring stayed visible on a pale
+                            // photograph, and it also made every unticked tile carry a smudge. The
+                            // ring keeps its own contrast now from a soft shadow — one drawn mark
+                            // instead of a filled shape behind it, which is what the story card's
+                            // name does over the same problem.
+                            //
+                            // Ticked still fills, and must: the blue disc IS the "chosen" signal,
+                            // and it is the only thing distinguishing a numbered tile from an
+                            // empty one at a glance.
+                            if selected {
+                                Circle().fill(Color(hex: 0x3DA1FD)).frame(width: 26, height: 26)
+                            }
                             Circle().stroke(.white, lineWidth: 1.5).frame(width: 26, height: 26)
+                                .shadow(color: .black.opacity(selected ? 0 : 0.45), radius: 2, y: 0.5)
                         }
                         if let n = selectionNumber {
                             Text("\(n)").font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
