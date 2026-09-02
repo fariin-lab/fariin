@@ -23,6 +23,16 @@ struct GlowStoryCardView: View {
     /// on a 393pt phone leaves cards ~168pt wide.
     static let gutter: CGFloat = 16
     static let margin: CGFloat = 20
+    /// ⛔ 48, HIS NUMBER — owner, 2026-09-02, after ringing the face on these cards three separate
+    /// times: "make it 48". It was 40. 48 is the same diameter the story ring wears on a chat list
+    /// row, so the face reads at one size wherever the app draws a person with a live story.
+    ///
+    /// ⚠️ The name's trailing padding is DERIVED from this, not typed beside it. The two are one
+    /// measurement — the text has to stop before the face starts — and the day this number moves
+    /// again a typed 62 would let the name run under the picture.
+    static let avatar: CGFloat = 48
+    /// The face's inset from the card's bottom and trailing edges.
+    static let avatarInset: CGFloat = 10
 
     let thumbUrl: String
     let name: String
@@ -73,11 +83,12 @@ struct GlowStoryCardView: View {
                     .lineLimit(1)
                     .padding(.leading, 12)
                     .padding(.bottom, 12)
-                    .padding(.trailing, 54)   // clear of the face
+                    // clear of the face: its width, its inset, and 4 of daylight between the two
+                    .padding(.trailing, Self.avatar + Self.avatarInset + 4)
             }
             .overlay(alignment: .bottomTrailing) {
                 ZStack(alignment: .bottomTrailing) {
-                    AvatarView(name: name, photoUrl: authorPhoto, size: 40)
+                    AvatarView(name: name, photoUrl: authorPhoto, size: Self.avatar)
                         .overlay {
                             Circle().strokeBorder(
                                 LinearGradient(colors: [Color(hex: 0x34C76F), Color(hex: 0x3DA1FD)],
@@ -94,7 +105,7 @@ struct GlowStoryCardView: View {
                             .offset(x: 2, y: 2)
                     }
                 }
-                .padding(10)
+                .padding(Self.avatarInset)
                 // ⚠️ HIGH PRIORITY, or the card's own tap underneath wins the touch and the face
                 // opens the story instead of the person — the same rule the chat list's ringed
                 // avatar follows for exactly this reason.
