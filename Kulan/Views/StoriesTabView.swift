@@ -235,7 +235,7 @@ struct StoriesTabView: View {
         // the page never changes shape once it is on screen.
         if hasGlowGrid {
             VStack(alignment: .leading, spacing: 12) {
-                NavigationLink(value: GlowRoute.people) {
+                NavigationLink(value: GlowRoute.stories) {
                     HStack(spacing: 4) {
                         Text("Glowing").font(.system(size: 22, weight: .bold))
                             .foregroundStyle(.primary)
@@ -277,6 +277,11 @@ struct StoriesTabView: View {
     /// rather than a `navigationDestination` per screen scattered through the file.
     enum GlowRoute: Hashable {
         case people
+        /// All Glowing STORIES — what the "Glowing ›" heading opens. His correction, 2026-09-02:
+        /// a section heading with a chevron promises more of THAT SECTION, and the section is
+        /// stories. The people list belongs to the profile's stats card, where the question
+        /// really is "who".
+        case stories
         case notifications
         case storyPrivacy
         case profile(String, String, String)   // uid, name, photo
@@ -286,6 +291,8 @@ struct StoriesTabView: View {
         switch r {
         case .people:
             GlowPeopleListView(side: .glowers)
+        case .stories:
+            GlowStoriesGridView()
         case .notifications:
             GlowNotificationsView()
         case .storyPrivacy:
