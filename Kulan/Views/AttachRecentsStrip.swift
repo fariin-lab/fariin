@@ -128,7 +128,20 @@ struct AttachRecentsStrip: View {
     @State private var selectedAlbum: PHAssetCollection?   // nil = the newest across the whole library
     @State private var albums: [AttachAlbum] = []
 
-    private let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 3)   // 3 per row (user request)
+    /// ⛔ **THE GRID IS EDGE TO EDGE — owner, 2026-09-02: "now images Is Runded cornders and Laft and
+    /// right has space… make it exactly like image no space".**
+    ///
+    /// 2pt between tiles, nothing at the sides, and the tiles themselves are square. The 6pt gutters
+    /// and 12pt side margins that were here made the grid read as a row of cards laid on a sheet;
+    /// he wants one continuous sheet of photographs.
+    ///
+    /// ⚠️ **THE ROUNDED CORNERS HE STILL WANTS ARE THE SHEET'S, NOT THE TILES'.** In the picture he
+    /// matched against, only the top-left and top-right of the whole grid are curved, and that is
+    /// the presentation's own corner radius clipping the content — there is no radius on any tile.
+    /// So the tiles go to 0 and the curve comes for free, which is also why the grid must reach the
+    /// edges: inset by 12 there is nothing for the sheet's corner to cut.
+    private static let tileGap: CGFloat = 2
+    private let cols = Array(repeating: GridItem(.flexible(), spacing: AttachRecentsStrip.tileGap), count: 3)   // 3 per row (user request)
 
     var body: some View {
         Group {
@@ -253,7 +266,7 @@ struct AttachRecentsStrip: View {
                 }
                 .padding(.horizontal, 16).padding(.bottom, 8)
             }
-            LazyVGrid(columns: cols, spacing: 6) {
+            LazyVGrid(columns: cols, spacing: Self.tileGap) {
                 // ⛔ NO CAMERA TILE — owner, 2026-09-02. Camera is a tile INSIDE the attach bar now,
                 // beside GIF, Files and Location, and one action does not get two doors on one
                 // screen. The grid is photos and nothing else, which is what makes the first row
@@ -277,8 +290,8 @@ struct AttachRecentsStrip: View {
                     }
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.top, 2)
+            // ⛔ NO SIDE MARGIN AND NO TOP GAP — see `tileGap`. The photographs reach all four
+            // edges of the sheet; the only curve is the one the presentation cuts for itself.
         }
         // ⛔ NO TOP MARGIN — owner, 2026-09-02. It existed to hold the first row clear of an opaque
         // header, and there is no header. The photos begin at the sheet's own top edge, which is the
@@ -736,11 +749,23 @@ private struct RecentThumb: View {
                     Rectangle().fill(Color.secondary.opacity(0.12))
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay {   // hairline so light thumbs don't dissolve into the sheet
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(selected ? Color(hex: 0x3DA1FD) : Color.primary.opacity(0.06),
-                            lineWidth: selected ? 3 : 1)
+            // ⛔ SQUARE — owner, 2026-09-02. The 24pt radius is what made these read as cards; the
+            // only curve on this screen belongs to the sheet. `clipShape` stays because the picture
+            // is `scaledToFill` and still has to be cut to the cell.
+            .clipShape(Rectangle())
+            .overlay {
+                // ⚠️ THE UNSELECTED HAIRLINE IS GONE WITH THE CORNERS, and that is a consequence of
+                // his change rather than a second decision. It existed so a pale thumbnail did not
+                // dissolve into the sheet around it, which was a real risk when each tile floated in
+                // 12pt of margin. There is no margin now — a tile's neighbours are 2pt away on every
+                // side — so the same line would draw a grid of boxes over a continuous sheet of
+                // photographs, which is the look he is asking to be rid of.
+                //
+                // The SELECTED ring stays. It is not decoration, it is the only thing that says
+                // which pictures you are about to send.
+                if selected {
+                    Rectangle().stroke(Color(hex: 0x3DA1FD), lineWidth: 3)
+                }
             }
             .overlay(alignment: .bottomTrailing) {
                 if asset.mediaType == .video {
