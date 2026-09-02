@@ -33,8 +33,23 @@ struct GlowStoryCardView: View {
     static let corner: CGFloat = 34
     /// The grid around the card, from the same screen: a 20pt margin each side and 16 between, which
     /// on a 393pt phone leaves cards ~168pt wide.
-    static let gutter: CGFloat = 16
-    static let margin: CGFloat = 20
+    /// ⛔ THE FRIENDS STRIP'S OWN NUMBERS — owner, 2026-09-02: "the space at the edges used by the
+    /// Glowing card and the Friends story card is not the same; use the one the Friends card uses,
+    /// that is correct".
+    ///
+    /// `StoryRowMetrics.hPad` is 12 and `StoryRowMetrics.spacing` is 10 (`StoriesRowUIKit`), so the
+    /// strip's first tile starts 12 from the edge while this grid started at 20 — two sections of
+    /// one page with two different left edges, which is exactly what he is looking at.
+    ///
+    /// ⚠️ THE HEADINGS MOVE WITH THEM, because they read this same `margin`. That is the point
+    /// rather than a side effect: the alternative is cards at 12 under a heading at 20, which trades
+    /// his misalignment for a worse one. Friends, Glowing, the strip and both grids now share one
+    /// left edge.
+    ///
+    /// ⚠️ NOT copied by reference from `StoryRowMetrics`. That enum is `@MainActor` and these are
+    /// plain statics; naming the source in writing is what keeps them honest.
+    static let gutter: CGFloat = 10
+    static let margin: CGFloat = 12
     /// ⛔ 48, HIS NUMBER — owner, 2026-09-02, after ringing the face on these cards three separate
     /// times: "make it 48". It was 40. 48 is the same diameter the story ring wears on a chat list
     /// row, so the face reads at one size wherever the app draws a person with a live story.
