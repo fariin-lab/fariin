@@ -3892,20 +3892,35 @@ struct ThreadView: View {
     /// higher than theirs on a phone with a home indicator and sat level with it on one without.
     /// Theirs composes the bar's height from the inset itself. Dropping our 10 is what makes the two
     /// agree on every device instead of on one.
-    private static let attachBarHeight: CGFloat = 62
-    /// Their icon, stated once so the tile and anything else that draws one cannot drift apart.
-    private static let attachIconSize: CGFloat = 30
+    /// ⛔ **52 — OWNER, 2026-09-02: "attach bar and album button Is Looks big Fix like 52 make it".**
+    /// It was 62, the reference app's `glassPanelHeight`, read from their source on 2026-08-24. His
+    /// number now beats theirs: the bar shares its row with the Album button since this morning, and
+    /// two 62pt objects side by side are heavier than the one centred capsule that number was
+    /// measured for. The Album button reads this too, so both moved together as he asked.
+    private static let attachBarHeight: CGFloat = 52
+    /// ⛔ **26, DOWN FROM THE REFERENCE'S 30, AND IT IS FORCED BY THE 52 ABOVE — not a second
+    /// opinion about icon size.**
+    ///
+    /// A tile is `attachBarHeight - 8` tall and stacks icon + 4 + label. At 62 that was 54 holding
+    /// 30 + 4 + 12 = 46, with room to spare. At 52 it is 44 holding 46 — **two points of overflow**,
+    /// which SwiftUI resolves by squeezing the label, so the words under the glyphs would have gone
+    /// fuzzy or clipped rather than anything looking obviously wrong. 26 brings the stack to 42 and
+    /// leaves a point above and below.
+    ///
+    /// ⚠️ If the bar is ever put back to 62, put this back to 30 with it. They are one measurement.
+    private static let attachIconSize: CGFloat = 26
 
     /// ONE TILE'S WIDTH, AND IT HAS TO BE ARITHMETIC NOW — owner, 2026-09-02.
     ///
     /// 72 was safe while the bar was three tiles centred in the whole width. It is not free any
     /// more: Camera made a fourth, and the bar now shares its row with the Album button, so the
-    /// space it has is the screen less that button, the gap and both margins — 62 + 12 + 32 = 106.
+    /// space it has is the screen less that button, the gap and both margins — 52 + 12 + 32 = 96.
+    /// (It was 106 while the button was 62; his 2026-09-02 resize bought the bar ten points.)
     ///
     /// On his 428pt phone (measured, [[kulan-fill-image-sizes-its-parent]]):
-    ///   1:1    4 × 72 = 288, + 6 spacing + 12 padding = 306, + 106 = 412 of 428.  Fits.
-    ///   group  5 × 72 = 360, + 8      + 12            = 380, + 106 = 486 of 428.  Does NOT.
-    ///   group  5 × 58 = 290, + 8      + 12            = 310, + 106 = 416 of 428.  Fits.
+    ///   1:1    4 × 72 = 288, + 6 spacing + 12 padding = 306, + 96 = 402 of 428.  Fits.
+    ///   group  5 × 72 = 360, + 8      + 12            = 380, + 96 = 476 of 428.  Does NOT.
+    ///   group  5 × 58 = 290, + 8      + 12            = 310, + 96 = 406 of 428.  Fits.
     ///
     /// ⚠️ A STATED NUMBER PER COUNT, NOT A FLEXIBLE FRAME. The note on the bar above says a finite
     /// `maxWidth` inflates this capsule rather than capping it, and that was paid for once already;
