@@ -44,6 +44,8 @@ struct StoriesTabView: View {
     @State private var storiesOff = false
     @State private var storyLimitReached = false
     @AppStorage("storiesOptedOut") private var storiesOptedOut = false
+    /// The header's search field — his reference, 2026-09-02, has one sitting under the title.
+    @State private var search = ""
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -57,6 +59,14 @@ struct StoriesTabView: View {
                     ToolbarItem(placement: .topBarTrailing) { notificationsButton }
                     ToolbarItem(placement: .topBarTrailing) { addStoryButton }
                 }
+                // ⛔ A SEARCH FIELD UNDER THE HEADER — owner, 2026-09-02: "story page header make it
+                // like this, exactly like this, also search bar add". His reference draws it always
+                // present, not revealed by a pull, which is what `.always` means here; the default
+                // `.automatic` hides it until the page is scrolled to the top and his mockup has it
+                // sitting there with the page already scrolled.
+                .searchable(text: $search,
+                            placement: .navigationBarDrawer(displayMode: .always),
+                            prompt: "Search")
                 .navigationDestination(for: GlowRoute.self) { glowDestination($0) }
                 .navigationDestination(for: ChatTarget.self) { t in
                     // Same rule as the chat list's stack: the official channel is its own screen,
@@ -107,6 +117,12 @@ struct StoriesTabView: View {
             ContentUnavailableView("Stories are off",
                                    systemImage: "circle.slash",
                                    description: Text("Turn stories back on in Settings to see them here."))
+        } else if !search.trimmingCharacters(in: .whitespaces).isEmpty {
+            // ⚠️ THE FIELD REPLACES THE PAGE RATHER THAN FILTERING IT IN PLACE. Friends is a UIKit
+            // view that reads the repository itself, so there is no query to hand it; and a page
+            // that keeps its shape while its contents shrink reads as broken anyway. One list of
+            // matches, labelled by which section each came from.
+            searchResults
         } else {
             ScrollView {
                 VStack(spacing: 0) {
@@ -149,6 +165,71 @@ struct StoriesTabView: View {
             // one cell on a long press and each card has to lift on its own. On a page of its own it
             // is simply the first thing on the page, and all of that machinery is gone rather than
             // ported.
+        }
+    }
+
+    /// WHAT THE SEARCH FIELD FINDS: people with a live story, by name, across both sections.
+    ///
+    /// It searches the two things this page actually shows and nothing else. Searching the whole
+    /// address book from here would answer a question the page is not asking — you are looking at
+    /// stories, so you are looking for whose story to open.
+    @ViewBuilder private var searchResults: some View {
+        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+        let friends = StoriesRepository.shared.others
+            .filter { !StoryPrefs.isHidden($0.authorUid) && $0.name.lowercased().contains(q) }
+        let glowing = (glowStories.state.value ?? [])
+            .filter { $0.person.name.lowercased().contains(q) }
+        if friends.isEmpty && glowing.isEmpty {
+            ContentUnavailableView.search(text: search)
+        } else {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    if !friends.isEmpty {
+                        searchGroup("Friends") {
+                            ForEach(friends) { g in
+                                Button { openStoryFromRow(g) } label: {
+                                    GlowStoryCardView(
+                                        thumbUrl: g.stories.last.map { $0.thumbUrl.isEmpty ? $0.mediaUrl : $0.thumbUrl } ?? "",
+                                        name: g.name,
+                                        authorPhoto: g.photoUrl)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    if !glowing.isEmpty {
+                        searchGroup("Glowing") {
+                            ForEach(glowing) { c in
+                                // Same split as the section this came from: the card is the story,
+                                // the face on it is the person.
+                                Button { Task { await GlowStoryOpen.open(c.person) } } label: {
+                                    GlowStoryCardView(card: c) {
+                                        path.append(GlowRoute.profile(c.person.id, c.person.name,
+                                                                      c.person.photoUrl ?? ""))
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+                .padding(.top, 12)
+            }
+        }
+    }
+
+    /// One labelled block of result cards, in the same grid the sections themselves use.
+    @ViewBuilder private func searchGroup<C: View>(_ title: String,
+                                                   @ViewBuilder cards: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(.system(size: 22, weight: .bold))
+                .padding(.horizontal, GlowStoryCardView.margin)
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: GlowStoryCardView.gutter),
+                                GridItem(.flexible(), spacing: GlowStoryCardView.gutter)],
+                      spacing: GlowStoryCardView.gutter) {
+                cards()
+            }
+            .padding(.horizontal, GlowStoryCardView.margin)
         }
     }
 
@@ -336,9 +417,17 @@ struct StoriesTabView: View {
 
     /// Compose a story — the mark that was only reachable from the row's own tile before. In the
     /// header it is reachable whatever the row is doing, which is what his reference shows.
+    ///
+    /// ⛔ THE APP'S OWN MARK, NOT `plus.circle` — owner, 2026-09-02, sending the header he wants:
+    /// the stacked cards with a plus, which is the glyph the Stories tab already wears in the tab
+    /// bar. The tab and the button that fills it are one drawing; a generic ⊕ said "add something".
+    ///
+    /// ⚠️ An asset is sized by a `frame`, not by `font` — sizing a drawing with `font` does nothing
+    /// at all, which is written up against the attach sheet's album button for the same reason.
     @ViewBuilder private var addStoryButton: some View {
         Button { composeStory() } label: {
-            Image(systemName: "plus.circle")
+            Image("ic_stories").renderingMode(.template).resizable().scaledToFit()
+                .frame(width: 22, height: 22)
         }
     }
 
