@@ -3018,7 +3018,7 @@ struct ChatRow: View, Equatable {
                 }
             }
             .foregroundStyle(iconTint ?? Color.secondary)
-            Text(text).font(.system(size: 15, weight: weight))
+            Text(text).font(.subheadline.weight(weight))
                 .foregroundStyle(textTint ?? .secondary).lineLimit(1)
         }
     }
@@ -3145,9 +3145,9 @@ struct ChatRow: View, Equatable {
             previewRow("hand.raised.fill", "Blocked")
         } else if let r = recordingLabel, !activityExpired {
             (Text(Image(systemName: "mic.fill")).font(.system(size: 12)) + Text(" \(r)"))
-                .font(.system(size: 15)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
+                .font(.subheadline).foregroundStyle(Theme.accent(dark)).lineLimit(1)
         } else if let t = typingLabel, !activityExpired {
-            Text(t).font(.system(size: 15)).foregroundStyle(Theme.accent(dark)).lineLimit(1)
+            Text(t).font(.subheadline).foregroundStyle(Theme.accent(dark)).lineLimit(1)
         } else if voiceDraftSecs > 0 {
             // A parked voice recording (his reference screenshots): the same red "Draft:" the text
             // draft below wears, then the mic and the note's length. Wins over a text draft — the
@@ -3155,20 +3155,20 @@ struct ChatRow: View, Equatable {
             (Text("Draft: ").foregroundStyle(.red)
              + Text(Image(systemName: "mic.fill")).font(.system(size: 12))
              + Text(" " + voiceDraftLabel).foregroundStyle(.secondary))
-                .font(.system(size: 15)).lineLimit(1)
+                .font(.subheadline).lineLimit(1)
         } else if !draft.isEmpty {
             (Text("Draft: ").foregroundStyle(.red) + Text(draft).foregroundStyle(.secondary))
                 // 2 lines is the design, but the first layout pass can offer almost no width, and
                 // without a cap the text stacks one letter per line. See the note on timeStr.
-                .font(.system(size: 15)).lineLimit(2).truncationMode(.tail)
+                .font(.subheadline).lineLimit(2).truncationMode(.tail)
         } else if let r = reactionPreview {
-            Text(r).font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(1)
+            Text(r).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
         } else if isPhotoPreview {
             HStack(spacing: 5) {
                 SecureImageView(imageUrl: conv.lastImageUrl ?? "", enc: conv.lastImageEnc, cid: conv.id)
                     .frame(width: 20, height: 20)
                     .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                Text(lastSenderPrefix + photoPreviewLabel).font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(1)
+                Text(lastSenderPrefix + photoPreviewLabel).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
         } else if let badge = previewBadge(conv.lastMessageCipher, mine: lastIsCall && conv.lastIsMine(me)) {
             // A MISSED CALL IS THE ONE PREVIEW THAT IS BAD NEWS, and it was the same grey as
@@ -3211,7 +3211,11 @@ struct ChatRow: View, Equatable {
             previewRow("arrow.up.circle.fill", "Message from a newer version")
         } else {
             Text(lastSenderPrefix + decodedLast)
-                .font(.system(size: 15, weight: unread > 0 ? .semibold : .regular))
+                // ⛔ `.subheadline`, like every other preview branch and like the hidden two-line
+                // label that reserves this row's height. A fixed 15 and a semantic 15 are the same
+                // size at the default text setting and diverge at every other one — which would
+                // have left the reserve measuring one thing and the words another.
+                .font(.subheadline.weight(unread > 0 ? .semibold : .regular))
                 .foregroundStyle(unread > 0 ? Color.primary : .secondary).lineLimit(2)   // darker when unread
         }
     }
