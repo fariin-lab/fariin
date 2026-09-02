@@ -75,6 +75,10 @@ struct StoryAudienceRow<Trailing: View>: View {
 
     let audience: StoryAudience
     let contacts: Set<String>
+    /// The glow relationship, for the Glowers row's own count. Defaulted so the settings list — which
+    /// draws these rows too and has no reason to know about Glow — needs no change; that row simply
+    /// shows its wordy subtitle there instead of a number. See `StoryAudience.recipients`.
+    var glow: Set<String> = []
     @ViewBuilder var trailing: Trailing
 
     var body: some View {
@@ -82,7 +86,7 @@ struct StoryAudienceRow<Trailing: View>: View {
             badge
             VStack(alignment: .leading, spacing: 2) {
                 Text(audience.title).foregroundStyle(.primary).lineLimit(1)
-                Text(audience.subtitle(contacts: contacts))
+                Text(audience.subtitle(contacts: contacts, glow: glow))
                     .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)

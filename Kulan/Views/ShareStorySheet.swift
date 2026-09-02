@@ -258,6 +258,10 @@ struct ShareStorySheet: View {
     @State private var multiCustom: Set<String> = []
 
     private var contactIds: Set<String> { StoryContact.ids(contacts) }
+    /// The Glowers audience's people, read here on the main actor and handed DOWN to the audience
+    /// value — which is a pure struct and refuses to reach for a main-actor singleton itself. See
+    /// the note on `StoryAudience.recipients`; this sheet is the one place that knows both sets.
+    private var glowIds: Set<String> { GlowService.shared.glowRelationship }
 
     /// The audience the sheet currently has ticked, and the one door that writes it. See
     /// `editSelection` for why editing does not touch the store.
@@ -440,7 +444,7 @@ struct ShareStorySheet: View {
                     if oneTimeActive { oneTimeRow.listRowInsets(Self.audienceRowInsets) }
                     ForEach(store.all) { a in
                         Button { tapAudience(a) } label: {
-                            StoryAudienceRow(audience: a, contacts: contactIds) {
+                            StoryAudienceRow(audience: a, contacts: contactIds, glow: glowIds) {
                                 StoryTick(on: tickOn(a))
                             }
                         }
@@ -675,7 +679,7 @@ struct ShareStorySheet: View {
         if oneTimeActive { postOneTime(); return }
         if !multiCustom.isEmpty { postToLists(); return }
         let a = chosen
-        let recipients = a.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom)
+        let recipients = a.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom, glow: glowIds)
         // Block ONLY when you HAVE chats but this audience narrows down to literally no one. With no
         // chats at all, posting is still fine: it is YOUR OWN story and always visible to you, it
         // just has no other recipients yet. Without that carve-out a brand-new user could never post
@@ -785,9 +789,9 @@ struct ShareStorySheet: View {
         let a = chosen
         let recipients = multi
             ? lists.reduce(into: Set<String>()) {
-                $0.formUnion($1.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom))
+                $0.formUnion($1.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom, glow: glowIds))
               }
-            : a.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom)
+            : a.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom, glow: glowIds)
         // Block ONLY when there are chats and this audience narrows to nobody — the post path's rule.
         // With no chats at all it is still my own story and still visible to me.
         if recipients.isEmpty && !contactIds.isEmpty {
@@ -894,7 +898,7 @@ struct ShareStorySheet: View {
             return
         }
         let recipients = lists.reduce(into: Set<String>()) {
-            $0.formUnion($1.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom))
+            $0.formUnion($1.recipients(contacts: contactIds, hiddenFrom: store.hiddenFrom, glow: glowIds))
         }
         if recipients.isEmpty && !contactIds.isEmpty {
             UINotificationFeedbackGenerator().notificationOccurred(.warning)

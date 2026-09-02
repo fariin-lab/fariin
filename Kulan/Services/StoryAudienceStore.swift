@@ -108,8 +108,8 @@ struct StoryAudience: Identifiable, Codable, Equatable {
 
     /// How many people this reaches, given the accepted-chat set. Everyone's count is the tray
     /// audience — the profile half has no number, because it is however many people find you.
-    func viewerCount(contacts: Set<String>) -> Int {
-        recipients(contacts: contacts).count
+    func viewerCount(contacts: Set<String>, glow: Set<String> = []) -> Int {
+        recipients(contacts: contacts, glow: glow).count
     }
 
     /// THE ONE PLACE A LIST BECOMES A SET OF PEOPLE. Every caller — the post, the subtitle, the empty
@@ -118,7 +118,15 @@ struct StoryAudience: Identifiable, Codable, Equatable {
     /// Everything is intersected with the accepted-chat set, so a list holding somebody you have
     /// since blocked or lost the chat with quietly stops reaching them instead of posting into a
     /// hole. Blocked people are already out of `contacts` before it gets here.
-    func recipients(contacts: Set<String>, hiddenFrom: Set<String> = []) -> Set<String> {
+    /// ⚠️ `glow` IS PASSED IN, EXACTLY LIKE `contacts`, AND THAT IS NOT A STYLE CHOICE. This type is
+    /// a pure value: it is `Sendable`, it is read from background contexts, and it answers questions
+    /// off the sets it is HANDED. The first version of the Glowers audience reached into
+    /// `GlowService.shared` from in here and the compiler refused it — "main actor-isolated property
+    /// cannot be referenced from a nonisolated context", twice — which was the type defending the
+    /// pattern. Callers that know the glow set pass it; the ones that cannot pass nothing, and a
+    /// Glowers audience then honestly reaches nobody rather than lying from a stale singleton.
+    func recipients(contacts: Set<String>, hiddenFrom: Set<String> = [],
+                    glow: Set<String> = []) -> Set<String> {
         // ⚠️ NAMING SOMEBODY OUTRANKS HIDING THEM, and it did not. "Hide my stories from X" used
         // to be subtracted from EVERY audience, so a Custom list built by hand and containing one
         // person who happens to be on that list resolved to nobody — the owner hid Jini from
@@ -132,7 +140,7 @@ struct StoryAudience: Identifiable, Codable, Equatable {
         //
         // Blocks are NOT affected: those are removed from `contacts` before this is called, in both
         // directions, and no list can put them back.
-        let raw = rawRecipients(contacts: contacts)
+        let raw = rawRecipients(contacts: contacts, glow: glow)
         return appliesGlobalHide ? raw.subtracting(hiddenFrom) : raw
     }
 
@@ -166,7 +174,7 @@ struct StoryAudience: Identifiable, Codable, Equatable {
         }
     }
 
-    private func rawRecipients(contacts: Set<String>) -> Set<String> {
+    private func rawRecipients(contacts: Set<String>, glow: Set<String>) -> Set<String> {
         switch kind {
         case .everyone:
             // Delivered to the tray of everyone you have a chat with, exactly like My Friends. What
@@ -181,7 +189,7 @@ struct StoryAudience: Identifiable, Codable, Equatable {
         case .custom:
             return Set(members).intersection(contacts)
         case .glowers:
-            return GlowService.shared.glowRelationship
+            return glow
             // ⛔ NOT INTERSECTED WITH `contacts`, AND THAT IS THE FEATURE. Every branch above ends
             // in the accepted-chat set because every audience above describes people you talk to.
             // Glow exists so two people who have NEVER chatted can reach each other, so an
@@ -198,7 +206,7 @@ struct StoryAudience: Identifiable, Codable, Equatable {
     var isPublic: Bool { kind == .everyone }
 
     /// The grey line under the title in every list this appears in.
-    func subtitle(contacts: Set<String>) -> String {
+    func subtitle(contacts: Set<String>, glow: Set<String> = []) -> String {
         switch kind {
         case .everyone: return "All Fariin connections"
         case .myFriends:
@@ -209,7 +217,7 @@ struct StoryAudience: Identifiable, Codable, Equatable {
             }
         case .glowers:
             // Counted off the live relationship, not off `members` — this audience has none.
-            let n = GlowService.shared.glowRelationship.count
+            let n = glow.count
             return n == 0 ? "People you have a Glow with"
                           : "\(n) \(n == 1 ? "person" : "people") you have a Glow with"
         case .custom:
