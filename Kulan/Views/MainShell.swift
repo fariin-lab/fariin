@@ -1313,70 +1313,14 @@ struct ChatsView: View {
         // worth naming now that it is paid off.
         chatFilter == 0 && (!archivedChats.isEmpty || hasArchivedStories)
     }
-    /// 22pt of icon between two 11pt paddings. Only the empty-state overlay needs the number, and it
-    /// needs it BEFORE layout, which is why it is written down rather than measured.
-    private let archivedRowHeight: CGFloat = 44
-
-    @ViewBuilder private var archivedEntryRow: some View {
-        if showsArchivedRow {
-            // The archive is a page of this stack (his call), and the row's own metrics went back to
-            // ours with the chat rows' — 56pt column, 12pt gap.
-            Button { path.append(ArchiveRoute.archive) } label: {
-                HStack(spacing: 12) {
-                    // Centred in the 56pt column the avatars stand in, so "Archived" starts on the
-                    // same left edge as every chat name under it.
-                    // 20, which is `MenuIcon.custom` — the size every one of OUR drawings is drawn
-                    // at everywhere else in the app (two points under a system symbol's box, because
-                    // a solid shape carries more weight than a stroked one). It was 22 because this
-                    // one stands alone in a wide column; his call, 2026-08-14: smaller, but not
-                    // small. The app's own number is exactly that.
-                    MenuIcon("ic_archive", size: 20)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 56)
-                    // ⚠️ IT IS NOT A PEER OF THE ROWS UNDER IT, and the line that used to sit here
-                    // said it was: a chat name's font, `.primary`, semibold. That made the heaviest
-                    // type on the whole screen belong to the row people tap least, and it made the
-                    // archive read as a conversation with a strange name. Owner 2026-08-19, holding
-                    // ours beside the reference app's: theirs is grey and lighter than every name
-                    // below it, and it reads as a shelf rather than as a chat. This reverses his own
-                    // earlier call on the same row; the icon size he set that day is untouched.
-                    Text("Archived")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 8)
-                    // ⛔ NO COUNT (his order, 2026-08-21, circled). It was the number of archived
-                    // chats, tinted accent when any of them were unread.
-                    //
-                    // ⚠️ THAT NUMBER WAS ALSO THE ONLY UNREAD SIGNAL THIS ROW HAD, and with the row
-                    // itself now behind a pull-down gesture there is nothing left on this screen to
-                    // say an archived chat has something new in it. He asked for the number gone, so
-                    // it is gone; if the signal is wanted back it should be a dot rather than a
-                    // count, which is a different request and not one to make on his behalf.
-                }
-                .padding(.vertical, 11)
-                .padding(.horizontal, 16)   // the chat row's gutter, for the same reason (row insets are zero)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)            // same deal as a chat row: no custom press state
-            // Select mode: dimmed and dead, not gone. `disabled` is the right tool here for once —
-            // it stops the tap AND greys the row, and greyed is exactly the state being asked for.
-            .disabled(selecting)
-            .selectionDisabled(true)        // no checkbox, ever
-            .listRowInsets(EdgeInsets())
-            // ⛔ NO RULE UNDER THIS ROW EITHER — owner, 2026-09-02, off build 725: "remove white
-            // line under archive row". The chat rows lost their separators when the list went to
-            // the reference's no-rules look, and this one kept its `.visible` because it lives in
-            // a different property and was simply missed. The argument its old comment made — a
-            // row without a rule on a list that has one is conspicuous — has exactly inverted:
-            // the list has none now, so the one line left was the conspicuous one.
-            .listRowSeparator(.hidden)
-            // Same grey the chat rows shed — see the note there. This row lives in its own property
-            // and would otherwise be the one card left on the page.
-            .listRowBackground(Color.clear)
-            .deleteDisabled(true)
-            .moveDisabled(true)
-        }
-    }
+    // ⛔ DELETED HERE: `archivedEntryRow`, and `archivedRowHeight` with it — owner,
+    // 2026-09-02: "remove it completely from the chat list". `showsArchivedRow` stays because
+    // the empty-state copy below still asks whether there is an archive to mention.
+    //
+    // Recorded rather than quietly dropped: this row carried a lot of settled argument — its
+    // 56pt column and 12pt gap matched the chat rows, it stayed DIMMED rather than vanishing in
+    // select mode (his 2026-08-14 reference), and it lost its separator on his word. None of that
+    // is worth rediscovering, and none of it applies to a menu entry.
 
     /// THE SEARCH BOX'S TEST, A METHOD AND NOT AN INLINE CLOSURE. `visible` is one long chained
     /// expression and it is already at this file's type-checker budget — adding four lines
@@ -1938,7 +1882,22 @@ struct ChatsView: View {
                               chatSectionHeader("Other people")
                               ForEach(newPeople) { u in newPersonRow(u) }
                           }
-                          archivedEntryRow
+                          // ⛔ NO ARCHIVED ROW IN THE LIST AT ALL — owner, 2026-09-02, with it
+                          // ringed: "remove it completely from the chat list; when the user wants
+                          // archive he clicks the filter button then Archive, never a row in the
+                          // chat list".
+                          //
+                          // ⚠️ THE DOOR IS THE MENU AND IT ALREADY EXISTS, which is what makes this
+                          // a removal rather than a loss: `filterMenu` has carried an Archive entry
+                          // since it was written, so archived chats stay one tap away from the same
+                          // button that filters them.
+                          //
+                          // The history, because this row has been moved four times and each move
+                          // had a reason that is now spent: above the chats, then below them on
+                          // "exactly like the reference app", then gated behind a pull-to-reveal,
+                          // then always-on when he reversed that. He is ending the argument by
+                          // taking the row out of the list, and a menu entry cannot drift up and
+                          // down a page.
                         }
                         // ⛔ GROUPED, THEIR STYLE, READ FROM SOURCE — `CLVTableView.init` is
                         // `super.init(frame: .zero, style: .grouped)`. This is the modifier that
@@ -2093,7 +2052,9 @@ struct ChatsView: View {
                                     // have and the list is "empty", so this overlay would otherwise
                                     // land on top of the one row still standing (and eat its taps).
                                     emptyWelcome
-                                        .padding(.top, 24 + (showsArchivedRow ? archivedRowHeight : 0))
+                                        // Was `24 + archivedRowHeight` when that row could sit
+                                        // under an empty list. There is no row to clear now.
+                                        .padding(.top, 24)
                                 } else {
                                     // Per-filter copy — the Groups filter was showing the Unread text.
                                     ContentUnavailableView(
