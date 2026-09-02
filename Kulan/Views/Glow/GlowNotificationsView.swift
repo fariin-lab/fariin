@@ -119,14 +119,18 @@ struct GlowNotificationsView: View {
                 // the headings restated the order they were already in and broke a short list into
                 // three shorter ones.
                 //
-                // ⚠️ 10 LEADING, NOT 16 — his "the avatar's left angle has more space". The unread
-                // dot and its 12pt gap sit before the face, so a 16pt row inset put the picture at
-                // 34 while everything else on the page starts at 16. The dot moved into the row's
-                // own padding; this is now the page's margin, and the face lands on it.
+                // ⛔ 16, THE SAME MARGIN THE CHIPS USE — owner, 2026-09-02: "on the notification
+                // page the left space, use the same one the All text chip uses". The chips are
+                // `.padding(.horizontal, 16)` and the title bar's own margin is 16, so 16 is the
+                // page's column and the faces are the only thing that was not on it.
+                //
+                // ⚠️ THE DOT IS OUT OF THE ROW'S FLOW NOW, which is what makes that possible. It sat
+                // before the face with a gap, so any inset that put the DOT on 16 put the FACE at
+                // 22 or 34. It hangs in the margin instead — see `GlowEventRow`.
                 List {
                     ForEach(rows) { e in
                         GlowEventRow(event: e, unread: e.at > glow.seenUpTo, dark: dark)
-                            .listRowInsets(EdgeInsets(top: 8, leading: 10, bottom: 8, trailing: 16))
+                            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
                             .listRowSeparator(.hidden)
                     }
                 }
@@ -192,13 +196,7 @@ private struct GlowEventRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
-            // ⚠️ THE DOT AND ITS GAP ARE THE ROW'S LEADING SPACE — his "the avatar's left angle has
-            // more space". A 6pt dot on a 12pt gap inside a 16pt row inset put the face at 34 while
-            // the chips and the title above start at 16. The row inset came down to 10 and this gap
-            // to 6, which lands the face on 22 — clear of the dot, and close enough to the page's
-            // margin that the column reads straight.
-            Circle().fill(unread ? GlowStyle.accent : .clear).frame(width: 6, height: 6)
+        HStack(spacing: 12) {
 
             // THE PERSON — face and words together, because they name one thing.
             //
@@ -218,6 +216,16 @@ private struct GlowEventRow: View {
             .buttonStyle(.plain)
 
             trailing
+        }
+        // ⛔ THE UNREAD DOT HANGS IN THE MARGIN — owner, 2026-09-02: the faces must start on the
+        // same 16 the chips do. It used to be the first thing in this row, so every inset that put
+        // the DOT on the page's column pushed the FACE off it. As an overlay it takes no width at
+        // all: the row lays out as face-then-words, and the dot sits in the gutter beside it the way
+        // an unread mark is meant to.
+        .overlay(alignment: .leading) {
+            Circle().fill(unread ? GlowStyle.accent : .clear)
+                .frame(width: 6, height: 6)
+                .offset(x: -11)
         }
         // The ORDINARY profile — see the note on the same route in `StoriesTabView`. The Glow
         // profile is my own page and nobody else's.

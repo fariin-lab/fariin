@@ -464,11 +464,50 @@ struct StoriesTabView: View {
         case .stories:
             GlowStoriesGridView()
         case .friends:
-            // The same grid the page draws when nothing sits under it — one definition, so the
-            // full page and the no-Glow layout can never come to disagree about a card.
-            ScrollView { friendsGrid(showsHeading: false).padding(.top, 4) }
-                .navigationTitle("Friends")
-                .navigationBarTitleDisplayMode(.inline)
+            // ⛔ THE GLOWING PAGE'S GRID, BUILT HERE RATHER THAN BORROWED — owner, 2026-09-02, with
+            // this page photographed: "when I click the Friends text and it opens the friends
+            // cards, make it like this" (his Glowing grid), "also hide the bottom nav bar".
+            //
+            // ⚠️ IT USED TO CALL `friendsGrid`, WHICH IS THE STORIES TAB'S OWN SECTION — a `VStack`
+            // carrying its heading, its top padding and its section spacing, all of which are that
+            // page's business and none of which belong on a page of its own. Sharing it looked like
+            // one definition and was really one definition serving two jobs; what he photographed is
+            // what that costs. The cards are the shared thing and they still are: same
+            // `GlowStoryCardView`, same two columns, same margins as Glowing.
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: GlowStoryCardView.gutter),
+                                    GridItem(.flexible(), spacing: GlowStoryCardView.gutter)],
+                          spacing: GlowStoryCardView.gutter) {
+                    if let mine = StoriesRepository.shared.mine, let newest = mine.stories.last {
+                        Button { openStoryFromRow(mine) } label: {
+                            GlowStoryCardView(
+                                thumbUrl: newest.thumbUrl.isEmpty ? newest.mediaUrl : newest.thumbUrl,
+                                name: "My Story",
+                                authorPhoto: profile.me?.photoUrl,
+                                isMine: true,
+                                rectKey: mine.id)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    ForEach(StoriesRepository.shared.others.filter { !StoryPrefs.isHidden($0.authorUid) }) { g in
+                        Button { openStoryFromRow(g) } label: {
+                            GlowStoryCardView(
+                                thumbUrl: g.stories.last.map { $0.thumbUrl.isEmpty ? $0.mediaUrl : $0.thumbUrl } ?? "",
+                                name: g.name,
+                                authorPhoto: g.photoUrl,
+                                rectKey: g.id)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, GlowStoryCardView.margin)
+                .padding(.top, 8)
+            }
+            .navigationTitle("Friends")
+            .navigationBarTitleDisplayMode(.inline)
+            // A pushed page is not a tab — the same rule the Glow pages took, and the reason his
+            // last row sat under the floating bar.
+            .toolbar(.hidden, for: .tabBar)
         case .notifications:
             GlowNotificationsView()
         case .storyPrivacy:
