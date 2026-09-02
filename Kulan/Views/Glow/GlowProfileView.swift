@@ -68,15 +68,20 @@ struct GlowProfileView: View {
                     Color.clear.frame(height: 32)
                 }
             }
+            // The space the header measures its overscroll against — see `stretch` in `header`.
+            .coordinateSpace(.named("profileScroll"))
             // ⛔ THE PHOTOGRAPH RUNS TO THE TOP OF THE SCREEN — owner, 2026-09-02: "when I enter my
             // profile the top header looks a different colour". It was not a colour, it was a gap:
             // the scroll content started BELOW the status bar, so the strip behind the clock was
             // `pageColor` — a flat tone pulled from the photo — while the photo itself began an inch
             // lower. Two versions of the same colour meeting in a line is exactly what he saw.
             //
-            // A full-bleed header means full bleed. The back button already floats on the picture
-            // and `header`'s own `ZStack(alignment: .top)` keeps it clear of the clock.
+            // A full-bleed header means full bleed.
             .ignoresSafeArea(edges: .top)
+
+            // LAST IN THE STACK, so it draws over the scrolling content and stays put — see
+            // `pinnedChrome`.
+            pinnedChrome
         }
         // ⛔ NO TAB BAR ON THIS PAGE — owner, same report: "when I enter, hide the nav bottom bar".
         // It is a profile opened from a story, not a tab, and the bar was sitting over the Posted
@@ -109,6 +114,15 @@ struct GlowProfileView: View {
         ZStack(alignment: .top) {
             GeometryReader { geo in
                 let w = geo.size.width
+                // ⛔ THE PICTURE STRETCHES INSTEAD OF LEAVING A HOLE — his same report: pulling the
+                // page down opened a band of flat colour above the photograph, which is what made a
+                // scroll look like a sheet coming loose. A full-bleed header grows with the
+                // overscroll; every profile page that does this well does exactly this.
+                //
+                // ⚠️ ONLY DOWNWARDS. `max(0, minY)` means the image is only ever taller than its
+                // slot, never shorter: scrolling UP must let it leave normally, or the page would
+                // drag its own header along behind it.
+                let stretch = max(0, geo.frame(in: .named("profileScroll")).minY)
                 Group {
                     if let url = profile?.photoUrl ?? initialPhoto, !url.isEmpty {
                         StoryImage(url: url)
@@ -122,8 +136,9 @@ struct GlowProfileView: View {
                         }
                     }
                 }
-                .frame(width: w, height: w)
+                .frame(width: w, height: w + stretch)
                 .clipped()
+                .offset(y: -stretch)
                 // The photograph melts into the page rather than ending on a line — the seam
                 // `ProfilePalette` exists to kill. See its note on `page`.
                 .overlay(alignment: .bottom) {
@@ -133,29 +148,44 @@ struct GlowProfileView: View {
                 }
             }
             .frame(height: UIScreen.main.bounds.width)
-
-            HStack {
-                CircleGlyphButton(system: "chevron.left") { dismiss() }
-                Spacer()
-                // ⛔ EDIT, TOP RIGHT, MINE ONLY — owner, 2026-09-02: "on my profile top right side
-                // add an edit button; when I click it I can change name, bio, avatar, username like
-                // in Settings > Edit profile".
-                //
-                // ⚠️ THE SAME `EditProfileView` SETTINGS PRESENTS, not a second editor. It already
-                // owns the rules this page must not re-decide: nothing is written until Save, the
-                // username has its own claim-and-release flow, and the avatar is cropped twice (the
-                // circle for lists, the tall one for this very header). A copy of that here would be
-                // a second answer to all three.
-                if isMe {
-                    GlassTextButton(title: "Edit") { showEdit = true }
-                }
-            }
-            .padding(.horizontal, 16)
-            // ⚠️ THE INSET IS PUT BACK BY HAND. The scroll view ignores the top safe area so the
-            // photograph can reach the screen edge, which also strips it from everything floating on
-            // that photograph — without this the two buttons sit under the clock.
-            .padding(.top, Self.topInset + 8)
         }
+    }
+
+    /// ⛔ THE CHROME DOES NOT SCROLL — owner, 2026-09-02: "when I scroll down and up the buttons
+    /// follow me; that is not a real page".
+    ///
+    /// ⚠️ THEY WERE INSIDE THE SCROLL VIEW, which is the whole of it. The back button and Edit were
+    /// laid out on top of the photograph INSIDE `header`, and `header` is the first thing in the
+    /// scrolling stack — so they were content, and content moves. On every other page in this app
+    /// the back button belongs to the navigation bar and the bar does not move; this page hides its
+    /// bar to get a full-bleed picture, and hiding the bar took the one thing that was standing
+    /// still with it.
+    ///
+    /// As a sibling of the scroll view in the `ZStack` they are pinned to the screen, which is what
+    /// a navigation bar is. Nothing about how they look changes.
+    private var pinnedChrome: some View {
+        HStack {
+            CircleGlyphButton(system: "chevron.left") { dismiss() }
+            Spacer()
+            // ⛔ EDIT, TOP RIGHT, MINE ONLY — owner, 2026-09-02: "on my profile top right side
+            // add an edit button; when I click it I can change name, bio, avatar, username like
+            // in Settings > Edit profile".
+            //
+            // ⚠️ THE SAME `EditProfileView` SETTINGS PRESENTS, not a second editor. It already
+            // owns the rules this page must not re-decide: nothing is written until Save, the
+            // username has its own claim-and-release flow, and the avatar is cropped twice (the
+            // circle for lists, the tall one for this very header). A copy of that here would be
+            // a second answer to all three.
+            if isMe {
+                GlassTextButton(title: "Edit") { showEdit = true }
+            }
+        }
+        .padding(.horizontal, 16)
+        // ⚠️ THE INSET IS PUT BACK BY HAND. The page ignores the top safe area so the photograph can
+        // reach the screen edge, which also strips it from everything floating on that photograph —
+        // without this the two buttons sit under the clock.
+        .padding(.top, Self.topInset + 8)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     /// Name, tick, @handle, bio — his screenshot's stack, centred.
