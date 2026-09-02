@@ -289,6 +289,7 @@ struct AttachRecentsStrip: View {
                         // open the multi-image approval (paging) of the selected set instead. Tap the
                         // CHECKBOX → (de)select. Separate, never conflict.
                         RecentThumb(asset: a, selectionNumber: selectionIndex(a),
+                                    selectionActive: !selectedIds.isEmpty,
                                     onOpen: { openTapped(a) },
                                     onToggle: { toggle(a) })
                             .onAppear { loadMoreIfNeeded(a) }   // near the end → page in the next batch
@@ -765,6 +766,11 @@ private struct AlbumThumb: View {
 private struct RecentThumb: View {
     let asset: PHAsset
     var selectionNumber: Int? = nil
+    /// ≥1 photo is ticked somewhere in the grid. The circles draw only then — owner, 2026-09-02,
+    /// off build 725: "when i open attach sheet first time user dont show select tick box, only
+    /// appear when user click image". At rest the grid is clean photographs; the first tick makes
+    /// every tile show its circle so the running numbers read as a set.
+    var selectionActive: Bool = false
     let onOpen: () -> Void      // tap the PHOTO → open it
     let onToggle: () -> Void    // tap the CHECKBOX → (de)select
     @State private var image: UIImage?
@@ -789,20 +795,12 @@ private struct RecentThumb: View {
             // only curve on this screen belongs to the sheet. `clipShape` stays because the picture
             // is `scaledToFill` and still has to be cut to the cell.
             .clipShape(Rectangle())
-            .overlay {
-                // ⚠️ THE UNSELECTED HAIRLINE IS GONE WITH THE CORNERS, and that is a consequence of
-                // his change rather than a second decision. It existed so a pale thumbnail did not
-                // dissolve into the sheet around it, which was a real risk when each tile floated in
-                // 12pt of margin. There is no margin now — a tile's neighbours are 2pt away on every
-                // side — so the same line would draw a grid of boxes over a continuous sheet of
-                // photographs, which is the look he is asking to be rid of.
-                //
-                // The SELECTED ring stays. It is not decoration, it is the only thing that says
-                // which pictures you are about to send.
-                if selected {
-                    Rectangle().stroke(Color(hex: 0x3DA1FD), lineWidth: 3)
-                }
-            }
+            // ⛔ NO BLUE BORDER ON A SELECTED TILE — owner, 2026-09-02, off build 725, ringed in
+            // red: "when i selected image the blue square remove plz around images". The earlier
+            // square-tiles pass kept the stroke on the theory that it was the only thing saying
+            // which pictures you are about to send; it is not — the numbered blue badge says it,
+            // and on a 2pt-gap grid a 3pt stroke bled into the neighbouring photos. The badge is
+            // the whole selected state now. (The unselected hairline went in that same pass.)
             .overlay(alignment: .bottomTrailing) {
                 if asset.mediaType == .video {
                     HStack(spacing: 3) {
@@ -815,16 +813,23 @@ private struct RecentThumb: View {
                     .padding(4)
                 }
             }
-            .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            // Square, like the tile — the 24pt rounded contentShape was a leftover from the
+            // rounded-card era and was quietly clipping the corners out of the tap area.
+            .contentShape(Rectangle())
             // Tapping the PHOTO opens it (separate from the checkbox below).
             .onTapGesture { onOpen() }
-            // Always-visible selection checkbox (top-trailing): tap to (de)select — its own hit area.
+            // The selection corner: its HIT AREA is always live, its CIRCLE only draws while a
+            // selection is active (see `selectionActive`). Hiding the chrome must not hide the
+            // door — the first tick is made by tapping the same corner it has always been in, and
+            // the moment it lands every tile's circle appears.
             .overlay(alignment: .topTrailing) {
                 Button(action: onToggle) {
                     ZStack {
-                        Circle().fill(selected ? Color(hex: 0x3DA1FD) : Color.black.opacity(0.35))
-                            .frame(width: 26, height: 26)
-                        Circle().stroke(.white, lineWidth: 1.5).frame(width: 26, height: 26)
+                        if selectionActive || selected {
+                            Circle().fill(selected ? Color(hex: 0x3DA1FD) : Color.black.opacity(0.35))
+                                .frame(width: 26, height: 26)
+                            Circle().stroke(.white, lineWidth: 1.5).frame(width: 26, height: 26)
+                        }
                         if let n = selectionNumber {
                             Text("\(n)").font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
                         }
