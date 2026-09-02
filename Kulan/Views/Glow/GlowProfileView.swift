@@ -322,7 +322,9 @@ struct GlowProfileView: View {
                 case .loaded(let rows):
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 10) {
-                            ForEach(rows) { s in PostedStoryTile(story: s) }
+                            ForEach(rows) { s in
+                                PostedStoryTile(story: s) { openPosted() }
+                            }
                         }
                         .padding(.horizontal, 12)
                     }
@@ -450,6 +452,29 @@ struct GlowProfileView: View {
         await faces.load(Array(ids), key: "faces-" + faceKey)
     }
 
+    /// Open the story set this rail is showing.
+    ///
+    /// ⚠️ THE WHOLE SET, NOT THE ONE TILE. `StoryDoor` opens a person's group and pages through it;
+    /// there is no "start at index three" and inventing one would be a second way into the viewer.
+    /// Opening the group is what the story row does from every other surface in the app, and the
+    /// viewer starts on the first unseen story, which is the answer somebody tapping a rail wants
+    /// far more often than "this exact one".
+    ///
+    /// ⚠️ TWO DOORS BECAUSE THERE ARE TWO SITUATIONS. My own stories are already in memory as a
+    /// group; somebody else's have to be fetched and mapped, which is what `GlowStoryOpen` does.
+    private func openPosted() {
+        if isMe {
+            guard let mine = StoriesRepository.shared.mine, !mine.stories.isEmpty else { return }
+            StoryDoor.open(mine, among: [mine], from: mine.id, pinned: true, deliveredToMe: true)
+        } else {
+            let p = GlowPerson(id: uid,
+                               name: profile?.name ?? initialName,
+                               handle: profile?.handle ?? "",
+                               photoUrl: profile?.photoUrl ?? initialPhoto)
+            Task { await GlowStoryOpen.open(p) }
+        }
+    }
+
     private func loadStories() async {
         await stories.load(uid: uid)
         await stories.loadViewCounts(isMe: isMe)
@@ -464,8 +489,25 @@ struct GlowProfileView: View {
 /// One story in the profile's rail: the poster, and the view badge from his screenshot.
 struct PostedStoryTile: View {
     let story: PostedStory
+    /// ⛔ THE TILE OPENS THE STORY — owner, 2026-09-02: "when I click a story it is not opening,
+    /// fix". It never could: this was a plain `ZStack` inside a `ForEach`, with no button and no
+    /// gesture anywhere on it. Nothing was broken; the tap had simply never been wired.
+    ///
+    /// Nil leaves the tile inert, which is what a screen that only displays them wants.
+    var onTap: (() -> Void)? = nil
+
+    init(story: PostedStory, onTap: (() -> Void)? = nil) {
+        self.story = story
+        self.onTap = onTap
+    }
 
     var body: some View {
+        Button { onTap?() } label: { tile }
+            .buttonStyle(.plain)
+            .disabled(onTap == nil)
+    }
+
+    private var tile: some View {
         ZStack(alignment: .bottomLeading) {
             StoryImage(url: story.thumbUrl)
                 .frame(width: 104, height: 150)

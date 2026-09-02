@@ -56,6 +56,9 @@ struct PostedStoriesView: View {
     }
 
     @State private var loader = PostedStoriesLoader()
+    /// The person, for the door below. Fetched with the page rather than passed in, because this
+    /// screen can be reached with nothing but a uid.
+    @State private var person: UserProfile?
     @State private var filter: Filter = .all
     @State private var showFilters = false
     @Environment(\.dismiss) private var dismiss
@@ -99,7 +102,26 @@ struct PostedStoriesView: View {
                     }
                 }
             }
-            .task { await loader.load(uid: uid); await loader.loadViewCounts(isMe: isMe) }
+            .task {
+                await loader.load(uid: uid)
+                await loader.loadViewCounts(isMe: isMe)
+                if !isMe, person == nil { person = await ProfileStore.shared.fetch(uid) }
+            }
+    }
+
+    /// Open this person's story set. The same two doors the profile's rail uses, and for the same
+    /// reason — see `GlowProfileView.openPosted`.
+    private func open() {
+        if isMe {
+            guard let mine = StoriesRepository.shared.mine, !mine.stories.isEmpty else { return }
+            StoryDoor.open(mine, among: [mine], from: mine.id, pinned: true, deliveredToMe: true)
+        } else {
+            let p = GlowPerson(id: uid,
+                               name: person?.name ?? title,
+                               handle: person?.handle ?? "",
+                               photoUrl: person?.photoUrl)
+            Task { await GlowStoryOpen.open(p) }
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -140,7 +162,13 @@ struct PostedStoriesView: View {
             } else {
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 3) {
-                        ForEach(rows) { s in PostedStoryGridTile(story: s) }
+                        // ⛔ THE CELL OPENS THE STORY — owner, 2026-09-02: "when I click a story
+                        // it is not opening". Same omission as the profile's rail: the tile was
+                        // drawn and never wired to anything.
+                        ForEach(rows) { s in
+                            Button { open() } label: { PostedStoryGridTile(story: s) }
+                                .buttonStyle(.plain)
+                        }
                     }
                     .padding(.horizontal, 3)
                 }
@@ -196,6 +224,7 @@ private struct FilterSheet: View {
 }
 
 /// One cell of the full-page grid: the poster, the view badge, and a mark for a video.
+///
 private struct PostedStoryGridTile: View {
     let story: PostedStory
 
