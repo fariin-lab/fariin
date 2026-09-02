@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit   // `UIApplication`, for the window's safe-area inset — see `topInset`
 
 /// THE GLOW PROFILE — his fifth screenshot, 2026-09-02.
 ///
