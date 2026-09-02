@@ -111,6 +111,33 @@ struct PostedStory: Identifiable, Equatable {
             return
         }
         guard !uid.isEmpty else { state = .loaded([]); return }
+
+        // ⛔ MY OWN STORIES COME FROM THE REPOSITORY, NOT FROM `publicStories` — owner, 2026-09-02:
+        // "I upload a story but Posted stories never shows it".
+        //
+        // ⚠️ `publicStories` IS A MIRROR OF THE PUBLIC ONES AND ONLY THOSE. It is what lets a
+        // STRANGER see what you have posted from your profile, so it is written for the Everyone
+        // audience and for nothing else — post to Friends or to Glowers and that collection stays
+        // empty, which is exactly what he did and exactly what the card then said. Reading it for my
+        // own page asked a question about strangers on the one page where the answer is mine.
+        //
+        // `StoriesRepository.mine` is every live story I have posted whatever its audience, it is
+        // already in memory off a listener, and it is what the story row itself draws. So this is
+        // also instant where the query was a round trip.
+        if uid == (AuthService.shared.uid ?? ""), let mine = StoriesRepository.shared.mine {
+            state = .loaded(mine.stories.reversed().map { s in
+                PostedStory(id: s.id,
+                            thumbUrl: s.thumbUrl.isEmpty ? s.mediaUrl : s.thumbUrl,
+                            blurThumb: s.blurThumb,
+                            createdAt: s.createdAt,
+                            expiresAt: s.expiresAt,
+                            isVideo: s.isVideo,
+                            views: nil,
+                            audience: s.audienceLabel)
+            })
+            return
+        }
+
         state = .loading
         let db = Firestore.firestore()
         do {

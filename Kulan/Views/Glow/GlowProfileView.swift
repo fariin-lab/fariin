@@ -90,6 +90,11 @@ struct GlowProfileView: View {
         // out. `\.colorScheme`, never `preferredColorScheme` — see the note in ThreadView.
         .environment(\.colorScheme, .dark)
         .toolbar(.hidden, for: .navigationBar)
+        // ⛔ AND THE SWIPE BACK COMES WITH IT — owner, 2026-09-02: "swiping back doesn't work on
+        // this page, only the arrow button works". Hiding the navigation bar takes the interactive
+        // pop gesture with it, because UIKit hangs that gesture off the bar's back item: no back
+        // item, no swipe. Every full-bleed page in the app pays this and this one had not been told.
+        .background(RestoreSwipeBack())
         .task { await load() }
         // Keyed on the relationship, so the faces appear the moment the listeners deliver rather
         // than only if they happened to be there on the first frame. See `faceKey`.
@@ -324,6 +329,10 @@ struct GlowProfileView: View {
                     .frame(height: 172)
                     .padding(.top, 12)
 
+                    // ⛔ ONLY PAST THREE — owner, 2026-09-02: "more than 3 stories show the See All
+                    // button". Under four the rail already shows everything, so the row offered a
+                    // page identical to what you were looking at.
+                    if rows.count > 3 {
                     Divider().overlay(Color.white.opacity(0.12)).padding(.top, 10)
                     NavigationLink {
                         PostedStoriesView(uid: uid, isMe: isMe,
@@ -338,6 +347,7 @@ struct GlowProfileView: View {
                         .padding(.horizontal, 14).padding(.vertical, 13)
                     }
                     .buttonStyle(.plain)
+                    }
                 }
             }
             .background(cardColor, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -485,6 +495,64 @@ struct PostedStoryTile: View {
 
 /// The app's round glass glyph button, at the size this page's chrome uses. Local because the
 /// design-system `CloseXButton` is an X and this needs a chevron; same 44pt metric.
+/// Gives the interactive pop gesture back to a page that hides its navigation bar.
+///
+/// ⚠️ THE DELEGATE IS BORROWED AND PUT BACK. A `UINavigationController`'s pop recognizer is one
+/// object shared by every page on the stack, so taking its delegate and walking away would hand our
+/// answer to whatever screen came next. The old delegate is remembered on the way in and restored on
+/// the way out, which is also why this is a controller rather than a `.onAppear`.
+///
+/// ⚠️ `viewControllers.count > 1` IS THE WHOLE POLICY. Swiping on the root of a stack with nothing
+/// to pop is what freezes a navigation controller mid-transition, and the system's own delegate
+/// exists to say no to exactly that.
+private struct RestoreSwipeBack: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> Holder { Holder() }
+    func updateUIViewController(_ vc: Holder, context: Context) {}
+
+    final class Holder: UIViewController, UIGestureRecognizerDelegate {
+        private weak var previous: UIGestureRecognizerDelegate?
+        private var claimed = false
+
+        /// The nav controller is not ours — this view is buried in the SwiftUI hosting tree, so the
+        /// stack sits somewhere above us and the depth is not fixed.
+        private var nav: UINavigationController? {
+            var p: UIViewController? = self
+            while let cur = p {
+                if let n = cur.navigationController { return n }
+                p = cur.parent
+            }
+            return nil
+        }
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            guard !claimed, let pop = nav?.interactivePopGestureRecognizer else { return }
+            previous = pop.delegate
+            pop.delegate = self
+            pop.isEnabled = true
+            claimed = true
+        }
+
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            guard claimed, let pop = nav?.interactivePopGestureRecognizer else { return }
+            pop.delegate = previous
+            claimed = false
+        }
+
+        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            (nav?.viewControllers.count ?? 0) > 1
+        }
+
+        /// The page scrolls, and a horizontal drag from the edge must not have to win a fight with
+        /// it. Letting the two run together is what makes the swipe feel native here.
+        func gestureRecognizer(_ g: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            true
+        }
+    }
+}
+
 private struct CircleGlyphButton: View {
     let system: String
     let action: () -> Void

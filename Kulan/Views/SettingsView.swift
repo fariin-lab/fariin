@@ -1484,8 +1484,6 @@ struct EditProfileView: View {
     @State private var cropCandidate: CropItem?   // picked image awaiting the circular cropper
     @State private var confirmRemovePhoto = false   // Remove asks first (user request)
     @State private var showEditPhoto = false        // the Edit Photo sheet
-    /// My own profile, drawn the way everybody else sees it — see `ContactInfoView.previewUid`.
-    @State private var showProfilePreview = false
     /// What that sheet was asked for. Read and cleared in its onDismiss, never acted on inline.
     @State private var photoAction: ProfilePhotoAction?
     @State private var showPhotoPicker = false       // programmatic PhotosPicker present
@@ -1625,20 +1623,15 @@ struct EditProfileView: View {
                                     .contentShape(Capsule())
                             }
                             .buttonStyle(.plain)
-                            // ⛔ SEE IT AS THEY SEE IT (owner, 2026-08-20). Everything on this screen
-                            // is a field; none of it shows what the RESULT looks like, and the page
-                            // it feeds takes its colour from the photograph — so the one thing you
-                            // cannot judge from here is the thing this screen decides.
-                            Button { showProfilePreview = true } label: {
-                                Image(systemName: "person.text.rectangle")
-                                    .font(.system(size: 16, weight: .medium))
-                                    .foregroundStyle(.primary)
-                                    .frame(width: 36, height: 36)
-                                    .background(Color(.secondarySystemGroupedBackground), in: Circle())
-                                    .contentShape(Circle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Preview profile")
+                            // ⛔ DELETED HERE: the preview button — owner, 2026-09-02: "in edit
+                            // profile the preview button, remove it, I don't need it".
+                            //
+                            // It was added 2026-08-20 on the reasoning that everything on this
+                            // screen is a field and none of it shows the result. That reasoning is
+                            // weaker now than it was: the profile has its own Edit button in the top
+                            // right, so the page you are editing is one tap behind this sheet rather
+                            // than somewhere you have to go and find. Preview from a preview is a
+                            // second door to the room you just left.
                         }
                         // Was `.disabled(uploading)`, guarding an upload that started the moment you
                         // cropped. Nothing uploads here any more, so there is nothing to guard: you
@@ -1673,33 +1666,15 @@ struct EditProfileView: View {
                                           action: $photoAction)
                     }
                     .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
-                    // ⚠️ THE REAL SCREEN, NOT A MOCK-UP OF IT. `ContactInfoView` in preview mode is
-                    // the same view a stranger gets, with the same palette extracted from the same
-                    // photograph — a second copy built to look like it would start lying the first
-                    // time either changes. It cannot be acted on; see `previewUid`.
+                    // ⛔ DELETED HERE with its button: the profile PREVIEW sheet, on his word,
+                    // 2026-09-02. It presented `ContactInfoView` in preview mode — the real screen a
+                    // stranger gets, not a mock-up, driven by `previewUid`. That mode still exists
+                    // and still works; nothing on this page opens it any more.
                     //
-                    // ⛔ A SHEET AGAIN (owner, 2026-08-20: "dont make full Page … make it sheet like
-                    // before"), and the white it was moved away from is answered a different way.
-                    //
-                    // The history, so the swap is not made a third time: as a sheet it sat on a card
-                    // with rounded corners and white showed in both bottom ones. `presentationBackground`
-                    // is the answer to that IF the white was the sheet's own default surface, which
-                    // it almost certainly was — the page paints its colour inside its safe area and
-                    // the corner radius cuts across it. Black, because this page is always dark by
-                    // his own standing rule, so there is no light state for it to be wrong in.
-                    //
-                    // If white still shows there, then it is the LIGHT Settings screen behind the
-                    // card rather than the card itself, and no background set here can reach it.
-                    .sheet(isPresented: $showProfilePreview) {
-                        NavigationStack {
-                            ContactInfoView(cid: "",
-                                            name: profile.me?.name ?? "",
-                                            photoUrl: profile.me?.photoUrl,
-                                            posterUrl: profile.me?.posterUrl,
-                                            previewUid: AuthService.shared.uid ?? "")
-                        }
-                        .presentationBackground(.black)
-                    }
+                    // Recorded rather than silently dropped because it took two goes to get right
+                    // (full page, then back to a sheet on his word, then `presentationBackground`
+                    // for the white corners), and none of that history is worth rediscovering if it
+                    // is ever wanted again.
                     // Its own stack, because it carries a title and a Done and is no longer inside
                     // this screen's navigation.
                     .sheet(isPresented: $editingUsername) {
