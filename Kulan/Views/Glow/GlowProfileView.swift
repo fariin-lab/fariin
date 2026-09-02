@@ -329,13 +329,34 @@ struct GlowProfileView: View {
     // MARK: - Loading
 
     private func load() async {
+        // ⛔ THE COLOUR IS PAINTED BEFORE THE ROUND TRIP, NOT AFTER IT — owner, 2026-09-02: "first
+        // time I enter my profile my colour never appears, after seconds it appears".
+        //
+        // ⚠️ IT WAS QUEUED BEHIND A FETCH IT DID NOT NEED. Every read of the palette below sat after
+        // `await ProfileStore.shared.fetch(uid)`, so even a palette this device had already computed
+        // and cached waited on a network answer to a question it was not asking — the photo's URL
+        // arrived with the push (`initialPhoto`) and was in hand the whole time. Until that returned
+        // the page fell back to `Theme.bg(true)`, which is the flat dark he saw, and then repainted.
+        //
+        // Cached: synchronous, so the first frame is already the right colour. Not cached: resolved
+        // in its own task, so it lands when it lands instead of adding itself to the fetch's wait.
+        if palette == nil, let url = initialPhoto, !url.isEmpty {
+            if let hit = ProfilePalette.cached(for: url) {
+                palette = hit
+            } else {
+                Task { palette = await ProfilePalette.resolve(url: url) }
+            }
+        }
         if let p = await ProfileStore.shared.fetch(uid) {
             profile = p
-            if let url = p.photoUrl, !url.isEmpty {
-                // ⚠️ NOT `cached(...) ?? (await resolve(...))`. The right side of `??` is an
-                // AUTOCLOSURE, which cannot be async — "'async' call in an autoclosure that does
-                // not support concurrency". Written out, the cheap synchronous hit still short
-                // circuits the round trip, which was the whole point of the `??`.
+            // The server's photo may differ from the one the push carried (changed since, or none
+            // was passed), so this still runs — it is the correction, no longer the first paint.
+            //
+            // ⚠️ NOT `cached(...) ?? (await resolve(...))`. The right side of `??` is an AUTOCLOSURE,
+            // which cannot be async — "'async' call in an autoclosure that does not support
+            // concurrency". Written out, the cheap synchronous hit still short circuits the round
+            // trip, which was the whole point of the `??`.
+            if let url = p.photoUrl, !url.isEmpty, url != initialPhoto {
                 if let hit = ProfilePalette.cached(for: url) {
                     palette = hit
                 } else {
