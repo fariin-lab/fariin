@@ -149,6 +149,50 @@ struct PostedStory: Identifiable, Equatable {
     func invalidate() { loadedUid = "" }
 }
 
+/// One card in the Stories tab's "Glowing" grid: somebody you have a glow with, and the newest
+/// live story they have posted.
+struct GlowStoryCard: Identifiable, Equatable {
+    var id: String { person.id }
+    let person: GlowPerson
+    let story: PostedStory
+}
+
+/// The Stories tab's Glowing grid — his sixth reference, 2026-09-02: large two-column story cards
+/// with the author's name and face on them, NOT a row of avatars.
+///
+/// ⚠️ ONE PERSON, ONE CARD, and it is the NEWEST live story. A grid with three cards from the same
+/// person would push everybody else off the screen; the section is "who is glowing", not "every
+/// glow story ever posted". Opening the card is what pages through the rest.
+///
+/// ⚠️ READS THE PUBLIC MIRROR, like every other Glow surface — see `PostedStoriesLoader`. That
+/// means the grid shows a glow person's story only when they posted it publicly or to an audience
+/// this account is in; it never leaks the audience itself.
+@MainActor @Observable final class GlowStoriesLoader {
+    private(set) var state: GlowLoad<[GlowStoryCard]> = .loading
+    private var loadedKey = ""
+
+    func load(_ uids: [String], key: String) async {
+        guard key != loadedKey else { return }
+        loadedKey = key
+        guard !uids.isEmpty else { state = .loaded([]); return }
+        state = .loading
+        var cards: [GlowStoryCard] = []
+        for uid in uids {
+            guard let p = await ProfileStore.shared.fetch(uid) else { continue }
+            let one = PostedStoriesLoader()
+            await one.load(uid: uid)
+            // Newest first is the order `PostedStoriesLoader` already returns.
+            guard let newest = one.state.value?.first else { continue }
+            cards.append(GlowStoryCard(
+                person: GlowPerson(id: uid, name: p.name, handle: p.handle, photoUrl: p.photoUrl),
+                story: newest))
+        }
+        state = .loaded(cards)
+    }
+
+    func invalidate() { loadedKey = "" }
+}
+
 /// Short form for a view count badge — 25600 → "25.6K", his screenshot's own format.
 enum GlowCount {
     static func short(_ n: Int) -> String {

@@ -37,6 +37,8 @@ struct StoriesTabView: View {
     @State private var profileGroup: StoryGroup?
     /// The Glow section's people, resolved for their cards.
     @State private var glowPeople = GlowPeopleLoader()
+    /// The Glowing grid: one card per glow person, carrying their newest live story.
+    @State private var glowStories = GlowStoriesLoader()
     private var glow = GlowService.shared
     /// The server says this account may not post a story at all — see `AppLimits.storiesEnabled`.
     @State private var storiesOff = false
@@ -47,8 +49,13 @@ struct StoriesTabView: View {
         NavigationStack(path: $path) {
             content
                 .navigationTitle("Stories")
+                // ⛔ THREE BUTTONS, HIS REFERENCE: the ••• menu on the LEFT, and the bell and the
+                // add-story mark together on the RIGHT — the two right-hand ones read as one glass
+                // capsule in his mockup because iOS groups adjacent trailing items that way.
                 .toolbar {
+                    ToolbarItem(placement: .topBarLeading) { moreMenu }
                     ToolbarItem(placement: .topBarTrailing) { notificationsButton }
+                    ToolbarItem(placement: .topBarTrailing) { addStoryButton }
                 }
                 .navigationDestination(for: GlowRoute.self) { glowDestination($0) }
                 .navigationDestination(for: ChatTarget.self) { t in
@@ -89,6 +96,7 @@ struct StoriesTabView: View {
         // the loader, so a re-render costs nothing.
         .task(id: glowKey) {
             await glowPeople.load(Array(glow.glowRelationship).sorted(), key: glowKey)
+            await glowStories.load(Array(glow.glowRelationship).sorted(), key: glowKey)
         }
     }
 
@@ -102,7 +110,14 @@ struct StoriesTabView: View {
         } else {
             ScrollView {
                 VStack(spacing: 0) {
-                    StoriesRow(meName: profile.me?.name ?? "You", mePhoto: profile.me?.photoUrl,
+                    // ⛔ FRIENDS BECOMES A GRID WHEN THERE IS NO GLOWING SECTION — his seventh
+                    // reference, 2026-09-02: "when the user doesn't have Glow story, friends design
+                    // like this", showing the big two-column cards filling the page.
+                    //
+                    // The reasoning holds up: with a Glowing grid underneath it, Friends is a strip
+                    // so the two sections can both be seen. With nothing underneath, a single strip
+                    // leaves most of the page empty, and the cards are the better use of it.
+                    if hasGlowGrid { StoriesRow(meName: profile.me?.name ?? "You", mePhoto: profile.me?.photoUrl,
                                // HOLD THE ROW STILL WHILE A STORY IS OPEN. Watching someone's last
                                // unseen story re-sorts the row live, so their card slid out from
                                // under the close before it could land on it.
@@ -112,6 +127,9 @@ struct StoriesTabView: View {
                                onMessage: { g in openStoryChat(g) },
                                onProfile: { g in profileGroup = g },
                                onOpenUploading: { openUploadingStory() })
+                    } else {
+                        friendsGrid
+                    }
                     // ⛔ GLOW SITS UNDER FRIENDS AND IS NOT MIXED INTO IT — his requirement 10,
                     // 2026-09-02: "Glowers must not be mixed into the Friends Story list". The row
                     // above is the friends row and is untouched; this is a second, separate
@@ -134,50 +152,96 @@ struct StoriesTabView: View {
         }
     }
 
+    /// Is there a Glowing grid below? Decides whether Friends is a strip or a grid.
+    private var hasGlowGrid: Bool { !(glowStories.state.value ?? []).isEmpty }
+
+    /// FRIENDS AS A GRID — the layout when nothing sits under it. Same card as Glowing.
+    ///
+    /// ⚠️ THIS IS A SECOND WAY OF DRAWING FRIENDS' STORIES, and this file's own header warns against
+    /// exactly that: `StoriesRow` is one UIKit view that owns the card, its long press, and the
+    /// ANCHOR the open/close morph flies from. These cards have no anchor registered, so opening one
+    /// gets `StoryDoor`'s plain presentation rather than the morph out of the tapped card.
+    ///
+    /// It is built this way deliberately and the cost is stated rather than hidden: the alternative
+    /// is teaching the UIKit row a second layout, which is a much larger change to the one file this
+    /// app has been most often burned by. If the missing morph reads wrong on his phone, the fix is
+    /// to register these cards with `StoryCardMorph` — not to reimplement the row.
+    @ViewBuilder private var friendsGrid: some View {
+        let groups = StoriesRepository.shared.others.filter { !StoryPrefs.isHidden($0.authorUid) }
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 4) {
+                Text("Friends").font(.system(size: 22, weight: .bold))
+                Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10),
+                                GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                // My own card first, wearing the ⊕ — his reference puts My Story at the front of
+                // the grid exactly as it is at the front of the strip.
+                if let mine = StoriesRepository.shared.mine, let newest = mine.stories.last {
+                    Button { openStoryFromRow(mine) } label: {
+                        GlowStoryCardView(thumbUrl: newest.thumbUrl.isEmpty ? newest.mediaUrl : newest.thumbUrl,
+                                          name: "My Story",
+                                          authorPhoto: profile.me?.photoUrl,
+                                          isMine: true)
+                    }
+                    .buttonStyle(.plain)
+                }
+                ForEach(groups) { g in
+                    Button { openStoryFromRow(g) } label: {
+                        GlowStoryCardView(
+                            thumbUrl: g.stories.last.map { $0.thumbUrl.isEmpty ? $0.mediaUrl : $0.thumbUrl } ?? "",
+                            name: g.name,
+                            authorPhoto: g.photoUrl)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+        .padding(.top, 4)
+    }
+
     // MARK: - Glow
 
-    /// The Glow strip: a header that opens the full list, then a card per person you have a glow
-    /// with. Empty until somebody glows you, and then it simply appears — no placeholder row, no
-    /// "invite" pitch, because a section that is always there but usually empty is a section people
-    /// learn to ignore.
+    /// ⛔ "GLOWING", A TWO-COLUMN GRID OF STORY CARDS — his sixth reference, 2026-09-02. My first
+    /// pass was a horizontal strip of avatars, which is the FRIENDS row's language and wrong here:
+    /// the friends row is a queue of people you already know, so a face is enough to pick one out.
+    /// Glowing is people you may not know at all, and the picture is what makes one worth opening.
+    /// Big cards, the story's own image, the author's name and face on it.
+    ///
+    /// It also takes the exact place the Discover grid used to occupy, which is why the grid shape
+    /// is the one that already suited this page.
     @ViewBuilder private var glowSection: some View {
-        let people = glowPeople.state.value ?? []
-        if !people.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
+        let cards = glowStories.state.value ?? []
+        if !cards.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
                 NavigationLink(value: GlowRoute.people) {
                     HStack(spacing: 4) {
-                        Text("Glow").font(.system(size: 20, weight: .bold)).foregroundStyle(.primary)
-                        Image(systemName: "chevron.right").font(.footnote.weight(.bold))
+                        Text("Glowing").font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(.primary)
+                        Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold))
                             .foregroundStyle(.secondary)
                     }
                 }
                 .buttonStyle(.plain)
                 .padding(.horizontal, 16)
 
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(alignment: .top, spacing: 12) {
-                        ForEach(people) { p in
-                            NavigationLink(value: GlowRoute.profile(p.id, p.name, p.photoUrl ?? "")) {
-                                VStack(spacing: 6) {
-                                    AvatarView(name: p.name, photoUrl: p.photoUrl, size: 62)
-                                        .overlay {
-                                            // Glow's own ring, so a glow card is never mistaken for
-                                            // a friend's story card above it.
-                                            Circle().strokeBorder(GlowStyle.accent, lineWidth: 2)
-                                                .frame(width: 68, height: 68)
-                                        }
-                                        .frame(width: 68, height: 68)
-                                    Text(p.name).font(.caption).lineLimit(1)
-                                        .frame(width: 72)
-                                }
-                            }
-                            .buttonStyle(.plain)
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10),
+                                    GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                    ForEach(cards) { c in
+                        NavigationLink(value: GlowRoute.profile(c.person.id, c.person.name,
+                                                                c.person.photoUrl ?? "")) {
+                            GlowStoryCardView(card: c)
                         }
+                        .buttonStyle(.plain)
                     }
-                    .padding(.horizontal, 16)
                 }
+                .padding(.horizontal, 16)
             }
-            .padding(.top, 18)
+            .padding(.top, 20)
         }
     }
 
@@ -186,6 +250,7 @@ struct StoriesTabView: View {
     enum GlowRoute: Hashable {
         case people
         case notifications
+        case storyPrivacy
         case profile(String, String, String)   // uid, name, photo
     }
 
@@ -195,6 +260,12 @@ struct StoriesTabView: View {
             GlowPeopleListView(side: .glowers)
         case .notifications:
             GlowNotificationsView()
+        case .storyPrivacy:
+            // ⛔ STRAIGHT TO THE REAL SETTINGS PAGE — his instruction, 2026-09-02: "in the 3 dot
+            // button show story privacy, when the user clicks it go direct to the stories page in
+            // settings". `StorySettingsView` is that page, the same one Settings pushes; a second
+            // copy of those switches is how two screens come to disagree about one setting.
+            StorySettingsView()
         case .profile(let uid, let name, let photo):
             GlowProfileView(uid: uid, initialName: name,
                             initialPhoto: photo.isEmpty ? nil : photo)
@@ -207,6 +278,25 @@ struct StoriesTabView: View {
     /// ⚠️ UNREAD IS DERIVED FROM A READING POSITION, not a per-row flag. `GlowService.seenUpTo` is
     /// stamped when the page closes, so "unread" is simply "a glow arrived after that" — nothing to
     /// write per notification, nothing to migrate, and it cannot drift out of step with the rows.
+    /// The ••• menu. One entry for now, his: Story privacy, straight to the settings page.
+    @ViewBuilder private var moreMenu: some View {
+        Menu {
+            NavigationLink(value: GlowRoute.storyPrivacy) {
+                Label("Story privacy", systemImage: "lock")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+        }
+    }
+
+    /// Compose a story — the mark that was only reachable from the row's own tile before. In the
+    /// header it is reachable whatever the row is doing, which is what his reference shows.
+    @ViewBuilder private var addStoryButton: some View {
+        Button { composeStory() } label: {
+            Image(systemName: "plus.circle")
+        }
+    }
+
     @ViewBuilder private var notificationsButton: some View {
         NavigationLink(value: GlowRoute.notifications) {
             Image(systemName: "bell")
