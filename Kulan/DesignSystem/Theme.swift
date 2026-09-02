@@ -44,40 +44,70 @@ enum Theme {
 
     /// THE SURFACE BEHIND A BUBBLE THAT IS NOT MINE, decided once and read by both render paths.
     ///
-    /// Without a wallpaper it is `received` and nothing has changed. With one it is a SLICE of the
-    /// blurred, washed wallpaper — the reference app's `CVWallpaperBlurView`, ported in
-    /// `WallpaperBlur` with its numbers — so every bubble shows the part of the picture that sits
-    /// under it, and a picture with light in it puts that light INSIDE the bubble. Reduce
-    /// Transparency wins over all of it, exactly as theirs checks it first: the plain theme
-    /// background, not the received grey, because the grey is a bubble-on-background colour and
-    /// there is a picture here instead.
+    /// Without a wallpaper it is `received` and nothing has changed. With one it is `.material` —
+    /// **the system's own blur**, `UIBlurEffect` in UIKit and `Material` in SwiftUI. Reduce
+    /// Transparency wins over all of it and must be checked first: the plain theme background, not
+    /// the received grey, because the grey is a bubble-on-background colour and there is a picture
+    /// here instead.
     ///
-    /// `.material` is the one branch theirs does not have. It is what a surface falls back to when a
-    /// wallpaper is present but no slice could be made for it — a preview platter that is not the
-    /// size of the window, or a render that failed — and it is an approximation, kept only so those
-    /// places still read as "on a wallpaper" rather than going flat.
+    /// ⛔ **OWNER, 2026-09-02: THE HAND-BUILT BLUR IS OUT.** This used to return `.slice` — an
+    /// image of the wallpaper rendered once, gaussian-blurred at radius 20, washed with 80% black
+    /// in dark / two white passes in light, then vibrance and +0.4 exposure, with every bubble
+    /// showing its own slice of that one picture and repositioning on each scroll tick. It was the
+    /// reference app's recipe ported number for number, and it is the thing he asked to be replaced
+    /// with Apple's native blur. The slice is darker, flatter and more opaque than a system
+    /// material; that difference is the whole point of the change.
+    ///
+    /// ⚠️ `.slice` IS STILL IN THIS ENUM AND NOTHING RETURNS IT. Kept deliberately: this exact
+    /// question has now been answered twice in opposite directions, so the machinery in
+    /// `WallpaperBlur.swift` and the branches that draw it stay compiled and correct. Switching
+    /// back is this function plus the early return in `WallpaperBlur.state`, nothing else.
     enum ReceivedSurface: Equatable {
         case flat(Color)
         case slice(WallpaperBlurState)
         case material
     }
 
+    /// `blur` is now ignored — see the note above. It stays in the signature because it is the
+    /// switch-back lever and because `WallpaperBlurState.id` is still what the row caches key on.
     static func receivedSurface(_ dark: Bool, onWallpaper: Bool,
                                 blur: WallpaperBlurState?) -> ReceivedSurface {
         guard onWallpaper else { return .flat(received(dark)) }
         if UIAccessibility.isReduceTransparencyEnabled { return .flat(bg(dark)) }
-        if let blur { return .slice(blur) }
         return .material
     }
 
-    /// THE RIM ON AN INCOMING BUBBLE OVER A WALLPAPER — his close-up crops, 2026-08-23, and the last
-    /// visible difference from the reference. Theirs is not glass and not a reflection: a
-    /// `CAShapeLayer` stroking the bubble's own path at 2 hairlines, clipped by the bubble mask so
-    /// only the INNER hairline survives — one physical pixel of light just inside the edge. White at
-    /// 25% in dark mode, BLACK at 35% in light (the "white rim" is a dark-mode fact). Incoming only,
-    /// wallpaper only; outgoing never gets one.
+    /// THE SYSTEM BLUR AN INCOMING BUBBLE WEARS OVER A WALLPAPER, in each render path's own type.
+    ///
+    /// Ultra-thin in BOTH themes, which is not what the reference app does (thin in light, ultra-thin
+    /// in dark). Ultra-thin is the most see-through material the system ships and see-through is the
+    /// look he asked for; a thin material in light mode is close enough to opaque white that the
+    /// wallpaper stops showing through the bubble at all, which is the flat surface this change is
+    /// getting rid of.
+    ///
+    /// ⚠️ These two must stay the same weight. `UIBlurEffect(.systemUltraThinMaterial)` and
+    /// SwiftUI's `.ultraThin` are the same recipe, and a chat draws both — UIKit for a plain text
+    /// row, SwiftUI for everything else — so two different weights means two different greys in one
+    /// conversation. That mismatch has already shipped once here, from a stale row asking for the
+    /// wrong one.
+    static var receivedBlurStyle: UIBlurEffect.Style { .systemUltraThinMaterial }
+    static var receivedMaterial: Material { .ultraThin }
+
+    /// THE RIM ON AN INCOMING BUBBLE OVER A WALLPAPER. Incoming only, wallpaper only; outgoing
+    /// never gets one.
+    ///
+    /// ⛔ **OWNER, 2026-09-02: WHITE IN BOTH THEMES NOW.** It used to be white at 20% in dark and
+    /// **black at 30% in light** — the reference app's pair, where the light-mode rim is a shadow
+    /// rather than a highlight. The system's own iOS 26 edge is a specular highlight: light in both
+    /// themes, because it is modelling light catching the lip of the glass, and light does not turn
+    /// black when the phone does. A dark line is the single thing that most reads as hand-drawn, so
+    /// it is the first thing to go.
+    ///
+    /// Light mode carries the higher alpha on purpose: the material underneath it is already pale,
+    /// so a white line needs more of itself there to separate the bubble from the picture behind it.
+    /// In dark mode the material is nearly black and 35% is plenty.
     static func bubbleRim(_ dark: Bool) -> Color {
-        dark ? Color.white.opacity(0.20) : Color.black.opacity(0.30)
+        dark ? Color.white.opacity(0.35) : Color.white.opacity(0.65)
     }
 
     /// THE RIM'S OWN WIDTH, and it is deliberately not `hairline`.
@@ -96,13 +126,13 @@ enum Theme {
     /// mask eats the outer half — so this is the width to draw INSIDE the edge (`strokeBorder`).
     static var hairline: CGFloat { 1 / UIScreen.main.scale }
 
-    /// The previews' version of the above — the colour-picker platter and the chat peek, which
-    /// draw the wallpaper at a size that is not the window's and so cannot take a slice. Same
-    /// decision, with `.material` drawn as the system material it approximates.
+    /// The shape-style spelling of the above, for the places that need a `ShapeStyle` rather than a
+    /// view — the colour-picker platter and the chat peek. Same decision, same material; these used
+    /// to be an approximation of a surface they could not draw, and now they draw the real one.
     static func receivedStyle(_ dark: Bool, onWallpaper: Bool) -> AnyShapeStyle {
         switch receivedSurface(dark, onWallpaper: onWallpaper, blur: nil) {
         case .flat(let c): return AnyShapeStyle(c)
-        case .slice, .material: return AnyShapeStyle(dark ? Material.ultraThin : Material.thin)
+        case .slice, .material: return AnyShapeStyle(receivedMaterial)
         }
     }
     static func accent(_ dark: Bool) -> Color { dark ? .white : .black }
@@ -513,7 +543,7 @@ struct ReceivedBubbleSurface: View {
         switch Theme.receivedSurface(dark, onWallpaper: onWallpaper, blur: blur) {
         case .flat(let c): c
         case .slice(let s): WallpaperBlurSlice(state: s)
-        case .material: Rectangle().fill(dark ? Material.ultraThin : Material.thin)
+        case .material: Rectangle().fill(Theme.receivedMaterial)
         }
     }
 }

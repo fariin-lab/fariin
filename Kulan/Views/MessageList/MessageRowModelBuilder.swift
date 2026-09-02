@@ -525,9 +525,9 @@ enum MessageRowModelBuilder {
             // the decision; this only reads the same flag it read to tell the two apart.
             return (ctx.onWallpaper && UIAccessibility.isReduceTransparencyEnabled) ? .background : .received
         case .slice(let state): return .wallpaperSlice(state)
-        // No picture could be made for this wallpaper. The flat grey is the honest fallback here —
-        // a live material would be a second mechanism for a case that should not happen.
-        case .material: return .received
+        // The system blur. This branch used to return the flat grey, because a material was then a
+        // fallback for a slice that could not be built; it is the surface itself now.
+        case .material: return .material
         }
     }
 

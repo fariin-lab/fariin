@@ -351,7 +351,7 @@ final class RowNoticePillView: UIView {
                 bubbleFill = (plan.onWallpaper && UIAccessibility.isReduceTransparencyEnabled)
                     ? .background : .received
             case .slice(let state): bubbleFill = .wallpaperSlice(state)
-            case .material: bubbleFill = .received
+            case .material: bubbleFill = .material
             }
             fill.apply(bubbleFill, path: path, bounds: CGRect(origin: .zero, size: size))
             fill.alpha = 1

@@ -104,7 +104,18 @@ enum BubbleFill: Equatable {
     /// Reduce Transparency is on over a wallpaper — collapsing the two flats into one was a real
     /// difference for anyone with that setting turned on.
     case background
-    case wallpaperSlice(WallpaperBlurState)   // incoming on a wallpaper: a slice of the blurred picture
+    case wallpaperSlice(WallpaperBlurState)   // ⚠️ nothing builds this any more — see `.material`
+    /// INCOMING ON A WALLPAPER: the system's own blur, `UIBlurEffect(Theme.receivedBlurStyle)`.
+    ///
+    /// Owner, 2026-09-02. This case existed before and meant "we wanted a blur and could not make
+    /// one, so paint the flat grey" — the honest fallback for a wallpaper that failed to render.
+    /// It is the real surface now, and `.wallpaperSlice` is the one nothing builds.
+    ///
+    /// ⚠️ Carries no associated value ON PURPOSE, which is what makes it cheap here. The slice had
+    /// to carry a `WallpaperBlurState` because every bubble showed a different part of one picture
+    /// and had to be told which part; a live blur samples whatever is behind it, so the row model
+    /// no longer has to know anything about the wallpaper except that there is one.
+    case material
     /// A borderless bubble. The reference app's own `isBubbleTransparent`: the bubble VIEW stays and
     /// only the fill is dropped, so the text insets and the footer position are unchanged. Used by
     /// jumbomoji, which is why an emoji message lines up with an ordinary one exactly.
@@ -115,7 +126,7 @@ enum BubbleFill: Equatable {
         switch self {
         case .solid(let v): return BubblePalette.hex(UInt32(truncatingIfNeeded: v))
         case .gradient(let v): return BubblePalette.hex(UInt32(truncatingIfNeeded: v.first ?? 0))
-        case .received, .wallpaperSlice: return BubblePalette.receivedFill
+        case .received, .wallpaperSlice, .material: return BubblePalette.receivedFill
         case .background: return BubblePalette.background
         case .clear: return .clear
         }
@@ -279,6 +290,11 @@ final class BubbleFillView: UIView {
     private let gradient = CAGradientLayer()
     private let gradientMask = CAShapeLayer()
     private var sliceView: WallpaperBlurSliceView?
+    /// Built the first time a bubble on a wallpaper draws, then reused. Lazy for the same reason the
+    /// slice view is: most chats have no wallpaper and would otherwise pay for a visual-effect view
+    /// per recycled cell that never becomes visible.
+    private var blurView: UIVisualEffectView?
+    private let blurMask = CAShapeLayer()
     private var current: BubbleFill?
 
     private(set) var path = UIBezierPath()
@@ -313,33 +329,52 @@ final class BubbleFillView: UIView {
         gradientMask.frame = CGRect(origin: .zero, size: b.size)
         gradientMask.path = p.cgPath
 
+        // ⚠️ BOTH OPTIONAL SURFACES GO DOWN BEFORE THE SWITCH, and only the branch that wants one
+        // raises it again. They used to be lowered branch by branch, which is five places to
+        // remember on every new fill — this file recycles its views, so a surface left up is the
+        // previous message's bubble showing through the current one.
+        gradient.isHidden = true
+        sliceView?.isHidden = true
+        blurView?.isHidden = true
+
         switch fill {
         case .solid(let hex):
             shape.fillColor = BubblePalette.hex(UInt32(truncatingIfNeeded: hex)).cgColor
-            gradient.isHidden = true
-            sliceView?.isHidden = true
         case .gradient(let hexes):
             shape.fillColor = UIColor.clear.cgColor
             gradient.colors = hexes.map { BubblePalette.hex(UInt32(truncatingIfNeeded: $0)).cgColor }
             gradient.isHidden = false
-            sliceView?.isHidden = true
         case .received:
             shape.fillColor = BubblePalette.receivedFill.cgColor
-            gradient.isHidden = true
-            sliceView?.isHidden = true
         case .background:
             shape.fillColor = BubblePalette.background.cgColor
-            gradient.isHidden = true
-            sliceView?.isHidden = true
         case .clear:
             shape.fillColor = UIColor.clear.cgColor
-            gradient.isHidden = true
-            sliceView?.isHidden = true
+        case .material:
+            // ⚠️ THE FILL MUST GO TO CLEAR. A blur samples what is behind it, so an opaque grey left
+            // underneath means the blur reads the grey and resolves to it — you pay for a blur and
+            // get the flat bubble back. This exact mistake is written up from the first attempt at
+            // this surface.
+            shape.fillColor = UIColor.clear.cgColor
+            let v = blurView ?? {
+                let bv = UIVisualEffectView(effect: UIBlurEffect(style: Theme.receivedBlurStyle))
+                bv.isUserInteractionEnabled = false
+                // ⚠️ Masked by the bubble's OWN path, never a corner radius. These bubbles square
+                // off the side a cluster continues, and a rounded-rect mask would round the two
+                // corners the shape deliberately keeps sharp.
+                bv.layer.mask = blurMask
+                insertSubview(bv, at: 0)
+                blurView = bv
+                return bv
+            }()
+            v.isHidden = false
+            v.frame = CGRect(origin: .zero, size: b.size)
+            blurMask.frame = CGRect(origin: .zero, size: b.size)
+            blurMask.path = p.cgPath
         case .wallpaperSlice(let state):
             // The fill goes to CLEAR, not left underneath: the slice is opaque and would cover it,
             // but a fill that is still there is a fill somebody will one day see at an edge.
             shape.fillColor = UIColor.clear.cgColor
-            gradient.isHidden = true
             let v = sliceView ?? {
                 let s = WallpaperBlurSliceView()
                 insertSubview(s, at: 0)

@@ -114,12 +114,30 @@ import UIKit
         return total / CGFloat(n * n)
     }
 
+    /// ⛔ **SWITCHED OFF — OWNER, 2026-09-02. ONE LINE TO TURN BACK ON.**
+    ///
+    /// Incoming bubbles wear the system's own blur now: `Theme.receivedSurface` returns `.material`
+    /// and no longer returns `.slice`, so nothing on screen draws one of these. This flag is what
+    /// stops the WORK — without it every chat open still pays for an `ImageRenderer` pass over the
+    /// wallpaper plus six CoreImage filters, to make a picture no view asks for.
+    ///
+    /// ⚠️ **THIS FLAG AND THE RETURN IN `Theme.receivedSurface` ARE A PAIR.** Turning only this one
+    /// back on changes nothing you can see, because the surface decision no longer asks for a slice.
+    /// Turning only the other one back on gives every bubble the flat grey, because it would ask for
+    /// a slice and be handed nil. Both, or neither.
+    ///
+    /// Everything below and after it is intact and correct — the recipe, the cache, the anchor, the
+    /// scroll-tick repositioning. It is switched off, not half-removed, because this question has
+    /// been answered twice in opposite directions already.
+    static let enabled = false
+
     /// The state for this chat, or nil when no picture is wanted: no wallpaper, or Reduce
     /// Transparency on (theirs shows the plain theme background then, and so do we — see
     /// `Theme.receivedSurface`). Cached per chat, theme, size and wallpaper version; the first ask
     /// after any of those changes pays for one render and one blur, on the main thread, exactly as
     /// theirs does. A 390×844 image at radius 20 is a few tens of milliseconds once per chat open.
     static func state(for cid: String, dark: Bool, frame: CGRect) -> WallpaperBlurState? {
+        guard enabled else { return nil }
         let store = WallpaperStore.shared
         // The wallpaper going AWAY is the same staleness the other way round: an off-screen bubble
         // would go on showing a slice of a picture the chat no longer has. Same broadcast, emptied.
@@ -301,6 +319,14 @@ import UIKit
 /// Not a visual-effect view, and that is the other half of why this replaced one: an image view
 /// SNAPSHOTS. The long-press lift copies the bubble with `snapshotView`, which cannot render a blur
 /// and came up empty or dead over the previous approach; a slice comes up exactly as drawn.
+///
+/// ⚠️ **AND THAT TRADE IS NOW GOING THE OTHER WAY — OWNER, 2026-09-02.** He asked for the system's
+/// own blur, which means the lift is a snapshot of a `UIVisualEffectView` again. The mechanism is
+/// `NativeMessageList.bubbleSource`, `resizableSnapshotView(afterScreenUpdates: false)`. It was
+/// reported once before, when the material shipped the first time, and it was never proven — the
+/// note in the memory file says do not fix it blind, and it is still unfixed. If an incoming bubble
+/// lifts with no background under a long press, this is why, and the fix is at that call site, not
+/// here.
 @MainActor final class WallpaperBlurSliceView: UIView {
     private static let live = NSHashTable<WallpaperBlurSliceView>.weakObjects()
 

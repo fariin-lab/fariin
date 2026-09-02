@@ -1240,9 +1240,12 @@ extension IconButton: UIGestureRecognizerDelegate {
 }
 
 /// The "Set to one-time listen" toast: the composer's notice in the chat's own bubble surface — the
-/// same slice of blurred wallpaper an incoming bubble wears, with the hairline rim, or the flat
-/// received colour. Never a material: a material samples live and comes out a different colour from
-/// the bubble beside it.
+/// same system blur an incoming bubble wears, with the hairline rim, or the flat received colour.
+///
+/// ⚠️ The note here used to say "never a material, a material samples live and comes out a different
+/// colour from the bubble beside it". That was true while bubbles were a slice of ONE pre-rendered
+/// picture; it is backwards now. Both this and the bubbles sample live off the same `Theme`
+/// constant, so they agree — and they only agree while they read that one constant.
 final class NoticePillView: UIView {
     private var surface: UIView?
     private let icon = UIImageView()
@@ -1281,7 +1284,7 @@ final class NoticePillView: UIView {
             sv.state = state
             v = sv
         case .material:
-            v = UIVisualEffectView(effect: UIBlurEffect(style: dark ? .systemUltraThinMaterial : .systemThinMaterial))
+            v = UIVisualEffectView(effect: UIBlurEffect(style: Theme.receivedBlurStyle))
         }
         v.isUserInteractionEnabled = false
         insertSubview(v, at: 0)
