@@ -1343,12 +1343,13 @@ struct ChatsView: View {
             .disabled(selecting)
             .selectionDisabled(true)        // no checkbox, ever
             .listRowInsets(EdgeInsets())
-            // Same hairline as the chat rows below it, same 84pt start — theirs draws one under the
-            // archive entry too. A single row without a rule, sitting on top of a list that has one,
-            // is more conspicuous than no rules at all.
-            .listRowSeparator(.hidden, edges: .top)   // see the chat row: never above the first
-            .listRowSeparator(.visible, edges: .bottom)
-            .alignmentGuide(.listRowSeparatorLeading) { _ in 84 }
+            // ⛔ NO RULE UNDER THIS ROW EITHER — owner, 2026-09-02, off build 725: "remove white
+            // line under archive row". The chat rows lost their separators when the list went to
+            // the reference's no-rules look, and this one kept its `.visible` because it lives in
+            // a different property and was simply missed. The argument its old comment made — a
+            // row without a rule on a list that has one is conspicuous — has exactly inverted:
+            // the list has none now, so the one line left was the conspicuous one.
+            .listRowSeparator(.hidden)
             .deleteDisabled(true)
             .moveDisabled(true)
         }
@@ -1392,7 +1393,14 @@ struct ChatsView: View {
     @ViewBuilder private func chatSectionHeader(_ title: String) -> some View {
         Text(title)
             .font(.headline)
-            .foregroundStyle(.primary)
+            // ⛔ `Color(.label)`, NOT `.primary` — owner, 2026-09-02, off build 725: "chats and
+            // pinned text now looks dark, make it like the reference exactly". `.primary` is a
+            // HIERARCHICAL style, and inside a list's header environment the primary level can
+            // still render dimmed — which on his phone it did, a grey where theirs is full label.
+            // The reference app's header colour is literally `UIColor.label` (read from its chat
+            // list data source), so this is not an approximation of their colour, it is their
+            // colour, and a concrete `Color` carries no hierarchy for a container to dim.
+            .foregroundStyle(Color(.label))
             .textCase(nil)
             .padding(.top, 14)
             .padding(.bottom, 8)
@@ -1739,7 +1747,14 @@ struct ChatsView: View {
                           // The way into the archive, above the chats. Empty when there is nothing
                           // archived — the `if` lives inside the property so this body only grows by
                           // one element (this file's type-checker budget is a known cost).
-                          archivedEntryRow
+                          // ⛔ THE ARCHIVE ROW MOVED TO THE BOTTOM OF THE LIST — owner, 2026-09-02,
+                          // off build 725: "archive row hide in chatlist", with "like the reference
+                          // app exactly" over the whole report. Theirs keeps Archived as the LAST
+                          // row, after every conversation, so it is out of sight until you scroll
+                          // for it and the list opens on actual chats. It used to sit above
+                          // everything here ("above the chats", his earlier call — this reverses
+                          // that on his newer word). Hidden, not deleted: it is still the only door
+                          // to archived chats, and a door has to exist somewhere.
                           // ⛔ TWO SECTIONS, "Pinned" AND "Chats" — owner, 2026-09-02: "separate the
                           // chat list into Pinned and Chats sections exactly like the reference app".
                           //
@@ -1774,8 +1789,17 @@ struct ChatsView: View {
                                   ForEach(split.rest) { conv in chatListRow(conv) }
                               } header: { chatSectionHeader("Chats") }
                           }
+                          archivedEntryRow
                         }
                         .listStyle(.plain)
+                        // ⛔ THE SECTION GAP IS THE HEADER'S OWN 14, NOTHING MORE — owner,
+                        // 2026-09-02, off build 725: "space between chats and pinned chats, make
+                        // like the reference". The List adds its own inter-section spacing on top of
+                        // whatever a header pads, so the gap rendered as system-spacing PLUS 14
+                        // where theirs is a stated 14-above/8-below and nothing else
+                        // (`CLVTableDataSource`'s header insets). Zeroed here so the header's
+                        // numbers are the whole story.
+                        .listSectionSpacing(0)
                         // THE STUCK GREY ROW, real cause. This List carries a `selection` binding for
                         // multi-select, and every row carries a `.tag`. A NavigationLink row does not only
                         // push - it ALSO sets the List's selection - and SwiftUI does not clear that on the
@@ -3227,7 +3251,13 @@ struct ChatRow: View, Equatable {
             Image(systemName: "checkmark")
             if read { Image(systemName: "checkmark") }
         }
-        .font(.system(size: 10, weight: .bold))
+        // ⛔ `.caption` (12pt), UP FROM A FIXED 10 — owner, 2026-09-02, off build 725: "the one
+        // tick or 2 tick now looks small". The 10 was tuned against a 12pt timestamp; the match
+        // pass took the row's text to 15 and left the ticks behind, so they shrank by comparison
+        // without changing at all. 12 is the old proportion against the new text (10 × 15⁄12), and
+        // a semantic style so the ticks now scale with the phone's text size like the rest of the
+        // row does.
+        .font(.caption.weight(.bold))
         .foregroundStyle(read ? Theme.accent(dark) : Color.secondary)
     }
 
@@ -3385,10 +3415,11 @@ struct ChatRow: View, Equatable {
                     // beside one would be reporting delivery of something that was never sent. The
                     // field used to be cleared to prevent exactly this; the guard lives here now.
                     if conv.lastIsMine(me), !lastIsCall { ticksView.padding(.top, 1) }
-                    if conv.isPinned(me) {
-                        Image(systemName: "pin.fill")
-                            .font(.system(size: 11)).foregroundStyle(.tertiary)
-                    }
+                    // ⛔ NO PIN GLYPH — owner, 2026-09-02, off build 725: "remove pin icon, now
+                    // already everyone can see pinned, no need". He is right about the mechanism:
+                    // the icon existed because pinned chats were only SORTED to the top with
+                    // nothing marking them, and the "Pinned" section header now does that job by
+                    // name. Two marks for one fact is one too many.
                     // ONE badge for every reaction, never the emoji itself (user spec 2026-07-29, with
                     // the reference screenshot: "if react always use that badge"). The preview text
                     // beside it already spells out WHICH emoji — "Reacted 🐱 to your message" — so
