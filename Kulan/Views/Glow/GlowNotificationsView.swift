@@ -56,6 +56,11 @@ struct GlowNotificationsView: View {
         // of its three chips told people the other two were something else.
         .navigationTitle("Notifications")
         .navigationBarTitleDisplayMode(.inline)
+        // ⛔ NO TAB BAR ON A PUSHED PAGE — owner, 2026-09-02: "when I enter the notification page,
+        // hide the bottom nav bar". Second time he has asked for this, after the profile: a page
+        // you PUSHED is not a tab, and the floating bar sits over its last row. Applied to every
+        // pushed Glow page rather than only this one, because the next one would be the same report.
+        .toolbar(.hidden, for: .tabBar)
         .task { await events.load() }
         // Opening the page IS reading it — the badge on the Stories tab clears from here, which is
         // his "read/unread notification states" without a per-row flag to store or sync.

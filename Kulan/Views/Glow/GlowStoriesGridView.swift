@@ -25,6 +25,8 @@ struct GlowStoriesGridView: View {
         content
             .navigationTitle("Glowing")
             .navigationBarTitleDisplayMode(.inline)
+            // A pushed page is not a tab — see the note in `GlowNotificationsView`.
+            .toolbar(.hidden, for: .tabBar)
             // The ORDINARY profile — see the note on the same route in `StoriesTabView`. The Glow
             // profile is my own page and nobody else's.
             .navigationDestination(item: $profileTarget) { p in

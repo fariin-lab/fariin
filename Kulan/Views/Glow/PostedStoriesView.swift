@@ -71,6 +71,8 @@ struct PostedStoriesView: View {
     var body: some View {
         content
             .navigationBarTitleDisplayMode(.inline)
+            // A pushed page is not a tab — see the note in `GlowNotificationsView`.
+            .toolbar(.hidden, for: .tabBar)
             .toolbar {
                 // ⛔ THE FILTER IS THE TITLE — his reference: "Posted stories ⌄", a menu hanging off
                 // the heading rather than an icon in the corner. That is better than my first pass

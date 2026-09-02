@@ -47,6 +47,8 @@ struct GlowPeopleListView: View {
         }
         .navigationTitle(title.isEmpty ? "Glow" : title)
         .navigationBarTitleDisplayMode(.inline)
+        // A pushed page is not a tab — see the note in `GlowNotificationsView`.
+        .toolbar(.hidden, for: .tabBar)
         .onAppear { tab = side }
         .task(id: uids) { await reload() }
     }
