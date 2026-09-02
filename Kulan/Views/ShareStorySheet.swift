@@ -701,6 +701,15 @@ struct ShareStorySheet: View {
         let included: Set<String> = {
             if a.kind == .custom { return Set(a.members) }
             if a.kind == .myFriends && a.mode == .only { return Set(a.members) }
+            // ⛔ GLOWERS TRAVELS AS AN EXPLICIT `included` SET, resolved HERE, not as a fourth flag
+            // through four post entry points. The three-value seam this comment block describes is
+            // deliberately narrow and worth keeping narrow.
+            //
+            // ⚠️ `resolveAudience` re-checks these against the live chat list at upload time, and
+            // it carries a matching exception so glow-only people survive that intersection —
+            // without it this resolves to nobody for exactly the people Glow exists for. The two
+            // halves have to stay together; the note there says so too.
+            if a.kind == .glowers { return GlowService.shared.glowRelationship }
             return []
         }()
         let replies = a.allowReplies
@@ -709,6 +718,7 @@ struct ShareStorySheet: View {
         let tag: StoryAudienceTag = {
             switch a.kind {
             case .everyone: return .everyone
+            case .glowers:  return .glowers
             case .custom:   return StoryAudienceTag(label: "custom", name: a.name)
             default:        return .friends
             }
@@ -811,6 +821,7 @@ struct ShareStorySheet: View {
             }
             switch a.kind {
             case .everyone: return .everyone
+            case .glowers:  return .glowers
             case .custom:   return StoryAudienceTag(label: "custom", name: a.name)
             default:        return .friends
             }

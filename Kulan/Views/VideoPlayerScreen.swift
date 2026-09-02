@@ -103,6 +103,10 @@ struct VideoPlayerScreen: View {
                 onDismiss: { instantDismiss() })
         }
         .presentationBackground(.clear)   // the fading backdrop reveals the conversation behind
+        // Always dark, for the same reason as the photo viewer beside it and in the same breath as
+        // his report — see the note in `ImageViewerView`. The two screens share a chrome vocabulary
+        // and would look like different apps in light mode if only one were pinned.
+        .environment(\.colorScheme, .dark)
         .statusBarHidden(true)
         .task { await load() }
         // noteClosed: the cover is gone for real, so a tap that arrived while it was leaving can run

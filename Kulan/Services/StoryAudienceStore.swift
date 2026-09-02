@@ -31,6 +31,18 @@ struct StoryAudience: Identifiable, Codable, Equatable {
         case myFriends
         /// A named list of specific people.
         case custom
+        /// ⛔ GLOWERS — his Glow feature, 2026-09-02. Everyone in a glow relationship with me, in
+        /// EITHER direction (people who glowed me, plus people I glowed), which is his ruling: a
+        /// glow reaches immediately and "Glow back" is social rather than a key.
+        ///
+        /// ⚠️ **THE ONLY AUDIENCE THAT IS NOT A SUBSET OF YOUR CHATS, AND THAT IS THE WHOLE
+        /// POINT.** Every other kind ends up intersected with the accepted-chat set, because every
+        /// other kind describes people you talk to. Glow exists precisely so two people who have
+        /// never chatted can reach each other — so intersecting this one would resolve it to
+        /// nobody, silently, and the story would upload wearing a normal ring and reach no one.
+        /// `rawRecipients` and `StoriesService.resolveAudience` each carry that exception; they are
+        /// the two places a Glowers story could be quietly emptied.
+        case glowers
         /// NOT AN AUDIENCE. The people hidden from your stories entirely, whichever audience you
         /// pick — "Hide my stories from X" off a viewer row. Stored as a list because it is one,
         /// and kept out of `all` so it can never be posted to.
@@ -51,9 +63,10 @@ struct StoryAudience: Identifiable, Codable, Equatable {
     var allowReplies: Bool
     var createdAt: Date
 
-    /// The two fixed ids. Custom lists get a uuid, so neither can ever be taken.
+    /// The fixed ids. Custom lists get a uuid, so none of these can ever be taken.
     static let everyoneId = "everyone"
     static let myFriendsId = "myFriends"
+    static let glowersId = "glowers"
     static let hiddenId = "hiddenFrom"
 
     /// ⚠️ NOT `Date.distantPast`, AND THIS CRASHED THE APP IN BUILD 470.
@@ -75,11 +88,19 @@ struct StoryAudience: Identifiable, Codable, Equatable {
     static let defaultMyFriends = StoryAudience(id: myFriendsId, kind: .myFriends, name: "My Friends",
                                                 mode: .all, members: [], allowReplies: true,
                                                 createdAt: sortsFirst)
+    /// ⚠️ BUILT-IN AND MEMBERLESS. Its people are the live glow relationship, not a stored list, so
+    /// there is nothing to edit and nothing to keep in sync — the same shape as Everyone. It is
+    /// never written to Firestore for that reason: a `storyLists` document for it would be a second
+    /// copy of an answer `GlowService` already holds.
+    static let glowersAudience = StoryAudience(id: glowersId, kind: .glowers, name: "Glowers",
+                                               mode: .all, members: [], allowReplies: true,
+                                               createdAt: sortsFirst)
 
     var title: String {
         switch kind {
         case .everyone: return "Everyone"
         case .myFriends: return "My Friends"
+        case .glowers: return "Glowers"
         case .custom: return name
         case .hidden: return ""
         }
@@ -137,6 +158,10 @@ struct StoryAudience: Identifiable, Codable, Equatable {
         case .custom:    return true
         case .myFriends: return mode == .only    // "only these people" is a list, the others are rules
         case .everyone:  return false
+        // A crowd, like Everyone: "whoever I have a glow with" is a rule, not a set of names
+        // somebody typed. It never meets the global hide list anyway (`appliesGlobalHide` is
+        // Everyone alone), so this only answers the question honestly rather than changing reach.
+        case .glowers:   return false
         case .hidden:    return false
         }
     }
@@ -155,6 +180,15 @@ struct StoryAudience: Identifiable, Codable, Equatable {
             }
         case .custom:
             return Set(members).intersection(contacts)
+        case .glowers:
+            return GlowService.shared.glowRelationship
+            // ⛔ NOT INTERSECTED WITH `contacts`, AND THAT IS THE FEATURE. Every branch above ends
+            // in the accepted-chat set because every audience above describes people you talk to.
+            // Glow exists so two people who have NEVER chatted can reach each other, so an
+            // intersection here would resolve this audience to the empty set for exactly the people
+            // it was built for — silently, since an empty audience is an accepted post.
+            //
+            // Either direction, his ruling: people who glowed me plus people I glowed.
         case .hidden:
             return []          // never an audience — see Kind.hidden
         }
@@ -173,6 +207,11 @@ struct StoryAudience: Identifiable, Codable, Equatable {
             case .except: return "All chats you accepted except \(members.count)"
             case .only: return "\(members.count) selected"
             }
+        case .glowers:
+            // Counted off the live relationship, not off `members` — this audience has none.
+            let n = GlowService.shared.glowRelationship.count
+            return n == 0 ? "People you have a Glow with"
+                          : "\(n) \(n == 1 ? "person" : "people") you have a Glow with"
         case .custom:
             let n = members.count
             return "Custom story · \(n) \(n == 1 ? "viewer" : "viewers")"
@@ -232,7 +271,19 @@ final class StoryAudienceStore {
 
     /// Everything the pickers draw, in the order they draw it: the two built-ins, then the custom
     /// lists oldest first so a new one appears at the bottom where it was added.
-    var all: [StoryAudience] { [everyone, myFriends] + custom }
+    /// ⛔ GLOWERS SITS THIRD, AFTER THE TWO BUILT-INS AND BEFORE THE CUSTOM LISTS — his feature,
+    /// 2026-09-02. It is a built-in, not a custom list: memberless, never written to Firestore,
+    /// and its people are `GlowService`'s live answer. Third rather than second so the two audiences
+    /// that have always been there keep their order and their muscle memory.
+    ///
+    /// ⚠️ IT IS ALWAYS OFFERED, even with no glows yet. A row that appears only once somebody
+    /// glows you is a feature nobody discovers — its subtitle carries the count, so an empty one
+    /// explains itself, and posting to it is the same accepted-empty case every audience has.
+    ///
+    /// ⚠️ He has a CUSTOM list literally named "Glowers" from before this existed (his 2026-09-02
+    /// screenshot of the share sheet). This does not touch it: it is a different id and a different
+    /// kind, so the two can sit in the same sheet. Tell him to delete his by hand if he wants to.
+    var all: [StoryAudience] { [everyone, myFriends, .glowersAudience] + custom }
 
     func audience(id: String) -> StoryAudience? { all.first { $0.id == id } }
 

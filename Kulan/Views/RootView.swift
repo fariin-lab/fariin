@@ -310,6 +310,11 @@ struct RootView: View {
         // know what to draw. It starts from its own disk mirror, so this listener is a correction
         // rather than a load — see StoryAudienceStore.
         StoryAudienceStore.shared.start(uid: AuthService.shared.uid ?? "")
+        // ⚠️ AND GLOW, BESIDE IT, FOR THE SAME REASON — the Glowers audience is one of the rows in
+        // that sheet and its people ARE this listener's answer. Started here rather than lazily on
+        // the Stories tab: an audience that resolves before its own data has landed posts to
+        // nobody, and `resolveAudience` treats an empty set as an accepted post.
+        GlowService.shared.start(uid: AuthService.shared.uid ?? "")
     }
 
     #if DEBUG

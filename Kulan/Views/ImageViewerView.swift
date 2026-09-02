@@ -336,6 +336,15 @@ struct ImageViewerView: View {
                             startDrawing: true,
                             selfDismissOnSend: false)
         }
+        // ⛔ THIS SCREEN IS ALWAYS DARK — owner, 2026-09-02, screenshot of the share / draw / delete
+        // row: "image and video controls make it always dark mode". The page is a full-bleed black
+        // ground whatever the phone is set to, so in light mode the chrome came out light-on-light:
+        // his pen glyph was near-black on a pale grey circle, floating on black.
+        //
+        // ⚠️ `\.colorScheme`, NOT `.preferredColorScheme` — the latter sets the WINDOW's style and
+        // `KulanApp` already sets one outside `RootView`, where it wins. Five dead pins in the auth
+        // flow are the record of that mistake. This is the subtree, which is all that is wanted.
+        .environment(\.colorScheme, .dark)
     }
 
     // Horizontal paging between photos; each page zooms/dismisses independently. EVERY page is

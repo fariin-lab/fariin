@@ -33,6 +33,10 @@ enum SessionWipe {
         // the share sheet can open instantly. Left behind, the next account's Share Story sheet
         // would open holding a stranger's custom lists.
         StoryAudienceStore.shared.clear()
+        // Glow is the same class of leak, one step worse: these are two sets of uids naming people
+        // the PREVIOUS account has a relationship with. Left behind, the next account's Glowers
+        // audience would resolve to a stranger's people and post to them.
+        GlowService.shared.stop()
         ThreadMessageCache.shared.removeAll()   // decrypted messages
         ProfileStore.shared.me = nil
         Drafts.shared.clear()                   // unsent plaintext

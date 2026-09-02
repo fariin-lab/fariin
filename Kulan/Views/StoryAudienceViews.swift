@@ -133,6 +133,7 @@ struct StoryAudienceRow<Trailing: View>: View {
         switch audience.kind {
         case .everyone: return "globe"
         case .myFriends: return "person.2.fill"
+        case .glowers: return "sparkles"
         case .custom: return "rectangle.stack.fill"
         // Never drawn: `StoryAudienceStore.all` excludes the hide list, because it is not an
         // audience you can post to. Answered rather than trapped, so a future caller that does
@@ -144,6 +145,10 @@ struct StoryAudienceRow<Trailing: View>: View {
         switch audience.kind {
         case .everyone: return .blue
         case .myFriends: return .orange
+        // Glow's own colour, the pink of the "Glow back" button in his notifications screenshot —
+        // one hue for the whole feature, so a Glowers row is recognisable at a glance beside the
+        // blue and orange built-ins.
+        case .glowers: return Color(hex: 0xFF3B6B)
         case .custom: return .gray
         case .hidden: return .gray
         }

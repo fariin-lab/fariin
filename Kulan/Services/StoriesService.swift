@@ -69,11 +69,17 @@ enum StoryAudienceToken {
 /// from, which is what makes "changes never affect stories you've already sent" true by construction
 /// rather than by care. A label is frozen at post time and cannot lead anywhere.
 struct StoryAudienceTag {
-    var label: String        // "everyone" | "friends" | "custom" | "oneTime"
+    var label: String        // "everyone" | "friends" | "glowers" | "custom" | "oneTime"
     var name: String = ""    // custom lists only, device-local
     var oneTime: Bool { label == "oneTime" }
     static let friends = StoryAudienceTag(label: "friends")
     static let everyone = StoryAudienceTag(label: "everyone")
+    /// ⚠️ ITS OWN LABEL, NOT "friends". This is the word the author's own header shows and the key
+    /// the Posted Stories filter groups by, so a Glowers story wearing the friends label would be
+    /// mislabelled on the story AND invisible to its own filter. The two `switch a.kind` blocks in
+    /// `ShareStorySheet` both fell through to `.friends` by `default`, which is why this had to be
+    /// added at both of them rather than only in the type.
+    static let glowers = StoryAudienceTag(label: "glowers")
 }
 
 struct Story: Identifiable, Hashable, Codable {
@@ -854,7 +860,33 @@ final class StoriesService {
         // must agree or the sheet promises an audience the post does not deliver. Naming somebody
         // beats a standing rule about crowds; a block still beats everything, and blocks are already
         // out of `allContacts` in both directions.
-        if !included.isEmpty { return (included.intersection(allContacts), "only") }
+        // ⛔ A GLOW IS A REACH OF ITS OWN — his Glow feature, 2026-09-02. Every audience above ends
+        // up inside `allContacts` because every one of them describes people you have a chat with.
+        // Glow exists precisely so two people who have NEVER chatted can reach each other, so an
+        // explicitly included person who is in the glow relationship has to survive this line.
+        //
+        // ⚠️ WITHOUT THIS, A GLOWERS STORY IS THE SILENT-EMPTY BUG THIS FUNCTION ALREADY DOCUMENTS
+        // TWICE: the intersection would drop exactly the people the audience was built for, an
+        // empty recipient set is an ACCEPTED post ("Empty recipients is OK"), and the story would
+        // upload, wear a normal ring on his own row, and reach nobody — with `recipientUids` pinned
+        // immutable so there is no repair and nothing to tell him.
+        //
+        // ⚠️ BLOCKS STILL BEAT IT, IN BOTH DIRECTIONS. `allContacts` has blocked people filtered
+        // out already; the glow set has not, because a glow needs no conversation and therefore has
+        // no block record on one. So the block map is read separately here and subtracted — a glow
+        // must not become the way around a block.
+        let blockedEither = await MainActor.run {
+            Set(ConversationsRepository.shared.conversations
+                .filter { c in
+                    guard !c.isGroup else { return false }
+                    let them = c.otherUid(me)
+                    return !them.isEmpty && (c.isBlockedByMe(me) || c.isBlockedByMe(them))
+                }
+                .map { $0.otherUid(me) })
+        }
+        let glowReach = await MainActor.run { GlowService.shared.glowRelationship }
+            .subtracting(blockedEither)
+        if !included.isEmpty { return (included.intersection(allContacts.union(glowReach)), "only") }
         if !excluded.isEmpty { return (pool.subtracting(excluded), "except") }
         return (pool, "all")
     }
