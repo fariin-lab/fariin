@@ -928,6 +928,16 @@ struct ChatsView: View {
     /// place rather than pushing a separate results screen, so the row you tap is the row you
     /// were already looking at.
     @State private var chatSearch = ""
+    /// ⛔ THE CHAT LIST'S SEARCH REACHES PAST THE CHAT LIST — owner, 2026-09-02: "the search inside
+    /// the chat list must work like global; when the user wants to search: chats, users, new users".
+    ///
+    /// People who are NOT in your chats, found by username. `searchUsers` is an exact-handle lookup
+    /// and deliberately not a prefix query — the note on it says so: a prefix search over profiles
+    /// would need `list` permission on every profile document in the app, which is the same decision
+    /// as making everyone's account enumerable. So this finds somebody when you type their username,
+    /// and finds nobody when you type three letters of it.
+    @State private var userHits: [UserProfile] = []
+    @State private var searchingUsers = false
     @State private var path = NavigationPath()
     // NO "CURRENTLY OPEN CHAT" HIGHLIGHT. There was one here, and it is gone on the owner's word
     // (2026-08-03): "highlight only while the user's finger is touching it… never during the back
@@ -1366,6 +1376,66 @@ struct ChatsView: View {
     private func searchMatches(_ c: Conversation) -> Bool {
         let q = chatSearch.trimmingCharacters(in: .whitespaces).lowercased()
         return q.isEmpty || c.displayName(me).lowercased().contains(q)
+    }
+
+    /// The query, once. Read from four places in a body that re-runs on every typing dot.
+    private var searchTrimmed: String { chatSearch.trimmingCharacters(in: .whitespaces) }
+
+    /// Found people who are NOT already a row above. Somebody you chat with matching the query is
+    /// already in the list; offering to "start" a chat you are in the middle of would be two rows
+    /// for one person saying different things.
+    private var newPeople: [UserProfile] {
+        let known = Set(visible.compactMap { $0.isGroup ? nil : $0.otherUid(me) })
+        return userHits.filter { !known.contains($0.id) && $0.id != me }
+    }
+
+    /// One found stranger. Tapping opens the chat with them, which is what creates it.
+    ///
+    /// ⚠️ THEIR PHOTO IS THEIR CHOICE. A search result is by definition somebody you may not know,
+    /// so the Profile Picture audience is honoured here exactly as `NewChatView` honours it — the
+    /// two are the same situation and must not answer it differently.
+    @ViewBuilder private func newPersonRow(_ u: UserProfile) -> some View {
+        Button {
+            let cid = ChatService.convId(me, u.id)
+            chatSearch = ""
+            path.append(ChatTarget(id: cid, name: u.name.isEmpty ? u.handle : u.name, photo: u.photoUrl))
+            Task { try? await ChatService.openConversation(other: u) }
+        } label: {
+            HStack(spacing: 12) {
+                AvatarView(name: u.name.isEmpty ? u.handle : u.name,
+                           photoUrl: PrivacyPrefs.allows(u.privacy, "photo",
+                                                         contactOfMine: PrivacyPrefs.isContact(u.id))
+                                     ? u.photoUrl : nil,
+                           size: 56)
+                    .padding(.vertical, 12)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(u.name.isEmpty ? u.handle : u.name).font(.headline).foregroundStyle(.primary)
+                    Text("@\(u.handle)").font(.subheadline).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets())
+        .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
+        .selectionDisabled(true)
+    }
+
+    /// Ask the server who owns this username. Debounced by the trailing-edge check rather than by a
+    /// timer: a stale answer is discarded when it lands, so a fast typist never sees the result of a
+    /// query they have moved on from.
+    private func lookUpPeople(_ raw: String) async {
+        let q = raw.trimmingCharacters(in: .whitespaces)
+        guard q.count >= 2 else { userHits = []; searchingUsers = false; return }
+        searchingUsers = true
+        var found = await ChatService.searchUsers(prefix: q)
+        if found.isEmpty, let exact = await ChatService.findByHandle(q) { found = [exact] }
+        guard chatSearch.trimmingCharacters(in: .whitespaces) == q else { return }
+        userHits = found
+        searchingUsers = false
     }
 
     /// The two halves of `visible`, for the "Pinned" / "Chats" sections.
@@ -1817,6 +1887,15 @@ struct ChatsView: View {
                               chatSectionHeader("Chats")
                               ForEach(split.rest) { conv in chatListRow(conv) }
                           }
+                          // ⛔ PEOPLE YOU HAVE NEVER CHATTED WITH, UNDER THE CHATS — owner,
+                          // 2026-09-02. Only while searching, and only below every chat that
+                          // matched: what you are almost always looking for is a conversation you
+                          // already have, and a stranger pushed above those would be in the way of
+                          // the common answer to serve the rare one.
+                          if !searchTrimmed.isEmpty, !newPeople.isEmpty {
+                              chatSectionHeader("Other people")
+                              ForEach(newPeople) { u in newPersonRow(u) }
+                          }
                           archivedEntryRow
                         }
                         .listStyle(.plain)
@@ -1913,7 +1992,9 @@ struct ChatsView: View {
                             // `hasLoaded` too, or the quiet window before the skeleton arms would show
                             // "No chats yet" to someone who has chats. An empty list is only news once
                             // we have actually heard back.
-                            if visible.isEmpty, repo.hasLoaded {
+                            // ⚠️ `newPeople` TOO, or a username that matches nobody you chat with
+                            // draws "No results" straight over the person it just found.
+                            if visible.isEmpty, newPeople.isEmpty, repo.hasLoaded {
                                 // A SEARCH THAT FOUND NOTHING IS NOT AN EMPTY INBOX. Without this
                                 // branch, typing a name nobody has empties the list and the welcome
                                 // state below tells someone with two hundred chats that they have
@@ -1994,7 +2075,13 @@ struct ChatsView: View {
             // in for three different searches depending on which tab you had come from, which is why
             // the shell had to remember where you had been; a page that knows what it searches needs
             // none of that.
-            .searchable(text: $chatSearch, prompt: "Search chats")
+            // ⛔ "chats, users, new users" — his word, so the prompt says so. It used to promise
+            // only chats, which was accurate before and would be a lie now.
+            .searchable(text: $chatSearch, prompt: "Search chats and people")
+            // ⚠️ `.task(id:)` RATHER THAN `.onChange`. It cancels the previous lookup when the query
+            // moves on, so a slow answer to an abandoned query cannot land after a fast answer to
+            // the current one — which is the classic search-race and shows as the wrong person.
+            .task(id: chatSearch) { await lookUpPeople(chatSearch) }
             .toolbar { homeToolbar }
             // Hide the header icons whenever a chat is on the stack (incl. the swipe-back
             // drag); reveal them only when we're fully back at the root list.
