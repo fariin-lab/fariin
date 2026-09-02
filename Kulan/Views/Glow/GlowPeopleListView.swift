@@ -139,11 +139,13 @@ struct GlowPeopleListView: View {
     // MARK: - Data
 
     private func count(_ s: Side) -> Int {
-        s == .glowers ? glow.glowers.count : glow.glowing.count
+        s == .glowers ? glow.displayGlowers.count : glow.displayGlowing.count
     }
 
     private var uids: [String] {
-        Array(tab == .glowers ? glow.glowers : glow.glowing).sorted()
+        // `display*`, not the raw sets: the demo people have to be in the LIST as well as in the
+        // count above it, or his own screen would say "4 Glowers" over three rows.
+        Array(tab == .glowers ? glow.displayGlowers : glow.displayGlowing).sorted()
     }
 
     private func filtered(_ people: [GlowPerson]) -> [GlowPerson] {

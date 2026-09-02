@@ -321,7 +321,7 @@ struct StoriesTabView: View {
         if let rows = glowPeople.state.value, let newest = rows.map(\.at).max() {
             return newest > glow.seenUpTo
         }
-        return !glow.glowers.isEmpty && glow.seenUpTo == Date(timeIntervalSince1970: 0)
+        return !glow.displayGlowers.isEmpty && glow.seenUpTo == Date(timeIntervalSince1970: 0)
     }
 
     // MARK: - The doors

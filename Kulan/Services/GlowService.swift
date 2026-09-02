@@ -56,7 +56,30 @@ import FirebaseFirestore
     private(set) var seenUpTo: Date
 
     /// The union, which IS the Glowers story audience (his ruling: either direction).
-    var glowRelationship: Set<String> { glowers.union(glowing) }
+    ///
+    /// ⚠️ THE DEMO IS ADDED HERE, AT THE ONE PLACE EVERY SURFACE ALREADY ASKS, so the Stories grid,
+    /// the lists, the counts and the audience subtitle all see the same invented people without a
+    /// single screen learning that demo mode exists. Two gates guard it — TestFlight-or-debug, and
+    /// his handle — see `GlowDemo`.
+    ///
+    /// ⛔ **DELIBERATELY NOT IN THE POSTED AUDIENCE.** `StoryAudienceStore` reads
+    /// `glowRelationship` for the Glowers subtitle's COUNT, which is what should include them, but
+    /// `ShareStorySheet` resolves the real recipients through `GlowService.shared.glowRelationship`
+    /// too — and a demo uid in `recipientUids` would write a fake person into a REAL story
+    /// document, permanently, with `recipientUids` pinned immutable. So the post path strips them:
+    /// see `realGlowRelationship`, which is what the sheet and `resolveAudience` use.
+    var glowRelationship: Set<String> {
+        GlowDemo.isOn ? glowers.union(glowing).union(GlowDemo.glowerIds).union(GlowDemo.glowingIds)
+                      : glowers.union(glowing)
+    }
+
+    /// The union with NO demo people in it — what a real post is addressed to. A demo uid reaching
+    /// `recipientUids` would be written into a story document that can never be edited afterwards.
+    var realGlowRelationship: Set<String> { glowers.union(glowing) }
+
+    /// The lists as the SCREENS see them, demo included.
+    var displayGlowers: Set<String> { GlowDemo.isOn ? glowers.union(GlowDemo.glowerIds) : glowers }
+    var displayGlowing: Set<String> { GlowDemo.isOn ? glowing.union(GlowDemo.glowingIds) : glowing }
 
     private let db = Firestore.firestore()
     private var glowersListener: ListenerRegistration?

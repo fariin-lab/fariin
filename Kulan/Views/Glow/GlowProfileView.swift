@@ -163,8 +163,17 @@ struct GlowProfileView: View {
     ///
     /// ⚠️ TAPPABLE ONLY ON MY OWN PROFILE. Same ruling as the lists it opens.
     private var statsCard: some View {
-        let glowers = profile?.glowerCount ?? 0
-        let glowing = profile?.glowingCount ?? 0
+        // ⛔ MY OWN COUNTS ARE COUNTED HERE, NOT READ FROM THE SERVER — and that is not a shortcut,
+        // it is the more truthful of the two answers. `GlowService` holds my complete glow sets,
+        // live, off two listeners; the user-document fields are a denormalised copy that a function
+        // maintains and that is stale for as long as the write takes.
+        //
+        // ⚠️ SOMEBODY ELSE'S COUNTS STILL COME FROM THE DOCUMENT, and they read ZERO until
+        // `onGlowWrite` is deployed. They cannot be counted here for the reason the whole privacy
+        // model rests on: the rules refuse to list anybody's glows but your own, so a client CANNOT
+        // count a stranger's glowers. That is the design working, not a gap in it.
+        let glowers = isMe ? glow.displayGlowers.count : (profile?.glowerCount ?? 0)
+        let glowing = isMe ? glow.displayGlowing.count : (profile?.glowingCount ?? 0)
         return Group {
             if isMe {
                 NavigationLink { GlowPeopleListView(side: .glowers, title: profile?.handle ?? profile?.name ?? "Glow") } label: { statsCardBody(glowers, glowing) }

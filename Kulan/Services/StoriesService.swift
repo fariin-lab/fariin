@@ -884,7 +884,7 @@ final class StoriesService {
                 }
                 .map { $0.otherUid(me) })
         }
-        let glowReach = await MainActor.run { GlowService.shared.glowRelationship }
+        let glowReach = await MainActor.run { GlowService.shared.realGlowRelationship }
             .subtracting(blockedEither)
         if !included.isEmpty { return (included.intersection(allContacts.union(glowReach)), "only") }
         if !excluded.isEmpty { return (pool.subtracting(excluded), "except") }

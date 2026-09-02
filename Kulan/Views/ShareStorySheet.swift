@@ -713,7 +713,7 @@ struct ShareStorySheet: View {
             // it carries a matching exception so glow-only people survive that intersection —
             // without it this resolves to nobody for exactly the people Glow exists for. The two
             // halves have to stay together; the note there says so too.
-            if a.kind == .glowers { return GlowService.shared.glowRelationship }
+            if a.kind == .glowers { return GlowService.shared.realGlowRelationship }
             return []
         }()
         let replies = a.allowReplies

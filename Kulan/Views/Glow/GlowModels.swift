@@ -63,6 +63,13 @@ struct PostedStory: Identifiable, Equatable {
     func load(_ uids: [String], dates: [String: Date] = [:], key: String) async {
         guard key != loadedKey else { return }
         loadedKey = key
+        // Demo: his account only, see GlowDemo. Resolving fake uids against the server would
+        // fetch nothing, so the rows are handed over whole.
+        if GlowDemo.isOn, uids.allSatisfy(GlowDemo.isDemoPerson) {
+            let all = GlowDemo.glowers + GlowDemo.glowing
+            state = .loaded(uids.compactMap { u in all.first { $0.id == u } })
+            return
+        }
         guard !uids.isEmpty else { state = .loaded([]); return }
         state = .loading
         var out: [GlowPerson] = []
@@ -99,6 +106,10 @@ struct PostedStory: Identifiable, Equatable {
     func load(uid: String, force: Bool = false) async {
         guard force || uid != loadedUid else { return }
         loadedUid = uid
+        if GlowDemo.isOn, GlowDemo.isDemoPerson(uid) {
+            state = .loaded(GlowDemo.stories(for: uid))
+            return
+        }
         guard !uid.isEmpty else { state = .loaded([]); return }
         state = .loading
         let db = Firestore.firestore()
@@ -174,6 +185,10 @@ struct GlowStoryCard: Identifiable, Equatable {
     func load(_ uids: [String], key: String) async {
         guard key != loadedKey else { return }
         loadedKey = key
+        if GlowDemo.isOn {
+            state = .loaded(GlowDemo.storyCards)
+            return
+        }
         guard !uids.isEmpty else { state = .loaded([]); return }
         state = .loading
         var cards: [GlowStoryCard] = []
@@ -238,6 +253,7 @@ struct GlowEvent: Identifiable, Equatable {
         loading = true
         defer { loading = false }
         state = .loading
+        if GlowDemo.isOn { state = .loaded(GlowDemo.events); return }
 
         var out: [GlowEvent] = []
 
