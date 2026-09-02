@@ -99,20 +99,23 @@ enum Theme {
     static var receivedMaterial: Material { .ultraThin }
 
     /// THE RIM ON AN INCOMING BUBBLE OVER A WALLPAPER. Incoming only, wallpaper only; outgoing
-    /// never gets one.
+    /// never gets one. White at 20% in dark, BLACK at 30% in light — the reference app's own pair,
+    /// where the light-mode rim is a shadow rather than a highlight, read from their source on
+    /// 2026-08-23.
     ///
-    /// ⛔ **OWNER, 2026-09-02: WHITE IN BOTH THEMES NOW.** It used to be white at 20% in dark and
-    /// **black at 30% in light** — the reference app's pair, where the light-mode rim is a shadow
-    /// rather than a highlight. The system's own iOS 26 edge is a specular highlight: light in both
-    /// themes, because it is modelling light catching the lip of the glass, and light does not turn
-    /// black when the phone does. A dark line is the single thing that most reads as hand-drawn, so
-    /// it is the first thing to go.
+    /// ⛔ **THIS PAIR IS RESTORED AND THE WHOLE APPLE EXPERIMENT IS NOW UNDONE — owner, 2026-09-02,
+    /// ringed in red: "remove my apple white stick line restore my custom white line".** The
+    /// morning's Apple-look change (build 724) had two halves, the system-material surface and a
+    /// white-in-both-themes rim at 0.35/0.65. He took the surface back the same afternoon and kept
+    /// the line; seeing the line on its own over his slice recipe, he took that back too. Surface
+    /// and rim are both his originals again, and the only survivor of the Apple day is nothing.
     ///
-    /// Light mode carries the higher alpha on purpose: the material underneath it is already pale,
-    /// so a white line needs more of itself there to separate the bubble from the picture behind it.
-    /// In dark mode the material is nearly black and 35% is plenty.
+    /// ⚠️ **THE BUBBLE SURFACE FAMILY HAS NOW FLIPPED FOUR TIMES.** Do not change this function,
+    /// `Theme.receivedSurface`, or `WallpaperBlur.enabled` again without his words in his own
+    /// sentence and a screenshot. The width (0.30pt, `bubbleRimWidth`) is his 2026-08-28 number and
+    /// has never moved through any of it.
     static func bubbleRim(_ dark: Bool) -> Color {
-        dark ? Color.white.opacity(0.35) : Color.white.opacity(0.65)
+        dark ? Color.white.opacity(0.20) : Color.black.opacity(0.30)
     }
 
     /// THE RIM'S OWN WIDTH, and it is deliberately not `hairline`.
